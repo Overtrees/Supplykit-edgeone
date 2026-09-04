@@ -1,7 +1,9 @@
 {
   "name": "supplykit",
-  "installCommand": "cd frontend && npm install",
-  "buildCommand": "cd frontend && npm run build",
+  "build": {
+    "command": "npm --prefix frontend run build",
+    "cwd": "frontend"
+  },
   "cloudFunctions": {
     "maxDuration": 120,
     "regions": {
