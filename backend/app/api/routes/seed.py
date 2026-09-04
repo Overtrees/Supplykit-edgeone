@@ -3,7 +3,7 @@ from app.core.database import get_db, get_conn, DB_PATH, submit_task, get_task, 
 from app.core.response import ok
 from app.core.dashboard_cache import invalidate
 from app.core.sales_utils import build_daily_sales_snapshot
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 import random, sqlite3, uuid, threading, os
 
 router = APIRouter(prefix="/api/seed", tags=["seed"])
@@ -179,7 +179,7 @@ def _run_step(step_name, fn, steps):
 def _seed_fill_async():
     global _current_task_id
     db = get_db()
-    today = datetime.now(UTC)
+    today = datetime.now(timezone.utc)
     conn = get_conn()
     steps = []
 
@@ -493,8 +493,8 @@ def _seed_batches(db, skus_data):
     16% 批次剩余效期 < 1/3(临近/否档)  → 预警演示
     同时回写 products.best_before = 该 SKU 最早批次截止日(风险最高)
     """
-    from datetime import timedelta as _td, UTC
-    today = datetime.now(UTC)
+    from datetime import timedelta as _td, timezone
+    today = datetime.now(timezone.utc)
     conn = get_conn()
     rows = conn.execute("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory WHERE available_qty > 0").fetchall()
     bdata = []
@@ -630,10 +630,10 @@ def _seed_rules(db, skus_data):
 
 def _seed_records(db, skus_data):
     """生成当月出入库记录（供进销存页展示）"""
-    from datetime import datetime, timedelta, UTC
+    from datetime import datetime, timedelta, timezone
     import random
     conn = get_conn()
-    today = datetime.now(UTC)
+    today = datetime.now(timezone.utc)
     _batch_pool = {}
     try:
         for _r in conn.execute("SELECT sku, warehouse, prod_date, exp_date FROM batches").fetchall():
@@ -678,7 +678,7 @@ def _seed_records(db, skus_data):
 
 def _sync_inv_month(conn):
     """同步出入库记录到 inventory 月汇总(month_inbound/outbound)，确保汇总态=各批次之和"""
-    from datetime import datetime as _dt, UTC
+    from datetime import datetime as _dt, timezone
     _month_start = _dt.utcnow().strftime('%Y-%m-01')
     try:
         rows = conn.execute("SELECT sku, warehouse, channel, SUM(quantity) FROM inbound_records WHERE channel IN ('jd','other') AND inbound_date >= ? GROUP BY sku, warehouse, channel", (_month_start,)).fetchall()

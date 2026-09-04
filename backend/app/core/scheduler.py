@@ -3,7 +3,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("scheduler")
 scheduler = BackgroundScheduler(daemon=True)
@@ -45,9 +45,9 @@ def _task_snapshot_freshness():
     try:
         from app.core.database import get_conn, get_db
         from app.core.sales_utils import build_daily_sales_snapshot
-        from datetime import datetime, timedelta, UTC
+        from datetime import datetime, timedelta, timezone
         _sn = get_conn().execute("SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot").fetchone()[0]
-        _stale = (not _sn) or _sn < (datetime.now(UTC) - timedelta(days=2)).strftime('%Y-%m-%d')
+        _stale = (not _sn) or _sn < (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%d')
         if _stale:
             logger.warning(f"[scheduler] freshness: 日销快照陈旧(max={_sn}), 自动重建")
             _n = build_daily_sales_snapshot(get_db())
@@ -59,8 +59,8 @@ def _task_archive_orders():
     """每天凌晨 1 点归档 90 天前的订单（与看板/滞销 90 天窗口一致，避免缺口）"""
     try:
         from app.core.database import get_db, get_conn
-        from datetime import timedelta, UTC
-        cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime('%Y-%m-%d')
+        from datetime import timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime('%Y-%m-%d')
         db = get_db()
         # 用 SQL 只取超期订单（避免全表加载）
         conn = get_conn()
@@ -135,7 +135,7 @@ def _task_cleanup_logs():
     try:
         from app.core.database import get_db
         db = get_db()
-        cutoff = datetime.now(UTC).isoformat()
+        cutoff = datetime.now(timezone.utc).isoformat()
         # 简单清理 events 和 quality_logs
         for table in ['events', 'quality_logs']:
             rows = db.table(table).select("*").execute().data
@@ -408,7 +408,7 @@ def _eval_daily_user_rules(db):
         last_map = {}
         for r in conn.execute("SELECT sku, MAX(date) FROM daily_sales_snapshot GROUP BY sku").fetchall():
             last_map[str(r[0])] = str(r[1] or '')[:10]
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         for r in inv_rows:
             sku = str(r[0] or '')
             if not sku:
@@ -531,20 +531,20 @@ def start():
     scheduler.add_job(_task_wal_checkpoint_periodic, IntervalTrigger(minutes=15), id='wal_checkpoint_periodic')  # 15min(曾60/360min, 高频写下WAL暴涨撑爆配额→3次事故)
     # 每小时 WAL checkpoint（防 WAL 无限增长导致的慢/锁/配额问题）
     # 延迟预热 dashboard 缓存（reload 后 10s 执行，避开 CI health 探测窗口；修复预热线程饿死请求）
-    scheduler.add_job(_task_warmup_dashboard, trigger='date', run_date=datetime.now(UTC) + timedelta(seconds=10), id='dash_warmup')
+    scheduler.add_job(_task_warmup_dashboard, trigger='date', run_date=datetime.now(timezone.utc) + timedelta(seconds=10), id='dash_warmup')
     scheduler.start()
     # 快照新鲜度自愈(启动即查): PA 上 03:30 CronTrigger 可能长期不触发(快照曾停 7/9 致濒临断货 0 条),
     # 进程频繁 reload → 每次启动检查, 快照陈旧(>2天)立即重建, 不依赖单一定时
     try:
         _sn = get_conn().execute("SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot").fetchone()[0]
-        _today = datetime.now(UTC).strftime('%Y-%m-%d')
-        if not _sn or _sn < (datetime.now(UTC) - timedelta(days=2)).strftime('%Y-%m-%d'):
+        _today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        if not _sn or _sn < (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%d'):
             logger.warning(f"[scheduler] 日销快照陈旧(max={_sn}), 启动重建")
             from app.core.sales_utils import build_daily_sales_snapshot
             threading.Thread(target=lambda: build_daily_sales_snapshot(get_db()), daemon=True).start()
     except Exception as e:
         logger.warning(f"[scheduler] snapshot freshness check: {e}")
-    logger.info(f"Started at {datetime.now(UTC).isoformat()}")
+    logger.info(f"Started at {datetime.now(timezone.utc).isoformat()}")
 
 def get_status():
     jobs = scheduler.get_jobs()

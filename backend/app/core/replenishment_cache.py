@@ -1,5 +1,5 @@
 """补货建议缓存 — 持久化到数据库，避免每次全量计算"""
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 import json, hashlib
 
 CACHE_TTL = 900  # 15 分钟
@@ -25,7 +25,7 @@ def get_cached(mode, channel, days, db):
     try:
         cached = json.loads(row["value"])
         cached_time = datetime.fromisoformat(row.get("updated_at", "")) if row.get("updated_at") else datetime.min
-        if (datetime.now(UTC) - cached_time).total_seconds() < CACHE_TTL:
+        if (datetime.now(timezone.utc) - cached_time).total_seconds() < CACHE_TTL:
             return cached.get("data"), True
     except Exception as e:
         import logging; logging.warning(f"[replen-cache] read: {e}")
@@ -35,10 +35,10 @@ def get_cached(mode, channel, days, db):
 def set_cache(mode, channel, days, data, db):
     """写入缓存"""
     key = get_cache_key(mode, channel, days, db)
-    value = json.dumps({"data": data, "ts": datetime.now(UTC).isoformat()})
+    value = json.dumps({"data": data, "ts": datetime.now(timezone.utc).isoformat()})
     # UPSERT
     existing = db.table("replenishment_config").select("id").eq("key", f"_cache_replen_{key}").execute().data
-    payload = {"key": f"_cache_replen_{key}", "value": value, "channel": channel, "updated_at": datetime.now(UTC).isoformat()}
+    payload = {"key": f"_cache_replen_{key}", "value": value, "channel": channel, "updated_at": datetime.now(timezone.utc).isoformat()}
     if existing:
         db.table("replenishment_config").update(payload).eq("id", existing[0]["id"]).execute()
     else:

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.core.database import get_db
 from app.core.response import ok, fail
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -114,8 +114,8 @@ def permanent_delete_product(pid: int, db = get_db()):
 @router.delete("/{pid}")
 def delete_product(pid: int, db = get_db()):
     # 软删除（关联建议/看板通过 products.changed 事件联动剔除）
-    from datetime import datetime, UTC
-    db.table("products").update({"deleted_at": datetime.now(UTC).isoformat()}).eq("id", pid).execute()
+    from datetime import datetime, timezone
+    db.table("products").update({"deleted_at": datetime.now(timezone.utc).isoformat()}).eq("id", pid).execute()
     _emit_products_changed({"action": "delete", "id": pid})
     return ok({})
 
@@ -126,7 +126,7 @@ def batch_products(body: dict, channel: str = '', db = get_db()):
 
     主体隔离: 只允许命中本渠道商品(id 全局唯一但跨渠道误传时禁止生效)
     """
-    from datetime import datetime, UTC
+    from datetime import datetime, timezone
     action = body.get("action", "")
     ids = [int(x) for x in (body.get("ids") or []) if isinstance(x, int) or str(x).isdigit()]
     if not ids:
@@ -137,7 +137,7 @@ def batch_products(body: dict, channel: str = '', db = get_db()):
         return q
     if action in ('delete', 'restore', 'purge'):
         if action == 'delete':
-            val = {"deleted_at": datetime.now(UTC).isoformat()}
+            val = {"deleted_at": datetime.now(timezone.utc).isoformat()}
         elif action == 'restore':
             val = {"deleted_at": ""}
         else:

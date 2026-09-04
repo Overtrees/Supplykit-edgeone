@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from app.core.database import get_db
 from app.core.response import ok
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import json, os, logging
 
 logger = logging.getLogger("purchase")
@@ -13,8 +13,8 @@ router = APIRouter(prefix="/api/insights", tags=["insights"])
 @router.get('/purchase')
 def get_purchase_suggestions(days: int = 28, mode: str = 'bbcc', channel: str = 'jd', search: str = '', db = get_db()):
     """采购建议：系统总库存视角，含目标周转控制"""
-    from datetime import timedelta, UTC
-    now = datetime.now(UTC)
+    from datetime import timedelta, timezone
+    now = datetime.now(timezone.utc)
     # 尝试读取缓存（与补货建议共享 _replen_version 版本号）
     from app.core.replenishment_cache import get_cached, set_cache as _set_cache
     _pkey = 'purchase_' + (mode or 'bbcc')  # 与补货建议(纯mode)key隔离, 且教采购bbcc/traditional区分
@@ -252,12 +252,12 @@ def export_purchase_suggestions_excel(days: int = 28, mode: str = 'bbcc', channe
         ws.column_dimensions[ws.cell(1,i).column_letter].width = w
 
     ws2 = wb.create_sheet("汇总")
-    ws2.append(["采购建议汇总"]); ws2.append(["生成时间", datetime.now(UTC).strftime("%Y-%m-%d %H:%M")])
+    ws2.append(["采购建议汇总"]); ws2.append(["生成时间", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")])
     ws2.append(["建议采购SKU数", len(suggestions)])
     ws2.append(["建议采购总量", sum(r["purchase_qty"] for r in suggestions)])
     ws2.merge_cells('A1:D1'); ws2['A1'].font = Font(bold=True, size=14)
 
     buf = BytesIO(); wb.save(buf); buf.seek(0)
-    filename = f"采购建议_{datetime.now(UTC).strftime('%Y%m%d')}.xlsx"
+    filename = f"采购建议_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
     return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})

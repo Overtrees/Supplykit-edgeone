@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import json, csv, io, re, os, uuid
 from openpyxl import load_workbook
 import logging
@@ -110,7 +110,7 @@ async def preview_cleansing(file: UploadFile = File(...), mapping: str = Form(''
 def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str, template_name: str = '', channel: str = 'jd', conflict_mode: str = 'overwrite'):
     """清洗核心逻辑，含格式校验 → 业务校验 → 补全推断"""
     db = get_db()
-    task_id = f"clean_{datetime.now(UTC).strftime('%H%M%S')}"
+    task_id = f"clean_{datetime.now(timezone.utc).strftime('%H%M%S')}"
     # 强制恢复 WAL 模式（之前可能因配额满降级为 DELETE，大批量写入极慢）
     try:
         conn = get_conn()
@@ -134,7 +134,7 @@ def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str
     # 加载用于校验和推断的参考数据
     products_map = {p["sku"]: p for p in db.table("products").select("*").eq("deleted_at", "").execute().data}
     inventory_map = {i["sku"]: i for i in db.table("inventory").select("*").execute().data}
-    task_id = f"clean_{datetime.now(UTC).strftime('%H%M%S')}"
+    task_id = f"clean_{datetime.now(timezone.utc).strftime('%H%M%S')}"
     errors = []
     success = 0
     failed = 0
@@ -193,11 +193,11 @@ def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str
 
         # ─── 业务校验 ──────────────────────────────────────────────
         if not data.get('ordered_at'):
-            data['ordered_at'] = datetime.now(UTC).strftime('%Y-%m-%d')
+            data['ordered_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         # 去重处理（库存按 sku+仓库+批次(prod_date+exp_date) 复合去重）
         if is_inv:
-            sku_val = sku or f"AUTO-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{success}"
+            sku_val = sku or f"AUTO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{success}"
             _wh_key = str(data.get('warehouse', '')) or ('平台仓' if platform_inv else 'B仓' if b_inv else '自有仓')
             _pd_key = str(data.get('prod_date', ''))[:10]
             _ed_key = str(data.get('exp_date', ''))[:10]
@@ -209,7 +209,7 @@ def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str
         else:
             order_no = data.get('order_no', '')
             if not order_no:
-                order_no = f"AUTO-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{success}"
+                order_no = f"AUTO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{success}"
                 data['order_no'] = order_no
             # 检查数据库中是否已存在（同一采购单号+同 SKU 才算重复）
             sku_key = data.get('sku', '')
@@ -480,7 +480,7 @@ def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str
                         try:
                             from app.core.database import submit_task
                             from app.api.routes.seed import _seed_rules
-                            _tid = f"rule_eval_{datetime.now(UTC).strftime('%H%M%S')}"
+                            _tid = f"rule_eval_{datetime.now(timezone.utc).strftime('%H%M%S')}"
                             submit_task(_tid, _seed_rules, get_db(), None, channel=channel, task_type='cleansing')
                         except Exception as e:
                             import logging; logging.warning(f"[Cleansing] batch rule eval: {e}")
@@ -499,7 +499,7 @@ def _run_cleansing(content: bytes, filename: str, mapping_json: str, target: str
             except Exception as e: logger.warning(f"emit event: {e}")
             from app.core.database import submit_task
             from app.api.routes.insights import sync_inventory_from_orders
-            submit_task(f"inv_sync_{datetime.now(UTC).strftime('%H%M%S')}", sync_inventory_from_orders, 200)
+            submit_task(f"inv_sync_{datetime.now(timezone.utc).strftime('%H%M%S')}", sync_inventory_from_orders, 200)
         except Exception as e:
             from app.core.database import update_task
             update_task(task_id, progress=100)

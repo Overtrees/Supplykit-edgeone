@@ -40,7 +40,7 @@ def save_template(data: dict, db=None):
         db.table("cleansing_templates").update({
             "mapping": json.dumps(data.get('mapping', {}), ensure_ascii=False),
             "doc_type": data.get('doc_type', data.get('target', 'order')),
-            "updated_at": __import__('datetime').datetime.now(UTC).isoformat(),
+            "updated_at": __import__('datetime').datetime.now(timezone.utc).isoformat(),
         }).eq("id", existing[0]["id"]).execute()
     else:
         db.table("cleansing_templates").insert({

@@ -1,6 +1,6 @@
 """异步导出 — 后台生成 Excel，持久化导出记录到文件，支持下载"""
 import os, json, uuid
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from app.core.database import get_db
@@ -150,7 +150,7 @@ def create_export_task(type: str = 'purchase', mode: str = 'bbcc', days: int = 2
                     else:
                         for _pb in _batches:
                             ws.append([r[0], _bc, r[8], r[5], r[6], r[7], r[1], r[2], r[3], r[4], r[9], r[10], r[11], _td, _pb[0], _pb[1], _pb[2], _eff_status(_pb[0], _pb[1])])
-            filename = f"{type}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.xlsx"
+            filename = f"{type}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.xlsx"
             filepath = os.path.join(EXPORT_DIR, filename)
             wb.save(filepath)
             return {"filepath": filepath, "filename": filename, "size": os.path.getsize(filepath), "type": type}

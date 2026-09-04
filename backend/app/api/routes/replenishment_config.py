@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from app.core.database import get_db
 from app.core.response import ok, fail
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 router = APIRouter(prefix="/api/replenishment-config", tags=["replenishment"])
@@ -31,18 +31,18 @@ def get_config(mode: str = None, channel: str = 'jd', db=get_db()):
 def update_config(data: dict, mode: str = '', channel: str = 'jd', db=get_db()):
     _cfg_cache.clear()
     try:
-        from datetime import datetime, UTC
+        from datetime import datetime, timezone
         v = db.table("replenishment_config").select("*").eq("key", "_cfg_version").execute().data
         nv = (int(v[0]["value"]) + 1) if v and v[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_cfg_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_cfg_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except: pass  # 配置变更，清空缓存
     # 配置变更(含滞销参数 slow_cats_config) → 递增 _replen_version, 让滞销/补货缓存失效
     try:
         _rv = db.table("replenishment_config").select("*").eq("key", "_replen_version").execute().data
         _rnv = (int(_rv[0]["value"]) + 1) if _rv and _rv[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_replen_version", "value": str(_rnv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_replen_version", "value": str(_rnv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except: pass
-    now = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     if mode:
         prefix = f'mode_{mode}_'
         for k, v in data.items():
@@ -100,9 +100,9 @@ def update_seasons(data: dict, mode: str = 'bbcc', channel: str = 'jd', db=get_d
     if old_val != val:
         db.table("replenishment_config_history").insert({
             'key': key, 'old_value': old_val, 'new_value': val,
-            'channel': channel, 'mode': mode, 'created_at': datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+            'channel': channel, 'mode': mode, 'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         }).execute()
-    db.table("replenishment_config").upsert({"key": key, "value": val, "channel": channel, "updated_at": datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}, conflict_col='key')
+    db.table("replenishment_config").upsert({"key": key, "value": val, "channel": channel, "updated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}, conflict_col='key')
     return ok(items)
 @router.get('/slow-cats')
 def get_slow_cats(channel: str = 'jd', db=get_db()):
@@ -135,9 +135,9 @@ def update_slow_cats(data: dict, channel: str = 'jd', db=get_db()):
     if old_val != val:
         db.table("replenishment_config_history").insert({
             'key': 'slow_cats_config', 'old_value': old_val, 'new_value': val,
-            'channel': channel, 'mode': '', 'created_at': datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+            'channel': channel, 'mode': '', 'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         }).execute()
-    db.table("replenishment_config").upsert({"key": "slow_cats_config", "value": val, "channel": channel, "updated_at": datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}, conflict_col='key')
+    db.table("replenishment_config").upsert({"key": "slow_cats_config", "value": val, "channel": channel, "updated_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}, conflict_col='key')
     return ok(items)
 
 
@@ -152,7 +152,7 @@ def calculate(mode: str = 'bbcc', db=get_db()):
             cfg[k[len(prefix):]] = v
     lt = int(cfg.get('lead_time_days','10'))
     sm = float(cfg.get('safety_multiplier','1.0'))
-    cutoff = (datetime.now(UTC)-timedelta(days=30)).strftime('%Y-%m-%d')
+    cutoff = (datetime.now(timezone.utc)-timedelta(days=30)).strftime('%Y-%m-%d')
     sku_s = defaultdict(int)
     for o in db.table("orders").select("*").execute().data:
         if o.get("deleted_at"): continue

@@ -5,7 +5,7 @@
       db.table("orders").insert([{"order_no":"xxx"}]).execute()
 """
 import sqlite3, json, os, threading, concurrent.futures
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from collections import defaultdict
 from typing import Any, Optional
 
@@ -360,7 +360,7 @@ def backup_db():
     """
     import shutil, gzip, logging
     _logger = logging.getLogger("backup")
-    bak_path = DB_PATH + f".bak.{datetime.now(UTC).strftime('%Y%m%d')}"
+    bak_path = DB_PATH + f".bak.{datetime.now(timezone.utc).strftime('%Y%m%d')}"
     try:
         # 1. 在线备份到临时文件（sqlite3 backup API：增量复制，不锁库）
         _tmp = DB_PATH + ".bak.tmp"
@@ -766,7 +766,7 @@ class InsertBuilder:
         self.conn = conn
 
     def execute(self):
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         sql = f'INSERT INTO "{self.table}" ({self._cols}) VALUES ({self._vals})'
         cur = _write_execute(self.conn, sql, self._params)
         result = ExecuteResult([{"id": cur.lastrowid}])

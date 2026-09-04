@@ -141,7 +141,7 @@ def _get_batch_summary(channel='jd', warehouse_type=''):
     """
     try:
         from app.core.database import get_conn
-        from datetime import datetime, timedelta, UTC
+        from datetime import datetime, timedelta, timezone
         conn = get_conn()
         if warehouse_type:
             # 取每个 SKU 最早过期的完整批次（prod/exp 同批次）＋ 该主体下的批次数
@@ -172,7 +172,7 @@ def _get_batch_summary(channel='jd', warehouse_type=''):
             _rt = conn.execute("SELECT value FROM replenishment_config WHERE key='transit_days' AND channel=?", (channel,)).fetchone()
             if _rt and _rt[0]: transit = int(_rt[0])
         except Exception: pass
-        today = datetime.now(UTC).replace(tzinfo=None)
+        today = datetime.now(timezone.utc).replace(tzinfo=None)
         out = {}
         for r in rows:
             sku = str(r[0] or '')

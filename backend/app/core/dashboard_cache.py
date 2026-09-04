@@ -1,7 +1,7 @@
 """In-memory dashboard cache, rebuilt on demand or invalidated by events."""
 import time, os, sqlite3
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, timezone
 from app.core.database import get_db, DB_PATH, get_conn
 
 _cache = None
@@ -38,7 +38,7 @@ def _compute_period_trends(conn, ch, today):
     GMV 小卡口径 = 已支付(待发货/已发货/已完成/申请退款): 订单数与 GMV 都是已支付;
     漏斗(订单阶段分布)=全部状态。两卡不同业务口径。
     """
-    from datetime import timedelta, UTC
+    from datetime import timedelta, timezone
     periods = {}
     # 各维度同时计算上一周期(环比基准): today→昨日, week→上周同7天, month→上月同30天
     for pname, pdays, prev_span in [('today', 1, 1), ('week', 7, 7), ('month', 30, 30)]:
@@ -93,11 +93,11 @@ def _rebuild(channel='jd'):
     """Full rebuild of dashboard data from database using SQL aggregation."""
     conn = get_conn()
     ch = channel
-    from datetime import timedelta, UTC
+    from datetime import timedelta, timezone
     from concurrent.futures import ThreadPoolExecutor
-    _today = datetime.now(UTC).date()
+    _today = datetime.now(timezone.utc).date()
     _cut90 = (_today - timedelta(days=90)).isoformat()
-    bj_now = datetime.now(UTC) + timedelta(hours=8)
+    bj_now = datetime.now(timezone.utc) + timedelta(hours=8)
     bj_date = bj_now.date()
     _month_cut = (bj_date - timedelta(days=29)).isoformat()
     _week_cut = (bj_date - timedelta(days=6)).isoformat()

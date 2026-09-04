@@ -1,6 +1,6 @@
 """Health check endpoint for monitoring"""
 from fastapi import APIRouter, Request
-from datetime import datetime, UTC, timedelta
+from datetime import datetime, timezone, timedelta
 import os, sqlite3
 
 router = APIRouter(tags=["health"])
@@ -288,7 +288,7 @@ def health():
         _expect = _ordmax[:10]
         from datetime import timedelta as _td2
         try:
-            _y = (datetime.now(UTC) - timedelta(days=1)).strftime('%Y-%m-%d')
+            _y = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
             _expect_min = _y  # 快照至少应覆盖到昨天
         except Exception:
             _expect_min = _ordmax[:10]
@@ -308,7 +308,7 @@ def health():
 
     return {
         "status": status,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "version": version,
     }
@@ -338,9 +338,9 @@ def diag_orders(action: str = ''):
                 if os.path.exists(_new): os.remove(_new)
                 return {"ok": False, "error": f"备份 {os.path.basename(_src)} 校验失败: {_qc}"}
             # 原子替换: 坏库保留为 .corrupt.<ts>, 移除可能冲突的 WAL/SHM
-            for _ext in ('.corrupt.' + datetime.now(UTC).strftime('%Y%m%d%H%M%S'),):
+            for _ext in ('.corrupt.' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'),):
                 pass
-            _corrupt = DB_PATH + '.corrupt.' + datetime.now(UTC).strftime('%Y%m%d%H%M%S')
+            _corrupt = DB_PATH + '.corrupt.' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
             try:
                 _g = get_conn(); _g.close()
             except Exception: pass
@@ -366,7 +366,7 @@ def diag_orders(action: str = ''):
         try:
             from app.api.routes.seed import _seed_rules
             from app.core.database import get_db, get_conn
-            from datetime import datetime, UTC
+            from datetime import datetime, timezone
             _seed_rules(get_db(), {'jd': [], 'other': []})
             # 递增全部相关版本号(alerts 列表缓存 + 看板 summary 缓存失效):
             #   _rules_version/_replen_version → alerts 缓存
@@ -376,7 +376,7 @@ def diag_orders(action: str = ''):
                 _v = _c.execute("SELECT value FROM replenishment_config WHERE key=?", (_k,)).fetchone()
                 _nv = str(int(_v[0]) + 1) if _v and _v[0] else '1'
                 _c.execute("INSERT OR REPLACE INTO replenishment_config(key,value,channel,updated_at) VALUES(?,?,?,?)",
-                           (_k, _nv, 'jd', datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')))
+                           (_k, _nv, 'jd', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')))
             _c.commit()
             # 返回生成统计
             _cnt = _c.execute("SELECT COUNT(*) FROM alerts WHERE source='rules_engine' AND status='active'").fetchone()[0]

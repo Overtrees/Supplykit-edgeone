@@ -42,10 +42,10 @@ def list_suppliers(db = get_db(), search: str = "", channel: str = 'jd'):
 def create_supplier(body: dict, db = get_db()):
     _suppliers_cache.clear()
     try:
-        from datetime import datetime, UTC
+        from datetime import datetime, timezone
         v = db.table("replenishment_config").select("*").eq("key", "_suppliers_version").execute().data
         nv = (int(v[0]["value"]) + 1) if v and v[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except: pass
     data = db.table("suppliers").insert({
         "supplier_code": body.get("supplier_code"),
@@ -62,10 +62,10 @@ def create_supplier(body: dict, db = get_db()):
 def update_supplier(sid: int, body: dict, db = get_db()):
     _suppliers_cache.clear()
     try:
-        from datetime import datetime, UTC
+        from datetime import datetime, timezone
         v = db.table("replenishment_config").select("*").eq("key", "_suppliers_version").execute().data
         nv = (int(v[0]["value"]) + 1) if v and v[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except: pass
     db.table("suppliers").update(body).eq("id", sid).execute()
     return ok({})
@@ -74,10 +74,10 @@ def update_supplier(sid: int, body: dict, db = get_db()):
 def delete_supplier(sid: int, db = get_db()):
     _suppliers_cache.clear()
     try:
-        from datetime import datetime, UTC
+        from datetime import datetime, timezone
         v = db.table("replenishment_config").select("*").eq("key", "_suppliers_version").execute().data
         nv = (int(v[0]["value"]) + 1) if v and v[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_suppliers_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except: pass
     db.table("suppliers").delete().eq("id", sid).execute()
     return ok({})

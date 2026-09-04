@@ -4,7 +4,7 @@ from app.core.database import get_db, get_conn, DB_PATH
 from app.core.sales_utils import calc_sales, rolling_predict
 import sqlite3
 from app.core.response import ok, fail
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 import time
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -24,7 +24,7 @@ def dashboard_summary(channel: str = 'jd', start_date: str = '', end_date: str =
         #   - 只取日期范围内、本渠道订单(旧版未过滤 channel, 混入另一渠道数据 → 已修)
         #   - trend GMV 只计「已完成」、订单数计全部(旧版相反 → 已对齐标准)
         #   - health_index: bc = platform + platform_b(B+C 总和, 京东主体口径, 勿拆成单独 B 仓)
-        from datetime import datetime as dt, UTC
+        from datetime import datetime as dt, timezone
         from collections import defaultdict
         _conn = sqlite3.connect(DB_PATH)
         _conn.row_factory = sqlite3.Row
@@ -231,7 +231,7 @@ def stock_risk(channel: str = 'jd', full: int = 0):
       C仓可用 / 融合日销，可用 < 安全线 且 > 0
     """
     db = get_db()
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
 
     # 读取补货参数
     cfg_rows = db.table("replenishment_config").select("*").eq("channel", channel).execute().data or []

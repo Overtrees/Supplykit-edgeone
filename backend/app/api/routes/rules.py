@@ -14,10 +14,10 @@ _rules_cache = {}
 def _bump_rules_version(db):
     """递增 _rules_version(规则变更版本)——alerts 缓存校验它, 规则操作后告警即时失效"""
     try:
-        from datetime import datetime, UTC
+        from datetime import datetime, timezone
         v = db.table("replenishment_config").select("*").eq("key", "_rules_version").execute().data
         nv = (int(v[0]["value"]) + 1) if v and v[0].get("value") else 1
-        db.table("replenishment_config").upsert({"key": "_rules_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(UTC).isoformat()}, conflict_col='key')
+        db.table("replenishment_config").upsert({"key": "_rules_version", "value": str(nv), "channel": "jd", "updated_at": datetime.now(timezone.utc).isoformat()}, conflict_col='key')
     except Exception:
         pass
 
@@ -98,8 +98,8 @@ def delete_rule(rule_id: int, db = get_db()):
     _rules_cache.clear(); _bump_rules_version(db)
     try:
         # 软删除
-        from datetime import datetime, UTC
-        db.table("rules").update({"is_active": 0, "deleted_at": datetime.now(UTC).isoformat()}).eq("id", rule_id).execute()
+        from datetime import datetime, timezone
+        db.table("rules").update({"is_active": 0, "deleted_at": datetime.now(timezone.utc).isoformat()}).eq("id", rule_id).execute()
         _sync_alerts_for_rules([rule_id], True, db)
         from app.api.routes.ws import broadcast_sync; broadcast_sync("data.updated")
         return ok({"message": "已删除", "id": rule_id})
@@ -178,7 +178,7 @@ def batch_rules(body: dict, channel: str = '', db = get_db()):
 
     主体隔离: 批量操作只允许命中本渠道规则(id 全局唯一但跨渠道误传时禁止生效, 双保险)
     """
-    from datetime import datetime, UTC
+    from datetime import datetime, timezone
     action = body.get("action", "")
     ids = [int(x) for x in (body.get("ids") or []) if isinstance(x, int) or str(x).isdigit()]
     if not ids:
@@ -190,7 +190,7 @@ def batch_rules(body: dict, channel: str = '', db = get_db()):
             return q.eq("channel", channel)
         return q
     if action == 'delete':
-        _scoped(db.table("rules").update({"is_active": 0, "deleted_at": datetime.now(UTC).isoformat()}).in_("id", ids)).execute()
+        _scoped(db.table("rules").update({"is_active": 0, "deleted_at": datetime.now(timezone.utc).isoformat()}).in_("id", ids)).execute()
         _sync_alerts_for_rules(ids, True, db, channel)
     elif action == 'purge':
         # 批量永久删除（回收站用）：硬删除规则，关联告警一并清理
