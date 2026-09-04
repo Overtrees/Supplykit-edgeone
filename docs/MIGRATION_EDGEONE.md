@@ -20,9 +20,10 @@
 | Python 版本 | 3.11（PA） | **3.10** | `datetime.UTC` 43 处（3.11+ API）→ 批量改 `timezone.utc`（**已完成 Phase 1，20 文件 45/45 通过 3.10 语法验证**）；无其他 3.11+ 特性 |
 | SQLite 数据层 | 214 ORM + 322 原生 SQL + 59 PRAGMA | **无持久文件系统** | 数据层换 TiDB（已有新加坡实例）或腾讯云 TDSQL；ORM 适配 |
 | APScheduler 常驻任务 | 10 个（快照/归档/备份/规则/checkpoint 等） | **无常驻进程、单次≤120s** | ✅ **Makers 原生 `schedules` 支持**（edgeone.json cron 表达式+时区+触发路径，上限10条）——1:1 映射，无需外部 cron（CLI schema 实测确认） |
-| WebSocket | `/ws/events`（清洗进度推送） | 不支持 WS | 改轮询/SSE |
-| 线程长任务 | seed 填充（分钟级）、清洗导入、导出 | 单次执行 ≤120s | 拆分/异步化，导入文件需走 COS |
-| 请求体 | 清洗 CSV 导入 | **≤6MB** | 大文件走 COS 预签名上传 |
+| WebSocket | `/ws/events`（清洗进度推送） | 平台层✅/函数层⚠️ | **修正：EO 平台层原生支持 WS**（站点加速→网络优化开启，HTTP/1.1，超时最长 300s）；Cloud Functions 运行时 ASGI WS 待实测（120s 上限内短连接可用）；前端已有轮询兜底，优先级低 |
+| 线程长任务 | seed 填充（分钟级）、清洗导入、导出 | 单次执行 ≤120s | 拆分/异步化；**文件存储用 Blob 预签名 URL 直传**（createUploadUrl，绕开函数中转） |
+| 请求体 | 清洗 CSV 导入 | **≤6MB** | Blob 预签名直传解决 |
+| **存储** | — | KV（仅 Edge Functions，1GB）；Blob（Cloud/Edge 通用 1GB，**当前仅 Node.js SDK**，Python SDK 开发中） | **修正：Python 函数暂无法用平台内置存储**——数据层更依赖 TiDB；导出/导入文件需 Blob 预签名（Node 中间层）或 COS |
 | 免费额度 | — | Cloud Functions 100万次/月、KV/Blob 各 1GB、构建 500次/月 | 当前用量 ~6-7万次/月，余量充足 |
 
 ## 3. 迁移前后优势对比
@@ -36,7 +37,7 @@
 | **数据安全** | SQLite 单文件 + 自愈 + 异地备份 | TiDB 多副本托管 | 🟢 更强 |
 | **出站限制** | PA 白名单（TiDB 连不了，已实测） | Makers 出站无白名单（可连 TiDB 新加坡） | 🟢 解除 |
 | **响应性** | 看板 1.7s 基线 | TiDB 跨公网 RTT + 函数冷启动；大陆地域部署后用户侧更快 | 🟡 服务器侧略降、用户侧提升 |
-| **常驻能力** | scheduler/WS/线程任务全支持 | 全不支持（需外部化改造） | 🔴 架构改造量最大 |
+| **常驻能力** | scheduler/WS/线程任务全支持 | **修正**：scheduler→`schedules` 原生映射✅；WS 平台层支持✅；线程长任务受 120s 限制 | 🟡 改造量下调（schedules 免外部 cron） |
 | **数据层** | SQLite 全功能（PRAGMA/WAL/自愈） | 需迁移 TiDB（20-40 人日白皮书估） | 🔴 核心工作量 |
 | **改造量** | — | 数据层 + 任务系统 + WS + 版本兼容 | 🔴 估 3-6 周（单人） |
 | **备案** | 无需 | 大陆加速区域自定义域名**需备案**；平台默认域名免备案但体验差 | 🟡 注意项 |
@@ -47,7 +48,7 @@
 1. **Phase 0（已完成）**：备份 tag + 归档；环境调试（token/region/CLI 全通）
 2. **Phase 1**：建 `feat/edgeone` 分支；`datetime.UTC`→`timezone.utc`（43 处）；本地 3.10 语法门禁验证
 3. **Phase 2**：TiDB 建库 + 数据迁移（全量演练）；ORM 适配层（SQLite/TiDB 双后端）
-4. **Phase 3**：任务系统外部化（GitHub Actions cron 调 API）；WS→轮询；导入走 COS
+4. **Phase 3**：schedules 映射 10 个常驻任务（edgeone.json）；WS 实测（平台层已开启则保留，否则轮询）；导入/导出走 Blob 预签名（Node 中间层或 COS）
 5. **Phase 4**：前端部署 Makers（Vite 构建零改动）+ 自定义域名（备案或先用默认域）；CF 保留
 6. **Phase 5**：双跑验证（PA 版为主、Makers 版影子验证数据一致性）→ 切流量 → 观察 2 周 → 停 PA
 
@@ -62,5 +63,5 @@
 - 迁移**技术上可行**（Python 3.10 + FastAPI 原生支持已确认），国内访问是质变收益
 - 代价是架构改造（数据层/任务系统/WS），**不是部署搬家而是适配迁移**
 - 收益排序：国内访问(大) > 配额根治 > 部署现代化 > 托管稳定性
-- 成本排序：数据层迁移 > 任务外部化 > WS 改造 > 版本兼容
+- 成本排序：数据层迁移 > 文件存储适配（Blob Python SDK 未就绪）> 任务映射（schedules 原生，轻）> 版本兼容（已完成）
 - 建议：接受 3-6 周改造 + Phase 2 RU 实测门禁，可启动；否则维持现状（PA+SQLite）或转轻量服务器（零改造）
