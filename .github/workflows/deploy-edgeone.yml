@@ -1,0 +1,94 @@
+name: Deploy to EdgeOne Makers (迁移版)
+
+on:
+  push:
+    branches: [feat/edgeone]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'cloud-functions/**'
+      - 'edgeone.json'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Python 3.10 语法门禁 (Makers 运行时版本)
+        run: |
+          set -e
+          # 门禁: 以 3.10 为目标版本验证全项目——Makers Cloud Functions 运行时是 Python 3.10
+          # 防"本地 3.12 合法/3.10 不合法"语法漏检(2026-09-04 事故同型)
+          python3 - <<'EOF'
+          import ast, pathlib, sys
+          bad = []
+          for f in pathlib.Path('backend/app').rglob('*.py'):
+              try:
+                  ast.parse(f.read_text(encoding='utf-8'), feature_version=(3, 10))
+              except SyntaxError as e:
+                  bad.append(f'{f}: {e}')
+          if bad:
+              for b in bad: print('❌', b)
+              sys.exit(1)
+          print('✅ Python 3.10 语法检查通过')
+          EOF
+
+      - name: Install EdgeOne CLI
+        run: npm install -g edgeone@latest
+
+      - name: Deploy backend to EdgeOne Makers
+        env:
+          EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
+          EDGEONE_PAGES_API_REGION: china
+        run: |
+          set -e
+          # 部署 Makers 项目(自动构建 cloud-functions 并发布)
+          edgeone makers deploy -n supplykit -e production -t "$EDGEONE_PAGES_API_TOKEN"
+          echo "✅ EdgeOne Makers 部署已触发"
+
+      - name: Set TiDB env vars on Makers project (API 直设)
+        env:
+          EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
+          TIDB_HOST: ${{ secrets.TIDB_HOST }}
+          TIDB_PORT: ${{ secrets.TIDB_PORT }}
+          TIDB_USER: ${{ secrets.TIDB_USER }}
+          TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+          TIDB_DB: ${{ secrets.TIDB_DB }}
+        run: |
+          set -e
+          # 用 pages-api 直接设置 env(CLI env set 需 link 项目, CI 下不可靠)
+          # 先查项目 ID
+          PROJ=$(curl -s -X POST "https://pages-api.cloud.tencent.com/v1" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $EDGEONE_PAGES_API_TOKEN" \
+            -d '{"Action":"DescribePagesProjects","Filters":[{"Name":"Name","Values":["supplykit"]}],"Offset":0,"Limit":10}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['Data']['Response']['Projects'][0]['ProjectId'])")
+          echo "ProjectId: $PROJ"
+          # 构造 env payload
+          python3 - "$PROJ" <<'PYEOF'
+          import json, sys, os
+          pid = sys.argv[1]
+          envs = [
+              {"Key": "TIDB_HOST", "Value": os.environ["TIDB_HOST"]},
+              {"Key": "TIDB_PORT", "Value": os.environ["TIDB_PORT"]},
+              {"Key": "TIDB_USER", "Value": os.environ["TIDB_USER"]},
+              {"Key": "TIDB_PASSWORD", "Value": os.environ["TIDB_PASSWORD"]},
+              {"Key": "TIDB_DB", "Value": os.environ["TIDB_DB"]},
+              {"Key": "TIDB_SSL", "Value": "true"},
+          ]
+          payload = {"Action": "ModifyPagesProjectEnvs", "ProjectId": pid, "EnvVars": envs}
+          open("/tmp/env_payload.json", "w").write(json.dumps(payload))
+          PYEOF
+          curl -s -X POST "https://pages-api.cloud.tencent.com/v1" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $EDGEONE_PAGES_API_TOKEN" \
+            -d @/tmp/env_payload.json | tee /tmp/env_resp.json
+          echo
+          python3 -c "import json; d=json.load(open('/tmp/env_resp.json')); assert d.get('Code')==0, d; print('✅ TiDB env 设置成功')"

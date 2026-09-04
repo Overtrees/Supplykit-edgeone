@@ -1,0 +1,15 @@
+{
+  "name": "supplykit",
+  "cloudFunctions": {
+    "maxDuration": 120,
+    "regions": {
+      "mainland": ["ap-guangzhou"],
+      "overseas": ["ap-singapore"]
+    },
+    "includeFiles": [
+      "backend/app/**/*.py",
+      "backend/app/**/*.json"
+    ]
+  },
+  "outputDirectory": "frontend/dist"
+}
