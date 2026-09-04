@@ -23,7 +23,7 @@
 | WebSocket | `/ws/events`（清洗进度推送） | 平台层✅/函数层⚠️ | **修正：EO 平台层原生支持 WS**（站点加速→网络优化开启，HTTP/1.1，超时最长 300s）；Cloud Functions 运行时 ASGI WS 待实测（120s 上限内短连接可用）；前端已有轮询兜底，优先级低 |
 | 线程长任务 | seed 填充（分钟级）、清洗导入、导出 | 单次执行 ≤120s | 拆分/异步化；**文件存储用 Blob 预签名 URL 直传**（createUploadUrl，绕开函数中转） |
 | 请求体 | 清洗 CSV 导入 | **≤6MB** | Blob 预签名直传解决 |
-| **存储** | — | KV（仅 Edge Functions，1GB）；Blob（Cloud/Edge 通用 1GB，**当前仅 Node.js SDK**，Python SDK 开发中） | **修正：Python 函数暂无法用平台内置存储**——数据层更依赖 TiDB；导出/导入文件需 Blob 预签名（Node 中间层）或 COS |
+| **存储** | — | KV（仅 Edge Functions，1GB）；Blob（Cloud/Edge 通用 1GB，Node.js SDK 现成，Python SDK 开发中）；**Python 函数可用 `context.agent.store`**（Blob 底层，snake_case API，跨实例持久化，CLI≥1.6.26 已满足） | **修正 2 次**：Python 可经 `context.agent.store` 存 JSON/会话态（非 SQL）；SQL 数据仍需 TiDB；大文件走 Blob 预签名（Node 中间层）或 COS |
 | 免费额度 | — | Cloud Functions 100万次/月、KV/Blob 各 1GB、构建 500次/月 | 当前用量 ~6-7万次/月，余量充足 |
 
 ## 3. 迁移前后优势对比
@@ -63,5 +63,5 @@
 - 迁移**技术上可行**（Python 3.10 + FastAPI 原生支持已确认），国内访问是质变收益
 - 代价是架构改造（数据层/任务系统/WS），**不是部署搬家而是适配迁移**
 - 收益排序：国内访问(大) > 配额根治 > 部署现代化 > 托管稳定性
-- 成本排序：数据层迁移 > 文件存储适配（Blob Python SDK 未就绪）> 任务映射（schedules 原生，轻）> 版本兼容（已完成）
+- 成本排序：数据层迁移（TiDB，最大） > 文件存储适配（Blob 预签名/Node 中间层/COS） > 任务映射（schedules 原生，轻） > 版本兼容（已完成）
 - 建议：接受 3-6 周改造 + Phase 2 RU 实测门禁，可启动；否则维持现状（PA+SQLite）或转轻量服务器（零改造）
