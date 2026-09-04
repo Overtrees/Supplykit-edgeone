@@ -68,3 +68,21 @@
 **方案对比**：TiKV/TiDB 自建（3 节点成本↑）> TiDB Cloud Serverless（建议，按量计费）> 维持 SQLite+归档（中短期够用）
 
 **风险预案**：迁移期间保留 SQLite 为 read 后备；双写双读窗口 2-4 周；回滚点 = 全量快照。
+
+## 6. 免费版（Starter）官方口径验证补充（2026-09-04）
+
+**免费配额**（官方定价详情页实测）：每实例每月 **5 GiB 行存 + 5 GiB 列存 + 5000 万 RU**；每组织最多 5 个免费实例（合计 25 GiB + 2.5 亿 RU/月）。
+
+**存储**：按**逻辑容量**计费（$0.2/GiB-月），多副本含在价格内，非物理 3 倍计费——当前线上 125MB，5 GiB 余量 ~40 倍，**存储不是瓶颈**。
+
+**RU 是硬约束**：读 64KiB payload=1RU / 8 read req=1RU、写 2KiB=1RU、SQL CPU 3ms=1RU、**公网出口 1KiB=1RU**（PA→TiDB 跨公网返回数据直接吃 RU；`EXPLAIN ANALYZE` 不含出口 RU，易低估）。免费版单查询内存上限 256 MiB。
+
+**配额耗尽行为（比预想严重）**：免费实例任一配额超限 → **立即拒绝新连接 + 存量连接限流**，直到设消费上限或下月重置——不是"响应微降"而是**服务拒连**。
+
+**粗算**：看板 summary 全量重建（扫 18.5 万行）单次 ~1-3K RU，3min TTL 下日耗接近 167 万 RU/天上限（5000 万/月）；补货全 SKU 扫描同量级。**免费 RU 下定期全量重建有耗尽风险**。
+
+**时区**：TiDB `time_zone` 默认 SYSTEM（托管实例通常 UTC），与 SQLite `datetime('now')`=UTC 语义一致；建实例后 `SELECT @@system_time_zone` 实测确认。代码 6 处 UTC 均为 Python 层，不受影响。
+
+**休眠**：现行官方文档**未见自动休眠条款**（旧 Serverless 曾有 5min idle sleep）；仅公网连接 idle timeout 断连。唤醒延迟不可断言，建实例后实测。
+
+**代码审计修正**（相对 §3）：PRAGMA 59 处（原 54）、`||` 拼接 **0 处**（原"若干"不实）、strftime 64、INSERT OR 35、ON CONFLICT 5、AUTOINCREMENT 0。
