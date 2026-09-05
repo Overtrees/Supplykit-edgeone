@@ -13,13 +13,13 @@ from db import query, one, execute
 app = FastAPI()
 
 
-@app.get("/__p")
+@app.get("/api/__p")
 def path_probe(request):
     """探针: 返回 FastAPI 视角的请求路径(定位前缀剥离行为)"""
     return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
 
 
-@app.get("/health")
+@app.get("/api/health")
 def health():
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
     try:
@@ -36,7 +36,7 @@ def health():
     return out
 
 
-@app.get("/debug/verify")
+@app.get("/api/debug/verify")
 def debug_verify():
     """数据层验证: 三个核心聚合的原生 TiDB SQL"""
     out = {"ok": True}
