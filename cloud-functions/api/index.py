@@ -13,6 +13,12 @@ from db import query, one, execute
 app = FastAPI()
 
 
+@app.get("/__p")
+def path_probe(request):
+    """探针: 返回 FastAPI 视角的请求路径(定位前缀剥离行为)"""
+    return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
+
+
 @app.get("/health")
 def health():
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
