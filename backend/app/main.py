@@ -88,19 +88,22 @@ from app.api.routes.records import router as records_router
 # 否则 auth.SECRET 为空导致所有 token 401(自愈重启后每次复现)
 if not os.getenv("JWT_SECRET"):
     try:
-        import sqlite3 as _sj
-        from app.core.database import DB_PATH as _DBJ
-        _cj = _sj.connect(_DBJ); _cj.execute("PRAGMA busy_timeout=3000")
+        from app.core.database import get_conn as _gj
+        _cj = _gj()
         _rj = _cj.execute("SELECT value FROM replenishment_config WHERE key='jwt_secret'").fetchone()
-        if _rj and _rj[0]:
-            os.environ["JWT_SECRET"] = _rj[0]
+        _val = _rj['value'] if _rj else None
+        if _val:
+            os.environ["JWT_SECRET"] = _val
         else:
             import hashlib as _hl
             _sec = _hl.sha256(os.urandom(64)).hexdigest()[:48]
             _cj.execute("INSERT OR REPLACE INTO replenishment_config(key,value,channel) VALUES('jwt_secret',?,'jd')", (_sec,))
             _cj.commit()
             os.environ["JWT_SECRET"] = _sec
-        _cj.close()
+        try:
+            _cj.close()
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -117,6 +120,9 @@ from app.core.monitor import record as monitor_record
 
 # 灾害自愈(前置): 先检查 DB 损坏并在 init_db 前从备份恢复——曾因 init_db 连损坏库即崩致 app 全 500
 try:
+    from app.core.database import _backend as _bk1
+    if _bk1() == "tidb":
+        raise RuntimeError("skip sqlite-only selfheal on tidb")
     import sqlite3 as _sqlite3, gzip as _gzip, shutil as _shutil, glob as _sglob, os as _os, time as _time
     from app.core.database import DB_PATH as _DB_PATH
     try:
@@ -195,19 +201,22 @@ except Exception as _ide:
 
 # 启动时清理卡死的后台任务（running 超过 10 分钟视为线程已死，标记 error 释放线程池）
 try:
-    import sqlite3 as _s3
-    from app.core.database import DB_PATH as _DP
-    _c = _s3.connect(_DP)
-    _c.execute("PRAGMA busy_timeout=10000")
+    from app.core.database import get_conn as _g4
+    _c = _g4()
     _c.execute("UPDATE sync_tasks SET status='error', result='{\"error\":\"stale task cleaned on restart\"}', updated_at=datetime('now') "
         "WHERE status='running' AND updated_at < datetime('now', '-10 minutes')")
     _c.commit()
-    _c.close()
+    if hasattr(_c, 'close'):
+        try: _c.close()
+        except Exception: pass
 except Exception:
     pass
 
 # 数据库完整性自动恢复（启动时检测损坏，自动 VACUUM 或从备份恢复）
 try:
+    from app.core.database import _backend as _bk2
+    if _bk2() == "tidb":
+        raise RuntimeError("skip sqlite-only integrity check on tidb")
     import sqlite3 as _sqlite3, glob as _glob, os as _os, shutil as _shutil
     from app.core.database import DB_PATH as _DB_PATH
     _c = _sqlite3.connect(_DB_PATH)
@@ -260,6 +269,9 @@ except Exception as _e:
 # 灾害自愈: 检测 DB 损坏(database disk image is malformed)→自动从最近备份 gz 解压恢复
 # (8-28/9-2 事故沉淀: 磁盘满/SQLite写失败致 malformed, app 全500; 备份在 app 目录, 启动时无console也能恢复)
 try:
+    from app.core.database import _backend as _bk3
+    if _bk3() == "tidb":
+        raise RuntimeError("skip sqlite-only WAL checkpoint on tidb")
     import sqlite3 as _sqlite3, gzip as _gzip, shutil as _shutil, glob as _sglob, os as _os, time as _time
     from app.core.database import DB_PATH as _DB_PATH
     _dc = _sqlite3.connect(_DB_PATH)
@@ -290,17 +302,22 @@ start_scheduler()
 # 初始化 JWT SECRET（持久化到数据库，跨重启 token 有效）
 if not os.getenv("JWT_SECRET"):
     try:
-        _cj = _sqlite3.connect(_DB_PATH)
+        from app.core.database import get_conn as _gj2
+        _cj = _gj2()
         _rj = _cj.execute("SELECT value FROM replenishment_config WHERE key='jwt_secret'").fetchone()
-        if _rj and _rj[0]:
-            os.environ["JWT_SECRET"] = _rj[0]
+        _val = _rj['value'] if _rj else None
+        if _val:
+            os.environ["JWT_SECRET"] = _val
         else:
             import hashlib as _hl
             _secret = _hl.sha256(os.urandom(64)).hexdigest()[:48]
             _cj.execute("INSERT OR REPLACE INTO replenishment_config(key,value,channel) VALUES('jwt_secret',?,'jd')", (_secret,))
             _cj.commit()
             os.environ["JWT_SECRET"] = _secret
-        _cj.close()
+        try:
+            _cj.close()
+        except Exception:
+            pass
     except Exception:
         pass
 
