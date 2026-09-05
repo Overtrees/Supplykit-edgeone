@@ -92,7 +92,8 @@ def _make_fallback(error):
     def health():
         return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)",
                 "error": str(error)[:200], "vendor": _VENDOR_INFO,
-                "sys_path": [p for p in sys.path if 'vendor' in p or 'api' in p][:5]}
+                "import_diag": _IMPORT_DIAG,
+                "sys_path": [p for p in sys.path if 'vendor' in p or 'api' in p or 'var/user' in p][:8]}
 
     @f.get("/tidb-test")
     def tidb_test():
@@ -124,6 +125,20 @@ def _make_fallback(error):
 
 
 # 组装 app(backend 优先, fallback 兜底)
+_IMPORT_DIAG = {}
+try:
+    import app as _pkg_app
+    _IMPORT_DIAG["app_ok"] = True
+    _IMPORT_DIAG["app_path"] = list(getattr(_pkg_app, "__path__", []))
+except Exception as _iae:
+    _IMPORT_DIAG["app_ok"] = False
+    _IMPORT_DIAG["app_err"] = "%s: %s" % (type(_iae).__name__, str(_iae)[:200])
+    _IMPORT_DIAG["found"] = []
+    for _p in sys.path:
+        _pa = os.path.join(_p, "app")
+        if os.path.isdir(_pa):
+            _IMPORT_DIAG["found"].append({"path": _p, "has_init": os.path.isfile(os.path.join(_pa, "__init__.py")),
+                                          "files": sorted(os.listdir(_pa))[:6]})
 try:
     from app.main import app as _supplykit_app
     _final_app = _ApiPrefixProxy(_supplykit_app)
