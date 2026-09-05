@@ -103,6 +103,8 @@ class _ApiPrefixProxy:
             return
         if not path.startswith("/api"):
             scope["path"] = "/api" + path
+        # 清 root_path: Makers 框架设置 root_path=/api, 可能并入 FastAPI 路由/URL 匹配
+        scope["root_path"] = ""
         await self.app(scope, receive, send)
 
 
