@@ -9,7 +9,19 @@ router = APIRouter(prefix="/api/exports", tags=["exports"])
 
 # 导出文件目录
 EXPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'exports')
-os.makedirs(EXPORT_DIR, exist_ok=True)
+# 只读环境(Makers 函数沙箱)回退系统临时目录
+try:
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    _probe = os.path.join(EXPORT_DIR, '.w_probe')
+    with open(_probe, 'w') as _pf:
+        _pf.write('ok')
+    os.remove(_probe)
+except Exception:
+    EXPORT_DIR = '/tmp'
+    try:
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+    except Exception:
+        pass
 
 
 @router.post("")
