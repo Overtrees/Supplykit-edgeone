@@ -3,12 +3,13 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute, table
-from routes.common import ok, fail, create_token, verify_token, hash_password, check_password
+from routes.common import ok, fail, create_token, verify_token, hash_password, check_password, traced
 
 router = APIRouter(tags=["auth"])
 
 
 @router.post("/auth/setup")
+@traced
 async def setup(request: Request):
     """首次设置管理员密码(兼容 query/body 两种传参)"""
     data = {}
@@ -32,6 +33,7 @@ async def setup(request: Request):
 
 
 @router.post("/auth/login")
+@traced
 async def login(request: Request):
     data = {}
     try:
@@ -52,6 +54,7 @@ async def login(request: Request):
 
 
 @router.get("/auth/check")
+@traced
 def check_auth(request: Request):
     auth = request.headers.get("Authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ""

@@ -79,3 +79,33 @@ def check_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(key.hex(), key_hex)
     except Exception:
         return False
+
+
+# ── 统一异常追踪装饰器(所有路由自动捕获返回 detail+tb, 状态 200 防 Makers 转页) ──
+def traced(handler):
+    """包装 FastAPI 路由: 异常返回 {ok:False, error, detail, tb}(200 状态避免 Makers 500 转页)"""
+    from functools import wraps
+    import traceback as _tb
+    import asyncio as _ai
+
+    def _err(e):
+        return {"ok": False, "error": "handler-error",
+                "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
+                "tb": _tb.format_exc(limit=15)[-2000:]}
+
+    if _ai.iscoroutinefunction(handler):
+        @wraps(handler)
+        async def _awrap(*args, **kwargs):
+            try:
+                return await handler(*args, **kwargs)
+            except Exception as e:
+                return _err(e)
+        return _awrap
+
+    @wraps(handler)
+    def _wrap(*args, **kwargs):
+        try:
+            return handler(*args, **kwargs)
+        except Exception as e:
+            return _err(e)
+    return _wrap

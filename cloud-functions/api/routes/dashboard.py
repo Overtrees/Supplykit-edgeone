@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 
 from db import query, one
-from routes.common import ok, fail, PAID_STATUSES
+from routes.common import ok, fail, PAID_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
 
@@ -17,16 +17,8 @@ def _status_cond(col="order_status"):
 
 
 @router.get("/dashboard/summary")
+@traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
-    try:
-        return _summary_impl(channel, start_date, end_date)
-    except Exception as e:
-        import traceback as _tb
-        return {"ok": False, "error": "summary-error", "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
-                "tb": _tb.format_exc(limit=15)[-2000:]}
-
-
-def _summary_impl(channel: str, start_date: str = "", end_date: str = ""):
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
@@ -140,9 +132,9 @@ def _assemble(rows, channel, start_date, end_date):
     tg, to = _agg(today_s, today_s)
     pg, po = _agg(d1, d1)
     wg, wo = _agg(d7, today_s)
-    pwg, pwo = _agg(d8, d14)
+    pwg, pwo = _agg(d14, d8)
     mg, mo = _agg(d30, today_s)
-    pmg, pmo = _agg(d31, d60)
+    pmg, pmo = _agg(d60, d31)
 
     periods = {
         "today": {"gmv": tg, "orders": to, "days": 1, "prev_gmv": pg, "prev_orders": po,
