@@ -74,6 +74,7 @@ _diag_app = FastAPI()
 @_diag_app.get("/__entry")
 def _entry_status():
     import sys as _sys
+    import os as _os2
     mt_ok = False
     mt_err = ""
     try:
@@ -86,7 +87,7 @@ def _entry_status():
         "migrate_tool_import": mt_ok,
         "migrate_tool_err": mt_err,
         "sys_path_tail": list(_sys.path)[-8:],
-        "cwd": _os.getcwd() if hasattr(_os, 'getcwd') else "",
+        "cwd": _os2.getcwd(),
     }
 
 
