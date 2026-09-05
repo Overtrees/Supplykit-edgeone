@@ -23,6 +23,14 @@ from routes.common import verify_token
 app = FastAPI()
 
 
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    import traceback as _tb
+    return JSONResponse({"ok": False, "error": "服务器内部错误",
+                         "detail": str(exc)[:400],
+                         "tb": _tb.format_exc(limit=10)[-1200:]}, status_code=500)
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, next):
     """鉴权: auth/health/debug 放行, 其余需 Bearer; demo 只读"""
