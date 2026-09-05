@@ -4,7 +4,7 @@
       db.table("orders").select("*").eq("order_no","xxx").execute()
       db.table("orders").insert([{"order_no":"xxx"}]).execute()
 """
-import sqlite3, json, os, threading, concurrent.futures
+import sqlite3, json, os, threading, concurrent.futures, re
 from datetime import datetime, timezone
 from collections import defaultdict
 from typing import Any, Optional
@@ -595,7 +595,25 @@ def incremental_vacuum(db=None):
         return False
 
 
+def _backend():
+    """当前数据后端: sqlite(默认) / tidb(Phase2 迁移)"""
+    return os.getenv("DB_BACKEND", "sqlite").lower()
+
+
+def _finalize_sql(sql):
+    """SQL 后端适配: tidb 时 SQLite 方言→TiDB + 双引号标识符→反引号 + ? → %s"""
+    if _backend() != "tidb":
+        return sql
+    from app.core.dialect import to_tidb
+    sql = to_tidb(sql)
+    sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'`\1`', sql)
+    return sql.replace("?", "%s")
+
+
 def get_conn():
+    if _backend() == "tidb":
+        from app.core.tidb_backend import get_conn as _tidb_conn
+        return _tidb_conn()
     if not hasattr(_local, "conn") or _local.conn is None:
         _local.conn = sqlite3.connect(DB_PATH)
         _local.conn.row_factory = sqlite3.Row
@@ -620,7 +638,9 @@ def get_conn():
     return _local.conn
 
 def _quote_col(col):
-    "转义列名中的双引号，防止SQL注入"
+    "转义列名(按后端: sqlite 双引号 / tidb 反引号), 防SQL注入"
+    if _backend() == "tidb":
+        return "`" + col.replace("`", "``") + "`"
     return '"' + col.replace('"', '""') + '"'
 
 
@@ -710,23 +730,30 @@ class QueryBuilder:
         return " AND ".join(self._where) if self._where else "1=1"
 
     def execute(self):
-        cursor = self.conn.execute
-        if self._select_cols.startswith("count"):
+        cur = self.conn.cursor()
+        try:
+            if self._select_cols.startswith("count"):
+                sql = f'SELECT {self._select_cols} FROM "{self.table}" WHERE {self._build_where()}'
+                cur.execute(_finalize_sql(sql), self._params)
+                row = cur.fetchone()
+                # sqlite3.Row 用下标; pymysql DictCursor 是 dict
+                _c = row[0] if row is not None else 0
+                if isinstance(_c, dict):
+                    _c = list(_c.values())[0] if _c else 0
+                result = ExecuteResult([], count=_c or 0)
+                if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] count {self.table} → {result.count}")
+                return result
             sql = f'SELECT {self._select_cols} FROM "{self.table}" WHERE {self._build_where()}'
-            cur = cursor(sql, self._params)
-            row = cur.fetchone()
-            result = ExecuteResult([], count=row[0] if row else 0)
-            if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] count {self.table} → {result.count}")
+            if self._order: sql += " " + self._order
+            if self._limit: sql += f" LIMIT {self._limit}"
+            if self._offset: sql += f" OFFSET {self._offset}"
+            cur.execute(_finalize_sql(sql), self._params)
+            rows = [dict(r) for r in cur.fetchall()]
+            result = ExecuteResult(rows)
+            if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] query {self.table} → {len(rows)} rows")
             return result
-        sql = f'SELECT {self._select_cols} FROM "{self.table}" WHERE {self._build_where()}'
-        if self._order: sql += " " + self._order
-        if self._limit: sql += f" LIMIT {self._limit}"
-        if self._offset: sql += f" OFFSET {self._offset}"
-        cur = cursor(sql, self._params)
-        rows = [dict(r) for r in cur.fetchall()]
-        result = ExecuteResult(rows)
-        if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] query {self.table} → {len(rows)} rows")
-        return result
+        finally:
+            cur.close()
 
 class ExecuteResult:
     def __init__(self, data, count=None):
@@ -741,6 +768,11 @@ def _write_execute(conn, sql, params=None, retries=3):
     写锁竞争常见，busy_timeout 等待超时即抛 locked → 500。
     统一在此重试（SQLite 应用标准做法），替代逐接口打补丁。
     """
+    # TiDB 后端: 走 tidb_backend.execute(已含方言转换/commit)
+    if _backend() == "tidb":
+        from app.core.tidb_backend import execute as _t_exec
+        _t_exec(_finalize_sql(sql), params or ())
+        return None
     import time as _t
     for attempt in range(retries + 1):
         try:
@@ -766,8 +798,13 @@ class InsertBuilder:
         self.conn = conn
 
     def execute(self):
-        now = datetime.now(timezone.utc).isoformat()
-        sql = f'INSERT INTO "{self.table}" ({self._cols}) VALUES ({self._vals})'
+        sql = _finalize_sql(f'INSERT INTO "{self.table}" ({self._cols}) VALUES ({self._vals})')
+        if _backend() == "tidb":
+            from app.core.tidb_backend import execute_lastrowid
+            rid = execute_lastrowid(sql, self._params)
+            result = ExecuteResult([{"id": rid}])
+            if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] insert {self.table} → id={rid}")
+            return result
         cur = _write_execute(self.conn, sql, self._params)
         result = ExecuteResult([{"id": cur.lastrowid}])
         if os.getenv('DB_LOG'): import logging; logging.info(f"[DB] insert {self.table} → id={cur.lastrowid}")
@@ -800,7 +837,7 @@ class UpdateBuilder:
             raise Exception("UPDATE without WHERE is not allowed")
         sets = ", ".join(f'"{k}" = ?' for k in self.data)
         vals = list(self.data.values()) + self._params
-        sql = f'UPDATE "{self.table}" SET {sets} WHERE {" AND ".join(self._where)}'
+        sql = _finalize_sql(f'UPDATE "{self.table}" SET {sets} WHERE {" AND ".join(self._where)}')
         _write_execute(self.conn, sql, vals)
         return ExecuteResult([])
 
@@ -833,7 +870,7 @@ class DeleteBuilder:
     def execute(self):
         if not self._where:
             raise Exception("DELETE without WHERE is not allowed")
-        sql = f'DELETE FROM "{self.table}" WHERE {" AND ".join(self._where)}'
+        sql = _finalize_sql(f'DELETE FROM "{self.table}" WHERE {" AND ".join(self._where)}')
         _write_execute(self.conn, sql, self._params)
         return ExecuteResult([])
 
@@ -866,15 +903,14 @@ class TableRef:
         return UpdateBuilder(self.table, self.conn, data)
 
     def upsert(self, row, conflict_col='id'):
-        """INSERT OR REPLACE（SQLite 版 upsert）"""
+        """INSERT OR REPLACE（SQLite 版 upsert; TiDB 走 REPLACE INTO）"""
         if not row: raise Exception("upsert requires a dict")
         cols = list(row.keys())
         placeholders = ", ".join(["?"] * len(cols))
         col_names = ", ".join(f'"{c}"' for c in cols)
-        sql = f'INSERT OR REPLACE INTO "{self.table}" ({col_names}) VALUES ({placeholders})'
+        sql = _finalize_sql(f'INSERT OR REPLACE INTO "{self.table}" ({col_names}) VALUES ({placeholders})')
         params = [row.get(c) for c in cols]
-        self.conn.execute(sql, params)
-        self.conn.commit()
+        _write_execute(self.conn, sql, params)
         return ExecuteResult([])
 
     def delete(self):
@@ -919,6 +955,9 @@ def get_db():
 
 def init_db(path=None):
     """初始化数据库表结构"""
+    if _backend() == "tidb":
+        # TiDB 表结构由 Makers /migrate/build 管理(23表+31索引), 不在此建
+        return
     conn = sqlite3.connect(path or DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
