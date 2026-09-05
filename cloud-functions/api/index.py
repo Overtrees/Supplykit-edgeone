@@ -85,13 +85,14 @@ class _ApiPrefixProxy:
         # 诊断: 返回请求路径信息(定位中间件放行失效)
         if path == "/__diag" or path == "/api/__diag":
             import json as _json
-            body = _json.dumps({
-                "raw_path": (scope.get("raw_path") or b"").decode(errors="replace"),
-                "path": scope.get("path", ""),
-                "root_path": scope.get("root_path", ""),
-                "qs": (scope.get("query_string") or b"").decode(errors="replace"),
-                "full_path": scope.get("full_path", ""),
-            }).encode()
+            _before = {"path": scope.get("path", ""), "root_path": scope.get("root_path", "")}
+            # 执行正常修改逻辑后再输出
+            _modified = {}
+            if not path.startswith("/api"):
+                scope["path"] = "/api" + path
+            _modified = {"path": scope.get("path", ""), "root_path": scope.get("root_path", "")}
+            body = _json.dumps({"before": _before, "after": _modified,
+                                "raw_path": (scope.get("raw_path") or b"").decode(errors="replace")}).encode()
             hdrs = [[b"content-type", b"application/json"],
                     [b"content-length", str(len(body)).encode()]]
             await send({"type": "http.response.start", "status": 200, "headers": hdrs})
