@@ -41,6 +41,11 @@ Makers 函数生产域名直连 → **401 `X-EOP-MSG: eo_time missing`**(鉴权�
 - **Token 绑定域名**:Text 参数必须传域名,传 ProjectId 会得到 wrong token(实测踩坑)
 - 302 后的 Location 是无签名的干净 URL——重定向会丢 cookie,必须手动带 cookie 两步走(curl -c/-b)
 
+## 3.5 同源免签(浏览器会话, 2026-09-05 实测)
+- 签名 URL 302 种 cookie 后, **浏览器同源 fetch('/api/*') 直达函数 200**——静态页面 + API 整个站点 3h 内全通
+- curl 带 Origin/Referer 模拟仍 401——同源免签依赖真实浏览器会话(平台校验 Cookie 完整性)
+- **含义**: 前端部署 Makers 同域名 + VITE_API_BASE_URL 同源, 预览/签名会话内可跑前端全功能一比一; 生产公开访问仍需自定义域名或确认免签配置
+
 ## 4. Action 发现途径(按可靠性排序)
 
 1. **CLI 打包源码逆向**(最全):`/usr/local/lib/node_modules/edgeone/edgeone-dist/cli.js`(npm 全局安装后),grep `"Describe[A-Za-z]*"` / `action:"..."` 提取全部 Action;配合调用上下文理解参数

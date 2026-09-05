@@ -1,3 +1,18 @@
+## 2026-09-05 前端切换 Makers 全链路打通(重大里程碑)
+> **链路**: 浏览器(Makers 域名) → 同源 /api/* → Makers 函数 → TiDB。前端已切 Makers, PA 仅剩历史数据与回退。
+
+| 项 | 内容 |
+|---|---|
+| **前端切换** | frontend/.env 加 `VITE_API_BASE_URL=https://supplykit-qreqtomf.edgeone.cool`(同源), push 触发 Makers 重建 |
+| **同源免签机制(实测确认)** | Makers 域名整体受 eo_token 签名保护(静态+API, 大陆 IP 401, 报错提示 "Global MLC excluded 检查网络"); 但**签名 cookie(3h)会话内, 浏览器同源 fetch('/api/*') 直达函数免签**——curl 带 Origin 模拟仍 401, 真实浏览器同源 200(预览链接 302 Set-Cookie 后同源全通) |
+| **端到端验证** | edgeone.cool 打开前端 → demo/demo123 登录 → 看板全数据(GMV ¥294,214 与 curl 一致 / 环比 ↓5.0% / 濒临断货 BC 14 条 / 健康度 71) |
+| **契约修复** | LoginPage 原生 fetch 直连期待**平铺 {ok,token}**(非 ok() 包装)——auth 路由改平铺返回; 其他页面走 axios 拦截器(ok(data) 解包)不受影响 |
+| **坑** | "无法连接到服务器"根因=大陆出口请求 PA 被墙(非 Makers 问题); Makers 域名普通用户访问仍需签名(生产公开访问待自定义域名备案或海外免签确认) |
+
+### 结论
+3 小时预览/sign cookie 会话内可跑**前端全功能一比一**(已实证看板); 生产公开访问需自定义域名(大陆 ICP 备案, 用户暂无域名)或确认海外免签路径。
+
+
 ## 2026-09-04~09-05 Makers 迁移 Phase1+2 完成 + 方案B 原生重构(主线确立)
 > **主线变更**：EdgeOne Makers 迁移确立为现主线；PA 版退居保留/可回退（feat/edgeone 分支，远程 edgeone=Overtrees/Supplykit-edgeone）。
 > **关键决策**：SQLite 适配 TiDB 边际成本失控（双层方言差异+Makers 环境坑）→ 停适配，按 Makers 官方规范**原生重构**（复用纯 Python 业务逻辑，数据层直写 TiDB 方言，接口契约与前端零改动）。

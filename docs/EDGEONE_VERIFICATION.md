@@ -88,3 +88,16 @@ auth / dashboard(summary+aux+stock-risk) / replenishment(BBCC+传统) / orders /
 - 统一 @traced 异常追踪(异常返回 detail+tb, 200 状态防 Makers 转页)
 - local_test.py 21 项本地回归(mock db + TestClient, 部署前前置拦截 Python bug)
 - 部署域名: supplykit-qreqtomf.edgeone.cool(函数路由 ^/api(?:/.*)?$ → api/index.py)
+
+## 6. 前端切换 Makers 实证(2026-09-05)
+
+### 6.1 Makers 域名全站签名保护
+- PresetDomain(edgeone.cool)整体受 eo_token 签名保护: 静态资源与函数均 401(大陆 IP), 报错提示 "For Global (MLC excluded) projects, check your network environment"
+- **真实浏览器同源请求免签**: 签名 URL(302)种下 cookie(eo_token+eo_time, 3h)后, 同源 fetch('/api/*') 直达函数 200——curl 带 Origin 模拟仍 401, 必须真实浏览器会话
+- 结论: **3 小时预览/sign cookie 会话内可跑前端全功能一比一**(已实证登录+看板全数据)
+
+### 6.2 前端切换
+- frontend/.env: `VITE_API_BASE_URL=https://supplykit-qreqtomf.edgeone.cool`(同源), push 触发重建
+- 端到端: edgeone.cool → demo 登录 → 看板 GMV ¥294,214(与 curl 一致)/ 环比 / 断货 14 / 健康 71
+- **契约差异**: LoginPage 用原生 fetch(不走 axios 拦截器)期待平铺 {ok,token}; 原生 auth 已改平铺返回; 其他页面走 api client(ok(data) 解包)不受影响
+- 生产公开访问待自定义域名(大陆备案)或海外免签确认

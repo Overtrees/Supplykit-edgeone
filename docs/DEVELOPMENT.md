@@ -622,3 +622,11 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - `cloud-functions/api/local_test.py`: 21 项本地回归(mock db+TestClient)——**改代码先跑, Python 层 bug 部署前拦截**(TiDB 连接/CLI dev 在 iSH 均不可用)
 - `scripts/gen_schema.py`: SQLite→TiDB DDL 转换器(索引并入 CREATE TABLE 根治异步 DDL 竞争)
 - docs/MAKERS_API.md: pages-api 逆向参考(DescribePagesEncipherToken 签名机制等)
+
+### 15.20 前端切 Makers + 同源免签机制(2026-09-05)
+- **Makers 域名全站签名保护**: edgeone.cool 静态+函数均 401(大陆 IP), 报错 "Global MLC excluded 检查网络"; 浏览器无签名无法访问
+- **同源免签(关键实测)**: 签名 URL 302 种 cookie(eo_token+eo_time, Max-Age=10800)后, **浏览器同源 fetch('/api/*') 直达函数 200**; curl 带 Origin/Referer 模拟仍 401——必须是真实浏览器会话(平台可能校验 Cookie 完整性/UA)
+- **前端切换**: frontend/.env `VITE_API_BASE_URL=<Makers 域名>`(同源, 页面域名==API 域名); 用完整域名而非空串(空串 fallback 到默认 PA)
+- **契约红线**: **LoginPage 用原生 fetch**(不走 api client 拦截器)→ 期待平铺 {ok, token}; 其他页面走 axios(ok(data) 解包)。改动后端返回结构时, 检查每个消费方是 fetch 直连还是 api client
+- **大陆出口访问 PA 被墙**: browser_use/大陆 IP 请求 pythonanywhere 会"无法连接到服务器"——区分网络问题 vs 代码问题
+- **生产公开访问**: 3h 签名会话只够开发验证; 公开访问需自定义域名(大陆 ICP 备案, 备案对象=域名, 后端变量不在备案范围)或确认海外区免签
