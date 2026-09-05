@@ -2,7 +2,8 @@
 
 - vendor/app = backend/app 的构建时同步副本(edgeone.json build.command 生成)
 - Makers 框架模式剥离 /api 前缀 → _ApiPrefixProxy 恢复后转发给 backend app
-- backend 加载失败时 fallback 到最小 app(health/tidb-test 保持可用)
+- backend 加载失败时 fallback 到最小 app(health/tidb-test/migrate 保持可用)
+- 注意: app 赋值必须在模块级行首(构建器正则 /^app\\s*=/m 检测函数入口)
 """
 import os
 import sys
@@ -56,7 +57,7 @@ def _mt():
 
 
 class _ApiPrefixProxy:
-    """恢复 /api 前缀后转发给真实 ASGI app(幂等: 已带 /api 的不再加); /migrate 走迁移工具"""
+    """恢复 /api 前缀后转发给真实 ASGI app(幂等); /migrate 走迁移工具"""
 
     def __init__(self, app):
         self.app = app
@@ -71,22 +72,17 @@ class _ApiPrefixProxy:
         await self.app(scope, receive, send)
 
 
-try:
-    # 完整 backend(main.py 内部含 JWT/自愈/init_db/scheduler)
-    from app.main import app as _supplykit_app
-    app = _ApiPrefixProxy(_supplykit_app)
-except Exception as _be:
-    # backend 加载失败 → fallback 最小 app, 保留诊断端点
+def _make_fallback(error):
+    """backend 加载失败时的最小 app(诊断用)"""
     import logging
-    logging.error("[entry] backend 加载失败: %s %s", type(_be).__name__, str(_be)[:300])
+    logging.error("[entry] backend 加载失败: %s %s", type(error).__name__, str(error)[:300])
+    f = FastAPI()
 
-    app = FastAPI()
-
-    @app.get("/health")
+    @f.get("/health")
     def health():
-        return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)", "error": str(_be)[:200]}
+        return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)", "error": str(error)[:200]}
 
-    @app.get("/tidb-test")
+    @f.get("/tidb-test")
     def tidb_test():
         import pymysql
         out = {"env": {"host": bool(os.environ.get("TIDB_HOST")), "port": True,
@@ -101,8 +97,25 @@ except Exception as _be:
             cur = conn.cursor()
             cur.execute("SELECT VERSION()")
             out["version"] = cur.fetchone()[0]
-            cur.close(); conn.close()
+            cur.close()
+            conn.close()
             out["status"] = "OK"
         except Exception as e:
             out["error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
         return out
+
+    if _MIGRATE_OK:
+        # migrate 端点并入 fallback app
+        for r in _migrate_app.routes:
+            f.routes.append(r)
+    return f
+
+
+# 组装 app(backend 优先, fallback 兜底)
+try:
+    from app.main import app as _supplykit_app
+    _final_app = _ApiPrefixProxy(_supplykit_app)
+except Exception as _be:
+    _final_app = _make_fallback(_be)
+
+app = _final_app
