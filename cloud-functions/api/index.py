@@ -73,34 +73,6 @@ def _mt():
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
-_diag_app = FastAPI()
-
-
-@_diag_app.get("/__entry")
-def _entry_status():
-    import sys as _sys
-    import os as _os2
-    mt_ok = False
-    mt_err = ""
-    try:
-        import migrate_tool
-        mt_ok = True
-    except Exception as e:
-        mt_err = "%s: %s" % (type(e).__name__, str(e)[:200])
-    return {
-        "MIGRATE_OK": globals().get("_MIGRATE_OK", "?"),
-        "migrate_tool_import": mt_ok,
-        "migrate_tool_err": mt_err,
-        "sys_path_tail": list(_sys.path)[-8:],
-        "cwd": _os2.getcwd(),
-    }
-
-
-_ENTRY_APP = FastAPI()
-for _r in _diag_app.routes:
-    _ENTRY_APP.routes.append(_r)
-
-
 class _ApiPrefixProxy:
     """恢复 /api 前缀后转发给真实 ASGI app(幂等); /migrate 走迁移工具"""
 
@@ -109,11 +81,6 @@ class _ApiPrefixProxy:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "") or ""
-        if path in ("/__entry", "/api/__entry"):
-            scope["path"] = path[len("/api"):] if path.startswith("/api") else path
-            scope["root_path"] = ""
-            await _ENTRY_APP(scope, receive, send)
-            return
         if _MIGRATE_OK and (path.startswith("/migrate") or path.startswith("/api/migrate")):
             # 兼容剥离/未剥离两种框架行为; 统一转 migrate_app(去掉 /api 前缀)
             scope["path"] = path[len("/api"):] if path.startswith("/api/migrate") else path
