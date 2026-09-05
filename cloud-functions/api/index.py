@@ -3,8 +3,14 @@
 构建器要求: 模块级行首 app = (正则 /^app\\s*=/m)
 """
 import os
+import sys
 import time
 from datetime import datetime, timezone
+
+# 函数包运行时 sys.path 只有函数根; 入口目录(api/)需自行加入(同目录模块 db.py 等)
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
 
 from fastapi import FastAPI
 
