@@ -61,7 +61,7 @@ def root():
 
 # ─── Phase2 迁移工具端点(临时, 完成后删除) ─────────────────────────────
 
-@app.get("/api/migrate/build")
+@app.get("/migrate/build")
 def migrate_build_route():
     """建表 DDL(幂等)"""
     try:
@@ -70,7 +70,7 @@ def migrate_build_route():
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
-@app.get("/api/migrate/seed")
+@app.get("/migrate/seed")
 def migrate_seed_route(n_orders: int = 5000):
     """小批量虚拟数据(默认 5000 单)"""
     try:
@@ -79,7 +79,7 @@ def migrate_seed_route(n_orders: int = 5000):
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
-@app.get("/api/migrate/ru-test")
+@app.get("/migrate/ru-test")
 def migrate_ru_route():
     """关键查询 EXPLAIN ANALYZE(RU 实测)"""
     try:
@@ -88,7 +88,7 @@ def migrate_ru_route():
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
-@app.get("/api/migrate/tables")
+@app.get("/migrate/tables")
 def migrate_tables_route():
     """TiDB 表清单"""
     try:
