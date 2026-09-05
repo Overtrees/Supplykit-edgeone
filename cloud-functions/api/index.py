@@ -66,14 +66,6 @@ def _mt():
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
-_diag_app = FastAPI()
-
-
-@_diag_app.get("/__diag")
-def _diag():
-    return {"msg": "diag ok"}
-
-
 class _ApiPrefixProxy:
     """恢复 /api 前缀后转发给真实 ASGI app(幂等); /migrate 走迁移工具"""
 
@@ -82,22 +74,6 @@ class _ApiPrefixProxy:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "") or ""
-        # 诊断: 返回请求路径信息(定位中间件放行失效)
-        if path == "/__diag" or path == "/api/__diag":
-            import json as _json
-            _before = {"path": scope.get("path", ""), "root_path": scope.get("root_path", "")}
-            # 执行正常修改逻辑后再输出
-            _modified = {}
-            if not path.startswith("/api"):
-                scope["path"] = "/api" + path
-            _modified = {"path": scope.get("path", ""), "root_path": scope.get("root_path", "")}
-            body = _json.dumps({"before": _before, "after": _modified,
-                                "raw_path": (scope.get("raw_path") or b"").decode(errors="replace")}).encode()
-            hdrs = [[b"content-type", b"application/json"],
-                    [b"content-length", str(len(body)).encode()]]
-            await send({"type": "http.response.start", "status": 200, "headers": hdrs})
-            await send({"type": "http.response.body", "body": body})
-            return
         if _MIGRATE_OK and path.startswith("/migrate"):
             await _migrate_app(scope, receive, send)
             return
@@ -117,9 +93,8 @@ def _make_fallback(error):
     @f.get("/health")
     def health():
         return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)",
-                "error": str(error)[:200], "vendor": _VENDOR_INFO,
-                "import_diag": _IMPORT_DIAG,
-                "sys_path": [p for p in sys.path if 'vendor' in p or 'api' in p or 'var/user' in p][:8]}
+                "error": str(error)[:200],
+                "vendor": _VENDOR_INFO}
 
     @f.get("/tidb-test")
     def tidb_test():
@@ -151,20 +126,6 @@ def _make_fallback(error):
 
 
 # 组装 app(backend 优先, fallback 兜底)
-_IMPORT_DIAG = {}
-try:
-    import app as _pkg_app
-    _IMPORT_DIAG["app_ok"] = True
-    _IMPORT_DIAG["app_path"] = list(getattr(_pkg_app, "__path__", []))
-except Exception as _iae:
-    _IMPORT_DIAG["app_ok"] = False
-    _IMPORT_DIAG["app_err"] = "%s: %s" % (type(_iae).__name__, str(_iae)[:200])
-    _IMPORT_DIAG["found"] = []
-    for _p in sys.path:
-        _pa = os.path.join(_p, "app")
-        if os.path.isdir(_pa):
-            _IMPORT_DIAG["found"].append({"path": _p, "has_init": os.path.isfile(os.path.join(_pa, "__init__.py")),
-                                          "files": sorted(os.listdir(_pa))[:6]})
 try:
     from app.main import app as _supplykit_app
     _final_app = _ApiPrefixProxy(_supplykit_app)

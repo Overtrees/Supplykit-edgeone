@@ -6,6 +6,34 @@ import os, sqlite3
 router = APIRouter(tags=["health"])
 
 
+def _health_tidb():
+    """TiDB 后端精简健康检查(SQLite 检查项无意义)"""
+    from datetime import datetime, timezone
+    from app.core.database import get_conn
+    checks = {"db_backend": "tidb", "fragmentation": "n/a", "quota_auto_checkpoint": "skip"}
+    _c = None
+    try:
+        _c = get_conn()
+        _r = _c.execute("SELECT 1 AS ok").fetchone()
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = "error: %s" % str(e)[:100]
+    if _c is not None:
+        try:
+            _row = _c.execute("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot").fetchone()
+            _sn = _row['m'] if _row and isinstance(_row, dict) else (_row[0] if _row else '')
+            checks["snapshot_max"] = _sn or ''
+        except Exception:
+            checks["snapshot_max"] = ''
+        try:
+            _v = _c.execute("SELECT value FROM replenishment_config WHERE `key`='_cache_version'").fetchone()
+            checks["cache_version"] = (_v.get('value') if _v and isinstance(_v, dict) else (_v[0] if _v else ''))
+        except Exception:
+            checks["cache_version"] = ''
+    status = "ok" if checks.get("db") == "ok" else "degraded"
+    return {"status": status, "timestamp": datetime.now(timezone.utc).isoformat(), "checks": checks}
+
+
 @router.post("/api/backup")
 def trigger_backup(request: Request):
     """手动触发数据库备份（验证备份机制 + 应急数据保护）"""
@@ -83,6 +111,9 @@ def vacuum_status():
 @router.get("/api/health")
 def health():
     """系统健康检查 + 缓存版本号"""
+    from app.core.database import _backend
+    if _backend() == "tidb":
+        return _health_tidb()
     status = "ok"
     checks = {}
     
