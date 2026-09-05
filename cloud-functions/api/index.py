@@ -86,13 +86,15 @@ class _ApiPrefixProxy:
         if path == "/__diag" or path == "/api/__diag":
             import json as _json
             body = _json.dumps({
-                "raw_path": scope.get("raw_path", ""),
+                "raw_path": (scope.get("raw_path") or b"").decode(errors="replace"),
                 "path": scope.get("path", ""),
                 "root_path": scope.get("root_path", ""),
-                "qs": scope.get("query_string", ""),
+                "qs": (scope.get("query_string") or b"").decode(errors="replace"),
+                "full_path": scope.get("full_path", ""),
             }).encode()
-            await send({"type": "http.response.start", "status": 200,
-                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+            hdrs = [[b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode()]]
+            await send({"type": "http.response.start", "status": 200, "headers": hdrs})
             await send({"type": "http.response.body", "body": body})
             return
         if _MIGRATE_OK and path.startswith("/migrate"):
