@@ -9,8 +9,15 @@ router = APIRouter(tags=["auth"])
 
 
 @router.post("/auth/setup")
-def setup(username: str = "", password: str = ""):
-    """首次设置管理员密码; 兼容旧数据(已有用户则校验旧密码可更新)"""
+async def setup(request: Request):
+    """首次设置管理员密码(兼容 query/body 两种传参)"""
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    username = data.get("username") or request.query_params.get("username", "")
+    password = data.get("password") or request.query_params.get("password", "")
     if not username or not password:
         return fail("请输入用户名和密码")
     if len(password) < 6:
@@ -25,7 +32,14 @@ def setup(username: str = "", password: str = ""):
 
 
 @router.post("/auth/login")
-def login(username: str = "", password: str = ""):
+async def login(request: Request):
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    username = data.get("username") or request.query_params.get("username", "")
+    password = data.get("password") or request.query_params.get("password", "")
     if not username or not password:
         return fail("请输入用户名和密码")
     # demo 访客(只读)内置
