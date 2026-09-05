@@ -71,6 +71,7 @@ jobs:
               {"Key": "TIDB_PASSWORD", "Value": os.environ["TIDB_PASSWORD"]},
               {"Key": "TIDB_DB", "Value": os.environ["TIDB_DB"]},
               {"Key": "TIDB_SSL", "Value": "true"},
+              {"Key": "DB_BACKEND", "Value": "tidb"},
           ]
           payload = {"Action": "ModifyPagesProjectEnvs", "ProjectId": pid, "EnvVars": envs}
           open("/tmp/env_payload.json", "w").write(json.dumps(payload))

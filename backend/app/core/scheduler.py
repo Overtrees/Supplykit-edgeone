@@ -6,7 +6,11 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("scheduler")
-scheduler = BackgroundScheduler(daemon=True)
+# 构造可能因本地时区不可用失败(tzlocal/zoneinfo)——异常环境降级为无调度器
+try:
+    scheduler = BackgroundScheduler(daemon=True)
+except Exception:
+    scheduler = None
 _started = False
 
 def _task_inventory_sync():
@@ -525,6 +529,9 @@ def _task_warmup_dashboard():
 def start():
     global _started
     if _started:
+        return
+    if scheduler is None:
+        logger.warning("[scheduler] 调度器不可用(时区初始化失败), 跳过启动")
         return
     _started = True
     scheduler.add_job(_task_inventory_sync, IntervalTrigger(minutes=30), id='inventory_sync')

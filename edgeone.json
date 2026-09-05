@@ -1,7 +1,7 @@
 {
   "name": "supplykit",
   "build": {
-    "command": "npm --prefix frontend run build",
+    "command": "mkdir -p ../cloud-functions/vendor && rm -rf ../cloud-functions/vendor/app && cp -r ../backend/app ../cloud-functions/vendor/app && find ../cloud-functions/vendor -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; find ../cloud-functions/vendor -name '*.db*' -delete 2>/dev/null; find ../cloud-functions/vendor -name '.env' -delete 2>/dev/null; find ../cloud-functions/vendor -name '.selfheal.log' -delete 2>/dev/null; npm --prefix frontend run build",
     "cwd": "frontend"
   },
   "cloudFunctions": {
