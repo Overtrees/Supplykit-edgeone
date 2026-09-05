@@ -76,7 +76,10 @@ class _ApiPrefixProxy:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "") or ""
-        if _MIGRATE_OK and path.startswith("/migrate"):
+        if _MIGRATE_OK and (path.startswith("/migrate") or path.startswith("/api/migrate")):
+            # 兼容剥离/未剥离两种框架行为; 统一转 migrate_app(去掉 /api 前缀)
+            scope["path"] = path[len("/api"):] if path.startswith("/api/migrate") else path
+            scope["root_path"] = ""
             await _migrate_app(scope, receive, send)
             return
         if not path.startswith("/api"):
