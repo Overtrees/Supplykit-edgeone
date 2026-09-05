@@ -66,6 +66,14 @@ def _mt():
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
+_diag_app = FastAPI()
+
+
+@_diag_app.get("/__diag")
+def _diag():
+    return {"msg": "diag ok"}
+
+
 class _ApiPrefixProxy:
     """恢复 /api 前缀后转发给真实 ASGI app(幂等); /migrate 走迁移工具"""
 
@@ -74,6 +82,19 @@ class _ApiPrefixProxy:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "") or ""
+        # 诊断: 返回请求路径信息(定位中间件放行失效)
+        if path == "/__diag" or path == "/api/__diag":
+            import json as _json
+            body = _json.dumps({
+                "raw_path": scope.get("raw_path", ""),
+                "path": scope.get("path", ""),
+                "root_path": scope.get("root_path", ""),
+                "qs": scope.get("query_string", ""),
+            }).encode()
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
         if _MIGRATE_OK and path.startswith("/migrate"):
             await _migrate_app(scope, receive, send)
             return
