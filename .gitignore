@@ -8,4 +8,3 @@ __pycache__/
 test_*.db
 .test_*.db
 *.selfheal.log
-cloud-functions/vendor/
