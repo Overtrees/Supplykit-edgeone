@@ -38,12 +38,6 @@ def health():
     return out
 
 
-@app.get("/__p")
-def path_probe(request: Request):
-    """探针: 返回 FastAPI 视角的请求路径(定位前缀剥离行为)"""
-    return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
-
-
 @app.get("/debug/verify")
 def debug_verify():
     """数据层验证: 三个核心聚合的原生 TiDB SQL"""
