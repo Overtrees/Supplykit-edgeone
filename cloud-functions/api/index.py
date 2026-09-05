@@ -1,7 +1,9 @@
-"""Makers 入口 —— 最小版 + TiDB 连接验证端点"""
+"""Makers 入口 —— 最小版 + TiDB 连接验证端点 + Phase2 迁移工具"""
 import os
 from fastapi import FastAPI
 import pymysql
+
+from migrate import build as migrate_build, seed_small as migrate_seed, ru_test as migrate_ru, tables as migrate_tables
 
 app = FastAPI()
 
@@ -55,3 +57,41 @@ def tidb_test():
 @app.get("/")
 def root():
     return {"ok": True}
+
+
+# ─── Phase2 迁移工具端点(临时, 完成后删除) ─────────────────────────────
+
+@app.get("/api/migrate/build")
+def migrate_build_route():
+    """建表 DDL(幂等)"""
+    try:
+        return migrate_build()
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@app.get("/api/migrate/seed")
+def migrate_seed_route(n_orders: int = 5000):
+    """小批量虚拟数据(默认 5000 单)"""
+    try:
+        return migrate_seed(n_orders=n_orders)
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@app.get("/api/migrate/ru-test")
+def migrate_ru_route():
+    """关键查询 EXPLAIN ANALYZE(RU 实测)"""
+    try:
+        return migrate_ru()
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@app.get("/api/migrate/tables")
+def migrate_tables_route():
+    """TiDB 表清单"""
+    try:
+        return {"tables": migrate_tables()}
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
