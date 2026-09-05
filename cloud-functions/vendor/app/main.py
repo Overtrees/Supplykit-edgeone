@@ -332,7 +332,8 @@ if not os.getenv("JWT_SECRET"):
     except Exception:
         pass
 
-app = FastAPI(title="Supplykit", openapi_url="/api/docs.json", docs_url="/api/docs")
+if True:
+    app = FastAPI(title="Supplykit", openapi_url="/api/docs.json", docs_url="/api/docs")
 
 # API 鉴权 + 监控中间件：保护所有 /api/* 路由（除 /api/auth 和 /api/health），记录请求统计
 @app.middleware("http")
