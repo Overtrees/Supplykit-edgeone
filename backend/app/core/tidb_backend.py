@@ -160,3 +160,9 @@ def health_check():
         return bool(r)
     except Exception:
         return False
+
+
+def execute_lastrowid(sql, params=None):
+    """执行写 SQL 返回 lastrowid(兼容 database.py InsertBuilder tidb 分支)"""
+    cur = get_conn().execute(sql, params or ())
+    return cur.lastrowid if cur else 0
