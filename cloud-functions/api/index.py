@@ -164,12 +164,7 @@ CREATE UNIQUE INDEX `idx_outbound_records_unique` ON `outbound_records` (sku, wa
 Makers 云函数临时工具, Phase2(TiDB 数据层)期间使用, 迁移完成后删除。
 所有操作幂等, 只影响 TiDB 侧数据。
 """
-import os
 from datetime import datetime, timezone
-
-import pymysql
-
-from tidb_schema import SCHEMA_SQL
 
 _BRANDS = ["禾味", "山泉", "椒香", "酱乡", "净洁", "薯乐", "谷香", "醇味", "鲜禾", "禾田"]
 _STORES = ["自营旗舰店", "自营直营店", "调味品专营店", "零食旗舰店", "日化专营店"]
