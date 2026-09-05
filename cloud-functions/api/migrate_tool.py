@@ -87,7 +87,8 @@ def build():
                     continue
             out["fail"].append("%s: %s" % (stmt[:80], str(e)[:200]))
     # 统计索引(表定义内 KEY/UNIQUE KEY)
-    out["indexes_ok"] = len(_re2.findall(r"KEY `idx_", SCHEMA_SQL))
+    _idx_names = _re2.findall(r"KEY `idx_", SCHEMA_SQL)
+    out["indexes_ok"] = _idx_names
     cur.close()
     conn.close()
     return {"ok": len(out["tables_ok"]), "tables": out["tables_ok"],
