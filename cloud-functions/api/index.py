@@ -8,7 +8,12 @@
 import os
 import sys
 
-_vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor")
+# 函数包运行时 sys.path 只有 /var/user(函数根), 入口目录(api/)需自行加入——
+# 否则同目录模块(migrate_tool 等)import 失败(9-05 实测 ModuleNotFoundError)
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+_vendor = os.path.join(_here, "..", "vendor")
 # 多候选路径(不同运行环境 __file__/cwd 解析不同)
 _cwd = os.getcwd()
 _cands = [_vendor,
