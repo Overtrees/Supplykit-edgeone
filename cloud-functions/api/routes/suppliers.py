@@ -100,3 +100,66 @@ async def update_config(request: Request):
                 "ON DUPLICATE KEY UPDATE value=VALUES(value)", (k, str(v), channel))
         n += 1
     return ok({"updated": n})
+
+
+@router.get("/replenishment-config/history")
+@traced
+def config_history(channel: str = "jd", limit: int = 50):
+    """配置变更历史(规则页-变更历史弹窗)"""
+    rows = query("SELECT id, `key`, value, channel, updated_at FROM replenishment_config_history "
+                 "WHERE channel=%s OR channel='' ORDER BY id DESC LIMIT %s", [channel, limit])
+    return ok(rows)
+
+
+@router.get("/replenishment-config/slow-cats")
+@traced
+def get_slow_cats(channel: str = "jd"):
+    row = one("SELECT value FROM replenishment_config WHERE `key`='slow_cats' AND channel=%s", [channel])
+    try:
+        return ok(json.loads((row or {}).get("value") or "[]"))
+    except Exception:
+        return ok([])
+
+
+@router.put("/replenishment-config/slow-cats")
+@traced
+async def put_slow_cats(request: Request):
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channel = d.get("channel", "jd")
+    items = d.get("items") or []
+    execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('slow_cats',%s,%s) "
+            "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            (json.dumps(items, ensure_ascii=False), channel))
+    return ok({"updated": len(items)})
+
+
+@router.get("/replenishment-config/seasons")
+@traced
+def get_seasons(channel: str = "jd", mode: str = "bbcc"):
+    row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
+              ("season_config_" + mode, channel))
+    try:
+        return ok(json.loads((row or {}).get("value") or "[]"))
+    except Exception:
+        return ok([])
+
+
+@router.put("/replenishment-config/seasons")
+@traced
+async def put_seasons(request: Request):
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channel = d.get("channel", "jd")
+    mode = d.get("mode", "bbcc")
+    items = d.get("items") or []
+    execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            ("season_config_" + mode, json.dumps(items, ensure_ascii=False), channel))
+    return ok({"updated": len(items)})

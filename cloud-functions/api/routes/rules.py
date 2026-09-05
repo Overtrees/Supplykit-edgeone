@@ -14,8 +14,11 @@ _FIELDS = "id, name, event, condition_json, alert_type, alert_title, alert_desc,
 
 @router.get("/rules")
 @traced
-def list_rules(channel: str = "jd"):
-    rows = query("SELECT %s FROM rules WHERE (deleted_at IS NULL OR deleted_at='') ORDER BY id ASC" % _FIELDS, [])
+def list_rules(channel: str = "jd", include_deleted: int = 0):
+    if include_deleted:
+        rows = query("SELECT %s FROM rules ORDER BY id ASC" % _FIELDS, [])
+    else:
+        rows = query("SELECT %s FROM rules WHERE (deleted_at IS NULL OR deleted_at='') ORDER BY id ASC" % _FIELDS, [])
     out = []
     for r in rows:
         try:
@@ -80,6 +83,49 @@ def delete_rule(rid: int):
     # 软删除
     execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id=%s", [rid])
     return ok({})
+
+
+@router.post("/rules/{rid}/restore")
+@traced
+def restore_rule(rid: int):
+    execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id=%s", [rid])
+    return ok({})
+
+
+@router.post("/rules/{rid}/permanent-delete")
+@traced
+def permanent_delete_rule(rid: int):
+    execute("DELETE FROM rules WHERE id=%s", [rid])
+    return ok({})
+
+
+@router.post("/rules/batch")
+@traced
+async def rules_batch(request: Request):
+    """批量操作: {action: active|inactive|delete|restore|purge, ids: []}"""
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    action = d.get("action", "")
+    ids = d.get("ids") or []
+    if not ids:
+        return fail("缺少 ids")
+    ph = ",".join(["%s"] * len(ids))
+    if action == "active":
+        execute("UPDATE rules SET is_active=1 WHERE id IN (%s)" % ph, ids)
+    elif action == "inactive":
+        execute("UPDATE rules SET is_active=0 WHERE id IN (%s)" % ph, ids)
+    elif action == "delete":
+        execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id IN (%s)" % ph, ids)
+    elif action == "restore":
+        execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id IN (%s)" % ph, ids)
+    elif action == "purge":
+        execute("DELETE FROM rules WHERE id IN (%s)" % ph, ids)
+    else:
+        return fail("未知操作: " + str(action))
+    return ok({"updated": len(ids)})
 
 
 @router.get("/rules/{rid}/test")

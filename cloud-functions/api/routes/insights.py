@@ -10,6 +10,13 @@ from biz.sales import load_daily_sales, calc_sales_multi
 router = APIRouter(tags=["insights"])
 
 
+@router.get("/insights/ping")
+@traced
+def ping():
+    """健康检查(免鉴权): 前端 checkApi/设置页连接状态用"""
+    return {"ok": True}
+
+
 @router.get("/insights/slow-moving")
 @traced
 def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
@@ -53,21 +60,28 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
 @traced
 def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 0,
                          page_size: int = 0, search: str = ""):
-    """进销存台账: 库存 + 日销 + 周转(wh_type=own/platform/platform_b)"""
-    where = "channel=%s AND warehouse_type=%s"
+    """进销存台账: 库存 + 日销 + 周转 + 当月进出(wh_type=own/platform/platform_b)"""
+    from datetime import datetime, timezone as _tz
+    now = datetime.now(_tz.utc)
+    month_start = now.strftime("%Y-%m-01")
+    month_end = now.strftime("%Y-%m-%d")
+    where = "i.channel=%s AND i.warehouse_type=%s"
     params = [channel, wh_type]
     if search:
-        where += " AND (sku LIKE %s OR product_name LIKE %s)"
+        where += " AND (i.sku LIKE %s OR i.product_name LIKE %s)"
         params += ["%%%s%%" % search] * 2
-    total = one("SELECT COUNT(*) AS c FROM inventory WHERE %s" % where, params) or {}
+    total = one("SELECT COUNT(*) AS c FROM inventory i WHERE %s" % where, params) or {}
     total = int(total.get("c") or 0)
+    sel = ("SELECT i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
+           "i.safety_qty, i.product_name, i.month_inbound, i.month_outbound, i.beginning_stock, "
+           "i.turnover_days, i.barcode, p.brand, p.price, "
+           "(SELECT COUNT(*) FROM batches b WHERE b.sku=i.sku AND b.warehouse=i.warehouse AND b.channel=i.channel) AS batch_count "
+           "FROM inventory i LEFT JOIN products p ON p.sku=i.sku AND p.channel=i.channel WHERE %s")
     if page > 0 and page_size > 0:
-        rows = query("SELECT sku, warehouse, warehouse_type, available_qty, in_transit_qty, c_transit, "
-                     "safety_qty, product_name FROM inventory WHERE %s ORDER BY id ASC LIMIT %s OFFSET %s"
+        rows = query((sel + " ORDER BY i.id ASC LIMIT %s OFFSET %s")
                      % (where, page_size, (page - 1) * page_size), params)
     else:
-        rows = query("SELECT sku, warehouse, warehouse_type, available_qty, in_transit_qty, c_transit, "
-                     "safety_qty, product_name FROM inventory WHERE %s ORDER BY id ASC" % where, params)
+        rows = query((sel + " ORDER BY i.id ASC") % where, params)
 
     skus = [r.get("sku") for r in rows]
     daily = load_daily_sales(28, channel, skus=set(skus)) if skus else {}
@@ -86,7 +100,14 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "daily_sales": round(ds, 1),
             "turnover_days": round((avail + transit) / ds, 1) if ds > 0 else None,
             "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
+            "month_start": month_start, "month_end": month_end,
+            "month_inbound": int(r.get("month_inbound") or 0),
+            "month_outbound": int(r.get("month_outbound") or 0),
+            "beginning_stock": int(r.get("beginning_stock") or 0),
+            "barcode": r.get("barcode") or "", "brand": r.get("brand") or "",
+            "price": r.get("price") or 0, "batch_count": int(r.get("batch_count") or 0),
         })
     if page > 0 and page_size > 0:
-        return ok({"items": items, "total": total, "page": page, "page_size": page_size})
+        return ok({"items": items, "total": total, "page": page, "page_size": page_size,
+                   "month_start": month_start, "month_end": month_end})
     return ok(items)

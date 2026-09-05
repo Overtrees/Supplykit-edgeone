@@ -26,6 +26,8 @@ from routes.alerts import router as alerts_router
 from routes.misc import router as misc_router
 from routes.suppliers import router as suppliers_router
 from routes.rules import router as rules_router
+from routes.inventory import router as inventory_router
+from routes.batches import router as batches_router
 from routes.common import verify_token
 
 app = FastAPI()
@@ -44,7 +46,8 @@ async def auth_middleware(request: Request, next):
     """鉴权: auth/health/debug 放行, 其余需 Bearer; demo 只读"""
     path = request.url.path
     if (path.startswith("/auth") or path == "/health" or path.startswith("/debug")
-            or path.startswith("/docs") or path.startswith("/openapi")):
+            or path.startswith("/docs") or path.startswith("/openapi")
+            or path == "/insights/ping"):
         return await next(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -98,3 +101,5 @@ app.include_router(alerts_router)
 app.include_router(misc_router)
 app.include_router(suppliers_router)
 app.include_router(rules_router)
+app.include_router(inventory_router)
+app.include_router(batches_router)

@@ -60,6 +60,10 @@ def fake_query(sql, params=None):
 
 
 def fake_one(sql, params=None):
+    if "FROM users WHERE" in sql:
+        from routes.common import hash_password as _hp
+        uname = params[0] if params else "admin"
+        return {"username": uname, "password_hash": _hp("admin123"), "role": "admin"}
     if "GROUP BY DATE(ordered_at)" in sql or "GROUP BY warehouse_type" in sql or "warehouse_type IN" in sql:
         return fake_query(sql, params)[0] if fake_query(sql, params) else {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
     if "COUNT(*)" in sql:
@@ -122,6 +126,15 @@ check("auth/login 错误密码", r.json().get("ok") is False)
 r = client.get("/auth/check", headers={"Authorization": "Bearer " + TOKEN})
 check("auth/check 带 token", r.status_code == 200 and r.json().get("ok"), r.text[:150])
 
+# admin 用户(写操作测试用; demo 只读)
+r = client.post("/auth/setup", json={"username": "admin", "password": "admin123"})
+check("auth/setup admin", r.status_code == 200 and r.json().get("ok") is True, r.text[:150])
+ADMIN = r.json().get("token", "")
+check("setup 返回 admin token", bool(ADMIN))
+r = client.post("/auth/login", json={"username": "admin", "password": "admin123"})
+check("auth/login admin", r.status_code == 200 and r.json().get("ok"), r.text[:150])
+ADMIN = r.json().get("token", "")
+
 # 中间件
 r = client.get("/dashboard/summary")
 check("无 token 401", r.status_code == 401, str(r.status_code))
@@ -170,6 +183,63 @@ d = r.json()
 check("slow-moving 200", d.get("ok") is not False, (d.get("detail") or "")[:150])
 r = client.get("/insights/with-sales?wh_type=own&channel=jd", headers={"Authorization": "Bearer " + TOKEN})
 check("with-sales 200", r.json().get("ok") is not False, r.text[:150])
+
+# ── 契约补齐组 A: ping/删除恢复/批量/缺货/批次/配置 ──
+r = client.get("/insights/ping")
+check("ping 免鉴权 {ok:true}", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+AH = {"Authorization": "Bearer " + ADMIN}
+r = client.delete("/orders/1", headers={"Authorization": "Bearer " + TOKEN})
+check("orders 软删 demo 只读403", r.status_code == 403, r.text[:120])
+r = client.delete("/orders/1", headers=AH)
+check("orders 软删 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.post("/orders/1/restore", headers=AH)
+check("orders restore 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.post("/orders/1/permanent-delete", headers=AH)
+check("orders 永久删除 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.get("/orders?include_deleted=1", headers=AH)
+check("orders include_deleted 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.post("/products/batch", json={"action": "active", "ids": [1, 2]}, headers=AH)
+check("products batch active", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.post("/products/batch", json={"action": "delete", "ids": [1]}, headers=AH)
+check("products batch delete", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.post("/rules/batch", json={"action": "purge", "ids": [1]}, headers=AH)
+check("rules batch purge", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.post("/rules/1/restore", headers=AH)
+check("rules restore 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.get("/rules?include_deleted=1", headers=AH)
+check("rules include_deleted 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.get("/inventory/out-of-stock?channel=jd&wh=own", headers=AH)
+check("out-of-stock 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.delete("/inventory/1", headers=AH)
+check("inventory 删除 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.get("/batches?channel=jd&sku=SKU0001", headers=AH)
+check("batches 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.get("/replenishment-config/history?channel=jd", headers=AH)
+check("config history 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.get("/replenishment-config/slow-cats?channel=jd", headers=AH)
+check("slow-cats GET 200", r.status_code == 200, r.text[:120])
+r = client.put("/replenishment-config/slow-cats?channel=jd", json={"items": [{"cat": "调味", "days": 30}]}, headers=AH)
+check("slow-cats PUT 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.get("/replenishment-config/seasons?channel=jd&mode=bbcc", headers=AH)
+check("seasons GET 200", r.status_code == 200, r.text[:120])
+r = client.put("/replenishment-config/seasons?channel=jd&mode=bbcc",
+               json={"items": [{"key": "夏", "factor": 1.2, "enabled": True}]}, headers=AH)
+check("seasons PUT 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+
+r = client.get("/insights/with-sales?wh_type=own&channel=jd", headers=AH)
+d = r.json()
+if d.get("ok") is True:
+    items = d.get("data") or []
+    check("with-sales 增强字段(month/batch)",
+          (len(items) == 0) or ("month_start" in items[0] and "month_inbound" in items[0]
+                                and "batch_count" in items[0]), str(items)[:200])
+else:
+    check("with-sales 增强字段(month/batch)", False, (d.get("detail") or "")[:150])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
