@@ -1,6 +1,7 @@
 """Makers 原生后端入口(方案 B: 无 SQLite 适配, 直写 TiDB 方言)
 
 构建器要求: 模块级行首 app = (正则 /^app\\s*=/m)
+Makers FastAPI 框架模式: 路由无 /api 前缀(框架剥离后转发, root_path=/api)
 """
 import os
 import sys
@@ -13,26 +14,14 @@ if _here not in sys.path:
     sys.path.insert(0, _here)
 
 from fastapi import FastAPI
+from fastapi import Request
 
 from db import query, one, execute
 
 app = FastAPI()
 
 
-@app.get("/api/__p")
-def path_probe(request):
-    """探针: 返回 FastAPI 视角的请求路径(定位前缀剥离行为)"""
-    return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
-
-
-@app.api_route("/{full_path:path}", methods=["GET"])
-def catch_all(request, full_path: str):
-    """catch-all: 任何未匹配路径返回 scope 信息(定位 404 根因)"""
-    return {"path": request.url.path, "root_path": request.scope.get("root_path", ""),
-            "full_path": full_path, "matched": False}
-
-
-@app.get("/api/health")
+@app.get("/health")
 def health():
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
     try:
@@ -49,7 +38,13 @@ def health():
     return out
 
 
-@app.get("/api/debug/verify")
+@app.get("/__p")
+def path_probe(request: Request):
+    """探针: 返回 FastAPI 视角的请求路径(定位前缀剥离行为)"""
+    return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
+
+
+@app.get("/debug/verify")
 def debug_verify():
     """数据层验证: 三个核心聚合的原生 TiDB SQL"""
     out = {"ok": True}
