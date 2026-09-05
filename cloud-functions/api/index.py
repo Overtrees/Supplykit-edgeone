@@ -64,7 +64,7 @@ def root():
 def migrate_build_route():
     """建表 DDL(幂等)"""
     try:
-        return migrate_build()
+        return build()
     except Exception as e:
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -73,7 +73,7 @@ def migrate_build_route():
 def migrate_seed_route(n_orders: int = 5000):
     """小批量虚拟数据(默认 5000 单)"""
     try:
-        return migrate_seed(n_orders=n_orders)
+        return seed_small(n_orders=n_orders)
     except Exception as e:
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -82,7 +82,7 @@ def migrate_seed_route(n_orders: int = 5000):
 def migrate_ru_route():
     """关键查询 EXPLAIN ANALYZE(RU 实测)"""
     try:
-        return migrate_ru()
+        return ru_test()
     except Exception as e:
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -91,7 +91,7 @@ def migrate_ru_route():
 def migrate_tables_route():
     """TiDB 表清单"""
     try:
-        return {"tables": migrate_tables()}
+        return {"tables": tables()}
     except Exception as e:
         return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
