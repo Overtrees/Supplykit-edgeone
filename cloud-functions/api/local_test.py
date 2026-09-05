@@ -107,7 +107,7 @@ def check(name, cond, extra=""):
 # auth
 r = client.post("/auth/login", json={"username": "demo", "password": "demo123"})
 check("auth/login demo", r.status_code == 200 and r.json().get("ok"), r.text[:150])
-TOKEN = (r.json().get("data") or {}).get("token", "")
+TOKEN = r.json().get("token", "")
 check("login 返回 token", bool(TOKEN))
 
 r = client.post("/auth/login", json={"username": "x", "password": "bad"})

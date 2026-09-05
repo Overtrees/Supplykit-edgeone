@@ -29,7 +29,7 @@ async def setup(request: Request):
     execute("INSERT INTO users(username, password_hash, role) VALUES(%s,%s,%s)",
             (username, hash_password(password), "admin"))
     token = create_token(username)
-    return ok({"token": token, "user": username, "role": "admin"})
+    return {"ok": True, "token": token, "user": username, "role": "admin"}
 
 
 @router.post("/auth/login")
@@ -46,11 +46,11 @@ async def login(request: Request):
         return fail("请输入用户名和密码")
     # demo 访客(只读)内置
     if username == "demo" and password == "demo123":
-        return ok({"token": create_token("demo"), "user": "demo", "role": "viewer"})
+        return {"ok": True, "token": create_token("demo"), "user": "demo", "role": "viewer"}
     row = one("SELECT username, password_hash, role FROM users WHERE username=%s", [username])
     if not row or not check_password(password, row.get("password_hash") or ""):
         return fail("用户名或密码错误", 401)
-    return ok({"token": create_token(username), "user": username, "role": row.get("role") or "user"})
+    return {"ok": True, "token": create_token(username), "user": username, "role": row.get("role") or "user"}
 
 
 @router.get("/auth/check")
@@ -61,7 +61,7 @@ def check_auth(request: Request):
     user = verify_token(token) if token else None
     if not user:
         return fail("未登录", 401)
-    return ok({"user": user})
+    return {"ok": True, "user": user}
 
 
 def require_user(request: Request):
