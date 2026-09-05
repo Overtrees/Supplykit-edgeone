@@ -56,6 +56,9 @@ def fake_query(sql, params=None):
         return [{"healthy": 65, "warning": 10, "out_of_stock": 2, "total": 77}]
     if "GROUP BY warehouse_type" in sql:
         return list(_INV)
+    if "FROM sync_tasks" in sql:
+        return [{"task_id": "seed_1", "task_type": "seed", "status": "done", "result": "{}",
+                 "params": "{}", "channel": "jd", "created_at": "2026-09-05 10:00:00"}]
     return []
 
 
@@ -64,6 +67,12 @@ def fake_one(sql, params=None):
         from routes.common import hash_password as _hp
         uname = params[0] if params else "admin"
         return {"username": uname, "password_hash": _hp("admin123"), "role": "admin"}
+    if "SELECT status FROM sync_tasks" in sql:
+        if params and params[0] == "none":
+            return None
+        return {"status": "done"}
+    if "FROM export_files" in sql:
+        return {"content": "SKU,商品名\nSKU0001,禾味调味料1号\n"}
     if "GROUP BY DATE(ordered_at)" in sql or "GROUP BY warehouse_type" in sql or "warehouse_type IN" in sql:
         return fake_query(sql, params)[0] if fake_query(sql, params) else {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
     if "COUNT(*)" in sql:
@@ -76,6 +85,7 @@ def fake_one(sql, params=None):
 _db.query = fake_query
 _db.one = fake_one
 _db.execute = lambda sql, params=None: 0
+_db.executemany = lambda sql, seq: None
 
 
 # ── replenishment mock ──
@@ -240,6 +250,22 @@ if d.get("ok") is True:
                                 and "batch_count" in items[0]), str(items)[:200])
 else:
     check("with-sales 增强字段(month/batch)", False, (d.get("detail") or "")[:150])
+
+# ── 契约补齐组 B: tasks / seed / exports ──
+r = client.get("/tasks?channel=jd", headers=AH)
+check("tasks 列表", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
+r = client.get("/seed/fill/status?task_id=seed_1", headers=AH)
+check("fill/status done", (r.json().get("data") or {}).get("status") == "done", r.text[:120])
+r = client.get("/seed/fill/status?task_id=none", headers=AH)
+check("fill/status not_found", (r.json().get("data") or {}).get("status") == "not_found", r.text[:120])
+r = client.post("/seed/fill", json={}, headers=AH)
+check("seed/fill 有数据 requires_reset", (r.json().get("data") or {}).get("requires_reset") is True, r.text[:120])
+r = client.post("/seed/reset", json={}, headers=AH)
+check("seed/reset 返回 task_id", r.json().get("ok") is True and bool((r.json().get("data") or {}).get("task_id")), r.text[:120])
+r = client.post("/exports?type=replen&mode=bbcc&channel=jd", headers=AH)
+check("exports 平铺 task_id", r.json().get("ok") is True and bool(r.json().get("task_id")), r.text[:120])
+r = client.get("/exports/download/test.csv", headers=AH)
+check("exports download csv", r.status_code == 200 and "csv" in r.headers.get("content-type", ""), r.text[:120])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

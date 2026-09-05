@@ -28,6 +28,7 @@ from routes.suppliers import router as suppliers_router
 from routes.rules import router as rules_router
 from routes.inventory import router as inventory_router
 from routes.batches import router as batches_router
+from routes.tasks import router as tasks_router
 from routes.common import verify_token
 
 app = FastAPI()
@@ -103,3 +104,4 @@ app.include_router(suppliers_router)
 app.include_router(rules_router)
 app.include_router(inventory_router)
 app.include_router(batches_router)
+app.include_router(tasks_router)
