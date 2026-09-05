@@ -308,47 +308,33 @@ def ru_test():
     conn = _conn()
     cur = conn.cursor()
 
-    # 查询1: 看板 summary 核心聚合(模拟全量重建)
-    q1 = ("SELECT substr(ordered_at,1,10) as d, order_status, store, "
-          "SUM(total_amount) as g, COUNT(*) as cnt FROM orders "
-          "WHERE channel='jd' AND ordered_at >= '2026-07-01' GROUP BY d, order_status, store")
-    try:
-        cur.execute("EXPLAIN ANALYZE " + q1)
-        rows = cur.fetchall()
-        out["q1_summary_analyze"] = [str(r)[:200] for r in rows[-3:]]
-        cur.execute(q1)
-        out["q1_rows"] = len(cur.fetchall())
-    except Exception as e:
-        out["q1_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+    import re as _re
+    def _analyze(label, q):
+        try:
+            cur.execute("EXPLAIN ANALYZE " + q)
+            rows = [str(r[0]) for r in cur.fetchall()]
+            full = "\n".join(rows)
+            # 提取 RU 数值(Serverless EXPLAIN ANALYZE 含 RU: xxx 行或列)
+            ru_m = _re.findall(r"RU[:\s=]+([\d.]+)", full)
+            out[label + "_plan"] = rows
+            out[label + "_ru_hits"] = ru_m[:20]
+            cur.execute(q)
+            out[label + "_rows"] = len(cur.fetchall())
+        except Exception as e:
+            out[label + "_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
 
-    # 查询2: 补货核心(库存×日销)
-    q2 = ("SELECT i.sku, SUM(i.available_qty) avail, SUM(i.safety_qty) safety "
-          "FROM inventory i WHERE i.channel='jd' GROUP BY i.sku")
-    try:
-        cur.execute("EXPLAIN ANALYZE " + q2)
-        rows = cur.fetchall()
-        out["q2_inventory_analyze"] = [str(r)[:200] for r in rows[-3:]]
-        cur.execute(q2)
-        out["q2_rows"] = len(cur.fetchall())
-    except Exception as e:
-        out["q2_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+    _analyze("q1_summary", "SELECT substr(ordered_at,1,10) as d, order_status, store, "
+             "SUM(total_amount) as g, COUNT(*) as cnt FROM orders "
+             "WHERE channel='jd' AND ordered_at >= '2026-07-01' GROUP BY d, order_status, store")
+    _analyze("q2_inventory", "SELECT i.sku, SUM(i.available_qty) avail, SUM(i.safety_qty) safety "
+             "FROM inventory i WHERE i.channel='jd' GROUP BY i.sku")
+    _analyze("q3_snapshot", "SELECT date, sku, SUM(order_count) FROM daily_sales_snapshot "
+             "WHERE channel='jd' AND date >= '2026-08-01' GROUP BY date, sku")
 
-    # 查询3: 快照日销读取
-    q3 = ("SELECT date, sku, SUM(order_count) FROM daily_sales_snapshot "
-          "WHERE channel='jd' AND date >= '2026-08-01' GROUP BY date, sku")
+    # 表统计(SHOW TABLE STATUS 比 information_schema.tables 更可能返回行数)
     try:
-        cur.execute("EXPLAIN ANALYZE " + q3)
-        rows = cur.fetchall()
-        out["q3_snapshot_analyze"] = [str(r)[:200] for r in rows[-3:]]
-        cur.execute(q3)
-        out["q3_rows"] = len(cur.fetchall())
-    except Exception as e:
-        out["q3_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
-
-    # 表统计
-    try:
-        cur.execute("SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema=%s", (os.environ.get("TIDB_DB", "supplykit"),))
-        out["table_rows"] = {r[0]: r[1] for r in cur.fetchall() if r[1]}
+        cur.execute("SHOW TABLE STATUS FROM `%s`" % os.environ.get("TIDB_DB", "supplykit"))
+        out["table_rows"] = {r[0]: r[4] for r in cur.fetchall() if r[4]}
     except Exception as e:
         out["tables_error"] = str(e)[:200]
 
