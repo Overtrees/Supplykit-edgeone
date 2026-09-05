@@ -30,6 +30,20 @@ _INV = [
 
 
 def fake_query(sql, params=None):
+    if "FROM inventory WHERE" in sql or "FROM inventory i" in sql:
+        return [dict(x) for x in _FAKE_INV]
+    if "FROM products WHERE" in sql:
+        return [dict(x) for x in _FAKE_PROD]
+    if "FROM daily_sales_snapshot" in sql:
+        # 模拟 28 天日销: SKU0001 华东C仓 每天 5 件
+        rows = []
+        from datetime import datetime as _dt2, timedelta as _td2, timezone as _tz2
+        _now2 = _dt2.now(_tz2.utc)
+        for k in range(28):
+            d = (_now2 - _td2(days=k)).strftime('%Y-%m-%d')
+            rows.append({"date": d, "sku": "SKU0001", "warehouse": "华东C仓", "order_count": 5})
+            rows.append({"date": d, "sku": "SKU0002", "warehouse": "华东C仓", "order_count": 2})
+        return rows
     if "GROUP BY DATE(ordered_at), order_status, store" in sql:
         return list(_ORDERS)
     if "warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql:
@@ -52,6 +66,18 @@ def fake_one(sql, params=None):
 _db.query = fake_query
 _db.one = fake_one
 _db.execute = lambda sql, params=None: 0
+
+
+# ── replenishment mock ──
+_FAKE_INV = [
+    {"sku": "SKU0001", "warehouse": "华东C仓", "warehouse_type": "platform", "available_qty": 30, "in_transit_qty": 5, "c_transit": 10, "safety_qty": 50},
+    {"sku": "SKU0001", "warehouse": "B仓", "warehouse_type": "platform_b", "available_qty": 100, "in_transit_qty": 20, "c_transit": 0, "safety_qty": 0},
+    {"sku": "SKU0002", "warehouse": "华东C仓", "warehouse_type": "platform", "available_qty": 0, "in_transit_qty": 0, "c_transit": 0, "safety_qty": 40},
+]
+_FAKE_PROD = [
+    {"sku": "SKU0001", "barcode": "69-01", "product_name": "禾味调味料1号", "brand": "禾味", "store": "自营旗舰店", "category": "调味", "box_qty": 12},
+    {"sku": "SKU0002", "barcode": "69-02", "product_name": "山泉饮料2号", "brand": "山泉", "store": "自营旗舰店", "category": "饮料", "box_qty": 24},
+]
 
 # ── 导入 app 并测试 ────────────────────────────────────────────────
 from fastapi.testclient import TestClient
@@ -107,6 +133,19 @@ else:
 r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=2026-08-31",
                headers={"Authorization": "Bearer " + TOKEN})
 check("自定义日期 200", r.status_code == 200 and r.json().get("ok") is not False, r.text[:120])
+
+# replenishment
+r = client.get("/insights/replenishment?channel=jd&mode=bbcc", headers={"Authorization": "Bearer " + TOKEN})
+d = r.json()
+if d.get("ok") is False:
+    check("replenish 无错误", False, (d.get("detail") or "")[:200])
+else:
+    items = d.get("data") or []
+    check("replenish 返回列表", isinstance(items, list), str(d)[:150])
+    check("replenish SKU0001 充足无建议", not any(i.get("sku") == "SKU0001" and (i.get("suggested_qty") or 0) > 0 for i in items), str(items)[:300])
+    check("replenish SKU0002 有建议(缺货)", any(i.get("sku") == "SKU0002" for i in items))
+r = client.get("/insights/replenishment?channel=jd&mode=traditional", headers={"Authorization": "Bearer " + TOKEN})
+check("replenish traditional 200", r.status_code == 200, r.text[:120])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

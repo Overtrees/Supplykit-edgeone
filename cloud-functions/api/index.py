@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from db import one
 from routes.auth import router as auth_router
 from routes.dashboard import router as dashboard_router
+from routes.replenishment import router as replenishment_router
 from routes.common import verify_token
 
 app = FastAPI()
@@ -69,3 +70,4 @@ def health():
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(replenishment_router)
