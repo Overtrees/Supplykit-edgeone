@@ -9,8 +9,18 @@ import os
 import sys
 
 _vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor")
+# 多候选路径(不同运行环境 __file__/cwd 解析不同)
+_cwd = os.getcwd()
+_cands = [_vendor,
+          os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"),
+          os.path.join(_cwd, "vendor"),
+          os.path.join(_cwd, "..", "vendor"),
+          os.path.join(_cwd, "api", "..", "vendor")]
+_vendor = next((p for p in _cands if os.path.isdir(os.path.join(p, "app"))), _vendor)
 if _vendor not in sys.path:
     sys.path.insert(0, _vendor)
+_VENDOR_INFO = {"path": _vendor, "has_app": os.path.isdir(os.path.join(_vendor, "app")),
+                "app_files": sorted(os.listdir(os.path.join(_vendor, "app")))[:8] if os.path.isdir(os.path.join(_vendor, "app")) else []}
 
 from fastapi import FastAPI
 
@@ -80,7 +90,9 @@ def _make_fallback(error):
 
     @f.get("/health")
     def health():
-        return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)", "error": str(error)[:200]}
+        return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)",
+                "error": str(error)[:200], "vendor": _VENDOR_INFO,
+                "sys_path": [p for p in sys.path if 'vendor' in p or 'api' in p][:5]}
 
     @f.get("/tidb-test")
     def tidb_test():
