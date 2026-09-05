@@ -428,6 +428,12 @@ import traceback as _tb
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
+    # TiDB 模式: 直接返回错误详情(写 quality_logs 可能二次失败致 ASGI 崩溃)
+    from app.core.database import _backend as _bk_err
+    if _bk_err() == "tidb":
+        import traceback as _tb2
+        return JSONResponse({"ok": False, "error": "服务器内部错误", "detail": str(exc)[:400],
+                             "tb": _tb2.format_exc(limit=12)[-1500:]}, status_code=500)
     try:
         from app.core.database import get_conn
         _c = get_conn()
