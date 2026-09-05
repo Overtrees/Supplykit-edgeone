@@ -153,6 +153,9 @@ def _task_cleanup_logs():
         logger.info(f"Cleanup error: {e}")
 
 def _task_backup():
+    from app.core.database import _backend as _bk
+    if _bk() == "tidb":
+        return  # TiDB 无文件系统/无 WAL, 备份与磁盘清理由平台负责
     """每天凌晨 2 点备份数据库（自动检查配额，只保留最近 2 个备份）"""
     try:
         from app.core.database import backup_db, DB_PATH
@@ -219,6 +222,9 @@ def _task_backup():
         logger.info(f"Backup error: {e}")
 
 def _task_disk_cleanup():
+    from app.core.database import _backend as _bk
+    if _bk() == "tidb":
+        return  # TiDB 无文件系统/无 WAL, 备份与磁盘清理由平台负责
     """每日磁盘自检：清理旧备份/临时文件 + WAL checkpoint，防止撑爆存储配额"""
     try:
         from app.core.database import DB_PATH
@@ -305,6 +311,9 @@ def _get_checkpoint_lock():
     return _checkpoint_lock
 
 def _task_wal_checkpoint_periodic():
+    from app.core.database import _backend as _bk
+    if _bk() == "tidb":
+        return  # TiDB 无文件系统/无 WAL, 备份与磁盘清理由平台负责
     """定时 WAL checkpoint 防膨胀: 仅当 WAL>15MB 才 TRUNCATE(小WAL跳过零阻塞;
     曾6h间隔内WAL暴涨89MB撑满配额3次事故, 但高频阻塞式TRUNCATE会与写请求争锁)"""
     try:
