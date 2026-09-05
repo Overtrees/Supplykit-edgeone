@@ -18,6 +18,15 @@ def _status_cond(col="order_status"):
 
 @router.get("/dashboard/summary")
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
+    try:
+        return _summary_impl(channel, start_date, end_date)
+    except Exception as e:
+        import traceback as _tb
+        return {"ok": False, "error": "summary-error", "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
+                "tb": _tb.format_exc(limit=15)[-2000:]}
+
+
+def _summary_impl(channel: str, start_date: str = "", end_date: str = ""):
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
