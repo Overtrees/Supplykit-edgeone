@@ -102,7 +102,7 @@ def migrate_tables_route():
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS `alerts` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `alert_type` VARCHAR(30) DEFAULT '', `title` TEXT, `description` TEXT, `severity` TEXT, `status` VARCHAR(30) DEFAULT 'active', `source` VARCHAR(30) DEFAULT '', `related_sku` TEXT, `related_order_no` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `pushed` BIGINT DEFAULT 0, `related_rule_id` BIGINT DEFAULT 0, `warehouse_type` VARCHAR(20) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `batches` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `warehouse_type` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', `prod_date` DATETIME, `exp_date` DATETIME, `qty` BIGINT DEFAULT 0, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `cleansing_errors` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `task_id` VARCHAR(64) DEFAULT '', `row_index` VARCHAR(0) DEFAULT 0, `source_file` TEXT, `error_type` VARCHAR(30) DEFAULT '', `field_name` VARCHAR(50) DEFAULT '', `raw_value` TEXT, `error_message` TEXT, `raw_data` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `cleansing_errors` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `task_id` VARCHAR(64) DEFAULT '', `row_index` BIGINT DEFAULT 0, `source_file` TEXT, `error_type` VARCHAR(30) DEFAULT '', `field_name` VARCHAR(50) DEFAULT '', `raw_value` TEXT, `error_message` TEXT, `raw_data` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `cleansing_templates` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `name` TEXT, `doc_type` VARCHAR(30) DEFAULT 'order', `mapping` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `custom_fields` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `target` VARCHAR(50), `key` VARCHAR(64), `label` TEXT, `type` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `daily_sales_snapshot` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `sku` VARCHAR(64), `warehouse` VARCHAR(64) DEFAULT '', `order_count` BIGINT DEFAULT 0, UNIQUE(`date`, `channel`, `sku`, `warehouse`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -190,10 +190,18 @@ def _conn():
 
 
 def build():
-    """执行建表 DDL(幂等)"""
-    out = {"tables_ok": [], "indexes_ok": [], "fail": []}
+    """执行建表 DDL(幂等: 先 DROP 全部表再建, 保证 schema 与代码一致)"""
+    out = {"tables_ok": [], "indexes_ok": [], "fail": [], "dropped": []}
     conn = _conn()
     cur = conn.cursor()
+    # 先 DROP 所有表(清掉旧 schema 残留, 防 IF NOT EXISTS 跳过旧表)
+    import re as _re
+    for t in _re.findall(r"CREATE TABLE IF NOT EXISTS `(\w+)`", SCHEMA_SQL):
+        try:
+            cur.execute("DROP TABLE IF EXISTS `%s`" % t)
+            out["dropped"].append(t)
+        except Exception:
+            pass
     for stmt in SCHEMA_SQL.split(";"):
         stmt = stmt.strip()
         if not stmt:
