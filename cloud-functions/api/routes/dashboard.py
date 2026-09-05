@@ -60,7 +60,7 @@ def _assemble(rows, channel, start_date, end_date):
     funnel = {}
     day_rows = {}
     for r in rows:
-        d = r.get("d") or ""
+        d = str(r.get("d") or "")[:10]  # TiDB DATE() → datetime.date, 统一转 str
         st = r.get("order_status") or "未知"
         store = r.get("store") or ""
         g = float(r.get("g") or 0)
