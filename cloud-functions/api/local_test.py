@@ -104,6 +104,12 @@ def check(name, cond, extra=""):
         print("❌ %s %s" % (name, extra))
 
 
+# health(数据版本指纹)
+r = client.get("/health")
+d = r.json()
+check("health 200", r.status_code == 200, r.text[:150])
+check("health 含 version 字段", isinstance(d, dict) and "version" in d, r.text[:150])
+
 # auth
 r = client.post("/auth/login", json={"username": "demo", "password": "demo123"})
 check("auth/login demo", r.status_code == 200 and r.json().get("ok"), r.text[:150])

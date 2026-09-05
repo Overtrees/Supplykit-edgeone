@@ -223,7 +223,7 @@ export default function App() {
         const r = await fetch(API + '/api/health')
         const d = await r.json()
         const v = d.version || 0
-        if (versionRef.current > 0 && v !== versionRef.current) {
+        if (versionRef.current !== 0 && versionRef.current !== v) {
           // 版本变化，清除前端缓存
           clearCache()
           useAppStore.getState().loadAll().catch(() => {})

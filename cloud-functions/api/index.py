@@ -72,6 +72,19 @@ def health():
         out["snapshot_max"] = (r or {}).get("m") or ""
     except Exception:
         pass
+    # 数据版本指纹: 关键表 MAX(id)/MAX(date) 拼接, 任何数据变更即变化
+    # (前端每 15s 轮询 /health 取 version, 变化时 clearCache+loadAll 绕过 30s 前端缓存)
+    try:
+        r = one(
+            "SELECT CONCAT_WS('-',"
+            "(SELECT COALESCE(MAX(id),0) FROM orders),"
+            "(SELECT COALESCE(MAX(id),0) FROM inventory),"
+            "(SELECT COALESCE(MAX(id),0) FROM products),"
+            "(SELECT COALESCE(MAX(id),0) FROM alerts),"
+            "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot)) AS v")
+        out["version"] = str((r or {}).get("v") or "0")
+    except Exception:
+        out["version"] = "0"
     return out
 
 
