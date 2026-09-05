@@ -91,7 +91,22 @@ class _ApiPrefixProxy:
             scope["path"] = "/api" + path
         # 清 root_path: Makers 框架设置 root_path=/api, 可能并入 FastAPI 路由/URL 匹配
         scope["root_path"] = ""
-        await self.app(scope, receive, send)
+        try:
+            await self.app(scope, receive, send)
+        except Exception as _e:
+            # 兜底: 任何未捕获异常转为可读 JSON(定位崩溃)
+            import traceback as _tb3
+            import json as _j3
+            body = _j3.dumps({"ok": False, "error": "entry-catch",
+                              "detail": "%s: %s" % (type(_e).__name__, str(_e)[:300]),
+                              "tb": _tb3.format_exc(limit=15)[-2000:]}).encode()
+            hdrs = [[b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode()]]
+            try:
+                await send({"type": "http.response.start", "status": 500, "headers": hdrs})
+                await send({"type": "http.response.body", "body": body})
+            except Exception:
+                pass
 
 
 def _make_fallback(error):
