@@ -1,160 +1,77 @@
-"""Makers 入口 —— 挂载完整 backend(Phase2)
+"""Makers 原生后端入口(方案 B: 无 SQLite 适配, 直写 TiDB 方言)
 
-- vendor/app = backend/app 的构建时同步副本(edgeone.json build.command 生成)
-- Makers 框架模式剥离 /api 前缀 → _ApiPrefixProxy 恢复后转发给 backend app
-- backend 加载失败时 fallback 到最小 app(health/tidb-test/migrate 保持可用)
-- 注意: app 赋值必须在模块级行首(构建器正则 /^app\\s*=/m 检测函数入口)
+构建器要求: 模块级行首 app = (正则 /^app\\s*=/m)
 """
 import os
-import sys
-
-# 函数包运行时 sys.path 只有 /var/user(函数根), 入口目录(api/)需自行加入——
-# 否则同目录模块(migrate_tool 等)import 失败(9-05 实测 ModuleNotFoundError)
-_here = os.path.dirname(os.path.abspath(__file__))
-if _here not in sys.path:
-    sys.path.insert(0, _here)
-_vendor = os.path.join(_here, "..", "vendor")
-# 多候选路径(不同运行环境 __file__/cwd 解析不同)
-_cwd = os.getcwd()
-_cands = [_vendor,
-          os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"),
-          os.path.join(_cwd, "vendor"),
-          os.path.join(_cwd, "..", "vendor"),
-          os.path.join(_cwd, "api", "..", "vendor")]
-_vendor = next((p for p in _cands if os.path.isdir(os.path.join(p, "app"))), _vendor)
-if _vendor not in sys.path:
-    sys.path.insert(0, _vendor)
-_VENDOR_INFO = {"path": _vendor, "has_app": os.path.isdir(os.path.join(_vendor, "app")),
-                "app_files": sorted(os.listdir(os.path.join(_vendor, "app")))[:8] if os.path.isdir(os.path.join(_vendor, "app")) else []}
+import time
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
-# Phase2 迁移工具(migrate 端点不经过 backend)
-try:
-    from migrate_tool import build as _mig_build, seed_small as _mig_seed, ru_test as _mig_ru, tables as _mig_tables
-    _MIGRATE_OK = True
-except Exception as _me:
-    import logging as _lg
-    _lg.error("[entry] migrate_tool 导入失败: %s %s", type(_me).__name__, str(_me)[:200])
-    _MIGRATE_OK = False
+from db import query, one, execute
 
-_migrate_app = FastAPI()
+app = FastAPI()
 
 
-@_migrate_app.get("/migrate/build")
-def _mb():
+@app.get("/health")
+def health():
+    out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
     try:
-        return _mig_build()
+        r = one("SELECT 1 AS ok")
+        out["db"] = "ok" if r else "unknown"
     except Exception as e:
-        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
-
-
-@_migrate_app.get("/migrate/seed")
-def _ms(n_orders: int = 5000):
+        out["db"] = "error: %s" % str(e)[:150]
+        out["status"] = "degraded"
     try:
-        return _mig_seed(n_orders=n_orders)
-    except Exception as e:
-        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+        r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot")
+        out["snapshot_max"] = (r or {}).get("m") or ""
+    except Exception:
+        pass
+    return out
 
 
-@_migrate_app.get("/migrate/ru-test")
-def _mr():
+@app.get("/debug/verify")
+def debug_verify():
+    """数据层验证: 三个核心聚合的原生 TiDB SQL"""
+    out = {"ok": True}
+    # 1. 看板 summary 核心(GMV 已支付口径)
     try:
-        return _mig_ru()
+        t0 = time.time()
+        rows = query(
+            "SELECT DATE(ordered_at) AS d, order_status, store, "
+            "SUM(IF(order_status IN ('待发货','已发货','已完成','申请退款'), "
+            "total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
+            "COUNT(*) AS cnt FROM orders "
+            "WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
+            "GROUP BY DATE(ordered_at), order_status, store",
+            ("jd", "2026-07-01 00:00:00"))
+        out["q1_summary"] = {"rows": len(rows), "ms": round((time.time() - t0) * 1000)}
     except Exception as e:
-        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
-
-
-@_migrate_app.get("/migrate/tables")
-def _mt():
+        out["q1_summary"] = {"error": "%s: %s" % (type(e).__name__, str(e)[:200])}
+    # 2. 库存分组(补货核心)
     try:
-        return {"tables": _mig_tables()}
+        t0 = time.time()
+        rows = query(
+            "SELECT sku, warehouse_type, SUM(available_qty) AS avail, SUM(safety_qty) AS safety, "
+            "SUM(in_transit_qty) AS transit FROM inventory WHERE channel=%s GROUP BY sku, warehouse_type",
+            ("jd",))
+        out["q2_inventory"] = {"rows": len(rows), "ms": round((time.time() - t0) * 1000)}
     except Exception as e:
-        return {"error": "%s: %s" % (type(e).__name__, str(e)[:300])}
-
-
-class _ApiPrefixProxy:
-    """恢复 /api 前缀后转发给真实 ASGI app(幂等); /migrate 走迁移工具"""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        path = scope.get("path", "") or ""
-        if _MIGRATE_OK and (path.startswith("/migrate") or path.startswith("/api/migrate")):
-            # 兼容剥离/未剥离两种框架行为; 统一转 migrate_app(去掉 /api 前缀)
-            scope["path"] = path[len("/api"):] if path.startswith("/api/migrate") else path
-            scope["root_path"] = ""
-            await _migrate_app(scope, receive, send)
-            return
-        if not path.startswith("/api"):
-            scope["path"] = "/api" + path
-        # 清 root_path: Makers 框架设置 root_path=/api, 可能并入 FastAPI 路由/URL 匹配
-        scope["root_path"] = ""
-        try:
-            await self.app(scope, receive, send)
-        except Exception as _e:
-            # 兜底: 任何未捕获异常转为可读 JSON(定位崩溃)
-            import traceback as _tb3
-            import json as _j3
-            body = _j3.dumps({"ok": False, "error": "entry-catch",
-                              "detail": "%s: %s" % (type(_e).__name__, str(_e)[:300]),
-                              "tb": _tb3.format_exc(limit=15)[-2000:]}).encode()
-            hdrs = [[b"content-type", b"application/json"],
-                    [b"content-length", str(len(body)).encode()]]
-            try:
-                await send({"type": "http.response.start", "status": 500, "headers": hdrs})
-                await send({"type": "http.response.body", "body": body})
-            except Exception:
-                pass
-
-
-def _make_fallback(error):
-    """backend 加载失败时的最小 app(诊断用)"""
-    import logging
-    logging.error("[entry] backend 加载失败: %s %s", type(error).__name__, str(error)[:300])
-    f = FastAPI()
-
-    @f.get("/health")
-    def health():
-        return {"status": "degraded", "msg": "supplykit-edgeone (backend failed)",
-                "error": str(error)[:200],
-                "vendor": _VENDOR_INFO}
-
-    @f.get("/tidb-test")
-    def tidb_test():
-        import pymysql
-        out = {"env": {"host": bool(os.environ.get("TIDB_HOST")), "port": True,
-                       "user": bool(os.environ.get("TIDB_USER")), "password": bool(os.environ.get("TIDB_PASSWORD"))}}
-        try:
-            conn = pymysql.connect(host=os.environ.get("TIDB_HOST"),
-                                   port=int(os.environ.get("TIDB_PORT", "4000")),
-                                   user=os.environ.get("TIDB_USER"),
-                                   password=os.environ.get("TIDB_PASSWORD"),
-                                   database=os.environ.get("TIDB_DB", "supplykit"),
-                                   ssl={"ca": None}, connect_timeout=10)
-            cur = conn.cursor()
-            cur.execute("SELECT VERSION()")
-            out["version"] = cur.fetchone()[0]
-            cur.close()
-            conn.close()
-            out["status"] = "OK"
-        except Exception as e:
-            out["error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
-        return out
-
-    if _MIGRATE_OK:
-        # migrate 端点并入 fallback app
-        for r in _migrate_app.routes:
-            f.routes.append(r)
-    return f
-
-
-# 组装 app(backend 优先, fallback 兜底)
-try:
-    from app.main import app as _supplykit_app
-    _final_app = _ApiPrefixProxy(_supplykit_app)
-except Exception as _be:
-    _final_app = _make_fallback(_be)
-
-app = _final_app
+        out["q2_inventory"] = {"error": "%s: %s" % (type(e).__name__, str(e)[:200])}
+    # 3. 快照日销
+    try:
+        t0 = time.time()
+        rows = query(
+            "SELECT date, sku, SUM(order_count) AS cnt FROM daily_sales_snapshot "
+            "WHERE channel=%s AND date >= %s GROUP BY date, sku",
+            ("jd", "2026-08-01"))
+        out["q3_snapshot"] = {"rows": len(rows), "ms": round((time.time() - t0) * 1000)}
+    except Exception as e:
+        out["q3_snapshot"] = {"error": "%s: %s" % (type(e).__name__, str(e)[:200])}
+    # 4. 表行数
+    try:
+        rows = query("SHOW TABLE STATUS FROM `%s`" % os.environ.get("TIDB_DB", "supplykit"))
+        out["table_rows"] = {r["Name"]: r["Rows"] for r in rows if r.get("Rows")}
+    except Exception as e:
+        out["table_rows"] = {"error": str(e)[:150]}
+    return out
