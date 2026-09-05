@@ -8,6 +8,7 @@ on:
       - 'frontend/**'
       - 'cloud-functions/**'
       - 'edgeone.json'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -40,19 +41,6 @@ jobs:
           print('✅ Python 3.10 语法检查通过')
           EOF
 
-      - name: Install EdgeOne CLI
-        run: npm install -g edgeone@latest
-
-      - name: Deploy backend to EdgeOne Makers
-        env:
-          EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
-          EDGEONE_PAGES_API_REGION: china
-        run: |
-          set -e
-          # 部署 Makers 项目(自动构建 cloud-functions 并发布)
-          edgeone makers deploy -n supplykit -e production -t "$EDGEONE_PAGES_API_TOKEN"
-          echo "✅ EdgeOne Makers 部署已触发"
-
       - name: Set TiDB env vars on Makers project (API 直设)
         env:
           EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
@@ -64,7 +52,8 @@ jobs:
         run: |
           set -e
           # 用 pages-api 直接设置 env(CLI env set 需 link 项目, CI 下不可靠)
-          # 先查项目 ID
+          # env 必须先于构建完成更新——Makers 函数实例 env 是部署时快照,
+          # ModifyPagesProjectEnvs 只改项目配置, 不作用于运行实例(9-05 实测)
           PROJ=$(curl -s -X POST "https://pages-api.cloud.tencent.com/v1" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $EDGEONE_PAGES_API_TOKEN" \
@@ -92,3 +81,52 @@ jobs:
             -d @/tmp/env_payload.json | tee /tmp/env_resp.json
           echo
           python3 -c "import json; d=json.load(open('/tmp/env_resp.json')); assert d.get('Code')==0, d; print('✅ TiDB env 设置成功')"
+
+      - name: Wait for Makers build (Git 集成自动构建)
+        env:
+          EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
+        run: |
+          set -e
+          # 项目是 Provider=Github 的 Git 集成类型: push 已触发 Makers webhook 自动构建,
+          # 不支持 `edgeone makers deploy` 直传(会报 Provider 不支持——9-05 实测)。
+          # 本步骤轮询等待当前 commit 的部署完成, 作为 CI 门禁。
+          python3 - <<'EOF'
+          import json, os, time, urllib.request
+
+          token = os.environ["EDGEONE_PAGES_API_TOKEN"]
+          sha = os.environ["GITHUB_SHA"]
+
+          def api(action, data):
+              req = urllib.request.Request(
+                  "https://pages-api.cloud.tencent.com/v1",
+                  data=json.dumps({"Action": action, **data}).encode(),
+                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          # 项目 ID
+          proj = api("DescribePagesProjects", {"Filters": [{"Name": "Name", "Values": ["supplykit"]}], "Offset": 0, "Limit": 10})
+          pid = proj["Data"]["Response"]["Projects"][0]["ProjectId"]
+          print("ProjectId:", pid, "| commit:", sha)
+
+          deadline = time.time() + 600  # 10 分钟超时
+          while time.time() < deadline:
+              d = api("DescribePagesDeployments", {"ProjectId": pid, "Offset": 0, "Limit": 10, "OrderBy": "CreatedOn", "Order": "Desc"})
+              deps = d["Data"]["Response"]["Deployments"]
+              match = next((x for x in deps if x.get("RepoCommitHash") == sha), None)
+              if match:
+                  st = match.get("Status")
+                  print(f"deployment {match.get('DeploymentId')} status={st}")
+                  if st == "Success":
+                      print("✅ Makers 构建成功:", match.get("ProjectUrl"))
+                      sys.exit(0)
+                  if st in ("Failed", "Error", "Canceled"):
+                      print("❌ Makers 构建失败:", st)
+                      sys.exit(1)
+              else:
+                  print("waiting for deployment of commit", sha[:10], "...")
+              time.sleep(15)
+
+          print("❌ 超时: 10 分钟内未等到当前 commit 的部署")
+          sys.exit(1)
+          EOF
