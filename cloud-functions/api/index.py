@@ -28,7 +28,9 @@ from fastapi import FastAPI
 try:
     from migrate_tool import build as _mig_build, seed_small as _mig_seed, ru_test as _mig_ru, tables as _mig_tables
     _MIGRATE_OK = True
-except Exception:
+except Exception as _me:
+    import logging as _lg
+    _lg.error("[entry] migrate_tool 导入失败: %s %s", type(_me).__name__, str(_me)[:200])
     _MIGRATE_OK = False
 
 _migrate_app = FastAPI()
