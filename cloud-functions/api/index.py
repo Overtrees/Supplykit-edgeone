@@ -22,6 +22,8 @@ from routes.replenishment import router as replenishment_router
 from routes.orders import router as orders_router
 from routes.products import router as products_router
 from routes.insights import router as insights_router
+from routes.alerts import router as alerts_router
+from routes.misc import router as misc_router
 from routes.common import verify_token
 
 app = FastAPI()
@@ -77,3 +79,5 @@ app.include_router(replenishment_router)
 app.include_router(orders_router)
 app.include_router(products_router)
 app.include_router(insights_router)
+app.include_router(alerts_router)
+app.include_router(misc_router)

@@ -197,3 +197,190 @@ def _health_index(channel):
     return {"own": _score(hw.get("own", z)), "platform": _score(hw.get("platform", z)),
             "platform_b": _score(hw.get("platform_b", z)), "bc": _score(bc),
             "score": _score(all_rows)["score"], "level": _score(all_rows)["level"]}
+
+
+@router.get("/dashboard/aux")
+@traced
+def dashboard_aux(channel: str = "jd"):
+    """看板辅助聚合: alerts(分组配额) + alertCounts + stockOverview + bcOutOfStock"""
+    from routes.alerts import _FIELDS as _AF
+    # alerts 分组配额
+    alerts = []
+    for atype in ("low_stock", "replenish", None):
+        if atype:
+            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
+                         "ORDER BY id DESC LIMIT 100" % _AF, [channel, atype])
+        else:
+            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
+                         "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT 100" % _AF, [channel])
+        alerts.extend(rows)
+    counts = query("SELECT alert_type, severity, COUNT(*) AS c FROM alerts "
+                   "WHERE channel=%s AND status='active' GROUP BY alert_type, severity", [channel])
+    by_type, by_sev, total = {}, {}, 0
+    for r in counts:
+        at = r.get("alert_type") or "other"
+        sev = r.get("severity") or "info"
+        c = int(r.get("c") or 0)
+        total += c
+        by_type[at] = by_type.get(at, 0) + c
+        by_sev[sev] = by_sev.get(sev, 0) + c
+    # stockOverview(缺货/低库存)
+    out = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0", [channel]) or {}
+    low = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty>0 AND available_qty<safety_qty", [channel]) or {}
+    so_items = query("SELECT sku, product_name, warehouse, warehouse_type, available_qty, safety_qty "
+                     "FROM inventory WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
+    # bc 合计缺货 SKU
+    bc_rows = query(
+        "SELECT sku, MAX(product_name) AS product_name FROM inventory "
+        "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
+        "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku LIMIT 100", [channel])
+    bc_out = [{"sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
+               "warehouse_type": "bc"} for r in bc_rows]
+    return ok({
+        "alerts": alerts,
+        "alertCounts": {"total": total, "by_type": by_type, "by_severity": by_sev},
+        "stockOverview": {"items": so_items,
+                          "out_of_stock_count": int(out.get("c") or 0),
+                          "low_stock_count": int(low.get("c") or 0),
+                          "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
+        "bcOutOfStock": bc_out,
+        "stockRisk": _stock_risk(channel),
+    })
+
+
+@router.get("/dashboard/stock-risk")
+@traced
+def stock_risk(channel: str = "jd", full: int = 0):
+    return ok(_stock_risk(channel, full=full))
+
+
+def _stock_risk(channel, full: int = 0):
+    """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
+    from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+    from db import query as _q
+    cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
+    cfg = {r.get("key"): r.get("value") for r in cfg_rows}
+    b_to_c = int(cfg.get("b_to_c_days", "3") or 3)
+    c_safety = int(cfg.get("c_safety_days", "0") or 0)
+    lead = b_to_c + c_safety
+
+    inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, safety_qty, product_name "
+             "FROM inventory WHERE channel=%s", [channel])
+    prods = _q("SELECT sku, barcode, product_name FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel])
+    pmap = {r.get("sku"): r for r in prods}
+    skus = set([r.get("sku") for r in inv]) | set(pmap.keys())
+
+    by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
+    multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
+    fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
+    # 全国 C 仓日销(BBCC)
+    c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}
+    daily_c = {}
+    for wk, wd in by_sku_wh.items():
+        base, wh = wk.rsplit("|", 1)
+        if wh in c_whs:
+            m = daily_c.setdefault(base, {})
+            for d, q in wd.items():
+                m[d] = m.get(d, 0) + q
+    cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
+    fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
+
+    c_stock, b_stock, bc_total, own_stock = {}, {}, {}, {}
+    for r in inv:
+        sku = r.get("sku")
+        wt = r.get("warehouse_type")
+        qty = int(r.get("available_qty") or 0)
+        safety = int(r.get("safety_qty") or 0)
+        tty = int(r.get("in_transit_qty") or 0)
+        if wt == "own":
+            own_stock[sku] = {"available": own_stock.get(sku, {}).get("available", 0) + qty,
+                              "safety": own_stock.get(sku, {}).get("safety", 0) + safety}
+        elif wt == "platform_b":
+            b_stock[sku] = {"available": b_stock.get(sku, {}).get("available", 0) + qty,
+                            "safety": b_stock.get(sku, {}).get("safety", 0) + safety}
+        elif wt == "platform":
+            c_stock[sku] = {"available": c_stock.get(sku, {}).get("available", 0) + qty,
+                            "safety": c_stock.get(sku, {}).get("safety", 0) + safety}
+        if wt in ("platform", "platform_b"):
+            bc_total[sku] = {"available": bc_total.get(sku, {}).get("available", 0) + qty,
+                             "safety": bc_total.get(sku, {}).get("safety", 0) + safety,
+                             "transit": bc_total.get(sku, {}).get("transit", 0) + tty}
+
+    result = []
+    # B 维度(BBCC)
+    for sku, st in b_stock.items():
+        b_avail = st["available"]
+        if b_avail <= 0:
+            continue
+        ds = fused_c.get(sku, 0)
+        if ds <= 0:
+            continue
+        c_avail = c_stock.get(sku, {}).get("available", 0)
+        c_gap = max(round(ds * lead - c_avail, 0), 0)
+        if c_gap <= 0:
+            continue
+        result.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+                       "product_name": (pmap.get(sku) or {}).get("product_name", st.get("pname", sku)),
+                       "warehouse": "B仓", "type": "B", "available_qty": b_avail,
+                       "daily_sales": round(ds, 1),
+                       "days_to_empty": round(b_avail / (c_gap / lead), 1) if c_gap > 0 else 999,
+                       "c_gap": c_gap, "c_avail": c_avail})
+    # C 维度(传统)
+    c_items = []
+    for sku, st in c_stock.items():
+        avail = st["available"]
+        safety = st["safety"]
+        ds = fused_c.get(sku, 0) or fused.get(sku, 0)
+        if avail <= 0 or avail >= safety or ds <= 0:
+            continue
+        c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+                        "product_name": (pmap.get(sku) or {}).get("product_name", sku),
+                        "warehouse": "C仓", "type": "C", "available_qty": avail,
+                        "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
+    # BC 合计
+    bc_items = []
+    for sku, st in bc_total.items():
+        avail = st["available"]
+        safety = st["safety"]
+        ds = fused_c.get(sku, 0)
+        if ds <= 0:
+            continue
+        if avail <= 0 or avail < safety:
+            bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+                             "product_name": (pmap.get(sku) or {}).get("product_name", sku),
+                             "warehouse": "BC", "type": "BC", "available_qty": avail,
+                             "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1),
+                             "b_avail": b_stock.get(sku, {}).get("available", 0),
+                             "c_avail": c_stock.get(sku, {}).get("available", 0)})
+    # own 维度
+    own_items = []
+    for sku, st in own_stock.items():
+        avail = st["available"]
+        safety = st["safety"]
+        ds = fused.get(sku, 0)
+        if ds <= 0:
+            continue
+        if avail <= 0 or (safety > 0 and avail < safety):
+            own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
+                              "warehouse": "自有", "type": "OWN", "available_qty": avail,
+                              "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
+
+    def _stats(items):
+        crit = sum(1 for i in items if i.get("days_to_empty", 999) < 3)
+        warn = sum(1 for i in items if 3 <= i.get("days_to_empty", 999) < 7)
+        return len(items), crit, warn
+
+    result.sort(key=lambda x: x["days_to_empty"])
+    bc_items.sort(key=lambda x: x["days_to_empty"])
+    c_items.sort(key=lambda x: x["days_to_empty"])
+    own_items.sort(key=lambda x: x["days_to_empty"])
+    t, c, w = _stats(result)
+    bt, bc, bw = _stats(bc_items)
+    ct, cc, cw = _stats(c_items)
+    ot, oc, ow = _stats(own_items)
+    payload = {"items": result[:10], "total": t, "critical": c, "warning": w,
+               "bcItems": bc_items[:10], "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
+               "cItems": c_items[:10], "cTotal": ct, "cCritical": cc, "cWarning": cw,
+               "ownItems": own_items[:10], "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}
+    return payload
