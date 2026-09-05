@@ -1,21 +1,21 @@
 """Phase2 迁移工具(自包含): 建表/seed/RU 实测, 随入口挂载 /migrate/* 端点"""
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS `alerts` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `alert_type` VARCHAR(30) DEFAULT '', `title` TEXT, `description` TEXT, `severity` TEXT, `status` VARCHAR(30) DEFAULT 'active', `source` VARCHAR(30) DEFAULT '', `related_sku` TEXT, `related_order_no` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `pushed` BIGINT DEFAULT 0, `related_rule_id` BIGINT DEFAULT 0, `warehouse_type` VARCHAR(20) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `batches` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `warehouse_type` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', `prod_date` DATETIME, `exp_date` DATETIME, `qty` BIGINT DEFAULT 0, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `alerts` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `alert_type` VARCHAR(30) DEFAULT '', `title` TEXT, `description` TEXT, `severity` TEXT, `status` VARCHAR(30) DEFAULT 'active', `source` VARCHAR(30) DEFAULT '', `related_sku` TEXT, `related_order_no` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `pushed` BIGINT DEFAULT 0, `related_rule_id` BIGINT DEFAULT 0, `warehouse_type` VARCHAR(20) DEFAULT '', KEY `idx_alerts_status` (status)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `batches` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `warehouse_type` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', `prod_date` DATETIME, `exp_date` DATETIME, `qty` BIGINT DEFAULT 0, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, KEY `idx_batches_sku_wh` (sku, warehouse, channel)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `cleansing_errors` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `task_id` VARCHAR(64) DEFAULT '', `row_index` BIGINT DEFAULT 0, `source_file` TEXT, `error_type` VARCHAR(30) DEFAULT '', `field_name` VARCHAR(50) DEFAULT '', `raw_value` TEXT, `error_message` TEXT, `raw_data` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `cleansing_templates` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `name` TEXT, `doc_type` VARCHAR(30) DEFAULT 'order', `mapping` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `custom_fields` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `target` VARCHAR(50), `key` VARCHAR(64), `label` TEXT, `type` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `daily_sales_snapshot` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `sku` VARCHAR(64), `warehouse` VARCHAR(64) DEFAULT '', `order_count` BIGINT DEFAULT 0, UNIQUE(`date`, `channel`, `sku`, `warehouse`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `daily_stats` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `store` VARCHAR(128) DEFAULT '', `sku` VARCHAR(64) DEFAULT '', `order_status` VARCHAR(30) DEFAULT '', `gmv` DOUBLE DEFAULT 0, `order_count` BIGINT DEFAULT 0, `quantity` BIGINT DEFAULT 0, UNIQUE(`date`, `channel`, `store`, `sku`, `order_status`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `daily_sales_snapshot` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `sku` VARCHAR(64), `warehouse` VARCHAR(64) DEFAULT '', `order_count` BIGINT DEFAULT 0, UNIQUE(`date`, `channel`, `sku`, `warehouse`), KEY `idx_snapshot_date` (date, channel, sku)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `daily_stats` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `store` VARCHAR(128) DEFAULT '', `sku` VARCHAR(64) DEFAULT '', `order_status` VARCHAR(30) DEFAULT '', `gmv` DOUBLE DEFAULT 0, `order_count` BIGINT DEFAULT 0, `quantity` BIGINT DEFAULT 0, UNIQUE(`date`, `channel`, `store`, `sku`, `order_status`), KEY `idx_daily_stats_date` (date, channel)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `disposal_records` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `warehouse_type` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', `level` VARCHAR(20) DEFAULT '', `turnover_days` DOUBLE DEFAULT 0, `reason` VARCHAR(100) DEFAULT '', `action` VARCHAR(50) DEFAULT '', `note` VARCHAR(200) DEFAULT '', `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `events` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `event_type` VARCHAR(30), `entity_type` VARCHAR(50) DEFAULT '', `entity_id` VARCHAR(64) DEFAULT '', `title` TEXT, `payload` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `inbound_records` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `supplier` TEXT, `inbound_date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `prod_date` DATETIME, `exp_date` DATETIME, `warehouse` VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `inventory` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `product_name` TEXT, `store` VARCHAR(128) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `available_qty` BIGINT DEFAULT 0, `locked_qty` BIGINT DEFAULT 0, `in_transit_qty` BIGINT DEFAULT 0, `safety_qty` BIGINT DEFAULT 0, `safety_days` DOUBLE DEFAULT 0, `warehouse_type` VARCHAR(20) DEFAULT 'platform', `raw_data` TEXT, `source` VARCHAR(30) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `beginning_stock` BIGINT DEFAULT 0, `month_inbound` BIGINT DEFAULT 0, `month_outbound` BIGINT DEFAULT 0, `turnover_days` DOUBLE DEFAULT 0, `c_transit` BIGINT DEFAULT 0, `weight` DOUBLE DEFAULT 0, `volume` DOUBLE DEFAULT 0, `barcode` VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `orders` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `order_no` VARCHAR(64), `store` VARCHAR(128) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `unit_price` DOUBLE DEFAULT 0, `total_amount` DOUBLE DEFAULT 0, `data_source` VARCHAR(50) DEFAULT '', `order_status` VARCHAR(30) DEFAULT '', `ordered_at` DATETIME, `platform` VARCHAR(30) DEFAULT '', `supplier` TEXT, `remark` TEXT, `parent_order_no` TEXT, `raw_data` TEXT, `source` VARCHAR(30) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `paid_at` DATETIME, `barcode` VARCHAR(64) DEFAULT '', `deleted_at` TEXT, `freight_amount` DOUBLE DEFAULT 0, `subsidy_amount` DOUBLE DEFAULT 0, `tax_amount` DOUBLE DEFAULT 0, `discount_amount` DOUBLE DEFAULT 0, `actual_amount` DOUBLE DEFAULT 0) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `outbound_records` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `target_warehouse` TEXT, `outbound_date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `prod_date` DATETIME, `exp_date` DATETIME, `warehouse` VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `products` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `product_name` TEXT, `store` VARCHAR(128) DEFAULT '', `category` TEXT, `price` DOUBLE DEFAULT 0, `box_qty` BIGINT DEFAULT 1, `status` VARCHAR(30) DEFAULT 'active', `supplier_code` VARCHAR(64) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `barcode` VARCHAR(64) DEFAULT '', `weight` DOUBLE DEFAULT 0, `volume` DOUBLE DEFAULT 0, `channel` VARCHAR(20) DEFAULT 'jd', `unit` TEXT, `deleted_at` TEXT, `best_before` TEXT, `brand` TEXT, UNIQUE(`sku`, `channel`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `purchase_orders` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `store` VARCHAR(128) DEFAULT '', `product_name` TEXT, `suggested_qty` BIGINT DEFAULT 0, `actual_qty` BIGINT DEFAULT 0, `arrival_date` DATETIME, `status` VARCHAR(30) DEFAULT 'pending', `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS `quality_logs` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `log_type` VARCHAR(30) DEFAULT '', `level` VARCHAR(20) DEFAULT '', `message` TEXT, `details` TEXT, `source` VARCHAR(30) DEFAULT '', `entity_type` VARCHAR(50) DEFAULT '', `entity_id` VARCHAR(64) DEFAULT '', `field_name` VARCHAR(50) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `events` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `event_type` VARCHAR(30), `entity_type` VARCHAR(50) DEFAULT '', `entity_id` VARCHAR(64) DEFAULT '', `title` TEXT, `payload` TEXT, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, KEY `idx_events_type` (event_type), KEY `idx_events_created_at` (created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `inbound_records` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `supplier` TEXT, `inbound_date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `prod_date` DATETIME, `exp_date` DATETIME, `warehouse` VARCHAR(64) DEFAULT '', KEY `idx_inbound_date` (inbound_date), UNIQUE KEY `idx_inbound_sku_date` (sku, inbound_date), UNIQUE KEY `idx_inbound_records_unique` (sku, warehouse, channel, prod_date, exp_date, inbound_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `inventory` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `product_name` TEXT, `store` VARCHAR(128) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `available_qty` BIGINT DEFAULT 0, `locked_qty` BIGINT DEFAULT 0, `in_transit_qty` BIGINT DEFAULT 0, `safety_qty` BIGINT DEFAULT 0, `safety_days` DOUBLE DEFAULT 0, `warehouse_type` VARCHAR(20) DEFAULT 'platform', `raw_data` TEXT, `source` VARCHAR(30) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `beginning_stock` BIGINT DEFAULT 0, `month_inbound` BIGINT DEFAULT 0, `month_outbound` BIGINT DEFAULT 0, `turnover_days` DOUBLE DEFAULT 0, `c_transit` BIGINT DEFAULT 0, `weight` DOUBLE DEFAULT 0, `volume` DOUBLE DEFAULT 0, `barcode` VARCHAR(64) DEFAULT '', KEY `idx_inventory_sku` (sku), KEY `idx_inventory_store` (store), KEY `idx_inventory_sku_wh_ch` (sku, warehouse_type, channel), KEY `idx_inventory_wh_ch` (warehouse_type, channel), UNIQUE KEY `idx_inventory_sku_wh_uq` (sku, warehouse, channel)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `orders` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `order_no` VARCHAR(64), `store` VARCHAR(128) DEFAULT '', `warehouse` VARCHAR(64) DEFAULT '', `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `unit_price` DOUBLE DEFAULT 0, `total_amount` DOUBLE DEFAULT 0, `data_source` VARCHAR(50) DEFAULT '', `order_status` VARCHAR(30) DEFAULT '', `ordered_at` DATETIME, `platform` VARCHAR(30) DEFAULT '', `supplier` TEXT, `remark` TEXT, `parent_order_no` TEXT, `raw_data` TEXT, `source` VARCHAR(30) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `channel` VARCHAR(20) DEFAULT 'jd', `paid_at` DATETIME, `barcode` VARCHAR(64) DEFAULT '', `deleted_at` TEXT, `freight_amount` DOUBLE DEFAULT 0, `subsidy_amount` DOUBLE DEFAULT 0, `tax_amount` DOUBLE DEFAULT 0, `discount_amount` DOUBLE DEFAULT 0, `actual_amount` DOUBLE DEFAULT 0, UNIQUE KEY `idx_orders_no_sku` (order_no, sku), KEY `idx_orders_order_no` (order_no), KEY `idx_orders_ordered_at` (ordered_at), KEY `idx_orders_status` (order_status), KEY `idx_orders_store` (store), KEY `idx_orders_sku` (sku), KEY `idx_orders_data_source` (data_source), KEY `idx_orders_sku_ordered_at` (sku, ordered_at, channel), KEY `idx_orders_ch_status` (channel, order_status), KEY `idx_orders_ch_ordered_at` (channel, order_status, ordered_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `outbound_records` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64) DEFAULT '', `product_name` TEXT, `quantity` BIGINT DEFAULT 0, `target_warehouse` TEXT, `outbound_date` DATETIME, `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `prod_date` DATETIME, `exp_date` DATETIME, `warehouse` VARCHAR(64) DEFAULT '', KEY `idx_outbound_date` (outbound_date), UNIQUE KEY `idx_outbound_sku_date` (sku, outbound_date), UNIQUE KEY `idx_outbound_records_unique` (sku, warehouse, channel, prod_date, exp_date, outbound_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `products` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `product_name` TEXT, `store` VARCHAR(128) DEFAULT '', `category` TEXT, `price` DOUBLE DEFAULT 0, `box_qty` BIGINT DEFAULT 1, `status` VARCHAR(30) DEFAULT 'active', `supplier_code` VARCHAR(64) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `barcode` VARCHAR(64) DEFAULT '', `weight` DOUBLE DEFAULT 0, `volume` DOUBLE DEFAULT 0, `channel` VARCHAR(20) DEFAULT 'jd', `unit` TEXT, `deleted_at` TEXT, `best_before` TEXT, `brand` TEXT, UNIQUE(`sku`, `channel`), KEY `idx_products_sku` (sku), KEY `idx_products_sku_ch` (sku, channel)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `purchase_orders` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `sku` VARCHAR(64), `store` VARCHAR(128) DEFAULT '', `product_name` TEXT, `suggested_qty` BIGINT DEFAULT 0, `actual_qty` BIGINT DEFAULT 0, `arrival_date` DATETIME, `status` VARCHAR(30) DEFAULT 'pending', `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `idx_po_sku_store` (sku, store)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS `quality_logs` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `log_type` VARCHAR(30) DEFAULT '', `level` VARCHAR(20) DEFAULT '', `message` TEXT, `details` TEXT, `source` VARCHAR(30) DEFAULT '', `entity_type` VARCHAR(50) DEFAULT '', `entity_id` VARCHAR(64) DEFAULT '', `field_name` VARCHAR(50) DEFAULT '', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, KEY `idx_quality_logs_level` (level)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `replenishment_config` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `key` VARCHAR(64), `value` TEXT, `channel` VARCHAR(20) DEFAULT 'jd', `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(`key`, `channel`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `replenishment_config_history` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `key` VARCHAR(64), `old_value` TEXT, `new_value` TEXT, `channel` VARCHAR(20) DEFAULT 'jd', `mode` VARCHAR(20) DEFAULT '', `operator` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `rules` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `name` TEXT, `event` VARCHAR(30) DEFAULT '', `condition_json` TEXT, `alert_type` VARCHAR(30) DEFAULT '', `alert_title` TEXT, `alert_desc` TEXT, `severity` TEXT, `is_active` BIGINT DEFAULT 1, `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `mode` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', `deleted_at` TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -23,38 +23,6 @@ CREATE TABLE IF NOT EXISTS `suppliers` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, 
 CREATE TABLE IF NOT EXISTS `sync_tasks` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `task_id` VARCHAR(64) DEFAULT '', `task_type` TEXT, `status` VARCHAR(30) DEFAULT 'pending', `params` TEXT, `result` TEXT, `channel` VARCHAR(20) DEFAULT 'jd', `owner_id` TEXT, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `users` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `username` VARCHAR(64) UNIQUE, `password_hash` TEXT, `role` VARCHAR(20) DEFAULT 'user', `is_active` BIGINT DEFAULT 1, `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `warehouse_registry` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT, `warehouse` VARCHAR(64) DEFAULT '', `warehouse_type` VARCHAR(20) DEFAULT '', `channel` VARCHAR(20) DEFAULT 'jd', UNIQUE(`warehouse`, `channel`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE UNIQUE INDEX `idx_orders_no_sku` ON `orders` (order_no, sku);
-CREATE INDEX `idx_orders_order_no` ON `orders` (order_no);
-CREATE INDEX `idx_inventory_sku` ON `inventory` (sku);
-CREATE INDEX `idx_products_sku` ON `products` (sku);
-CREATE INDEX `idx_alerts_status` ON `alerts` (status);
-CREATE UNIQUE INDEX `idx_po_sku_store` ON `purchase_orders` (sku, store);
-CREATE INDEX `idx_events_type` ON `events` (event_type);
-CREATE INDEX `idx_quality_logs_level` ON `quality_logs` (level);
-CREATE INDEX `idx_orders_ordered_at` ON `orders` (ordered_at);
-CREATE INDEX `idx_orders_status` ON `orders` (order_status);
-CREATE INDEX `idx_orders_store` ON `orders` (store);
-CREATE INDEX `idx_orders_sku` ON `orders` (sku);
-CREATE INDEX `idx_orders_data_source` ON `orders` (data_source);
-CREATE INDEX `idx_inventory_store` ON `inventory` (store);
-CREATE INDEX `idx_events_created_at` ON `events` (created_at);
-CREATE INDEX `idx_orders_sku_ordered_at` ON `orders` (sku, ordered_at, channel);
-CREATE INDEX `idx_inventory_sku_wh_ch` ON `inventory` (sku, warehouse_type, channel);
-CREATE INDEX `idx_inventory_wh_ch` ON `inventory` (warehouse_type, channel);
-CREATE INDEX `idx_daily_stats_date` ON `daily_stats` (date, channel);
-CREATE INDEX `idx_products_sku_ch` ON `products` (sku, channel);
-CREATE INDEX `idx_orders_ch_status` ON `orders` (channel, order_status);
-CREATE INDEX `idx_orders_ch_ordered_at` ON `orders` (channel, order_status, ordered_at);
-CREATE INDEX `idx_inbound_date` ON `inbound_records` (inbound_date);
-CREATE INDEX `idx_outbound_date` ON `outbound_records` (outbound_date);
-CREATE INDEX `idx_snapshot_date` ON `daily_sales_snapshot` (date, channel, sku);
-CREATE UNIQUE INDEX `idx_inventory_sku_wh_uq` ON `inventory` (sku, warehouse, channel);
-CREATE UNIQUE INDEX `idx_inbound_sku_date` ON `inbound_records` (sku, inbound_date);
-CREATE UNIQUE INDEX `idx_outbound_sku_date` ON `outbound_records` (sku, outbound_date);
-CREATE INDEX `idx_batches_sku_wh` ON `batches` (sku, warehouse, channel);
-CREATE UNIQUE INDEX `idx_inbound_records_unique` ON `inbound_records` (sku, warehouse, channel, prod_date, exp_date, inbound_date);
-CREATE UNIQUE INDEX `idx_outbound_records_unique` ON `outbound_records` (sku, warehouse, channel, prod_date, exp_date, outbound_date);
 """
 
 
@@ -93,7 +61,7 @@ def _conn():
 
 
 def build():
-    """执行建表 DDL(幂等, 抗 TiDB 异步 DDL 竞争)"""
+    """执行建表 DDL(幂等, 索引已并入表定义, DROP TABLE 重建即带索引)"""
     import re as _re2
     import time as _t2
     out = {"tables_ok": [], "indexes_ok": [], "fail": []}
@@ -104,38 +72,22 @@ def build():
         if not stmt:
             continue
         try:
-            _is_index = "CREATE INDEX" in stmt.upper()
-            _name = _tbl = None
-            if _is_index:
-                _m = _re2.search(r"INDEX `([\w]+)` ON `([\w]+)`", stmt)
-                if _m:
-                    _name, _tbl = _m.group(1), _m.group(2)
-                # 先 DROP 旧索引(DROP TABLE 异步竞争下防 Duplicate key name)
-                if _name and _tbl:
-                    try:
-                        cur.execute("DROP INDEX IF EXISTS `%s` ON `%s`" % (_name, _tbl))
-                    except Exception:
-                        pass
             cur.execute(stmt)
-            if "CREATE TABLE" in stmt.upper():
-                out["tables_ok"].append(stmt.split("`")[1])
-            else:
-                out["indexes_ok"].append(_name or stmt.split("`")[3])
+            out["tables_ok"].append(stmt.split("`")[1])
         except Exception as e:
             # 异步 DDL 未完成: 等 3s 重试一次
-            if "Duplicate" in str(e) and ("INDEX" in stmt.upper() or "TABLE" in stmt.upper()):
+            if "Duplicate" in str(e):
                 _t2.sleep(3)
                 try:
                     cur.execute(stmt)
-                    if "CREATE TABLE" in stmt.upper():
-                        out["tables_ok"].append(stmt.split("`")[1])
-                    else:
-                        out["indexes_ok"].append(_name or stmt.split("`")[3])
+                    out["tables_ok"].append(stmt.split("`")[1])
                     continue
                 except Exception as e2:
                     out["fail"].append("%s: %s" % (stmt[:80], str(e2)[:200]))
                     continue
             out["fail"].append("%s: %s" % (stmt[:80], str(e)[:200]))
+    # 统计索引(表定义内 KEY/UNIQUE KEY)
+    out["indexes_ok"] = len(_re2.findall(r"KEY `idx_", SCHEMA_SQL))
     cur.close()
     conn.close()
     return {"ok": len(out["tables_ok"]), "tables": out["tables_ok"],
