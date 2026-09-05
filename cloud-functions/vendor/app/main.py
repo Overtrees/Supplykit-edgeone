@@ -1,10 +1,21 @@
 import os, sys, subprocess, tempfile
 
 # 统一临时目录到项目 tmp/（避免依赖 /tmp 导致 disk I/O error）
+# Makers 只读文件系统: 项目目录不可写时回退系统 /tmp
 _tmp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
-os.makedirs(_tmp_dir, exist_ok=True)
-os.environ['TMPDIR'] = _tmp_dir
-tempfile.tempdir = _tmp_dir
+try:
+    os.makedirs(_tmp_dir, exist_ok=True)
+    _probe = os.path.join(_tmp_dir, '.w_probe')
+    with open(_probe, 'w') as _pf:
+        _pf.write('ok')
+    os.remove(_probe)
+except Exception:
+    _tmp_dir = '/tmp'
+try:
+    os.environ['TMPDIR'] = _tmp_dir
+    tempfile.tempdir = _tmp_dir
+except Exception:
+    pass
 
 # Sentry（可选，通过 SENTRY_DSN 环境变量启用）
 if os.getenv("SENTRY_DSN"):
