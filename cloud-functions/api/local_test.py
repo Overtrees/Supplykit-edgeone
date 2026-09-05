@@ -30,6 +30,12 @@ _INV = [
 
 
 def fake_query(sql, params=None):
+    if "FROM orders WHERE" in sql and "COUNT" not in sql:
+        return [{"id": 1, "order_no": "NO0000000001", "sku": "SKU0001", "barcode": "69-01",
+                 "product_name": "禾味调味料1号", "store": "自营旗舰店", "warehouse": "华东C仓",
+                 "quantity": 2, "unit_price": 25.0, "total_amount": 50.0, "order_status": "已完成",
+                 "ordered_at": "2026-09-04 10:00:00", "paid_at": "2026-09-04 10:01:00",
+                 "platform": "jd", "channel": "jd", "deleted_at": ""}]
     if "FROM inventory WHERE" in sql or "FROM inventory i" in sql:
         return [dict(x) for x in _FAKE_INV]
     if "FROM products WHERE" in sql:
@@ -146,6 +152,18 @@ else:
     check("replenish SKU0002 有建议(缺货)", any(i.get("sku") == "SKU0002" for i in items))
 r = client.get("/insights/replenishment?channel=jd&mode=traditional", headers={"Authorization": "Bearer " + TOKEN})
 check("replenish traditional 200", r.status_code == 200, r.text[:120])
+
+# orders / products / insights
+r = client.get("/orders?page=1&page_size=5", headers={"Authorization": "Bearer " + TOKEN})
+d = r.json()
+check("orders 返回分页", d.get("ok") and len(d.get("data", {}).get("items", [])) >= 1, r.text[:150])
+r = client.get("/products?page=1&page_size=5", headers={"Authorization": "Bearer " + TOKEN})
+check("products 200", r.status_code == 200 and r.json().get("ok"), r.text[:120])
+r = client.get("/insights/slow-moving?channel=jd", headers={"Authorization": "Bearer " + TOKEN})
+d = r.json()
+check("slow-moving 200", d.get("ok") is not False, (d.get("detail") or "")[:150])
+r = client.get("/insights/with-sales?wh_type=own&channel=jd", headers={"Authorization": "Bearer " + TOKEN})
+check("with-sales 200", r.json().get("ok") is not False, r.text[:150])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
