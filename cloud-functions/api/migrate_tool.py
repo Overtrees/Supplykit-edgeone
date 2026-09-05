@@ -93,7 +93,9 @@ def _conn():
 
 
 def build():
-    """执行建表 DDL(幂等)"""
+    """执行建表 DDL(幂等, 抗 TiDB 异步 DDL 竞争)"""
+    import re as _re2
+    import time as _t2
     out = {"tables_ok": [], "indexes_ok": [], "fail": []}
     conn = _conn()
     cur = conn.cursor()
@@ -102,20 +104,37 @@ def build():
         if not stmt:
             continue
         try:
-            if "CREATE INDEX" in stmt.upper():
-                # TiDB DDL 异步竞争: DROP TABLE 后立即 CREATE INDEX 可能遇旧元数据 → 先显式 DROP 索引
-                _name = stmt.split("`")[3]
-                _tbl = stmt.split("`")[5]
-                try:
-                    cur.execute("DROP INDEX IF EXISTS `%s` ON `%s`" % (_name, _tbl))
-                except Exception:
-                    pass
+            _is_index = "CREATE INDEX" in stmt.upper()
+            _name = _tbl = None
+            if _is_index:
+                _m = _re2.search(r"INDEX `([\w]+)` ON `([\w]+)`", stmt)
+                if _m:
+                    _name, _tbl = _m.group(1), _m.group(2)
+                # 先 DROP 旧索引(DROP TABLE 异步竞争下防 Duplicate key name)
+                if _name and _tbl:
+                    try:
+                        cur.execute("DROP INDEX IF EXISTS `%s` ON `%s`" % (_name, _tbl))
+                    except Exception:
+                        pass
             cur.execute(stmt)
             if "CREATE TABLE" in stmt.upper():
                 out["tables_ok"].append(stmt.split("`")[1])
             else:
-                out["indexes_ok"].append(stmt.split("`")[3])
+                out["indexes_ok"].append(_name or stmt.split("`")[3])
         except Exception as e:
+            # 异步 DDL 未完成: 等 3s 重试一次
+            if "Duplicate" in str(e) and ("INDEX" in stmt.upper() or "TABLE" in stmt.upper()):
+                _t2.sleep(3)
+                try:
+                    cur.execute(stmt)
+                    if "CREATE TABLE" in stmt.upper():
+                        out["tables_ok"].append(stmt.split("`")[1])
+                    else:
+                        out["indexes_ok"].append(_name or stmt.split("`")[3])
+                    continue
+                except Exception as e2:
+                    out["fail"].append("%s: %s" % (stmt[:80], str(e2)[:200]))
+                    continue
             out["fail"].append("%s: %s" % (stmt[:80], str(e)[:200]))
     cur.close()
     conn.close()
