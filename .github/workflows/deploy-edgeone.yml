@@ -91,7 +91,7 @@ jobs:
           # 不支持 `edgeone makers deploy` 直传(会报 Provider 不支持——9-05 实测)。
           # 本步骤轮询等待当前 commit 的部署完成, 作为 CI 门禁。
           python3 - <<'EOF'
-          import json, os, time, urllib.request
+          import json, os, time, urllib.request, sys
 
           token = os.environ["EDGEONE_PAGES_API_TOKEN"]
           sha = os.environ["GITHUB_SHA"]
