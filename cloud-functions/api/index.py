@@ -19,6 +19,13 @@ def path_probe(request):
     return {"path": request.url.path, "root_path": request.scope.get("root_path", "")}
 
 
+@app.api_route("/{full_path:path}", methods=["GET"])
+def catch_all(request, full_path: str):
+    """catch-all: 任何未匹配路径返回 scope 信息(定位 404 根因)"""
+    return {"path": request.url.path, "root_path": request.scope.get("root_path", ""),
+            "full_path": full_path, "matched": False}
+
+
 @app.get("/api/health")
 def health():
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
