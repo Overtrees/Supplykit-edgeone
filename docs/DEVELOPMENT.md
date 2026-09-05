@@ -603,3 +603,22 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **GMV 环比**：periods 各维度含 prev_gmv/prev_orders（今日→昨日/本周→上周7天/本月→上月30天），前端标签随维度——忌"硬编码比较标签+用 trend 末两点当环比"
 - **碎片监控**：健康检查加只读 freelist PRAGMA；`freelist>2000页` 提示手动 VACUUM——**勿做定时 VACUUM**（独占写锁+阻塞全请求，8-28 教训）
 - **入口唯一**：WSGI 用 `app.main`（backend/app/main.py），根目录 main.py 是遗留冗余——迁移/备份时勿混淆
+
+### 15.19 Makers 原生重构(方案B, 2026-09-05)——停 SQLite 适配, 数据层直写 TiDB 方言
+**决策背景**: SQLite ORM + 方言适配器挂载 Makers 后, ORM 查询接口(products/orders/dashboard)秒级 500 函数崩溃——SQLite/TiDB 双层语义差异(占位符/日期类型/异步 DDL/序列化)+ Makers 环境坑(只读 FS/sys.path/root_path/env 快照)叠加, 每个接口都可能踩, 边际成本失控。**停适配, 按 Makers 官方规范原生重构**: 复用纯 Python 业务逻辑(三窗口日销/BBCC/口径), 数据层直写 TiDB 方言, 接口契约与前端零改动。
+
+**Makers FastAPI 框架模式规范(实测)**
+1. 路由**无 /api 前缀**(框架剥离 path 转发, root_path=/api)——旧 backend 的 /api/xxx 路由在 Makers 原生模式 404
+2. 入口文件模块级行首 `app =`(构建器 /^app\s*=/m 检测)
+3. 函数包运行时 **sys.path 只有函数根**——同目录模块(db.py/routes/*)必须 `sys.path.insert(0, os.path.dirname(__file__))`, 否则 ModuleNotFoundError(函数表现为 404/plain Not Found)
+4. **只读文件系统**: TMPDIR/EXPORT_DIR 等模块级 mkdir 需可写探测回退 /tmp(否则 import 崩)
+5. FastAPI 标量参数默认读 query——POST JSON body 需 `await request.json()` 手动解析
+6. **TiDB DATE()/DictCursor 返回 datetime.date/datetime 对象**(非 str)——与字符串比较/拼接须 str(x)[:10]
+7. 状态码 500 会被 Makers 转成"函数崩溃页"(HTML)——业务异常统一返回 200 + {ok:false, detail, tb}(@traced 装饰器)
+
+**可复用资产**
+- `cloud-functions/api/db.py`: 原生 pymysql DictCursor(query/one/execute/executemany/table CRUD, 反引号+%s)
+- `cloud-functions/api/biz/sales.py`: 三窗口日销(3σ 剔除+近3天1.5倍加权+趋势权重表, 与旧版算法一致)
+- `cloud-functions/api/local_test.py`: 21 项本地回归(mock db+TestClient)——**改代码先跑, Python 层 bug 部署前拦截**(TiDB 连接/CLI dev 在 iSH 均不可用)
+- `scripts/gen_schema.py`: SQLite→TiDB DDL 转换器(索引并入 CREATE TABLE 根治异步 DDL 竞争)
+- docs/MAKERS_API.md: pages-api 逆向参考(DescribePagesEncipherToken 签名机制等)

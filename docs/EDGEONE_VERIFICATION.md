@@ -63,3 +63,28 @@ Makers 构建器从**项目 API 配置**读 BuildCmd/InstallCmd（非 edgeone.js
 1. **数据层 TiDB**（后端 SQLite → TiDB，无持久文件系统硬约束）
 2. **cloud-functions 自包含**：后端代码进函数包（复制到 cloud-functions/ 或 build 时打包）
 3. 任务系统外部化（schedules/外部 cron）+ WS→轮询
+
+## 5. Phase2 实证补充(2026-09-05)
+
+### 5.1 函数访问签名机制(已破解, 可脚本化)
+- 生产域名 /api/* 直连 → 401 `X-EOP-MSG: eo_time missing`
+- 流程: ①`DescribePagesEncipherToken`(**参数 Text=域名** 非 ProjectId)拿 {Token, Timestamp} → ②请求 `https://<域名>/api/...?eo_token=<Token>&eo_time=<Timestamp>` → 302 + Set-Cookie(eo_token+eo_time, Max-Age=10800=3h, HttpOnly) → ③带 cookie 访问无签名 URL 即达函数
+- 等价控制台 3 小时预览链接; pages-api Action 无公开文档(CLI 源码逆向, 见 docs/MAKERS_API.md)
+
+### 5.2 backend 挂载尝试与放弃(适配泥潭)
+- vendor 方案(backend 副本入库 + PrefixProxy + root_path 清理 + TMPDIR 回退 + sys.path 修复)可挂载, health/monitor/auth 通
+- 但 ORM 查询接口(products/orders/dashboard)秒级 500 函数崩溃——SQLite/TiDB 双层语义差异 + 适配器, 排查多轮未根治 → **停适配, 原生重构**
+
+### 5.3 Makers FastAPI 框架模式规范(原生重构, 实测确认)
+1. 路由**无 /api 前缀**(框架剥离 path 后转发, root_path=/api)——旧 backend /api/xxx 路由靠 proxy 加回前缀才通
+2. 入口行首 `app =`(构建器 /^app\s*=/m)
+3. 函数包运行时 **sys.path 只有函数根**, 同目录模块(db.py/routes)须 `sys.path.insert(0, os.path.dirname(__file__))`
+4. 只读文件系统: TMPDIR/EXPORT_DIR 需可写探测回退 /tmp
+5. FastAPI 标量参数默认读 query, JSON body 需 Request 手动解析
+6. TiDB DATE() 返回 datetime.date(非 str), 与字符串比较须 str(x)[:10]
+
+### 5.4 原生后端九路由线上全通
+auth / dashboard(summary+aux+stock-risk) / replenishment(BBCC+传统) / orders / products / insights(滞销+进销存) / alerts(分组配额+counts) / misc / suppliers / rules
+- 统一 @traced 异常追踪(异常返回 detail+tb, 200 状态防 Makers 转页)
+- local_test.py 21 项本地回归(mock db + TestClient, 部署前前置拦截 Python bug)
+- 部署域名: supplykit-qreqtomf.edgeone.cool(函数路由 ^/api(?:/.*)?$ → api/index.py)

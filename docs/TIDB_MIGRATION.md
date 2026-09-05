@@ -86,3 +86,23 @@
 **休眠**：现行官方文档**未见自动休眠条款**（旧 Serverless 曾有 5min idle sleep）；仅公网连接 idle timeout 断连。唤醒延迟不可断言，建实例后实测。
 
 **代码审计修正**（相对 §3）：PRAGMA 59 处（原 54）、`||` 拼接 **0 处**（原"若干"不实）、strftime 64、INSERT OR 35、ON CONFLICT 5、AUTOINCREMENT 0。
+
+## 7. Phase2 实测进展(2026-09-05 更新)
+
+### 7.1 建表完成(23 表 + 31 索引, 0 失败)
+- 转换器固化: `scripts/gen_schema.py`(SQLite → TiDB DDL: INTEGER→BIGINT/REAL→DOUBLE/时间列→DATETIME(created_at/updated_at 用 DEFAULT CURRENT_TIMESTAMP)/键列按语义定长(sku 64/order_no 64/warehouse 64/channel 20/store 128 防唯一索引超 3072)/表级 UNIQUE 列名加反引号(key 保留字))
+- **索引并入 CREATE TABLE(KEY/UNIQUE KEY)**——TiDB DDL 异步执行, DROP TABLE 后立即 CREATE INDEX 遇旧元数据报 Duplicate key name(实测 3 轮), 并入表定义后 DROP 重建即带索引, 根治
+- build 幂等: 先 DROP 全表再建(顺序: DROP TABLE IF EXISTS 全部 → CREATE TABLE)
+
+### 7.2 seed 验证(5000 单虚拟数据)
+- products 100 / inventory 500 / orders 5000 / daily_sales_snapshot 11132 行写入成功
+- 三组核心查询 EXPLAIN ANALYZE 全部走索引毫秒级(看板聚合 782ms / 库存分组 382ms / 快照 603ms)
+
+### 7.3 RU 实测结论
+- TiDB Cloud Serverless 的 EXPLAIN ANALYZE **不输出 RU 数值**(实测确认)
+- SHOW TABLE STATUS 可用; RU 精确消耗只能在**控制台用量页**观察(48h RU 门禁的观察方式)
+
+### 7.4 方案B 决策(适配 → 原生重构)
+- **停适配**: SQLite ORM/方言适配器挂载 Makers 后 ORM 查询接口秒级 500 崩溃(双层语义差异 + Makers 环境坑), 边际成本失控
+- **原生重构**: 数据层直写 TiDB 方言(pymysql DictCursor + DATE()/IF()/反引号/%s), 复用纯 Python 业务逻辑(三窗口日销/BBCC/口径), 接口契约与前端零改动
+- 九路由线上全通(见 EDGEONE_VERIFICATION.md §5)

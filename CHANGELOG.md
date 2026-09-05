@@ -1,3 +1,25 @@
+## 2026-09-04~09-05 Makers 迁移 Phase1+2 完成 + 方案B 原生重构(主线确立)
+> **主线变更**：EdgeOne Makers 迁移确立为现主线；PA 版退居保留/可回退（feat/edgeone 分支，远程 edgeone=Overtrees/Supplykit-edgeone）。
+> **关键决策**：SQLite 适配 TiDB 边际成本失控（双层方言差异+Makers 环境坑）→ 停适配，按 Makers 官方规范**原生重构**（复用纯 Python 业务逻辑，数据层直写 TiDB 方言，接口契约与前端零改动）。
+
+### 09-04 Phase1（语法兼容 + 全链路实证）
+- `datetime.UTC`→`timezone.utc` 43 处（Makers=Python 3.10），全项目 ast 3.10 语法门禁 45/45，117 测试 116 通过
+- 全链路实证：入口检测正则（`/^app\s*=/m` 行首）/函数包边界（仅 cloud-functions/）/依赖冲突（supabase 死依赖移除）/大陆 401（预览链接 3h）
+- TiDB Starter 评估：5GiB 行存+5GiB 列存+5000 万 RU/月；RU 硬约束（公网出口 1KiB=1RU）；配额耗尽=拒连
+
+### 09-05 Phase2（TiDB 数据层 + 方案B 原生重构）
+- **TiDB 链路打通**：控制台设 root 密码（API 无密码端点实测）→ 三处同步（控制台/本地 env/GitHub Secret/Makers env）→ 重部署才生效（env 部署时快照）
+- **Makers 函数访问签名破解**：DescribePagesEncipherToken(Text=域名) → eo_token+eo_time → 302 Set-Cookie(3h) → 带 cookie 直达函数（等价控制台预览链接，可脚本化）
+- **建表**：SQLite schema 自动转换 TiDB DDL（23 表+31 索引 0 失败）；索引并入 CREATE TABLE（TiDB 异步 DDL 竞争根治）；seed 5000 单验证；三组核心查询毫秒级
+- **ORM 双后端适配尝试**：dialect.py(11/11) + tidb_backend 连接适配器 + database.py 双后端——SQLite 回归 116/117，但**挂载 Makers 后 ORM 接口秒级 500 崩溃**，判定适配泥潭
+- **方案B 原生重构**（当前）：cloud-functions/api/{index,db,biz/sales,routes/*}——auth/dashboard/replenishment/orders/products/insights/alerts/misc/suppliers/rules **九路由线上全通**；统一 @traced 异常追踪；local_test.py 21 项本地回归（部署前前置拦截 Python bug）
+- **清理**：删除 vendor(旧 backend 副本)/migrate_tool/适配层；schema 固化 scripts/gen_schema.py
+- **关键坑**：函数包 sys.path 仅函数根（同目录模块需自行 insert）；路由无 /api 前缀（框架剥离）；root_path=/api 需清；TMPDIR/exports 只读回退 /tmp；TiDB DATE() 返回 datetime.date（转 str）
+
+### 剩余
+cleansing/exports/tasks/purchase 低频路由；前端切 Makers（需解决 eo_token 签名障碍+自定义域名备案）；schedules 定时任务映射；真实数据迁移；前端契约对齐验证
+
+
 ## 2026-09-02~09-03 搜索全页修复 + 闭包bug排查 + 看板UI对齐 + 配额事故治本
 | 模块 | 改动 |
 |------|------|
