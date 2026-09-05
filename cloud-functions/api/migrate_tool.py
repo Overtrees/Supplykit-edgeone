@@ -102,6 +102,14 @@ def build():
         if not stmt:
             continue
         try:
+            if "CREATE INDEX" in stmt.upper():
+                # TiDB DDL 异步竞争: DROP TABLE 后立即 CREATE INDEX 可能遇旧元数据 → 先显式 DROP 索引
+                _name = stmt.split("`")[3]
+                _tbl = stmt.split("`")[5]
+                try:
+                    cur.execute("DROP INDEX IF EXISTS `%s` ON `%s`" % (_name, _tbl))
+                except Exception:
+                    pass
             cur.execute(stmt)
             if "CREATE TABLE" in stmt.upper():
                 out["tables_ok"].append(stmt.split("`")[1])
