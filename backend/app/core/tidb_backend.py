@@ -72,6 +72,9 @@ class _TiDBConnAdapter:
 
     def execute(self, sql, params=None):
         from app.core.database import _finalize_sql
+        # PRAGMA 是 SQLite 专有: TiDB 无此概念, 直接忽略(busy_timeout/journal_mode/wal_checkpoint 等由平台管理)
+        if isinstance(sql, str) and sql.lstrip().upper().startswith("PRAGMA"):
+            return _AdapterCursor()
         cur = self._conn.cursor()
         try:
             cur.execute(_finalize_sql(sql), params or ())
