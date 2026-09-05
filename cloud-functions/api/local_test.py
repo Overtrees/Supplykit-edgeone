@@ -5,6 +5,7 @@
 """
 import sys
 import os
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("JWT_SECRET", "local-test-secret")
@@ -67,10 +68,10 @@ def fake_one(sql, params=None):
         from routes.common import hash_password as _hp
         uname = params[0] if params else "admin"
         return {"username": uname, "password_hash": _hp("admin123"), "role": "admin"}
-    if "SELECT status FROM sync_tasks" in sql:
+    if "FROM sync_tasks" in sql:
         if params and params[0] == "none":
             return None
-        return {"status": "done"}
+        return {"status": "done", "result": '{"result": {"target": "order", "success": 1, "failed": 0}}'}
     if "FROM export_files" in sql:
         return {"content": "SKU,商品名\nSKU0001,禾味调味料1号\n"}
     if "GROUP BY DATE(ordered_at)" in sql or "GROUP BY warehouse_type" in sql or "warehouse_type IN" in sql:
@@ -266,6 +267,54 @@ r = client.post("/exports?type=replen&mode=bbcc&channel=jd", headers=AH)
 check("exports 平铺 task_id", r.json().get("ok") is True and bool(r.json().get("task_id")), r.text[:120])
 r = client.get("/exports/download/test.csv", headers=AH)
 check("exports download csv", r.status_code == 200 and "csv" in r.headers.get("content-type", ""), r.text[:120])
+
+# ── 契约补齐组 C: cleansing / purchase / disposal ──
+CSV_DATA = "订单号,SKU,数量,商品名称\nNO9001,SKU0001,5,禾味调味料1号\n"
+F = {"file": ("t.csv", CSV_DATA, "text/csv")}
+r = client.post("/cleansing/detect", files=F, headers=AH)
+d = r.json()
+check("cleansing/detect 平铺 columns", d.get("ok") is True and len(d.get("columns", [])) == 4
+      and d.get("total") == 1, r.text[:150])
+MP = json.dumps({"订单号": {"target": "order_no", "type": "string"},
+                 "SKU": {"target": "sku", "type": "string"},
+                 "数量": {"target": "quantity", "type": "number"}})
+r = client.post("/cleansing/preview", files=F, headers=AH,
+                data={"mapping": MP, "target": "order", "channel": "jd"})
+d = r.json()
+pv = d.get("preview") or [{}]
+check("cleansing/preview", d.get("ok") is True and d.get("total") == 1
+      and pv[0].get("order_no") == "NO9001", r.text[:150])
+r = client.post("/cleansing/execute-async", files=F, headers=AH,
+                data={"mapping": "{}", "target": "order", "channel": "jd"})
+d = r.json()
+check("cleansing/execute-async", d.get("ok") is True and bool(d.get("task_id")), r.text[:150])
+r = client.get("/cleansing/task/clean_1", headers=AH)
+check("cleansing/task done", r.json().get("status") == "done", r.text[:120])
+r = client.get("/cleansing/templates", headers=AH)
+check("cleansing/templates GET", r.json().get("ok") is True, r.text[:120])
+r = client.post("/cleansing/templates", json={"name": "t1", "doc_type": "order",
+                                              "mapping": {"订单号": "order_no"}}, headers=AH)
+check("cleansing/templates POST", r.json().get("ok") is True, r.text[:120])
+
+r = client.get("/purchase-orders?channel=jd", headers=AH)
+check("purchase-orders GET", r.json().get("ok") is True, r.text[:120])
+r = client.post("/purchase-orders?sku=SKU0001&store=%E8%87%AA%E8%90%A5%E6%97%97%E8%88%B0%E5%BA%97&channel=jd", headers=AH)
+check("purchase-orders POST", r.json().get("ok") is True, r.text[:120])
+r = client.delete("/purchase-orders?sku=SKU0001&store=%E8%87%AA%E8%90%A5%E6%97%97%E8%88%B0%E5%BA%97&channel=jd", headers=AH)
+check("purchase-orders DELETE", r.json().get("ok") is True, r.text[:120])
+r = client.put("/purchase-orders/1", json={"arrival_date": "2026-09-10"}, headers=AH)
+check("purchase-orders PUT", r.json().get("ok") is True, r.text[:120])
+r = client.get("/insights/purchase?channel=jd&mode=bbcc", headers=AH)
+d = r.json()
+check("insights/purchase suggestions", d.get("ok") is True
+      and isinstance((d.get("data") or {}).get("suggestions", []), list), r.text[:150])
+r = client.get("/insights/disposal-suggestions?channel=jd", headers=AH)
+check("disposal-suggestions 200", r.json().get("ok") is True, r.text[:150])
+r = client.post("/disposals/batch",
+                json={"channel": "jd", "action": "mark", "note": "test",
+                      "items": [{"sku": "SKU0001", "warehouse": "华东C仓"}]}, headers=AH)
+d = r.json()
+check("disposals/batch", d.get("ok") is True and (d.get("data") or {}).get("updated") == 1, r.text[:150])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
