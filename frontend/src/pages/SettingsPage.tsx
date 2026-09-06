@@ -6,7 +6,7 @@ import { useToast } from '../components/Toast'
 import { t } from "../locale"
 import ConfirmDialog from '../components/ConfirmDialog'
 
-const VERSION = '1.0.0'
+const VERSION = '2.0.0'
 const BUILD = new Date().toISOString().slice(0,10)
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -336,6 +336,7 @@ export default function SettingsPage() {
     {confirm === 'recycle' ? <RecycleBin onClose={() => setConfirm(null)} toast={toast} /> : <div style={{padding:'16px 0',maxWidth:500,margin:'0 auto'}}>
       <Group title="连接状态">
         <Row label="后端服务" value={status} sub={`${ping}ms · ${lastCheck}`} />
+        <Row label="API 地址" value={(() => { try { return window.location.host || '-' } catch { return '-' } })()} sub="EdgeOne Makers · 同源免签" />
         <Row label="实时连接" value={wsStatus === 'connected' ? '已连接' : wsStatus === 'polling' ? '轮询中' : '已断开'} />
         <LastRow label="当前渠道" value={channel === 'jd' ? '京东' : '其他渠道'} />
       </Group>
@@ -350,7 +351,7 @@ export default function SettingsPage() {
         <Row label="版本号" value={`v${VERSION}`} />
         <Row label="构建日期" value={BUILD} />
         <Row label="前端" value="React 18 + TypeScript" />
-        <LastRow label="后端" value="FastAPI + SQLite" />
+        <LastRow label="后端" value="FastAPI + TiDB · EdgeOne Makers" />
       </Group>
 
       <Group title="界面">
