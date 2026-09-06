@@ -82,11 +82,26 @@ def get_config(channel: str = "jd"):
     return ok({r.get("key"): r.get("value") for r in rows if r.get("key")})
 
 
+def _log_cfg_history(channel, key, old_val, new_val, mode=""):
+    """配置变更写入 history(规则页'变更历史'弹窗; 对齐 PA——保存时记录)"""
+    try:
+        if str(old_val) == str(new_val):
+            return
+        execute("INSERT INTO replenishment_config_history(`key`, old_value, new_value, channel, mode, created_at) "
+                "VALUES(%s,%s,%s,%s,%s,NOW())", (key, str(old_val), str(new_val), channel, mode))
+    except Exception:
+        try:
+            execute("INSERT INTO replenishment_config_history(`key`, new_value, channel, mode, created_at) "
+                    "VALUES(%s,%s,%s,%s,NOW())", (key, str(new_val), channel, mode))
+        except Exception:
+            pass
+
+
 @router.put("/replenishment-config")
 @traced
 async def update_config(request: Request):
     """配置保存: 带 mode 参数时键加 mode_{mode}_ 前缀存储(对齐 PA——前端加载按 mode 前缀解析,
-    平铺存储会被 seed 的 mode 前缀旧值覆盖导致保存不生效)"""
+    平铺存储会被 seed 的 mode 前缀旧值覆盖导致保存不生效); 变更记录 history"""
     d = {}
     try:
         d = await request.json()
@@ -100,6 +115,8 @@ async def update_config(request: Request):
         if k in ("channel", "data"):
             continue
         key = ("mode_%s_" % mode) + k if mode else k
+        old = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s", [key, channel])
+        _log_cfg_history(channel, key, (old or {}).get("value", ""), v, mode)
         execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE value=VALUES(value)", (key, str(v), channel))
         n += 1
@@ -135,6 +152,9 @@ async def put_slow_cats(request: Request):
         pass
     channel = d.get("channel", "jd")
     items = d.get("items") or []
+    old = one("SELECT value FROM replenishment_config WHERE `key`='slow_cats' AND channel=%s", [channel])
+    _log_cfg_history(channel, "slow_cats", (old or {}).get("value", ""),
+                     json.dumps(items, ensure_ascii=False))
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('slow_cats',%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(items, ensure_ascii=False), channel))
@@ -163,7 +183,11 @@ async def put_seasons(request: Request):
     channel = d.get("channel", "jd")
     mode = d.get("mode", "bbcc")
     items = d.get("items") or []
+    key = "season_config_%s" % mode
+    old = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s", [key, channel])
+    _log_cfg_history(channel, key, (old or {}).get("value", ""),
+                     json.dumps(items, ensure_ascii=False), mode)
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
-            ("season_config_" + mode, json.dumps(items, ensure_ascii=False), channel))
+            (key, json.dumps(items, ensure_ascii=False), channel))
     return ok({"updated": len(items)})
