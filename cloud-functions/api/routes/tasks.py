@@ -184,26 +184,36 @@ async def create_export(request: Request):
     task_id = _new_task_id("exp")
     started = time.time()
     try:
-        rows = _build_export_rows(exp_type, mode, channel)
+        wh_type = (qs.get("wh_type") or [""])[0]
+        rows = _build_export_rows(exp_type, mode, channel, wh_type)
         if rows is None:
             return fail("未知导出类型: " + str(exp_type))
-        # 生成 xlsx(openpyxl; 空数据也生成带表头的工作簿)
-        from openpyxl import Workbook
-        from openpyxl.styles import Font
-        buf = io.BytesIO()
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "导出"
-        if rows:
-            headers = list(rows[0].keys())
-            ws.append(headers)
-            for c in ws[1]:
-                c.font = Font(bold=True)
-            for r in rows:
-                ws.append([r.get(k) for k in headers])
-        wb.save(buf)
-        content = buf.getvalue()
-        filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
+        # orders/inventory 大批量 → CSV 轻量生成(避免 12 万行 xlsx 内存超限); 其他 → xlsx
+        if exp_type in ("orders", "inventory"):
+            buf = io.StringIO()
+            if rows:
+                writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+            content = buf.getvalue().encode("utf-8")
+            filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
+        else:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+            buf = io.BytesIO()
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "导出"
+            if rows:
+                headers = list(rows[0].keys())
+                ws.append(headers)
+                for c in ws[1]:
+                    c.font = Font(bold=True)
+                for r in rows:
+                    ws.append([r.get(k) for k in headers])
+            wb.save(buf)
+            content = buf.getvalue()
+            filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
         # content 列可能仍为 TEXT(ALTER 异步/失败)——二进制 base64 兜底
         import base64 as _b64
         try:
@@ -256,7 +266,7 @@ def now_stamp():
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def _build_export_rows(exp_type, mode, channel):
+def _build_export_rows(exp_type, mode, channel, wh_type=""):
     """按类型生成导出行(复用现有路由逻辑, 均为字典列表)"""
     if exp_type in ("replen", "purchase_suggestions", "purchase"):
         from routes.replenishment import get_replenishment_suggestions
@@ -280,4 +290,42 @@ def _build_export_rows(exp_type, mode, channel):
         r = slow_moving(channel=channel)
         items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
         return items
+    if exp_type == "orders":
+        # 订单导出(当前渠道, 最多 5 万行)
+        from routes.orders import list_orders
+        r = list_orders(channel=channel, page=1, page_size=50000)
+        data = (r.get("data") or {}) if isinstance(r, dict) else (r or [])
+        items = data.get("items") if isinstance(data, dict) else (data or [])
+        out = []
+        for o in items:
+            out.append({
+                "订单号": o.get("order_no", ""), "店铺": o.get("store", ""),
+                "仓库": o.get("warehouse", ""), "SKU": o.get("sku", ""),
+                "商品名": o.get("product_name", ""), "69码": o.get("barcode", ""),
+                "数量": o.get("quantity", ""), "单价": o.get("unit_price", ""),
+                "金额": o.get("total_amount", ""), "状态": o.get("order_status", ""),
+                "下单时间": str(o.get("ordered_at") or "")[:10],
+                "支付时间": str(o.get("paid_at") or "")[:10],
+                "平台": o.get("platform", ""), "渠道": o.get("channel", ""),
+            })
+        return out
+    if exp_type == "inventory":
+        # 进销存导出(当前渠道+仓型, 最多 5 万行)
+        from routes.insights import inventory_with_sales
+        r = inventory_with_sales(wh_type=wh_type or "own", channel=channel,
+                                 page=1, page_size=50000)
+        data = (r.get("data") or {}) if isinstance(r, dict) else (r or [])
+        items = data.get("items") if isinstance(data, dict) else (data or [])
+        out = []
+        for it in items:
+            out.append({
+                "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
+                "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
+                "可用": it.get("available_qty", ""), "在途": it.get("in_transit_qty", ""),
+                "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
+                "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
+                "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
+                "期初": it.get("beginning_stock", ""), "品牌": it.get("brand", ""),
+            })
+        return out
     return None
