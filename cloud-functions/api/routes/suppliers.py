@@ -168,6 +168,8 @@ async def put_slow_cats(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('slow_cats',%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(items, ensure_ascii=False), channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 滞销参数变更 → 处置建议缓存即时失效
     return ok({"updated": len(items)})
 
 
@@ -200,4 +202,6 @@ async def put_seasons(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (key, json.dumps(items, ensure_ascii=False), channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 季节参数变更 → 补货/采购缓存即时失效
     return ok({"updated": len(items)})

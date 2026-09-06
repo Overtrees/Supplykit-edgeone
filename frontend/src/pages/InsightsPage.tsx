@@ -136,6 +136,27 @@ export default function InsightsPage() {
   const reqSeq = useRef(0)
   const replenSeq = useRef(0)
 
+  // 规则/参数保存或任务完成 → 即时刷新当前 tab(补货/采购/滞销联动)
+  useEffect(() => {
+    const h = () => {
+      const ch = useAppStore.getState().channel || 'jd'
+      const t = useAppStore.getState().hammerInsightsTab || 'replen'
+      if (t === 'purchase') {
+        api.get('/api/insights/purchase?days=28&mode=' + (useAppStore.getState().hammerReplenMode || 'bbcc') + '&channel=' + ch)
+          .then(r => setPurchase(r.data?.suggestions || r.data || [])).catch(() => {})
+      } else if (t === 'slow') {
+        api.get('/api/insights/disposal-suggestions?channel=' + ch + '&page=1&page_size=100')
+          .then(r => { const d = r.data || {}; setDisposals(d.items || d || []); setSlowTotal(d.total || (d.items || []).length || 0) }).catch(() => {})
+      } else {
+        loadReplen(useAppStore.getState().hammerReplenMode || 'bbcc', ch, 1)
+      }
+    }
+    window.addEventListener('rules-changed', h)
+    window.addEventListener('insights-refresh', h)
+    return () => { window.removeEventListener('rules-changed', h); window.removeEventListener('insights-refresh', h) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     const saved = hammerCols?.['insights_'+replenMode]
     if (saved) {
