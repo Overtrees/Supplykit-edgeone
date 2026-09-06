@@ -509,6 +509,11 @@ def run_seed_fill():
     n_prod, n_sup = _seed_products_suppliers(skus_data)
     n_orders = _seed_orders(today, skus_data)
     n_inv = _seed_inventory(skus_data)
+    # 诊断: 落库行数按仓型(排查生成 17000 与落库不符)
+    inv_counts = {}
+    for wt in ('own', 'platform', 'platform_b'):
+        r = one("SELECT COUNT(*) AS c FROM inventory WHERE warehouse_type=%s", [wt]) or {}
+        inv_counts[wt] = int(r.get('c') or 0)
     n_batch = _seed_batches()
     n_in, n_out = _seed_records()
     _sync_inv_month()
@@ -516,6 +521,6 @@ def run_seed_fill():
     n_alert = _seed_alerts()
     n_snap = _build_snapshot()
     return {'orders': n_orders, 'products': len(n_prod), 'suppliers': len(n_sup),
-            'inventory': n_inv, 'batches': n_batch, 'inbound': n_in, 'outbound': n_out,
-            'alerts': n_alert, 'snapshot': n_snap,
+            'inventory': n_inv, 'inventory_db': inv_counts, 'batches': n_batch,
+            'inbound': n_in, 'outbound': n_out, 'alerts': n_alert, 'snapshot': n_snap,
             'elapsed': round(time.time() - started, 1)}
