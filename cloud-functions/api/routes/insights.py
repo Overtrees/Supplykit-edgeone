@@ -13,7 +13,13 @@ router = APIRouter(tags=["insights"])
 @router.get("/insights/ping")
 @traced
 def ping():
-    """健康检查(免鉴权): 前端 checkApi/设置页连接状态用"""
+    """健康检查(免鉴权): 前端 checkApi/设置页连接状态用; 附带 DB 连接预热
+    (SELECT 1 建立/复用 TiDB 连接——App 每 15s 轮询, 保持实例与连接热, 避免页面首次请求冷启动 10s+)"""
+    try:
+        from db import one
+        one("SELECT 1")
+    except Exception:
+        pass
     return {"ok": True}
 
 
