@@ -260,7 +260,7 @@ export default function InsightsPage() {
   const todayStr = new Date().toISOString().slice(0, 10)
 
   useEffect(() => {
-    setDispSel([])
+    useAppStore.getState().setProdBatchSel([])
     const seq = ++reqSeq.current
     const mode = globalChannel === 'jd' ? replenMode : 'traditional'
     if (globalChannel !== 'jd' && replenMode === 'bbcc') setHammerReplenMode('traditional')
