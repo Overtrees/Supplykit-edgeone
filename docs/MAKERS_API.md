@@ -60,3 +60,10 @@ Makers 函数生产域名直连 → **401 `X-EOP-MSG: eo_time missing`**(鉴权�
 - 日志无公开 API:官方文档确认日志只在**控制台"日志分析"页**(按时间/状态/关键字,保留 24h);DescribePages*Logs 类 Action 均不存在(107)
 - 入口文件检测:构建器要求行首 `app =`(/^app\s*=/m),`from x import app` 不满足
 - 函数包 = 仅 cloud-functions/ 目录,独立模块(api/ 下的 .py)在运行时 import 可能失败 → **入口自包含单文件最稳**
+
+## 6. 2026-09-06 新增实测
+- **新 Action 补充**: `ModifyPagesProject`(BuildCmd/OutputDir/InstallCmd 可 API 设置; Area 改静默忽略不可用); `DescribePagesProjects` 返回 Area(global/overseas)/CustomDomains/EnvVars/Deployment——项目详情/域名/区域/环境审计用
+- **schedules 官方配置(edgeone.json)**: 见 makers.edgeone.link/document/edgeone-json——cloudFunctions 必须运行时分组(`python.maxDuration`)+ `mainlandRegions/overseasRegions`; schedules maxItems 10, cron 5 字段+timezone; **与旧顶层 cloudFunctions 结构共存会丢函数路由(health 变 HTML); cron 最小间隔一天(实测 */5 不支持且致路由丢失)**
+- **免签域名**: 自定义域名(CNAME pages.dnsoe6.com)不受 eo_token 保护, 公开访问免签; Area=overseas 免备案(项目创建时固定, 换区=新建项目)
+- **构建配额**: 免费版单日构建数有限(9-06 约 55 次触及); ModifyPagesProject 传同值不触发重建; 恢复需等窗口+空 commit 补触发
+- **RU 实测路径**: POST /api/db/diag(admin, EXPLAIN/SELECT/SHOW 只读)——EXPLAIN ANALYZE 线上输出真实 RU(serverless 新版支持)

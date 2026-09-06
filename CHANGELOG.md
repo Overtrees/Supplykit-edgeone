@@ -1,3 +1,54 @@
+## 2026-09-06 生产公开访问 + 全量功能/显示对齐 + 免费额度四维优化(重大里程碑)
+> **主线**: makers-8gstkvheqm2c(supplykit, **Area=overseas 免备案**) + 域名 **supplykit.top**(免签名公开访问); 旧项目 supplykit1 退居。
+> **当天 commit ~55 次**(后续收敛: 攒批部署, 已触及 Makers 单日构建上限)。
+
+### 生产公开访问(免签上线)
+- **新项目**: Area=**overseas(不含大陆)**→ 自定义域名**免 ICP 备案**(老项目 global 绑定需备案, 换区=新建项目, Area 创建时固定)
+- **supplykit.top**: CNAME → `supplykit.top.pages.dnsoe6.com`; SSL TrustAsia 自动签发; **免 eo_token 公开访问**(前端/API/登录/看板全通); www 子域独立 CNAME(pages.dnsoe5.com)
+- env/构建配置全 API 化(ModifyPagesProjectEnvs/ModifyPagesProject); **EO 站点(网站安全加速)与 Makers 域名托管互斥**(DNS CNAME 只能指一处, 曾空白页)
+
+### 契约补齐(前端引用 vs 后端缺口清零, 39 端点)
+- **A 组**: ping 免鉴权 / orders 软删+restore+permanent-delete+include_deleted / rules+products 批量 / out-of-stock / batches / config history+slow-cats+seasons / with-sales 增强
+- **B 组**: tasks 任务表 / seed 填充+重置+status / exports+download(CSV 存表)
+- **C 组**: cleansing 6 类导入(detect/preview/execute-async/task/templates) / purchase-orders / insights/purchase / disposal 建议+批量处置
+
+### 业务逻辑补强(A/B 组)
+- **A1 规则引擎**: evaluate 表达式引擎(括号/四则/max/AND)+ 接入清洗/每日任务 + test 真实评估 + 内置 4 规则; **批量版 evaluate_many(规则一次加载+去重预载+executemany, 2000 SKU 全量 4.67s vs 原 120s+ 超时)**
+- **A2 滞销多因素**: 品类滞销线(slow-cats)/临期(black)/B仓超免费期/资金占用升级 red/伪滞销提示
+- **A3 库存联动**: 清洗导入 inbound+/outbound-/order(采购+/销售-) → 库存批量更新 + 规则评估
+- **B1 进销存当月进出**实时聚合(记录表); **B2 采购建议**供应商级参数+MOQ 聚合+采购告警; **B3 导出 xlsx**(openpyxl, 大批量类型 CSV 轻量)
+
+### seed 完整版(PA 790 行移植, TiDB 原生) + 异步分步
+- **规模**: 2000 SKU×2渠道 / 18.7万订单 / 库存1.7万 / 批次3.2万 / 快照14万 / 告警375
+- **Makers 异步分步**: 单请求 120s 上限 → sync_tasks 驱动, fill 建任务+step0, **fill/status 轮询续跑**(每步≤90s), 9 请求 ~183s 完成
+- **TiDB serverless 硬限制实测**: ①单条多值 INSERT ~500 行上限(2000/批只落500) ②大 DELETE 全表内存取消(8176)→ reset 分批 LIMIT 10000 ③db.execute 需返回 rowcount ④订单生成随机池化提速
+
+### 定时任务(官方文档配置)
+- routes/cron.py 7 端点(snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts); edgeone.json schedules 按官方文档(cloudFunctions 运行时分组 + mainlandRegions/overseasRegions)
+- **踩坑**: 旧版 cloudFunctions 顶层结构与 schedules 共存 → 全站函数路由丢失(health 变 HTML); **cron 最小间隔一天(实测 */5 不支持且致路由丢失)**, 全部改每日
+
+### 逐页深挖修复(读前端完整代码 ↔ 后端 ↔ PA, 20+ 项)
+- **看板**: alertCounts 仓库分布(non_replenish/ls_warehouse/rp_warehouse)/ periods 周期趋势(today/week/month_trend 联动)/ brands+period_stores/period_brands(品牌维度)/ stock-risk full=1 全量(弹窗 195 条完整)
+- **进销存**: 批次日期格式(str[:10] 修 T00:00:00)/ 批次摘要(batch_prod_date/exp_date/status/pct/days)/ 当月进出实时聚合
+- **商品**: batch_days(最早批次总效期)/ is_active(批量按钮状态)
+- **规则**: channel 过滤(修复重复)/ 删除联动关告警 / 补货参数 mode 前缀保存(平铺被覆盖致保存失效)/ config history 写入+查询列对齐
+- **导出**: orders/inventory 类型恢复 + CSV 轻量; **cleansing**: 冲突策略适配面(sum 仅 inbound/outbound, 其余全列覆盖对齐 PA)/ 模板同名覆盖 / DELETE 模板端点
+- **UI 清理**: 移除未用 react-query/死代码(version.ts/VirtualScroll)/ loadHistory 去重(含构建失败教训: 删文件须同步删 import)
+- **设置页**: v2.0.0 / FastAPI+TiDB·Makers / API 地址行
+- **滞销批量处置**: 规则页同款批量模式(复用 prodBatch, 渠道隔离)+ 业务语义按钮(✅标记/🔙退货/💰清仓/🏷促销)+ 二次确认 + 已处置不可勾选
+
+### 免费额度四维优化(数据驱动, 非拍脑袋)
+- **分析缓存**: summary/aux/replen/purchase TTL 300s(与前端 30s 轮询命中率高); **中央失效 invalidate_all**(写操作: 清洗/seed/规则/供应商/订单/商品/库存/处置/模板 → 缓存即时清空, 导入后下个请求即最新——实测 2592→2593 立变)
+- **索引**: orders (channel, ordered_at); **EXPLAIN ANALYZE 实测**: summary 全扫 187547 行 420 RU/次(优化器选择正确, FORCE INDEX 反 716 RU 更差不采用); **月 RU 实测 ~916万(18%)**, 存储 84.8MB(0.17% of 5GiB)
+- **轮询降频**: health/ping 30s, loadAll 60s(Cloud Functions 单用户挂机 52万/月)
+- **diag 端点**: POST /api/db/diag(admin, EXPLAIN/SELECT/SHOW) 线上实测 RU
+
+### 测试残留清理 + 工作流调整
+- 全部测试数据(订单/库存/供应商/模板/处置/配置)已清理, 验证后精确还原
+- **部署频率收敛**: 今天 ~55 次 push 触及单日构建上限 → 后续**攒批提交再部署**; 待部署 commit: 66321aad(setDispSel 修复)+ c42fdbe6
+
+---
+
 ## 2026-09-05 前端切换 Makers 全链路打通(重大里程碑)
 > **链路**: 浏览器(Makers 域名) → 同源 /api/* → Makers 函数 → TiDB。前端已切 Makers, PA 仅剩历史数据与回退。
 

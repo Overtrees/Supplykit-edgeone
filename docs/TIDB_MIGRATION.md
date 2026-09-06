@@ -106,3 +106,13 @@
 - **停适配**: SQLite ORM/方言适配器挂载 Makers 后 ORM 查询接口秒级 500 崩溃(双层语义差异 + Makers 环境坑), 边际成本失控
 - **原生重构**: 数据层直写 TiDB 方言(pymysql DictCursor + DATE()/IF()/反引号/%s), 复用纯 Python 业务逻辑(三窗口日销/BBCC/口径), 接口契约与前端零改动
 - 九路由线上全通(见 EDGEONE_VERIFICATION.md §5)
+
+### 7.5 seed 完整版 + TiDB serverless 硬限制实测(2026-09-06)
+- **seed 完整版**: PA 原版 790 行逻辑完整移植(2000 SKU×2渠道/60天 18.7万订单/库存1.7万/批次3.2万/快照14万), 销售曲线+促销+滞销3%+低动销2%+GMV 明细+批次效期+出入库+规则告警; **Makers 异步分步**: sync_tasks 驱动, fill/status 轮询续跑(单请求 120s 上限, 9 请求 ~183s 完成, 每步≤90s)
+- **硬限制实测**:
+  - ① 单条多值 INSERT ~500 行上限(2000/批只落 500/批; 500/批全量)——executemany 拼接 >500 行被截断(静默)
+  - ② 单条大 DELETE 全表超内存限制被取消(8176 'exceeded memory limit')——reset 须分批 `DELETE ... LIMIT 10000` 循环
+  - ③ `db.execute` 返回 **rowcount**(原 lastrowid=0 致分批循环提前 break)
+  - ④ 日期列 DATETIME 读出 datetime 对象, 比较/展示须 str(x)[:10]
+  - ⑤ 生成性能: 随机池预生成(22万×9组)消除循环内 random 调用, orders 每步 6-11s
+- **RU 实测(EXPLAIN ANALYZE)**: summary 全扫 187547 行 420 RU/次(耗时156ms), 60 天聚合走全扫为优化器正确选择(索引提示反增); 月 RU ~916万(18%), 存储 84.8MB(0.17% of 5GiB)

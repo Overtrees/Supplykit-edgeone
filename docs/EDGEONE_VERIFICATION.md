@@ -101,3 +101,10 @@ auth / dashboard(summary+aux+stock-risk) / replenishment(BBCC+传统) / orders /
 - 端到端: edgeone.cool → demo 登录 → 看板 GMV ¥294,214(与 curl 一致)/ 环比 / 断货 14 / 健康 71
 - **契约差异**: LoginPage 用原生 fetch(不走 axios 拦截器)期待平铺 {ok,token}; 原生 auth 已改平铺返回; 其他页面走 api client(ok(data) 解包)不受影响
 - 生产公开访问待自定义域名(大陆备案)或海外免签确认
+
+## 7. 生产公开访问 + RU 实测(2026-09-06)
+- **新项目 makers-8gstkvheqm2c(Area=overseas, 免备案)**: 自定义域名 supplykit.top 免 eo_token 公开访问(前端/API/登录/看板全通); CNAME → supplykit.top.pages.dnsoe6.com(平台分配), SSL TrustAsia 自动签发
+- **免签成立条件**: 项目加速区域不含大陆(Area=overseas)→ 自定义域名绑定无需 ICP 备案(老项目 global 时绑定提示需备案); Area 创建时固定(API/控制台改均静默忽略)
+- **EO 站点互斥**: 网站安全加速(EO 站点)接管域名会切走 DNS 致空白页——与 Makers 域名托管二选一(已停用 EO 站点恢复)
+- **RU 实测(EXPLAIN ANALYZE, serverless 支持 RU 输出)**: summary 全扫 187547 行=420 RU/次(耗时156ms); FORCE INDEX(idx_orders_channel_ordered) 反 716 RU 更差(GROUP BY DATE 聚合本质需全扫, 优化器选择正确, 不加索引提示); health 指纹 5 表 MAX 走主键 ~3 RU; 月 RU 实测估算 ~916万(18% of 5000万)
+- **构建配额**: Makers 免费版单日构建数有限(9-06 约 55 次 push 触及上限, 新 push 不再触发)——攒批部署, 恢复窗口后空 commit 补触发

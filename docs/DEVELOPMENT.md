@@ -630,3 +630,14 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **契约红线**: **LoginPage 用原生 fetch**(不走 api client 拦截器)→ 期待平铺 {ok, token}; 其他页面走 axios(ok(data) 解包)。改动后端返回结构时, 检查每个消费方是 fetch 直连还是 api client
 - **大陆出口访问 PA 被墙**: browser_use/大陆 IP 请求 pythonanywhere 会"无法连接到服务器"——区分网络问题 vs 代码问题
 - **生产公开访问**: 3h 签名会话只够开发验证; 公开访问需自定义域名(大陆 ICP 备案, 备案对象=域名, 后端变量不在备案范围)或确认海外区免签
+
+### 15.21 生产公开访问 + 免费额度四维 + 逐页对齐(2026-09-06)
+- **免备案成立**: 项目 Area=overseas(不含大陆)→ 自定义域名免 ICP; Area 创建时固定, 换区=新建项目(API 改被静默忽略)
+- **免签公开**: 自定义域名(CNAME pages.dnsoe6.com)不受 eo_token 签名保护, 前端/API 全通; **EO 站点与 Makers 域名托管互斥**(DNS CNAME 二选一, EO 站点接管会空白页)
+- **TiDB serverless 硬限制(实测)**: ①单条多值 INSERT ~500 行上限(2000/批只落500) ②单条大 DELETE 全表内存取消(8176)→ 分批 LIMIT 10000 ③db.execute 返回 rowcount 而非 lastrowid ④批量写入动态分批 500(10MB 单事务)
+- **Makers 异步分步**: 单请求 120s 上限 → sync_tasks 任务表驱动, status 轮询续跑(每步≤90s); seed 18.7万订单 9 请求完成
+- **分析缓存四维保障**: TTL 只是兜底, **写操作 invalidate_all() 中央失效**保证导入/规则/参数变更后下个请求即最新(不牺牲实时性); 缓存 key 含 channel/mode, 分页搜索缓存后处理
+- **RU 数据驱动**: EXPLAIN ANALYZE 实测(summary 420 RU/次全扫, FORCE INDEX 反 716 更差——GROUP BY DATE 聚合本质需全扫, 不加索引提示); 月 RU ~916万(18%), 控制台 Diagnosis/Top RU 复核
+- **cron 官方配置**: cloudFunctions 必须运行时分组(python.maxDuration) + mainlandRegions/overseasRegions; schedules 与旧顶层结构共存会丢函数路由; **cron 最小间隔一天(*/5 实测不支持且致路由丢失)**
+- **前端批量状态**: 规则/商品/滞销共用 prodBatch/prodSelIds(联动一致); setChannel 与 navigateTo 统一复位(渠道/页面隔离); 删除文件须同步删 import(version.ts 教训: 删了文件留 import 致构建失败)
+- **部署频率纪律**: Makers 免费版单日构建有限 → 攒批提交再部署, 禁止每小改即 push(9-06 约 55 次触及上限)
