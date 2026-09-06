@@ -475,7 +475,7 @@ def _seed_alerts():
                     and ('replenish', ch, sku, 'rules_engine') not in existing:
                 existing.add(('replenish', ch, sku, 'rules_engine'))
                 inserts.append(("replenish", "紧急补货: %s" % name,
-                                "可用 %d(<安全线30%), 含在途 %d 仍不足安全线 %d" % (avail, avail + transit, safety),
+                                "可用 %d(<安全线30%%), 含在途 %d 仍不足安全线 %d" % (avail, avail + transit, safety),
                                 "error", ch, sku, sku_wh.get(sku, '')))
     for i in range(0, len(inserts), 500):
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
