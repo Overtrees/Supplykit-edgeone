@@ -208,7 +208,7 @@ def _seed_orders(today, skus_data):
                               'channel': ch, 'platform': '京东' if label == 'jd' else '天猫',
                               'data_source': 'seed'})
                 total += 1
-                if len(batch) >= 5000:
+                if len(batch) >= 500:
                     flush()
     flush()
     return total
@@ -307,7 +307,7 @@ def _seed_batches():
                           'qty': bq})
             if sku not in best_map or exp < best_map[sku]:
                 best_map[sku] = exp
-    for i in range(0, len(bdata), 2000):
+    for i in range(0, len(bdata), 500):
         cols = ['sku', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
         executemany("INSERT INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                             ", ".join(["%s"] * len(cols))),
@@ -365,7 +365,7 @@ def _seed_records():
                              'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
                                   ('outbound_records', out_rows, 'outbound_date')):
-        for i in range(0, len(rows), 2000):
+        for i in range(0, len(rows), 500):
             cols = list(rows[0].keys())
             sql = "INSERT IGNORE INTO `%s`(%s) VALUES(%s)" % (
                 table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
@@ -509,11 +509,13 @@ def run_seed_fill():
     n_prod, n_sup = _seed_products_suppliers(skus_data)
     n_orders = _seed_orders(today, skus_data)
     n_inv = _seed_inventory(skus_data)
-    # 诊断: 落库行数按仓型(排查生成 17000 与落库不符)
+    # 诊断: 落库行数按仓型/订单(排查生成与落库差异)
     inv_counts = {}
     for wt in ('own', 'platform', 'platform_b'):
         r = one("SELECT COUNT(*) AS c FROM inventory WHERE warehouse_type=%s", [wt]) or {}
         inv_counts[wt] = int(r.get('c') or 0)
+    r = one("SELECT COUNT(*) AS c FROM orders") or {}
+    orders_db = int(r.get('c') or 0)
     n_batch = _seed_batches()
     n_in, n_out = _seed_records()
     _sync_inv_month()
@@ -521,6 +523,6 @@ def run_seed_fill():
     n_alert = _seed_alerts()
     n_snap = _build_snapshot()
     return {'orders': n_orders, 'products': len(n_prod), 'suppliers': len(n_sup),
-            'inventory': n_inv, 'inventory_db': inv_counts, 'batches': n_batch,
+            'inventory': n_inv, 'inventory_db': inv_counts, 'orders_db': orders_db, 'batches': n_batch,
             'inbound': n_in, 'outbound': n_out, 'alerts': n_alert, 'snapshot': n_snap,
             'elapsed': round(time.time() - started, 1)}
