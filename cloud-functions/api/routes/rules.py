@@ -15,10 +15,15 @@ _FIELDS = "id, name, event, condition_json, alert_type, alert_title, alert_desc,
 @router.get("/rules")
 @traced
 def list_rules(channel: str = "jd", include_deleted: int = 0):
-    if include_deleted:
-        rows = query("SELECT %s FROM rules ORDER BY id ASC" % _FIELDS, [])
-    else:
-        rows = query("SELECT %s FROM rules WHERE (deleted_at IS NULL OR deleted_at='') ORDER BY id ASC" % _FIELDS, [])
+    """规则列表(channel=all 或空返回全部, 否则按渠道过滤——修复 jd+other 混返致前端重复显示)"""
+    conds, params = [], []
+    if channel and channel != "all":
+        conds.append("channel=%s")
+        params.append(channel)
+    if not include_deleted:
+        conds.append("(deleted_at IS NULL OR deleted_at='')")
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    rows = query("SELECT %s FROM rules%s ORDER BY id ASC" % (_FIELDS, where), params)
     out = []
     for r in rows:
         try:
@@ -77,10 +82,27 @@ async def update_rule(rid: int, request: Request):
     return ok({})
 
 
+def _close_alerts_for_rules(ids):
+    """规则删除/停用时联动关闭其产出的 active 告警(PA 行为, 免等每日孤儿清理)"""
+    try:
+        if not ids:
+            return
+        ph = ",".join(["%s"] * len(ids))
+        pairs = set()
+        for r in query("SELECT alert_type, channel FROM rules WHERE id IN (%s)" % ph, ids):
+            pairs.add((r.get("alert_type"), r.get("channel") or "jd"))
+        for at, ch in pairs:
+            execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
+                    "AND status='active' AND source IN ('rules_engine','event_bus')", [at, ch])
+    except Exception:
+        pass
+
+
 @router.delete("/rules/{rid}")
 @traced
 def delete_rule(rid: int):
-    # 软删除
+    # 软删除 + 联动关闭该类告警
+    _close_alerts_for_rules([rid])
     execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id=%s", [rid])
     return ok({})
 
@@ -116,12 +138,16 @@ async def rules_batch(request: Request):
     if action == "active":
         execute("UPDATE rules SET is_active=1 WHERE id IN (%s)" % ph, ids)
     elif action == "inactive":
+        # 停用联动关闭该类告警(PA 行为)
+        _close_alerts_for_rules(ids)
         execute("UPDATE rules SET is_active=0 WHERE id IN (%s)" % ph, ids)
     elif action == "delete":
+        _close_alerts_for_rules(ids)
         execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id IN (%s)" % ph, ids)
     elif action == "restore":
         execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id IN (%s)" % ph, ids)
     elif action == "purge":
+        _close_alerts_for_rules(ids)
         execute("DELETE FROM rules WHERE id IN (%s)" % ph, ids)
     else:
         return fail("未知操作: " + str(action))
