@@ -85,19 +85,23 @@ def get_config(channel: str = "jd"):
 @router.put("/replenishment-config")
 @traced
 async def update_config(request: Request):
+    """配置保存: 带 mode 参数时键加 mode_{mode}_ 前缀存储(对齐 PA——前端加载按 mode 前缀解析,
+    平铺存储会被 seed 的 mode 前缀旧值覆盖导致保存不生效)"""
     d = {}
     try:
         d = await request.json()
     except Exception:
         pass
-    channel = d.get("channel", "jd")
+    mode = request.query_params.get("mode", "")
+    channel = request.query_params.get("channel", "jd") or d.get("channel", "jd")
     data = d.get("data") or d
     n = 0
     for k, v in data.items():
         if k in ("channel", "data"):
             continue
+        key = ("mode_%s_" % mode) + k if mode else k
         execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
-                "ON DUPLICATE KEY UPDATE value=VALUES(value)", (k, str(v), channel))
+                "ON DUPLICATE KEY UPDATE value=VALUES(value)", (key, str(v), channel))
         n += 1
     return ok({"updated": n})
 

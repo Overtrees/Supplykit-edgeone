@@ -50,6 +50,10 @@ def list_products(channel: str = "jd", page: int = 1, page_size: int = 30,
         for r in rows:
             r["batch_days"] = _bmap.get(str(r.get("sku") or ""), 0)
 
+    # is_active 注入(前端批量面板按钮状态: status==='active' → 1; 原缺失致批量停用按钮恒禁用)
+    for r in rows:
+        r.setdefault("is_active", 1 if (r.get("status") or "active") == "active" else 0)
+
     if page > 0 and page_size > 0:
         return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
     return ok(rows)
