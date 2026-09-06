@@ -111,3 +111,18 @@ app.include_router(tasks_router)
 app.include_router(cleansing_router)
 app.include_router(purchase_router)
 app.include_router(cron_router)
+
+# ── 启动自动补索引(幂等, 免费额度 RU 优化: 看板 60 天范围查询走 (channel, ordered_at) 区间) ──
+_INDEXES = [
+    ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
+]
+if os.environ.get("DB_BACKEND", "tidb") == "tidb":
+    try:
+        from db import execute as _exec
+        for _iname, _tbl, _cols in _INDEXES:
+            try:
+                _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
+            except Exception:
+                pass
+    except Exception:
+        pass

@@ -104,6 +104,8 @@ def delete_rule(rid: int):
     # 软删除 + 联动关闭该类告警
     _close_alerts_for_rules([rid])
     execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id=%s", [rid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -111,6 +113,8 @@ def delete_rule(rid: int):
 @traced
 def restore_rule(rid: int):
     execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id=%s", [rid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -118,6 +122,8 @@ def restore_rule(rid: int):
 @traced
 def permanent_delete_rule(rid: int):
     execute("DELETE FROM rules WHERE id=%s", [rid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 

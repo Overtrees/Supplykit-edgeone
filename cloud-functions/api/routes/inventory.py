@@ -30,4 +30,6 @@ def out_of_stock(channel: str = "jd", wh: str = "own"):
 @traced
 def delete_inventory(iid: int):
     execute("DELETE FROM inventory WHERE id=%s", [iid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})

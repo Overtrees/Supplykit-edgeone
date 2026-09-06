@@ -209,7 +209,7 @@ export default function App() {
       setApiStatus(d.ok ? 'ok' : 'slow')
     } catch { setApiStatus('error') }
   }, [])
-  useEffect(() => { checkApi(); const t = setInterval(checkApi, 15000); return () => clearInterval(t) }, [checkApi])
+  useEffect(() => { checkApi(); const t = setInterval(checkApi, 30000); return () => clearInterval(t) }, [checkApi])
 
   // 数据版本轮询：后端_ cache_version 变化时自动刷新
   const [dbVersion, setDbVersion] = useState(0)
@@ -228,7 +228,7 @@ export default function App() {
         versionRef.current = v
         setDbVersion(v)
       } catch {}
-    }, 15000)
+    }, 30000)
     return () => clearInterval(poll)
   }, [])
 

@@ -84,9 +84,13 @@ def seed_fill_status(task_id: str = ""):
             # 全部步骤完成 → done(汇总 part 简单展示)
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                     (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
+            from routes.analysis_cache import invalidate_all
+            invalidate_all()  # seed 完成 → 分析缓存即时失效
             return {"data": {"status": "done"}}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (new_params, task_id))
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()  # 每步数据变化 → 缓存失效
         return {"data": {"status": "running", "step": nxt, "part": part}}
     except Exception as e:
         import traceback as _tb
@@ -158,6 +162,8 @@ async def seed_reset(request: Request):
                 if not n or int(n or 0) < 10000:
                     break
         _log_task(task_id, "reset", "done", channel, {"result": {"reset": "all"}})
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()
         return ok({"task_id": task_id})
     except Exception as e:
         import traceback as _tb

@@ -1,4 +1,5 @@
 """原生补货路由(方案 B): BBCC 两步法 + 传统逐仓(契约与旧 backend 一致)"""
+import time as _time
 from fastapi import APIRouter
 
 from db import query, one
@@ -7,13 +8,33 @@ from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predic
 
 router = APIRouter(tags=["insights"])
 
+from routes.analysis_cache import register as _register_cache
+_register_cache(lambda: _repl_cache.clear())
+
+
+_repl_cache = {}
+_REPL_TTL = 60
+
 
 @router.get("/insights/replenishment")
 @traced
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
                                   search: str = ""):
-    """补货建议: mode=bbcc(全国一盘棋) / traditional(逐仓)"""
+    """补货建议(60s TTL 缓存全量, 分页/搜索在缓存后处理——降 RU): mode=bbcc/traditional"""
+    _key = "%s|%s" % (channel, mode)
+    _c = _repl_cache.get(_key)
+    if _c and _time.time() - _c[0] < _REPL_TTL:
+        _all = _c[1]
+        if search:
+            _sq = search.lower()
+            _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()
+                    or _sq in str(s.get("product_name", "")).lower()
+                    or _sq in str(s.get("barcode", "")).lower()]
+        if page > 0 and page_size > 0:
+            return ok({"items": _all[(page - 1) * page_size: page * page_size],
+                       "total": len(_all), "page": page, "page_size": page_size})
+        return ok(_all)
     now_s = "2026-09-05"  # 占位, 由下方实际计算
     cfg = _config(channel, mode)
     products = _products(channel)
@@ -223,6 +244,7 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
         suggestions = [s for s in suggestions if sq in str(s.get("sku", "")).lower()
                        or sq in str(s.get("product_name", "")).lower()
                        or sq in str(s.get("barcode", "")).lower()]
+    _repl_cache[_key] = (_time.time(), suggestions)
     if page > 0 and page_size > 0:
         total = len(suggestions)
         return ok({"items": suggestions[(page - 1) * page_size: page * page_size],

@@ -40,6 +40,8 @@ async def create_supplier(request: Request):
             "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
             (code, d.get("supplier_name", ""), d.get("contact_person", ""), d.get("contact_phone", ""),
              int(d.get("score") or 0), d.get("status", "active"), ch, d.get("brand", "")))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({"id": 0, "supplier_code": code})
 
 
@@ -62,6 +64,8 @@ async def update_supplier(sid: int, request: Request):
         return fail("无更新字段")
     params.append(sid)
     execute("UPDATE suppliers SET %s WHERE id=%%s" % ", ".join(sets), params)
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -69,6 +73,8 @@ async def update_supplier(sid: int, request: Request):
 @traced
 def delete_supplier(sid: int):
     execute("DELETE FROM suppliers WHERE id=%s", [sid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -121,6 +127,8 @@ async def update_config(request: Request):
         execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE value=VALUES(value)", (key, str(v), channel))
         n += 1
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({"updated": n})
 
 

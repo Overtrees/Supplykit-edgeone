@@ -249,6 +249,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     evaluated = len(i_ctxs)
         except Exception:
             pass
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()
         try:
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                     "VALUES(%s,'cleansing','done','{}',%s,%s)",

@@ -40,6 +40,8 @@ def list_orders(channel: str = "jd", page: int = 1, page_size: int = 30,
 def soft_delete_order(oid: int):
     """软删除(前端 5s 撤销窗口, 回收站可恢复)"""
     execute("UPDATE orders SET deleted_at=NOW() WHERE id=%s", [oid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -47,6 +49,8 @@ def soft_delete_order(oid: int):
 @traced
 def restore_order(oid: int):
     execute("UPDATE orders SET deleted_at='' WHERE id=%s", [oid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -54,4 +58,6 @@ def restore_order(oid: int):
 @traced
 def permanent_delete_order(oid: int):
     execute("DELETE FROM orders WHERE id=%s", [oid])
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})

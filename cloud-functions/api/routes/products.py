@@ -83,4 +83,6 @@ async def products_batch(request: Request):
         execute("UPDATE products SET deleted_at='', status='active' WHERE id IN (%s)" % ph, ids)
     else:
         return fail("未知操作: " + str(action))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({"updated": len(ids)})

@@ -1,6 +1,7 @@
 """原生采购/处置路由(方案 B): purchase-orders CRUD + insights/purchase + 滞销处置建议"""
 
 import json
+import time as _time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter
@@ -11,6 +12,9 @@ from routes.common import ok, fail, traced
 from biz.sales import load_daily_sales_grouped, load_daily_sales, calc_sales_multi, rolling_predict
 
 router = APIRouter(tags=["purchase"])
+
+from routes.analysis_cache import register as _register_cache
+_register_cache(lambda: _purchase_cache.clear())
 
 
 # ── 已下单标记(purchase-orders) ─────────────────────────────────────────
@@ -37,6 +41,8 @@ async def create_purchase_order(request: Request):
             "VALUES(%s,%s,%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), suggested_qty=VALUES(suggested_qty)",
             (sku, store, product_name, suggested_qty, channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -49,6 +55,8 @@ async def delete_purchase_order(request: Request):
     channel = q.get("channel", "jd")
     execute("DELETE FROM purchase_orders WHERE sku=%s AND store=%s AND channel=%s",
             (sku, store, channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
@@ -69,15 +77,31 @@ async def update_purchase_order(pid: int, request: Request):
         return fail("无更新字段")
     params.append(pid)
     execute("UPDATE purchase_orders SET %s WHERE id=%%s" % ", ".join(sets), params)
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({})
 
 
 # ── 采购建议(insights/purchase) ─────────────────────────────────────────
+_purchase_cache = {}
+_PURCHASE_TTL = 60
+
+
 @router.get("/insights/purchase")
 @traced
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
                          search: str = ""):
-    """采购建议(PA 完整版): 系统总库存视角 + 供应商级参数(前置期/安全天数/MOQ) + 目标周转 + 采购告警"""
+    """采购建议(60s TTL 缓存, 搜索在缓存后过滤——降 RU): 系统总库存+供应商级参数+目标周转+采购告警"""
+    _key = "%s|%s" % (channel, mode)
+    _c = _purchase_cache.get(_key)
+    if _c and _time.time() - _c[0] < _PURCHASE_TTL:
+        _all = _c[1]
+        if search:
+            _sq = search.lower()
+            _all = [r for r in _all if _sq in str(r.get("sku", "")).lower()
+                    or _sq in str(r.get("product_name", "")).lower()
+                    or _sq in str(r.get("barcode", "")).lower()]
+        return ok({"suggestions": _all})
     from biz.sales import load_daily_sales, calc_sales_multi
     now = datetime.now(timezone.utc)
 
@@ -267,12 +291,13 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
     except Exception:
         pass
 
+    result.sort(key=lambda x: x["days_to_empty"])
+    _purchase_cache[_key] = (_time.time(), result)
     if search:
         sq = search.lower()
         result = [r for r in result if sq in str(r.get("sku", "")).lower()
                   or sq in str(r.get("product_name", "")).lower()
                   or sq in str(r.get("barcode", "")).lower()]
-    result.sort(key=lambda x: x["days_to_empty"])
     return ok({"suggestions": result})
 
 
@@ -498,4 +523,6 @@ async def disposals_batch(request: Request):
                  it.get("level", ""), float(it.get("turnover_days") or 0),
                  it.get("reason") or "", action, note))
         n += 1
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
     return ok({"updated": n})

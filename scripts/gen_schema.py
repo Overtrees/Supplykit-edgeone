@@ -106,6 +106,8 @@ def main():
                       re.search(r'ON\s+\w+\s*\((.*)\)\s*;?\s*$', sql, re.S).group(1))
         cols = re.sub(r'\s+', ' ', cols).strip()
         tables[tbl].append('%sKEY `%s` (%s)' % (uniq, name, cols))
+        if tbl == 'orders' and name == 'idx_orders_ch_ordered_at':
+            tables[tbl].append('KEY `idx_orders_channel_ordered` (channel, ordered_at)')
     # 输出
     lines = []
     for name in sorted(tables):

@@ -1,5 +1,6 @@
 """原生 dashboard 路由: summary(契约与旧 backend 一致)"""
 from datetime import datetime, timedelta, timezone
+import time as _time
 
 from fastapi import APIRouter
 
@@ -7,6 +8,9 @@ from db import query, one
 from routes.common import ok, fail, PAID_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
+
+from routes.analysis_cache import register as _register_cache
+_register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear()))
 
 _PAID = tuple(PAID_STATUSES)
 
@@ -16,9 +20,18 @@ def _status_cond(col="order_status"):
     return "%s IN (%s)" % (col, ",".join(["'%s'" % s for s in _PAID]))
 
 
+_summary_cache = {}
+_SUMMARY_TTL = 30
+
+
 @router.get("/dashboard/summary")
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
+    """看板汇总(30s TTL 缓存——与前端 30s 静默刷新同频, 多用户共享大幅降 RU; 数据变化最多 30s 可见)"""
+    _key = "%s|%s|%s" % (channel, start_date, end_date)
+    _c = _summary_cache.get(_key)
+    if _c and _time.time() - _c[0] < _SUMMARY_TTL:
+        return ok(_c[1])
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
@@ -31,7 +44,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
             "AND ordered_at >= %%s AND ordered_at < %%s "
             "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
-        return ok(_assemble(rows, channel, start_date, end_date))
+        _result = _assemble(rows, channel, start_date, end_date)
+        _summary_cache[_key] = (_time.time(), _result)
+        return ok(_result)
 
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
@@ -40,7 +55,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
         (channel, (now - timedelta(days=59)).strftime("%Y-%m-%d") + " 00:00:00"))
-    return ok(_assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today))
+    _result = _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+    _summary_cache[_key] = (_time.time(), _result)
+    return ok(_result)
 
 
 def _assemble(rows, channel, start_date, end_date):
@@ -245,10 +262,17 @@ def _health_index(channel):
             "score": _score(all_rows)["score"], "level": _score(all_rows)["level"]}
 
 
+_aux_cache = {}
+_AUX_TTL = 15
+
+
 @router.get("/dashboard/aux")
 @traced
 def dashboard_aux(channel: str = "jd"):
-    """看板辅助聚合: alerts(分组配额) + alertCounts + stockOverview + bcOutOfStock"""
+    """看板辅助聚合(15s TTL 缓存): alerts(分组配额) + alertCounts + stockOverview + bcOutOfStock"""
+    _c = _aux_cache.get(channel)
+    if _c and _time.time() - _c[0] < _AUX_TTL:
+        return ok(_c[1])
     from routes.alerts import _FIELDS as _AF
     # alerts 分组配额
     alerts = []
@@ -301,7 +325,7 @@ def dashboard_aux(channel: str = "jd"):
         "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku LIMIT 100", [channel])
     bc_out = [{"sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
                "warehouse_type": "bc"} for r in bc_rows]
-    return ok({
+    _aux_result = {
         "alerts": alerts,
         "alertCounts": alert_counts_full,
         "stockOverview": {"items": so_items,
@@ -310,7 +334,9 @@ def dashboard_aux(channel: str = "jd"):
                           "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
         "bcOutOfStock": bc_out,
         "stockRisk": _stock_risk(channel),
-    })
+    }
+    _aux_cache[channel] = (_time.time(), _aux_result)
+    return ok(_aux_result)
 
 
 @router.get("/dashboard/stock-risk")
