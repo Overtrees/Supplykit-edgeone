@@ -90,7 +90,9 @@ async def seed_fill(request: Request):
         _log_task(task_id, "seed", "done", channel, {"result": summary})
         return ok({"task_id": task_id, "summary": summary})
     except Exception as e:
-        _log_task(task_id, "seed", "error", channel, {"error": str(e)[:400]})
+        import traceback as _tb
+        _log_task(task_id, "seed", "error", channel,
+                  {"error": str(e)[:400], "tb": _tb.format_exc()[-1800:]})
         return fail("种子填充失败: %s" % str(e)[:200])
 
 
