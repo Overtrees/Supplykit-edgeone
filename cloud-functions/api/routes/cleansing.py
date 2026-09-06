@@ -398,15 +398,18 @@ def _write_rows(target, channel, conflict_mode, cleaned):
 
 
 def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
-    """批量写入: 仅保留存在的列; 冲突按 conflict_mode(sum 累加数量/else 覆盖)"""
+    """批量写入: 仅保留存在的列; 冲突策略——
+    inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
+    其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)"""
     if not cleaned:
         return 0, 0
     keys = set(key_cols)
     success = failed = 0
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
-    sum_mode = conflict_mode == "sum"
+    # sum 累加仅限出入库记录(HammerCleansing 只在 inbound/outbound 暴露 sum/overwrite 选择)
+    sum_mode = table in ("inbound_records", "outbound_records") and conflict_mode == "sum"
     for i in range(0, len(cleaned), 500):
-        chunk = cleaned[i:i + 200]
+        chunk = cleaned[i:i + 500]
         rows = []
         for it in chunk:
             row = {}
@@ -423,39 +426,29 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
         sql = "INSERT INTO `%s` (%s) VALUES (%s)" % (
             table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
         if sum_mode:
+            # inbound/outbound + sum: 数量列累加, 其余列覆盖
             upd = []
-            params_extra = []
             for c in cols:
                 if c in qty_cols:
                     upd.append("`%s` = `%s` + VALUES(`%s`)" % (c, c, c))
-                elif c not in keys:
+                elif c not in keys and c not in ("id", "deleted_at"):
                     upd.append("`%s` = VALUES(`%s`)" % (c, c))
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(upd)
-            try:
-                executemany(sql, [tuple(r[c] for c in cols) for r in rows])
-                success += len(rows)
-            except Exception:
-                # 分批降级: 单行插入, 冲突跳过
-                for r in rows:
-                    try:
-                        execute(sql, [r[c] for c in cols])
-                        success += 1
-                    except Exception:
-                        failed += 1
         else:
-            # overwrite: ON DUPLICATE KEY UPDATE 全列覆盖(对齐 PA——INSERT IGNORE 保留旧数据语义错误)
+            # 统一全列覆盖(对齐 PA: 冲突即覆盖新值)
             upd = ", ".join("`%s`=VALUES(`%s`)" % (c, c) for c in cols if c not in ("id", "deleted_at"))
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % upd
-            try:
-                executemany(sql, [tuple(r[c] for c in cols) for r in rows])
-                success += len(rows)
-            except Exception:
-                for r in rows:
-                    try:
-                        execute(sql, [r[c] for c in cols])
-                        success += 1
-                    except Exception:
-                        failed += 1
+        try:
+            executemany(sql, [tuple(r[c] for c in cols) for r in rows])
+            success += len(rows)
+        except Exception:
+            # 分批降级: 单行插入
+            for r in rows:
+                try:
+                    execute(sql, [r[c] for c in cols])
+                    success += 1
+                except Exception:
+                    failed += 1
     return success, failed
