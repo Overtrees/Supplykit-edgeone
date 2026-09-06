@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 from fastapi import Request
 
-from db import query, one, execute
+from db import query, one, execute, executemany
 from routes.common import ok, fail, traced
 from biz.sales import load_daily_sales_grouped, load_daily_sales, calc_sales_multi, rolling_predict
 
@@ -77,76 +77,203 @@ async def update_purchase_order(pid: int, request: Request):
 @traced
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
                          search: str = ""):
-    """采购建议: 在补货建议基础上合并自有/B/C 仓口径 + 已下单量 + 补后周转"""
-    from routes.replenishment import get_replenishment_suggestions
-    r = get_replenishment_suggestions(days=days, mode=mode, channel=channel)
-    items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
-    if not items:
+    """采购建议(PA 完整版): 系统总库存视角 + 供应商级参数(前置期/安全天数/MOQ) + 目标周转 + 采购告警"""
+    from biz.sales import load_daily_sales, calc_sales_multi
+    now = datetime.now(timezone.utc)
+
+    raw = {}
+    for r in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''",
+                   [channel]):
+        raw[r.get("key") or ""] = r.get("value") or ""
+    purchase_lead_time = int(float(raw.get("purchase_lead_days") or 0))
+    moq_default = int(float(raw.get("moq") or 0))
+    purchase_safety_days = float(raw.get("purchase_safety_days") or 0)
+    target_turn = int(float(raw.get("max_turnover_days") or 0))
+    # 活动系数
+    active_factor = 1.0
+    try:
+        sv = json.loads(raw.get("season_config_%s" % mode) or "[]")
+        for s in (sv or []):
+            if isinstance(s, dict) and s.get("enabled") and float(s.get("factor", 1.0)) > active_factor:
+                active_factor = float(s["factor"])
+    except Exception:
+        pass
+
+    products = {}
+    for p in query("SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
+                   "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
+                   "AND channel=%s", [channel]):
+        products[p.get("sku")] = p
+    if not products:
         return ok({"suggestions": []})
 
-    skus = [x.get("sku") for x in items if x.get("sku")]
-    # 库存按仓型聚合
-    inv = query("SELECT sku, warehouse_type, available_qty, in_transit_qty FROM inventory "
-                "WHERE channel=%s", [channel]) if skus else []
-    agg = {}
-    for r2 in inv:
-        sku = r2.get("sku")
-        wt = r2.get("warehouse_type")
-        d = agg.setdefault(sku, {"own_avail": 0, "own_transit": 0, "b_avail": 0, "b_transit": 0,
-                                 "plat_avail": 0, "plat_transit": 0})
-        q = int(r2.get("available_qty") or 0)
-        t = int(r2.get("in_transit_qty") or 0)
-        if wt == "own":
-            d["own_avail"] += q
-            d["own_transit"] += t
-        elif wt == "platform_b":
-            d["b_avail"] += q
-            d["b_transit"] += t
+    # 日销 14+28 双窗口 → fused(趋势加权)
+    daily = load_daily_sales(days, channel, skus=set(products.keys()))
+    multi = calc_sales_multi(daily, windows=[14, 28])
+    s14m, s28m = multi[14], multi[28]
+    fused = {}
+    for sku in set(list(s14m) + list(s28m)):
+        a, b = s14m.get(sku, 0), s28m.get(sku, 0)
+        if a > b * 1.15:
+            w14, w28 = 0.55, 0.45
+        elif a < b * 0.85:
+            w14, w28 = 0.35, 0.65
         else:
-            d["plat_avail"] += q
-            d["plat_transit"] += t
-    # 已下单(采购订单)
-    ordered = {}
-    for r3 in query("SELECT sku, store, suggested_qty, arrival_date FROM purchase_orders "
-                    "WHERE channel=%s", [channel]):
-        ordered[r3.get("sku")] = r3
-    cfg = {}
-    for r4 in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel]):
-        cfg[r4.get("key") or ""] = r4.get("value") or ""
-    target_turn = float(cfg.get("target_turnover_days") or cfg.get("max_turnover_days") or 15)
-    lead = int(cfg.get("purchase_lead_days") or 3)
+            w14, w28 = 0.20, 0.80
+        fused[sku] = round(a * w14 + b * w28, 1)
 
-    out = []
-    for it in items:
-        sku = it.get("sku")
-        st = agg.get(sku) or {}
-        sys_avail = st.get("own_avail", 0) + st.get("plat_avail", 0) + (st.get("b_avail", 0) if mode == "bbcc" else 0)
-        sys_transit = st.get("own_transit", 0) + st.get("plat_transit", 0) + (st.get("b_transit", 0) if mode == "bbcc" else 0)
-        ds = float(it.get("daily_sales") or 0)
-        need = max(round(ds * lead - sys_avail - sys_transit, 0), 0)
-        po = ordered.get(sku)
-        actual = int((po or {}).get("suggested_qty") or 0)
-        after = (sys_avail + sys_transit + need + actual) / ds if ds > 0 else None
-        out.append({
-            "sku": sku, "barcode": it.get("barcode", ""), "brand": it.get("brand", ""),
-            "product_name": it.get("product_name", ""),
-            "warehouse": it.get("warehouse", ""), "store": it.get("store", ""),
-            "sys_available": sys_avail, "own_available": st.get("own_avail", 0),
-            "b_available": st.get("b_avail", 0), "plat_available": st.get("plat_avail", 0),
-            "sys_transit": sys_transit, "own_transit": st.get("own_transit", 0),
-            "b_transit": st.get("b_transit", 0), "plat_transit": st.get("plat_transit", 0),
-            "daily_sales": round(ds, 1), "daily_sales_7": it.get("daily_sales_7", ""),
-            "daily_sales_14": it.get("daily_sales_14", ""), "daily_sales_28": it.get("daily_sales_28", ""),
-            "daily_sales_60": it.get("daily_sales_60", ""),
-            "purchase_qty": need, "actual_purchase": actual,
-            "after_turnover": round(after, 1) if after is not None else None,
-            "target_turnover": target_turn,
-            "note": "建议采购 %d 件(覆盖 %d 天) | 已下单 %d 件" % (need, lead, actual) if need > 0 or actual > 0 else "库存充足, 无需采购",
+    # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
+    inv = {}
+    for i in query("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, "
+                   "safety_qty, safety_days FROM inventory WHERE channel=%s", [channel]):
+        s = i.get("sku")
+        wt = i.get("warehouse_type") or "platform"
+        if wt == "platform_b" and (channel != "jd" or mode != "bbcc"):
+            continue
+        st = inv.setdefault(s, {"available": 0, "transit": 0, "safety": 0, "safety_days": 0,
+                                "own_avail": 0, "own_transit": 0, "plat_avail": 0,
+                                "plat_transit": 0, "b_transit": 0, "b_avail": 0,
+                                "own_warehouse": ""})
+        qty = int(i.get("available_qty") or 0)
+        tty = int(i.get("in_transit_qty") or 0)
+        st["available"] += qty
+        st["transit"] += tty
+        st["safety"] += int(i.get("safety_qty") or 0)
+        sd = float(i.get("safety_days") or 0)
+        if sd > st["safety_days"]:
+            st["safety_days"] = sd
+        if wt == "platform_b":
+            st["b_avail"] += qty
+            st["b_transit"] += tty
+        elif wt == "own":
+            st["own_avail"] += qty
+            st["own_transit"] += tty
+            if not st["own_warehouse"]:
+                st["own_warehouse"] = i.get("warehouse", "")
+        else:
+            st["plat_avail"] += qty
+            st["plat_transit"] += tty
+
+    # 供应商特定参数(前置期/安全天数/MOQ 按供应商独立, 回退全局)
+    _sup_params = {}
+
+    def _sup_param(sup_code, key, fallback):
+        if not sup_code:
+            return fallback
+        cache = _sup_params.setdefault(sup_code, {})
+        if key not in cache:
+            try:
+                cache[key] = int(float(raw.get("%s_%s" % (key, sup_code), str(fallback))))
+            except Exception:
+                cache[key] = fallback
+        return cache[key]
+
+    result = []
+    for sku, st in inv.items():
+        ds = round(fused.get(sku, 0) * active_factor, 1)
+        if ds <= 0:
+            continue
+        sys_total = st["available"] + st["transit"]
+        prod = products.get(sku, {})
+        _sup = prod.get("supplier_code") or ""
+        _lead = _sup_param(_sup, "purchase_lead_days", purchase_lead_time)
+        _safe_days = st["safety_days"] if st["safety_days"] > 0 else _sup_param(
+            _sup, "purchase_safety_days", purchase_safety_days)
+        eff_safety = round(ds * _safe_days)
+        purchase_qty = max(round(ds * _lead) + eff_safety - sys_total, 0)
+        box_qty = int(prod.get("box_qty") or 1)
+        actual_purchase = (purchase_qty + box_qty - 1) // box_qty * box_qty if purchase_qty > 0 else 0
+        days_to_empty = round(st["available"] / ds, 1) if ds > 0 else 999
+        after_stock = st["own_avail"] + st["own_transit"] + actual_purchase
+        after_turnover = round(after_stock / ds, 1) if ds > 0 else 999
+        c_consume = round(ds * _lead)
+        note = ""
+        if purchase_qty > 0:
+            note = "消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty)
+            if box_qty > 1:
+                note += " · 箱规%d件, 实购%d件(%d箱)" % (box_qty, actual_purchase, actual_purchase // box_qty)
+            if target_turn > 0:
+                note += " · 补后周转%d天%s" % (after_turnover,
+                                            " > 目标%d天" % target_turn if after_turnover > target_turn
+                                            else " < 目标%d天" % target_turn)
+        result.append({
+            "sku": sku, "barcode": prod.get("barcode", ""),
+            "product_name": prod.get("product_name") or sku, "brand": prod.get("brand", ""),
+            "store": prod.get("store", ""), "warehouse": st["own_warehouse"],
+            "category": prod.get("category", ""),
+            "sys_available": st["available"], "sys_transit": st["transit"], "sys_total": sys_total,
+            "own_available": st["own_avail"], "own_transit": st["own_transit"],
+            "b_transit": st["b_transit"], "plat_available": st["plat_avail"],
+            "plat_transit": st["plat_transit"], "b_available": st["b_avail"],
+            "safety_qty": st["safety"], "daily_sales": ds,
+            "daily_sales_14": round(s14m.get(sku, 0), 1), "daily_sales_28": round(s28m.get(sku, 0), 1),
+            "daily_sales_60": round(fused.get(sku, 0), 1),
+            "supplier_code": _sup,
+            "purchase_qty": purchase_qty, "box_qty": box_qty, "actual_purchase": actual_purchase,
+            "after_stock": after_stock, "after_turnover": after_turnover,
+            "target_turnover": target_turn, "days_to_empty": days_to_empty,
+            "note": note if note else "库存充足",
         })
+
+    # 供应商 MOQ 聚合: 同供应商采购量合计 < MOQ 时按占比放大到起订量
+    _sup_groups = {}
+    for _r in result:
+        _sup = _r.get("supplier_code") or ""
+        if not _sup:
+            continue
+        g = _sup_groups.setdefault(_sup, {"moq": _sup_param(_sup, "moq", moq_default),
+                                          "total_raw": 0, "skus": []})
+        g["total_raw"] += _r["purchase_qty"]
+        g["skus"].append(_r)
+    for _sup, g in _sup_groups.items():
+        if g["total_raw"] > 0 and g["total_raw"] < g["moq"]:
+            _ratio = g["moq"] / g["total_raw"]
+            for _r in g["skus"]:
+                _old = _r["purchase_qty"]
+                _r["purchase_qty"] = max(round(_r["purchase_qty"] * _ratio), 0)
+                if _r["purchase_qty"] > 0:
+                    _box = _r.get("box_qty") or 1
+                    _r["actual_purchase"] = (_r["purchase_qty"] + _box - 1) // _box * _box
+                _r["note"] = "%s · 供应商%s起订%d件, 该供应商合计%d件不足, 按占比%d/%d提升至%d件" % (
+                    _r.get("note", ""), _sup, g["moq"], g["total_raw"], _old,
+                    g["total_raw"], _r["purchase_qty"])
+
+    # 采购告警 purchase_need(批量: 需采购且可撑<14天 → active; 无需 → closed)
+    try:
+        existing = set()
+        for r in query("SELECT related_sku FROM alerts WHERE alert_type='purchase_need' "
+                       "AND status='active' AND channel=%s", [channel]):
+            existing.add(r.get("related_sku"))
+        ins, upd = [], []
+        for _r in result:
+            sku = _r.get("sku")
+            if _r.get("purchase_qty", 0) > 0 and _r.get("days_to_empty", 999) < 14 and sku not in existing:
+                ins.append(("需采购: %s" % _r.get("product_name"),
+                            "可用%d件, 建议采购%d件, 可撑%d天" % (_r.get("sys_available") or 0,
+                                                            _r.get("actual_purchase") or 0,
+                                                            _r.get("days_to_empty") or 0),
+                            sku, channel))
+            elif _r.get("purchase_qty", 0) == 0 and sku in existing:
+                upd.append(sku)
+        for i in range(0, len(ins), 100):
+            executemany("INSERT INTO alerts(alert_type, title, description, severity, source, "
+                        "related_sku, status, channel) VALUES('purchase_need',%s,%s,'warning',"
+                        "'purchase_engine',%s,'active',%s)", ins[i:i + 100])
+        if upd:
+            ph = ",".join(["%s"] * len(upd))
+            execute("UPDATE alerts SET status='closed' WHERE alert_type='purchase_need' "
+                    "AND related_sku IN (%s) AND status='active' AND channel=%s"
+                    % (ph, channel), upd + [channel])
+    except Exception:
+        pass
+
     if search:
         sq = search.lower()
-        out = [x for x in out if sq in str(x.get("sku", "")).lower() or sq in str(x.get("product_name", "")).lower()]
-    return ok({"suggestions": out})
+        result = [r for r in result if sq in str(r.get("sku", "")).lower()
+                  or sq in str(r.get("product_name", "")).lower()
+                  or sq in str(r.get("barcode", "")).lower()]
+    result.sort(key=lambda x: x["days_to_empty"])
+    return ok({"suggestions": result})
 
 
 # ── 滞销处置建议(disposal-suggestions) ──────────────────────────────────

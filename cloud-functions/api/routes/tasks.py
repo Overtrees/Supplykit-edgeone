@@ -297,7 +297,7 @@ async def seed_reset(request: Request):
         return fail("重置失败: %s" % str(e)[:200])# ── 导出任务 ──────────────────────────────────────────────────────────────
 _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
                "id BIGINT PRIMARY KEY AUTO_INCREMENT, filename VARCHAR(128) DEFAULT '', "
-               "content MEDIUMTEXT, channel VARCHAR(20) DEFAULT 'jd', "
+               "content MEDIUMBLOB, channel VARCHAR(20) DEFAULT 'jd', "
                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
                "UNIQUE KEY uk_filename (filename))")
 
@@ -306,7 +306,7 @@ _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
 @traced
 async def create_export(request: Request):
     """导出任务(POST ?type=replen|purchase_suggestions|purchase|slow&mode=bbcc|traditional&channel=)
-    返回平铺 {ok, task_id}(HammerInsights 期待 d.task_id)"""
+    返回平铺 {ok, task_id}(HammerInsights 期待 d.task_id); 生成 xlsx 二进制存 export_files"""
     from urllib.parse import parse_qs
     qs = parse_qs(request.url.query)
     exp_type = (qs.get("type") or ["replen"])[0]
@@ -318,14 +318,27 @@ async def create_export(request: Request):
         rows = _build_export_rows(exp_type, mode, channel)
         if rows is None:
             return fail("未知导出类型: " + str(exp_type))
-        buf = io.StringIO()
+        # 生成 xlsx(openpyxl; 空数据也生成带表头的工作簿)
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+        buf = io.BytesIO()
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "导出"
         if rows:
-            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
+            headers = list(rows[0].keys())
+            ws.append(headers)
+            for c in ws[1]:
+                c.font = Font(bold=True)
+            for r in rows:
+                ws.append([r.get(k) for k in headers])
+        wb.save(buf)
         content = buf.getvalue()
-        filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
-        execute(_EXPORT_DDL)
+        filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
+        try:
+            execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
+        except Exception:
+            pass
         execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE content=VALUES(content)",
                 (filename, content, channel))
@@ -344,9 +357,18 @@ def export_download(filename: str):
     row = one("SELECT content FROM export_files WHERE filename=%s", [filename])
     if not row:
         return fail("导出文件不存在", 404)
-    content = row.get("content") or ""
-    # filename 纯 ASCII 安全(导出用 ASCII 命名), 直接放 Content-Disposition
-    return Response(content=content, media_type="text/csv; charset=utf-8",
+    content = row.get("content")
+    if isinstance(content, str):
+        data = content.encode("utf-8")
+    elif content is None:
+        data = b""
+    else:
+        data = bytes(content)
+    if filename.endswith(".xlsx"):
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        media = "text/csv; charset=utf-8"
+    return Response(content=data, media_type=media,
                     headers={"Content-Disposition": "attachment; filename=%s" % filename})
 
 

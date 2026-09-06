@@ -276,6 +276,8 @@ r = client.post("/exports?type=replen&mode=bbcc&channel=jd", headers=AH)
 check("exports 平铺 task_id", r.json().get("ok") is True and bool(r.json().get("task_id")), r.text[:120])
 r = client.get("/exports/download/test.csv", headers=AH)
 check("exports download csv", r.status_code == 200 and "csv" in r.headers.get("content-type", ""), r.text[:120])
+r = client.get("/exports/download/test.xlsx", headers=AH)
+check("exports download xlsx", r.status_code == 200 and "spreadsheetml" in r.headers.get("content-type", ""), r.text[:120])
 
 # ── 契约补齐组 C: cleansing / purchase / disposal ──
 CSV_DATA = "订单号,SKU,数量,商品名称\nNO9001,SKU0001,5,禾味调味料1号\n"

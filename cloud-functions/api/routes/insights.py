@@ -86,12 +86,29 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     skus = [r.get("sku") for r in rows]
     daily = load_daily_sales(28, channel, skus=set(skus)) if skus else {}
     multi = calc_sales_multi(daily, windows=[7, 14, 28])
+    # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
+    month_in, month_out = {}, {}
+    if skus:
+        _ph = ",".join(["%s"] * len(skus))
+        for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM inbound_records "
+                        "WHERE channel=%s AND inbound_date>=%s AND sku IN (%s) "
+                        "GROUP BY sku, warehouse" % (channel, month_start, _ph), skus):
+            month_in[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
+        for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM outbound_records "
+                        "WHERE channel=%s AND outbound_date>=%s AND sku IN (%s) "
+                        "GROUP BY sku, warehouse" % (channel, month_start, _ph), skus):
+            month_out[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
     for r in rows:
         sku = r.get("sku")
         ds = multi[28].get(sku, 0) or multi[7].get(sku, 0)
         avail = int(r.get("available_qty") or 0)
         transit = int(r.get("in_transit_qty") or 0)
+        _k = (sku, r.get("warehouse") or "")
+        mi = month_in.get(_k)
+        mo = month_out.get(_k)
+        month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
+        month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
         items.append({
             "sku": sku, "product_name": r.get("product_name") or sku,
             "warehouse": r.get("warehouse", ""), "warehouse_type": r.get("warehouse_type", ""),
@@ -101,9 +118,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "turnover_days": round((avail + transit) / ds, 1) if ds > 0 else None,
             "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
             "month_start": month_start, "month_end": month_end,
-            "month_inbound": int(r.get("month_inbound") or 0),
-            "month_outbound": int(r.get("month_outbound") or 0),
-            "beginning_stock": int(r.get("beginning_stock") or 0),
+            "month_inbound": month_inbound,
+            "month_outbound": month_outbound,
+            "beginning_stock": max(avail - month_inbound + month_outbound, 0),
             "barcode": r.get("barcode") or "", "brand": r.get("brand") or "",
             "price": r.get("price") or 0, "batch_count": int(r.get("batch_count") or 0),
         })
