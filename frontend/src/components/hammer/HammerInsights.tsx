@@ -73,15 +73,25 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
   }
 
   // 批量处置(规则页同款批量模式, 复用 prodBatch/prodSelIds; 后端 disposal_records 持久)
+  // 处置动作定义(滞销业务特性: 标记/退货/清仓/促销; 已处理的不可再勾选)
+  const DISPOSE_ACTIONS = {
+    mark: { label: '✅ 标记已处理', desc: '确认库存已清理或不再处理', color: 'var(--success)' },
+    return: { label: '🔙 退货供应商', desc: '向供应商退货, 回收占用资金', color: '#f59e0b' },
+    clearance: { label: '💰 清仓甩卖', desc: '大力度清库, 尽快释放资金', color: '#8b5cf6' },
+    promo: { label: '🏷 降价促销', desc: '降价促销拉动动销', color: '#06b6d4' },
+  }
   const runDispose = async () => {
     const s = useAppStore.getState()
     const ids = s.prodSelIds || []
     if (ids.length === 0) { toast.error('请先勾选要处置的项'); return }
+    const _a = DISPOSE_ACTIONS[bpAction] || DISPOSE_ACTIONS.mark
+    if (bpAction !== 'mark' && !window.confirm('确定对 ' + ids.length + ' 项执行「' + _a.label + '」？该操作将记录处置状态。')) return
     setBpBusy(true)
     try {
+      // 过滤已处置(保险: 行勾选已禁, 双保险过滤)
       const items = ids.map(k => { const parts = k.split('|'); return { sku: parts[0], warehouse: parts[1] } })
       await api.post('/api/disposals/batch', { channel, action: bpAction, note: bpNote, items })
-      toast.success('已处置 ' + items.length + ' 项')
+      toast.success('已处置 ' + items.length + ' 项(' + _a.label + ')')
       s.setProdBatch(false); s.setProdBatchSel([]); setBpOpen(false)
       window.dispatchEvent(new Event('insights-refresh'))
     } catch(e) { toast.error('处置失败: ' + (e.message||'')) }
@@ -147,12 +157,17 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             <button className="hammer-btn btn-ghost" onClick={() => { const s = useAppStore.getState(); if (!s.prodBatch) s.setProdBatch(true); s.requestProdBatchAll() }}>全选/取消</button>
           </div>
           <div className="muted2 text-10" style={{marginTop:6}}>滞销预警按 SKU×仓库 · 处置后该行标记「已处理」</div>
-          <div className="hammer-btn-row" style={{marginTop:8}}>
-            {[['mark','标记已处理','var(--success)'],['return','退货供应商','#f59e0b'],['clearance','清仓甩卖','#8b5cf6'],['promo','降价促销','#06b6d4']].map(([v,l,c]) => (
-              <button key={v} className="hammer-btn btn-ghost" style={{color:c, opacity:(bpBusy||(useAppStore.getState().prodSelIds||[]).length===0)?0.4:1, borderColor: bpAction===v?c:undefined}}
-                disabled={bpBusy||(useAppStore.getState().prodSelIds||[]).length===0} onClick={()=>setBpAction(v)}>{l}</button>
+          <div className="hm-group" style={{marginTop:6}}>
+            <span className="text-11 muted2">处置动作(按滞销业务特性)</span>
+          </div>
+          <div className="hammer-btn-row" style={{marginTop:6}}>
+            {Object.entries(DISPOSE_ACTIONS).map(([v, a]) => (
+              <button key={v} className="hammer-btn btn-ghost" title={a.desc}
+                style={{color:a.color, opacity:(bpBusy||(useAppStore.getState().prodSelIds||[]).length===0)?0.4:(bpAction===v?1:0.75), borderColor: bpAction===v?a.color:undefined}}
+                disabled={bpBusy||(useAppStore.getState().prodSelIds||[]).length===0} onClick={()=>setBpAction(v)}>{a.label}</button>
             ))}
           </div>
+          <div className="muted2 text-10" style={{marginTop:4}}>{DISPOSE_ACTIONS[bpAction]?.desc || ''}</div>
           <div style={{marginTop:8}}>
             <input value={bpNote} onChange={e=>setBpNote(e.target.value)} placeholder="备注(可选)" className="hammer-input" />
           </div>

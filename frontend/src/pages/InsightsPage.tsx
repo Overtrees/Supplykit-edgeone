@@ -571,8 +571,9 @@ export default function InsightsPage() {
                       const key = x.sku + '|' + x.warehouse
                       const isSel = (prodSelIds || []).includes(key)
                       const s = useAppStore.getState()
-                      return <tr key={key} onClick={()=>{ if (prodBatch) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{opacity:x.disposed?0.5:1,background:prodBatch&&isSel?'rgba(29,78,216,0.08)':'transparent',cursor:prodBatch?'pointer':'default'}}>
-                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key])}} style={{padding:'4px 8px',textAlign:'center'}}><span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11}}>{isSel?'✓':''}</span></td>}
+                      const done = !!x.disposed
+                      return <tr key={key} onClick={()=>{ if (prodBatch && !done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{opacity:done?0.4:1,background:prodBatch&&isSel?'rgba(29,78,216,0.08)':'transparent',cursor:prodBatch&&!done?'pointer':'default'}}>
+                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); if (!done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{padding:'4px 8px',textAlign:'center'}}><span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:isSel?'var(--primary)':(done?'var(--border)':'var(--border)'),background:isSel?'var(--primary)':(done?'rgba(148,163,184,0.15)':'transparent'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,opacity:done?0.35:1}}>{done?'✓':(isSel?'✓':'')}</span></td>}
                         {slowVisCols.map(id => {
                           const col = SLOW_COLS.find(c => c.id === id)
                           if (!col) return <td key={id}></td>
