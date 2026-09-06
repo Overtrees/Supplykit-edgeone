@@ -8,16 +8,55 @@
     "python": {
       "maxDuration": 120
     },
-    "mainlandRegions": ["ap-guangzhou"],
-    "overseasRegions": ["ap-singapore"]
+    "mainlandRegions": [
+      "ap-guangzhou"
+    ],
+    "overseasRegions": [
+      "ap-singapore"
+    ]
   },
   "schedules": [
-    { "name": "archive-orders", "cron": "5 1 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/archive" },
-    { "name": "cleanup-logs", "cron": "5 3 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/cleanup-logs" },
-    { "name": "snapshot-freshness", "cron": "10 3 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/freshness" },
-    { "name": "build-snapshot", "cron": "55 10 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/snapshot" },
-    { "name": "daily-rules", "cron": "5 4 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/daily-rules" },
-    { "name": "recycle-cleanup", "cron": "35 4 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/recycle" },
-    { "name": "push-alerts", "cron": "30 8 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/push-alerts" }
+    {
+      "name": "archive-orders",
+      "cron": "5 1 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/archive"
+    },
+    {
+      "name": "cleanup-logs",
+      "cron": "5 3 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/cleanup-logs"
+    },
+    {
+      "name": "snapshot-freshness",
+      "cron": "10 3 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/freshness"
+    },
+    {
+      "name": "build-snapshot",
+      "cron": "55 10 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/snapshot"
+    },
+    {
+      "name": "daily-rules",
+      "cron": "*/5 * * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/daily-rules"
+    },
+    {
+      "name": "recycle-cleanup",
+      "cron": "35 4 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/recycle"
+    },
+    {
+      "name": "push-alerts",
+      "cron": "30 8 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/push-alerts"
+    }
   ]
 }
