@@ -173,6 +173,34 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         success, failed = _write_rows(target, channel, conflict_mode, cleaned)
         errs = 0
         elapsed = round(time.time() - started, 1)
+        # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
+        adjusted = 0
+        try:
+            if target in ("inbound", "outbound", "order"):
+                from collections import defaultdict
+                deltas = defaultdict(int)
+                _wht = {}
+                for c in cleaned:
+                    _sku = c.get("sku")
+                    if not _sku:
+                        continue
+                    _qty = int(c.get("quantity") or 0)
+                    _wh = str(c.get("warehouse") or "")
+                    if target == "inbound":
+                        _d, _wt = _qty, "own"
+                    elif target == "outbound":
+                        _d, _wt = -_qty, "own"
+                    else:
+                        _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
+                        _d = _qty if _ds == "jd_po" else -_qty  # 采购单入库+, 销售订单出库-
+                        _wt = "platform"
+                    if _d:
+                        deltas[(_sku, _wh, _wt)] += _d
+                        _wht[(_sku, _wh, _wt)] = _wt
+                if deltas:
+                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()}, 300)
+        except Exception:
+            pass
         # 规则引擎评估: 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
         evaluated = 0
         try:
@@ -218,12 +246,13 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     "VALUES(%s,'cleansing','done','{}',%s,%s)",
                     (task_id, json.dumps({"result": {"target": target, "success": success,
                                                        "failed": failed, "elapsed": elapsed,
-                                                       "rules_evaluated": evaluated}}, ensure_ascii=False), channel))
+                                                       "rules_evaluated": evaluated,
+                                                       "inventory_adjusted": adjusted}}, ensure_ascii=False), channel))
         except Exception:
             pass
         return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
                 "error": "", "message": "成功 %d 条, 跳过 %d 条" % (success, failed),
-                "target": target, "rules_evaluated": evaluated}
+                "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted}
     except Exception as e:
         try:
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
@@ -284,6 +313,38 @@ async def cleansing_templates_save(request: Request):
 
 
 # ── 写入逻辑(按目标类型) ────────────────────────────────────────────────
+def _adjust_inventory(channel, deltas, evaluate_skus=300):
+    """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则评估"""
+    from collections import defaultdict
+    from core.rules import evaluate
+    if not deltas:
+        return 0, []
+    n = 0
+    touched = []
+    for (sku, wh, wht), delta in deltas.items():
+        cur = one("SELECT id, available_qty FROM inventory WHERE sku=%s AND warehouse=%s AND channel=%s",
+                  [sku, wh, channel])
+        if cur:
+            new_qty = max(0, int(cur.get("available_qty") or 0) + delta)
+            execute("UPDATE inventory SET available_qty=%s WHERE id=%s", [new_qty, cur.get("id")])
+        else:
+            execute("INSERT INTO inventory(sku, warehouse, warehouse_type, available_qty, safety_qty, channel) "
+                    "VALUES(%s,%s,%s,%s,10,%s)", [sku, wh or "", wht or "own", max(0, delta), channel])
+        n += 1
+        if len(touched) < evaluate_skus:
+            touched.append(sku)
+    seen = set()
+    for sku in touched:
+        if sku in seen:
+            continue
+        seen.add(sku)
+        inv = one("SELECT sku, warehouse, warehouse_type, product_name, available_qty, safety_qty, "
+                  "in_transit_qty FROM inventory WHERE sku=%s AND channel=%s LIMIT 1", [sku, channel])
+        if inv:
+            evaluate("inventory.changed", {"sku": sku, "channel": channel, "inv": inv})
+    return n, list(seen)
+
+
 def _write_rows(target, channel, conflict_mode, cleaned):
     """按 target 分派写入; 返回 (success, failed)"""
     if target == "order":
