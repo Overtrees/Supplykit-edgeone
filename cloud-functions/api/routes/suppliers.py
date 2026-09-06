@@ -127,8 +127,9 @@ async def update_config(request: Request):
 @router.get("/replenishment-config/history")
 @traced
 def config_history(channel: str = "jd", limit: int = 50):
-    """配置变更历史(规则页-变更历史弹窗)"""
-    rows = query("SELECT id, `key`, value, channel, updated_at FROM replenishment_config_history "
+    """配置变更历史(规则页-变更历史弹窗); 列与表结构对齐(old_value/new_value/mode/created_at)"""
+    rows = query("SELECT id, `key`, old_value, new_value, channel, mode, created_at "
+                 "FROM replenishment_config_history "
                  "WHERE channel=%s OR channel='' ORDER BY id DESC LIMIT %s", [channel, limit])
     return ok(rows)
 
