@@ -405,7 +405,7 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
     success = failed = 0
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
     sum_mode = conflict_mode == "sum"
-    for i in range(0, len(cleaned), 200):
+    for i in range(0, len(cleaned), 500):
         chunk = cleaned[i:i + 200]
         rows = []
         for it in chunk:
