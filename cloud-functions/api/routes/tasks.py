@@ -110,11 +110,17 @@ async def seed_reset(request: Request):
     task_id = _new_task_id("reset")
     try:
         for t in _TABLES_RESET:
-            execute("DELETE FROM `%s`" % t)
+            # 分批删除(TiDB serverless 内存限制: 单条大 DELETE 全表会被取消)
+            while True:
+                n = execute("DELETE FROM `%s` LIMIT 10000" % t)
+                if not n or int(n or 0) < 10000:
+                    break
         _log_task(task_id, "reset", "done", channel, {"result": {"reset": "all"}})
         return ok({"task_id": task_id})
     except Exception as e:
-        _log_task(task_id, "reset", "error", channel, {"error": str(e)[:400]})
+        import traceback as _tb
+        _log_task(task_id, "reset", "error", channel,
+                  {"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]})
         return fail("重置失败: %s" % str(e)[:200])# ── 导出任务 ──────────────────────────────────────────────────────────────
 _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
                "id BIGINT PRIMARY KEY AUTO_INCREMENT, filename VARCHAR(128) DEFAULT '', "
