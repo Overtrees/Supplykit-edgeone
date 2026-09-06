@@ -89,10 +89,11 @@ def _log_cfg_history(channel, key, old_val, new_val, mode=""):
             return
         execute("INSERT INTO replenishment_config_history(`key`, old_value, new_value, channel, mode, created_at) "
                 "VALUES(%s,%s,%s,%s,%s,NOW())", (key, str(old_val), str(new_val), channel, mode))
-    except Exception:
+    except Exception as _e:
         try:
-            execute("INSERT INTO replenishment_config_history(`key`, new_value, channel, mode, created_at) "
-                    "VALUES(%s,%s,%s,%s,NOW())", (key, str(new_val), channel, mode))
+            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('config_history', 'error', %s, %s, 'config')",
+                    ("history 写入失败", str(_e)[:300]))
         except Exception:
             pass
 
