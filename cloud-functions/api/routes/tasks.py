@@ -335,13 +335,20 @@ async def create_export(request: Request):
         wb.save(buf)
         content = buf.getvalue()
         filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
+        # content 列可能仍为 TEXT(ALTER 异步/失败)——二进制 base64 兜底
+        import base64 as _b64
         try:
             execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
         except Exception:
             pass
-        execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                (filename, content, channel))
+        try:
+            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                    (filename, content, channel))
+        except Exception:
+            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                    (filename, "base64:" + _b64.b64encode(content).decode("ascii"), channel))
         _log_task(task_id, "export", "done", channel,
                   {"result": {"filename": filename, "type": exp_type,
                               "rows": len(rows), "elapsed": round(time.time() - started, 1)}})
@@ -359,7 +366,11 @@ def export_download(filename: str):
         return fail("导出文件不存在", 404)
     content = row.get("content")
     if isinstance(content, str):
-        data = content.encode("utf-8")
+        if content.startswith("base64:"):
+            import base64 as _b64
+            data = _b64.b64decode(content[7:])
+        else:
+            data = content.encode("utf-8")
     elif content is None:
         data = b""
     else:
