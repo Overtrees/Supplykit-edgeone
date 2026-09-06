@@ -295,6 +295,14 @@ def cleansing_task(task_id: str):
 
 
 # ── 模板 CRUD ───────────────────────────────────────────────────────────
+@router.delete("/cleansing/templates/{tid}")
+@traced
+def cleansing_templates_delete(tid: int):
+    """删除清洗模板(对齐 PA)"""
+    execute("DELETE FROM cleansing_templates WHERE id=%s", [tid])
+    return ok({"message": "已删除"})
+
+
 @router.get("/cleansing/templates")
 @traced
 def cleansing_templates():
