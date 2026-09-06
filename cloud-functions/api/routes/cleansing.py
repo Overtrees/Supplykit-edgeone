@@ -317,8 +317,14 @@ async def cleansing_templates_save(request: Request):
     mapping = d.get("mapping")
     if isinstance(mapping, dict):
         mapping = json.dumps(mapping, ensure_ascii=False)
-    execute("INSERT INTO cleansing_templates(name, doc_type, mapping) VALUES(%s,%s,%s)",
-            (name, doc_type, mapping or "{}"))
+    # 同名模板更新覆盖(对齐 PA: name 存在 → UPDATE; 否则 INSERT——防止同名重复)
+    existing = one("SELECT id FROM cleansing_templates WHERE name=%s", [name])
+    if existing:
+        execute("UPDATE cleansing_templates SET mapping=%s, doc_type=%s, updated_at=NOW() WHERE id=%s",
+                (mapping or "{}", doc_type, existing.get("id")))
+    else:
+        execute("INSERT INTO cleansing_templates(name, doc_type, mapping) VALUES(%s,%s,%s)",
+                (name, doc_type, mapping or "{}"))
     return ok({"message": "模板已保存"})
 
 
