@@ -8,7 +8,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 
 const VERSION = '1.0.0'
 const BUILD = new Date().toISOString().slice(0,10)
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 
 const Group = ({ title, children }) => (
   <div style={{marginBottom:20}}>

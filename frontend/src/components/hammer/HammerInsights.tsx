@@ -51,7 +51,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
   const doExport = async (type) => {
     setExporting(true)
     try {
-      const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+      const API = import.meta.env.VITE_API_BASE_URL || ''
       const _mode = window.__hammerReplenMode || 'bbcc'
       const _type = type === 'slow' ? 'slow' : type === 'purchase' ? 'purchase_suggestions' : type === 'replen' ? 'replen' : 'purchase'
       const r = await fetch(API + '/api/exports?type=' + _type + '&mode=' + _mode + '&channel=' + channel, 

@@ -69,7 +69,7 @@ export default function App() {
   const [highlightSku, setHighlightSku] = useState('')
   const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
   const toast = useToast()
-  const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+  const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 全局后台任务轮询（跨页面、挂后台均有效）
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
   const [taskVersion, setTaskVersion] = useState(0)
@@ -197,7 +197,7 @@ export default function App() {
     setShowHistory(true)
     setHistLoading(true)
     try {
-      const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+      const API = import.meta.env.VITE_API_BASE_URL || ''
       const r = await fetch(API + '/api/replenishment-config/history?channel=' + (ch||channel) + '&limit=50', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
       const d = await r.json()
       setHistory(d.data || [])

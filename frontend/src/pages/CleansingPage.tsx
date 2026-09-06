@@ -5,7 +5,7 @@ import { useAppStore } from '../store/useAppStore'
 import { IconClipboard, IconPackage, IconImport, IconExport, IconTrendUp, IconLightning, IconCheck, IconAlert, IconLoading, IconFolder, IconTag } from '../components/Icons'
 import { t } from "../locale"
 
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 const INV_FIELDS = [
   {t:'warehouse',l:'仓库',tp:'string'},{t:'sku',l:'SKU',tp:'string'},{t:'barcode',l:'69码',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
   {t:'channel',l:'平台',tp:'string'},

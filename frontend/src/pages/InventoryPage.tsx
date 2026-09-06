@@ -9,7 +9,7 @@ import { useAppStore } from '../store/useAppStore'
 import { INV_COLS } from '../components/hammer/configs'
 import { t } from "../locale"
 
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 const COL_KEY='c_cols_inventory'
 const getVis=(wt,ch)=>{try{return JSON.parse(localStorage.getItem(COL_KEY+'_'+ch+'_'+wt)||'null')}catch{return null}}
 

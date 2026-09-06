@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const BASE = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 // 响应缓存（内存）
 const cache = new Map()

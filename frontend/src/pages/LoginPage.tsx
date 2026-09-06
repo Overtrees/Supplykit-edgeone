@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { t } from '../locale'
 
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 
 export default function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [username, setUsername] = useState('')

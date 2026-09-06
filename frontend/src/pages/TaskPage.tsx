@@ -5,7 +5,7 @@ import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../
 import { t } from '../locale'
 import ErrorRetry from '../components/ErrorRetry'
 
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 
 const EXPORT_TYPE_NAME = { orders: '订单明细', inventory: '库存明细', slow: '滞销明细', purchase: '补货建议', purchase_suggestions: '采购建议' }
 const CLEAN_TARGET_NAME = { order: '订单表', inventory: '库存表(自有)', platform_inv: '库存表(平台)', inventory_b: '库存表(B仓)', inbound: '入库记录表', outbound: '出库记录表', product: '商品表' }

@@ -5,7 +5,7 @@ import { useAppStore } from '../store/useAppStore'
 import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert } from '../components/Icons'
 import { t } from "../locale"
 
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 const EVENTS = [
   {value:'inventory.changed',label:'库存变动'},
   {value:'order.created',label:'订单创建'},

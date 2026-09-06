@@ -49,7 +49,7 @@ function renderNote(text) {
 
 const defVis = (cols) => { try { const s = localStorage.getItem('c_cols_insights_' + (hammerInsightsTab || 'replen') + '_' + (globalChannel || 'jd')); if (s) { const p = JSON.parse(s); if (p.length > 0) return p } } catch {} return cols.map(c => c.id) }
 const defVisTrad = (cols) => { try { const s = localStorage.getItem('c_cols_insights_traditional_' + (globalChannel || 'jd')); if (s) { const p = JSON.parse(s); if (p.length > 0) return p } } catch {} return cols.map(c => c.id) }
-const API = import.meta.env.VITE_API_BASE_URL || 'https://overtrees.pythonanywhere.com'
+const API = import.meta.env.VITE_API_BASE_URL || ''
 const getVis = (m, ch) => { try { return JSON.parse(localStorage.getItem('c_cols_insights_' + ch + '_' + m) || 'null') } catch{return null} }
 const safeGet = (key, def) => { try { return localStorage.getItem(key) ?? def } catch { return def } }
 const safeSet = (key, val) => { try { localStorage.setItem(key, val) } catch {} }
