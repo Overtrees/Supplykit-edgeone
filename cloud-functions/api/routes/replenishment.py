@@ -13,7 +13,7 @@ _register_cache(lambda: _repl_cache.clear())
 
 
 _repl_cache = {}
-_REPL_TTL = 60
+_REPL_TTL = 300
 
 
 @router.get("/insights/replenishment")

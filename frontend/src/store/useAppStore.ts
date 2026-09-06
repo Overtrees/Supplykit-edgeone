@@ -32,7 +32,7 @@ interface AppState {
 import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
 
-const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 30000)
+const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 60000)
 const WS_URL = import.meta.env.VITE_WS_URL || ''
 
 // 安全 localStorage 读取（Safari 隐私模式兼容）

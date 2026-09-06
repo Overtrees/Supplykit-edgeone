@@ -84,7 +84,7 @@ async def update_purchase_order(pid: int, request: Request):
 
 # ── 采购建议(insights/purchase) ─────────────────────────────────────────
 _purchase_cache = {}
-_PURCHASE_TTL = 60
+_PURCHASE_TTL = 300
 
 
 @router.get("/insights/purchase")

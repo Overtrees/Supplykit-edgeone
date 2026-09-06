@@ -263,7 +263,7 @@ def _health_index(channel):
 
 
 _aux_cache = {}
-_AUX_TTL = 15
+_AUX_TTL = 300
 
 
 @router.get("/dashboard/aux")
