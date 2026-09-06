@@ -91,13 +91,13 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     if skus:
         _ph = ",".join(["%s"] * len(skus))
         for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM inbound_records "
-                        "WHERE channel=%s AND inbound_date>=%s AND sku IN (%s) "
-                        "GROUP BY sku, warehouse" % _ph,
+                        "WHERE channel=%s AND inbound_date>=%s AND sku IN (" + _ph + ") "
+                        "GROUP BY sku, warehouse",
                         [channel, month_start] + skus):
             month_in[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
         for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM outbound_records "
-                        "WHERE channel=%s AND outbound_date>=%s AND sku IN (%s) "
-                        "GROUP BY sku, warehouse" % _ph,
+                        "WHERE channel=%s AND outbound_date>=%s AND sku IN (" + _ph + ") "
+                        "GROUP BY sku, warehouse",
                         [channel, month_start] + skus):
             month_out[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
