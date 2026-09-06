@@ -92,6 +92,56 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     skus = [r.get("sku") for r in rows]
     daily = load_daily_sales(28, channel, skus=set(skus)) if skus else {}
     multi = calc_sales_multi(daily, windows=[7, 14, 28])
+    # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)
+    batch_map = {}
+    if skus:
+        _ph = ",".join(["%s"] * len(skus))
+        try:
+            _brows = query(
+                "SELECT b.sku AS sku, b.prod_date AS pd, b.exp_date AS ed, cc.cnt AS cnt FROM ("
+                "SELECT sku, prod_date, exp_date, ROW_NUMBER() OVER (PARTITION BY sku ORDER BY exp_date ASC) AS rn "
+                "FROM batches WHERE channel=%s AND warehouse_type=%s AND exp_date IS NOT NULL AND exp_date!='' "
+                "AND sku IN (" + _ph + ")) b "
+                "JOIN (SELECT sku, COUNT(*) AS cnt FROM batches WHERE channel=%s AND warehouse_type=%s "
+                "AND sku IN (" + _ph + ") GROUP BY sku) cc ON b.sku=cc.sku WHERE b.rn=1",
+                [channel, wh_type] + skus + [channel, wh_type] + skus)
+            _transit = 3
+            try:
+                _tr = one("SELECT value FROM replenishment_config WHERE `key`='transit_days' AND channel=%s", [channel])
+                if _tr and _tr.get("value"):
+                    _transit = int(_tr["value"])
+            except Exception:
+                pass
+            from datetime import datetime as _bdt
+            _now = datetime.now(timezone.utc).replace(tzinfo=None)
+            for _b in _brows:
+                _sku = str(_b.get("sku") or "")
+                _pd = str(_b.get("pd") or "")[:10]
+                _ed = str(_b.get("ed") or "")[:10]
+                _st, _pct, _td = "", 0, 0
+                if _pd and _ed:
+                    try:
+                        _pdd = _bdt.strptime(_pd, "%Y-%m-%d")
+                        _edd = _bdt.strptime(_ed, "%Y-%m-%d")
+                        _td = (_edd - _pdd).days
+                        _cons = (_now - _pdd).days
+                        _third = max(_td // 3, 1)
+                        if _td > 0:
+                            _pct = round(_cons / _td * 100, 0)
+                        if _cons >= _td:
+                            _st = "expired"
+                        elif _cons >= _third:
+                            _st = "no"
+                        elif _cons + _transit > _third:
+                            _st = "warn"
+                        else:
+                            _st = "ok"
+                    except Exception:
+                        pass
+                batch_map[_sku] = {"pd": _pd, "ed": _ed, "st": _st, "pct": _pct,
+                                   "days": _td if _td > 0 else 0, "cnt": int(_b.get("cnt") or 0)}
+        except Exception:
+            pass
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
     month_in, month_out = {}, {}
     if skus:
@@ -117,6 +167,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         mo = month_out.get(_k)
         month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
         month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
+        _bm = batch_map.get(sku) or {}
         items.append({
             "sku": sku, "product_name": r.get("product_name") or sku,
             "warehouse": r.get("warehouse", ""), "warehouse_type": r.get("warehouse_type", ""),
@@ -131,6 +182,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "beginning_stock": max(avail - month_inbound + month_outbound, 0),
             "barcode": r.get("barcode") or "", "brand": r.get("brand") or "",
             "price": r.get("price") or 0, "batch_count": int(r.get("batch_count") or 0),
+            "batch_prod_date": _bm.get("pd", ""), "batch_exp_date": _bm.get("ed", ""),
+            "batch_status": _bm.get("st", ""), "batch_pct": _bm.get("pct", 0),
+            "batch_days": _bm.get("days", 0),
         })
     if page > 0 and page_size > 0:
         return ok({"items": items, "total": total, "page": page, "page_size": page_size,

@@ -24,4 +24,8 @@ def list_batches(channel: str = "jd", sku: str = "", warehouse: str = "",
         params.append(warehouse_type)
     rows = query("SELECT id, sku, warehouse, warehouse_type, prod_date, exp_date, qty "
                  "FROM batches WHERE %s ORDER BY exp_date ASC, id ASC" % where, params)
+    # TiDB DATETIME 读出 datetime 对象 → 格式化为 YYYY-MM-DD(修复前端显示 T00:00:00)
+    for r in rows:
+        r["prod_date"] = str(r.get("prod_date") or "")[:10]
+        r["exp_date"] = str(r.get("exp_date") or "")[:10]
     return ok(rows)

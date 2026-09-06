@@ -159,8 +159,54 @@ def _assemble(rows, channel, start_date, end_date):
         "low_stock_count": int(low_stock.get("c") or 0), "active_alerts": int(alert_count.get("c") or 0),
         "total_products": int(product_count.get("c") or 0), "total_suppliers": int(supplier_count.get("c") or 0),
     }
+    # 周期趋势(前端 gmv 小卡图表按今日/本周/本月联动)
+    def _trend_range(d0, d1):
+        return [{"日期": x.get("日期"), "GMV": x.get("GMV"), "订单数": x.get("订单数")}
+                for x in trend_data if d0 <= str(x.get("日期") or "")[:10] <= d1]
+
+    # 周期店铺(前端店铺 GMV 卡周期联动)
+    def _stores_range(d0, d1):
+        sg = {}
+        for (d, st, s2), (gv, sb, cn) in day_rows.items():
+            if d0 <= (d or "") <= d1 and st in _PAID:
+                sg[s2] = sg.get(s2, 0) + gv
+        return [{"name": k, "gmv": round(v, 2),
+                 "net_gmv": round(v - store_refund.get(k, 0), 2),
+                 "payout": round(v - store_refund.get(k, 0) - store_subsidy.get(k, 0), 2)}
+                for k, v in sorted(sg.items(), key=lambda x: -x[1])]
+
+    periods["today_trend"] = _trend_range(today_s, today_s)
+    periods["week_trend"] = _trend_range(d7, today_s)
+    periods["month_trend"] = _trend_range(d30, today_s)
+
+    # 品牌维度(店铺 GMV 卡切品牌: 近 60 天 paid 订单按品牌聚合, join products)
+    brands_map = {}
+    try:
+        _br = query(
+            "SELECT COALESCE(p.brand,'') AS brand, "
+            "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
+            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g "
+            "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
+            "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
+            "AND o.ordered_at>=%%s GROUP BY p.brand" % _status_cond(),
+            [channel, d60 + " 00:00:00"])
+        for _r in _br:
+            _b = _r.get("brand") or "未分类"
+            if not _b or _b == "未分类":
+                continue
+            brands_map[_b] = round(float(_r.get("g") or 0), 2)
+    except Exception:
+        pass
+    brands = [{"name": k, "gmv": v, "net_gmv": v, "payout": v}
+              for k, v in sorted(brands_map.items(), key=lambda x: -x[1])]
+    period_stores = {"today": _stores_range(today_s, today_s),
+                     "week": _stores_range(d7, today_s),
+                     "month": _stores_range(d30, today_s)}
+    period_brands = {"today": brands, "week": brands, "month": brands}
+
     return {"summary": summary, "periods": periods, "trend": trend_data,
-            "funnel": funnel_res, "health_index": health, "stores": stores}
+            "funnel": funnel_res, "health_index": health, "stores": stores,
+            "brands": brands, "period_stores": period_stores, "period_brands": period_brands}
 
 
 def _health_index(channel):
@@ -398,8 +444,8 @@ def _stock_risk(channel, full: int = 0):
     bt, bc, bw = _stats(bc_items)
     ct, cc, cw = _stats(c_items)
     ot, oc, ow = _stats(own_items)
-    payload = {"items": result[:10], "total": t, "critical": c, "warning": w,
-               "bcItems": bc_items[:10], "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
-               "cItems": c_items[:10], "cTotal": ct, "cCritical": cc, "cWarning": cw,
-               "ownItems": own_items[:10], "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}
+    payload = {"items": result if full else result[:10], "total": t, "critical": c, "warning": w,
+               "bcItems": bc_items if full else bc_items[:10], "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
+               "cItems": c_items if full else c_items[:10], "cTotal": ct, "cCritical": cc, "cWarning": cw,
+               "ownItems": own_items if full else own_items[:10], "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}
     return payload
