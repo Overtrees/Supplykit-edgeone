@@ -30,7 +30,6 @@ import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
 import { t } from "./locale"
 import { IconStatusOnline, IconStatusWarning, IconStatusOffline, IconExport } from './components/Icons'
-import './version'
 import { PRODUCT_COLS, prodColKey, getProdVis, SUPPLIER_COLS, suppColKey, getSuppVis, ORDER_COLS, ORDER_STATUSES, orderColKey, getOrderVis, INS_BBCC_COLS, INS_TRAD_COLS, INS_PURCHASE_COLS, INS_SLOW_COLS, insColKey, getInsVis, insDefVis, insDefVisTrad, INV_COLS, INV_COL_KEY, getInvVis, INV_WH_LABEL } from './components/hammer/configs'
 
 export const NAV = [
