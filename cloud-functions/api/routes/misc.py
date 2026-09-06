@@ -1,5 +1,6 @@
 """原生辅助路由(方案 B): quality-logs / monitor"""
 from fastapi import APIRouter
+from fastapi import Request
 
 from db import query, one
 from routes.common import ok, traced
