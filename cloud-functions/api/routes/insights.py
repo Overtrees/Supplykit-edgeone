@@ -100,7 +100,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             _brows = query(
                 "SELECT b.sku AS sku, b.prod_date AS pd, b.exp_date AS ed, cc.cnt AS cnt FROM ("
                 "SELECT sku, prod_date, exp_date, ROW_NUMBER() OVER (PARTITION BY sku ORDER BY exp_date ASC) AS rn "
-                "FROM batches WHERE channel=%s AND warehouse_type=%s AND exp_date IS NOT NULL AND exp_date!='' "
+                "FROM batches WHERE channel=%s AND warehouse_type=%s AND exp_date IS NOT NULL "
                 "AND sku IN (" + _ph + ")) b "
                 "JOIN (SELECT sku, COUNT(*) AS cnt FROM batches WHERE channel=%s AND warehouse_type=%s "
                 "AND sku IN (" + _ph + ") GROUP BY sku) cc ON b.sku=cc.sku WHERE b.rn=1",
