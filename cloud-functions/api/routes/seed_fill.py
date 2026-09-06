@@ -217,9 +217,9 @@ def _seed_orders(today, skus_data):
 def _seed_inventory(skus_data):
     inv = []
     for ch, skus in skus_data.items():
-        seen_own = False
         for sk in skus:
             low = random.random() < 0.18
+            seen_own = False  # 每个 SKU 内重置: WH 中 own 仓只保留一个(集货仓/三方仓)
             for wn, wt in WH:
                 if wt == 'platform_b' and ch != 'jd':
                     continue
