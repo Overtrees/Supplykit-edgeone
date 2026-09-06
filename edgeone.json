@@ -1,18 +1,23 @@
 {
   "name": "supplykit",
   "build": {
-    "command": "mkdir -p ../cloud-functions/vendor && rm -rf ../cloud-functions/vendor/app && cp -r ../backend/app ../cloud-functions/vendor/app && find ../cloud-functions/vendor -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; find ../cloud-functions/vendor -name '*.db*' -delete 2>/dev/null; find ../cloud-functions/vendor -name '.env' -delete 2>/dev/null; find ../cloud-functions/vendor -name '.selfheal.log' -delete 2>/dev/null; npm --prefix frontend run build",
+    "command": "npm --prefix frontend run build",
     "cwd": "frontend"
   },
   "cloudFunctions": {
-    "maxDuration": 120,
-    "regions": {
-      "mainland": ["ap-guangzhou"],
-      "overseas": ["ap-singapore"]
+    "python": {
+      "maxDuration": 120
     },
-    "includeFiles": [
-      "backend/app/**/*.py",
-      "backend/app/**/*.json"
-    ]
-  }
+    "mainlandRegions": ["ap-guangzhou"],
+    "overseasRegions": ["ap-singapore"]
+  },
+  "schedules": [
+    { "name": "archive-orders", "cron": "5 1 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/archive" },
+    { "name": "cleanup-logs", "cron": "5 3 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/cleanup-logs" },
+    { "name": "snapshot-freshness", "cron": "10 3 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/freshness" },
+    { "name": "build-snapshot", "cron": "35 3 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/snapshot" },
+    { "name": "daily-rules", "cron": "5 4 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/daily-rules" },
+    { "name": "recycle-cleanup", "cron": "35 4 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/recycle" },
+    { "name": "push-alerts", "cron": "30 8 * * *", "timezone": "Asia/Shanghai", "path": "/api/cron/push-alerts" }
+  ]
 }
