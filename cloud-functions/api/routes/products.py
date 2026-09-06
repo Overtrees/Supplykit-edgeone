@@ -27,8 +27,31 @@ def list_products(channel: str = "jd", page: int = 1, page_size: int = 30,
     if page > 0 and page_size > 0:
         rows = query("SELECT %s FROM products WHERE %s ORDER BY id ASC LIMIT %s OFFSET %s"
                      % (_FIELDS, where, page_size, (page - 1) * page_size), params)
+    else:
+        rows = query("SELECT %s FROM products WHERE %s ORDER BY id ASC" % (_FIELDS, where), params)
+
+    # 注入批次总效期 batch_days(SKU 最早批次 exp-prod 天数, 对齐 PA; 只查当前页 SKU)
+    _skus = [str(r.get("sku") or "") for r in rows if r.get("sku")]
+    if _skus:
+        from datetime import datetime as _dt
+        _ph = ",".join(["%s"] * len(_skus))
+        _bmap = {}
+        for b in query("SELECT sku, MIN(prod_date) AS pd, MIN(exp_date) AS ed FROM batches "
+                       "WHERE channel=%s AND sku IN (" + _ph + ") GROUP BY sku",
+                       [channel] + _skus):
+            _pd = str(b.get("pd") or "")[:10]
+            _ed = str(b.get("ed") or "")[:10]
+            if _pd and _ed:
+                try:
+                    _bmap[str(b.get("sku"))] = max((_dt.strptime(_ed, "%Y-%m-%d")
+                                                    - _dt.strptime(_pd, "%Y-%m-%d")).days, 0)
+                except Exception:
+                    pass
+        for r in rows:
+            r["batch_days"] = _bmap.get(str(r.get("sku") or ""), 0)
+
+    if page > 0 and page_size > 0:
         return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
-    rows = query("SELECT %s FROM products WHERE %s ORDER BY id ASC" % (_FIELDS, where), params)
     return ok(rows)
 
 
