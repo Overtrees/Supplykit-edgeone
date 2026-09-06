@@ -143,7 +143,7 @@ async def cron_cleanup_logs(request: Request):
 @router.post("/cron/daily-rules")
 @traced
 async def cron_daily_rules(request: Request):
-    """每日规则: 滞销识别告警(有 active slow_moving 规则时) + 孤儿告警清理"""
+    """每日规则: 全量规则评估(低库存/紧急补货/超卖/滞销 + 用户自定义) + 孤儿告警清理"""
     if not _authed(request):
         return fail("未授权", 401)
     # 1. 孤儿告警清理: active 且 source in (rules_engine,event_bus) 的 alert_type 已无 active 规则 → inactive
@@ -158,32 +158,12 @@ async def cron_daily_rules(request: Request):
             execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
                     "AND status='active' AND source IN ('rules_engine','event_bus')", [at, ch])
             cleaned += 1
-    # 2. 滞销识别(>30 天无销售且有库存) → slow_moving 告警(去重)
-    slow = one("SELECT COUNT(*) AS c FROM rules WHERE alert_type='slow_moving' AND is_active=1 "
-               "AND (deleted_at IS NULL OR deleted_at='')") or {}
-    created = 0
-    if int(slow.get("c") or 0) > 0:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-        for r in query(
-                "SELECT i.sku, MAX(i.product_name) AS product_name, SUM(i.available_qty) AS avail, "
-                "MAX(IFNULL((SELECT MAX(s.date) FROM daily_sales_snapshot s WHERE s.sku=i.sku AND s.channel=i.channel), '')) AS last_sale "
-                "FROM inventory i WHERE i.channel=%s GROUP BY i.sku", ["jd"]):
-            avail = int(r.get("avail") or 0)
-            if avail <= 0:
-                continue
-            last = str(r.get("last_sale") or "")[:10]
-            if last >= cutoff:
-                continue
-            dup = one("SELECT COUNT(*) AS c FROM alerts WHERE alert_type='slow_moving' "
-                      "AND related_sku=%s AND status='active' AND source='rules_engine'", [r.get("sku")]) or {}
-            if int(dup.get("c") or 0) > 0:
-                continue
-            execute("INSERT INTO alerts(alert_type, title, description, severity, status, source, related_sku, warehouse_type, channel) "
-                    "VALUES('slow_moving',%s,%s,'warning','active','rules_engine',%s,'','jd')",
-                    ("超过30天无销售", "SKU %s 超过 30 天无销售, 库存 %d 件" % (r.get("sku"), avail), r.get("sku")))
-            created += 1
-    _log("info", "每日规则: 孤儿告警清理 %d, 滞销告警新增 %d" % (cleaned, created))
-    return ok({"orphan_cleaned": cleaned, "slow_alerts_created": created})
+    # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存 SKU
+    from core.rules import evaluate_stock_skus
+    triggered = evaluate_stock_skus("jd", limit=2000)
+    _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
+        cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
+    return ok({"orphan_cleaned": cleaned, "rules_triggered": triggered})
 
 
 @router.post("/cron/recycle")

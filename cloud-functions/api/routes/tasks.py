@@ -240,6 +240,30 @@ async def seed_fill(request: Request):
                     ("库存低于安全线", "SKU %s 可用 %s 低于安全线 %s" % (r.get("sku"), r.get("available_qty"), r.get("safety_qty")),
                      r.get("sku"), channel))
 
+        # 7.5 内置规则(规则引擎开箱即用: 低库存/紧急补货/超卖/滞销)
+        _builtin_rules = [
+            ("低库存预警", "inventory.changed",
+             {"left": "inv.available_qty", "op": "<", "right": "inv.safety_qty"},
+             "low_stock", "低库存预警: {product_name}", "可用 {avail} < 安全线 {safety}", "warning"),
+            ("紧急补货", "inventory.changed",
+             {"left": "inv.available_qty", "op": "<=", "right": "max(inv.safety_qty*0.3, 1)"},
+             "replenish", "紧急补货: {product_name}", "可用 {avail}, 低于安全线 30%, 建议补货", "error"),
+            ("超卖保护", "order.created",
+             {"left": "order.quantity", "op": ">", "right": "available_stock"},
+             "oversell", "超卖告警: {sku}", "订单数量 {order_qty} 超过可用库存 {available_stock}", "error"),
+            ("滞销识别", "scheduled.daily",
+             {"left": "days_since_last", "op": ">", "right": "30",
+              "and": {"left": "stock", "op": ">", "right": "0"}},
+             "slow_moving", "滞销: {product_name}", "{days_since_last} 天无销售, 库存 {stock} 件", "warning"),
+        ]
+        for _name, _ev, _cond, _at, _title, _desc, _sev in _builtin_rules:
+            _dup = one("SELECT COUNT(*) AS c FROM rules WHERE name=%s AND channel=%s",
+                       [_name, channel]) or {}
+            if int(_dup.get("c") or 0) == 0:
+                execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,'')",
+                        (_name, _ev, json.dumps(_cond, ensure_ascii=False), _at, _title, _desc, _sev, channel))
+
         _log_task(task_id, "seed", "done", channel,
                   {"result": {"orders": len(orders), "products": len(products),
                               "inventory": len(inv_rows), "snapshot": len(snap),

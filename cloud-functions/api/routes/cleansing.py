@@ -173,16 +173,57 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         success, failed = _write_rows(target, channel, conflict_mode, cleaned)
         errs = 0
         elapsed = round(time.time() - started, 1)
+        # 规则引擎评估: 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
+        evaluated = 0
+        try:
+            from core.rules import evaluate
+            if target == "order":
+                seen = set()
+                skus = [c.get("sku") for c in cleaned
+                        if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))][:300]
+                inv_map = {}
+                if skus:
+                    ph = ",".join(["%s"] * len(skus))
+                    for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+                                   "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % (channel, ph),
+                                   [channel] + skus):
+                        inv_map[r.get("sku")] = int(r.get("avail") or 0)
+                for c in cleaned[:300]:
+                    sku = c.get("sku")
+                    if not sku:
+                        continue
+                    oq = int(c.get("quantity") or 0)
+                    evaluate("order.created", {"sku": sku, "channel": channel,
+                                               "order": {"quantity": oq},
+                                               "order_qty": oq,
+                                               "available_stock": inv_map.get(sku, 0)})
+                    evaluated += 1
+            elif target in ("inventory", "platform_inv", "inventory_b"):
+                for c in cleaned[:300]:
+                    sku = c.get("sku")
+                    if not sku:
+                        continue
+                    evaluate("inventory.changed", {"sku": sku, "channel": channel,
+                                                   "inv": {"available_qty": int(c.get("available_qty") or 0),
+                                                           "safety_qty": int(c.get("safety_qty") or 0),
+                                                           "in_transit_qty": int(c.get("in_transit_qty") or 0),
+                                                           "warehouse_type": c.get("warehouse_type", ""),
+                                                           "warehouse": c.get("warehouse", ""),
+                                                           "product_name": c.get("product_name") or sku}})
+                    evaluated += 1
+        except Exception:
+            pass
         try:
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                     "VALUES(%s,'cleansing','done','{}',%s,%s)",
                     (task_id, json.dumps({"result": {"target": target, "success": success,
-                                                       "failed": failed, "elapsed": elapsed}}, ensure_ascii=False), channel))
+                                                       "failed": failed, "elapsed": elapsed,
+                                                       "rules_evaluated": evaluated}}, ensure_ascii=False), channel))
         except Exception:
             pass
         return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
                 "error": "", "message": "成功 %d 条, 跳过 %d 条" % (success, failed),
-                "target": target}
+                "target": target, "rules_evaluated": evaluated}
     except Exception as e:
         try:
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "

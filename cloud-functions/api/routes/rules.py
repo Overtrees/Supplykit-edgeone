@@ -128,14 +128,60 @@ async def rules_batch(request: Request):
     return ok({"updated": len(ids)})
 
 
-@router.get("/rules/{rid}/test")
+@router.post("/rules/{rid}/test")
 @traced
-def test_rule(rid: int):
+async def test_rule(rid: int, request: Request):
+    """规则引擎可视化调试: 传入模拟库存/订单数据, 真实评估条件是否触发"""
     row = one("SELECT * FROM rules WHERE id=%s", [rid])
     if not row:
-        return fail("规则不存在")
+        return fail("规则不存在", 404)
     try:
         cond = json.loads(row.get("condition_json") or "{}")
     except Exception:
         cond = {}
-    return ok({"rule": row.get("name"), "condition": cond, "test": "ok"})
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    inv = body.get("inv") or {}
+    order = body.get("order") or {}
+    ctx = {
+        "inv": {
+            "available_qty": int(inv.get("available_qty") or 0),
+            "safety_qty": int(inv.get("safety_qty") or 0),
+            "in_transit_qty": int(inv.get("in_transit_qty") or 0),
+            "warehouse_type": inv.get("warehouse_type", ""),
+            "days_since_last": int(inv.get("days_since_last") or 0),
+        },
+        "order": {"quantity": int(order.get("quantity") or 0),
+                  "total_amount": float(order.get("total_amount") or 0)},
+        "channel": row.get("channel") or "jd",
+        "days_since_last": int(inv.get("days_since_last") or 0),
+        "stock": int(inv.get("available_qty") or 0),
+    }
+    from core.rules import _check_condition, _resolve_value
+    triggered = _check_condition(cond, ctx)
+    detail = {}
+    try:
+        left_raw = cond.get("left", "")
+        right_raw = cond.get("right", "")
+        detail["left"] = left_raw
+        detail["right"] = right_raw
+        detail["op"] = cond.get("op", "<")
+        detail["left_value"] = _resolve_value(left_raw, ctx)
+        if str(right_raw).startswith("max("):
+            detail["right_value"] = "max(%s)" % right_raw[4:-1]
+        elif str(right_raw).replace(".", "", 1).isdigit():
+            detail["right_value"] = float(right_raw)
+        elif "." in str(right_raw):
+            detail["right_value"] = _resolve_value(right_raw, ctx)
+        else:
+            detail["right_value"] = right_raw
+        detail["warehouse"] = cond.get("warehouse", "")
+    except Exception:
+        pass
+    return ok({"triggered": triggered,
+               "alert_title": row.get("alert_title", ""),
+               "alert_desc": row.get("alert_desc", ""),
+               "detail": detail})

@@ -60,10 +60,19 @@ def fake_query(sql, params=None):
     if "FROM sync_tasks" in sql:
         return [{"task_id": "seed_1", "task_type": "seed", "status": "done", "result": "{}",
                  "params": "{}", "channel": "jd", "created_at": "2026-09-05 10:00:00"}]
+    if "FROM rules" in sql:
+        return [{"id": 1, "name": "低库存预警", "event": "inventory.changed",
+                 "condition_json": '{"left":"inv.available_qty","op":"<","right":"inv.safety_qty"}',
+                 "alert_type": "low_stock", "alert_title": "低库存预警: {product_name}",
+                 "alert_desc": "可用 {avail} < 安全线 {safety}", "severity": "warning",
+                 "is_active": 1, "channel": "jd", "mode": "", "deleted_at": ""}]
     return []
 
 
 def fake_one(sql, params=None):
+    if "FROM rules" in sql:
+        rows = fake_query(sql, params)
+        return rows[0] if rows else None
     if "FROM users WHERE" in sql:
         from routes.common import hash_password as _hp
         uname = params[0] if params else "admin"
@@ -333,6 +342,33 @@ r = client.post("/cron/recycle")
 check("cron/recycle", r.json().get("ok") is not False, r.text[:150])
 r = client.post("/cron/push-alerts")
 check("cron/push-alerts(无webhook跳过)", r.json().get("ok") is not False, r.text[:150])
+
+# ── A1 规则引擎: 表达式解析 / 条件评估 / test 端点 / evaluate 触发告警 ──
+from core.rules import _check_condition, _resolve_value, evaluate
+check("rules 表达式解析(加法)", _resolve_value("inv.available_qty + inv.in_transit_qty",
+      {"inv": {"available_qty": 10, "in_transit_qty": 5}}) == 15.0, "resolve fail")
+check("rules 表达式解析(括号乘除)", _resolve_value("(inv.available_qty + inv.in_transit_qty) / 2",
+      {"inv": {"available_qty": 10, "in_transit_qty": 4}}) == 7.0, "resolve fail")
+check("rules 条件 avail<safety 触发", _check_condition(
+      {"left": "inv.available_qty", "op": "<", "right": "inv.safety_qty"},
+      {"inv": {"available_qty": 5, "safety_qty": 10}}), "cond fail")
+check("rules 条件不触发", not _check_condition(
+      {"left": "inv.available_qty", "op": "<", "right": "inv.safety_qty"},
+      {"inv": {"available_qty": 15, "safety_qty": 10}}), "cond fail")
+check("rules max() 条件", _check_condition(
+      {"left": "inv.available_qty", "op": "<=", "right": "max(inv.safety_qty*0.3, 1)"},
+      {"inv": {"available_qty": 2, "safety_qty": 10}}), "max fail")
+r = client.post("/rules/1/test", json={"inv": {"available_qty": 5, "safety_qty": 10}}, headers=AH)
+d = r.json()
+td = d.get("data") or {}
+check("rules test 真实评估 triggered", d.get("ok") is True and td.get("triggered") is True,
+      r.text[:200])
+check("rules test detail 计算值", (td.get("detail") or {}).get("left_value") == 5.0, r.text[:200])
+trig = evaluate("inventory.changed", {"sku": "SKU0001", "channel": "jd",
+                                      "inv": {"available_qty": 30, "safety_qty": 50,
+                                              "in_transit_qty": 5, "warehouse_type": "platform",
+                                              "product_name": "测试商品"}})
+check("evaluate 触发低库存规则", "低库存预警" in trig, str(trig))
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
