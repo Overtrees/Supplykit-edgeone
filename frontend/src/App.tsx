@@ -194,8 +194,6 @@ export default function App() {
   const loadHistory = useCallback(async (ch) => {
     setShowHistory(true)
     setHistLoading(true)
-    setShowHistory(true)
-    setHistLoading(true)
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       const r = await fetch(API + '/api/replenishment-config/history?channel=' + (ch||channel) + '&limit=50', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
