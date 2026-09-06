@@ -55,11 +55,11 @@ def one(sql, params=None):
 
 
 def execute(sql, params=None):
-    """写操作(autocommit), 返回 lastrowid"""
+    """写操作(autocommit), 返回受影响行数(分批删除等按 rowcount 判断)"""
     cur = conn().cursor()
     try:
         cur.execute(sql, params or ())
-        return cur.lastrowid or 0
+        return cur.rowcount or 0
     finally:
         cur.close()
 
