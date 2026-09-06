@@ -31,6 +31,7 @@ from routes.batches import router as batches_router
 from routes.tasks import router as tasks_router
 from routes.cleansing import router as cleansing_router
 from routes.purchase import router as purchase_router
+from routes.cron import router as cron_router
 from routes.common import verify_token
 
 app = FastAPI()
@@ -50,7 +51,7 @@ async def auth_middleware(request: Request, next):
     path = request.url.path
     if (path.startswith("/auth") or path == "/health" or path.startswith("/debug")
             or path.startswith("/docs") or path.startswith("/openapi")
-            or path == "/insights/ping"):
+            or path == "/insights/ping" or path.startswith("/cron")):
         return await next(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -109,3 +110,4 @@ app.include_router(batches_router)
 app.include_router(tasks_router)
 app.include_router(cleansing_router)
 app.include_router(purchase_router)
+app.include_router(cron_router)

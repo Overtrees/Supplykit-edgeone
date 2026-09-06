@@ -316,5 +316,23 @@ r = client.post("/disposals/batch",
 d = r.json()
 check("disposals/batch", d.get("ok") is True and (d.get("data") or {}).get("updated") == 1, r.text[:150])
 
+# ── 定时任务(cron, 白名单免 token, 无 CRON_SECRET 时放行) ──
+r = client.post("/cron/snapshot")
+check("cron/snapshot", r.status_code == 200 and r.json().get("ok") is not False, r.text[:150])
+r = client.post("/cron/freshness")
+d = r.json()
+check("cron/freshness 200", r.status_code == 200 and d.get("ok") is not False, r.text[:150])
+r = client.post("/cron/archive")
+d = r.json()
+check("cron/archive 200", r.status_code == 200 and d.get("ok") is not False, r.text[:150])
+r = client.post("/cron/cleanup-logs")
+check("cron/cleanup-logs", r.json().get("ok") is not False, r.text[:150])
+r = client.post("/cron/daily-rules")
+check("cron/daily-rules", r.json().get("ok") is not False, r.text[:150])
+r = client.post("/cron/recycle")
+check("cron/recycle", r.json().get("ok") is not False, r.text[:150])
+r = client.post("/cron/push-alerts")
+check("cron/push-alerts(无webhook跳过)", r.json().get("ok") is not False, r.text[:150])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
