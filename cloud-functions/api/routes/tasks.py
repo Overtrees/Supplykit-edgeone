@@ -60,18 +60,49 @@ def list_tasks(channel: str = "jd", limit: int = 50):
 @router.get("/seed/fill/status")
 @traced
 def seed_fill_status(task_id: str = ""):
+    """任务状态查询(Makers 异步适配: running 时续跑下一步, 客户端轮询推进直到 done)"""
     if not task_id:
         return {"data": {"status": "not_found"}}
-    row = one("SELECT status FROM sync_tasks WHERE task_id=%s", [task_id])
-    status = (row or {}).get("status") or "not_found"
-    return {"data": {"status": status}}
+    row = one("SELECT status, params FROM sync_tasks WHERE task_id=%s", [task_id])
+    if not row:
+        return {"data": {"status": "not_found"}}
+    status = row.get("status") or "not_found"
+    if status in ("done", "error"):
+        return {"data": {"status": status}}
+    # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
+    try:
+        import json as _json
+        params = _json.loads(row.get("params") or "{}")
+        step = int(params.get("step") or 0)
+        from routes.seed_fill import prepare_skus, seed_step
+        from datetime import datetime, timezone as _tz
+        skus_data = prepare_skus()
+        today = datetime.now(_tz.utc)
+        nxt, part = seed_step(step, today, skus_data)
+        new_params = _json.dumps({"step": nxt})
+        if nxt >= 10:
+            # 全部步骤完成 → done(汇总 part 简单展示)
+            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
+            return {"data": {"status": "done"}}
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (new_params, task_id))
+        return {"data": {"status": "running", "step": nxt, "part": part}}
+    except Exception as e:
+        import traceback as _tb
+        try:
+            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
+        except Exception:
+            pass
+        return {"data": {"status": "error", "error": str(e)[:200]}}
 
 
-# ── 种子数据填充 ──────────────────────────────────────────────────────────
+# ── 种子数据填充(异步分步) ───────────────────────────────────────────────
 @router.post("/seed/fill")
 @traced
 async def seed_fill(request: Request):
-    """空库生成完整演示数据(PA 原版逻辑移植: 2000 SKU×2渠道/60天约10万订单), 有数据则 requires_reset"""
+    """空库生成完整演示数据(PA 原版逻辑移植, 异步分步: 任务表驱动, status 轮询续跑)"""
     channel = "jd"
     try:
         d = await request.json()
@@ -83,17 +114,28 @@ async def seed_fill(request: Request):
     if int(cnt.get("c") or 0) > 0 or int(pct.get("c") or 0) > 0:
         return ok({"requires_reset": True})
     task_id = _new_task_id("seed")
-    started = time.time()
     try:
-        from routes.seed_fill import run_seed_fill
-        summary = run_seed_fill()
-        _log_task(task_id, "seed", "done", channel, {"result": summary})
-        return ok({"task_id": task_id, "summary": summary})
+        # 创建 running 任务 + 执行步骤 0(商品/供应商, 秒级)
+        import json as _json
+        from routes.seed_fill import prepare_skus, seed_step
+        from datetime import datetime, timezone as _tz
+        execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                "VALUES(%s,'seed','running',%s,'{}',%s)",
+                (task_id, _json.dumps({"step": 0}), channel))
+        skus_data = prepare_skus()
+        today = datetime.now(_tz.utc)
+        nxt, part = seed_step(0, today, skus_data)
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (_json.dumps({"step": nxt}), task_id))
+        return ok({"task_id": task_id, "started": True})
     except Exception as e:
         import traceback as _tb
-        _log_task(task_id, "seed", "error", channel,
-                  {"error": str(e)[:400], "tb": _tb.format_exc()[-1800:]})
-        return fail("种子填充失败: %s" % str(e)[:200])
+        try:
+            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
+        except Exception:
+            pass
+        return fail("种子填充启动失败: %s" % str(e)[:200])
 
 
 # ── 数据重置 ──────────────────────────────────────────────────────────────

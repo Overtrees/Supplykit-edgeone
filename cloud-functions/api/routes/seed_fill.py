@@ -127,8 +127,17 @@ def _seed_products_suppliers(skus_data):
 
 
 def _seed_orders(today, skus_data):
+    """全量订单(兼容): 等价于 _seed_orders_range(0, 60)"""
+    return _seed_orders_range(today, skus_data, 0, 60)
+
+
+def _seed_orders_range(today, skus_data, day_from, day_to):
+    """按天范围生成订单(day_from <= day_offset < day_to)并写入(异步分步执行用)
+
+    随机池预生成(统计等价, 消除 18 万次 random 调用); 500/批写入(TiDB serverless 单条 INSERT 上限)"""
     global _DEMO_SLOW, _DEMO_LOW
-    _DEMO_SLOW, _DEMO_LOW = set(), set()
+    if day_from == 0:
+        _DEMO_SLOW, _DEMO_LOW = set(), set()
     total = 0
     batch = []
 
@@ -181,7 +190,7 @@ def _seed_orders(today, skus_data):
             'sku': [random.choice(_normal_skus if _normal_skus else skus) for _ in range(220000)],
         }
         _pi = 0
-        for d in range(60):
+        for d in range(day_from, day_to):
             dt = today - timedelta(days=d)
             is_promo = any(d in v for v in promo.values())
             cnt = int(base * random.uniform(2, 4)) if is_promo else \
@@ -510,6 +519,44 @@ def _build_snapshot():
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [start])
     r = one("SELECT COUNT(*) AS c FROM daily_sales_snapshot") or {}
     return int(r.get('c') or 0)
+
+
+def prepare_skus():
+    """生成 SKU(确定性: random.seed(42), 供 fill/status 各步复用一致)"""
+    random.seed(42)
+    jd_s = _make_skus('-J', 1000)
+    ot_s = _make_skus('-O', 1000)
+    return {'jd': jd_s, 'other': ot_s}
+
+
+def seed_step(step, today, skus_data):
+    """执行单个步骤(Makers 异步分步: 每步 ≤90s, 任务表驱动续跑); 返回 (next_step, part_summary)"""
+    random.seed(42)  # 确定性: 各步/重复调用生成一致(防重跑数据漂移)
+    if step == 0:
+        n_prod, n_sup = _seed_products_suppliers(skus_data)
+        return 1, {'products': len(n_prod), 'suppliers': len(n_sup)}
+    if 1 <= step <= 4:
+        day_from = (step - 1) * 15
+        n = _seed_orders_range(today, skus_data, day_from, day_from + 15)
+        return step + 1, {'orders_part_%d' % step: n}
+    if step == 5:
+        n = _seed_inventory(skus_data)
+        return 6, {'inventory': n}
+    if step == 6:
+        n = _seed_batches()
+        return 7, {'batches': n}
+    if step == 7:
+        a, b = _seed_records()
+        return 8, {'inbound': a, 'outbound': b}
+    if step == 8:
+        _sync_inv_month()
+        _seed_config()
+        return 9, {'config': 'ok'}
+    if step == 9:
+        n_alert = _seed_alerts()
+        n_snap = _build_snapshot()
+        return 10, {'alerts': n_alert, 'snapshot': n_snap}
+    return 10, {}
 
 
 def run_seed_fill():
