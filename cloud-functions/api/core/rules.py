@@ -8,7 +8,7 @@
 import json
 import os
 
-from db import query, one, execute
+from db import query, one, execute, executemany
 
 
 def _resolve_single(expr, ctx):
@@ -172,48 +172,95 @@ def _action_create_alert(ctx):
 
 
 def evaluate(event, context):
-    """按事件匹配 active 规则(渠道/模式隔离), 条件满足则生成告警; 返回触发规则名列表"""
-    results = []
-    try:
-        params = [event]
-        sql = ("SELECT * FROM rules WHERE is_active=1 AND event=%s "
-               "AND (deleted_at IS NULL OR deleted_at='')")
-        if context.get("channel"):
-            sql += " AND channel=%s"
-            params.append(context["channel"])
-        rules = query(sql, params)
+    """单条评估(兼容): 内部转批量"""
+    return evaluate_many(event, [context], context.get("channel"))
+
+
+def evaluate_many(event, contexts, channel=None, rule_cache=None):
+    """批量评估同事件上下文(性能版): 规则一次加载 + 告警去重预载 + executemany 批量插入
+
+    避免逐条 evaluate 的 N×查询——2000 SKU 全量评估从分钟级降到秒级
+    """
+    if not contexts:
+        return []
+    rules = rule_cache if rule_cache is not None else load_rules_for(event, channel)
+    rules = [r for r in rules if not (r.get("mode") or "") or r.get("mode") == (contexts[0].get("mode") or "")]
+    if not rules:
+        return []
+    # 预载已有 active 告警 key(去重)
+    existing = set()
+    for r in query("SELECT alert_type, related_sku, channel FROM alerts "
+                   "WHERE status='active' AND source='rules_engine'"):
+        existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel")))
+    inserts = []
+    triggered = []
+    for ctx in contexts:
+        sku = ctx.get("sku", "")
+        channel_x = ctx.get("channel") or channel or "jd"
         for rule in rules:
             try:
                 cond = json.loads(rule.get("condition_json") or "{}")
             except Exception:
                 continue
-            rule_mode = rule.get("mode") or ""
-            ctx_mode = context.get("mode") or ""
-            if rule_mode and rule_mode != ctx_mode:
+            ctx2 = {**ctx, "rule": rule,
+                    "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
+                    "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
+                    "product_name": (ctx.get("inv") or {}).get("product_name", "")}
+            if not _check_condition(cond, ctx2):
                 continue
-            ctx = {**context, "rule": rule,
-                   "avail": int((context.get("inv") or {}).get("available_qty") or 0),
-                   "safety": int((context.get("inv") or {}).get("safety_qty") or 0),
-                   "product_name": (context.get("inv") or {}).get("product_name", "")}
-            if _check_condition(cond, ctx):
-                _action_create_alert(ctx)
-                results.append(rule.get("name") or str(rule.get("id")))
-    except Exception:
-        pass
-    return results
+            at = rule.get("alert_type", "")
+            key = (at, sku, channel_x)
+            if key in existing:
+                continue
+            existing.add(key)
+            title_tpl = rule.get("alert_title", "") or ""
+            desc_tpl = rule.get("alert_desc", "") or ""
+            try:
+                title = title_tpl.format(**ctx2) if "{" in title_tpl else title_tpl
+                desc = desc_tpl.format(**ctx2) if "{" in desc_tpl else desc_tpl
+            except Exception:
+                title, desc = title_tpl, desc_tpl
+            inserts.append((at, title, desc, rule.get("severity", "warning"),
+                            sku, int(rule.get("id") or 0),
+                            (ctx.get("inv") or {}).get("warehouse_type", ""), channel_x))
+            triggered.append(rule.get("name") or str(rule.get("id")))
+    if inserts:
+        for i in range(0, len(inserts), 100):
+            try:
+                executemany("INSERT INTO alerts(alert_type, title, description, severity, status, "
+                            "source, related_sku, related_rule_id, warehouse_type, channel) "
+                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s)",
+                            inserts[i:i + 100])
+            except Exception:
+                pass
+    return list(dict.fromkeys(triggered))
 
 
-def evaluate_stock_skus(channel, limit=500):
-    """对库存 SKU 批量评估 inventory.changed/scheduled.daily(cleansing 导入与每日任务用)"""
+def load_rules_for(event, channel=None):
+    """一次性加载某事件的全部 active 规则(性能: evaluate_many 复用)"""
+    params = [event]
+    sql = ("SELECT * FROM rules WHERE is_active=1 AND event=%s "
+           "AND (deleted_at IS NULL OR deleted_at='')")
+    if channel:
+        sql += " AND channel=%s"
+        params.append(channel)
+    return query(sql, params)
+
+
+def evaluate_stock_skus(channel, limit=2000):
+    """对库存 SKU 批量评估 inventory.changed/scheduled.daily(批量版, 秒级)"""
+    from datetime import datetime, timezone
     rows = query("SELECT sku, warehouse, warehouse_type, product_name, available_qty, "
                  "safety_qty, in_transit_qty FROM inventory WHERE channel=%s "
                  "ORDER BY id LIMIT %s", [channel, limit])
+    if not rows:
+        return []
     last_map = {}
-    for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku", [channel]):
+    for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
+                   [channel]):
         last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
-    triggered = []
+    inv_ctxs, daily_ctxs = [], []
     for r in rows:
         sku = str(r.get("sku") or "")
         if not sku:
@@ -225,7 +272,7 @@ def evaluate_stock_skus(channel, limit=500):
                 days = max((now - datetime.strptime(last, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days, 0)
             except Exception:
                 days = 999
-        ctx = {
+        base = {
             "sku": sku, "channel": channel,
             "inv": {"available_qty": int(r.get("available_qty") or 0),
                     "safety_qty": int(r.get("safety_qty") or 0),
@@ -237,6 +284,10 @@ def evaluate_stock_skus(channel, limit=500):
             "days_since_last": days,
             "product_name": r.get("product_name") or sku,
         }
-        triggered += evaluate("inventory.changed", {**ctx})
-        triggered += evaluate("scheduled.daily", {**ctx})
-    return list(set(triggered))
+        inv_ctxs.append(base)
+        daily_ctxs.append(base)
+    r1 = evaluate_many("inventory.changed", inv_ctxs, channel, load_rules_for("inventory.changed", channel))
+    r2 = evaluate_many("scheduled.daily", daily_ctxs, channel, load_rules_for("scheduled.daily", channel))
+    out = list(dict.fromkeys(r1 + r2))
+    # 返回触发规则名(不泄漏查询细节)
+    return out

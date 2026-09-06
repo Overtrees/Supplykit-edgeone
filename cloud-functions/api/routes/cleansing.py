@@ -201,10 +201,10 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()}, 300)
         except Exception:
             pass
-        # 规则引擎评估: 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
+        # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
         evaluated = 0
         try:
-            from core.rules import evaluate
+            from core.rules import evaluate_many, load_rules_for
             if target == "order":
                 seen = set()
                 skus = [c.get("sku") for c in cleaned
@@ -216,29 +216,37 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % (channel, ph),
                                    [channel] + skus):
                         inv_map[r.get("sku")] = int(r.get("avail") or 0)
+                o_ctxs = []
                 for c in cleaned[:300]:
                     sku = c.get("sku")
                     if not sku:
                         continue
                     oq = int(c.get("quantity") or 0)
-                    evaluate("order.created", {"sku": sku, "channel": channel,
-                                               "order": {"quantity": oq},
-                                               "order_qty": oq,
-                                               "available_stock": inv_map.get(sku, 0)})
-                    evaluated += 1
+                    o_ctxs.append({"sku": sku, "channel": channel,
+                                   "order": {"quantity": oq},
+                                   "order_qty": oq,
+                                   "available_stock": inv_map.get(sku, 0)})
+                if o_ctxs:
+                    evaluate_many("order.created", o_ctxs, channel,
+                                  load_rules_for("order.created", channel))
+                    evaluated = len(o_ctxs)
             elif target in ("inventory", "platform_inv", "inventory_b"):
+                i_ctxs = []
                 for c in cleaned[:300]:
                     sku = c.get("sku")
                     if not sku:
                         continue
-                    evaluate("inventory.changed", {"sku": sku, "channel": channel,
-                                                   "inv": {"available_qty": int(c.get("available_qty") or 0),
-                                                           "safety_qty": int(c.get("safety_qty") or 0),
-                                                           "in_transit_qty": int(c.get("in_transit_qty") or 0),
-                                                           "warehouse_type": c.get("warehouse_type", ""),
-                                                           "warehouse": c.get("warehouse", ""),
-                                                           "product_name": c.get("product_name") or sku}})
-                    evaluated += 1
+                    i_ctxs.append({"sku": sku, "channel": channel,
+                                   "inv": {"available_qty": int(c.get("available_qty") or 0),
+                                           "safety_qty": int(c.get("safety_qty") or 0),
+                                           "in_transit_qty": int(c.get("in_transit_qty") or 0),
+                                           "warehouse_type": c.get("warehouse_type", ""),
+                                           "warehouse": c.get("warehouse", ""),
+                                           "product_name": c.get("product_name") or sku}})
+                if i_ctxs:
+                    evaluate_many("inventory.changed", i_ctxs, channel,
+                                  load_rules_for("inventory.changed", channel))
+                    evaluated = len(i_ctxs)
         except Exception:
             pass
         try:
