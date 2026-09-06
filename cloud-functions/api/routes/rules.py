@@ -52,6 +52,8 @@ async def create_rule(request: Request):
              d.get("alert_type", ""), d.get("alert_title", ""), d.get("alert_desc", ""),
              d.get("severity", "warning"), 1 if d.get("is_active", 1) else 0,
              d.get("channel", "jd"), d.get("mode", "")))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 规则新建 → 看板/接口缓存即时失效
     return ok({"id": 0})
 
 
@@ -79,6 +81,8 @@ async def update_rule(rid: int, request: Request):
         return fail("无更新字段")
     params.append(rid)
     execute("UPDATE rules SET %s WHERE id=%%s" % ", ".join(sets), params)
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 规则编辑 → 缓存即时失效
     return ok({})
 
 
@@ -157,6 +161,8 @@ async def rules_batch(request: Request):
         execute("DELETE FROM rules WHERE id IN (%s)" % ph, ids)
     else:
         return fail("未知操作: " + str(action))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 批量启用/停用/删除/恢复/永久删 → 看板告警计数/规则联动即时失效
     return ok({"updated": len(ids)})
 
 
