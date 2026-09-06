@@ -247,7 +247,7 @@ def _seed_inventory(skus_data):
                             'in_transit_qty': 0 if low else random.randint(0, 200),
                             'safety_qty': random.randint(30, 200),
                             'channel': ch, 'barcode': sk['barcode']})
-    for i in range(0, len(inv), 2000):
+    for i in range(0, len(inv), 500):
         cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty',
                 'in_transit_qty', 'safety_qty', 'channel', 'barcode']
         executemany("INSERT INTO inventory(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
