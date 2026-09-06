@@ -131,6 +131,10 @@ def _seed_orders(today, skus_data):
     _DEMO_SLOW, _DEMO_LOW = set(), set()
     total = 0
     batch = []
+    # 并发写入: TiDB serverless 单条 INSERT 约 500 行上限, 500/批 × 370 批串行太慢
+    # → 4 线程并发 executemany(db.conn 为 threading.local, 每线程独立连接)
+    from concurrent.futures import ThreadPoolExecutor
+    _exec = ThreadPoolExecutor(max_workers=4)
 
     def _amt(q, price):
         base = round(q * price, 2)
@@ -141,18 +145,22 @@ def _seed_orders(today, skus_data):
                 'subsidy_amount': round(subsidy, 2), 'tax_amount': 0.0,
                 'actual_amount': round(base - disc - subsidy + freight, 2)}
 
-    def flush():
-        nonlocal batch
-        if not batch:
-            return
+    def _insert(b):
         cols = ['order_no', 'store', 'warehouse', 'sku', 'product_name', 'quantity', 'unit_price',
                 'total_amount', 'discount_amount', 'freight_amount', 'subsidy_amount', 'tax_amount',
                 'actual_amount', 'order_status', 'ordered_at', 'paid_at', 'channel', 'platform',
                 'data_source']
         executemany("INSERT INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                            ", ".join(["%s"] * len(cols))),
-                    [tuple(o[c] for c in cols) for o in batch])
+                    [tuple(o[c] for c in cols) for o in b])
+
+    def flush():
+        nonlocal batch
+        if not batch:
+            return
+        b = batch
         batch = []
+        _exec.submit(_insert, b)
 
     for ch, label, skus, base in [('jd', 'jd', skus_data['jd'], 1100),
                                   ('other', 'other', skus_data['other'], 550)]:
@@ -211,6 +219,7 @@ def _seed_orders(today, skus_data):
                 if len(batch) >= 500:
                     flush()
     flush()
+    _exec.shutdown(wait=True)  # 等待全部并发写入完成
     return total
 
 
