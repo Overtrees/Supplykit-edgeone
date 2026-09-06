@@ -100,6 +100,7 @@ export const useAppStore = create((set, get) => ({
   setHammerCols: (pageKey, cols) => set((s) => ({ hammerCols: { ...s.hammerCols, [pageKey]: cols } })),
   prodBatch: false,
   setProdBatch: (v) => set({ prodBatch: v }),
+
   prodSelIds: [],
   prodFilterLen: 0,
   prodBatchVersion: 0,

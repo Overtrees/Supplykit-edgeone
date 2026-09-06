@@ -78,10 +78,6 @@ export default function InsightsPage() {
   const [slowLoadingMore, setSlowLoadingMore] = useState(false)
   const slowSentinelRef = useRef(null)
   const slowLoadingRef = useRef(false)
-  const [dispSel, setDispSel] = useState([])
-  const [dispAction, setDispAction] = useState('mark')
-  const [dispNote, setDispNote] = useState('')
-  const [dispBusy, setDispBusy] = useState(false)
   const [showDisposed, setShowDisposed] = useState(false)
 
   // 各区块加载状态
@@ -96,8 +92,10 @@ export default function InsightsPage() {
   const [purchaseLimit, setPurchaseLimit] = useState(50)
   const [slowLimit, setSlowLimit] = useState(50)
 
-  const { channel: globalChannel, hammerInsightsTab: tab, hammerReplenMode, setHammerReplenMode, hammerCols, hammerData, dataVersion } = useAppStore()
-  useEffect(() => { setDispSel([]) }, [globalChannel, tab])
+  const { channel: globalChannel, hammerInsightsTab: tab, hammerReplenMode, setHammerReplenMode, hammerCols, hammerData, dataVersion, prodBatch, prodSelIds, setProdBatch, setProdBatchSel, requestProdBatchAll, prodBatchAllReq } = useAppStore()
+  useEffect(() => { setProdBatch(false); setProdBatchSel([]) }, [globalChannel, tab])
+  // 批量模式全选(断言: 锤子面板"全选" requestProdBatchAll → 全选当前过滤列表)
+  useEffect(() => { if (prodBatchAllReq > 0) { const s = useAppStore.getState(); const all = filteredDisp.map(x => x.sku + '|' + x.warehouse); s.setProdBatchSel(s.prodSelIds.length === all.length && all.length > 0 ? [] : all) } }, [prodBatchAllReq])
   const replenMode = (globalChannel !== 'jd' && hammerReplenMode === 'bbcc') ? 'traditional' : hammerReplenMode
   const currentCols = replenMode === 'bbcc' ? BBCC_COLS : TRAD_COLS
   const [visCols, setVisCols] = useState(() => {
@@ -310,21 +308,6 @@ export default function InsightsPage() {
     }).catch(() => { slowLoadingRef.current = false; setSlowLoadingMore(false) })
     // 不 reobserve——IntersectionObserver 触发后表增长哨兵下移(状态变化),
     // 用户滚动再进入视口触发(同补货模式, 无循环无卡)
-  }
-
-  const doDispose = async () => {
-    if (dispSel.length === 0) { toast.error('请先勾选要处置的项'); return }
-    setDispBusy(true)
-    try {
-      const items = dispSel
-        .map(key => { const parts = key.split('|'); const d = disposals.find(x => (x.sku + '|' + x.warehouse) === key); return d ? { sku: parts[0], warehouse: parts[1], warehouse_type: d.warehouse_type, level: d.level, turnover_days: d.turnover_days, reason: d.reason } : null })
-        .filter(Boolean)
-      await api.post('/api/disposals/batch', { channel: globalChannel, action: dispAction, note: dispNote, items })
-      toast.success('已标记 ' + items.length + ' 项处置')
-      setDispSel([]); setDispNote('')
-      api.get('/api/insights/disposal-suggestions?channel=' + globalChannel).then(r => setDisposals(r.data || [])).catch(() => {})
-    } catch(e) { toast.error('处置失败: ' + (e.message||'')) }
-    setDispBusy(false)
   }
 
   return (
@@ -582,12 +565,14 @@ export default function InsightsPage() {
                 }}>
                 <table>
                   <colgroup>{slowVisCols.map(id => {const col = SLOW_COLS.find(c => c.id === id); return col ? <col key={col.id} /> : null})}</colgroup>
-                  <thead style={{position:'sticky',top:0,background:'var(--card)',zIndex:1}}><tr>{slowVisCols.map(id => {const col = SLOW_COLS.find(c => c.id === id); return col ? <th style={{whiteSpace:'nowrap',fontSize:11,padding:'8px 4px'}} key={col.id}>{col.label}</th> : null})}</tr></thead>
+                  <thead style={{position:'sticky',top:0,background:'var(--card)',zIndex:1}}><tr>{prodBatch && <th style={{width:30}}></th>}{slowVisCols.map(id => {const col = SLOW_COLS.find(c => c.id === id); return col ? <th style={{whiteSpace:'nowrap',fontSize:11,padding:'8px 4px'}} key={col.id}>{col.label}</th> : null})}</tr></thead>
                   <tbody>
                     {filteredDisp.map((x, i) => {
                       const key = x.sku + '|' + x.warehouse
-                      const isSel = dispSel.includes(key)
-                      return <tr key={key} onClick={()=>setDispSel(prev => isSel ? prev.filter(k=>k!==key) : [...prev, key])} style={{opacity:x.disposed?0.5:1,background:isSel?'rgba(29,78,216,0.08)':'transparent',cursor:'pointer'}}>
+                      const isSel = (prodSelIds || []).includes(key)
+                      const s = useAppStore.getState()
+                      return <tr key={key} onClick={()=>{ if (prodBatch) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{opacity:x.disposed?0.5:1,background:prodBatch&&isSel?'rgba(29,78,216,0.08)':'transparent',cursor:prodBatch?'pointer':'default'}}>
+                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key])}} style={{padding:'4px 8px',textAlign:'center'}}><span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11}}>{isSel?'✓':''}</span></td>}
                         {slowVisCols.map(id => {
                           const col = SLOW_COLS.find(c => c.id === id)
                           if (!col) return <td key={id}></td>
@@ -607,20 +592,6 @@ export default function InsightsPage() {
                   </tbody>
                 </table>
               </div>
-              {/* 批量处置操作栏 */}
-              {!showDisposed && dispSel.length > 0 && (
-                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,padding:'8px 10px',borderRadius:16,background:'var(--card)',border:'1px solid var(--border)',alignItems:'center'}}>
-                  <span style={{fontSize:12,fontWeight:600}}>已选 {dispSel.length} 项</span>
-                  <select value={dispAction} onChange={e=>setDispAction(e.target.value)} style={{fontSize:12,padding:'6px 8px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)'}}>
-                    <option value="mark">标记已处理</option>
-                    <option value="return">退货供应商</option>
-                    <option value="clearance">清仓甩卖</option>
-                    <option value="promo">降价促销</option>
-                  </select>
-                  <input value={dispNote} onChange={e=>setDispNote(e.target.value)} placeholder="备注(可选)" style={{flex:1,minWidth:80,fontSize:12,padding:'6px 10px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',outline:'none'}} />
-                  <button onClick={doDispose} disabled={dispBusy} className="btn btn-primary" style={{minHeight:32,padding:'0 14px',fontSize:12,flexShrink:0}}>{dispBusy?'处理中...':'批量处置'}</button>
-                </div>
-              )}
               {/* IntersectionObserver 哨兵(自动加载, 无固定占位): 触发时 disconnect 防重复,
                   加载完成 finally 重新 observe(状态变化循环)。onScroll 冗余已去 */}
               <div style={{height:1}} ref={function(el){

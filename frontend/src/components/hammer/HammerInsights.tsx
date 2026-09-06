@@ -4,10 +4,16 @@ import { useAppStore } from "../../store/useAppStore"
 import { useToast } from "../../components/Toast"
 import { INS_BBCC_COLS, INS_TRAD_COLS, INS_PURCHASE_COLS, INS_SLOW_COLS, insColKey, getInsVis, insDefVis, insDefVisTrad } from "./configs"
 import { IconExport } from "../Icons"
+import { api } from '../../api/client' 
 interface HammerInsightsProps { channel: string }
 
 export default function HammerInsights({ channel }: HammerInsightsProps) {
-  const { hammerPanel, setHammerPanel, setHammerCols, hammerInsightsTab, setHammerInsightsTab, hammerReplenMode, setHammerReplenMode, hammerData, setHammerData } = useAppStore()
+  const { hammerPanel, setHammerPanel, setHammerCols, hammerInsightsTab, setHammerInsightsTab, hammerReplenMode, setHammerReplenMode, hammerData, setHammerData, prodBatch, setProdBatch, prodSelIds, setProdBatchSel, requestProdBatchAll } = useAppStore()
+  const toast = useToast()
+  const [bpOpen, setBpOpen] = useState(false)
+  const [bpAction, setBpAction] = useState('mark')
+  const [bpNote, setBpNote] = useState('')
+  const [bpBusy, setBpBusy] = useState(false)
   const mode = (channel !== 'jd' && hammerReplenMode === 'bbcc') ? 'traditional' : hammerReplenMode
   const isPurchase = hammerInsightsTab === 'purchase'
   const isSlow = hammerInsightsTab === 'slow'
@@ -65,6 +71,22 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
     } catch(e) { toast.error('导出失败: ' + e.message) }
     setExporting(false)
   }
+
+  // 批量处置(规则页同款批量模式, 复用 prodBatch/prodSelIds; 后端 disposal_records 持久)
+  const runDispose = async () => {
+    const s = useAppStore.getState()
+    const ids = s.prodSelIds || []
+    if (ids.length === 0) { toast.error('请先勾选要处置的项'); return }
+    setBpBusy(true)
+    try {
+      const items = ids.map(k => { const parts = k.split('|'); return { sku: parts[0], warehouse: parts[1] } })
+      await api.post('/api/disposals/batch', { channel, action: bpAction, note: bpNote, items })
+      toast.success('已处置 ' + items.length + ' 项')
+      s.setProdBatch(false); s.setProdBatchSel([]); setBpOpen(false)
+      window.dispatchEvent(new Event('insights-refresh'))
+    } catch(e) { toast.error('处置失败: ' + (e.message||'')) }
+    setBpBusy(false)
+  }
   return (
     <div>
       <div className="hammer-header">{channel === 'jd' ? '京东' : '其他'} · 建议</div>
@@ -107,7 +129,38 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
         )} disabled={exporting} className="clickable hammer-btn btn-ghost" style={{opacity:exporting?0.5:1}}>
           {exporting ? <span className="hammer-spinner" /> : <IconExport size={13} />} {exporting ? '导出中...' : '导出'}
         </button>
+        {isSlow && <button onClick={() => setBpOpen(!bpOpen)}
+          className="hammer-btn btn-ghost" style={{borderColor: useAppStore.getState().prodBatch ? 'var(--danger)' : undefined, color: useAppStore.getState().prodBatch ? 'var(--danger)' : undefined}}>批量处置</button>}
       </div>
+      {/* 批量处置面板(规则页同款批量模式) */}
+      {isSlow && bpOpen && (
+        <div className="hammer-panel">
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <span className="text-12 muted2">已选 <b style={{color:'var(--text)'}}>{useAppStore.getState().prodSelIds?.length || 0}</b> 项</span>
+            {useAppStore.getState().prodBatch ? (
+              <button className="hammer-clear" onClick={() => { useAppStore.getState().setProdBatch(false); useAppStore.getState().setProdBatchSel([]) }}>退出批量模式</button>
+            ) : (
+              <button className="hammer-clear" onClick={() => useAppStore.getState().setProdBatch(true)}>进入批量模式</button>
+            )}
+          </div>
+          <div className="hammer-btn-row">
+            <button className="hammer-btn btn-ghost" onClick={() => { const s = useAppStore.getState(); if (!s.prodBatch) s.setProdBatch(true); s.requestProdBatchAll() }}>全选/取消</button>
+          </div>
+          <div className="muted2 text-10" style={{marginTop:6}}>滞销预警按 SKU×仓库 · 处置后该行标记「已处理」</div>
+          <div className="hammer-btn-row" style={{marginTop:8}}>
+            {[['mark','标记已处理','var(--success)'],['return','退货供应商','#f59e0b'],['clearance','清仓甩卖','#8b5cf6'],['promo','降价促销','#06b6d4']].map(([v,l,c]) => (
+              <button key={v} className="hammer-btn btn-ghost" style={{color:c, opacity:(bpBusy||(useAppStore.getState().prodSelIds||[]).length===0)?0.4:1, borderColor: bpAction===v?c:undefined}}
+                disabled={bpBusy||(useAppStore.getState().prodSelIds||[]).length===0} onClick={()=>setBpAction(v)}>{l}</button>
+            ))}
+          </div>
+          <div style={{marginTop:8}}>
+            <input value={bpNote} onChange={e=>setBpNote(e.target.value)} placeholder="备注(可选)" className="hammer-input" />
+          </div>
+          <div className="hammer-btn-row" style={{marginTop:8}}>
+            <button disabled={bpBusy} className="hammer-btn btn-primary" onClick={runDispose}>{bpBusy ? '处理中...' : '执行处置'}</button>
+          </div>
+        </div>
+      )}
       {/* 搜索面板 */}
       {hammerPanel === 'search' && (
         <div className="hammer-panel">
