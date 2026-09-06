@@ -444,7 +444,10 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
                     except Exception:
                         failed += 1
         else:
-            sql = sql.replace("INSERT INTO", "INSERT IGNORE INTO")
+            # overwrite: ON DUPLICATE KEY UPDATE 全列覆盖(对齐 PA——INSERT IGNORE 保留旧数据语义错误)
+            upd = ", ".join("`%s`=VALUES(`%s`)" % (c, c) for c in cols if c not in ("id", "deleted_at"))
+            if upd:
+                sql += " ON DUPLICATE KEY UPDATE %s" % upd
             try:
                 executemany(sql, [tuple(r[c] for c in cols) for r in rows])
                 success += len(rows)
