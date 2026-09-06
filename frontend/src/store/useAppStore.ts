@@ -33,7 +33,7 @@ import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
 
 const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 30000)
-const WS_URL = import.meta.env.VITE_WS_URL || 'wss://overtrees.pythonanywhere.com/ws/events'
+const WS_URL = import.meta.env.VITE_WS_URL || ''
 
 // 安全 localStorage 读取（Safari 隐私模式兼容）
 const safeGet = (key, def = null) => { try { return localStorage.getItem(key) } catch { return def } }
