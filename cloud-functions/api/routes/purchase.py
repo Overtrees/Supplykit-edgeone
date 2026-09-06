@@ -329,7 +329,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         if row and row.get("value"):
             try:
                 d = json.loads(row["value"])
-                if isinstance(d, list):
+                # 空数组视为"未自定义"→ 返回内置默认(避免丢个护家清等品类配置, 全按食品线误判)
+                if isinstance(d, list) and d:
                     return d
             except Exception:
                 pass
