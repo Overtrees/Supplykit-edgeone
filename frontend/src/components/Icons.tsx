@@ -296,3 +296,20 @@ export const STATUS_LABEL: Record<string, { label: string; Icon: React.FC<IconPr
   polling: { label: '轮询', Icon: IconStatusWarning },
   disconnected: { label: '断开', Icon: IconStatusOffline },
 }
+
+// ─── 滞销处置动作图标(2026-09-06) ───
+
+export const IconReturn: React.FC<IconProps> = (p) => (
+  <svg {...s(p)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 14 4 9 9 4" />
+    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+  </svg>
+)
+
+export const IconMoney: React.FC<IconProps> = (p) => (
+  <svg {...s(p)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="6" width="20" height="12" rx="2" />
+    <circle cx="12" cy="12" r="2.5" />
+    <path d="M6 12h.01M18 12h.01" />
+  </svg>
+)
