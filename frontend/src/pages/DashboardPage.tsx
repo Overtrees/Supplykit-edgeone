@@ -24,7 +24,7 @@ const RISK_LV = {
 
 interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string, sku?: string) => void }
 
-export default function DashboardPage({ onAlert }: DashboardPageProps) {
+export default function DashboardPage({ onAlert, onGoInsights }: DashboardPageProps) {
   const { dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, loading, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion } = useAppStore()
   const [healthTab, setHealthTab] = useState(() => { try { const h = localStorage.getItem('health_tab') || (channel === 'jd' ? 'own' : 'platform'); return (channel !== 'jd' && h === 'platform_b') ? 'platform' : h } catch { return channel === 'jd' ? 'own' : 'platform' } })
   // 渠道切换归一化: platform_b(B 仓)为 jd BBCC 专属维度, other 渠道强制 platform(避免残留空维度显示)
