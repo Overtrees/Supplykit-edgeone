@@ -79,9 +79,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     if (seq === reqSeq.current) { setLoading(false); setLoadingMore(false) }
   }
   useEffect(() => { clearCache('with-sales'); setInvPage(1); loadInv(1) }, [whType, globalChannel, s])
-  // 从告警跳转: 高亮 SKU(可带具体仓)滚动到可视区(等数据渲染后, 多页时也定位)
+  // 从告警跳转: 高亮 SKU(可带具体仓)滚动到可视区(等数据渲染后, 多页时也定位);
+  // 数据首次到达检查一次, 未命中 → 提示(空 warehouse_type 存量告警/维度不匹配兜底)
+  const locateCheckedRef = useRef(false)
   useEffect(() => {
-    if (!highlightSku) return
+    if (!highlightSku || locateCheckedRef.current) return
+    if (inventory.length === 0) return  // 数据未加载完, 等 inventory 变化再触发
+    locateCheckedRef.current = true
     const t = setTimeout(() => {
       try {
         let el = null
@@ -91,8 +95,9 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           el = document.querySelector('[id^="hl-' + highlightSku + '-"]')
         }
         if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        else toast.error('未找到 ' + highlightSku + '，可能不在当前仓库维度或已无库存')
       } catch(e) {}
-    }, 400)
+    }, 300)
     return () => clearTimeout(t)
   }, [highlightSku, highlightWarehouse, inventory, whType])
   const handleScroll = (e) => {

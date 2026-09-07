@@ -63,7 +63,9 @@ const INV_WH_LABEL = { own:'自有仓', platform:'平台仓', platform_b:'B仓' 
 
 export default function App() {
   const [page, setPage] = useState('dash')
-  const navigateTo = (p: string) => { setPage(p); clearCache(); clearInflight(); const _s = useAppStore.getState(); if (_s.prodBatch || _s.prodSelIds?.length) { _s.setProdBatch(false); _s.setProdBatchSel([]) }; if (p === 'dash') { useAppStore.getState().bumpPageVersion() } }
+  const navigateTo = (p: string) => { setPage(p); clearCache(); clearInflight(); const _s = useAppStore.getState(); if (_s.prodBatch || _s.prodSelIds?.length) { _s.setProdBatch(false); _s.setProdBatchSel([]) }; if (p === 'dash') { useAppStore.getState().bumpPageVersion() }
+    // 跳转定位用的搜索词(loc_search 标记)在离开进销存页时清理 —— 避免污染产品/供应商等共享搜索的页面
+    try { if (p !== 'inv' && sessionStorage.getItem('loc_search')) { sessionStorage.removeItem('loc_search'); useAppStore.getState().setHammerSearch('') } } catch(e) {} }
   ;(window as any).__setPage = (p: string) => { navigateTo(p); closeHammerMenu() }
   const [highlightSku, setHighlightSku] = useState('')
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
@@ -348,6 +350,8 @@ export default function App() {
       setHighlightSku(sku)
       // 进销存按 SKU 搜索定位: 目标行可能在分页深处(100条/页), 搜索后必在当前结果, 高亮+滚动才可达
       useAppStore.getState().setHammerSearch(sku)
+      // 标记定位搜索(离开进销存页时自动清理, 不污染其他共享搜索的页面)
+      try { sessionStorage.setItem('loc_search', sku) } catch(e) {}
     }
     if (wh) setHighlightWarehouse(wh)
     // 从告警跳进销存时同步切到对应仓库维度(own/platform/platform_b), 保证高亮可见
@@ -363,7 +367,7 @@ export default function App() {
   const renderPage = (pageId) => {
     const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
-      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab)=>{ navigateTo('insights'); useAppStore.getState().setHammerInsightsTab(tab) }} />)
+      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab, sku)=>{ useAppStore.getState().setHammerInsightsTab(tab); if (sku) { const _m = useAppStore.getState().hammerReplenMode; const _k = tab === 'purchase' ? 'purchase' : tab === 'slow' ? 'slow' : _m; useAppStore.getState().setHammerData('insights_search_' + _k, sku) } navigateTo('insights') }} />)
       case 'products': return wrap(<ProductPage key={pageId} />)
       case 'suppliers': return wrap(<SupplierPage key={pageId} />)
       case 'orders': return wrap(<OrdersPage key={pageId} />)

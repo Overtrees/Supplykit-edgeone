@@ -9,9 +9,11 @@ router = APIRouter(tags=["inventory"])
 
 @router.get("/inventory/out-of-stock")
 @traced
-def out_of_stock(channel: str = "jd", wh: str = "own"):
+def out_of_stock(channel: str = "jd", wh: str = "own", limit: int = 0):
     """缺货清单(维度与看板健康卡一致): wh=own/platform/platform_b/bc
-    bc = platform + platform_b 按 SKU 合计 <=0(与 dashboard aux bcOutOfStock 同口径)"""
+    bc = platform + platform_b 按 SKU 合计 <=0(与 dashboard aux bcOutOfStock 同口径)
+    limit>0 时截断(健康卡数据量大时防大响应, 默认全量兼容)"""
+    _lim = (" LIMIT %d" % limit) if limit > 0 else ""
     if wh == "bc":
         # bc = B仓+全国C仓按 SKU 合计(bbcc 一盘棋口径); warehouse 列给实际缺货仓集合
         # (前端弹窗/预览按数据 warehouse 列显示实际仓名, 非硬编码 "BC")
@@ -22,14 +24,14 @@ def out_of_stock(channel: str = "jd", wh: str = "own"):
             "ORDER BY warehouse SEPARATOR ',') AS warehouse "
             "FROM inventory "
             "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
-            "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku", [channel])
+            "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku" + _lim, [channel])
         for _r in rows:
             _r["warehouse"] = str(_r.get("warehouse") or "") or "BC"
     else:
         rows = query(
             "SELECT sku, product_name, warehouse, warehouse_type, available_qty "
             "FROM inventory WHERE channel=%s AND warehouse_type=%s AND available_qty<=0 "
-            "ORDER BY id DESC", [channel, wh])
+            "ORDER BY id DESC" + _lim, [channel, wh])
     return ok(rows)
 
 

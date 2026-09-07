@@ -22,7 +22,7 @@ const RISK_LV = {
   yellow: { c: '#eab308', t: '关注' },
 }
 
-interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string) => void }
+interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string, sku?: string) => void }
 
 export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const { dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, loading, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion } = useAppStore()
@@ -49,7 +49,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const [chLoading, setChLoading] = useState(false)
   const [dashErr, setDashErr] = useState('')
   // 弹窗数据加载(四维完整性): 告警用大 limit 分组配额拿全量; 濒临断货用 full=1; 缺货按维度拉全量
-  const loadFullAlerts = async () => { try { const r = await api.get('/api/alerts?channel=' + channel + '&limit=5000', {timeout: 60000}); setFullAlerts(r.data || []) } catch(e) { setFullAlerts([]) } }
+  const loadFullAlerts = async () => { try { const r = await api.get('/api/alerts?channel=' + channel + '&limit=20000', {timeout: 60000}); setFullAlerts(r.data || []) } catch(e) { setFullAlerts([]) } }
   const loadFullRisk = async () => {
     try {
       const r = await api.get('/api/dashboard/stock-risk?channel=' + channel + '&full=1', {timeout: 60000})
@@ -60,12 +60,12 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       setFullRisk(_lst)
     } catch(e) { setFullRisk([]) }
   }
-  const loadFullOut = async () => { const _wh = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : healthTab === 'platform' ? 'platform' : 'platform_b'; try { const r = await api.get('/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh, {timeout: 60000}); const d = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || []); setFullOut(d) } catch(e) { setFullOut([]) } }
+  const loadFullOut = async () => { const _wh = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : healthTab === 'platform' ? 'platform' : 'platform_b'; try { const r = await api.get('/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000', {timeout: 60000}); const d = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || []); setFullOut(d) } catch(e) { setFullOut([]) } }
   // 健康卡缺货列表: 随视图维度(own/平台/bc)拉取全量——与 healthData.out_of_stock 计数口径一致
   // (曾用 stockOverview.items(全渠道LIMIT100)过滤, 维度缺货SKU在窗口外时预览/计数漏显)
   useEffect(() => {
     const _wh = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : healthTab === 'platform' ? 'platform' : 'platform_b'
-    api.get('/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh, {timeout: 60000}).then(r => {
+    api.get('/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000', {timeout: 60000}).then(r => {
       const d = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || [])
       setOosList(d)
     }).catch(() => setOosList([]))
@@ -529,7 +529,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
           <div className="small muted" style={{padding:12,textAlign:'center'}}>暂无采购/补货需求</div>
         ) : (
           procList.slice(0,5).map((x, i) => (
-            <div key={x.tag + x.sku + i} onClick={() => onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen')} className="clickable" style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+            <div key={x.tag + x.sku + i} onClick={() => onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen', x.sku)} className="clickable" style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
                 <span style={{display:'inline-flex',alignItems:'center',gap:6,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>
                   <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
@@ -573,7 +573,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>采购&补货告警 · 共 {procTotal} 条</div>
           {(procList || []).map(function(x, i) {
-            return <div key={i} onClick={function(){onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen')}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
+            return <div key={i} onClick={function(){onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen', x.sku)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
                 <span style={{display:'inline-flex',alignItems:'center',gap:6,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>
                   <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
