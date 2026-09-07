@@ -357,9 +357,6 @@ def _stock_risk(channel, full: int = 0):
     from db import query as _q
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
-    b_to_c = int(cfg.get("b_to_c_days", "3") or 3)
-    c_safety = int(cfg.get("c_safety_days", "0") or 0)
-    lead = b_to_c + c_safety
 
     inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, safety_qty, product_name "
              "FROM inventory WHERE channel=%s", [channel])
@@ -386,47 +383,20 @@ def _stock_risk(channel, full: int = 0):
     wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                    wh_multi[28].get(k, 0)) for k in by_sku_wh}
 
-    # 聚合(BBCC 用: B 仓按 SKU 合计; BC 合计=platform+platform_b 按 SKU 一盘棋)
-    b_stock, bc_total, c_stock = {}, {}, {}
+    # 聚合(BC 合计=platform+platform_b 按 SKU 一盘棋 —— B 仓已含在合计内, 不再单独算 B 维度)
+    bc_total = {}
     for r in inv:
         sku = r.get("sku")
         wt = r.get("warehouse_type")
         qty = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
-        if wt == "platform_b":
-            st = b_stock.setdefault(sku, {"available": 0, "safety": 0})
-            st["available"] += qty
-            st["safety"] += safety
-        elif wt == "platform":
-            st = c_stock.setdefault(sku, {"available": 0, "safety": 0})
-            st["available"] += qty
-            st["safety"] += safety
         if wt in ("platform", "platform_b"):
             st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0})
             st["available"] += qty
             st["safety"] += safety
             st["transit"] += tty
 
-    result = []
-    # B 维度(BBCC: B 仓按 SKU 合计, B 仓为单一实体)
-    for sku, st in b_stock.items():
-        b_avail = st["available"]
-        if b_avail <= 0:
-            continue
-        ds = fused_c.get(sku, 0)
-        if ds <= 0:
-            continue
-        c_avail = c_stock.get(sku, {}).get("available", 0)
-        c_gap = max(round(ds * lead - c_avail, 0), 0)
-        if c_gap <= 0:
-            continue
-        result.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
-                       "product_name": (pmap.get(sku) or {}).get("product_name", st.get("pname", sku)),
-                       "warehouse": "B仓", "type": "B", "available_qty": b_avail,
-                       "daily_sales": round(ds, 1),
-                       "days_to_empty": round(b_avail / (c_gap / lead), 1) if c_gap > 0 else 999,
-                       "c_gap": c_gap, "c_avail": c_avail})
     # C 维度(传统多仓: 逐仓粒度 —— 一个 SKU 一个仓库一行, 该仓库存/该仓日销/该仓可撑天数)
     c_items = []
     for r in inv:
@@ -455,9 +425,7 @@ def _stock_risk(channel, full: int = 0):
             bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                              "warehouse": "BC", "type": "BC", "available_qty": avail,
-                             "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1),
-                             "b_avail": b_stock.get(sku, {}).get("available", 0),
-                             "c_avail": c_stock.get(sku, {}).get("available", 0)})
+                             "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
     # own 维度(传统: 逐仓 —— jd 集货仓 / other 三方仓, 该仓库存/该仓日销/可撑天数)
     own_items = []
     for r in inv:
@@ -481,15 +449,14 @@ def _stock_risk(channel, full: int = 0):
         warn = sum(1 for i in items if 3 <= i.get("days_to_empty", 999) < 7)
         return len(items), crit, warn
 
-    result.sort(key=lambda x: x["days_to_empty"])
     bc_items.sort(key=lambda x: x["days_to_empty"])
     c_items.sort(key=lambda x: x["days_to_empty"])
     own_items.sort(key=lambda x: x["days_to_empty"])
-    t, c, w = _stats(result)
     bt, bc, bw = _stats(bc_items)
     ct, cc, cw = _stats(c_items)
     ot, oc, ow = _stats(own_items)
-    payload = {"items": result if full else result[:10], "total": t, "critical": c, "warning": w,
+    # items(B 维度)已移除: bc 合计覆盖 B 仓, 前端 bbcc 只用 bcItems / traditional 用 cItems+ownItems
+    payload = {"items": [], "total": 0, "critical": 0, "warning": 0,
                "bcItems": bc_items if full else bc_items[:10], "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
                "cItems": c_items if full else c_items[:10], "cTotal": ct, "cCritical": cc, "cWarning": cw,
                "ownItems": own_items if full else own_items[:10], "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}

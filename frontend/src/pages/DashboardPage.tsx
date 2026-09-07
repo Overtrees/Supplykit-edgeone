@@ -82,7 +82,8 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       useAppStore.setState({ dashboard: dash, alerts, stockRisk, alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: ov.items || [], _stockOverview: ov, loading: false, dataLoaded: true })
       setChLoading(false)
       // 首次加载关键数据为空时自动重试（进程重启后缓存未就绪/慢接口超时兜底），最多 3 次
-      const _srEmpty = Array.isArray(stockRisk) ? stockRisk.length === 0 : !(stockRisk && stockRisk.items && stockRisk.items.length)
+      // B 维度(items)已移除(bbcc 用 bcItems / traditional 用 cItems+ownItems) → 空检查按各维度数组
+      const _srEmpty = Array.isArray(stockRisk) ? stockRisk.length === 0 : !(stockRisk && (((stockRisk.bcItems || []).length) || ((stockRisk.cItems || []).length) || ((stockRisk.ownItems || []).length)))
       if ((!dash || _srEmpty) && seq === reqSeq.current) {
         let retries = 0
         const timer = setInterval(() => {
@@ -97,7 +98,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
             const rv2 = r2.status === 'fulfilled' ? (r2.value.data || []) : []
             useAppStore.setState({
               dashboard: d2 || useAppStore.getState().dashboard,
-              stockRisk: (Array.isArray(rv2) ? rv2.length : (rv2 && rv2.items && rv2.items.length)) ? rv2 : useAppStore.getState().stockRisk,
+              stockRisk: (Array.isArray(rv2) ? rv2.length : (rv2 && (((rv2.bcItems || []).length) || ((rv2.cItems || []).length) || ((rv2.ownItems || []).length)))) ? rv2 : useAppStore.getState().stockRisk,
             })
             if (d2 && rv2.length) clearInterval(timer)
           })
