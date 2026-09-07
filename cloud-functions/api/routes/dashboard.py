@@ -288,6 +288,8 @@ def dashboard_aux(channel: str = "jd"):
             rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
                          "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT 100" % _AF, [channel])
         alerts.extend(rows)
+    from routes.alerts import _attach_warehouse as _att
+    _att(alerts, channel)
     counts = query("SELECT alert_type, severity, "
                    "IFNULL(NULLIF(warehouse_type,''),'') AS wt, COUNT(*) AS c "
                    "FROM alerts WHERE channel=%s AND status='active' "
@@ -381,25 +383,40 @@ def _stock_risk(channel, full: int = 0):
     fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
 
     c_stock, b_stock, bc_total, own_stock = {}, {}, {}, {}
+    # 各维度实际仓库名集合(弹窗/预览标签按数据 warehouse 列动态显示, 非硬编码维度名)
+    whs_c, whs_b, whs_own, whs_bc = {}, {}, {}, {}
     for r in inv:
         sku = r.get("sku")
         wt = r.get("warehouse_type")
+        wh = str(r.get("warehouse") or "")
         qty = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
         if wt == "own":
-            own_stock[sku] = {"available": own_stock.get(sku, {}).get("available", 0) + qty,
-                              "safety": own_stock.get(sku, {}).get("safety", 0) + safety}
+            st = own_stock.setdefault(sku, {"available": 0, "safety": 0})
+            st["available"] += qty
+            st["safety"] += safety
+            if wh:
+                whs_own.setdefault(sku, set()).add(wh)
         elif wt == "platform_b":
-            b_stock[sku] = {"available": b_stock.get(sku, {}).get("available", 0) + qty,
-                            "safety": b_stock.get(sku, {}).get("safety", 0) + safety}
+            st = b_stock.setdefault(sku, {"available": 0, "safety": 0})
+            st["available"] += qty
+            st["safety"] += safety
+            if wh:
+                whs_b.setdefault(sku, set()).add(wh)
         elif wt == "platform":
-            c_stock[sku] = {"available": c_stock.get(sku, {}).get("available", 0) + qty,
-                            "safety": c_stock.get(sku, {}).get("safety", 0) + safety}
+            st = c_stock.setdefault(sku, {"available": 0, "safety": 0})
+            st["available"] += qty
+            st["safety"] += safety
+            if wh:
+                whs_c.setdefault(sku, set()).add(wh)
         if wt in ("platform", "platform_b"):
-            bc_total[sku] = {"available": bc_total.get(sku, {}).get("available", 0) + qty,
-                             "safety": bc_total.get(sku, {}).get("safety", 0) + safety,
-                             "transit": bc_total.get(sku, {}).get("transit", 0) + tty}
+            st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0})
+            st["available"] += qty
+            st["safety"] += safety
+            st["transit"] += tty
+            if wh:
+                whs_bc.setdefault(sku, set()).add(wh)
 
     result = []
     # B 维度(BBCC)
@@ -416,7 +433,8 @@ def _stock_risk(channel, full: int = 0):
             continue
         result.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                        "product_name": (pmap.get(sku) or {}).get("product_name", st.get("pname", sku)),
-                       "warehouse": "B仓", "type": "B", "available_qty": b_avail,
+                       "warehouse": ",".join(sorted(whs_b.get(sku, set()))) or "B仓",
+                       "type": "B", "available_qty": b_avail,
                        "daily_sales": round(ds, 1),
                        "days_to_empty": round(b_avail / (c_gap / lead), 1) if c_gap > 0 else 999,
                        "c_gap": c_gap, "c_avail": c_avail})
@@ -430,7 +448,8 @@ def _stock_risk(channel, full: int = 0):
             continue
         c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                         "product_name": (pmap.get(sku) or {}).get("product_name", sku),
-                        "warehouse": "C仓", "type": "C", "available_qty": avail,
+                        "warehouse": ",".join(sorted(whs_c.get(sku, set()))) or "C仓",
+                        "type": "C", "available_qty": avail,
                         "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
     # BC 合计
     bc_items = []
@@ -443,7 +462,8 @@ def _stock_risk(channel, full: int = 0):
         if avail <= 0 or avail < safety:
             bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
-                             "warehouse": "BC", "type": "BC", "available_qty": avail,
+                             "warehouse": ",".join(sorted(whs_bc.get(sku, set()))) or "BC",
+                             "type": "BC", "available_qty": avail,
                              "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1),
                              "b_avail": b_stock.get(sku, {}).get("available", 0),
                              "c_avail": c_stock.get(sku, {}).get("available", 0)})
@@ -458,7 +478,8 @@ def _stock_risk(channel, full: int = 0):
         if avail <= 0 or (safety > 0 and avail < safety):
             own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                               "product_name": (pmap.get(sku) or {}).get("product_name", sku),
-                              "warehouse": "自有", "type": "OWN", "available_qty": avail,
+                              "warehouse": ",".join(sorted(whs_own.get(sku, set()))) or "自有",
+                              "type": "OWN", "available_qty": avail,
                               "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
 
     def _stats(items):

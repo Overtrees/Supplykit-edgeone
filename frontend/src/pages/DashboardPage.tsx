@@ -7,6 +7,14 @@ import { t } from "../locale"
 
 const periodLabel = { today:'今日', week:'本周', month:'本月' }
 
+// 仓库集合标签截断: 后端 warehouse 可能为 "北京仓,上海仓,成都仓" 集合(逗号连接) → 前2仓+等N仓, title 给完整
+const fmtWh = (w) => {
+  if (!w) return ''
+  const p = String(w).split(',').filter(Boolean)
+  if (p.length <= 2) return p.join(',')
+  return p.slice(0, 2).join(',') + '等' + p.length + '仓'
+}
+
 interface DashboardPageProps { onAlert?: (sku: string) => void }
 
 export default function DashboardPage({ onAlert }: DashboardPageProps) {
@@ -393,7 +401,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
             {healthData.out_of_stock > 0 && outOfStockItems.length > 0 && <div style={{marginTop:4}}>
               {outOfStockItems.map((x,i) => (
                 <div key={i} style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0}}>
-                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4}}>{healthTab === 'own' ? '自有' : channel === 'jd' ? (healthTab === 'bc' ? 'BC' : 'C仓') : '平台'}</span>
+                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4}}>{x.warehouse ? fmtWh(x.warehouse) : (healthTab === 'own' ? '自有' : healthTab === 'bc' ? 'BC' : (channel === 'jd' ? 'C仓' : '平台'))}</span>
                 </div>
               ))}
               {_oosSrc.length > 3 && <div onClick={function(){setShowAllOut(true)}} className="clickable" style={{textAlign:'left',fontSize:10,color:'var(--muted)',padding:'4px 0',cursor:'pointer'}}>还有 {_oosSrc.length - 3} 条...</div>}
@@ -424,7 +432,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               </div>
               <div style={{flexShrink:0}}>
               {_r.items.slice(0,3).map((x,i) => {
-                var whLabel = x.warehouse || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '集货仓' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+                var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
                 return (
                 <div key={i} style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0}}>
                   <span style={{color:'var(--muted)'}}>{i+1}.</span> {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
@@ -488,7 +496,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
                 <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
                 <span style={{display:'inline-flex',gap:4,alignItems:'center',flexShrink:0}}>
-                  {_whTag(x.warehouse_type) ? <span style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{_whTag(x.warehouse_type)}</span> : null}
+                  {(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type)) ? <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type))}</span> : null}
                   <span className={'pill '+(x.severity==='error'?'danger':'warning')} style={{fontSize:10}}>{x.severity==='warning'?'警告':'超储'}</span>
                 </span>
               </div>
@@ -511,7 +519,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
                 <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
                 <span style={{display:'inline-flex',gap:4,alignItems:'center',flexShrink:0}}>
-                  {_whTag(x.warehouse_type) ? <span style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{_whTag(x.warehouse_type)}</span> : null}
+                  {(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type)) ? <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type))}</span> : null}
                   <span className="pill danger" style={{fontSize:10}}>补货</span>
                 </span>
               </div>
@@ -529,14 +537,14 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       {showAllRisk && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
-          {(fullRisk || _r._full || _r.items || []).map(function(x, i) {
-            var whLabel = x.warehouse || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '集货仓' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+          {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
+            var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
             return <div key={i} onClick={function(){onAlert && onAlert(x.sku, _showOwn ? 'own' : 'platform')}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{minWidth:0,flex:1}}>
                 <div style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.product_name || x.sku}</div>
                 <div className="small muted" style={{fontSize:10}}>日销 {x.daily_sales} · 可用 {x.available_qty}</div>
               </div>
-              <span style={{fontSize:9,padding:'1px 5px',borderRadius:4,background:'var(--bg)',color:'var(--muted)',flexShrink:0}}>{whLabel}</span>
+              <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 5px',borderRadius:4,background:'var(--bg)',color:'var(--muted)',flexShrink:0}}>{whLabel}</span>
               <span style={{fontSize:11,fontWeight:600,color:'#ef4444',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
             </div>
           })}
@@ -554,7 +562,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
           {_oosSrc.map(function(x, i) {
             return <div key={i} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>{i+1}. {x.product_name || x.sku}</div>
-              <span style={{fontSize:10,color:'var(--muted)',background:'var(--bg)',padding:'0 6px',borderRadius:99,flexShrink:0}}>{healthTab === 'bc' || x.warehouse_type === 'bc' ? 'BC' : (x.warehouse || (healthTab === 'own' ? '自有' : '平台'))}</span>
+              <span title={x.warehouse || ''} style={{fontSize:10,color:'var(--muted)',background:'var(--bg)',padding:'0 6px',borderRadius:99,flexShrink:0}}>{(x.warehouse ? fmtWh(x.warehouse) : (healthTab === 'bc' || x.warehouse_type === 'bc' ? 'BC' : (healthTab === 'own' ? '自有' : '平台')))}</span>
             </div>
           })}
           <div onClick={function(){setShowAllOut(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>

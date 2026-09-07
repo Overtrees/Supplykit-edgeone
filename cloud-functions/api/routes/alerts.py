@@ -10,6 +10,37 @@ _FIELDS = "id, alert_type, title, description, severity, status, source, related
           "related_order_no, warehouse_type, channel, created_at"
 
 
+def _attach_warehouse(alerts, channel):
+    """告警补实际仓库名(按 related_sku+warehouse_type 反查 inventory, 批量防 N+1)
+
+    弹窗/预览的仓库标签按数据 warehouse 列动态显示(北京仓/集货仓/三方仓...),
+    不再硬编码维度标签(自有/C仓/BC)。一个 SKU 多仓时逗号连接(前端截断展示)。
+    """
+    if not alerts:
+        return alerts
+    skus = sorted({str(a.get("related_sku") or "") for a in alerts} - {""})
+    if not skus:
+        return alerts
+    wh_map = {}
+    for i in range(0, len(skus), 200):
+        _ph = ",".join(["%s"] * len(skus[i:i + 200]))
+        for r in query(
+                "SELECT sku, warehouse_type, "
+                "GROUP_CONCAT(DISTINCT warehouse ORDER BY warehouse SEPARATOR ',') AS whs "
+                "FROM inventory WHERE channel=%s AND sku IN (" + _ph + ") "
+                "AND warehouse IS NOT NULL AND warehouse!='' "
+                "GROUP BY sku, warehouse_type", [channel] + skus[i:i + 200]):
+            wh_map[(str(r.get("sku") or ""), str(r.get("warehouse_type") or ""))] = str(r.get("whs") or "")
+    for a in alerts:
+        _k = (str(a.get("related_sku") or ""), str(a.get("warehouse_type") or ""))
+        _v = wh_map.get(_k, "")
+        if not _v:
+            # 告警无 warehouse_type(旧数据) → 按 SKU 全仓反查
+            _v = wh_map.get((str(a.get("related_sku") or ""), ""), "")
+        a["warehouse"] = _v
+    return alerts
+
+
 @router.get("/alerts")
 @traced
 def list_alerts(channel: str = "jd", limit: int = 200):
@@ -25,6 +56,7 @@ def list_alerts(channel: str = "jd", limit: int = 200):
                          "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT %%s"
                          % _FIELDS, [channel, limit])
         items.extend(rows)
+    _attach_warehouse(items, channel)
     return ok(items)
 
 
