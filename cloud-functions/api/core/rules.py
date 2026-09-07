@@ -255,10 +255,14 @@ def load_rules_for(event, channel=None):
 
 
 def evaluate_stock_skus(channel, limit=2000):
-    """对库存 SKU 批量评估 inventory.changed/scheduled.daily(批量版, 秒级)"""
+    """对库存 SKU 批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
+
+    跳过 warehouse 为空的行(脏数据/导入错误行无实际仓归属, 不产生告警)
+    """
     from datetime import datetime, timezone
     rows = query("SELECT sku, warehouse, warehouse_type, product_name, available_qty, "
                  "safety_qty, in_transit_qty FROM inventory WHERE channel=%s "
+                 "AND warehouse IS NOT NULL AND warehouse!='' "
                  "ORDER BY id LIMIT %s", [channel, limit])
     if not rows:
         return []
