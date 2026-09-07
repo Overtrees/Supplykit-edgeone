@@ -37,7 +37,8 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       const r = await api.get('/api/dashboard/stock-risk?channel=' + channel + '&full=1', {timeout: 60000})
       const _m = (channel !== 'jd' && (hammerReplenMode || '') !== 'traditional') ? 'traditional' : (hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional'))
       const _d = r.data || {}
-      const _lst = Array.isArray(_d) ? _d : (_m === 'bbcc' ? (_d.bcItems || []) : (_d.items || []))
+      // bbcc→BC合计(b仓+全国c); traditional→C仓+自有/三方仓(不涉B)——取数必须与模式维度一致
+      const _lst = Array.isArray(_d) ? _d : (_m === 'bbcc' ? (_d.bcItems || []) : ((_d.cItems || []).concat(_d.ownItems || [])))
       setFullRisk(_lst)
     } catch(e) { setFullRisk([]) }
   }
@@ -553,7 +554,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
           {_oosSrc.map(function(x, i) {
             return <div key={i} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>{i+1}. {x.product_name || x.sku}</div>
-              <span style={{fontSize:10,color:'var(--muted)',background:'var(--bg)',padding:'0 6px',borderRadius:99,flexShrink:0}}>{x.warehouse_type === 'bc' ? 'BC' : (healthTab === 'own' ? '自有' : channel === 'jd' ? (healthTab === 'bc' ? 'BC' : 'C仓') : '平台')}</span>
+              <span style={{fontSize:10,color:'var(--muted)',background:'var(--bg)',padding:'0 6px',borderRadius:99,flexShrink:0}}>{healthTab === 'bc' || x.warehouse_type === 'bc' ? 'BC' : (x.warehouse || (healthTab === 'own' ? '自有' : '平台'))}</span>
             </div>
           })}
           <div onClick={function(){setShowAllOut(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
