@@ -1,3 +1,35 @@
+## 2026-09-07 看板告警体系重构 + 濒临断货判定升级(P0/P1/P2) + 逐仓化 + 全链路即时性(重大)
+> **主线**: feat/edgeone, 当日 commit: 145e→2ae03561 多个批次(看板重构/判定升级/深链接/即时性/响应性)。
+> **验证**: 全渠道(bbcc/traditional × jd/other)线上确认, local_test 82/82。
+
+### 看板告警卡片重构(定位重塑)
+- **补货告警卡** **→ 采购&补货告警卡**: 原=安全线30%阈值告警, 实测 **100% 是低库存告警的子集**(1733/1737 重叠)且与补货建议口径脱节 → 改为读接口(与建议页同源): 补货=`/insights/replenishment` 建议需补、采购=`/insights/purchase` 需采, **行标签'采购'橙/'补货'红**, 模式跟随, 点击跳对应建议页 tab(带 SKU 直达)
+- **低库存卡**: 安全线明细定位(健康度卡明细入口), **按补货模式过滤维度**(bbcc→BC盘+own 2592; traditional→C仓+own 2282/other 2774), counts 同步过滤(标题计数与列表一致)
+- **replenish 告警退役**: seed 不生成 + 内置'紧急补货'规则 index.py 启动幂等退役 + daily-rules 孤儿清理关存量(478 条清零); 用户自定义 replenish 规则不受影响
+- **待处理卡**: '需补货' → '采购&补货 N(采购x·补货y)'; B 维度预警冗余移除(bc 合计已含 B 仓, 前端零消费)
+
+### 濒临断货判定升级(供应链时间线优先, 替代静态安全线比较)
+- **P0**: `Adj-DOS=(在仓+在途×OTIF+B→C调拨×1.0)÷日销(P50, 3σ+趋势加权)`; `OTIF=suppliers.score/5`(0.6~1.0); `L/T_eff` 模式双线(bbcc: b_to_c_days+c_safety_days; 传统: lead_time_days); **三级分级**: 红=Adj-DOS≤L/T(击穿周期/已断 avail=0)、橙=逼近且 Buffer≤1.2、黄=缓冲破位时间尚够; 库存充足(buffer>1.2)不入选(误报修正)
+- **P1**: 小时流速加速(当天 vs 前3天同时刻 ≥1.3 且样本≥10 → ds 放大+accel 标记); season 活动系数接入; 补货 note 前置'🔴 已濒临'、采购 note 前置'🔴 需采购'
+- **P2**: 动态安全库存 `SS_dyn=Z(1.65)×日销σ×√L/T`(buffer 分母取 max(静态,动态)); cron daily-rules 写 **risk_summary 审计**(共/红/橙/黄+BC/C/OWN 到 quality_logs)
+- **实时性**: stock-risk 独立接口 **30s TTL**(原 aux 300s), aux 移除 stockRisk; **BC 聚合在途仅 platform_b**(对齐链路: 供应商统一发 B → B→C 调拨补 C, C 仓行 in_transit 无业务含义)
+
+### 逐仓化(业务粒度对齐补货链路)
+- 断货预警 C/own 维度 **SKU×仓行**(一个 SKU 一个仓库一行: 该仓库存/该仓日销 wh_fused/该仓可撑天数); 告警逐仓(alerts 加 warehouse 列, index.py 启动自愈 ALTER; 规则引擎去重 key 含 warehouse; seed 逐仓生成)
+- 规则引擎跳过 warehouse 为空库存行(脏数据/测试残留不产生集合告警); daily-rules 双渠道全量(原仅 jd+limit 2000=完整性缺口)
+- SKU-0100-J 等测试残留库存行清理(7 行 admin 逐删, 验证仓2/其他仓/华东C仓/空仓)
+
+### 定位/深链接 5 项 + 修复
+- 告警跳进销存 **按 SKU 搜索定位**(目标行在分页深处 getElementById 找不到 → setHammerSearch, 行必在当前结果); 跳转搜索词隔离(loc_search 标记, 离开进销存即清, 不污染产品/供应商页)
+- 采购&补货卡跳建议页 SKU 直达(onGoInsights 带 sku → 建议页搜索过滤单行)
+- 低库存弹窗 limit 5000→20000; out-of-stock 加 limit 参数; 进销存定位失败 toast 兜底
+- **修复**: onGoInsights 组件函数漏解构(interface 已有 → ReferenceError, 线上实测发现)
+
+### 看板响应性 + 全链路即时性(四维审计)
+- **响应慢根因**: stock-risk 30s TTL 计算频率×10 + _hourly_accel 每次重查 orders + 首屏等 3 路全到 → **accel 60s 内部缓存** + **首屏拆流**(summary+aux 先渲染, stock-risk 后置); 日销 60 天窗口保留(趋势/环比依赖, 勿动)
+- **即时性缺陷修复**: 参数保存 4 处 dispatch rules-changed; 补货页下单/取消 dispatch insights-refresh; **规则页'立即运行'**(POST /rules/evaluate 双渠道全量, admin; demo 只读 403)
+- 其他: CSV 导出 utf-8-sig BOM(Excel 中文不乱码); quality-logs 分页(加载更多不截断 200); 规则引擎对 warehouse 空行跳过; 滞销由处置建议页单一承载(规则 slow_moving 保留自定义能力)
+
 ## 2026-09-06 生产公开访问 + 全量功能/显示对齐 + 免费额度四维优化(重大里程碑)
 > **主线**: makers-8gstkvheqm2c(supplykit, **Area=overseas 免备案**) + 域名 **supplykit.top**(免签名公开访问); 旧项目 supplykit1 退居。
 > **当天 commit ~55 次**(后续收敛: 攒批部署, 已触及 Makers 单日构建上限)。

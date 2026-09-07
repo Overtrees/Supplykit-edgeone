@@ -641,3 +641,14 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **cron 官方配置**: cloudFunctions 必须运行时分组(python.maxDuration) + mainlandRegions/overseasRegions; schedules 与旧顶层结构共存会丢函数路由; **cron 最小间隔一天(*/5 实测不支持且致路由丢失)**
 - **前端批量状态**: 规则/商品/滞销共用 prodBatch/prodSelIds(联动一致); setChannel 与 navigateTo 统一复位(渠道/页面隔离); 删除文件须同步删 import(version.ts 教训: 删了文件留 import 致构建失败)
 - **部署频率纪律**: Makers 免费版单日构建有限 → 攒批提交再部署, 禁止每小改即 push(9-06 约 55 次触及上限)
+
+### 15.22 告警体系重构 + 濒临断货时间线判定 + 前端即时性(2026-09-07)
+- **卡片定位铁律**: 同体系告警必须检查子集重叠(low_stock vs replenish 实测 100% 重叠 → 静态阈值告警退役, 改读接口与建议页同源); 计数与列表必须同口径(counts 按补货模式过滤, 标题数字与弹窗列表一致)
+- **预警判定哲学**: 静态安全线比较 → **供应链时间线**(Adj-DOS ≤ 补货周期 L/T); 在途按 OTIF 打折(预警保守) vs 补货/采购全额(执行实际)是刻意设计; 已断(avail=0)纳入红灯最高级
+- **逐仓粒度铁律**: 传统多仓的补货/断货/告警必须 **SKU×仓**(一个 SKU 一个仓库一行, 与该仓日销/可撑天数独立); 规则引擎去重 key 必须含 warehouse; DB 表加列用 index.py 启动自愈 ALTER(幂等, 免手动迁移)
+- **逻辑粒度双轨**: BBCC bc 合计覆盖 B 仓 → 前端零消耗的冗余 B 维度/字段可移除; 但补货建议 BBCC 的 B 仓链路(b_gap/b_suggested)是核心绝不能动 —— 移除前必须 grep 确认前端消费点
+- **前端即时性三要素**: ①后端写操作 invalidate_all(中央失效注册表) ②**前端事件驱动**(rules-changed/insights-refresh)派发到所有消费点 —— 参数保存/下单取消这类"看起来不用刷"的操作也必须派发(实测漏派 → 建议页/采购卡 stale) ③30s 静默刷新兜底无事件路径
+- **深浅链接定位**: 目标行在分页深处(100 条/页)getElementById 找不到 → 跳转 `setHammerSearch(sku)` 搜索定位(行必在当前结果)+ 唯一 id(hl-sku-warehouse); 搜索词用 sessionStorage 标记(loc_search)离开页面即清, 防污染产品/供应商等共享搜索页面; 定位失败给 toast 兜底(不要静默)
+- **前端坑(本轮新沉淀)**: ①props interface 定义必须同步组件函数解构(漏解构 → 'Can't find variable' ReferenceError, 线上实测才暴露) ②内联箭头函数体加语句必须块体 `() => { a(); b() }`, 不能 `() => a(); b()`(语法错误) ③接口默认参数返回数组兼容旧消费者, 分页用可选 page/page_size 返回 {items,total}
+- **规则引擎演进规范**: 内置规则随业务迁移退役(seed 不生成 + index.py 启动幂等退役 + daily-rules 孤儿清理关存量; 用户自定义规则不受影响); 新增 POST /rules/evaluate 供'立即运行'(规则改动即时评估不等 cron); 规则/告警去重 key 与业务粒度同步(2026-09-07 起含 warehouse)
+- **性能(看板响应)**: 小时级聚合查询(_hourly_accel)加 60s 内部缓存(当天订单 1 小时内基本不变), invalidate_all 同步失效; 前端首屏拆流(重接口 stock-risk 后置, summary+aux 先渲染不阻塞骨架); **日销 60 天窗口勿轻易截断**(用户确认趋势/环比依赖, 改前必须确认)
