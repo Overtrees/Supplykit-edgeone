@@ -344,7 +344,11 @@ export default function App() {
   }, [])
 
   const navigate = useCallback((newPage, sku, whType, wh) => {
-    if (sku) setHighlightSku(sku)
+    if (sku) {
+      setHighlightSku(sku)
+      // 进销存按 SKU 搜索定位: 目标行可能在分页深处(100条/页), 搜索后必在当前结果, 高亮+滚动才可达
+      useAppStore.getState().setHammerSearch(sku)
+    }
     if (wh) setHighlightWarehouse(wh)
     // 从告警跳进销存时同步切到对应仓库维度(own/platform/platform_b), 保证高亮可见
     if (whType === 'own' || whType === 'platform' || whType === 'platform_b') {
