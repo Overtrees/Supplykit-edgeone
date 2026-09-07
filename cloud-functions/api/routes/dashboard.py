@@ -492,8 +492,10 @@ def _stock_risk(channel, full: int = 0):
             st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0, "ct": 0})
             st["available"] += qty
             st["safety"] += safety
-            st["transit"] += tty
-            # B→C 调拨在途(C 仓行, 自有调拨可信度 1.0)
+            # 链路: 供应商统一发 B 仓 → B→C 调拨补 C 缺口 → BC 供应的在途仅 B 仓行(供应商→B)
+            # + C 仓行 c_transit(B→C 调拨); C 仓行 in_transit(直发)在 BBCC 链路无业务含义
+            if wt == "platform_b":
+                st["transit"] += tty
             if wt == "platform":
                 st["ct"] += ctt
 
