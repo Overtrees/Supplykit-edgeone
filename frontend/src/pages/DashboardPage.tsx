@@ -11,7 +11,9 @@ interface DashboardPageProps { onAlert?: (sku: string) => void }
 
 export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const { dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, loading, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion } = useAppStore()
-  const [healthTab, setHealthTab] = useState(() => { try { return localStorage.getItem('health_tab') || (channel === 'jd' ? 'own' : 'platform') } catch { return channel === 'jd' ? 'own' : 'platform' } })
+  const [healthTab, setHealthTab] = useState(() => { try { const h = localStorage.getItem('health_tab') || (channel === 'jd' ? 'own' : 'platform'); return (channel !== 'jd' && h === 'platform_b') ? 'platform' : h } catch { return channel === 'jd' ? 'own' : 'platform' } })
+  // 渠道切换归一化: platform_b(B 仓)为 jd BBCC 专属维度, other 渠道强制 platform(避免残留空维度显示)
+  useEffect(() => { if (channel !== 'jd' && healthTab === 'platform_b') setHealthWithSave('platform') }, [channel])
   const setHealthWithSave = (tab) => { try { localStorage.setItem('health_tab', tab) } catch {} setHealthTab(tab) }
   // GMV 视角切换: total=总GMV(含退款流水) / net=净GMV(剔除退款)——GMV小卡+店铺GMV卡共用
   const [gmvView, setGmvView] = useState('total')
