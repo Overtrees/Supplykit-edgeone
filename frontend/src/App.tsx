@@ -363,7 +363,7 @@ export default function App() {
   const renderPage = (pageId) => {
     const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
-      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} />)
+      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab)=>{ navigateTo('insights'); useAppStore.getState().setHammerInsightsTab(tab) }} />)
       case 'products': return wrap(<ProductPage key={pageId} />)
       case 'suppliers': return wrap(<SupplierPage key={pageId} />)
       case 'orders': return wrap(<OrdersPage key={pageId} />)

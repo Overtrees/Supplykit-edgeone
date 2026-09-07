@@ -272,18 +272,31 @@ _AUX_TTL = 300
 
 @router.get("/dashboard/aux")
 @traced
-def dashboard_aux(channel: str = "jd"):
-    """看板辅助聚合(15s TTL 缓存): alerts(分组配额) + alertCounts + stockOverview + bcOutOfStock"""
-    _c = _aux_cache.get(channel)
+def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
+    """看板辅助聚合(300s TTL 缓存): alerts(分组配额, 低库存组按补货模式过滤维度) + alertCounts
+    + stockOverview + bcOutOfStock + stockRisk
+
+    模式跟随: bbcc → 低库存显示 BC 盘(platform/platform_b)+own(集货仓=B仓调拨源);
+    traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
+    """
+    _key = "%s|%s" % (channel, mode)
+    _c = _aux_cache.get(_key)
     if _c and _time.time() - _c[0] < _AUX_TTL:
         return ok(_c[1])
     from routes.alerts import _FIELDS as _AF
+    # 低库存维度过滤(跟随补货模式): bbcc → BC+own; traditional → C+own(白名单拼接)
+    _wh_in = "('own','platform','platform_b')" if mode == "bbcc" else "('own','platform')"
+    _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额
     alerts = []
     for atype in ("low_stock", "replenish", None):
         if atype:
-            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
-                         "ORDER BY id DESC LIMIT 100" % _AF, [channel, atype])
+            if atype == "low_stock":
+                rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s%s "
+                             "ORDER BY id DESC LIMIT 100" % (_AF, _wh_cond), [channel, atype])
+            else:
+                rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
+                             "ORDER BY id DESC LIMIT 100" % _AF, [channel, atype])
         else:
             rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
                          "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT 100" % _AF, [channel])
@@ -293,6 +306,7 @@ def dashboard_aux(channel: str = "jd"):
     counts = query("SELECT alert_type, severity, "
                    "IFNULL(NULLIF(warehouse_type,''),'') AS wt, COUNT(*) AS c "
                    "FROM alerts WHERE channel=%s AND status='active' "
+                   "AND (alert_type != 'low_stock' OR warehouse_type IN " + _wh_in + ") "
                    "GROUP BY alert_type, severity, wt", [channel])
     by_type, by_sev, by_wh, total = {}, {}, {}, 0
     by_wh_ls, by_wh_slow, by_wh_rp = {}, {}, {}
@@ -341,7 +355,7 @@ def dashboard_aux(channel: str = "jd"):
         "bcOutOfStock": bc_out,
         "stockRisk": _stock_risk(channel),
     }
-    _aux_cache[channel] = (_time.time(), _aux_result)
+    _aux_cache[_key] = (_time.time(), _aux_result)
     return ok(_aux_result)
 
 

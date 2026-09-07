@@ -445,15 +445,14 @@ def _seed_config():
         ("低库存预警", "inventory.changed",
          '{"left":"inv.available_qty","op":"<","right":"inv.safety_qty"}',
          "low_stock", "低库存预警: {product_name}", "可用 {avail} < 安全线 {safety}", "warning"),
-        ("紧急补货", "inventory.changed",
-         '{"left":"inv.available_qty","op":"<=","right":"max(1,inv.safety_qty*0.3)"}',
-         "replenish", "紧急补货: {product_name}", "可用 {avail}，低于安全线 30%", "error"),
         ("超卖保护", "order.created",
          '{"left":"order.quantity","op":">","right":"inv.available_qty"}',
          "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error"),
         ("滞销识别", "scheduled.daily",
          '{"left":"inv.days_since_last","op":">","right":"30"}',
          "slow_moving", "滞销: {product_name}", "{days} 天无销售", "warning"),
+        # 注: "紧急补货"(replenish)内置规则已退役 —— 看板采购&补货告警卡读补货/采购建议接口(动态缺口),
+        # 静态 30%*安全线 阈值告警与低库存 100% 重叠且口径与补货建议脱节
     ]
     for ch in ['jd', 'other']:
         for name, ev, cond, at, title, desc, sev in rules:
@@ -491,16 +490,12 @@ def _seed_alerts():
             sku, name = r.get('sku'), r.get('name') or r.get('sku')
             avail, transit, safety = int(r.get('avail') or 0), int(r.get('transit') or 0), int(r.get('safety') or 0)
             wh = str(r.get('warehouse') or '')
+            # 仅低库存告警(avail < safety); "紧急补货"(replenish)已退役——
+            # 看板采购&补货告警卡改读补货/采购建议接口(动态缺口), 与静态 30% 阈值告警 100% 重叠, 无独立信息价值
             if avail < safety and ('low_stock', ch, sku, wh, 'rules_engine') not in existing:
                 existing.add(('low_stock', ch, sku, wh, 'rules_engine'))
                 inserts.append(("low_stock", "低库存预警: %s" % name, "可用 %d < 安全线 %d" % (avail, safety),
                                 "warning", ch, sku, r.get('warehouse_type') or '', wh))
-            if avail <= max(1, int(safety * 0.3)) and (avail + transit) <= safety \
-                    and ('replenish', ch, sku, wh, 'rules_engine') not in existing:
-                existing.add(('replenish', ch, sku, wh, 'rules_engine'))
-                inserts.append(("replenish", "紧急补货: %s" % name,
-                                "可用 %d(<安全线30%%), 含在途 %d 仍不足安全线 %d" % (avail, avail + transit, safety),
-                                "error", ch, sku, r.get('warehouse_type') or '', wh))
     for i in range(0, len(inserts), 500):
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
                     "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s)",

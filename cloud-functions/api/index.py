@@ -132,5 +132,15 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("ALTER TABLE alerts ADD COLUMN warehouse VARCHAR(64) DEFAULT ''")
         except Exception:
             pass
+        # 内置"紧急补货"规则退役(幂等, 存量库): 看板补货告警卡改读补货建议接口(动态缺口),
+        # 静态 30%*安全线 阈值告警与低库存 100% 重叠且口径与补货建议脱节 → 退役后每日孤儿清理
+        # 自动关闭存量 replenish 告警(用户自定义 replenish 规则不受影响)
+        try:
+            from db import execute as _exec2
+            _exec2("UPDATE rules SET is_active=0, deleted_at=NOW() "
+                   "WHERE name='紧急补货' AND alert_type='replenish' AND is_active=1 "
+                   "AND (deleted_at IS NULL OR deleted_at='')")
+        except Exception:
+            pass
     except Exception:
         pass

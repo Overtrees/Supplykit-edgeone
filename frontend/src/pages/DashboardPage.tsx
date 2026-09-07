@@ -15,7 +15,7 @@ const fmtWh = (w) => {
   return p.slice(0, 2).join(',') + '等' + p.length + '仓'
 }
 
-interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void }
+interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string) => void }
 
 export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const { dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, loading, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion } = useAppStore()
@@ -27,7 +27,10 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const [gmvView, setGmvView] = useState('total')
   const [bcMenuOpen, setBcMenuOpen] = useState(false)
   const [showAllLowStock, setShowAllLowStock] = useState(false)
-  const [showAllReplenish, setShowAllReplenish] = useState(false)
+  // 采购&补货告警卡(重构): 补货建议需补(接口) + 采购建议需采(接口), 行标签区分, 跟随补货模式
+  const [procList, setProcList] = useState([])
+  const [procLoading, setProcLoading] = useState(true)
+  const [showAllProc, setShowAllProc] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
   const [_riskTab, setRiskTab] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store')  // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
@@ -61,13 +64,55 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
     }).catch(() => setOosList([]))
   }, [healthTab, channel])
   const reqSeq = useRef(0)
+  // 补货模式(看板卡片/接口参数跟随): bbcc(仅 jd) / traditional(other 强制 + jd 可选)
+  const _replMode = (channel !== 'jd' && (hammerReplenMode || '') !== 'traditional') ? 'traditional' : (hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional'))
+  // —— 采购&补货告警数据(与补货/采购建议页同源, 模式跟随; 补货=建议需补, 采购=建议需采) ——
+  const loadProc = async () => {
+    setProcLoading(true)
+    try {
+      const [r, p] = await Promise.all([
+        api.get('/api/insights/replenishment?days=28&mode=' + _replMode + '&channel=' + channel, {timeout: 90000}),
+        api.get('/api/insights/purchase?days=28&mode=' + _replMode + '&channel=' + channel, {timeout: 90000}),
+      ])
+      const repData = r.data || {}
+      const repItems = Array.isArray(repData) ? repData : (repData.items || [])
+      const repNeed = (Array.isArray(repItems) ? repItems : [])
+        .filter(x => (x.suggested_qty || 0) > 0 || (x.b_suggested || 0) > 0)
+        .map(x => ({ sku: x.sku, product_name: x.product_name, tag: '补货',
+          qty: (x.suggested_qty || 0) + (x.b_suggested || 0),
+          note: x.note || '', days_to_empty: x.days_to_empty || 999, wh: x.warehouse || '' }))
+      const purObj = p.data || {}
+      const purItems = (purObj && purObj.suggestions) || []
+      const purNeed = (Array.isArray(purItems) ? purItems : [])
+        .filter(x => (x.actual_purchase || 0) > 0)
+        .map(x => ({ sku: x.sku, product_name: x.product_name, tag: '采购',
+          qty: x.actual_purchase || 0,
+          note: x.note || '', days_to_empty: x.days_to_empty || 999, wh: x.warehouse || '' }))
+      // 采购在前(更紧急: 需向供应商采且可撑<14天), 随后补货按缺口
+      const sorted = [...purNeed, ...repNeed].sort((a, b) => {
+        if (a.tag !== b.tag) return a.tag === '采购' ? -1 : 1
+        return a.days_to_empty - b.days_to_empty
+      })
+      setProcList(sorted)
+    } catch (e) { setProcList([]) }
+    setProcLoading(false)
+  }
+  useEffect(() => { loadProc() }, [channel, _replMode])
+  // 规则/参数保存、任务完成 → 重拉(与 insights-refresh/rules-changed 联动)
+  useEffect(() => {
+    const h = () => { loadProc() }
+    window.addEventListener('rules-changed', h)
+    window.addEventListener('insights-refresh', h)
+    return () => { window.removeEventListener('rules-changed', h); window.removeEventListener('insights-refresh', h) }
+  }, [channel, _replMode])
+  const procTotal = procList.length
   useEffect(() => {
     const seq = ++reqSeq.current
     // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架, 有旧数据则不骨架(先显示旧值, 后台拉新替换)
     setChLoading(!useAppStore.getState().dashboard)
     const load = () => Promise.allSettled([
       api.get('/api/dashboard/summary?t=' + Date.now(), {timeout: 60000}),  // PA慢时段summary重建可能9-30s, 90s不超时
-      api.get('/api/dashboard/aux?channel=' + channel + '&t=' + Date.now(), {timeout: 60000}),
+      api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(), {timeout: 60000}),
     ]).then(([s, ax]) => {
       if (seq !== reqSeq.current) { setChLoading(false); return }  // 竞态丢弃
       // 兜底: summary 必须 fulfilled 且 data.summary 存在才算成功(seed填充/表重建期间
@@ -133,7 +178,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
         const _t = 't=' + Date.now()
         const [s, ax] = await Promise.all([
           api.get('/api/dashboard/summary?' + _t, {timeout: 60000}),
-          api.get('/api/dashboard/aux?channel=' + channel + '&' + _t, {timeout: 60000}),
+          api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t, {timeout: 60000}),
         ])
         const aux = ax.data || {}
         useAppStore.setState({ dashboard: s.data, alerts: aux.alerts || [], stockRisk: aux.stockRisk || [], alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: (aux.stockOverview || {}).items || [], loading: false, dataLoaded: true })
@@ -208,22 +253,17 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
   const errCount = (qualityLogs||[]).length
   const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
   const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
-  const replenishAlerts = alertsList.filter(x => x.alert_type === 'replenish')
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
   // 列表每组各取 200 条，总数可能远大于此，filter 计数会系统性漏报
-  const _acType = (alertCounts || {}).by_type || {}
   const _acSev = (alertCounts || {}).by_severity || {}
   const criticalAlerts = _acSev.error != null ? _acSev.error : alertsList.filter(x => x.severity === 'error').length
-  const nonReplenishTotal = (alertCounts && alertCounts.non_replenish != null) ? alertCounts.non_replenish : lowStockAlerts.length
   // 拆分类: 低库存(纯low_stock)与滞销(slow_moving)独立计数(曾合并为non_replenish导致"低库存N"含滞销误导)
   const _acByType2 = (alertCounts && alertCounts.by_type) || {}
   const lowStockTotal = _acByType2.low_stock != null ? _acByType2.low_stock : lowStockAlerts.filter(x => x.alert_type === 'low_stock').length
   const slowMovingTotal = _acByType2.slow_moving != null ? _acByType2.slow_moving : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
-  const replenishTotal = _acType.replenish != null ? _acType.replenish : replenishAlerts.length
   const periodDays = periodTab === 'custom' ? (periodMeta?.days || 30) : ({today:1,week:7,month:30}[periodTab]||30)
   // 濒临断货: 兼容旧数组/新{items,total,critical,warning}结构——卡上大数字/紧急警告用全量计数(完整性)
   // 补货模式联动: bbcc→BC 合计维度(对齐库存卡 bc tab: B+C 按 SKU 合计); traditional→C 仓维度
-  const _replMode = (channel !== 'jd' && (hammerReplenMode || '') !== 'traditional') ? 'traditional' : (hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional'))
   const _sr0 = Array.isArray(stockRisk) ? {items: stockRisk, total: stockRisk.length} : (stockRisk || {items: [], total: 0, critical: 0, warning: 0, bcItems: [], bcTotal: 0, bcCritical: 0, bcWarning: 0, cItems: [], cTotal: 0, cCritical: 0, cWarning: 0, ownItems: [], ownTotal: 0, ownCritical: 0, ownWarning: 0})
   if (_replMode === 'bbcc') {
     _sr0.items = _sr0.bcItems || []
@@ -331,16 +371,16 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'#ef4444'}}/>{errCount} 异常</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'#f59e0b'}}/>{dashboard?.summary?.active_alerts||0} 告警{criticalAlerts > 0 ? <span style={{color:'#ef4444',fontSize:10}}>({criticalAlerts} 严重)</span> : ''}</span>
             </div>
-            {(lowStockAlerts.length > 0 || replenishAlerts.length > 0) && <>
+            {(lowStockAlerts.length > 0 || procTotal > 0) && <>
               <div style={{fontSize:10,display:'flex',gap:8,marginTop:6}}>
                 <span style={{color:'var(--muted2)'}}>● 低库存 {lowStockTotal}</span>
                 {slowMovingTotal > 0 && <span style={{color:'var(--muted2)'}}>● 滞销 {slowMovingTotal}</span>}
-                <span style={{color:'var(--muted2)'}}>● 需{t("dash.replenish")} {replenishTotal}</span>
+                <span style={{color:'var(--muted2)'}}>● 采购&补货 {procTotal}</span>
               </div>
               <div style={{fontSize:9,display:'flex',gap:6,marginTop:5,color:'var(--muted)'}}>
                 <span>{_replMode === 'bbcc' ? 'BC' : 'C'}{lsWhView.main} {t("dash.own")}{lsWhView.own}</span>
                 <span style={{color:'var(--border)'}}>|</span>
-                <span>{_replMode === 'bbcc' ? 'BC' : 'C'}{rpWhView.main} 自有{rpWhView.own}</span>
+                <span>采购{procList.filter(x=>x.tag==='采购').length} · 补货{procList.filter(x=>x.tag==='补货').length}</span>
               </div>
             </>}
           </div>
@@ -472,19 +512,26 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
         {lowStockTotal > 5 && <button onClick={()=>{loadFullAlerts();setShowAllLowStock(true)}} className="clickable" style={{width:'100%',padding:8,border:'none',borderRadius:0,background:'transparent',fontSize:12,color:'var(--muted)',cursor:'pointer',fontFamily:'inherit'}}>还有 {lowStockTotal - 5} 条...</button>}
       </div>
       <div className="card" style={{height:'auto',overflow:'visible'}}>
-        <div className="section-title">{t("dash.replenish_alert")}{replenishTotal > 0 ? ` (${replenishTotal})` : ''}</div>
-        {replenishAlerts.length === 0
-          ? <div className="small muted" style={{padding:12,textAlign:'center'}}>暂无告警</div>
-          : replenishAlerts.slice(0,5).map(x => (
-              <div key={x.id} onClick={() => onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)} className="clickable" style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
-                <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
-                  <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
-                  <span className="pill danger" style={{flexShrink:0}}>补货</span>
-                </div>
-                <div className="small muted" style={{fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:2}}>{x.description}</div>
+        <div className="section-title">采购&补货告警{procTotal > 0 ? ` (${procTotal})` : ''}</div>
+        {procLoading ? (
+          <div className="small muted" style={{padding:12,textAlign:'center'}}>加载中...</div>
+        ) : procTotal === 0 ? (
+          <div className="small muted" style={{padding:12,textAlign:'center'}}>暂无采购/补货需求</div>
+        ) : (
+          procList.slice(0,5).map((x, i) => (
+            <div key={x.tag + x.sku + i} onClick={() => onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen')} className="clickable" style={{padding:'8px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+                <span style={{display:'inline-flex',alignItems:'center',gap:6,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>
+                  <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
+                  {x.product_name || x.sku}
+                </span>
+                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,fontSize:12,color:x.tag==='采购'?'#f59e0b':'#ef4444'}}>+{x.qty}</span>}
               </div>
-            ))}
-        {replenishTotal > 5 && <button onClick={()=>{loadFullAlerts();setShowAllReplenish(true)}} className="clickable" style={{width:'100%',padding:8,border:'none',borderRadius:0,background:'transparent',fontSize:12,color:'var(--muted)',cursor:'pointer',fontFamily:'inherit'}}>还有 {replenishTotal - 5} 条...</button>}
+              <div className="small muted" style={{fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:2}}>{x.sku}{x.wh ? ' · ' + x.wh : ''} · {(x.note ? String(x.note).slice(0,36) : (x.days_to_empty > 999 ? '库存充足' : '可撑' + x.days_to_empty + '天'))}</div>
+            </div>
+          ))
+        )}
+        {procTotal > 5 && <button onClick={()=>{setShowAllProc(true)}} className="clickable" style={{width:'100%',padding:8,border:'none',borderRadius:0,background:'transparent',fontSize:12,color:'var(--muted)',cursor:'pointer',fontFamily:'inherit'}}>还有 {procTotal - 5} 条...</button>}
       </div>
     </div>
       {/* 低库存告警弹窗 */}
@@ -492,7 +539,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       {showAllLowStock && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>低库存告警 · 共 {lowStockTotal} 条</div>
-          {(fullAlerts ? fullAlerts.filter(x => x.alert_type !== 'replenish') : lowStockAlerts).map(function(x) {
+          {(fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock' && (_replMode === 'bbcc' ? ['own','platform','platform_b'] : ['own','platform']).includes(x.warehouse_type)) : lowStockAlerts).map(function(x) {
             return <div key={x.id} onClick={function(){onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
                 <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
@@ -510,24 +557,24 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
         </div>
       </div>}
 
-      {/* 补货告警弹窗 */}
-      {showAllReplenish && <div onClick={function(){setShowAllReplenish(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllReplenish && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {/* 采购&补货告警弹窗(重构: 补货建议需补 + 采购建议需采, 行标签区分, 模式跟随) */}
+      {showAllProc && <div onClick={function(){setShowAllProc(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
+      {showAllProc && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>补货告警 · 共 {replenishTotal} 条</div>
-          {(fullAlerts ? fullAlerts.filter(x => x.alert_type === 'replenish') : replenishAlerts).map(function(x) {
-            return <div key={x.id} onClick={function(){onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
+          <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>采购&补货告警 · 共 {procTotal} 条</div>
+          {(procList || []).map(function(x, i) {
+            return <div key={i} onClick={function(){onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen')}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
-                <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
-                <span style={{display:'inline-flex',gap:4,alignItems:'center',flexShrink:0}}>
-                  {(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type)) ? <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type))}</span> : null}
-                  <span className="pill danger" style={{fontSize:10}}>补货</span>
+                <span style={{display:'inline-flex',alignItems:'center',gap:6,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>
+                  <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
+                  {x.product_name || x.sku}
                 </span>
+                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,color:x.tag==='采购'?'#f59e0b':'#ef4444'}}>+{x.qty}</span>}
               </div>
-              <div className="small muted" style={{fontSize:11}}>{x.description}</div>
+              <div className="small muted" style={{fontSize:10}}>{x.sku}{x.wh ? ' · ' + x.wh : ''} · {(x.note ? String(x.note).slice(0,50) : (x.days_to_empty > 999 ? '库存充足' : '可撑' + x.days_to_empty + '天'))}</div>
             </div>
           })}
-          <div onClick={function(){setShowAllReplenish(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllProc(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
             <span style={{fontSize:15,fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
