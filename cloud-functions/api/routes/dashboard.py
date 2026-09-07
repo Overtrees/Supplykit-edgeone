@@ -247,7 +247,11 @@ def _health_index(channel):
     def _score(r):
         total = int(r.get("total") or 0)
         healthy = int(r.get("healthy") or 0)
-        score = round(healthy / total * 100, 0) if total else 100
+        # 空维度(total=0, 如 other 渠道无 B 仓) → score=None/level=empty, 前端显示"—"而非 100 分误导
+        if total == 0:
+            return {"score": None, "healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0,
+                    "level": "empty"}
+        score = round(healthy / total * 100, 0)
         return {"score": score, "healthy": healthy, "warning": int(r.get("warning") or 0),
                 "out_of_stock": int(r.get("out_of_stock") or 0), "total": total,
                 "level": "good" if score >= 85 else ("warning" if score >= 60 else "danger")}

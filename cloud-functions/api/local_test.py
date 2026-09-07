@@ -31,6 +31,11 @@ _INV = [
 
 
 def fake_query(sql, params=None):
+    # health_index 查询(须在 FROM inventory WHERE 分支前, 避免被 _FAKE_INV 抢占致 total=0)
+    if "GROUP BY warehouse_type" in sql:
+        return list(_INV)
+    if "warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql:
+        return [{"healthy": 65, "warning": 10, "out_of_stock": 2, "total": 77}]
     if "FROM orders WHERE" in sql and "COUNT" not in sql:
         return [{"id": 1, "order_no": "NO0000000001", "sku": "SKU0001", "barcode": "69-01",
                  "product_name": "禾味调味料1号", "store": "自营旗舰店", "warehouse": "华东C仓",
@@ -53,10 +58,6 @@ def fake_query(sql, params=None):
         return rows
     if "GROUP BY DATE(ordered_at), order_status, store" in sql:
         return list(_ORDERS)
-    if "warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql:
-        return [{"healthy": 65, "warning": 10, "out_of_stock": 2, "total": 77}]
-    if "GROUP BY warehouse_type" in sql:
-        return list(_INV)
     if "FROM sync_tasks" in sql:
         return [{"task_id": "seed_1", "task_type": "seed", "status": "done", "result": "{}",
                  "params": "{}", "channel": "jd", "created_at": "2026-09-05 10:00:00"}]

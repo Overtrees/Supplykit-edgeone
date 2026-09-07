@@ -375,7 +375,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               </div>
             </div>
             <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
-              <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'#ef4444':healthData.level==='warning'?'#f59e0b':'var(--success)'}}>{healthData.score||0}分</div>
+              <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'#ef4444':healthData.level==='warning'?'#f59e0b':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
               <div className="card-sub" style={{marginTop:4}}>
                 <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   <span style={{color:'var(--success)'}}>● {healthData.healthy||0}健康</span>
