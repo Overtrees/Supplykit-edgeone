@@ -13,9 +13,9 @@ const API = import.meta.env.VITE_API_BASE_URL || ''
 const COL_KEY='c_cols_inventory'
 const getVis=(wt,ch)=>{try{return JSON.parse(localStorage.getItem(COL_KEY+'_'+ch+'_'+wt)||'null')}catch{return null}}
 
-interface InventoryPageProps { highlightSku?: string }
+interface InventoryPageProps { highlightSku?: string; highlightWarehouse?: string }
 
-export default function InventoryPage({ highlightSku }: InventoryPageProps) {
+export default function InventoryPage({ highlightSku, highlightWarehouse }: InventoryPageProps) {
   const [batchOpen, setBatchOpen] = useState([])
   const [batchData, setBatchData] = useState({})
   const [batchLoading, setBatchLoading] = useState({})
@@ -79,17 +79,22 @@ export default function InventoryPage({ highlightSku }: InventoryPageProps) {
     if (seq === reqSeq.current) { setLoading(false); setLoadingMore(false) }
   }
   useEffect(() => { clearCache('with-sales'); setInvPage(1); loadInv(1) }, [whType, globalChannel, s])
-  // 从告警跳转: 高亮 SKU 滚动到可视区(等数据渲染后, 多页时也定位)
+  // 从告警跳转: 高亮 SKU(可带具体仓)滚动到可视区(等数据渲染后, 多页时也定位)
   useEffect(() => {
     if (!highlightSku) return
     const t = setTimeout(() => {
       try {
-        const el = document.getElementById('hl-' + highlightSku)
+        let el = null
+        if (highlightWarehouse) {
+          el = document.getElementById('hl-' + highlightSku + '-' + highlightWarehouse)
+        } else {
+          el = document.querySelector('[id^="hl-' + highlightSku + '-"]')
+        }
         if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
       } catch(e) {}
     }, 400)
     return () => clearTimeout(t)
-  }, [highlightSku, inventory, whType])
+  }, [highlightSku, highlightWarehouse, inventory, whType])
   const handleScroll = (e) => {
     const el = e.target
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200 && !loadingMore && inventory.length > 0 && (!invTotal || inventory.length < invTotal)) {
@@ -128,7 +133,7 @@ export default function InventoryPage({ highlightSku }: InventoryPageProps) {
       <table><colgroup>{visCols.map(id=>{const col=INV_COLS[whType].find(c=>c.id===id);return col?<col key={col.id} />:null})}</colgroup>
         <thead style={{position:"sticky",top:0,background:"var(--card)",zIndex:1}}><tr>{visCols.map(id=>{const col=INV_COLS[whType].find(c=>c.id===id);if(!col)return null;let el;if(col.id==='month_in')el=<th key={col.id}>{col.label}<br/><span className='small' style={{fontWeight:400}}>{monthRange}</span></th>;else if(col.id==='month_out')el=<th key={col.id}>{col.label}<br/><span className='small' style={{fontWeight:400}}>{monthRange}</span></th>;else el=<th key={col.id}>{col.label}</th>;return el})}</tr></thead>
       <tbody>{fl.map(x => {
-        const isHL = highlightSku && x.sku === highlightSku
+        const isHL = highlightSku && x.sku === highlightSku && (!highlightWarehouse || x.warehouse === highlightWarehouse)
         const visCells = visCols.map(function(id){const col=INV_COLS[whType].find(function(c){return c.id===id});if(!col)return null;var el;if(col.id==='warehouse'){var isOpen=batchOpen.includes(x.sku+'|'+x.warehouse);var hasBatch=(x.batch_count||0)>1;el=React.createElement('td',{key:col.id,className:'col-store'},x.warehouse||'-',hasBatch?React.createElement('span',{style:{fontSize:10,marginLeft:6,color:'var(--primary)'}},isOpen?'▴':'⤵ 批次'):null);}else if(col.id==='channel')el=React.createElement('td',{key:col.id,style:{fontSize:11}},x.channel==='other'?'其他':'京东');else if(col.id==='brand')el=React.createElement('td',{key:col.id,style:{fontSize:11}},x.brand||'-');else if(col.id==='sku')el=React.createElement('td',{key:col.id,className:'mono col-sku'},x.sku);else if(col.id==='barcode')el=React.createElement('td',{key:col.id,className:'mono',style:{fontSize:11}},x.barcode||'-');else if(col.id==='name')el=React.createElement('td',{key:col.id,className:'col-name'},x.product_name);else if(col.id==='begin'){var _beg=(x.available_qty||0)-(x.month_inbound||0)+(x.month_outbound||0);el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontWeight:600}},_beg)}else if(col.id==='transit')el=React.createElement('td',{key:col.id,className:'col-qty'},x.in_transit_qty);else if(col.id==='c_transit')el=React.createElement('td',{key:col.id,className:'col-qty'},x.c_transit||0);else if(col.id==='month_in')el=React.createElement('td',{key:col.id,className:'col-qty'},x.month_inbound??0);else if(col.id==='month_out')el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontWeight:600}},x.month_outbound??0);else if(col.id==='prod_date')el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontSize:11}},x.batch_prod_date||'-');else if(col.id==='exp_date')el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontSize:11}},x.batch_exp_date||'-');else if(col.id==='batch_days')el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontSize:11}},x.batch_days||'-');else if(col.id==='eff_status'){var es=x.batch_status;var ecolor=es==='ok'?'var(--success)':es==='warn'?'var(--warning)':es==='no'?'var(--danger)':(es==='expired'?'#7c3aed':'var(--muted2)');var elbl=es==='ok'?'✓ 正常':es==='warn'?'⚠️ 临近':es==='no'?'✗ 否':(es==='expired'?'⚫ 过期':'-');el=React.createElement('td',{key:col.id},React.createElement('span',{style:{fontSize:11,fontWeight:600,color:ecolor}},elbl),x.batch_pct?React.createElement('span',{style:{fontSize:10,color:'var(--muted2)',marginLeft:4}},x.batch_pct+'%'):null);}else if(col.id==='over_third'){var _ot_st=x.batch_status;el=React.createElement('td',{key:col.id,style:{fontSize:11}},_ot_st==='no'?React.createElement('span',{style:{color:'var(--danger)',fontWeight:600}},'✗ 已超1/3'):_ot_st==='expired'?React.createElement('span',{style:{color:'#7c3aed'}},'已过期'):_ot_st==='warn'?React.createElement('span',{style:{color:'var(--warning)',fontWeight:600}},'⚠️ 临近'):_ot_st==='ok'?React.createElement('span',{style:{color:'var(--muted2)'}},'否'):'-');}else if(col.id==='note'){var _ns=x.batch_status;var _nb=(x.batch_pct||0);var _nclr=_ns==='ok'?'var(--success)':_ns==='warn'?'var(--warning)':_ns==='no'?'var(--danger)':(_ns==='expired'?'#7c3aed':'var(--muted2)');var _nlbl=_ns==='ok'?'正常':_ns==='warn'?'临近1/3':_ns==='no'?'已超1/3':(_ns==='expired'?'已过期':'');var _nact=_ns==='ok'?(_nb>30?'动销放缓，促动销':'正常销售'):_ns==='warn'?'促销去库/调拨':_ns==='no'?'尽快清仓/退供':(_ns==='expired'?'报废/退供应商':'');el=React.createElement('td',{key:col.id,style:{fontSize:11}},(_nb>0||_ns)?[React.createElement('span',{key:'s',style:{color:_nclr,fontWeight:600}},_nb+'% '+_nlbl),' → ',React.createElement('span',{key:'a',style:{color:'var(--muted2)'}},_nact)]:'-')}else if(col.id==='avail')el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontWeight:600}},x.available_qty);else if(col.id==='turnover'){var tc=x.turnover_days;el=React.createElement('td',{key:col.id,className:'col-qty',style:{fontWeight:600,color:tc!=null&&tc>30?'#ef4444':tc!=null&&tc>15?'var(--warning)':'var(--text)'}},tc!=null?tc+'天':'∞')}else if(col.id==='price')el=React.createElement('td',{key:col.id,className:'col-price',style:{fontSize:12}},x.price?('¥'+Number(x.price).toFixed(1)):'-');else if(col.id==='stock_amount'){var sa=(x.available_qty||0)*(x.price||0);el=React.createElement('td',{key:col.id,className:'col-price',style:{fontWeight:600,fontSize:12}},sa?'¥'+sa.toLocaleString():'-')}else el=React.createElement('td',{key:col.id,className:'small muted',style:{fontSize:11}},'-');return el})
         var bk=x.sku+'|'+x.warehouse
         var isOpen=batchOpen.includes(bk)
@@ -153,7 +158,7 @@ export default function InventoryPage({ highlightSku }: InventoryPageProps) {
             else el=React.createElement('td',{key:col.id,style:{fontSize:11}},'-');return el})
             batchTrs.push(React.createElement('tr',{key:x.id+'-b'+bi,className:'tr-batch'},bcells))
           })
-        }        var _hb=(x.batch_count||0)>1;return [React.createElement('tr',{key:x.id,id:'hl-'+x.sku,onClick:_hb?function(){toggleBatch(x)}:null,className:_hb?(isOpen?'tr-click tr-open':'tr-click'):'',style:isHL?{background:'rgba(245,158,11,0.15)',outline:'2px solid #f59e0b'}:{}},visCells)].concat(batchTrs)      })}
+        }        var _hb=(x.batch_count||0)>1;return [React.createElement('tr',{key:x.id,id:'hl-'+x.sku+'-'+(x.warehouse||''),onClick:_hb?function(){toggleBatch(x)}:null,className:_hb?(isOpen?'tr-click tr-open':'tr-click'):'',style:isHL?{background:'rgba(245,158,11,0.15)',outline:'2px solid #f59e0b'}:{}},visCells)].concat(batchTrs)      })}
       </tbody>
       {totalTurnover != null && <tfoot>
         <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>

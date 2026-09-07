@@ -66,6 +66,7 @@ export default function App() {
   const navigateTo = (p: string) => { setPage(p); clearCache(); clearInflight(); const _s = useAppStore.getState(); if (_s.prodBatch || _s.prodSelIds?.length) { _s.setProdBatch(false); _s.setProdBatchSel([]) }; if (p === 'dash') { useAppStore.getState().bumpPageVersion() } }
   ;(window as any).__setPage = (p: string) => { navigateTo(p); closeHammerMenu() }
   const [highlightSku, setHighlightSku] = useState('')
+  const [highlightWarehouse, setHighlightWarehouse] = useState('')
   const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
   const toast = useToast()
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
@@ -342,8 +343,9 @@ export default function App() {
     return () => mq.removeEventListener('change', syncMeta)
   }, [])
 
-  const navigate = useCallback((newPage, sku, whType) => {
+  const navigate = useCallback((newPage, sku, whType, wh) => {
     if (sku) setHighlightSku(sku)
+    if (wh) setHighlightWarehouse(wh)
     // 从告警跳进销存时同步切到对应仓库维度(own/platform/platform_b), 保证高亮可见
     if (whType === 'own' || whType === 'platform' || whType === 'platform_b') {
       useAppStore.getState().setHammerWhType(whType)
@@ -357,11 +359,11 @@ export default function App() {
   const renderPage = (pageId) => {
     const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
-      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt)=>{navigate('inv',s,wt)}} />)
+      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} />)
       case 'products': return wrap(<ProductPage key={pageId} />)
       case 'suppliers': return wrap(<SupplierPage key={pageId} />)
       case 'orders': return wrap(<OrdersPage key={pageId} />)
-      case 'inv': return wrap(<InventoryPage key={pageId} highlightSku={highlightSku || ''} />)
+      case 'inv': return wrap(<InventoryPage key={pageId} highlightSku={highlightSku || ''} highlightWarehouse={highlightWarehouse || ''} />)
       case 'insights': return wrap(<InsightsPage key={pageId} />)
       case 'cleansing': return wrap(<CleansingPage key={pageId} />)
       case 'rules': return wrap(<RulesPage key={pageId} />)

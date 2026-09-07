@@ -201,7 +201,7 @@ async def create_export(request: Request):
                 writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
                 writer.writeheader()
                 writer.writerows(rows)
-            content = buf.getvalue().encode("utf-8")
+            content = buf.getvalue().encode("utf-8-sig")  # 带 BOM: Excel 直接打开中文不乱码
             filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
         else:
             from openpyxl import Workbook
@@ -255,7 +255,7 @@ def export_download(filename: str):
             import base64 as _b64
             data = _b64.b64decode(content[7:])
         else:
-            data = content.encode("utf-8")
+            data = content.encode("utf-8-sig")  # 兼容 TEXT 列旧数据, 中文 Excel 打开不乱码
     elif content is None:
         data = b""
     else:

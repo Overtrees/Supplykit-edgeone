@@ -10,7 +10,14 @@ router = APIRouter(tags=["misc"])
 
 @router.get("/quality-logs")
 @traced
-def list_quality_logs(channel: str = "", limit: int = 200):
+def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_size: int = 0):
+    """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}"""
+    if page > 0 and page_size > 0:
+        r = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
+        total = int(r.get("c") or 0)
+        rows = query("SELECT id, log_type, level, message, details, source, created_at FROM quality_logs "
+                     "ORDER BY id DESC LIMIT %s OFFSET %s", [page_size, (page - 1) * page_size])
+        return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
     rows = query("SELECT id, log_type, level, message, details, source, created_at FROM quality_logs "
                  "ORDER BY id DESC LIMIT %s", [limit])
     return ok(rows)

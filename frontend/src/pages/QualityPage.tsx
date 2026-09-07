@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { api } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { t } from "../locale"
 
@@ -11,14 +12,42 @@ const TYPE_LABEL = {
   mapping_info: '映射信息',
 }
 const LEVEL_LABEL = { warning: '警告', error: '异常', info: '提示' }
+const PAGE_SIZE = 200
 
 export default function QualityPage() {
-  const { qualityLogs, channelVersion, loading } = useAppStore()
-  if (loading) return <div className="card"><div className="section-title">{t("nav.quality")}</div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
-  if (qualityLogs.length === 0) return <div className="card" key={channelVersion}><div className="section-title">{t("nav.quality")}</div><div className="small muted" style={{padding:24,textAlign:'center'}}>{t("quality.empty")}</div></div>
+  const { channelVersion, loading } = useAppStore()
+  const [list, setList] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [ld, setLd] = useState(true)
+  const [moreLoading, setMoreLoading] = useState(false)
+  const pageRef = useRef(1)
+  const reqSeq = useRef(0)
+
+  // 分页加载(>200 条不再截断, 底部加载更多)
+  const load = (p) => {
+    const seq = ++reqSeq.current
+    if (p === 1) setLd(true)
+    else setMoreLoading(true)
+    api.get('/api/quality-logs?page=' + p + '&page_size=' + PAGE_SIZE)
+      .then(r => {
+        if (seq !== reqSeq.current) { setLd(false); setMoreLoading(false); return }
+        const d = r.data || {}
+        const items = Array.isArray(d) ? d : (d.items || [])
+        const t = Array.isArray(d) ? items.length : (d.total || items.length)
+        setList(prev => p === 1 ? items : [...prev, ...items])
+        setTotal(t)
+        setPage(p); pageRef.current = p
+        setLd(false); setMoreLoading(false)
+      })
+      .catch(() => { if (seq === reqSeq.current) { setLd(false); setMoreLoading(false); setList([]) } })
+  }
+  useEffect(() => { setList([]); setTotal(0); load(1) }, [channelVersion])
+
+  if (loading && list.length === 0 && ld) return <div className="card"><div className="section-title">{t("nav.quality")}</div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
 
   const groups = {}
-  for (const x of qualityLogs) {
+  for (const x of list) {
     const day = (x.created_at || '').slice(0,10) || '未知日期'
     if (!groups[day]) groups[day] = []
     groups[day].push(x)
@@ -47,6 +76,20 @@ export default function QualityPage() {
 
   return <div className="card">
     <div className="section-title">{t("nav.quality")}</div>
-    {rows}
+    {list.length === 0 ? (
+      <div className="small muted" style={{padding:24,textAlign:'center'}}>{t("quality.empty")}</div>
+    ) : (
+      <>
+        {rows}
+        {list.length < total && (
+          <div className="text-center" style={{padding:'10px 0'}}>
+            <button className="btn btn-ghost" style={{fontSize:12,padding:'6px 16px',cursor:'pointer'}}
+              onClick={() => load(pageRef.current + 1)} disabled={moreLoading}>
+              {moreLoading ? '加载中...' : `加载更多 (${list.length}/${total})`}
+            </button>
+          </div>
+        )}
+      </>
+    )}
   </div>
 }
