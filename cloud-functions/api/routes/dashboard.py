@@ -10,7 +10,7 @@ from routes.common import ok, fail, PAID_STATUSES, traced
 router = APIRouter(tags=["dashboard"])
 
 from routes.analysis_cache import register as _register_cache
-_register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear()))
+_register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear(), _accel_cache.clear()))
 
 _PAID = tuple(PAID_STATUSES)
 
@@ -373,12 +373,20 @@ def stock_risk(channel: str = "jd", full: int = 0):
     return ok(_p)
 
 
+_accel_cache = {}
+_ACCEL_TTL = 60
+
+
 def _hourly_accel(channel, now):
     """P1 加速消耗判定: 当天累计销量 vs 前3天同时刻(当前小时前)累计平均
 
     比值 ≥1.3 且样本量足够(≥10 单) → 视为加速(大促/秒杀), 返回 {sku: 倍率}
     (需求按当前流速放大 → adj_dos 缩短 → 更易判濒临)
+    内部 60s 缓存: 当天订单近 1 小时基本不变, 避免 stock-risk 每次重算重复查 orders
     """
+    _c = _accel_cache.get(channel)
+    if _c and _time.time() - _c[0] < _ACCEL_TTL:
+        return _c[1]
     from datetime import timedelta
     paid = tuple(PAID_STATUSES)
     today = now.strftime("%Y-%m-%d")
@@ -408,6 +416,7 @@ def _hourly_accel(channel, now):
         hq = hist.get(sku, 0)
         if hq >= 10 and tq / hq >= 1.3:
             out[sku] = round(tq / hq, 2)
+    _accel_cache[channel] = (_time.time(), out)
     return out
 
 

@@ -117,23 +117,25 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     const seq = ++reqSeq.current
     // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架, 有旧数据则不骨架(先显示旧值, 后台拉新替换)
     setChLoading(!useAppStore.getState().dashboard)
-    const load = () => Promise.allSettled([
-      api.get('/api/dashboard/summary?t=' + Date.now(), {timeout: 60000}),  // PA慢时段summary重建可能9-30s, 90s不超时
-      api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(), {timeout: 60000}),
-      api.get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + Date.now(), {timeout: 60000}),  // 独立 30s TTL, 不依赖 aux 300s
-    ]).then(([s, ax, sr]) => {
-      if (seq !== reqSeq.current) { setChLoading(false); return }  // 竞态丢弃
-      // 兜底: summary 必须 fulfilled 且 data.summary 存在才算成功(seed填充/表重建期间
-      // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
-      const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
-      const dash = dashOk ? s.value.data : null
-      setDashErr((s.status === 'rejected' || !dashOk) ? '加载失败，可能是网络异常或数据正在处理中' : '')
-      const aux = (ax && ax.status === 'fulfilled') ? (ax.value.data || {}) : {}
-      const alerts = aux.alerts || []
-      const stockRisk = (sr && sr.status === 'fulfilled') ? (sr.value.data || {}) : (useAppStore.getState().stockRisk || {})
-      const ov = aux.stockOverview || {}
-      useAppStore.setState({ dashboard: dash, alerts, stockRisk, alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: ov.items || [], _stockOverview: ov, loading: false, dataLoaded: true })
-      setChLoading(false)
+    const load = () => {
+      // 首屏拆流: summary+aux 先渲染(不阻塞骨架屏), stock-risk 后置到达后更新断货卡
+      // (stock-risk 含 OTIF/逐仓日销/动态SS/加速判定较重, 首屏先看 GMV/告警/健康, 断货 1-2s 补齐)
+      Promise.allSettled([
+        api.get('/api/dashboard/summary?t=' + Date.now(), {timeout: 60000}),
+        api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(), {timeout: 60000}),
+      ]).then(([s, ax]) => {
+        if (seq !== reqSeq.current) { setChLoading(false); return }  // 竞态丢弃
+        // 兜底: summary 必须 fulfilled 且 data.summary 存在才算成功(seed填充/表重建期间
+        // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
+        const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
+        const dash = dashOk ? s.value.data : null
+        setDashErr((s.status === 'rejected' || !dashOk) ? '加载失败，可能是网络异常或数据正在处理中' : '')
+        const aux = (ax && ax.status === 'fulfilled') ? (ax.value.data || {}) : {}
+        const alerts = aux.alerts || []
+        const stockRisk = useAppStore.getState().stockRisk || {}
+        const ov = aux.stockOverview || {}
+        useAppStore.setState({ dashboard: dash, alerts, stockRisk, alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: ov.items || [], _stockOverview: ov, loading: false, dataLoaded: true })
+        setChLoading(false)
       // 首次加载关键数据为空时自动重试（进程重启后缓存未就绪/慢接口超时兜底），最多 3 次
       // B 维度(items)已移除(bbcc 用 bcItems / traditional 用 cItems+ownItems) → 空检查按各维度数组
       const _srEmpty = Array.isArray(stockRisk) ? stockRisk.length === 0 : !(stockRisk && (((stockRisk.bcItems || []).length) || ((stockRisk.cItems || []).length) || ((stockRisk.ownItems || []).length)))
@@ -158,6 +160,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         }, 3000)
       }
     }).catch(() => setChLoading(false))
+      // stock-risk 后置(独立 30s TTL 接口, 不阻塞首屏骨架; 到达后更新断货卡)
+      api.get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + Date.now(), {timeout: 60000})
+        .then(r => { if (seq === reqSeq.current && r.data) useAppStore.setState({ stockRisk: r.data }) })
+        .catch(() => {})
+    }
     load()
   }, [channel, pageVersion])
   // 30s 静默自动刷新（不显示 loading 骨架屏，避免闪烁）
