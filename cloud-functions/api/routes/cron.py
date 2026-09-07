@@ -175,6 +175,21 @@ async def cron_daily_rules(request: Request):
         triggered.extend(evaluate_stock_skus(_ch, limit=100000))
     _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
         cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
+    # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)
+    try:
+        from routes.dashboard import _stock_risk
+        for _ch in ("jd", "other"):
+            _rk = _stock_risk(_ch)
+            _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
+            _r = (_rk.get("bcCritical", 0) or 0) + (_rk.get("cCritical", 0) or 0) + (_rk.get("ownCritical", 0) or 0)
+            _o = (_rk.get("bcWarning", 0) or 0) + (_rk.get("cWarning", 0) or 0) + (_rk.get("ownWarning", 0) or 0)
+            execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                    "VALUES('risk_summary','info',%s,'cron')",
+                    ("[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d" % (
+                        _ch, _t, _r, _o, max(_t - _r - _o, 0),
+                        _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0)))
+    except Exception:
+        pass
     return ok({"orphan_cleaned": cleaned, "rules_triggered": triggered})
 
 

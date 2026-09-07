@@ -213,7 +213,7 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
         c_consume = round(ds * _lead)
         note = ""
         if purchase_qty > 0:
-            note = "消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty)
+            note = "🔴 需采购: " + ("消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty))
             if box_qty > 1:
                 note += " · 箱规%d件, 实购%d件(%d箱)" % (box_qty, actual_purchase, actual_purchase // box_qty)
             if target_turn > 0:

@@ -175,6 +175,9 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
                     parts.append("⚪ 近30天无销量")
             if not parts:
                 parts.append("库存充足")
+            # P1: 濒临断货反哺 —— 建议补>0 即 Adj-DOS≤补货周期(缺口), note 前置 🔴 已濒临
+            if suggested > 0 or b_box > 0:
+                parts.insert(0, "🔴 已濒临")
             note = " · ".join(parts)
             suggestions.append({
                 "sku": sku, "barcode": prod.get("barcode", ""),
@@ -233,7 +236,7 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
                 "daily_sales_60": round(fused.get(sku, 0), 1),
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
-                "note": "需补货" if box_qty > 0 else "库存充足",
+                "note": ("🔴 已濒临 · 需补货" if box_qty > 0 else "库存充足"),
             })
 
     # 排序: 需补货优先, 缺口大优先

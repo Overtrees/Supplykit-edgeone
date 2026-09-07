@@ -373,6 +373,44 @@ def stock_risk(channel: str = "jd", full: int = 0):
     return ok(_p)
 
 
+def _hourly_accel(channel, now):
+    """P1 加速消耗判定: 当天累计销量 vs 前3天同时刻(当前小时前)累计平均
+
+    比值 ≥1.3 且样本量足够(≥10 单) → 视为加速(大促/秒杀), 返回 {sku: 倍率}
+    (需求按当前流速放大 → adj_dos 缩短 → 更易判濒临)
+    """
+    from datetime import timedelta
+    paid = tuple(PAID_STATUSES)
+    today = now.strftime("%Y-%m-%d")
+    since = (now - timedelta(days=3)).strftime("%Y-%m-%d 00:00:00")
+    cur_h = now.hour
+    rows = query(
+        "SELECT sku, DATE(ordered_at) AS d, HOUR(ordered_at) AS h, SUM(quantity) AS q "
+        "FROM orders WHERE channel=%s AND ordered_at>=%s "
+        "AND order_status IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
+        "GROUP BY sku, DATE(ordered_at), HOUR(ordered_at)" % (",".join(["'%s'" % s for s in paid])),
+        [channel, since])
+    hist = {}
+    today_q = {}
+    for r in rows:
+        sku = str(r.get("sku") or "")
+        d = str(r.get("d") or "")[:10]
+        h = int(r.get("h") or 0)
+        q = int(r.get("q") or 0)
+        if d == today:
+            today_q[sku] = today_q.get(sku, 0) + q
+        elif h < cur_h:
+            hist[sku] = hist.get(sku, 0) + q / 3.0
+    out = {}
+    for sku, tq in today_q.items():
+        if tq < 10:
+            continue
+        hq = hist.get(sku, 0)
+        if hq >= 10 and tq / hq >= 1.3:
+            out[sku] = round(tq / hq, 2)
+    return out
+
+
 def _stock_risk(channel, full: int = 0):
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
     from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
@@ -397,6 +435,18 @@ def _stock_risk(channel, full: int = 0):
             otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), 0.6) if sc > 0 else 1.0
         except Exception:
             pass
+    # P1: 需求调整因子 —— 活动系数(season_config, 补货/采购已用) + 当天小时流速加速(加速判定)
+    try:
+        from routes.replenishment import _season_factor
+        factor_trad = _season_factor(channel, "traditional")
+        factor_bbcc = _season_factor(channel, "bbcc")
+    except Exception:
+        factor_trad = factor_bbcc = 1.0
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        accel = _hourly_accel(channel, _dt.now(_tz.utc))
+    except Exception:
+        accel = {}
 
     by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
     multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
@@ -416,6 +466,18 @@ def _stock_risk(channel, full: int = 0):
     wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
     wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                    wh_multi[28].get(k, 0)) for k in by_sku_wh}
+    # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
+    # (供应链看概率和波动: 平均日销够不代表明天稳定, σ 高 → 缓冲要求高)
+    sigma = {}
+    for _s, _daily in by_sku.items():
+        if len(_daily) >= 7:
+            _vals = list(_daily.values())
+            _m = sum(_vals) / len(_vals)
+            _v = sum((x - _m) ** 2 for x in _vals) / len(_vals)
+            sigma[_s] = _v ** 0.5
+
+    def _ss_dyn(sku, lit):
+        return 1.65 * sigma.get(sku, 0) * (lit ** 0.5) if lit > 0 else 0.0
 
     # 聚合(BC 合计=platform+platform_b 按 SKU 一盘棋 —— B 仓已含在合计内, 不再单独算 B 维度)
     bc_total = {}
@@ -466,16 +528,18 @@ def _stock_risk(channel, full: int = 0):
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
-        # 修正可售天数: 在仓 + 供应商在途×OTIF + B→C调拨在途×1.0(自有可信)
-        adj_dos = (avail + tty * _otif(sku) + ctt) / ds
-        buffer = avail / max(safety, 1)
+        # 修正可售天数: (在仓 + 供应商在途×OTIF + B→C调拨在途×1.0) ÷ (日销×活动系数×加速倍率)
+        a_rate = accel.get(sku, 1.0)
+        ds_eff = ds * factor_trad * a_rate
+        adj_dos = (avail + tty * _otif(sku) + ctt) / ds_eff
+        buffer = avail / max(max(safety, _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
             c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                             "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                             "warehouse": wh or "C仓", "type": "C", "available_qty": avail,
                             "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
-                            "level": lv})
+                            "level": lv, "accel": (a_rate > 1.1) or None})
     # BC 合计(bbcc 专属: B仓+全国C仓按 SKU 合计, 一盘棋视图 → 标签 BC; 用 bbcc 补货周期)
     bc_items = []
     for sku, st in bc_total.items():
@@ -484,15 +548,15 @@ def _stock_risk(channel, full: int = 0):
         ds = fused_c.get(sku, 0)
         if ds <= 0:
             continue
-        adj_dos = (avail + st["transit"] * _otif(sku) + st["ct"]) / ds
-        buffer = avail / max(safety, 1)
+        adj_dos = (avail + st["transit"] * _otif(sku) + st["ct"]) / (ds * factor_bbcc * accel.get(sku, 1.0))
+        buffer = avail / max(max(safety, _ss_dyn(sku, lit_bbcc)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_bbcc)
         if inc:
             bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                              "warehouse": "BC", "type": "BC", "available_qty": avail,
                              "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
-                             "level": lv})
+                             "level": lv, "accel": (accel.get(sku, 1.0) > 1.1) or None})
     # own 维度(传统: 逐仓 —— jd 集货仓 / other 三方仓, 该仓库存/该仓日销/可撑天数)
     own_items = []
     for r in inv:
@@ -506,15 +570,15 @@ def _stock_risk(channel, full: int = 0):
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
-        adj_dos = (avail + tty * _otif(sku)) / ds
-        buffer = avail / max(safety, 1)
+        adj_dos = (avail + tty * _otif(sku)) / (ds * factor_trad * accel.get(sku, 1.0))
+        buffer = avail / max(max(safety, _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
             own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                               "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                               "warehouse": wh or "自有", "type": "OWN", "available_qty": avail,
                               "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
-                              "level": lv})
+                              "level": lv, "accel": (accel.get(sku, 1.0) > 1.1) or None})
 
     def _stats(items):
         crit = sum(1 for i in items if i.get("level") == "red")
