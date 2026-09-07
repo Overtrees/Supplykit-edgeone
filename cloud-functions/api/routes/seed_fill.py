@@ -463,7 +463,11 @@ def _seed_config():
 
 
 def _seed_alerts():
-    """规则引擎告警(仿原版 _seed_rules): SQL 聚合生成低库存/紧急补货 + 关闭已恢复"""
+    """规则引擎告警(仿原版 _seed_rules): 按库存行(SKU×仓)逐仓生成低库存/紧急补货 + 关闭已恢复
+
+    逐仓粒度(与规则引擎 evaluate_many 去重 key 一致: alert_type+sku+warehouse+channel):
+    传统多仓下每个仓的库存风险独立成条, 告警弹窗按 warehouse 列显示实际仓名
+    """
     closed = 0
     for ch in ('jd', 'other'):
         cur = execute(
@@ -471,38 +475,35 @@ def _seed_alerts():
             "AND status='active' AND alert_type IN ('low_stock','replenish') "
             "AND related_sku IS NOT NULL AND related_sku != '' AND NOT EXISTS ("
             "SELECT 1 FROM inventory i WHERE i.channel=%s AND i.sku=alerts.related_sku "
-            "AND i.available_qty < i.safety_qty)", (ch, ch))
+            "AND i.warehouse=alerts.warehouse AND i.available_qty < i.safety_qty)", (ch, ch))
         closed += int(cur or 0)
     existing = set()
-    for r in query("SELECT alert_type, channel, related_sku, source FROM alerts WHERE status='active'"):
+    for r in query("SELECT alert_type, channel, related_sku, warehouse, source FROM alerts WHERE status='active'"):
         existing.add((r.get('alert_type'), r.get('channel') or 'jd', r.get('related_sku'),
-                      r.get('source') or ''))
-    sku_wh = {}
-    for r in query("SELECT sku, warehouse_type, available_qty FROM inventory ORDER BY available_qty DESC"):
-        if r.get('sku') and r.get('sku') not in sku_wh:
-            sku_wh[r.get('sku')] = r.get('warehouse_type') or ''
+                      r.get('warehouse') or '', r.get('source') or ''))
     inserts = []
     for ch in ['jd', 'other']:
         rows = query(
-            "SELECT sku, MAX(product_name) AS name, SUM(available_qty) AS avail, "
-            "SUM(in_transit_qty) AS transit, SUM(safety_qty) AS safety "
-            "FROM inventory WHERE channel=%s GROUP BY sku", [ch])
+            "SELECT sku, warehouse, warehouse_type, MAX(product_name) AS name, "
+            "available_qty AS avail, in_transit_qty AS transit, safety_qty AS safety "
+            "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])
         for r in rows:
             sku, name = r.get('sku'), r.get('name') or r.get('sku')
             avail, transit, safety = int(r.get('avail') or 0), int(r.get('transit') or 0), int(r.get('safety') or 0)
-            if avail < safety and ('low_stock', ch, sku, 'rules_engine') not in existing:
-                existing.add(('low_stock', ch, sku, 'rules_engine'))
+            wh = str(r.get('warehouse') or '')
+            if avail < safety and ('low_stock', ch, sku, wh, 'rules_engine') not in existing:
+                existing.add(('low_stock', ch, sku, wh, 'rules_engine'))
                 inserts.append(("low_stock", "低库存预警: %s" % name, "可用 %d < 安全线 %d" % (avail, safety),
-                                "warning", ch, sku, sku_wh.get(sku, '')))
+                                "warning", ch, sku, r.get('warehouse_type') or '', wh))
             if avail <= max(1, int(safety * 0.3)) and (avail + transit) <= safety \
-                    and ('replenish', ch, sku, 'rules_engine') not in existing:
-                existing.add(('replenish', ch, sku, 'rules_engine'))
+                    and ('replenish', ch, sku, wh, 'rules_engine') not in existing:
+                existing.add(('replenish', ch, sku, wh, 'rules_engine'))
                 inserts.append(("replenish", "紧急补货: %s" % name,
                                 "可用 %d(<安全线30%%), 含在途 %d 仍不足安全线 %d" % (avail, avail + transit, safety),
-                                "error", ch, sku, sku_wh.get(sku, '')))
+                                "error", ch, sku, r.get('warehouse_type') or '', wh))
     for i in range(0, len(inserts), 500):
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
-                    "related_sku, status, warehouse_type) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s)",
+                    "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s)",
                     inserts[i:i + 200])
     return len(inserts)
 

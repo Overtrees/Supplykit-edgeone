@@ -124,5 +124,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
             except Exception:
                 pass
+        # 启动补列(幂等): alerts.warehouse —— 告警逐仓化(规则引擎去重+seed 生成+展示均按 SKU×仓)
+        try:
+            from db import query as _qry
+            _cols = {str(r.get("Field") or "") for r in _qry("SHOW COLUMNS FROM alerts")}
+            if "warehouse" not in _cols:
+                _exec("ALTER TABLE alerts ADD COLUMN warehouse VARCHAR(64) DEFAULT ''")
+        except Exception:
+            pass
     except Exception:
         pass

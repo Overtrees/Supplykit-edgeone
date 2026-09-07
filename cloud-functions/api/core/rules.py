@@ -144,14 +144,19 @@ def _check_condition(cond, ctx):
 
 
 def _action_create_alert(ctx):
-    """生成告警(去重: alert_type+related_sku+status+channel+source=rules_engine)"""
+    """生成告警(去重: alert_type+related_sku+warehouse+status+channel+source=rules_engine)
+
+    逐仓粒度: 规则按库存行(SKU×仓)评估, 去重 key 含 warehouse —— 传统多仓下每个仓的
+    低库存/补货风险独立成条, 弹窗/预览按数据 warehouse 列显示实际仓名
+    """
     try:
         rule = ctx["rule"]
         sku = ctx.get("sku", "")
         channel = ctx.get("channel", "jd")
+        wh = (ctx.get("inv") or {}).get("warehouse", "")
         dup = one("SELECT COUNT(*) AS c FROM alerts WHERE alert_type=%s AND related_sku=%s "
-                  "AND status='active' AND channel=%s AND source='rules_engine'",
-                  [rule.get("alert_type", ""), sku, channel]) or {}
+                  "AND status='active' AND channel=%s AND source='rules_engine' AND warehouse=%s",
+                  [rule.get("alert_type", ""), sku, channel, wh]) or {}
         if int(dup.get("c") or 0) > 0:
             return
         title_tpl = rule.get("alert_title", "") or ""
@@ -162,11 +167,11 @@ def _action_create_alert(ctx):
         except Exception:
             title, desc = title_tpl, desc_tpl
         execute("INSERT INTO alerts(alert_type, title, description, severity, status, source, "
-                "related_sku, related_rule_id, warehouse_type, channel) "
-                "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s)",
+                "related_sku, related_rule_id, warehouse_type, warehouse, channel) "
+                "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s)",
                 (rule.get("alert_type", ""), title, desc, rule.get("severity", "warning"),
                  sku, int(rule.get("id") or 0),
-                 (ctx.get("inv") or {}).get("warehouse_type", ""), channel))
+                 (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel))
     except Exception:
         pass
 
@@ -187,16 +192,18 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
     rules = [r for r in rules if not (r.get("mode") or "") or r.get("mode") == (contexts[0].get("mode") or "")]
     if not rules:
         return []
-    # 预载已有 active 告警 key(去重)
+    # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
     existing = set()
-    for r in query("SELECT alert_type, related_sku, channel FROM alerts "
+    for r in query("SELECT alert_type, related_sku, channel, warehouse FROM alerts "
                    "WHERE status='active' AND source='rules_engine'"):
-        existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel")))
+        existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel"),
+                      r.get("warehouse") or ""))
     inserts = []
     triggered = []
     for ctx in contexts:
         sku = ctx.get("sku", "")
         channel_x = ctx.get("channel") or channel or "jd"
+        wh = (ctx.get("inv") or {}).get("warehouse", "")
         for rule in rules:
             try:
                 cond = json.loads(rule.get("condition_json") or "{}")
@@ -209,7 +216,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
-            key = (at, sku, channel_x)
+            key = (at, sku, channel_x, wh)
             if key in existing:
                 continue
             existing.add(key)
@@ -222,14 +229,14 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
                 title, desc = title_tpl, desc_tpl
             inserts.append((at, title, desc, rule.get("severity", "warning"),
                             sku, int(rule.get("id") or 0),
-                            (ctx.get("inv") or {}).get("warehouse_type", ""), channel_x))
+                            (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x))
             triggered.append(rule.get("name") or str(rule.get("id")))
     if inserts:
         for i in range(0, len(inserts), 100):
             try:
                 executemany("INSERT INTO alerts(alert_type, title, description, severity, status, "
-                            "source, related_sku, related_rule_id, warehouse_type, channel) "
-                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s)",
+                            "source, related_sku, related_rule_id, warehouse_type, warehouse, channel) "
+                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s)",
                             inserts[i:i + 100])
             except Exception:
                 pass

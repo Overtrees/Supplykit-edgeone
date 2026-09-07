@@ -158,9 +158,21 @@ async def cron_daily_rules(request: Request):
             execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
                     "AND status='active' AND source IN ('rules_engine','event_bus')", [at, ch])
             cleaned += 1
-    # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存 SKU
+    # 1.5 旧 SKU 级规则告警(warehouse 为空)清理 —— 告警已逐仓化(SKU×仓), 旧的 SKU 聚合
+    #     告警由下方全量评估重新生成逐仓版, 先关闭避免新旧混杂致看板计数翻倍
+    try:
+        _old = execute("UPDATE alerts SET status='inactive' WHERE status='active' "
+                       "AND source IN ('rules_engine','event_bus') "
+                       "AND (warehouse IS NULL OR warehouse='')")
+        cleaned += int(_old or 0)
+    except Exception:
+        pass
+    # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存行
+    #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
     from core.rules import evaluate_stock_skus
-    triggered = evaluate_stock_skus("jd", limit=2000)
+    triggered = []
+    for _ch in ("jd", "other"):
+        triggered.extend(evaluate_stock_skus(_ch, limit=100000))
     _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
         cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
     return ok({"orphan_cleaned": cleaned, "rules_triggered": triggered})

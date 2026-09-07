@@ -7,18 +7,21 @@ from routes.common import ok, traced
 router = APIRouter(tags=["alerts"])
 
 _FIELDS = "id, alert_type, title, description, severity, status, source, related_sku, " \
-          "related_order_no, warehouse_type, channel, created_at"
+          "related_order_no, warehouse_type, warehouse, channel, created_at"
 
 
 def _attach_warehouse(alerts, channel):
-    """告警补实际仓库名(按 related_sku+warehouse_type 反查 inventory, 批量防 N+1)
+    """告警补实际仓库名 —— 仅补存量空值(新告警逐仓生成时已带 warehouse 列)
 
-    弹窗/预览的仓库标签按数据 warehouse 列动态显示(北京仓/集货仓/三方仓...),
-    不再硬编码维度标签(自有/C仓/BC)。一个 SKU 多仓时逗号连接(前端截断展示)。
+    规则引擎/seed 已按 SKU×仓 逐仓生成告警(warehouse 列=实际仓名); 存量 SKU 级告警
+    warehouse 为空时按 related_sku+warehouse_type 反查 inventory 补(逗号连接, 前端截断)。
     """
     if not alerts:
         return alerts
-    skus = sorted({str(a.get("related_sku") or "") for a in alerts} - {""})
+    missing = [a for a in alerts if not (a.get("warehouse") or "")]
+    if not missing:
+        return alerts
+    skus = sorted({str(a.get("related_sku") or "") for a in missing} - {""})
     if not skus:
         return alerts
     wh_map = {}
@@ -31,11 +34,10 @@ def _attach_warehouse(alerts, channel):
                 "AND warehouse IS NOT NULL AND warehouse!='' "
                 "GROUP BY sku, warehouse_type", [channel] + skus[i:i + 200]):
             wh_map[(str(r.get("sku") or ""), str(r.get("warehouse_type") or ""))] = str(r.get("whs") or "")
-    for a in alerts:
+    for a in missing:
         _k = (str(a.get("related_sku") or ""), str(a.get("warehouse_type") or ""))
         _v = wh_map.get(_k, "")
         if not _v:
-            # 告警无 warehouse_type(旧数据) → 按 SKU 全仓反查
             _v = wh_map.get((str(a.get("related_sku") or ""), ""), "")
         a["warehouse"] = _v
     return alerts
