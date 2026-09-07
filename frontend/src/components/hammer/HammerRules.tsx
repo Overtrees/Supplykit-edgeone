@@ -17,6 +17,19 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
   const [searchOpen, setSearchOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
+  const [evaluating, setEvaluating] = useState(false)
+  // 立即运行: 规则改动后即时全量评估(双渠道 SKU×仓), 不等每日 cron; 完成后看板/建议页刷新
+  const runEvaluate = async () => {
+    setEvaluating(true)
+    try {
+      const r = await api.postHeavy('/api/rules/evaluate', {})
+      const ev = (r.data && r.data.evaluated) || {}
+      toast.success('评估完成 · jd ' + (ev.jd ?? '-') + ' · other ' + (ev.other ?? '-'))
+      window.dispatchEvent(new Event('rules-changed'))
+      window.dispatchEvent(new Event('insights-refresh'))
+    } catch(e) { toast.error('评估失败: ' + (e.message||'')) }
+    setEvaluating(false)
+  }
   const runBatch = async (action, label) => {
     const s = useAppStore.getState()
     const ids = s.prodSelIds || []
@@ -78,6 +91,10 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
             批量操作
           </button>
         </div>
+        <button onClick={runEvaluate} disabled={evaluating}
+          className="hammer-btn btn-ghost" style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4,width:'100%',color:'var(--primary)',opacity:evaluating?0.6:1,marginTop:8}}>
+          {evaluating ? <span className="hammer-spinner" /> : '⚡'} {evaluating ? '评估中(全量 SKU×仓)...' : '立即运行全部规则'}
+        </button>
         {batchOpen && (
           <div className="hammer-panel">
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>

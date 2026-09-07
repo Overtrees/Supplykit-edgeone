@@ -166,6 +166,29 @@ async def rules_batch(request: Request):
     return ok({"updated": len(ids)})
 
 
+@router.post("/rules/evaluate")
+@traced
+async def rules_evaluate(request: Request):
+    """手动触发规则全量评估(规则页'立即运行' —— 规则改动后即时出告警, 不等每日 cron)
+    双渠道 evaluate_stock_skus 全量库存行(SKU×仓), 返回各渠道触发规则数"""
+    from core.rules import evaluate_stock_skus
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channels = d.get("channels") or ["jd", "other"]
+    out = {}
+    for ch in channels:
+        try:
+            out[ch] = len(evaluate_stock_skus(ch, limit=100000))
+        except Exception as e:
+            out[ch] = "error: %s" % str(e)[:80]
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()  # 评估可能生成/变更告警 → 看板/接口缓存即时失效
+    return ok({"evaluated": out})
+
+
 @router.post("/rules/{rid}/test")
 @traced
 async def test_rule(rid: int, request: Request):
