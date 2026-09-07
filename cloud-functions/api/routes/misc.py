@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one
-from routes.common import ok, traced
+from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["misc"])
 
