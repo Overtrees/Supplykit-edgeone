@@ -15,6 +15,13 @@ const fmtWh = (w) => {
   return p.slice(0, 2).join(',') + '等' + p.length + '仓'
 }
 
+// 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
+const RISK_LV = {
+  red: { c: '#ef4444', t: '紧急' },
+  orange: { c: '#f97316', t: '预警' },
+  yellow: { c: '#eab308', t: '关注' },
+}
+
 interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string) => void }
 
 export default function DashboardPage({ onAlert }: DashboardPageProps) {
@@ -113,7 +120,8 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
     const load = () => Promise.allSettled([
       api.get('/api/dashboard/summary?t=' + Date.now(), {timeout: 60000}),  // PA慢时段summary重建可能9-30s, 90s不超时
       api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(), {timeout: 60000}),
-    ]).then(([s, ax]) => {
+      api.get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + Date.now(), {timeout: 60000}),  // 独立 30s TTL, 不依赖 aux 300s
+    ]).then(([s, ax, sr]) => {
       if (seq !== reqSeq.current) { setChLoading(false); return }  // 竞态丢弃
       // 兜底: summary 必须 fulfilled 且 data.summary 存在才算成功(seed填充/表重建期间
       // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
@@ -122,7 +130,7 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       setDashErr((s.status === 'rejected' || !dashOk) ? '加载失败，可能是网络异常或数据正在处理中' : '')
       const aux = (ax && ax.status === 'fulfilled') ? (ax.value.data || {}) : {}
       const alerts = aux.alerts || []
-      const stockRisk = aux.stockRisk || []
+      const stockRisk = (sr && sr.status === 'fulfilled') ? (sr.value.data || {}) : (useAppStore.getState().stockRisk || {})
       const ov = aux.stockOverview || {}
       useAppStore.setState({ dashboard: dash, alerts, stockRisk, alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: ov.items || [], _stockOverview: ov, loading: false, dataLoaded: true })
       setChLoading(false)
@@ -176,12 +184,13 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
       silentBusy.current = true
       try {
         const _t = 't=' + Date.now()
-        const [s, ax] = await Promise.all([
+        const [s, ax, sr] = await Promise.all([
           api.get('/api/dashboard/summary?' + _t, {timeout: 60000}),
           api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t, {timeout: 60000}),
+          api.get('/api/dashboard/stock-risk?channel=' + channel + '&' + _t, {timeout: 60000}),
         ])
         const aux = ax.data || {}
-        useAppStore.setState({ dashboard: s.data, alerts: aux.alerts || [], stockRisk: aux.stockRisk || [], alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: (aux.stockOverview || {}).items || [], loading: false, dataLoaded: true })
+        useAppStore.setState({ dashboard: s.data, alerts: aux.alerts || [], stockRisk: (sr && sr.data) || useAppStore.getState().stockRisk || {}, alertCounts: aux.alertCounts || null, bcOutOfStock: aux.bcOutOfStock || [], inventory: (aux.stockOverview || {}).items || [], loading: false, dataLoaded: true })
       } catch {} finally { silentBusy.current = false }
     }, 30000)
     return () => clearInterval(timer)
@@ -474,9 +483,10 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
               <div style={{flexShrink:0}}>
               {_r.items.slice(0,3).map((x,i) => {
                 var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+                var lv = RISK_LV[x.level]
                 return (
                 <div key={i} style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0}}>
-                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
+                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
                 </div>)
               })}
               </div>
@@ -587,13 +597,17 @@ export default function DashboardPage({ onAlert }: DashboardPageProps) {
           <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
           {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
             var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+            var lv = RISK_LV[x.level]
             return <div key={i} onClick={function(){onAlert && onAlert(x.sku, _showOwn ? 'own' : 'platform', x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{minWidth:0,flex:1}}>
-                <div style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.product_name || x.sku}</div>
+                <div style={{display:'flex',alignItems:'center',gap:4,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {lv ? <span className={'pill ' + (x.level === 'red' ? 'danger' : x.level === 'orange' ? 'warning' : 'info')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{lv.t}</span> : null}
+                  {x.product_name || x.sku}
+                </div>
                 <div className="small muted" style={{fontSize:10}}>日销 {x.daily_sales} · 可用 {x.available_qty}</div>
               </div>
               <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 5px',borderRadius:4,background:'var(--bg)',color:'var(--muted)',flexShrink:0}}>{whLabel}</span>
-              <span style={{fontSize:11,fontWeight:600,color:'#ef4444',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
+              <span style={{fontSize:11,fontWeight:600,color:lv ? lv.c : '#ef4444',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
             </div>
           })}
           <div onClick={function(){setShowAllRisk(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>

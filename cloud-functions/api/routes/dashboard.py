@@ -10,7 +10,7 @@ from routes.common import ok, fail, PAID_STATUSES, traced
 router = APIRouter(tags=["dashboard"])
 
 from routes.analysis_cache import register as _register_cache
-_register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear()))
+_register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear()))
 
 _PAID = tuple(PAID_STATUSES)
 
@@ -268,6 +268,8 @@ def _health_index(channel):
 
 _aux_cache = {}
 _AUX_TTL = 300
+_risk_cache = {}
+_RISK_TTL = 30
 
 
 @router.get("/dashboard/aux")
@@ -353,7 +355,6 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
                           "low_stock_count": int(low.get("c") or 0),
                           "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
         "bcOutOfStock": bc_out,
-        "stockRisk": _stock_risk(channel),
     }
     _aux_cache[_key] = (_time.time(), _aux_result)
     return ok(_aux_result)
@@ -362,7 +363,14 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
 @router.get("/dashboard/stock-risk")
 @traced
 def stock_risk(channel: str = "jd", full: int = 0):
-    return ok(_stock_risk(channel, full=full))
+    """濒临断货(独立接口, 30s TTL —— 比 aux 300s 实时, 数据变更由 invalidate_all 立即失效)"""
+    _key = "%s|%s" % (channel, full)
+    _c = _risk_cache.get(_key)
+    if _c and _time.time() - _c[0] < _RISK_TTL:
+        return ok(_c[1])
+    _p = _stock_risk(channel, full=full)
+    _risk_cache[_key] = (_time.time(), _p)
+    return ok(_p)
 
 
 def _stock_risk(channel, full: int = 0):
@@ -371,12 +379,24 @@ def _stock_risk(channel, full: int = 0):
     from db import query as _q
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
+    # 有效补货周期 L/T_eff(模式双线, 复用补货配置): bc 维度= B→C 调拨+安全缓冲; 传统维度=采购到货
+    lit_bbcc = int(cfg.get("b_to_c_days", "3") or 3) + int(cfg.get("c_safety_days", "0") or 0)
+    lit_trad = int(cfg.get("lead_time_days", "10") or 10)
 
-    inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, safety_qty, product_name "
+    inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, c_transit, safety_qty, product_name "
              "FROM inventory WHERE channel=%s", [channel])
-    prods = _q("SELECT sku, barcode, product_name FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel])
+    prods = _q("SELECT sku, barcode, product_name, supplier_code FROM products WHERE channel=%s "
+               "AND (deleted_at IS NULL OR deleted_at='')", [channel])
     pmap = {r.get("sku"): r for r in prods}
     skus = set([r.get("sku") for r in inv]) | set(pmap.keys())
+    # OTIF 置信系数: suppliers.score/5 → 在途可信度(0.6~1.0, 未评分=1.0 维持现状口径)
+    otif_map = {}
+    for r in _q("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
+        try:
+            sc = float(r.get("score") or 0)
+            otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), 0.6) if sc > 0 else 1.0
+        except Exception:
+            pass
 
     by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
     multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
@@ -405,11 +425,32 @@ def _stock_risk(channel, full: int = 0):
         qty = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
+        ctt = int(r.get("c_transit") or 0)
         if wt in ("platform", "platform_b"):
-            st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0})
+            st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0, "ct": 0})
             st["available"] += qty
             st["safety"] += safety
             st["transit"] += tty
+            # B→C 调拨在途(C 仓行, 自有调拨可信度 1.0)
+            if wt == "platform":
+                st["ct"] += ctt
+
+    def _otif(sku):
+        """该 SKU 供应商置信系数(products.supplier_code → suppliers.score/5)"""
+        sup = (pmap.get(sku) or {}).get("supplier_code")
+        return otif_map.get(sup, 1.0) if sup else 1.0
+
+    def _grade(adj_dos, buffer, lit):
+        """P0 三级分级(供应链时间线优先), 返回 (入选?, level):
+        红=Adj-DOS 击穿补货周期(含已断 avail=0); 橙=逼近周期且缓冲破位(≤1.2);
+        黄=缓冲破位(≤1.0)但时间尚够; 三者都不满足 → 不入选(安全)"""
+        if adj_dos <= lit:
+            return True, "red"
+        if adj_dos <= lit + 1 and buffer <= 1.2:
+            return True, "orange"
+        if buffer <= 1.0:
+            return True, "yellow"
+        return False, None
 
     # C 维度(传统多仓: 逐仓粒度 —— 一个 SKU 一个仓库一行, 该仓库存/该仓日销/该仓可撑天数)
     c_items = []
@@ -420,14 +461,22 @@ def _stock_risk(channel, full: int = 0):
         wh = str(r.get("warehouse") or "")
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
+        tty = int(r.get("in_transit_qty") or 0)
+        ctt = int(r.get("c_transit") or 0)
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
-        if avail <= 0 or avail >= safety or ds <= 0:
+        if ds <= 0:
             continue
-        c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
-                        "product_name": (pmap.get(sku) or {}).get("product_name", sku),
-                        "warehouse": wh or "C仓", "type": "C", "available_qty": avail,
-                        "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
-    # BC 合计(bbcc 专属: B仓+全国C仓按 SKU 合计, 一盘棋视图 → 标签 BC)
+        # 修正可售天数: 在仓 + 供应商在途×OTIF + B→C调拨在途×1.0(自有可信)
+        adj_dos = (avail + tty * _otif(sku) + ctt) / ds
+        buffer = avail / max(safety, 1)
+        inc, lv = _grade(adj_dos, buffer, lit_trad)
+        if inc:
+            c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+                            "product_name": (pmap.get(sku) or {}).get("product_name", sku),
+                            "warehouse": wh or "C仓", "type": "C", "available_qty": avail,
+                            "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
+                            "level": lv})
+    # BC 合计(bbcc 专属: B仓+全国C仓按 SKU 合计, 一盘棋视图 → 标签 BC; 用 bbcc 补货周期)
     bc_items = []
     for sku, st in bc_total.items():
         avail = st["available"]
@@ -435,11 +484,15 @@ def _stock_risk(channel, full: int = 0):
         ds = fused_c.get(sku, 0)
         if ds <= 0:
             continue
-        if avail <= 0 or avail < safety:
+        adj_dos = (avail + st["transit"] * _otif(sku) + st["ct"]) / ds
+        buffer = avail / max(safety, 1)
+        inc, lv = _grade(adj_dos, buffer, lit_bbcc)
+        if inc:
             bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                              "warehouse": "BC", "type": "BC", "available_qty": avail,
-                             "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
+                             "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
+                             "level": lv})
     # own 维度(传统: 逐仓 —— jd 集货仓 / other 三方仓, 该仓库存/该仓日销/可撑天数)
     own_items = []
     for r in inv:
@@ -449,23 +502,29 @@ def _stock_risk(channel, full: int = 0):
         wh = str(r.get("warehouse") or "")
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
+        tty = int(r.get("in_transit_qty") or 0)
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
-        if avail <= 0 or (safety > 0 and avail < safety):
+        adj_dos = (avail + tty * _otif(sku)) / ds
+        buffer = avail / max(safety, 1)
+        inc, lv = _grade(adj_dos, buffer, lit_trad)
+        if inc:
             own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
                               "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                               "warehouse": wh or "自有", "type": "OWN", "available_qty": avail,
-                              "daily_sales": round(ds, 1), "days_to_empty": round(avail / ds, 1)})
+                              "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
+                              "level": lv})
 
     def _stats(items):
-        crit = sum(1 for i in items if i.get("days_to_empty", 999) < 3)
-        warn = sum(1 for i in items if 3 <= i.get("days_to_empty", 999) < 7)
+        crit = sum(1 for i in items if i.get("level") == "red")
+        warn = sum(1 for i in items if i.get("level") == "orange")
         return len(items), crit, warn
 
-    bc_items.sort(key=lambda x: x["days_to_empty"])
-    c_items.sort(key=lambda x: x["days_to_empty"])
-    own_items.sort(key=lambda x: x["days_to_empty"])
+    _lv = {"red": 0, "orange": 1, "yellow": 2}
+    bc_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
+    c_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
+    own_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
     bt, bc, bw = _stats(bc_items)
     ct, cc, cw = _stats(c_items)
     ot, oc, ow = _stats(own_items)
