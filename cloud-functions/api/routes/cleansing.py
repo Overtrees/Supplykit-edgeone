@@ -370,7 +370,11 @@ def _adjust_inventory(channel, deltas, evaluate_skus=300):
 
 
 def _write_rows(target, channel, conflict_mode, cleaned):
-    """按 target 分派写入; 返回 (success, failed)"""
+    """按 target 分派写入; 返回 (success, failed)
+    渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道"""
+    for it in cleaned:
+        if "channel" not in it:
+            it["channel"] = channel
     if target == "order":
         return _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
