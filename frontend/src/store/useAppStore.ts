@@ -77,7 +77,7 @@ export const useAppStore = create((set, get) => ({
   setHammerWhType: (v) => { try { localStorage.setItem('c_wh_type_' + get().channel, v) } catch {} set({ hammerWhType: v }) },
   hammerInsightsTab: 'replen',
   setHammerInsightsTab: (t) => set({ hammerInsightsTab: t }),
-  hammerCleansingChannel: 'jd',
+  hammerCleansingChannel: (() => { try { return localStorage.getItem('c_channel') || 'jd' } catch { return 'jd' } })(),
   setHammerCleansingChannel: (c) => set({ hammerCleansingChannel: c }),
   hammerCleansingTarget: 'order',
   setHammerCleansingTarget: (t) => set({ hammerCleansingTarget: t }),
