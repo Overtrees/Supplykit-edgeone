@@ -373,5 +373,30 @@ trig = evaluate("inventory.changed", {"sku": "SKU0001", "channel": "jd",
                                               "product_name": "测试商品"}})
 check("evaluate 触发低库存规则", "低库存预警" in trig, str(trig))
 
+# ── 规则引擎融合回归(P1): health.score 键名 / params.* 引用 / test_rule 参数模拟 ──
+from core.rules import _check_condition
+# health.score 需要 ctx['health'] dict(曾注入 health_score 顶层致 0 恒触发)
+check("rules health.score 72 不触发", not _check_condition(
+      {"left": "health.score", "op": "<", "right": "params.health_warning"},
+      {"health": {"score": 72}, "params": {"health_warning": 60}}), "health 72 误触发")
+check("rules health.score 55 触发", _check_condition(
+      {"left": "health.score", "op": "<", "right": "params.health_warning"},
+      {"health": {"score": 55}, "params": {"health_warning": 60}}), "health 55 未触发")
+check("rules health 无参数兜底 999 不触发", not _check_condition(
+      {"left": "health.score", "op": "<", "right": "params.health_warning"},
+      {"health": {"score": 999}, "params": {}}), "health 999 误触发")
+# params.lit 引用(断货规则条件)
+check("rules params.lit 2<=3 触发", _check_condition(
+      {"left": "inv.adj_dos", "op": "<=", "right": "params.lit"},
+      {"inv": {"adj_dos": 2}, "params": {"lit": 3}}), "adj_dos 2 lit 3 未触发")
+check("rules params.lit 4>3 不触发", not _check_condition(
+      {"left": "inv.adj_dos", "op": "<=", "right": "params.lit"},
+      {"inv": {"adj_dos": 4}, "params": {"lit": 3}}), "adj_dos 4 lit 3 误触发")
+# test_rule 带 params 模拟(条件引用 params.lit)
+r = client.post("/rules/1/test", json={"inv": {"available_qty": 5, "safety_qty": 10, "adj_dos": 2.5},
+                                       "params": {"lit": 3}}, headers=AH)
+d = r.json()
+check("rules test 带 params(adj_dos<=lit 触发)", d.get("ok") is True, r.text[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

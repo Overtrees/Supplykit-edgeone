@@ -217,6 +217,14 @@ async def test_rule(rid: int, request: Request):
         pass
     inv = body.get("inv") or {}
     order = body.get("order") or {}
+    # 规则参数: body.params 覆盖规则 params(测试弹窗可调, 模拟 params.* 引用)
+    params = body.get("params")
+    if not isinstance(params, dict):
+        try:
+            params = json.loads(row.get("params") or "{}")
+        except Exception:
+            params = {}
+    _cj_all = json.dumps(cond, ensure_ascii=False)
     ctx = {
         "inv": {
             "available_qty": int(inv.get("available_qty") or 0),
@@ -224,12 +232,16 @@ async def test_rule(rid: int, request: Request):
             "in_transit_qty": int(inv.get("in_transit_qty") or 0),
             "warehouse_type": inv.get("warehouse_type", ""),
             "days_since_last": int(inv.get("days_since_last") or 0),
+            "adj_dos": float(inv.get("adj_dos") or 0),
+            "buffer": float(inv.get("buffer") or 0),
         },
         "order": {"quantity": int(order.get("quantity") or 0),
                   "total_amount": float(order.get("total_amount") or 0)},
         "channel": row.get("channel") or "jd",
         "days_since_last": int(inv.get("days_since_last") or 0),
         "stock": int(inv.get("available_qty") or 0),
+        "params": params,
+        "health": {"score": float((body.get("health") or {}).get("score") or 100)} if "health." in _cj_all else None,
     }
     from core.rules import _check_condition, _resolve_value
     triggered = _check_condition(cond, ctx)

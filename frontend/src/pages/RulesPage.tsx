@@ -67,13 +67,14 @@ export default function RulesPage() {
   const [testRule, setTestRule] = useState(null)
   const [testInv, setTestInv] = useState({ available_qty: 0, safety_qty: 0, in_transit_qty: 0, warehouse_type: '', days_since_last: 0, order_quantity: 0 })
   const [testResult, setTestResult] = useState(null)
+  const [testParams, setTestParams] = useState({})
   const [testLoading, setTestLoading] = useState(false)
 
   const runTest = async () => {
     if (!testRule) return
     setTestLoading(true)
     try {
-      const r = await fetch(API + '/api/rules/' + testRule.id + '/test', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (() => { try { return localStorage.getItem('c_token') } catch { return '' } })(), 'Content-Type': 'application/json' }, body: JSON.stringify({ inv: { available_qty: Number(testInv.available_qty)||0, safety_qty: Number(testInv.safety_qty)||0, in_transit_qty: Number(testInv.in_transit_qty)||0, warehouse_type: testInv.warehouse_type, days_since_last: Number(testInv.days_since_last)||0 }, order: { quantity: Number(testInv.order_quantity)||0 } }) })
+      const r = await fetch(API + '/api/rules/' + testRule.id + '/test', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (() => { try { return localStorage.getItem('c_token') } catch { return '' } })(), 'Content-Type': 'application/json' }, body: JSON.stringify({ inv: { available_qty: Number(testInv.available_qty)||0, safety_qty: Number(testInv.safety_qty)||0, in_transit_qty: Number(testInv.in_transit_qty)||0, warehouse_type: testInv.warehouse_type, days_since_last: Number(testInv.days_since_last)||0, adj_dos: Number(testInv.adj_dos)||0, buffer: Number(testInv.buffer)||0 }, order: { quantity: Number(testInv.order_quantity)||0 }, params: testParams, health: { score: testInv.health_score === undefined || testInv.health_score === '' ? 100 : Number(testInv.health_score) } }) })
       const d = await r.json()
       if (d.ok) setTestResult(d.data)
       else toast.error('测试失败: ' + (d.error || ''))
@@ -387,7 +388,7 @@ export default function RulesPage() {
           </div>
         </div>
         <div style={{display:'flex',gap:8,flexShrink:0,alignItems:'flex-start'}}>
-          <button onClick={()=>{setTestRule(rule);setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0});setTestResult(null)}} className="clickable" style={{fontSize:13,padding:'6px 14px',minHeight:36,borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
+          <button onClick={()=>{setTestRule(rule);setTestParams(rule.params||{});setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0,adj_dos:'',buffer:'',health_score:100});setTestResult(null)}} className="clickable" style={{fontSize:13,padding:'6px 14px',minHeight:36,borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
 
         </div>
         </div>
@@ -526,6 +527,27 @@ export default function RulesPage() {
             </select>
           </label>
         </div>
+        {(() => {
+          const _cj = (testRule && testRule.condition_json) || ''
+          const _needAdj = _cj.includes('adj_dos')
+          const _needBuf = _cj.includes('buffer')
+          const _needHealth = _cj.includes('health.')
+          const _needParams = _cj.includes('params.') && testParams && Object.keys(testParams).length > 0
+          if (!_needAdj && !_needBuf && !_needHealth && !_needParams) return null
+          return <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg)',borderRadius:24,border:'1px solid var(--border)'}}>
+            <div style={{fontWeight:600,fontSize:12,marginBottom:8}}>⚙️ 计算变量/规则参数（与看板判定同源，可调预览）</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {_needAdj && <label style={{fontSize:12}}>可售天数 Adj-DOS<input type="number" step="any" value={testInv.adj_dos} onChange={e=>setTestInv(p=>({...p,adj_dos:e.target.value}))} style={IS} placeholder="例 2.5"/></label>}
+              {_needBuf && <label style={{fontSize:12}}>缓冲比 Buffer<input type="number" step="any" value={testInv.buffer} onChange={e=>setTestInv(p=>({...p,buffer:e.target.value}))} style={IS} placeholder="例 0.8"/></label>}
+              {_needHealth && <label style={{fontSize:12}}>库存健康分<input type="number" step="any" value={testInv.health_score} onChange={e=>setTestInv(p=>({...p,health_score:e.target.value}))} style={IS} placeholder="例 60"/></label>}
+              {_needParams && Object.keys(testParams).map(k => (
+                <label key={k} style={{fontSize:12}}>参数 {k}
+                  <input type="number" step="any" value={testParams[k]} onChange={e=>setTestParams(p=>({...p,[k]:e.target.value}))} style={IS}/>
+                </label>
+              ))}
+            </div>
+          </div>
+        })()}
         <div style={{display:'flex',gap:10,marginTop:14}}>
           <button onClick={runTest} disabled={testLoading} className="btn btn-primary" style={{flex:1,display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42}}>{testLoading ? <><IconLoading size={14}/> 测试中...</> : '运行测试'}</button>
           <button onClick={()=>setTestRule(null)} className="btn btn-ghost" style={{flex:1,minHeight:42}}>关闭</button>
