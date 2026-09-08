@@ -170,7 +170,7 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         if not cleaned:
             return {"ok": True, "task_id": task_id, "success": 0, "failed": 0,
                     "error": "", "message": "文件为空或无有效映射"}
-        success, failed = _write_rows(target, channel, conflict_mode, cleaned)
+        success, failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
         elapsed = round(time.time() - started, 1)
         # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
         adjusted = 0
@@ -259,9 +259,20 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                                                        "inventory_adjusted": adjusted}}, ensure_ascii=False), channel))
         except Exception:
             pass
+        try:
+            if failed > 0 and err_details:
+                from db import execute as _e2
+                _e2("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES(%s,%s,%s,%s,%s)",
+                    ("cleansing_error", "warning", ("清洗失败 %d 条" % failed),
+                     ";".join("%s: %s" % (d.get("sku"), d.get("reason")) for d in err_details[:20]),
+                     "cleansing"))
+        except Exception:
+            pass
         return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
                 "error": "", "message": "成功 %d 条, 跳过 %d 条" % (success, failed),
-                "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted}
+                "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted,
+                "failed_details": err_details[:20]}
     except Exception as e:
         try:
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
@@ -420,9 +431,10 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
     inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
     其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)"""
     if not cleaned:
-        return 0, 0
+        return 0, 0, []
     keys = set(key_cols)
     success = failed = 0
+    err_details = []
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
     # sum 累加仅限出入库记录(HammerCleansing 只在 inbound/outbound 暴露 sum/overwrite 选择)
     sum_mode = table in ("inbound_records", "outbound_records") and conflict_mode == "sum"
@@ -467,6 +479,9 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
                 try:
                     execute(sql, [r[c] for c in cols])
                     success += 1
-                except Exception:
+                except Exception as e1:
                     failed += 1
-    return success, failed
+                    if len(err_details) < 50:
+                        err_details.append({"sku": str(r.get("sku") or r.get("supplier_code") or ""),
+                                            "reason": str(e1)[:80], "row": str(r)[:200]})
+    return success, failed, err_details

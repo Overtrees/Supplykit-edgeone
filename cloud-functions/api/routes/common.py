@@ -89,6 +89,13 @@ def traced(handler):
     import asyncio as _ai
 
     def _err(e):
+        try:
+            from db import execute as _e
+            _e("INSERT INTO quality_logs(log_type, level, message, source) "
+               "VALUES(%s,%s,%s,%s)",
+               ("api_error", "error", ("%s: %s" % (type(e).__name__, str(e)[:300])), "api"))
+        except Exception:
+            pass
         return {"ok": False, "error": "handler-error",
                 "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
                 "tb": _tb.format_exc(limit=15)[-2000:]}

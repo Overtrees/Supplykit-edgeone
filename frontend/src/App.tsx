@@ -3,19 +3,19 @@ import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { api } from './api/client'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
-import ProductPage from './pages/ProductPage'
-import SupplierPage from './pages/SupplierPage'
-import InsightsPage from './pages/InsightsPage'
-import CleansingPage from './pages/CleansingPage'
-import RulesPage from './pages/RulesPage'
-import DashboardPage from './pages/DashboardPage'
+const ProductPage = lazy(() => import('./pages/ProductPage'))
+const SupplierPage = lazy(() => import('./pages/SupplierPage'))
+const InsightsPage = lazy(() => import('./pages/InsightsPage'))
+const CleansingPage = lazy(() => import('./pages/CleansingPage'))
+const RulesPage = lazy(() => import('./pages/RulesPage'))
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 import ErrorBoundary from './components/ErrorBoundary'
-import OrdersPage from './pages/OrdersPage'
-import InventoryPage from './pages/InventoryPage'
-import QualityPage from './pages/QualityPage'
-import SettingsPage from './pages/SettingsPage'
-import TaskPage from './pages/TaskPage'
-import LoginPage from './pages/LoginPage'
+const OrdersPage = lazy(() => import('./pages/OrdersPage'))
+const InventoryPage = lazy(() => import('./pages/InventoryPage'))
+const QualityPage = lazy(() => import('./pages/QualityPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const TaskPage = lazy(() => import('./pages/TaskPage'))
+const LoginPage = lazy(() => import('./pages/LoginPage'))
 import Sidebar from './components/Sidebar'
 import HistorySheet from './components/hammer/HistorySheet'
 
@@ -373,7 +373,7 @@ export default function App() {
   const errCount = (qualityLogs||[]).length
 
   const renderPage = (pageId) => {
-    const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
+    const wrap = (el) => <ErrorBoundary key={pageId}><Suspense fallback={<div className="card"><div style={{padding:16,fontSize:13,color:'var(--muted2)'}}>加载中…</div></div>}>{el}</Suspense></ErrorBoundary>
     switch (pageId) {
       case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab, sku)=>{ useAppStore.getState().setHammerInsightsTab(tab); if (sku) { const _m = useAppStore.getState().hammerReplenMode; const _k = tab === 'purchase' ? 'purchase' : tab === 'slow' ? 'slow' : _m; useAppStore.getState().setHammerData('insights_search_' + _k, sku) } navigateTo('insights') }} />)
       case 'products': return wrap(<ProductPage key={pageId} />)
@@ -416,6 +416,13 @@ export default function App() {
                     <path d="m19 3-3 3"/>
                     <path d="M12 3v3"/>
                     <path d="M12 18v3"/>
+                  </svg>
+                </button>
+                <button title="立即刷新" className="hammer-icon-btn" onClick={() => useAppStore.getState().bumpPageVersion()}
+                  style={{display:'inline-flex',alignItems:'center',justifyContent:'center',padding:0}}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{transform:'scaleX(-1)'}}>
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                    <polyline points="21 3 21 9 15 9"/>
                   </svg>
                 </button>
               </div>

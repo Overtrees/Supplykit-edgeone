@@ -46,6 +46,24 @@ async def _unhandled(request: Request, exc: Exception):
 
 
 @app.middleware("http")
+async def slow_log_middleware(request: Request, next):
+    """慢请求监控(>3s 写 quality_logs —— monitor slow_count 此前恒 0 的缺口)"""
+    import time as _t
+    _t0 = _t.time()
+    _resp = await next(request)
+    _el = _t.time() - _t0
+    if _el > 3:
+        try:
+            from db import execute as _e
+            _e("INSERT INTO quality_logs(log_type, level, message, source) "
+               "VALUES(%s,%s,%s,%s)", ("slow_request","warning",
+               ("%s %s %.1fs" % (request.method, request.url.path, _el)), "api"))
+        except Exception:
+            pass
+    return _resp
+
+
+@app.middleware("http")
 async def auth_middleware(request: Request, next):
     """鉴权: auth/health/debug 放行, 其余需 Bearer; demo 只读"""
     path = request.url.path

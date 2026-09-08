@@ -386,6 +386,17 @@ export default function CleansingPage() {
         <div><div style={{fontSize:24,fontWeight:700,color:'var(--success)'}}>{res.success}</div><div className="small muted">成功</div></div>
         <div><div style={{fontSize:24,fontWeight:700,color:res.failed > 0 ? 'var(--danger)' : 'var(--muted2)'}}>{res.failed}</div><div className="small muted">跳过</div></div>
       </div>
+      {res.failed > 0 && Array.isArray(res.failed_details) && res.failed_details.length > 0 && (
+        <div style={{textAlign:'left',background:'var(--bg)',borderRadius:24,padding:'10px 14px',marginBottom:14,maxHeight:180,overflowY:'auto'}}>
+          <div style={{fontWeight:600,fontSize:12,marginBottom:6,color:'var(--danger)'}}>失败明细（可对照修正后重新导入）</div>
+          {res.failed_details.map((d, i) => (
+            <div key={i} style={{fontSize:11,color:'var(--muted2)',padding:'3px 0',borderBottom:'0.5px solid var(--border)',display:'flex',gap:8}}>
+              <span className="mono" style={{color:'var(--text)',flexShrink:0}}>{d.sku || '-'}</span>
+              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.reason || ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{display:'flex',gap:8,justifyContent:'center'}}>
         <button onClick={()=>{setS(0);setF(null);setCols([]);setTr(0);setMp({});setPv(null);setRes(null)}}
           className="btn btn-ghost">重新开始</button>
