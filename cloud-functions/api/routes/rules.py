@@ -89,8 +89,32 @@ async def update_rule(rid: int, request: Request):
         params.append(json.dumps(d["params"], ensure_ascii=False) if isinstance(d["params"], dict) else None)
     if not sets:
         return fail("无更新字段")
+    # 告警开关联动(即时, 四维: 不残留/不空等): 读取旧 params 的 alert_enabled 对比新值
+    _rl = one("SELECT alert_type, channel, params FROM rules WHERE id=%s", [rid])
+    _old_ae = None
+    _new_ae = None
+    if _rl:
+        try:
+            _old_ae = str((json.loads(_rl.get("params") or "{}") or {}).get("alert_enabled"))
+        except Exception:
+            pass
+        if isinstance(d.get("params"), dict):
+            _new_ae = str(d["params"].get("alert_enabled"))
+    _ch = d.get("channel") or (_rl.get("channel") if _rl else None) or "jd"
     params.append(rid)
     execute("UPDATE rules SET %s WHERE id=%%s" % ", ".join(sets), params)
+    # 开关变化 → 即时联动: 关=清该规则存量告警; 开=即时评估生成(幂等去重)
+    if _rl and _old_ae != _new_ae and _new_ae is not None:
+        _at = _rl.get("alert_type")
+        if _new_ae == "0":
+            execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
+                    "AND status='active' AND source='rules_engine'", [_at, _ch])
+        elif _new_ae == "1":
+            try:
+                from core.rules import evaluate_stock_skus
+                evaluate_stock_skus(_ch, limit=100000)
+            except Exception:
+                pass
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则编辑 → 缓存即时失效
     return ok({})
@@ -157,6 +181,13 @@ async def rules_batch(request: Request):
     ph = ",".join(["%s"] * len(ids))
     if action == "active":
         execute("UPDATE rules SET is_active=1 WHERE id IN (%s)" % ph, ids)
+        # 启用即时评估生成告警(四维: 启用即生效, 不等每日 cron; 幂等去重)
+        try:
+            from core.rules import evaluate_stock_skus
+            for _ch in ("jd", "other"):
+                evaluate_stock_skus(_ch, limit=100000)
+        except Exception:
+            pass
     elif action == "inactive":
         # 停用联动关闭该类告警(PA 行为)
         _close_alerts_for_rules(ids)
