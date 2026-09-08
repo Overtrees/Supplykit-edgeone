@@ -390,7 +390,7 @@ export default function RulesPage() {
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
               {(f.alert_type === 'stockout'
-                ? [['lit','补货周期 L/T(天)'],['otif_min','OTIF 置信下限(0.6~1)'],['ss_z','动态SS Z值(1.28/1.65/2.33)'],
+                ? [['lit','补货周期 L/T(天, 留空=按模式自动)'],['otif_min','OTIF 置信下限(0.6~1)'],['ss_z','动态SS Z值(1.28/1.65/2.33)'],
                    ['accel_ratio','加速倍率阈值(默认1.3)'],['accel_min_qty','加速样本量(默认10)'],
                    ['buffer_orange','橙灯缓冲上限(默认1.2)'],['buffer_yellow','黄灯缓冲上限(默认1.0)'],
                    ['orange_slack_days','橙灯天数余量(默认1)'],['include_avail_zero','已断纳入红灯 1/0'],['log','审计日志 1/0(触发写 quality_logs)']]

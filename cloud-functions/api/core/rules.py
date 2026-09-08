@@ -203,7 +203,9 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
     if not contexts:
         return []
     rules = rule_cache if rule_cache is not None else load_rules_for(event, channel)
-    rules = [r for r in rules if not (r.get("mode") or "") or r.get("mode") == (contexts[0].get("mode") or "")]
+    # 规则 mode(bbcc/traditional)不再按 ctx.mode 过滤排除 —— 原逻辑在 evaluate_stock_skus
+    # (ctx 无 mode 键)下 mode 指定规则永不评估(静默失效); mode 现仅用于 params.lit fallback
+    # 参数选择(bbcc→b_to_c+c_safety, traditional→lead_time, 跟随补货模式)
     for _rl in rules:
         _rl["_params"] = _rule_params_loaded(_rl)
     if not rules:
@@ -228,11 +230,16 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 continue
             if str((rule.get("_params") or {}).get("alert_enabled")) == "0":
                 continue  # 告警开关关闭(兼容字符串/数字): 规则仅作为计算参数载体
+            # params.lit 模式 fallback: 规则未设 lit 时按规则 mode 跟随补货周期
+            # (bbcc→b_to_c+c_safety, traditional→lead_time; 与断货卡模式双线一致)
+            _rp2 = dict(rule.get("_params") or {})
+            if "lit" not in _rp2 and ctx.get("lit_trad") is not None:
+                _rp2["lit"] = ctx.get("lit_bbcc" if str(rule.get("mode")) == "bbcc" else "lit_trad")
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
                     "product_name": (ctx.get("inv") or {}).get("product_name", ""),
-                    "params": rule.get("_params") or {}}
+                    "params": _rp2}
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
