@@ -16,6 +16,8 @@ const fmtWh = (w) => {
 }
 
 // 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
+const alertAge = (c) => { if (!c) return ''; try { const d = Math.floor((Date.now() - new Date(String(c).replace(' ', 'T')))/86400000); return d >= 1 ? ' · 持续' + d + '天' : '' } catch(e) { return '' } }
+
 const RISK_LV = {
   red: { c: '#ef4444', t: '紧急' },
   orange: { c: '#f97316', t: '预警' },
@@ -572,7 +574,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span className={'pill '+(x.severity==='error'?'danger':'warning')} style={{fontSize:10}}>{x.severity==='warning'?'警告':'超储'}</span>
                 </span>
               </div>
-              <div className="small muted" style={{fontSize:11}}>{x.description}</div>
+              <div className="small muted" style={{fontSize:11}}>{x.description}<span style={{color:'var(--muted2)',fontSize:10}}>{alertAge(x.created_at)}</span></div>
             </div>
           })}
           <div onClick={function(){setShowAllLowStock(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
@@ -618,7 +620,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')} style={{fontSize:10}}>{x.severity === 'error' ? '紧急' : '警告'}</span>
                 </span>
               </div>
-              <div className="small muted" style={{fontSize:11}}>{x.description}</div>
+              <div className="small muted" style={{fontSize:11}}>{x.description}<span style={{color:'var(--muted2)',fontSize:10}}>{alertAge(x.created_at)}</span></div>
             </div>
           })}
           <div onClick={function(){setShowAllOther(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>

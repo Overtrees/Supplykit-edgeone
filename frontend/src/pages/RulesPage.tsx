@@ -54,8 +54,12 @@ const pc = j => {
     const m = typeof r==='string'?r.match(/^max\(1,\s*(\w+(?:\.\w+)*)\s*\*\s*([\d.]+)\)$/):null
     if (m) { r=m[1]; rt='pct'; pct=Math.round(parseFloat(m[2])*100) }
     if (!rt||rt==='field') { const f=LF.find(x=>x.v===r); if(!f&&typeof r==='string'&&!r.replace('.','').match(/^\d+$/))rt='text'; else if(!f)rt='number' }
-    return {left:c.left||'inv.available_qty', op:c.op||'<', right:r, rightType:rt, pctValue:pct, warehouse:wh}
-  } catch { return {left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''} }
+    const orArr = Array.isArray(c.or) ? c.or.map(sub => ({
+      left: (sub||{}).left||'inv.available_qty', op: (sub||{}).op||'<',
+      right: (sub||{}).right||'inv.safety_qty', rightType: (sub||{}).rightType||'field',
+      warehouse: (sub||{}).warehouse||'', pctValue: 100 })) : []
+    return {left:c.left||'inv.available_qty', op:c.op||'<', right:r, rightType:rt, pctValue:pct, warehouse:wh, or:orArr}
+  } catch { return {left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:'', or:[]} }
 }
 
 export default function RulesPage() {
@@ -108,8 +112,8 @@ export default function RulesPage() {
 
   const defaultF = {name:'', event:'inventory.changed', alert_type:'low_stock', alert_title:'', alert_desc:'', severity:'warning', condition_json:'{}'}
   // 业务计算参数(融合进规则: 断货/健康类规则携带看板计算参数, 保存进 rules.params)
-  const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1'} :
-    at === 'health' ? {health_good:'85', health_warning:'60'} : {}
+  const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1', log:'0'} :
+    at === 'health' ? {health_good:'85', health_warning:'60', log:'0'} : {}
   // 类型模板(联动性: 选类型自动带出默认事件/条件/参数, 防止事件-变量错配致规则永不触发)
   const TYPE_TEMPLATE = {
     low_stock:   {event:'inventory.changed', cond:{left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}},
@@ -181,8 +185,8 @@ export default function RulesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hammerRuleNewVersion])
 
-  const resetForm = () => { setEditing({}); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}) }
-  const cancelEdit = () => { setEditing(null); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}); useAppStore.setState({ hammerRuleNewVersion: 0 }) }
+  const resetForm = () => { setEditing({}); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:'', or:[]}) }
+  const cancelEdit = () => { setEditing(null); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:'', or:[]}); useAppStore.setState({ hammerRuleNewVersion: 0 }) }
 
   const save = async () => {
     setSaveLoading(true)
@@ -192,7 +196,8 @@ export default function RulesPage() {
       if (cond.rightType === 'number') rv = parseFloat(cond.right) || 0
       else if (cond.rightType === 'field') rv = cond.right
       else if (cond.rightType === 'pct') rv = `max(1,${cond.right}*${(cond.pctValue||100)/100})`
-      const cj = JSON.stringify({left:cond.left, op:cond.op, right:rv, rightType:cond.rightType, warehouse:cond.warehouse})
+      const cj = JSON.stringify({left:cond.left, op:cond.op, right:rv, rightType:cond.rightType, warehouse:cond.warehouse,
+        or:(cond.or||[]).map(o => ({left:o.left, op:o.op, right:(o.rightType==='number'?(parseFloat(o.right)||0):o.right), warehouse:o.warehouse}))})
       const isNew = !editing || !editing.id
       const url = isNew ? API+'/api/rules' : API+'/api/rules/'+editing.id
       const r = await fetch(url, {method: isNew?'POST':'PUT', headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}, body:JSON.stringify({...f, mode: f.mode||'', channel:globalChannel, condition_json:cj, params:rParams})})
@@ -203,7 +208,7 @@ export default function RulesPage() {
       // 本地即时更新 mode 显示，不等 API 返回（避免旧 state 渲染导致 mode 显示"全部"）
       if (!isNew) setRules(prev => prev.map(rl => rl.id === editing.id ? {...rl, mode: f.mode||''} : rl))
       // 严谨性校验提示(不阻断, 防静默错): 条件引用 order.* 但事件非订单创建 / params.* 缺失
-      const _cj2 = JSON.stringify(cond)
+      const _cj2 = JSON.stringify(cond) + JSON.stringify((cond.or||[]).map(o=>({left:o.left,op:o.op,right:o.right})))
       const _evt = f.event || ''
       if ((_cj2.includes('order.') && _evt !== 'order.created')) toast.warning('条件引用 order.* 但事件非「订单创建」，该规则可能永不触发')
       const _pm = _cj2.match(/params\.([\w]+)/g) || []
@@ -317,7 +322,21 @@ export default function RulesPage() {
             当 <b>{WHS.find(w=>w.v===cond.warehouse)?.l||'全部'}</b> <b>{fieldLbl(cond.left)}</b> {opLbl(cond.op)} <b>{cond.pctValue||0}{cond.left==='inv.days_since_last'?'天':cond.left==='inv.available_qty'?'%':'件'}</b>
             {cond.left==='inv.available_qty' ? <span style={{color:'var(--muted2)',fontSize:11}}>（安全库存的 {cond.pctValue||0}%）</span> : ''}
             时
+            {(cond.or||[]).map((o,i)=>(<span key={i} style={{color:'var(--primary)'}}> <b>或</b> {WHS.find(w=>w.v===o.warehouse)?.l||'全部'} <b>{fieldLbl(o.left)}</b> {opLbl(o.op)} <b>{o.right}</b></span>))}
           </div>
+          {/* P2 或条件组(可拓展: 多条件任一满足即触发, 如断货'时间线或缓冲破位') */}
+          {(cond.or||[]).map((o, i) => (
+            <div key={i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8,padding:'8px 10px',background:'var(--bg)',borderRadius:32,border:'1px dashed var(--border)'}}>
+              <span className="text-13 font-600" style={{color:'var(--primary)'}}>或</span>
+              <select value={o.warehouse} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],warehouse:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:60,fontSize:12}}>{WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w=><option key={w.v} value={w.v}>{w.l}</option>)}</select>
+              <select value={o.left} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],left:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:2,minWidth:110,fontSize:12}}>{LF.map(f=><option key={f.v} value={f.v}>{f.l}</option>)}</select>
+              <select value={o.op} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],op:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,width:64,fontSize:12,textAlign:'center'}}>{OPS.map(x=><option key={x.v} value={x.v}>{x.l}</option>)}</select>
+              <input type="number" step="any" value={o.right==='inv.safety_qty'?'':o.right} placeholder={o.right==='inv.safety_qty'?'安全线':''}
+                onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],right:e.target.value||'inv.safety_qty',rightType:'number'};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:80,fontSize:12}}/>
+              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:12,color:'var(--danger)',cursor:'pointer',padding:'4px 6px'}}>✕</span>
+            </div>
+          ))}
+          <button onClick={()=>setCond(p=>({...p,or:[...(p.or||[]),{left:'inv.buffer',op:'<=',right:'1',rightType:'number',warehouse:'',pctValue:100}]}))} className="clickable" style={{marginTop:8,fontSize:12,padding:'4px 12px',borderRadius:99,border:'1px dashed var(--primary)',background:'transparent',color:'var(--primary)',cursor:'pointer'}}>＋ 或条件（任一满足触发）</button>
         </div>
 
         {/* 告警内容 */}
@@ -365,8 +384,8 @@ export default function RulesPage() {
                 ? [['lit','补货周期 L/T(天)'],['otif_min','OTIF 置信下限(0.6~1)'],['ss_z','动态SS Z值(1.28/1.65/2.33)'],
                    ['accel_ratio','加速倍率阈值(默认1.3)'],['accel_min_qty','加速样本量(默认10)'],
                    ['buffer_orange','橙灯缓冲上限(默认1.2)'],['buffer_yellow','黄灯缓冲上限(默认1.0)'],
-                   ['orange_slack_days','橙灯天数余量(默认1)'],['include_avail_zero','已断纳入红灯 1/0']]
-                : [['health_good','健康档位线(默认85)'],['health_warning','预警档位线(默认60)']]
+                   ['orange_slack_days','橙灯天数余量(默认1)'],['include_avail_zero','已断纳入红灯 1/0'],['log','审计日志 1/0(触发写 quality_logs)']]
+                : [['health_good','健康档位线(默认85)'],['health_warning','预警档位线(默认60)'],['log','审计日志 1/0(触发写 quality_logs)']]
               ).map(([k, l]) => (
                 <label key={k} style={{fontSize:12}}>{l}
                   <input type="number" step="any" value={rParams[k] ?? ''}

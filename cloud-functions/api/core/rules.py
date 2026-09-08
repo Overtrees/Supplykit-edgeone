@@ -133,14 +133,20 @@ def _check_single(cond, ctx):
 
 
 def _check_condition(cond, ctx):
+    """条件判定(P2 扩展): (主条件 && and 子条件) 或 or 组任一满足即触发
+    cond = {left,op,right,warehouse?, and?:{...}, or?:[{...},...]}
+    """
     if not cond:
         return False
-    if not _check_single(cond, ctx):
-        return False
-    sub = cond.get("and")
-    if sub:
-        return _check_single(sub, ctx)
-    return True
+    if _check_single(cond, ctx):
+        sub = cond.get("and")
+        if not sub or _check_single(sub, ctx):
+            return True
+    # or 组(可拓展: 断货'时间线或缓冲破位'等多重条件)
+    for _sub in (cond.get("or") or []):
+        if isinstance(_sub, dict) and _check_single(_sub, ctx):
+            return True
+    return False
 
 
 def _action_create_alert(ctx):
@@ -458,6 +464,17 @@ def evaluate_stock_skus(channel, limit=100000):
                     if _b:
                         execute("UPDATE alerts SET status='inactive' WHERE id IN (%s)"
                                 % ",".join(["%s"] * len(_b)), _b)
+    except Exception:
+        pass
+    # P2 动作审计: 规则 params.log=1 → 触发摘要写 quality_logs(追踪规则触发历史, 非仅当前 active 告警)
+    try:
+        for _rl in list(_daily_rules) + list(_inv_rules):
+            if (_rl.get("_params") or {}).get("log") and hits:
+                _n = sum(1 for h in hits if h[0] == _rl.get("alert_type"))
+                if _n:
+                    execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                            "VALUES('rule_action','info',%s,'rules')",
+                            ("规则[%s] 触发 %d 个 SKU×仓" % (_rl.get("name") or _rl.get("id"), _n)))
     except Exception:
         pass
     # 返回触发规则名(不泄漏查询细节)
