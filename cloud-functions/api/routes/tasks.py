@@ -115,7 +115,8 @@ async def seed_fill(request: Request):
         pass
     cnt = one("SELECT COUNT(*) AS c FROM orders") or {}
     pct = one("SELECT COUNT(*) AS c FROM products") or {}
-    if int(cnt.get("c") or 0) > 0 or int(pct.get("c") or 0) > 0:
+    alt = one("SELECT (SELECT COUNT(*) FROM alerts)+(SELECT COUNT(*) FROM inventory) AS c") or {}
+    if int(cnt.get("c") or 0) > 0 or int(pct.get("c") or 0) > 0 or int(alt.get("c") or 0) > 0:
         return ok({"requires_reset": True})
     task_id = _new_task_id("seed")
     try:

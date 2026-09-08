@@ -88,7 +88,10 @@ def health():
             "(SELECT COALESCE(MAX(id),0) FROM inventory),"
             "(SELECT COALESCE(MAX(id),0) FROM products),"
             "(SELECT COALESCE(MAX(id),0) FROM alerts),"
-            "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot)) AS v")
+            "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot),"
+            "(SELECT COALESCE(MAX(id),0) FROM rules),"
+            "(SELECT COALESCE(MAX(id),0) FROM suppliers),"
+            "(SELECT COALESCE(MAX(id),0) FROM replenishment_config)) AS v")
         out["version"] = str((r or {}).get("v") or "0")
     except Exception:
         out["version"] = "0"

@@ -275,7 +275,7 @@ def _health_index(channel):
 
 
 _aux_cache = {}
-_AUX_TTL = 300
+_AUX_TTL = 60
 _risk_cache = {}
 _RISK_TTL = 30
 

@@ -405,7 +405,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <span style={{color:'var(--border)'}}>|</span>
                 <span>采购{procList.filter(x=>x.tag==='采购').length} · 补货{procList.filter(x=>x.tag==='补货').length}</span>
                 {otherTotal > 0 && <span style={{color:'var(--muted)'}}>|</span>}
-                {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable" style={{cursor:'pointer',color:'var(--primary)',textDecoration:'underline'}}>其他 {otherTotal}</span>}
+                {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable pill info" style={{cursor:'pointer',fontSize:10,padding:'1px 8px',minHeight:'auto',lineHeight:'16px'}}>其他 {otherTotal}</span>}
               </div>
             </>}
           </div>
