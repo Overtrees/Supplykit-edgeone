@@ -3,19 +3,19 @@ import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { api } from './api/client'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
-const ProductPage = lazy(() => import('./pages/ProductPage'))
-const SupplierPage = lazy(() => import('./pages/SupplierPage'))
-const InsightsPage = lazy(() => import('./pages/InsightsPage'))
-const CleansingPage = lazy(() => import('./pages/CleansingPage'))
-const RulesPage = lazy(() => import('./pages/RulesPage'))
-const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+import ProductPage from './pages/ProductPage'
+import SupplierPage from './pages/SupplierPage'
+import InsightsPage from './pages/InsightsPage'
+import CleansingPage from './pages/CleansingPage'
+import RulesPage from './pages/RulesPage'
+import DashboardPage from './pages/DashboardPage'
 import ErrorBoundary from './components/ErrorBoundary'
-const OrdersPage = lazy(() => import('./pages/OrdersPage'))
-const InventoryPage = lazy(() => import('./pages/InventoryPage'))
-const QualityPage = lazy(() => import('./pages/QualityPage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
-const TaskPage = lazy(() => import('./pages/TaskPage'))
-const LoginPage = lazy(() => import('./pages/LoginPage'))
+import OrdersPage from './pages/OrdersPage'
+import InventoryPage from './pages/InventoryPage'
+import QualityPage from './pages/QualityPage'
+import SettingsPage from './pages/SettingsPage'
+import TaskPage from './pages/TaskPage'
+import LoginPage from './pages/LoginPage'
 import Sidebar from './components/Sidebar'
 import HistorySheet from './components/hammer/HistorySheet'
 
@@ -373,7 +373,7 @@ export default function App() {
   const errCount = (qualityLogs||[]).length
 
   const renderPage = (pageId) => {
-    const wrap = (el) => <ErrorBoundary key={pageId}><Suspense fallback={<div className="card"><div style={{padding:16,fontSize:13,color:'var(--muted2)'}}>加载中…</div></div>}>{el}</Suspense></ErrorBoundary>
+    const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
       case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab, sku)=>{ useAppStore.getState().setHammerInsightsTab(tab); if (sku) { const _m = useAppStore.getState().hammerReplenMode; const _k = tab === 'purchase' ? 'purchase' : tab === 'slow' ? 'slow' : _m; useAppStore.getState().setHammerData('insights_search_' + _k, sku) } navigateTo('insights') }} />)
       case 'products': return wrap(<ProductPage key={pageId} />)
