@@ -450,16 +450,35 @@ def _seed_config():
          '{"left":"order.quantity","op":">","right":"inv.available_qty"}',
          "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error",
          None),
-        # 注: 内置规则演进 —— "紧急补货"(replenish)/"滞销识别"(slow_moving)/
-        #     "濒临断货预警"(stockout)/"库存健康监控"(health) 均已退役:
-        #     采购&补货卡读建议接口 / 处置建议页承载滞销 / 断货卡与健康卡为系统级实时计算
-        #     承载(规则告警与卡片重叠且粒度错误)。规则页仍可自建上述类型规则(告警进'其他'分组)
+        # 濒临断货预警(参数载体): 断货卡计算参数(params 被 stock-risk 同源读取),
+        # alert_enabled=0 不生成告警(断货卡已实时承载展示); 用户可在编辑页开启告警开关
+        ("濒临断货预警", "scheduled.daily",
+         '{"left":"inv.adj_dos","op":"<=","right":"params.lit"}',
+         "stockout", "濒临断货: {product_name}", "可售天数 {adj_dos} ≤ 补货周期 {lit}", "error",
+         None),
+        # 库存健康监控(参数载体): 健康分档参数(params 被 health_index 同源读取), 不告警
+        ("库存健康监控", "scheduled.daily",
+         '{"left":"health.score","op":"<","right":"params.health_warning"}',
+         "health", "健康度预警: {health_score} 分", "库存健康分跌破 {health_warning} 档位线", "warning",
+         None),
+        # 注: 内置规则演进 —— "紧急补货"(replenish)/"滞销识别"(slow_moving) 退役
+        #     (采购&补货卡读建议接口 / 处置建议页承载滞销); stockout/health 保留为参数载体(不告警)
     ]
     for ch in ['jd', 'other']:
         for name, ev, cond, at, title, desc, sev, _p in rules:
+            if at == "stockout":
+                params = {"lit": 3 if ch == 'jd' else 10, "otif_min": 0.6, "ss_z": 1.65,
+                          "accel_ratio": 1.3, "accel_min_qty": 10, "buffer_orange": 1.2,
+                          "buffer_yellow": 1.0, "orange_slack_days": 1, "include_avail_zero": 1,
+                          "log": 0, "alert_enabled": 0}
+            elif at == "health":
+                params = {"health_good": 85, "health_warning": 60, "log": 0, "alert_enabled": 0}
+            else:
+                params = None
             execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, "
-                    "alert_desc, severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,NULL)",
-                    (name, ev, cond, at, title, desc, sev, ch))
+                    "alert_desc, severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,%s)",
+                    (name, ev, cond, at, title, desc, sev, ch,
+                     json.dumps(params, ensure_ascii=False) if params else None))
 
 
 def _seed_alerts():

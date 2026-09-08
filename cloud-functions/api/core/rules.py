@@ -220,6 +220,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 cond = json.loads(rule.get("condition_json") or "{}")
             except Exception:
                 continue
+            if (rule.get("_params") or {}).get("alert_enabled") == 0:
+                continue  # 告警开关关闭: 规则仅作为计算参数载体(断货卡/健康卡同源读取 params)
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
@@ -301,8 +303,14 @@ def evaluate_stock_skus(channel, limit=100000):
     if not rows:
         return []
     # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
-    _daily_rules = load_rules_for("scheduled.daily", channel)
-    _inv_rules = load_rules_for("inventory.changed", channel)
+    # alert_enabled=0 的参数载体规则(如内置断货/健康)不产生告警 → 不参与评估/注入
+    def _is_alert_rule(r):
+        try:
+            return (json.loads(r.get("params") or "{}") or {}).get("alert_enabled") != 0
+        except Exception:
+            return True
+    _daily_rules = [r for r in load_rules_for("scheduled.daily", channel) if _is_alert_rule(r)]
+    _inv_rules = [r for r in load_rules_for("inventory.changed", channel) if _is_alert_rule(r)]
     _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
     _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)

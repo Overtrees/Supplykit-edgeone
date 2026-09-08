@@ -112,8 +112,9 @@ export default function RulesPage() {
 
   const defaultF = {name:'', event:'inventory.changed', alert_type:'low_stock', alert_title:'', alert_desc:'', severity:'warning', condition_json:'{}'}
   // 业务计算参数(融合进规则: 断货/健康类规则携带看板计算参数, 保存进 rules.params)
-  const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1', log:'0'} :
-    at === 'health' ? {health_good:'85', health_warning:'60', log:'0'} : {}
+  const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1', log:'0', alert_enabled:'1'} :
+    at === 'health' ? {health_good:'85', health_warning:'60', log:'0', alert_enabled:'1'} :
+    ({alert_enabled:'1'})
   // 类型模板(联动性: 选类型自动带出默认事件/条件/参数, 防止事件-变量错配致规则永不触发)
   const TYPE_TEMPLATE = {
     low_stock:   {event:'inventory.changed', cond:{left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}},
@@ -341,7 +342,15 @@ export default function RulesPage() {
 
         {/* 告警内容 */}
         <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:32,padding:14}}>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容</div>
+          <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容
+            <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:4}}>
+              <span className="muted2" style={{fontSize:10}}>生成告警</span>
+              <span style={{display:'flex',gap:2,background:'var(--bg)',borderRadius:99,padding:2}}>
+                <span onClick={()=>setRParams({...rParams,alert_enabled:'1'})} className="clickable" style={{fontSize:10,padding:'2px 10px',borderRadius:99,cursor:'pointer',fontWeight:rParams.alert_enabled!=='0'?600:400,background:rParams.alert_enabled!=='0'?'var(--success)':'transparent',color:rParams.alert_enabled!=='0'?'#fff':'var(--muted2)'}}>开</span>
+                <span onClick={()=>setRParams({...rParams,alert_enabled:'0'})} className="clickable" style={{fontSize:10,padding:'2px 10px',borderRadius:99,cursor:'pointer',fontWeight:rParams.alert_enabled==='0'?600:400,background:rParams.alert_enabled==='0'?'var(--muted)':'transparent',color:rParams.alert_enabled==='0'?'#fff':'var(--muted2)'}}>关</span>
+              </span>
+            </span>
+          </div>
           <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:8}}>
             <label style={{flex:1,minWidth:180,fontSize:12}}>
               告警标题

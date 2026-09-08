@@ -140,14 +140,31 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("ALTER TABLE rules ADD COLUMN params TEXT")
         except Exception:
             pass
-        # 内置"濒临断货预警"/"库存健康监控"规则退役(幂等): 断货卡/健康卡为系统级实时计算
-        # 承载, 规则告警与之重叠(粒度粗/频率低/数字不一致) → 退役后孤儿清理自动清存量告警;
-        # 规则页仍可自建 stockout/health 类型规则(自定义告警进'其他'分组)
+        # 内置"濒临断货预警"/"库存健康监控"规则 = 计算参数载体(软删恢复 + alert_enabled=0 不告警;
+        # 断货卡/健康卡同源读取 params)。永久删除不补(尊重用户删除); 用户自改 params 保留合并
         try:
-            from db import execute as _exec5
-            _exec5("UPDATE rules SET is_active=0, deleted_at=NOW() "
-                   "WHERE name IN ('濒临断货预警','库存健康监控') AND is_active=1 "
-                   "AND (deleted_at IS NULL OR deleted_at='')")
+            import json as _json2
+            from db import query as _qry5, execute as _exec6
+            for _ch in ("jd", "other"):
+                for _nm, _at, _defp in (("濒临断货预警", "stockout",
+                                         {"lit": 3 if _ch == "jd" else 10, "otif_min": 0.6, "ss_z": 1.65,
+                                          "accel_ratio": 1.3, "accel_min_qty": 10, "buffer_orange": 1.2,
+                                          "buffer_yellow": 1.0, "orange_slack_days": 1,
+                                          "include_avail_zero": 1, "log": 0, "alert_enabled": 0}),
+                                        ("库存健康监控", "health",
+                                         {"health_good": 85, "health_warning": 60, "log": 0, "alert_enabled": 0})):
+                    _row = (_qry5("SELECT id, params FROM rules WHERE name=%s AND channel=%s "
+                                  "AND (deleted_at IS NOT NULL AND deleted_at != '' OR is_active=0) "
+                                  "LIMIT 1", [_nm, _ch]) or [None])[0]
+                    if _row:  # 软删/停用 → 恢复为参数载体(合并用户改的 params, 强制 alert_enabled=0)
+                        _p2 = {}
+                        try:
+                            _p2 = _json2.loads(_row.get("params") or "{}")
+                        except Exception:
+                            pass
+                        _p2 = {**(_p2 if isinstance(_p2, dict) else {}), "alert_enabled": 0}
+                        _exec6("UPDATE rules SET deleted_at='', is_active=1, params=%s WHERE id=%s",
+                               (_json2.dumps(_p2, ensure_ascii=False), _row.get("id")))
         except Exception:
             pass
         # 内置"滞销识别"规则退役(幂等, 存量库): 滞销由处置建议页(品类多因素分级)单一承载,
