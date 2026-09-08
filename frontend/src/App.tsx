@@ -418,13 +418,6 @@ export default function App() {
                     <path d="M12 18v3"/>
                   </svg>
                 </button>
-                <button title="立即刷新" className="hammer-icon-btn" onClick={() => useAppStore.getState().bumpPageVersion()}
-                  style={{display:'inline-flex',alignItems:'center',justifyContent:'center',padding:0}}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{transform:'scaleX(-1)'}}>
-                    <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
-                    <polyline points="21 3 21 9 15 9"/>
-                  </svg>
-                </button>
               </div>
               <button className="menu-btn" onClick={toggleEditorMenu}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="1.5" rx=".75" fill="currentColor"/><rect x="2" y="9.25" width="16" height="1.5" rx=".75" fill="currentColor"/><rect x="2" y="14.5" width="16" height="1.5" rx=".75" fill="currentColor"/></svg>
