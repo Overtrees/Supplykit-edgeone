@@ -345,9 +345,9 @@ export default function RulesPage() {
           <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容
             <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:4}}>
               <span className="muted2" style={{fontSize:10}}>生成告警</span>
-              <span className="seg">
-                <span className={'seg-item' + (rParams.alert_enabled !== '0' ? ' active-success' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'1'})}>开</span>
-                <span className={'seg-item' + (rParams.alert_enabled === '0' ? ' active-muted' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'0'})}>关</span>
+              <span className="hammer-segmented" style={{flexShrink:0}}>
+                <span className={'hammer-segment' + (rParams.alert_enabled !== '0' ? ' active' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'1'})} style={{minWidth:34,padding:'2px 6px'}}>开</span>
+                <span className={'hammer-segment' + (rParams.alert_enabled === '0' ? ' active' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'0'})} style={{minWidth:34,padding:'2px 6px'}}>关</span>
               </span>
             </span>
           </div>
@@ -558,7 +558,7 @@ export default function RulesPage() {
 
     {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发） ── */}
     {testRule && <div style={{position:'fixed',inset:0,zIndex:4000}}>
-      <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.3)'}} />
+      <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
       <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:32,padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'75vh',overflowY:'auto'}}>
         <div style={{fontWeight:700,fontSize:16,marginBottom:4,textAlign:'center'}}>规则测试</div>
         <div style={{textAlign:'center',fontSize:12,color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
