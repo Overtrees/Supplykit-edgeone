@@ -454,6 +454,9 @@ export default function InsightsPage() {
       {/* 采购建议 */}
       {tab === 'purchase' && (
         <div className="card">
+          <div style={{fontSize:11,color:'var(--muted2)',background:'var(--bg)',borderRadius:24,padding:'8px 12px',marginBottom:10,lineHeight:1.7}}>
+            💡 <b>采购闭环</b>：导出采购建议 → 内部评估执行下单 → <b>清洗导入库存（含在途列）</b>更新在途 → 建议自动抵扣，完成闭环
+          </div>
           <div className="section-title" style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
             <span>采购建议</span>
             {globalChannel==='jd' && <span className="pill" style={{fontSize:10,padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{replenMode==='bbcc'?'BBCC 口径(含B仓)':'传统口径(不含B仓)'}</span>}

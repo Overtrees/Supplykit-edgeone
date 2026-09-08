@@ -339,6 +339,19 @@ export default function CleansingPage() {
           {pv.preview?.length > 0 && <span className="small muted"> · {Object.keys(pv.preview[0]).filter(k=>k!=='_source').length} 列</span>}
         </div>
         {(() => {
+          // 脏数据预检: 缺SKU/重复SKU 统计(导入前发现)
+          const skuCol = Object.entries(mp).find(([,cfg]) => cfg && cfg.target === 'sku')
+          if (!skuCol) return null
+          const skuVals = (pv.preview||[]).map(r => String(r[skuCol[1].target]||''))
+          const seen = new Map(); const dupSkus = new Set()
+          skuVals.forEach(v => { if (v === '') return; seen.set(v, (seen.get(v)||0)+1); if (seen.get(v) > 1) dupSkus.add(v) })
+          const missing = skuVals.filter(v => v === '').length
+          if (missing === 0 && dupSkus.size === 0) return null
+          return <div style={{fontSize:11,color:'var(--danger)',background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.2)',borderRadius:24,padding:'8px 12px',marginBottom:8}}>
+            ⚠ 预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）—— 建议返回修正后导入
+          </div>
+        })()}
+        {(() => {
           if (!pv.preview?.length) return null
           // 按来源列显示：只显示有映射的列（target 非空），unmap 的列直接不出现
           const mappedSources = Object.entries(mp).filter(([, v]) => v && v.target)
@@ -346,6 +359,11 @@ export default function CleansingPage() {
             const sf = SYS_FIELDS.find(x => x.t === cfg.target) || cf.find(x => x.t === cfg.target)
             return {src, target: cfg.target, label: sf ? sf.l : cfg.target}
           })
+          // 脏数据预检: 重复 SKU 集合(表体行标红用)
+          const _skuCol = cols.find(c => c.target === 'sku')
+          const _skuVals = (pv.preview||[]).map(r => _skuCol ? String(r[_skuCol.target]||'') : '')
+          const _seen = new Map(); const dupSkus = new Set()
+          _skuVals.forEach(v => { if (!v) return; _seen.set(v, (_seen.get(v)||0)+1); if (_seen.get(v) > 1) dupSkus.add(v) })
           if (cols.length === 0) return <div className="small muted" style={{padding:20,textAlign:'center'}}>没有已映射的字段，请返回并设置字段映射</div>
           return <div style={{marginBottom:12}}>
             <div style={{fontSize:11,color:'var(--muted2)',marginBottom:4}}>← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →</div>
@@ -356,11 +374,17 @@ export default function CleansingPage() {
                 <div className="small muted text-9 font-400">← {col.src}</div>
               </th>
             ))}</tr></thead>
-            <tbody>{pv.preview.map((r,i) => (
-              <tr key={i}>{cols.map(col => (
-                <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{String(r[col.target]||'')}</td>
-              ))}</tr>
-            ))}</tbody></table>
+            <tbody>{pv.preview.map((r,i) => {
+              // 脏数据预检: 关键字段(sku)缺失/重复 → 行标红(导入前发现, 非执行后才知道)
+              const skuCol = cols.find(c => c.target === 'sku')
+              const skuVal = skuCol ? String(r[skuCol.target]||'') : ''
+              const issue = skuVal === '' ? '缺SKU' : (dupSkus.has(skuVal) ? '重复SKU' : '')
+              return <tr key={i} style={issue ? {background:'rgba(239,68,68,0.06)'} : undefined}>
+                {cols.map(col => (
+                  <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',color:issue && col.target==='sku' ? 'var(--danger)' : undefined}}>{String(r[col.target]||'')}{issue && col.target==='sku' ? <span style={{fontSize:9,color:'var(--danger)',marginLeft:4}}>⚠{issue}</span> : null}</td>
+                ))}
+              </tr>
+            })}</tbody></table>
             </div>
           </div>
         })()}

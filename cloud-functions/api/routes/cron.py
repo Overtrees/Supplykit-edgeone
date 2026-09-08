@@ -176,17 +176,23 @@ async def cron_daily_rules(request: Request):
         cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
     # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)
     try:
-        from routes.dashboard import _stock_risk
+        from routes.dashboard import _stock_risk, _health_index
         for _ch in ("jd", "other"):
             _rk = _stock_risk(_ch)
+            _hi = _health_index(_ch)
             _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
             _r = (_rk.get("bcCritical", 0) or 0) + (_rk.get("cCritical", 0) or 0) + (_rk.get("ownCritical", 0) or 0)
             _o = (_rk.get("bcWarning", 0) or 0) + (_rk.get("cWarning", 0) or 0) + (_rk.get("ownWarning", 0) or 0)
+            _hs = str(_hi.get("score") if _hi else "-")
+            _ho = str((_hi or {}).get("own", {}).get("score") if _hi else "-")
+            _hp = str((_hi or {}).get("platform", {}).get("score") if _hi else "-")
+            _hb = str((_hi or {}).get("bc", {}).get("score") if _hi else "-")
+            _msg = "[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d | 健康: %s分(own%s/platform%s/bc%s)" % (
+                _ch, _t, _r, _o, max(_t - _r - _o, 0),
+                _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0,
+                _hs, _ho, _hp, _hb)
             execute("INSERT INTO quality_logs(log_type, level, message, source) "
-                    "VALUES('risk_summary','info',%s,'cron')",
-                    ("[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d" % (
-                        _ch, _t, _r, _o, max(_t - _r - _o, 0),
-                        _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0)))
+                    "VALUES('risk_summary','info',%s,'cron')", (_msg,))
     except Exception:
         pass
     return ok({"orphan_cleaned": cleaned, "rules_triggered": triggered})
