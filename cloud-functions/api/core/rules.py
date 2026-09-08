@@ -190,6 +190,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
         return []
     rules = rule_cache if rule_cache is not None else load_rules_for(event, channel)
     rules = [r for r in rules if not (r.get("mode") or "") or r.get("mode") == (contexts[0].get("mode") or "")]
+    for _rl in rules:
+        _rl["_params"] = _rule_params_loaded(_rl)
     if not rules:
         return []
     # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
@@ -213,7 +215,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
                     "product_name": (ctx.get("inv") or {}).get("product_name", ""),
-                    "params": _rule_params_loaded(rule)}
+                    "params": rule.get("_params") or {}}
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
@@ -286,13 +288,12 @@ def evaluate_stock_skus(channel, limit=100000):
     if not rows:
         return []
     # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
-    _need_calc = False
-    _rules = list(load_rules_for("scheduled.daily", channel)) + list(load_rules_for("inventory.changed", channel))
-    for _rl in _rules:
-        _cj = str(_rl.get("condition_json") or "")
-        if any(_v in _cj for _v in _CALC_VARS):
-            _need_calc = True
-            break
+    _daily_rules = load_rules_for("scheduled.daily", channel)
+    _inv_rules = load_rules_for("inventory.changed", channel)
+    _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
+    _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
+    _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)
+    _need_calc = _need_calc_daily or _need_calc_inv
     last_map = {}
     for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
                    [channel]):
@@ -354,11 +355,12 @@ def evaluate_stock_skus(channel, limit=100000):
                                    min_qty=float(_rp.get("accel_min_qty", 10)))
         except Exception:
             pass
-        try:
-            from routes.dashboard import _health_index
-            _health = (_health_index(channel) or {}).get("score")
-        except Exception:
-            pass
+        if _need_health:
+            try:
+                from routes.dashboard import _health_index
+                _health = (_health_index(channel) or {}).get("score")
+            except Exception:
+                pass
         # SKU 聚合(avail/transit/safety + 供应商)
         _agg = {}
         _prod_sup = {}
@@ -420,8 +422,8 @@ def evaluate_stock_skus(channel, limit=100000):
                 pass
         inv_ctxs.append(base)
         daily_ctxs.append(base)
-    r1 = evaluate_many("inventory.changed", inv_ctxs, channel, load_rules_for("inventory.changed", channel))
-    r2 = evaluate_many("scheduled.daily", daily_ctxs, channel, load_rules_for("scheduled.daily", channel))
+    r1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules)
+    r2 = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules)
     out = list(dict.fromkeys(r1 + r2))
     # 返回触发规则名(不泄漏查询细节)
     return out
