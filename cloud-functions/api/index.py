@@ -140,6 +140,35 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("ALTER TABLE rules ADD COLUMN params TEXT")
         except Exception:
             pass
+        # 内置规则幂等补种(存量库升级): '濒临断货预警'+'库存健康监控'(不存在才插入, 用户删了不复活)
+        try:
+            import json as _json
+            from db import query as _qry3, execute as _exec4
+            for _ch in ("jd", "other"):
+                _ck = _qry3("SELECT COUNT(*) AS c FROM rules WHERE name='濒临断货预警' AND channel=%s "
+                            "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or {}
+                if not int(_ck.get("c") or 0):
+                    _lit = 3 if _ch == "jd" else 10
+                    _exec4("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, "
+                           "severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,%s)",
+                           ("濒临断货预警", "scheduled.daily",
+                            '{"left":"inv.adj_dos","op":"<=","right":"params.lit"}',
+                            "stockout", "濒临断货: {product_name}", "可售天数 {adj_dos} ≤ 补货周期 {lit}", "error", _ch,
+                            _json.dumps({"lit": _lit, "otif_min": 0.6, "ss_z": 1.65, "accel_ratio": 1.3,
+                                         "accel_min_qty": 10, "buffer_orange": 1.2, "buffer_yellow": 1.0,
+                                         "orange_slack_days": 1, "include_avail_zero": 1}, ensure_ascii=False)))
+                _ck2 = _qry3("SELECT COUNT(*) AS c FROM rules WHERE name='库存健康监控' AND channel=%s "
+                             "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or {}
+                if not int(_ck2.get("c") or 0):
+                    _exec4("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, "
+                           "severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,%s)",
+                           ("库存健康监控", "scheduled.daily",
+                            '{"left":"health.score","op":"<","right":"params.health_warning"}',
+                            "health", "健康度预警: {health_score} 分", "库存健康分跌破 {health_warning} 档位线",
+                            "warning", _ch,
+                            _json.dumps({"health_good": 85, "health_warning": 60}, ensure_ascii=False)))
+        except Exception:
+            pass
         # 内置"滞销识别"规则退役(幂等, 存量库): 滞销由处置建议页(品类多因素分级)单一承载,
         # 规则版(仅 days>30)粗糙且与处置页重复 → 退役后孤儿清理自动关存量 slow_moving 告警
         try:
