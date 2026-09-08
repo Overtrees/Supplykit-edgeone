@@ -88,6 +88,12 @@ input,select,button,textarea{font-family:inherit;font-size:16px}input[type="file
 .hammer-btn{flex:1;font-size:var(--font-sm);min-height:var(--h-btn);height:auto;width:auto;padding:2px var(--space-sm);border-radius:var(--radius-full);border:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;cursor:pointer;font-family:inherit;font-weight:400;transition:all 0.15s;white-space:nowrap}
 .hammer-tab{flex:1;font-size:12px;min-height:var(--h-btn);padding:2px var(--space-sm);border-radius:99px;border:none;cursor:pointer;text-align:center;display:flex;align-items:center;justify-content:center;box-sizing:border-box;font-family:inherit;font-weight:400;white-space:nowrap;transition:all 0.15s}
 .hammer-tab.active{background:var(--primary);color:#fff;font-weight:600}
+/* 规则页通用分段选择(告警开关/级别等 tab 样式, 替代内联) */
+.seg{display:flex;gap:2px;background:var(--bg);border-radius:99px;padding:2px;align-items:center}
+.seg-item{padding:2px 10px;border-radius:99px;cursor:pointer;font-size:10px;line-height:18px;white-space:nowrap;color:var(--muted2);transition:all .15s;user-select:none}
+.seg-item.active{background:var(--primary);color:#fff;font-weight:600}
+.seg-item.active-success{background:var(--success);color:#fff;font-weight:600}
+.seg-item.active-muted{background:var(--muted);color:#fff;font-weight:600}
 .hammer-tab:not(.active){background:var(--gray);color:var(--text);font-weight:400}
 .hammer-panel{border-top:1px solid var(--border);padding-top:8px;margin-top:8px}
 .hammer-panel-scroll{max-height:260px;overflow-y:auto}

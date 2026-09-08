@@ -345,9 +345,9 @@ export default function RulesPage() {
           <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容
             <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:4}}>
               <span className="muted2" style={{fontSize:10}}>生成告警</span>
-              <span style={{display:'flex',gap:2,background:'var(--bg)',borderRadius:99,padding:2}}>
-                <span onClick={()=>setRParams({...rParams,alert_enabled:'1'})} className="clickable" style={{fontSize:10,padding:'2px 10px',borderRadius:99,cursor:'pointer',fontWeight:rParams.alert_enabled!=='0'?600:400,background:rParams.alert_enabled!=='0'?'var(--success)':'transparent',color:rParams.alert_enabled!=='0'?'#fff':'var(--muted2)'}}>开</span>
-                <span onClick={()=>setRParams({...rParams,alert_enabled:'0'})} className="clickable" style={{fontSize:10,padding:'2px 10px',borderRadius:99,cursor:'pointer',fontWeight:rParams.alert_enabled==='0'?600:400,background:rParams.alert_enabled==='0'?'var(--muted)':'transparent',color:rParams.alert_enabled==='0'?'#fff':'var(--muted2)'}}>关</span>
+              <span className="seg">
+                <span className={'seg-item' + (rParams.alert_enabled !== '0' ? ' active-success' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'1'})}>开</span>
+                <span className={'seg-item' + (rParams.alert_enabled === '0' ? ' active-muted' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'0'})}>关</span>
               </span>
             </span>
           </div>
