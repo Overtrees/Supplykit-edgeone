@@ -12,13 +12,13 @@ import io
 import json
 import random
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import Response
 
-from db import query, one, execute, executemany
+from db import query, one, execute
 from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["tasks"])

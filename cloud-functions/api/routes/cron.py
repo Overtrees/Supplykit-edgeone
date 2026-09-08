@@ -11,7 +11,6 @@ PA 版 APScheduler 10 任务中, TiDB 场景需要外部化的核心任务(备�
 
 安全: /cron/* 放行鉴权中间件, 路由内校验 CRON_SECRET(query secret 或 X-Cron-Secret 头)
 """
-import json
 import os
 from datetime import datetime, timedelta, timezone
 

@@ -6,7 +6,6 @@
 - evaluate(event, context): 匹配 active 规则(event+channel+mode) → 条件满足 → _action_create_alert(去重)
 """
 import json
-import os
 
 from db import query, one, execute, executemany
 

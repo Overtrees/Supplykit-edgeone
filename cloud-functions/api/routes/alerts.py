@@ -1,7 +1,7 @@
 """原生 alerts 路由(方案 B): 列表(分组配额) + 精确计数"""
 from fastapi import APIRouter
 
-from db import query, one
+from db import query
 from routes.common import ok, traced
 
 router = APIRouter(tags=["alerts"])

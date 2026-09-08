@@ -2,8 +2,8 @@
 from fastapi import APIRouter
 from fastapi import Request
 
-from db import query, one, execute, table
-from routes.common import ok, fail, create_token, verify_token, hash_password, check_password, traced
+from db import one, execute, table
+from routes.common import fail, create_token, verify_token, hash_password, check_password, traced
 
 router = APIRouter(tags=["auth"])
 

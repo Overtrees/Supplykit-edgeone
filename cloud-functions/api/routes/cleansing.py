@@ -11,7 +11,7 @@ import io
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi import APIRouter
 from fastapi import Request
@@ -171,7 +171,6 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
             return {"ok": True, "task_id": task_id, "success": 0, "failed": 0,
                     "error": "", "message": "文件为空或无有效映射"}
         success, failed = _write_rows(target, channel, conflict_mode, cleaned)
-        errs = 0
         elapsed = round(time.time() - started, 1)
         # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
         adjusted = 0
@@ -339,7 +338,6 @@ async def cleansing_templates_save(request: Request):
 # ── 写入逻辑(按目标类型) ────────────────────────────────────────────────
 def _adjust_inventory(channel, deltas, evaluate_skus=300):
     """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则评估"""
-    from collections import defaultdict
     from core.rules import evaluate
     if not deltas:
         return 0, []

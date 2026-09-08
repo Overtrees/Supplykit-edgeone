@@ -9,8 +9,6 @@ from fastapi import Request
 
 from db import query, one, execute, executemany
 from routes.common import ok, fail, traced
-from biz.sales import load_daily_sales_grouped, load_daily_sales, calc_sales_multi, rolling_predict
-
 router = APIRouter(tags=["purchase"])
 
 from routes.analysis_cache import register as _register_cache
@@ -103,7 +101,6 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
                     or _sq in str(r.get("barcode", "")).lower()]
         return ok({"suggestions": _all})
     from biz.sales import load_daily_sales, calc_sales_multi
-    now = datetime.now(timezone.utc)
 
     raw = {}
     for r in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''",

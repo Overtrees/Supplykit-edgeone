@@ -1,5 +1,5 @@
 """原生 insights 路由(方案 B): 滞销识别 + 进销存 with-sales(契约与旧 backend 一致)"""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
@@ -29,7 +29,6 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
                 search: str = "", days_threshold: int = 30):
     """滞销识别: 最后销售日距今 > threshold 且库存>0"""
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=90)).strftime("%Y-%m-%d")
     rows = query(
         "SELECT i.sku AS sku, MAX(i.product_name) AS product_name, MAX(i.warehouse_type) AS warehouse_type, "
         "SUM(i.available_qty) AS available_qty, SUM(i.safety_qty) AS safety_qty, "

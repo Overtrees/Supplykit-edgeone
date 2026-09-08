@@ -508,7 +508,7 @@ def _seed_alerts():
             "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])
         for r in rows:
             sku, name = r.get('sku'), r.get('name') or r.get('sku')
-            avail, transit, safety = int(r.get('avail') or 0), int(r.get('transit') or 0), int(r.get('safety') or 0)
+            avail, safety = int(r.get('avail') or 0), int(r.get('safety') or 0)
             wh = str(r.get('warehouse') or '')
             # 仅低库存告警(avail < safety); "紧急补货"(replenish)已退役——
             # 看板采购&补货告警卡改读补货/采购建议接口(动态缺口), 与静态 30% 阈值告警 100% 重叠, 无独立信息价值

@@ -35,7 +35,6 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
             return ok({"items": _all[(page - 1) * page_size: page * page_size],
                        "total": len(_all), "page": page, "page_size": page_size})
         return ok(_all)
-    now_s = "2026-09-05"  # 占位, 由下方实际计算
     cfg = _config(channel, mode)
     products = _products(channel)
     inv = _inventory(channel)

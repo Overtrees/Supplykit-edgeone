@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one
-from routes.common import ok, fail, PAID_STATUSES, traced
+from routes.common import ok, PAID_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
 
@@ -472,6 +472,21 @@ def _stock_risk(channel, full: int = 0):
                "AND (deleted_at IS NULL OR deleted_at='')", [channel])
     pmap = {r.get("sku"): r for r in prods}
     skus = set([r.get("sku") for r in inv]) | set(pmap.keys())
+    # 看板计算参数(先于 otif_map: otif_min 用于在途打折, 规则 params 优先/config 兜底/默认保底)
+    _rp = _rule_params("stockout", channel)
+    def _cf(key, default):
+        try:
+            return float(_rp.get(key, cfg.get(key, default)))
+        except Exception:
+            return default
+    otif_min = _cf("otif_min", 0.6)
+    accel_ratio = _cf("accel_ratio", 1.3)
+    accel_min_qty = _cf("accel_min_qty", 10.0)
+    ss_z = _cf("ss_z", 1.65)
+    buffer_orange = _cf("buffer_orange", 1.2)
+    buffer_yellow = _cf("buffer_yellow", 1.0)
+    orange_slack = _cf("orange_slack_days", 1.0)
+    include_avail_zero = _cf("include_avail_zero", 1.0) > 0.5
     # OTIF 置信系数: suppliers.score/5 → 在途可信度(0.6~1.0, 未评分=1.0 维持现状口径)
     otif_map = {}
     for r in _q("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
@@ -487,21 +502,6 @@ def _stock_risk(channel, full: int = 0):
         factor_bbcc = _season_factor(channel, "bbcc")
     except Exception:
         factor_trad = factor_bbcc = 1.0
-    # 看板计算参数: 规则 params(内置'濒临断货预警'规则配置)优先, replenishment_config 兜底, 默认值保底
-    _rp = _rule_params("stockout", channel)
-    def _cf(key, default):
-        try:
-            return float(_rp.get(key, cfg.get(key, default)))
-        except Exception:
-            return default
-    otif_min = _cf("otif_min", 0.6)
-    accel_ratio = _cf("accel_ratio", 1.3)
-    accel_min_qty = _cf("accel_min_qty", 10.0)
-    ss_z = _cf("ss_z", 1.65)
-    buffer_orange = _cf("buffer_orange", 1.2)
-    buffer_yellow = _cf("buffer_yellow", 1.0)
-    orange_slack = _cf("orange_slack_days", 1.0)
-    include_avail_zero = _cf("include_avail_zero", 1.0) > 0.5
     try:
         from datetime import datetime as _dt, timezone as _tz
         accel = _hourly_accel(channel, _dt.now(_tz.utc), ratio=accel_ratio, min_qty=accel_min_qty)
