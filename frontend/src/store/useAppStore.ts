@@ -73,7 +73,7 @@ export const useAppStore = create((set, get) => ({
   hammerSearch: '',
   setHammerSearch: (text) => set({ hammerSearch: text }),
   hammerData: safeGetJSON('c_hammer_data_' + (safeGet('c_channel') || 'jd')) || {},
-  hammerWhType: (() => { const _ch0 = safeGet('c_channel') || 'jd'; const _wh0 = safeGet('c_wh_type_' + _ch0) || 'own'; return (_ch0 !== 'jd' && _wh0 === 'platform_b') ? 'own' : _wh0 })(),
+  hammerWhType: (() => { const _ch0 = safeGet('c_channel') || 'jd'; const _wh0 = safeGet('c_wh_type_' + _ch0) || 'own'; const _m0 = safeGet('c_replen_mode_' + _ch0) || (_ch0 === 'jd' ? 'bbcc' : 'traditional'); return (_ch0 !== 'jd' || _m0 !== 'bbcc') && _wh0 === 'platform_b' ? 'own' : _wh0 })(),
   setHammerWhType: (v) => { try { localStorage.setItem('c_wh_type_' + get().channel, v) } catch {} set({ hammerWhType: v }) },
   hammerInsightsTab: 'replen',
   setHammerInsightsTab: (t) => set({ hammerInsightsTab: t }),

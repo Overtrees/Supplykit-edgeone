@@ -121,7 +121,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
           <div className="muted2 text-10 mb-4">仓库类型</div>
           <div className="hammer-btn-row">
             {Object.keys(INV_COLS).map(k => {
-              if (k === 'platform_b' && channel !== 'jd') return null
+              if (k === 'platform_b' && (channel !== 'jd' || useAppStore.getState().hammerReplenMode !== 'bbcc')) return null
               return <span key={k} onClick={() => switchWh(k)}
                 className={'hammer-tab' + (hammerWhType === k ? ' active' : '')}>
                 {INV_WH_LABEL[k]}
