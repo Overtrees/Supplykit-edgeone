@@ -415,7 +415,8 @@ def evaluate_stock_skus(channel, limit=100000):
                 base["inv"]["otif"] = _otif
                 base["inv"]["ss_dyn"] = round(_ss, 1)
                 base["inv"]["accel_rate"] = round(_accel.get(sku, 1.0), 2)
-                base["health_score"] = _health
+                base["health"] = {"score": _health if _health is not None else 999.0}
+                base["health_score"] = _health if _health is not None else 999.0
                 base["lit_trad"] = _lit_trad
                 base["lit_bbcc"] = _lit_bbcc
             except Exception:
