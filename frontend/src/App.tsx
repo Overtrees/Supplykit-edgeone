@@ -74,6 +74,8 @@ export default function App() {
   const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
   const toast = useToast()  // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+  // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
+  const refreshAll = () => { clearCache(); clearInflight(); useAppStore.getState().loadAll(1, {refresh: true}).catch(() => {}); window.dispatchEvent(new Event('rules-changed')); window.dispatchEvent(new Event('insights-refresh')) }
   // 全局后台任务轮询（跨页面、挂后台均有效）
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
   const [taskVersion, setTaskVersion] = useState(0)
@@ -87,7 +89,7 @@ export default function App() {
         lastTaskSig.current = sig
         setTaskVersion(v => v + 1)  // 任务变化时重启轮询
       }
-    }, 2000)
+    }, 5000)
     return () => clearInterval(check)
   }, [])
   useEffect(() => {
@@ -99,10 +101,11 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
           const d = await r.json()
+          if (document.visibilityState === 'hidden') return  // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
             clearInterval(poll); try { localStorage.removeItem('c_seed_task') } catch {}
-            toast.success('种子数据填充完成，即将刷新')
-            setTimeout(() => window.location.reload(), 1500)
+            toast.success('种子数据填充完成')
+            refreshAll()
           } else if (d.data?.status === 'error' || d.data?.status === 'not_found') {
             // not_found 容错：任务可能刚提交数据库写入有延迟，重试 3 次才清理
             const missCount = (window.__seedMissCount || 0) + 1
@@ -122,10 +125,11 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
           const d = await r.json()
+          if (document.visibilityState === 'hidden') return
           if (d.status === 'done') {
             clearInterval(poll); try { localStorage.removeItem('c_cleansing_task') } catch {}
-            toast.success('数据清洗完成，即将刷新')
-            setTimeout(() => window.location.reload(), 1500)
+            toast.success('数据清洗完成')
+            refreshAll()
           } else if (d.status === 'error') {
             clearInterval(poll); try { localStorage.removeItem('c_cleansing_task') } catch {}
             toast.error('数据清洗失败')
@@ -147,12 +151,13 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
           const d = await r.json()
+          if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
             clearInterval(poll); try { localStorage.removeItem('c_reset_task') } catch {}
-            if (d.data?.status === 'done') { window.location.reload() }
+            if (d.data?.status === 'done') { toast.success('数据重置完成'); refreshAll() }
           }
         } catch {}
-      }, 3000)
+      }, 5000)
       polls.push(poll)
     }
     // 导出任务轮询
@@ -162,6 +167,7 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
           const d = await r.json()
+          if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done') {
             clearInterval(poll); try { localStorage.removeItem('c_export_task') } catch {}
             toast.success('导出完成，可在质量日志查看下载')
