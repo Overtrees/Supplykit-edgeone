@@ -163,8 +163,8 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
           <div className="hammer-btn-row" style={{marginTop:6}}>
             {Object.entries(DISPOSE_ACTIONS).map(([v, a]) => (
               <button key={v} className="hammer-btn btn-ghost" title={a.desc}
-                style={{color:a.color, opacity:(bpBusy||(useAppStore.getState().prodSelIds||[]).length===0)?0.4:(bpAction===v?1:0.75), borderColor: bpAction===v?a.color:undefined}}
-                disabled={bpBusy||(useAppStore.getState().prodSelIds||[]).length===0} onClick={()=>setBpAction(v)} style={{display:'inline-flex',alignItems:'center',gap:4}}>{a.icon}{a.label}</button>
+                style={{color:a.color, opacity:(bpBusy||(useAppStore.getState().prodSelIds||[]).length===0)?0.4:(bpAction===v?1:0.75), borderColor: bpAction===v?a.color:undefined, display:'inline-flex',alignItems:'center',gap:4}}
+                disabled={bpBusy||(useAppStore.getState().prodSelIds||[]).length===0} onClick={()=>setBpAction(v)}>{a.icon}{a.label}</button>
             ))}
           </div>
           <div className="muted2 text-10" style={{marginTop:4}}>{DISPOSE_ACTIONS[bpAction]?.desc || ''}</div>

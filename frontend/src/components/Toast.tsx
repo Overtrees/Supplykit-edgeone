@@ -16,6 +16,8 @@ interface ToastContextValue {
 }
 
 // 默认 no-op: Provider 外调用(如 App 组件体任务轮询)不崩, Provider 内正常 —— 防止 NullPointer 崩溃
+const _noop = () => {}
+const ToastContext = createContext<ToastContextValue>({ add: _noop, success: _noop, error: _noop, clear: _noop })
 
 export function useToast() { return useContext(ToastContext) }
 
@@ -53,3 +55,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     </div>
   </ToastContext.Provider>
 }
+
+// 页面切换立即清 toast(在 ToastProvider 内使用, toast 有效) —— 任务完成提示不跨页残留
+export function ToastAutoClear({ page }: { page: string }) {
+  const toast = useToast()
+  const prev = useRef(page)
+  useEffect(() => { if (prev.current !== page) toast.clear(); prev.current = page }, [page, toast])
+  return null
+}
+
+export default ToastProvider
