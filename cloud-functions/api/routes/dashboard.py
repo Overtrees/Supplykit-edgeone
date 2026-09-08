@@ -244,6 +244,14 @@ def _health_index(channel):
         "FROM inventory WHERE channel=%s AND warehouse_type IN ('platform','platform_b') GROUP BY sku) t",
         [channel]) or {}
 
+    # 健康分档参数: 内置'库存健康监控'规则 params 配置(默认 85/60 与硬编码一致)
+    _hrp = _rule_params("health", channel)
+    try:
+        _hg = float(_hrp.get("health_good", 85))
+        _hw = float(_hrp.get("health_warning", 60))
+    except Exception:
+        _hg, _hw = 85.0, 60.0
+
     def _score(r):
         total = int(r.get("total") or 0)
         healthy = int(r.get("healthy") or 0)
@@ -254,7 +262,7 @@ def _health_index(channel):
         score = round(healthy / total * 100, 0)
         return {"score": score, "healthy": healthy, "warning": int(r.get("warning") or 0),
                 "out_of_stock": int(r.get("out_of_stock") or 0), "total": total,
-                "level": "good" if score >= 85 else ("warning" if score >= 60 else "danger")}
+                "level": "good" if score >= _hg else ("warning" if score >= _hw else "danger")}
 
     z = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
     all_rows = {"healthy": sum(int(hw.get(k, z).get("healthy") or 0) for k in hw),
@@ -377,10 +385,29 @@ _accel_cache = {}
 _ACCEL_TTL = 60
 
 
-def _hourly_accel(channel, now):
+def _rule_params(alert_type, channel=None):
+    """看板计算参数源: 规则 params(alert_type 对应内置规则, 停用/删除=回默认) → {}"""
+    import json as _json
+    try:
+        sql = "SELECT params FROM rules WHERE alert_type=%s AND is_active=1 " \
+              "AND (deleted_at IS NULL OR deleted_at='') LIMIT 1"
+        _p = [alert_type]
+        if channel:
+            sql = sql.replace("LIMIT 1", "AND channel=%s LIMIT 1")
+            _p.append(channel)
+        row = one(sql, _p)
+        if row and row.get("params"):
+            d = _json.loads(row["params"])
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _hourly_accel(channel, now, ratio=1.3, min_qty=10.0):
     """P1 加速消耗判定: 当天累计销量 vs 前3天同时刻(当前小时前)累计平均
 
-    比值 ≥1.3 且样本量足够(≥10 单) → 视为加速(大促/秒杀), 返回 {sku: 倍率}
+    比值 ≥ ratio(默认1.3) 且样本量足够(≥min_qty 单) → 视为加速(大促/秒杀), 返回 {sku: 倍率}
     (需求按当前流速放大 → adj_dos 缩短 → 更易判濒临)
     内部 60s 缓存: 当天订单近 1 小时基本不变, 避免 stock-risk 每次重算重复查 orders
     """
@@ -411,10 +438,10 @@ def _hourly_accel(channel, now):
             hist[sku] = hist.get(sku, 0) + q / 3.0
     out = {}
     for sku, tq in today_q.items():
-        if tq < 10:
+        if tq < min_qty:
             continue
         hq = hist.get(sku, 0)
-        if hq >= 10 and tq / hq >= 1.3:
+        if hq >= min_qty and tq / hq >= ratio:
             out[sku] = round(tq / hq, 2)
     _accel_cache[channel] = (_time.time(), out)
     return out
@@ -441,7 +468,7 @@ def _stock_risk(channel, full: int = 0):
     for r in _q("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
         try:
             sc = float(r.get("score") or 0)
-            otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), 0.6) if sc > 0 else 1.0
+            otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), otif_min) if sc > 0 else 1.0
         except Exception:
             pass
     # P1: 需求调整因子 —— 活动系数(season_config, 补货/采购已用) + 当天小时流速加速(加速判定)
@@ -451,9 +478,24 @@ def _stock_risk(channel, full: int = 0):
         factor_bbcc = _season_factor(channel, "bbcc")
     except Exception:
         factor_trad = factor_bbcc = 1.0
+    # 看板计算参数: 规则 params(内置'濒临断货预警'规则配置)优先, replenishment_config 兜底, 默认值保底
+    _rp = _rule_params("stockout", channel)
+    def _cf(key, default):
+        try:
+            return float(_rp.get(key, cfg.get(key, default)))
+        except Exception:
+            return default
+    otif_min = _cf("otif_min", 0.6)
+    accel_ratio = _cf("accel_ratio", 1.3)
+    accel_min_qty = _cf("accel_min_qty", 10.0)
+    ss_z = _cf("ss_z", 1.65)
+    buffer_orange = _cf("buffer_orange", 1.2)
+    buffer_yellow = _cf("buffer_yellow", 1.0)
+    orange_slack = _cf("orange_slack_days", 1.0)
+    include_avail_zero = _cf("include_avail_zero", 1.0) > 0.5
     try:
         from datetime import datetime as _dt, timezone as _tz
-        accel = _hourly_accel(channel, _dt.now(_tz.utc))
+        accel = _hourly_accel(channel, _dt.now(_tz.utc), ratio=accel_ratio, min_qty=accel_min_qty)
     except Exception:
         accel = {}
 
@@ -486,7 +528,7 @@ def _stock_risk(channel, full: int = 0):
             sigma[_s] = _v ** 0.5
 
     def _ss_dyn(sku, lit):
-        return 1.65 * sigma.get(sku, 0) * (lit ** 0.5) if lit > 0 else 0.0
+        return ss_z * sigma.get(sku, 0) * (lit ** 0.5) if lit > 0 else 0.0
 
     # 聚合(BC 合计=platform+platform_b 按 SKU 一盘棋 —— B 仓已含在合计内, 不再单独算 B 维度)
     bc_total = {}
@@ -514,14 +556,12 @@ def _stock_risk(channel, full: int = 0):
         return otif_map.get(sup, 1.0) if sup else 1.0
 
     def _grade(adj_dos, buffer, lit):
-        """P0 三级分级(供应链时间线优先), 返回 (入选?, level):
-        红=Adj-DOS 击穿补货周期(含已断 avail=0); 橙=逼近周期且缓冲破位(≤1.2);
-        黄=缓冲破位(≤1.0)但时间尚够; 三者都不满足 → 不入选(安全)"""
+        """三级分级(供应链时间线优先), 返回 (入选?, level); 阈值可由规则页'看板计算'配置"""
         if adj_dos <= lit:
             return True, "red"
-        if adj_dos <= lit + 1 and buffer <= 1.2:
+        if adj_dos <= lit + orange_slack and buffer <= buffer_orange:
             return True, "orange"
-        if buffer <= 1.0:
+        if buffer <= buffer_yellow:
             return True, "yellow"
         return False, None
 

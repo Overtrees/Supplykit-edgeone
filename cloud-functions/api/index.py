@@ -132,6 +132,23 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("ALTER TABLE alerts ADD COLUMN warehouse VARCHAR(64) DEFAULT ''")
         except Exception:
             pass
+        # 启动补列(幂等): rules.params —— 规则携带业务计算参数(断货/健康看板逻辑融合进规则配置)
+        try:
+            from db import query as _qry2
+            _rcols = {str(r.get("Field") or "") for r in _qry2("SHOW COLUMNS FROM rules")}
+            if "params" not in _rcols:
+                _exec("ALTER TABLE rules ADD COLUMN params TEXT")
+        except Exception:
+            pass
+        # 内置"滞销识别"规则退役(幂等, 存量库): 滞销由处置建议页(品类多因素分级)单一承载,
+        # 规则版(仅 days>30)粗糙且与处置页重复 → 退役后孤儿清理自动关存量 slow_moving 告警
+        try:
+            from db import execute as _exec3
+            _exec3("UPDATE rules SET is_active=0, deleted_at=NOW() "
+                   "WHERE name='滞销识别' AND alert_type='slow_moving' AND is_active=1 "
+                   "AND (deleted_at IS NULL OR deleted_at='')")
+        except Exception:
+            pass
         # 内置"紧急补货"规则退役(幂等, 存量库): 看板补货告警卡改读补货建议接口(动态缺口),
         # 静态 30%*安全线 阈值告警与低库存 100% 重叠且口径与补货建议脱节 → 退役后每日孤儿清理
         # 自动关闭存量 replenish 告警(用户自定义 replenish 规则不受影响)

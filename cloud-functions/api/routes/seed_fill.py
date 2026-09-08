@@ -444,21 +444,44 @@ def _seed_config():
     rules = [
         ("低库存预警", "inventory.changed",
          '{"left":"inv.available_qty","op":"<","right":"inv.safety_qty"}',
-         "low_stock", "低库存预警: {product_name}", "可用 {avail} < 安全线 {safety}", "warning"),
+         "low_stock", "低库存预警: {product_name}", "可用 {avail} < 安全线 {safety}", "warning",
+         None),
         ("超卖保护", "order.created",
          '{"left":"order.quantity","op":">","right":"inv.available_qty"}',
-         "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error"),
-        ("滞销识别", "scheduled.daily",
-         '{"left":"inv.days_since_last","op":">","right":"30"}',
-         "slow_moving", "滞销: {product_name}", "{days} 天无销售", "warning"),
-        # 注: "紧急补货"(replenish)内置规则已退役 —— 看板采购&补货告警卡读补货/采购建议接口(动态缺口),
-        # 静态 30%*安全线 阈值告警与低库存 100% 重叠且口径与补货建议脱节
+         "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error",
+         None),
+        # 濒临断货预警(新增): 断货卡计算逻辑 + 告警融合为规则 —— 条件用看板同源计算变量
+        # (inv.adj_dos=修正可售天数), 阈值引用 params.lit(补货周期, 按渠道默认 jd=3/other=10);
+        # params 即断货判定参数(规则页编辑可见/可调, stock-risk 计算同源读取)
+        ("濒临断货预警", "scheduled.daily",
+         '{"left":"inv.adj_dos","op":"<=","right":"params.lit"}',
+         "stockout", "濒临断货: {product_name}", "可售天数 {adj_dos} ≤ 补货周期 {lit}", "error",
+         None),
+        # 库存健康监控(新增): 健康卡分档计算 + 阈值告警融合 —— 条件用 health.score(渠道健康分),
+        # params.health_warning 即健康卡预警档位(health_index 计算同源读取)
+        ("库存健康监控", "scheduled.daily",
+         '{"left":"health.score","op":"<","right":"params.health_warning"}',
+         "health", "健康度预警: {health_score} 分", "库存健康分跌破 {health_warning} 档位线", "warning",
+         None),
+        # 注: "滞销识别"(slow_moving)已退役 —— 滞销由处置建议页(品类多因素分级)单一承载;
+        #     "紧急补货"(replenish)已退役 —— 采购&补货告警卡读建议接口(动态缺口)
     ]
     for ch in ['jd', 'other']:
-        for name, ev, cond, at, title, desc, sev in rules:
+        for name, ev, cond, at, title, desc, sev, _p in rules:
+            if at == "stockout":
+                # 断货参数(看板计算): lit 按渠道默认(jd bbcc 3 / other traditional 10)
+                params = {"lit": 3 if ch == 'jd' else 10,
+                          "otif_min": 0.6, "ss_z": 1.65, "accel_ratio": 1.3,
+                          "accel_min_qty": 10, "buffer_orange": 1.2, "buffer_yellow": 1.0,
+                          "orange_slack_days": 1, "include_avail_zero": 1}
+            elif at == "health":
+                params = {"health_good": 85, "health_warning": 60}
+            else:
+                params = None
             execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, "
-                    "alert_desc, severity, is_active, channel) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s)",
-                    (name, ev, cond, at, title, desc, sev, ch))
+                    "alert_desc, severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,%s)",
+                    (name, ev, cond, at, title, desc, sev, ch,
+                     json.dumps(params, ensure_ascii=False) if params else None))
 
 
 def _seed_alerts():

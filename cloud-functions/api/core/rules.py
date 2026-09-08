@@ -212,7 +212,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
-                    "product_name": (ctx.get("inv") or {}).get("product_name", "")}
+                    "product_name": (ctx.get("inv") or {}).get("product_name", ""),
+                    "params": _rule_params_loaded(rule)}
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
@@ -254,10 +255,28 @@ def load_rules_for(event, channel=None):
     return query(sql, params)
 
 
-def evaluate_stock_skus(channel, limit=2000):
-    """对库存 SKU 批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
+def _rule_params_loaded(rule):
+    """规则 params(JSON 列)解析为 dict, 供条件引用 params.key"""
+    if not rule:
+        return {}
+    try:
+        p = rule.get("params")
+        if isinstance(p, dict):
+            return p
+        return json.loads(p or "{}")
+    except Exception:
+        return {}
+
+
+_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.")
+
+
+def evaluate_stock_skus(channel, limit=100000):
+    """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
     跳过 warehouse 为空的行(脏数据/导入错误行无实际仓归属, 不产生告警)
+    若存在引用计算变量的规则(inv.adj_dos/buffer/otif/ss_dyn/accel_rate/health.score/params.*),
+    注入断货判定同源的计算值(SKU 聚合粒度)——规则与看板断货/健康计算联动, 否则走快速路径(不加载日销)
     """
     from datetime import datetime, timezone
     rows = query("SELECT sku, warehouse, warehouse_type, product_name, available_qty, "
@@ -266,11 +285,96 @@ def evaluate_stock_skus(channel, limit=2000):
                  "ORDER BY id LIMIT %s", [channel, limit])
     if not rows:
         return []
+    # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
+    _need_calc = False
+    _rules = list(load_rules_for("scheduled.daily", channel)) + list(load_rules_for("inventory.changed", channel))
+    for _rl in _rules:
+        _cj = str(_rl.get("condition_json") or "")
+        if any(_v in _cj for _v in _CALC_VARS):
+            _need_calc = True
+            break
     last_map = {}
     for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
                    [channel]):
         last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
     now = datetime.now(timezone.utc)
+
+    # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
+    _agg = None
+    _fused = {}
+    _sigma = {}
+    _otif_map = {}
+    _accel = {}
+    _health = None
+    _lit_trad = 10.0
+    _lit_bbcc = 3.0
+    _rp = {}
+    if _need_calc:
+        try:
+            _cfg = {r2.get("key"): r2.get("value") for r2 in
+                    query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])}
+            _lit_trad = float(_cfg.get("lead_time_days", "10") or 10)
+            _lit_bbcc = float(_cfg.get("b_to_c_days", "3") or 3) + float(_cfg.get("c_safety_days", "0") or 0)
+        except Exception:
+            pass
+        try:
+            # 看板计算参数(规则 params 优先, 兼容 config)
+            from routes.dashboard import _rule_params
+            _rp = _rule_params("stockout")
+        except Exception:
+            pass
+        try:
+            for _r3 in query("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
+                try:
+                    _sc = float(_r3.get("score") or 0)
+                    _otif_map[_r3.get("supplier_code")] = max(min(_sc / 5.0, 1.0),
+                                                              float(_rp.get("otif_min", 0.6))) if _sc > 0 else 1.0
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+            _by_sku, _ = load_daily_sales_grouped(28, channel)
+            _multi = calc_sales_multi(_by_sku, windows=[7, 14, 28])
+            _fused = {s: rolling_predict(_multi[7].get(s, 0), _multi[14].get(s, 0),
+                                         _multi[28].get(s, 0)) for s in _by_sku}
+            for _s, _d in _by_sku.items():
+                if len(_d) >= 7:
+                    _vl = list(_d.values())
+                    _m = sum(_vl) / len(_vl)
+                    _v = sum((x - _m) ** 2 for x in _vl) / len(_vl)
+                    _sigma[_s] = _v ** 0.5
+        except Exception:
+            pass
+        try:
+            from routes.dashboard import _hourly_accel
+            _accel = _hourly_accel(channel, now,
+                                   ratio=float(_rp.get("accel_ratio", 1.3)),
+                                   min_qty=float(_rp.get("accel_min_qty", 10)))
+        except Exception:
+            pass
+        try:
+            from routes.dashboard import _health_index
+            _health = (_health_index(channel) or {}).get("score")
+        except Exception:
+            pass
+        # SKU 聚合(avail/transit/safety + 供应商)
+        _agg = {}
+        _prod_sup = {}
+        try:
+            for _r4 in query("SELECT sku, supplier_code FROM products WHERE channel=%s "
+                             "AND (deleted_at IS NULL OR deleted_at='')", [channel]):
+                _prod_sup[_r4.get("sku")] = _r4.get("supplier_code") or ""
+        except Exception:
+            pass
+        for _r in rows:
+            _sku = str(_r.get("sku") or "")
+            _st = _agg.setdefault(_sku, {"avail": 0, "transit": 0, "safety": 0})
+            _st["avail"] += int(_r.get("available_qty") or 0)
+            _st["transit"] += int(_r.get("in_transit_qty") or 0)
+            _st["safety"] += int(_r.get("safety_qty") or 0)
+
     inv_ctxs, daily_ctxs = [], []
     for r in rows:
         sku = str(r.get("sku") or "")
@@ -295,6 +399,25 @@ def evaluate_stock_skus(channel, limit=2000):
             "days_since_last": days,
             "product_name": r.get("product_name") or sku,
         }
+        if _need_calc and _agg is not None:
+            try:
+                _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
+                _ds = _fused.get(sku, 0)
+                _otif = _otif_map.get(_prod_sup.get(sku, ""), 1.0)
+                _ss_z = float(_rp.get("ss_z", 1.65))
+                _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
+                _adj = (_st["avail"] + _st["transit"] * _otif) / _ds if _ds > 0 else 999.0
+                _buf = _st["avail"] / max(max(_st["safety"], _ss), 1)
+                base["inv"]["adj_dos"] = round(_adj, 2)
+                base["inv"]["buffer"] = round(_buf, 2)
+                base["inv"]["otif"] = _otif
+                base["inv"]["ss_dyn"] = round(_ss, 1)
+                base["inv"]["accel_rate"] = round(_accel.get(sku, 1.0), 2)
+                base["health_score"] = _health
+                base["lit_trad"] = _lit_trad
+                base["lit_bbcc"] = _lit_bbcc
+            except Exception:
+                pass
         inv_ctxs.append(base)
         daily_ctxs.append(base)
     r1 = evaluate_many("inventory.changed", inv_ctxs, channel, load_rules_for("inventory.changed", channel))

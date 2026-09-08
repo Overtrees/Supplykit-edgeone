@@ -35,7 +35,11 @@ const LF = [
   {l:'可撑天数(可用/日销)',v:'inv.available_qty / daily_sales'},
   {l:'距上次销售(天)',v:'inv.days_since_last'},{l:'库存量',v:'inv.stock'},{l:'仓库类型',v:'inv.warehouse_type'},
   {l:'订单数量',v:'order.quantity'},{l:'订单金额',v:'order.total_amount'},
-  {l:'订单数量×单价',v:'order.quantity * order.unit_price'},{l:'单价',v:'order.unit_price'}]
+  {l:'订单数量×单价',v:'order.quantity * order.unit_price'},{l:'单价',v:'order.unit_price'},
+  {l:'可售天数 Adj-DOS(看板断货同源)',v:'inv.adj_dos'},{l:'缓冲比 Buffer(可用/安全线)',v:'inv.buffer'},
+  {l:'在途置信 OTIF(供应商分/5)',v:'inv.otif'},{l:'动态安全线 SS(规则参数)',v:'inv.ss_dyn'},
+  {l:'加速倍率(当天 vs 前3天)',v:'inv.accel_rate'},{l:'库存健康分(渠道)',v:'health.score'},
+  {l:'补货周期 L/T(规则参数)',v:'params.lit'},{l:'健康预警档位(规则参数)',v:'params.health_warning'}]
 const OPS = [{l:'小于',v:'<'},{l:'小于等于',v:'<='},{l:'大于',v:'>'},{l:'大于等于',v:'>='},{l:'等于',v:'=='},{l:'不等于',v:'!='}]
 const WHS = [{l:'全部',v:''},{l:'B仓',v:'platform_b'},{l:'C仓',v:'platform'},{l:'自有仓',v:'own'}]
 const MODES = [{l:'全部',v:''},{l:'BBCC',v:'bbcc'},{l:'传统多仓',v:'traditional'}]
@@ -102,8 +106,12 @@ export default function RulesPage() {
   const [suppliers, setSuppliers] = useState([])
 
   const defaultF = {name:'', event:'inventory.changed', alert_type:'low_stock', alert_title:'', alert_desc:'', severity:'warning', condition_json:'{}'}
+  // 业务计算参数(融合进规则: 断货/健康类规则携带看板计算参数, 保存进 rules.params)
+  const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1'} :
+    at === 'health' ? {health_good:'85', health_warning:'60'} : {}
   const [f, setF] = useState(defaultF)
   const [cond, setCond] = useState({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''})
+  const [rParams, setRParams] = useState({})
   const { channel: globalChannel, setChannel: setGlobalChannel, hammerRulesTab: tab, hammerRuleNewVersion, hammerRulesMode, hammerSearch, prodBatch, setProdBatch, prodSelIds, setProdBatchSel, setProdBatchFilterLen, prodBatchVersion, bumpProdBatchVersion, prodBatchAllReq } = useAppStore()
   useEffect(() => {
     api.get('/api/replenishment-config/slow-cats?channel=' + globalChannel).then(r => { if (Array.isArray(r.data)) setSlowCats(r.data) }).catch(() => {})
@@ -164,8 +172,8 @@ export default function RulesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hammerRuleNewVersion])
 
-  const resetForm = () => { setEditing({}); setF(defaultF); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}) }
-  const cancelEdit = () => { setEditing(null); setF(defaultF); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}); useAppStore.setState({ hammerRuleNewVersion: 0 }) }
+  const resetForm = () => { setEditing({}); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}) }
+  const cancelEdit = () => { setEditing(null); setF(defaultF); setRParams({}); setCond({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}); useAppStore.setState({ hammerRuleNewVersion: 0 }) }
 
   const save = async () => {
     setSaveLoading(true)
@@ -178,7 +186,7 @@ export default function RulesPage() {
       const cj = JSON.stringify({left:cond.left, op:cond.op, right:rv, rightType:cond.rightType, warehouse:cond.warehouse})
       const isNew = !editing || !editing.id
       const url = isNew ? API+'/api/rules' : API+'/api/rules/'+editing.id
-      const r = await fetch(url, {method: isNew?'POST':'PUT', headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}, body:JSON.stringify({...f, mode: f.mode||'', channel:globalChannel, condition_json:cj})})
+      const r = await fetch(url, {method: isNew?'POST':'PUT', headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}, body:JSON.stringify({...f, mode: f.mode||'', channel:globalChannel, condition_json:cj, params:rParams})})
       if (!r.ok) { const err = await r.json().catch(()=>({})); throw new Error(err.detail || 'HTTP '+r.status) }
       toast.success(isNew ? '规则已创建' : '规则已更新')
       addDebug('save 成功', {isNew, id: editing?.id})
@@ -254,6 +262,16 @@ export default function RulesPage() {
           <label style={{fontSize:12}}>补货模式
             <select value={f.mode||''} onChange={e=>setF({...f,mode:e.target.value})} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:80}}>{MODES.filter(m => m.v !== 'bbcc' || globalChannel === 'jd').map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select>
           </label>
+          <label style={{fontSize:12}}>规则类型
+            <select value={f.alert_type||'low_stock'} onChange={e=>{setF({...f,alert_type:e.target.value});setRParams(defaultParams(e.target.value))}} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
+              <option value='low_stock'>低库存(安全线)</option>
+              <option value='stockout'>濒临断货(看板同源)</option>
+              <option value='health'>健康监控(看板同源)</option>
+              <option value='oversell'>超卖保护</option>
+              <option value='slow_moving'>滞销识别</option>
+              <option value='custom'>自定义</option>
+            </select>
+          </label>
         </div>
 
         {/* 触发条件 — 一句话 */}
@@ -310,6 +328,33 @@ export default function RulesPage() {
           </div>
         </div>
 
+        {/* 业务计算参数(融合: 断货/健康类规则携带看板计算参数, 保存进 rules.params; stock-risk/health_index 同源读取) */}
+        {(f.alert_type === 'stockout' || f.alert_type === 'health') && (
+          <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:32,padding:14,marginTop:14}}>
+            <div style={{fontWeight:600,fontSize:13,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>⚙️ {f.alert_type === 'stockout' ? '断货计算参数(看板断货卡同源)' : '健康分档参数(看板健康卡同源)'}</div>
+            <div className="muted2" style={{fontSize:11,marginBottom:8}}>
+              {f.alert_type === 'stockout'
+                ? '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值'
+                : '配置后看板库存健康度分档(good/warning)即时按此计算，停用/删除本规则则回默认值'}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {(f.alert_type === 'stockout'
+                ? [['lit','补货周期 L/T(天)'],['otif_min','OTIF 置信下限(0.6~1)'],['ss_z','动态SS Z值(1.28/1.65/2.33)'],
+                   ['accel_ratio','加速倍率阈值(默认1.3)'],['accel_min_qty','加速样本量(默认10)'],
+                   ['buffer_orange','橙灯缓冲上限(默认1.2)'],['buffer_yellow','黄灯缓冲上限(默认1.0)'],
+                   ['orange_slack_days','橙灯天数余量(默认1)'],['include_avail_zero','已断纳入红灯 1/0']]
+                : [['health_good','健康档位线(默认85)'],['health_warning','预警档位线(默认60)']]
+              ).map(([k, l]) => (
+                <label key={k} style={{fontSize:12}}>{l}
+                  <input type="number" step="any" value={rParams[k] ?? ''}
+                    onChange={e=>setRParams({...rParams, [k]: e.target.value})}
+                    style={{...IS,fontSize:13,marginTop:2,padding:'6px 10px'}} placeholder="默认值"/>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{marginTop:16,display:'flex',gap:10}}>
           <button onClick={save} disabled={saveLoading} className="btn btn-primary" style={{flex:1,display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:40}}>{saveLoading ? <><IconLoading size={14} /> 保存中...</> : <><IconSave size={14} /> {t("common.save")}</>}</button>
           <button onClick={cancelEdit} className="btn btn-ghost" style={{flex:1,background:'var(--warning)',color:'#fff',minHeight:40}}>{t("common.cancel")}</button>
@@ -323,7 +368,7 @@ export default function RulesPage() {
         const whLbl = WHS.find(w=>w.v===condInfo.warehouse)?.l||'全部'
         const modeLbl = MODES.find(m=>m.v===(rule.mode||''))?.l||'全部'
         const condText = `当 ${whLbl} ${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${condInfo.rightType==='pct'?fieldLbl(condInfo.right)+'的'+condInfo.pctValue+'%':(condInfo.rightType==='field'?fieldLbl(condInfo.right):condInfo.right)}`
-        return <div key={rule.id} onClick={()=>{if(!prodBatch){const c=pc(rule.condition_json||'{}');setEditing(rule);setF({name:rule.name,event:rule.event,alert_type:rule.alert_type||'low_stock',alert_title:rule.alert_title||'',alert_desc:rule.alert_desc||'',severity:rule.severity||'warning',mode:rule.mode||'',condition_json:rule.condition_json||'{}'});setCond(c)}}} style={{cursor:prodBatch?'default':'pointer',padding:'14px 16px',border:'1px solid var(--border)',borderRadius:32,marginBottom:8,background:prodBatch&&selIds.includes(rule.id)?'rgba(29,78,216,0.08)':'transparent'}}>
+        return <div key={rule.id} onClick={()=>{if(!prodBatch){const c=pc(rule.condition_json||'{}');setEditing(rule);setF({name:rule.name,event:rule.event,alert_type:rule.alert_type||'low_stock',alert_title:rule.alert_title||'',alert_desc:rule.alert_desc||'',severity:rule.severity||'warning',mode:rule.mode||'',condition_json:rule.condition_json||'{}'});setRParams(rule.params||{});setCond(c)}}} style={{cursor:prodBatch?'default':'pointer',padding:'14px 16px',border:'1px solid var(--border)',borderRadius:32,marginBottom:8,background:prodBatch&&selIds.includes(rule.id)?'rgba(29,78,216,0.08)':'transparent'}}>
         {prodBatch && <span onClick={(e)=>{e.stopPropagation();const ids=selIds;setSelIds(ids.includes(rule.id)?ids.filter(i=>i!==rule.id):[...ids,rule.id])}} className="clickable" style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:selIds.includes(rule.id)?'var(--primary)':'var(--border)',background:selIds.includes(rule.id)?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11}}>{selIds.includes(rule.id)?'✓':''}</span><span style={{fontSize:12,color:'var(--muted2)'}}>选择</span></span>}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
         <div style={{flex:1,minWidth:0}}>

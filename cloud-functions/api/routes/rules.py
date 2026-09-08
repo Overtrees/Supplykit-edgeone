@@ -9,7 +9,7 @@ from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["rules"])
 
-_FIELDS = "id, name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, created_at, updated_at, deleted_at"
+_FIELDS = "id, name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, params, created_at, updated_at, deleted_at"
 
 
 @router.get("/rules")
@@ -30,6 +30,11 @@ def list_rules(channel: str = "jd", include_deleted: int = 0):
             r["condition"] = json.loads(r.get("condition_json") or "{}")
         except Exception:
             r["condition"] = {}
+        try:
+            _pp = r.get("params")
+            r["params"] = json.loads(_pp) if _pp else {}
+        except Exception:
+            r["params"] = {}
         out.append(r)
     return ok(out)
 
@@ -46,12 +51,14 @@ async def create_rule(request: Request):
     if not name:
         return fail("缺少 name")
     cond = d.get("condition") or d.get("condition_json") or {}
-    execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+    _params = d.get("params")
+    _pjson = json.dumps(_params, ensure_ascii=False) if isinstance(_params, dict) else None
+    execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, params) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (name, d.get("event", ""), json.dumps(cond, ensure_ascii=False),
              d.get("alert_type", ""), d.get("alert_title", ""), d.get("alert_desc", ""),
              d.get("severity", "warning"), 1 if d.get("is_active", 1) else 0,
-             d.get("channel", "jd"), d.get("mode", "")))
+             d.get("channel", "jd"), d.get("mode", ""), _pjson))
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则新建 → 看板/接口缓存即时失效
     return ok({"id": 0})
@@ -77,6 +84,9 @@ async def update_rule(rid: int, request: Request):
     if "condition" in d:
         sets.append("condition_json = %s")
         params.append(json.dumps(d["condition"], ensure_ascii=False))
+    if "params" in d:
+        sets.append("params = %s")
+        params.append(json.dumps(d["params"], ensure_ascii=False) if isinstance(d["params"], dict) else None)
     if not sets:
         return fail("无更新字段")
     params.append(rid)
