@@ -526,7 +526,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           </span>
         </div>
         <div style={{ overflowX: _storeDim === 'brand' ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}>
-          <div style={{ width: _storeDim === 'brand' ? Math.max((storeData && storeData.length || 1) * 30, 340) : '100%' }}>
+          <div style={{ width: _storeDim === 'brand' ? Math.max(((dashboard?.period_brands?.[periodTab] || dashboard?.brands || []).length || 1) * 30, 340) : '100%' }}>
             <Chart option={storeOption} height={170} />
           </div>
         </div>
