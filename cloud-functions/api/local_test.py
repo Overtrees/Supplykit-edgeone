@@ -398,5 +398,22 @@ r = client.post("/rules/1/test", json={"inv": {"available_qty": 5, "safety_qty":
 d = r.json()
 check("rules test 带 params(adj_dos<=lit 触发)", d.get("ok") is True, r.text[:200])
 
+# ── 告警开关兼容回归(P2 修复): 字符串 alert_enabled / 空规则 return_hits ──
+from core.rules import evaluate_many
+_ins_count = [0]
+_db.executemany = lambda sql, seq: _ins_count.__setitem__(0, _ins_count[0] + (len(seq) if seq else 0))
+_ins_count[0] = 0
+_r, _h = evaluate_many("inventory.changed",
+                       [{"sku": "S1", "channel": "jd", "inv": {"available_qty": 5, "safety_qty": 10, "warehouse": "北京仓"}}],
+                       "jd",
+                       [{"id": 9, "name": "关", "event": "inventory.changed",
+                         "condition_json": '{"left":"inv.available_qty","op":"<","right":"inv.safety_qty"}',
+                         "alert_type": "low_stock", "alert_title": "t", "alert_desc": "d", "severity": "warning",
+                         "is_active": 1, "channel": "jd", "mode": "", "deleted_at": "",
+                         "params": '{"alert_enabled":"0"}'}], return_hits=True)
+check("alert_enabled 字符串'0' 跳过不告警", not _r and not _h and _ins_count[0] == 0, str((_r, _h, _ins_count[0])))
+_r2, _h2 = evaluate_many("scheduled.daily", [{"sku": "S1", "channel": "jd"}], "jd", [], return_hits=True)
+check("evaluate_many 空规则 return_hits", _r2 == [] and _h2 == set(), str((_r2, _h2)))
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

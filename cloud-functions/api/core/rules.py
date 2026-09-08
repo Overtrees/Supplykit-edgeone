@@ -201,7 +201,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
     for _rl in rules:
         _rl["_params"] = _rule_params_loaded(_rl)
     if not rules:
-        return []
+        return ([], set()) if return_hits else []
     # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
     existing = set()
     for r in query("SELECT alert_type, related_sku, channel, warehouse FROM alerts "
@@ -220,8 +220,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 cond = json.loads(rule.get("condition_json") or "{}")
             except Exception:
                 continue
-            if (rule.get("_params") or {}).get("alert_enabled") == 0:
-                continue  # 告警开关关闭: 规则仅作为计算参数载体(断货卡/健康卡同源读取 params)
+            if str((rule.get("_params") or {}).get("alert_enabled")) == "0":
+                continue  # 告警开关关闭(兼容字符串/数字): 规则仅作为计算参数载体
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
@@ -306,7 +306,8 @@ def evaluate_stock_skus(channel, limit=100000):
     # alert_enabled=0 的参数载体规则(如内置断货/健康)不产生告警 → 不参与评估/注入
     def _is_alert_rule(r):
         try:
-            return (json.loads(r.get("params") or "{}") or {}).get("alert_enabled") != 0
+            ae = (json.loads(r.get("params") or "{}") or {}).get("alert_enabled")
+            return str(ae) != "0"  # 前端存字符串 '0', 统一字符串比较
         except Exception:
             return True
     _daily_rules = [r for r in load_rules_for("scheduled.daily", channel) if _is_alert_rule(r)]
