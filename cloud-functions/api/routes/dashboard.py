@@ -454,8 +454,17 @@ def _stock_risk(channel, full: int = 0):
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
     # 有效补货周期 L/T_eff(模式双线, 复用补货配置): bc 维度= B→C 调拨+安全缓冲; 传统维度=采购到货
-    lit_bbcc = int(cfg.get("b_to_c_days", "3") or 3) + int(cfg.get("c_safety_days", "0") or 0)
-    lit_trad = int(cfg.get("lead_time_days", "10") or 10)
+    # L/T 与补货建议同源(mode 前缀键优先, 平铺兜底)——断货红线=补货周期, 跟随 bbcc/传统模式
+    def _mc(key, mode, default):
+        v = cfg.get("mode_%s_%s" % (mode, key))
+        if v is None:
+            v = cfg.get(key)
+        try:
+            return int(float(v or default))
+        except Exception:
+            return default
+    lit_bbcc = _mc("b_to_c_days", "bbcc", 3) + _mc("c_safety_days", "bbcc", 0)
+    lit_trad = _mc("lead_time_days", "traditional", 10)
 
     inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, c_transit, safety_qty, product_name "
              "FROM inventory WHERE channel=%s", [channel])
@@ -579,6 +588,8 @@ def _stock_risk(channel, full: int = 0):
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
+        if avail <= 0 and not include_avail_zero:
+            continue  # include_avail_zero=0: 已断不入断货卡(归健康卡缺货承接)
         # 修正可售天数: (在仓 + 供应商在途×OTIF + B→C调拨在途×1.0) ÷ (日销×活动系数×加速倍率)
         a_rate = accel.get(sku, 1.0)
         ds_eff = ds * factor_trad * a_rate
@@ -598,6 +609,8 @@ def _stock_risk(channel, full: int = 0):
         safety = st["safety"]
         ds = fused_c.get(sku, 0)
         if ds <= 0:
+            continue
+        if avail <= 0 and not include_avail_zero:
             continue
         adj_dos = (avail + st["transit"] * _otif(sku) + st["ct"]) / (ds * factor_bbcc * accel.get(sku, 1.0))
         buffer = avail / max(max(safety, _ss_dyn(sku, lit_bbcc)), 1)
@@ -620,6 +633,8 @@ def _stock_risk(channel, full: int = 0):
         tty = int(r.get("in_transit_qty") or 0)
         ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
         if ds <= 0:
+            continue
+        if avail <= 0 and not include_avail_zero:
             continue
         adj_dos = (avail + tty * _otif(sku)) / (ds * factor_trad * accel.get(sku, 1.0))
         buffer = avail / max(max(safety, _ss_dyn(sku, lit_trad)), 1)

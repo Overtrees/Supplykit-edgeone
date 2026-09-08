@@ -181,10 +181,12 @@ def evaluate(event, context):
     return evaluate_many(event, [context], context.get("channel"))
 
 
-def evaluate_many(event, contexts, channel=None, rule_cache=None):
+def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=False):
     """批量评估同事件上下文(性能版): 规则一次加载 + 告警去重预载 + executemany 批量插入
 
     避免逐条 evaluate 的 N×查询——2000 SKU 全量评估从分钟级降到秒级
+    return_hits=True 时返回 (triggered, hits); hits={(alert_type, sku, warehouse, channel)}
+    供每日全量评估后反向关闭已恢复告警(完整性: 库存补足后旧告警不残留)
     """
     if not contexts:
         return []
@@ -202,6 +204,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
                       r.get("warehouse") or ""))
     inserts = []
     triggered = []
+    hits = set()
     for ctx in contexts:
         sku = ctx.get("sku", "")
         channel_x = ctx.get("channel") or channel or "jd"
@@ -219,6 +222,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
+            hits.add((at, sku, wh, channel_x))  # 条件触发即命中(含已存在告警, 反向关闭勿误关)
             key = (at, sku, channel_x, wh)
             if key in existing:
                 continue
@@ -234,6 +238,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
                             sku, int(rule.get("id") or 0),
                             (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x))
             triggered.append(rule.get("name") or str(rule.get("id")))
+            hits.add((at, sku, wh, channel_x))
     if inserts:
         for i in range(0, len(inserts), 100):
             try:
@@ -243,6 +248,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None):
                             inserts[i:i + 100])
             except Exception:
                 pass
+    if return_hits:
+        return list(dict.fromkeys(triggered)), hits
     return list(dict.fromkeys(triggered))
 
 
@@ -314,8 +321,16 @@ def evaluate_stock_skus(channel, limit=100000):
         try:
             _cfg = {r2.get("key"): r2.get("value") for r2 in
                     query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])}
-            _lit_trad = float(_cfg.get("lead_time_days", "10") or 10)
-            _lit_bbcc = float(_cfg.get("b_to_c_days", "3") or 3) + float(_cfg.get("c_safety_days", "0") or 0)
+            def _mcv(key, mode, default):
+                v = _cfg.get("mode_%s_%s" % (mode, key))
+                if v is None:
+                    v = _cfg.get(key)
+                try:
+                    return float(v or default)
+                except Exception:
+                    return default
+            _lit_trad = _mcv("lead_time_days", "traditional", 10)
+            _lit_bbcc = _mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
         except Exception:
             pass
         try:
@@ -424,7 +439,25 @@ def evaluate_stock_skus(channel, limit=100000):
         inv_ctxs.append(base)
         daily_ctxs.append(base)
     r1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules)
-    r2 = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules)
+    r2, hits = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules, return_hits=True)
     out = list(dict.fromkeys(r1 + r2))
+    # 恢复自动关闭(完整性): 每日全量快照下, 该事件规则 alert_type 的 active 告警
+    # 若 SKU×仓 未命中(已恢复/不满足) → inactive, 防止库存补足后旧告警残留虚高计数
+    try:
+        if hits:
+            _ats = sorted({h[0] for h in hits})
+            for _at in _ats:
+                _act = query("SELECT id, related_sku, warehouse FROM alerts "
+                             "WHERE alert_type=%s AND channel=%s AND status='active' AND source='rules_engine'",
+                             [_at, channel])
+                _close = [a["id"] for a in _act
+                          if (_at, a.get("related_sku"), a.get("warehouse") or "", channel) not in hits]
+                for _i in range(0, len(_close), 200):
+                    _b = _close[_i:_i + 200]
+                    if _b:
+                        execute("UPDATE alerts SET status='inactive' WHERE id IN (%s)"
+                                % ",".join(["%s"] * len(_b)), _b)
+    except Exception:
+        pass
     # 返回触发规则名(不泄漏查询细节)
     return out

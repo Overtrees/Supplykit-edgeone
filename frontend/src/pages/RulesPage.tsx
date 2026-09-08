@@ -110,6 +110,14 @@ export default function RulesPage() {
   // 业务计算参数(融合进规则: 断货/健康类规则携带看板计算参数, 保存进 rules.params)
   const defaultParams = (at) => at === 'stockout' ? {lit:'3', otif_min:'0.6', ss_z:'1.65', accel_ratio:'1.3', accel_min_qty:'10', buffer_orange:'1.2', buffer_yellow:'1.0', orange_slack_days:'1', include_avail_zero:'1'} :
     at === 'health' ? {health_good:'85', health_warning:'60'} : {}
+  // 类型模板(联动性: 选类型自动带出默认事件/条件/参数, 防止事件-变量错配致规则永不触发)
+  const TYPE_TEMPLATE = {
+    low_stock:   {event:'inventory.changed', cond:{left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''}},
+    stockout:    {event:'scheduled.daily',   cond:{left:'inv.adj_dos', op:'<=', right:'params.lit', rightType:'field', pctValue:100, warehouse:''}},
+    health:      {event:'scheduled.daily',   cond:{left:'health.score', op:'<', right:'params.health_warning', rightType:'field', pctValue:100, warehouse:''}},
+    oversell:    {event:'order.created',     cond:{left:'order.quantity', op:'>', right:'inv.available_qty', rightType:'field', pctValue:100, warehouse:''}},
+    slow_moving: {event:'scheduled.daily',   cond:{left:'inv.days_since_last', op:'>', right:'30', rightType:'number', pctValue:100, warehouse:''}},
+  }
   const [f, setF] = useState(defaultF)
   const [cond, setCond] = useState({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''})
   const [rParams, setRParams] = useState({})
@@ -194,6 +202,15 @@ export default function RulesPage() {
       clearCache(); cancelEdit(); await load(globalChannel); window.dispatchEvent(new Event('rules-changed'))
       // 本地即时更新 mode 显示，不等 API 返回（避免旧 state 渲染导致 mode 显示"全部"）
       if (!isNew) setRules(prev => prev.map(rl => rl.id === editing.id ? {...rl, mode: f.mode||''} : rl))
+      // 严谨性校验提示(不阻断, 防静默错): 条件引用 order.* 但事件非订单创建 / params.* 缺失
+      const _cj2 = JSON.stringify(cond)
+      const _evt = f.event || ''
+      if ((_cj2.includes('order.') && _evt !== 'order.created')) toast.warning('条件引用 order.* 但事件非「订单创建」，该规则可能永不触发')
+      const _pm = _cj2.match(/params\.([\w]+)/g) || []
+      if (_pm.length) {
+        const _miss = _pm.map(m => m.split('.')[1]).filter(k => !(rParams[k] !== undefined && rParams[k] !== ''))
+        if (_miss.length) toast.warning('条件引用参数 ' + _miss.join('/') + ' 但未填写，评估时将按 0 处理')
+      }
     } catch(e) { toast.error('保存失败: '+e.message) }
     setSaveLoading(false)
   }
@@ -264,7 +281,7 @@ export default function RulesPage() {
             <select value={f.mode||''} onChange={e=>setF({...f,mode:e.target.value})} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:80}}>{MODES.filter(m => m.v !== 'bbcc' || globalChannel === 'jd').map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select>
           </label>
           <label style={{fontSize:12}}>规则类型
-            <select value={f.alert_type||'low_stock'} onChange={e=>{setF({...f,alert_type:e.target.value});setRParams(defaultParams(e.target.value))}} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
+            <select value={f.alert_type||'low_stock'} onChange={e=>{const at=e.target.value;setF({...f,alert_type:at,event:(TYPE_TEMPLATE[at]||{}).event||f.event});const tm=(TYPE_TEMPLATE[at]||{}).cond;if(tm)setCond({...tm});setRParams(defaultParams(at))}} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
               <option value='low_stock'>低库存(安全线)</option>
               <option value='stockout'>濒临断货(看板同源)</option>
               <option value='health'>健康监控(看板同源)</option>

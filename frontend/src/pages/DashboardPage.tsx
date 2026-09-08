@@ -38,6 +38,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [procList, setProcList] = useState([])
   const [procLoading, setProcLoading] = useState(true)
   const [showAllProc, setShowAllProc] = useState(false)
+  const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
   const [_riskTab, setRiskTab] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store')  // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
@@ -113,6 +114,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     return () => { window.removeEventListener('rules-changed', h); window.removeEventListener('insights-refresh', h) }
   }, [channel, _replMode])
   const procTotal = procList.length
+  // 其他告警(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义) —— 可点开明细, 不再只有计数
+  const otherTotal = Object.entries((alertCounts && alertCounts.by_type) || {})
+    .filter(([k]) => !['low_stock', 'replenish', 'purchase_need'].includes(k))
+    .reduce((sum, [, v]) => sum + (v || 0), 0)
   useEffect(() => {
     const seq = ++reqSeq.current
     // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架, 有旧数据则不骨架(先显示旧值, 后台拉新替换)
@@ -397,6 +402,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <span>{_replMode === 'bbcc' ? 'BC' : 'C'}{lsWhView.main} {t("dash.own")}{lsWhView.own}</span>
                 <span style={{color:'var(--border)'}}>|</span>
                 <span>采购{procList.filter(x=>x.tag==='采购').length} · 补货{procList.filter(x=>x.tag==='补货').length}</span>
+                {otherTotal > 0 && <span style={{color:'var(--muted)'}}>|</span>}
+                {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable" style={{cursor:'pointer',color:'var(--primary)',textDecoration:'underline'}}>其他 {otherTotal}</span>}
               </div>
             </>}
           </div>
@@ -592,6 +599,29 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </div>
           })}
           <div onClick={function(){setShowAllProc(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+            <span style={{fontSize:15,fontWeight:600,color:'#fff'}}>关闭</span>
+          </div>
+        </div>
+      </div>}
+
+      {/* 其他告警弹窗(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义, 明细落点) */}
+      {showAllOther && <div onClick={function(){setShowAllOther(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
+      {showAllOther && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
+          <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>其他告警 · 共 {otherTotal} 条</div>
+          {(fullAlerts ? fullAlerts.filter(x => !['low_stock','replenish','purchase_need'].includes(x.alert_type)) : []).map(function(x) {
+            return <div key={x.id} onClick={function(){onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6}}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
+                <span style={{fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,minWidth:0}}>{x.title}</span>
+                <span style={{display:'inline-flex',gap:4,alignItems:'center',flexShrink:0}}>
+                  {(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type)) ? <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 6px',borderRadius:99,background:'var(--bg)',color:'var(--muted)'}}>{(x.warehouse ? fmtWh(x.warehouse) : _whTag(x.warehouse_type))}</span> : null}
+                  <span className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')} style={{fontSize:10}}>{x.severity === 'error' ? '紧急' : '警告'}</span>
+                </span>
+              </div>
+              <div className="small muted" style={{fontSize:11}}>{x.description}</div>
+            </div>
+          })}
+          <div onClick={function(){setShowAllOther(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
             <span style={{fontSize:15,fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
