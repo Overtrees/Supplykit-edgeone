@@ -164,6 +164,7 @@ export const useAppStore = create((set, get) => ({
   },
 
   connectWebSocket() {
+    if (!WS_URL) { set({ wsStatus: 'polling', ws: null }); return }  // Makers 无 WebSocket, 直接轮询
     const oldWs = get().ws
     if (oldWs) { try { oldWs.close() } catch(e) {} }
 
