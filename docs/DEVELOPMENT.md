@@ -652,3 +652,13 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **前端坑(本轮新沉淀)**: ①props interface 定义必须同步组件函数解构(漏解构 → 'Can't find variable' ReferenceError, 线上实测才暴露) ②内联箭头函数体加语句必须块体 `() => { a(); b() }`, 不能 `() => a(); b()`(语法错误) ③接口默认参数返回数组兼容旧消费者, 分页用可选 page/page_size 返回 {items,total}
 - **规则引擎演进规范**: 内置规则随业务迁移退役(seed 不生成 + index.py 启动幂等退役 + daily-rules 孤儿清理关存量; 用户自定义规则不受影响); 新增 POST /rules/evaluate 供'立即运行'(规则改动即时评估不等 cron); 规则/告警去重 key 与业务粒度同步(2026-09-07 起含 warehouse)
 - **性能(看板响应)**: 小时级聚合查询(_hourly_accel)加 60s 内部缓存(当天订单 1 小时内基本不变), invalidate_all 同步失效; 前端首屏拆流(重接口 stock-risk 后置, summary+aux 先渲染不阻塞骨架); **日销 60 天窗口勿轻易截断**(用户确认趋势/环比依赖, 改前必须确认)
+
+### 15.23 规则页融合看板计算 + 审查加固 + 模式跟随(2026-09-08)
+- **规则=业务计算引擎配置**: 不新增 tab, 规则编辑页融合断货/健康计算参数(存 rules.params, 卡片同源读取); 内置断货/健康规则 = **参数载体**(alert_enabled=0 不告警); 告警开关即时联动(关=清存量/开=评估生成, 四维闭环)
+- **类型契约铁律**: 前端表单字符串 vs 引擎数字比较是**隐式契约**, 必须统一 str() 处理 —— 本轮 3 个 bug(alert_enabled '0' / params '3' / 空规则 return_hits) 全因此类; 前后端各写一半无人校验 = 必踩坑
+- **规则 mode 语义**: mode 不再按 ctx 过滤(否则 ctx 无 mode 时指定规则永不评估), 改用于 params.lit fallback 参数选择(bbcc/trad 双线补货周期); 新建规则 mode 默认跟随当前补货模式, 保存防丢保险(f.mode 空用 editing.mode)
+- **卡片 vs 规则告警重叠判定**: 规则告警若与系统级卡片同语义(断货/健康), 必须先评估数字/粒度/频率重叠 —— 重叠则退役告警保留参数载体, 避免两套数字困惑(同 replenish/滞销教训)
+- **模式跟随全页清单**: 断货/低库存/健康/采购&补货/待处理卡 ✓; 进销存 B 仓维度/健康卡 healthTab 需按模式归一(platform_b 仅 jd+bbcc); 规则 mode/lit 双线
+- **性能**: evaluate_many params 预解析(循环外一次) + 按事件检测计算变量 + 规则缓存复用 → 121s→3.2s; 参数载体规则 _is_alert_rule 过滤 → 快速路径
+- **前端坑(新增)**: ①组件顶部 useEffect 引用后声明 const → TDZ(改用已解构 store 值) ②ErrorBoundary 加'回到看板'(完整重拉自愈) ③CSS 变量'利用收敛'优于删除(内联样式统一到变量/全局类)
+- **实时性**: aux TTL 300→60s; health 版本指纹补 rules/suppliers/config(外部改库也触发前端 30s 轮询); 30s 静默刷新兜底无事件路径

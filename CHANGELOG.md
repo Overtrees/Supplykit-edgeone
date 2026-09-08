@@ -1,3 +1,41 @@
+## 2026-09-08 规则页融合看板计算逻辑(规则=业务计算引擎配置) + 审查加固 P0/P1/P2 + 模式跟随(重大)
+> **主线**: feat/edgeone, 当日 22 commit(规则融合→审查加固→参数载体/告警开关→类型契约→模式跟随→优化清单)。
+> **验证**: 全链路线上实测, local_test 91/91。
+
+### 规则页融合看板计算(不新增 tab, 重构规则编辑页)
+- **rules 表加 params 列**(index.py 启动自愈 ALTER + 内置规则幂等补种/恢复, 永久删除不复活)
+- **引擎**: evaluate_stock_skus 注入计算变量(SKU聚合: inv.adj_dos/buffer/otif/ss_dyn/accel_rate + health.score + lit_bbcc/lit_trad), 条件支持 params.* 引用; 无计算变量规则走快速路径(不加载日销)
+- **编辑页**: 规则类型下拉(低库存/濒临断货/健康监控/超卖/滞销/自定义) + 字段下拉扩展计算变量 + 断货/健康类自动展开参数面板(可视化输入, 存 rules.params) + **触发事件下拉**(模板带出可视化)
+- **类型模板化**: 选类型自动带出 event+条件+参数(超卖→order.created+quantity>avail 等), 防事件-变量错配致规则永不触发
+- **内置规则**: 低库存/超卖保留; 滞销退役(处置页承载); 濒临断货预警+库存健康监控 = **参数载体**(alert_enabled=0 不告警, params 被断货/健康卡同源读取)
+
+### 审查加固 P0/P1/P2(联动/严谨/完整/可拓展)
+- **P0**: L/T 模式同源(断货红线=补货周期, mode 前缀优先: bc=3+3=6/传统=6) + 恢复自动关闭(评估后未命中告警反向关闭, 覆盖两事件) + include_avail_zero 实现 + 类型模板 + 其他告警落点(待处理卡'其他 N'弹窗) + 保存校验提示
+- **P1**: 规则测试带参数模拟(测试弹窗可调 params/计算变量预览) + 回归单测
+- **P2**: 条件 or 多组 + 告警年龄显示(持续 N 天) + 动作审计(params.log 写 quality_logs)
+- **性能**: evaluate_many params 预解析 + 按事件计算变量检测 + 规则缓存复用 → /rules/evaluate 121s→3.2s(35x)
+
+### 参数载体 + 告警开关(严谨评估后方案)
+- 评估: stockout/health 内置规则告警与断货/健康卡**重叠冗余**(其他弹窗 100% 被 stockout 1485 淹没; 健康渠道级×逐仓行粒度错误) → 退役告警, 保留规则为**参数载体**(卡片同源读 params)
+- **告警开关(alert_enabled)**: 编辑页'生成告警 开/关' —— 关=即时清存量告警, 开=即时评估生成(四维闭环, 不等 cron); 开关即时联动实测(开=1485 生成/关=0 清空/评估不复活)
+
+### 类型契约修复(前端字符串 × 引擎数字, 前后端各写一半无人校验)
+- **alert_enabled 字符串 '0'** vs 引擎 == 0 → 关闭后规则仍参与评估(下次 cron 复活告警) → 统一 str 比较
+- **params 值字符串 '3'** vs 数字比较 → Python3 TypeError 规则静默永不触发 → _resolve_single 字符串数值化(数字字符串转 float, 文本保留)
+- **evaluate_many 空规则 return_hits** 解包崩溃 → 返回 ([], set())
+- local_test 88→91(新增 4 项回归: 字符串开关/空规则/字符串参数/开关联动)
+
+### 模式跟随全页补漏 + 规则 mode 联动
+- **进销存 B 仓维度**(platform_b)仅 jd+bbcc 显示(store 初始化/setChannel + HammerInventory 选项按模式)
+- **健康卡 healthTab** 按模式归一(jd+traditional 残留 platform_b → platform)
+- **规则 mode 字段**: 去 ctx.mode 过滤(mode 指定规则此前永不评估) → mode 用于 params.lit fallback 参数选择(bbcc→b_to_c+c_safety, traditional→lead_time); **新建规则 mode 默认跟随当前补货模式** + 保存防丢保险(f.mode 空用规则原 mode); 引擎 mode 空按渠道默认(jd→bbcc lit/other→traditional lit)
+
+### 优化清单执行 + 样式统一 + 修复
+- aux TTL 300→60s(告警计数/低库存/缺货最长 1 分钟旧); health 版本指纹补 rules/suppliers/config(外部改库触发前端轮询); seed requires_reset 补 alerts/inventory 表检查; 待处理'其他 N' pill 化
+- **样式**: 告警开关复用锤子菜单同款 hammer-segmented(移除自定义 .seg); 测试弹窗遮罩 var(--overlay)(CSS 变量'利用收敛'方向, 未删除)
+- **修复**: 健康卡归一 useEffect TDZ(_replMode 声明前引用 → 改用 hammerReplenMode); ErrorBoundary 加'回到看板'一键恢复
+- 排查: 看板概率性兜底页(加载失败=ErrorRetry+自动重试 3 次, 渲染异常=ErrorBoundary+回到看板, 数据访问可选链已过一遍)
+
 ## 2026-09-07 看板告警体系重构 + 濒临断货判定升级(P0/P1/P2) + 逐仓化 + 全链路即时性(重大)
 > **主线**: feat/edgeone, 当日 commit: 145e→2ae03561 多个批次(看板重构/判定升级/深链接/即时性/响应性)。
 > **验证**: 全渠道(bbcc/traditional × jd/other)线上确认, local_test 82/82。
