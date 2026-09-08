@@ -26,6 +26,7 @@ export default function TaskPage() {
 
   const [loadErr, setLoadErr] = useState('')
   const doneTasks = useRef({})  // 已触发完成提示的任务
+  const firstLoad = useRef(true)  // 首载只记录历史完成, 不弹提示(避免进页一堆历史任务 toast)
   const loadTasks = async () => {
     try {
       const r = await fetch(API + '/api/tasks?channel=' + channel, { headers: { 'Authorization': 'Bearer ' + (() => { try { return localStorage.getItem('c_token') } catch { return '' } })() } })
@@ -36,6 +37,7 @@ export default function TaskPage() {
         d.data.forEach(function(t) {
           if ((t.status === 'done' || t.status === 'error') && !doneTasks.current[t.task_id]) {
             doneTasks.current[t.task_id] = true
+            if (firstLoad.current) return  // 首载: 仅记录, 不弹历史完成提示
             if (t.status === 'done') {
               toast.success('任务完成: ' + (t.task_type === 'seed' ? '种子填充' : t.task_type === 'clean' ? '清洗导入' : t.task_type === 'export' ? '导出' : t.task_type) + ' ✓')
               // 数据已变更，通知各页面刷新；dashboard 强制同步重建拿最新值（不用旧值）

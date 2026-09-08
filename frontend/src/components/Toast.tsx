@@ -31,7 +31,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return <ToastContext.Provider value={{ add, success, error }}>
     {children}
     <div style={{ position: 'fixed', top: 'calc(env(safe-area-inset-top) + 12px)', right: 16, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-      {toasts.map(t => (
+      {toasts.slice(-3).map(t => (
         <div key={t.id} style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderRadius: 32,
           background: t.type === 'error' ? 'rgba(225,29,72,0.12)' : 'rgba(5,150,105,0.12)',
