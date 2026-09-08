@@ -216,6 +216,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }, [channel])
   const periodTrend = dashboard?.periods?.[periodTab + '_trend'] || dashboard?.trend || []
   const periodMeta = dashboard?.periods?.[periodTab] || {}
+  // 店铺/品牌 GMV 数据量(横向滚动+自动采样判定, 渲染层可用)
+  const storeDataLen = (_storeDim === 'brand' ? ((dashboard?.period_brands?.[periodTab] || dashboard?.brands || []).length) : ((dashboard?.period_stores?.[periodTab] || dashboard?.stores || []).length)) || 0
 
   const periodTrendOption = useMemo(() => ({
     tooltip: { trigger: 'axis', valueFormatter: (v) => '¥' + Number(v).toLocaleString('zh-CN', {minimumFractionDigits:2,maximumFractionDigits:2}), extraCssText: 'z-index:1000', hideDelay: 100 },
@@ -245,7 +247,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     // 底部店铺/品牌名: 全量显示不截断; 长名截断+换行; 数量多(品牌35+)时旋转避免重叠
     xAxis: { type: 'category', data: storeData.map(i => i.name) || [],
       // 品牌维度标签太多(35+)重叠→隐藏, 用悬浮/点击 tooltip 显示名称; 店铺维度保留(数量少, 截断+旋转)
-      axisLabel: _storeDim === 'brand'
+      axisLabel: (storeData.length > 8 || _storeDim === 'brand')
         ? { show: true, interval: 'auto', fontSize: 8, margin: 4,
             formatter: (v) => { const t = String(v||''); return t.length > 5 ? t.slice(0,5)+'…' : t } }
         : { fontSize: 8, interval: 0, rotate: storeData.length > 8 ? 35 : 0, margin: 6,
@@ -255,7 +257,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       axisLabel: { fontSize: 8, formatter: (v) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) }, splitNumber: 4,
       max: (v) => Math.ceil(v.max * 1.15 / 1000) * 1000 },
     series: [{ type: 'bar', barMaxWidth: 26, data: storeData.map((i, idx) => ({ value: Math.round(_g(i) * 100) / 100, itemStyle: { color: ['#f59e0b','#06b6d4','#8b5cf6','#ec4899','#10b981','#f97316'][idx % 6] } })) || [] }],
-    grid: { containLabel: true, top: 8, bottom: _storeDim === 'brand' ? 30 : (storeData.length > 8 ? 42 : 30), left: 8, right: 12 }
+    grid: { containLabel: true, top: 8, bottom: (storeData.length > 8 || _storeDim === 'brand') ? 30 : 30, left: 8, right: 12 }
   }}, [dashboard, periodTab, gmvView, _storeDim])
 
   const barOption = useMemo(() => {
@@ -525,8 +527,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span onClick={function(){setStoreDim('brand')}} className="clickable" style={{fontSize:9,padding:'2px 6px',borderRadius:99,cursor:'pointer',fontWeight:_storeDim==='brand'?600:400,background:_storeDim==='brand'?'var(--card)':'transparent',color:_storeDim==='brand'?'var(--text)':'var(--muted2)',whiteSpace:'nowrap'}}>品牌</span>
           </span>
         </div>
-        <div style={{ overflowX: _storeDim === 'brand' ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}>
-          <div style={{ width: _storeDim === 'brand' ? Math.max(((dashboard?.period_brands?.[periodTab] || dashboard?.brands || []).length || 1) * 30, 340) : '100%' }}>
+        <div style={{ overflowX: (storeDataLen > 8) ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ width: (storeDataLen > 8) ? Math.max(storeDataLen * 30, 340) : '100%' }}>
             <Chart option={storeOption} height={170} />
           </div>
         </div>

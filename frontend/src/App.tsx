@@ -386,7 +386,7 @@ export default function App() {
 
   return (
     <>
-      {!loggedIn ? <LoginPage onLogin={() => { try { localStorage.removeItem('c_welcome_seen') } catch {} setLoggedIn(true); window.location.reload() }} />
+      {!loggedIn ? <LoginPage onLogin={() => { try { localStorage.removeItem('c_welcome_seen') } catch {}; setShowWelcome(true); setLoggedIn(true); clearCache(); clearInflight(); useAppStore.getState().loadAll().catch(() => {}) }} />
       : <ToastProvider>
       <ToastAutoClear page={page} />
       {/* 主内容 — 侧边栏打开时显示菜单，关闭时显示页面 */}

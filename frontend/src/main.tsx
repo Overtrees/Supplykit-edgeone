@@ -25,15 +25,27 @@ function showMaintenance() {
   document.body.appendChild(d)
   document.getElementById('app-reload').onclick = () => { location.reload() }
 }
-window.addEventListener('error', () => { setTimeout(() => {
-  const root = document.getElementById('root')
-  if (root && root.childElementCount === 0) showMaintenance()
-}, 300) })
-window.addEventListener('unhandledrejection', () => { setTimeout(() => {
-  const root = document.getElementById('root')
-  if (root && root.childElementCount === 0) showMaintenance()
-}, 300) })
+// 防误报: 仅 React 已挂载(render 发起后) + root 持续为空(挂载/重渲染瞬态排除) + 排除资源加载错误
+let _rendered = false
+function _maybeShowMaintenance() {
+  if (!_rendered) return  // React 挂载前不动(JS 未加载场景由 index.html 静态 fallback 兜底)
+  setTimeout(() => {
+    const root = document.getElementById('root')
+    if (!root || root.childElementCount !== 0) return
+    // 复查确认: StrictMode 双渲染/登录态切换等瞬态 root 可能短暂清空, 2.5s 后仍空才判整树崩溃
+    setTimeout(() => {
+      const r2 = document.getElementById('root')
+      if (r2 && r2.childElementCount === 0) showMaintenance()
+    }, 2500)
+  }, 500)
+}
+window.addEventListener('error', (e) => {
+  if (e.target && e.target !== window) return  // 资源加载失败(img/script/src)非致命, 不触发
+  _maybeShowMaintenance()
+})
+window.addEventListener('unhandledrejection', _maybeShowMaintenance)
 
+_rendered = true  // render 已发起: 之后 root 持续为空才算整树崩溃
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary><App /></ErrorBoundary>
