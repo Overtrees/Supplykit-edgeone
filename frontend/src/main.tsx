@@ -52,9 +52,26 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>,
 )
 
-// Service Worker 注册
+// Service Worker 注册 + 版本更新提示(新版本就绪 → 提示刷新, 避免用户停留在旧版)
+function showUpdateBanner() {
+  if (document.getElementById('app-update-banner')) return
+  const d = document.createElement('div')
+  d.id = 'app-update-banner'
+  d.style.cssText = "position:fixed;bottom:calc(env(safe-area-inset-bottom) + 16px);left:50%;transform:translateX(-50%);z-index:99998;background:rgba(15,23,42,0.92);color:#fff;padding:10px 18px;border-radius:99px;font-size:13px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);font-family:-apple-system,sans-serif"
+  d.innerHTML = '<span>发现新版本</span><span id="app-update-btn" style="color:#7db8ff;font-weight:700;cursor:pointer">立即刷新</span>'
+  document.body.appendChild(d)
+  document.getElementById('app-update-btn').onclick = () => { location.reload() }
+}
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing
+        if (!nw) return
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner()
+        })
+      })
+    }).catch(() => {})
   })
 }

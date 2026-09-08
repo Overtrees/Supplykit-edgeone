@@ -193,3 +193,8 @@ input,select{background:var(--card);color:var(--text);border-color:var(--border)
 .btn-danger{background:rgba(251,113,133,0.75);border:none}.btn-danger:hover{background:rgba(251,113,133,0.95)}
 .card-value{color:var(--text)}
 }
+
+/* 弹窗/表格滚动条美化(iOS 圆角细条) */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:rgba(148,163,184,0.4);border-radius:99px}
+::-webkit-scrollbar-track{background:transparent}

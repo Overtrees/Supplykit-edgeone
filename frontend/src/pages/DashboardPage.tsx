@@ -459,7 +459,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 </div>}
               </div>
             </div>
-            <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
+            <div key={'h'+healthTab} style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4,animation:'fadeIn 0.18s ease'}}>
               <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'#ef4444':healthData.level==='warning'?'#f59e0b':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
               <div className="card-sub" style={{marginTop:4}}>
                 <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
@@ -509,7 +509,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
                 var lv = RISK_LV[x.level]
                 return (
-                <div key={i} style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0}}>
+                <div key={i} onClick={function(){ var _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0,cursor:'pointer'}}>
                   <span style={{color:'var(--muted)'}}>{i+1}.</span> {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
                 </div>)
               })}

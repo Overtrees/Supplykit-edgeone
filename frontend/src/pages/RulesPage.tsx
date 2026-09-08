@@ -277,9 +277,9 @@ export default function RulesPage() {
         <div style={{display:'flex',gap:12,alignItems:'flex-end',marginBottom:14,flexWrap:'wrap'}}>
           <label style={{flex:1,minWidth:140,fontSize:12}}>{t("rules.name")}<input value={f.name} onChange={e=>setF({...f,name:e.target.value})} style={IS} placeholder='例：低库存预警'/></label>
           <label style={{fontSize:12}}>级别
-            <div style={{display:'flex',gap:4,marginTop:4}}>
+            <div className="hammer-segmented" style={{marginTop:4,flexShrink:0}}>
               {[{v:'warning',t:'警告',c:'var(--warning)'},{v:'error',t:t("rules.severity_error"),c:'var(--danger)'},{v:'info',t:'提示',c:'var(--primary)'}].map(({v,t,c}) =>
-                <span key={v} onClick={()=>setF({...f,severity:v})} className="clickable" style={{padding:'5px 12px',borderRadius:32,fontSize:13,fontWeight:600,cursor:'pointer',background:f.severity===v?c:'transparent',color:f.severity===v?'#fff':'var(--muted)',border:'1px solid',borderColor:f.severity===v?c:'var(--border)',display:'flex',alignItems:'center',gap:3}}>{t}</span>
+                <span key={v} onClick={()=>setF({...f,severity:v})} className={'hammer-segment' + (f.severity===v?' active':'')} style={{minWidth:46,color:f.severity===v?c:undefined,fontWeight:f.severity===v?700:undefined}}>{t}</span>
               )}
             </div>
           </label>
