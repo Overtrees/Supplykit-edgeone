@@ -414,6 +414,9 @@ _r, _h = evaluate_many("inventory.changed",
 check("alert_enabled 字符串'0' 跳过不告警", not _r and not _h and _ins_count[0] == 0, str((_r, _h, _ins_count[0])))
 _r2, _h2 = evaluate_many("scheduled.daily", [{"sku": "S1", "channel": "jd"}], "jd", [], return_hits=True)
 check("evaluate_many 空规则 return_hits", _r2 == [] and _h2 == set(), str((_r2, _h2)))
+check("rules 字符串参数 params.lit '3' 数值化比较", _check_condition(
+      {"left": "inv.adj_dos", "op": "<=", "right": "params.lit"},
+      {"inv": {"adj_dos": 2.5}, "params": {"lit": "3"}}), "字符串参数未数值化")
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -25,6 +25,12 @@ def _resolve_single(expr, ctx):
             val = val.get(p, 0)
         else:
             return 0
+    # 字符串数值化(前端 params 存字符串 '3', 兼容数字比较)
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except Exception:
+            return val
     return val
 
 
