@@ -290,6 +290,11 @@ export default function RulesPage() {
               <option value='custom'>自定义</option>
             </select>
           </label>
+          <label style={{fontSize:12}}>触发事件
+            <select value={f.event||'inventory.changed'} onChange={e=>setF({...f,event:e.target.value})} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
+              {EVENTS.map(ev=><option key={ev.value} value={ev.value}>{ev.label}</option>)}
+            </select>
+          </label>
         </div>
 
         {/* 触发条件 — 一句话 */}
