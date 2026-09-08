@@ -1,3 +1,36 @@
+## 2026-09-08 晚间: 稳定性攻坚(空白页/构建/维护层) + PA 清理 + 静态分析治本 + 体验优化
+> **主线**: feat/edgeone, 当日累计 43 commit(下午 21 条为 15:58 后新增)。
+> **验证**: local_test 91/91, tsc 通过, 线上全链路实测。
+
+### PA 版遗留清理 + README 重写
+- **删除 backend/ 整个 PA 版代码** + 4 个 GitHub Actions workflow(backup-offsite/deploy-backend/deploy-edgeone/self-heal) —— 仓库仅保留 EdgeOne Makers 原生版
+- README 全面重写(Makers+TiDB 当前架构/路由/部署/数据库, 修复 PA 版过时内容)
+
+### 静态分析治本(pyflakes 扫描, 2 个被吞的真实运行时 bug)
+- **dashboard.py**: otif_min 在 otif_map 之后定义 → NameError 被 try/except 吞 → **OTIF 置信系数恒 1.0(供应商折扣从未生效)** → 参数读取块提前
+- **cleansing.py**: `import defaultdict as _dd` 但调用 `defaultdict(int)` → NameError → **清洗导入库存联动(inbound+/outbound-/order)从未生效** → 改名匹配
+- 清理后端未使用 import/变量 12 处 + 前端孤儿文件 4 个(Card/Loading/theme.ts/types.ts, 0 引用)
+
+### 空白页崩溃攻坚(3 个根因, 逐一定位)
+- **根因 1**(ae9e635f): toast context 在 Provider 外为 null → useToast no-op + ToastAutoClear 移动端清理
+- **根因 2**(120d3c5b): DashboardPage 渲染层引用 useMemo 局部 storeData 致 ReferenceError
+- **构建失败**(303f646c): ToastAutoClear 实现缺失 → 重写 Toast.tsx + 恢复维护层
+
+### 维护层(最后一道空态防线)反复 → 定型
+- 859de84f 加 index.html 内嵌占位 + main.tsx 渲染检查 → 9cad01ec 疑似致构建失败回退 → 303f646c 重写恢复 → a3cf721f 防误报(加载中≠维护中文案) + 登录自然过渡
+
+### 体验优化
+- **任务双轮询优化**(25b850f0): 统一静默刷新(不整页 reload 消除闪烁) + 后台暂停轮询(visibilityState hidden, 回前台立即补查) + 签名扫描降频
+- **5 项优化**(baf932eb): 慢请求监控(>3s 写 quality_logs) / 错误审计(traced 写 api_error) / 路由 code-split(lazy) / 刷新按钮 / 清洗导入失败明细
+- **采购闭环指引 + 清洗预览脏数据标红 + risk_summary 健康分**(79858c4c)
+- 品牌 GMV 35+ 标签可视(横向滚动+自动采样) / 卡片预览点击 / PWA 更新提示 / severity 全局类 / 健康卡过渡 / 滚动条 / 加载占位文案 / VERSION 构建注入(vite define)
+- 告警跳转定位三处修复(e1148da3: 残留清除/离开页面清理/loc_search 防污染) + bc 行 C 仓维度聚合高亮多仓行(bef3e88a)
+
+### 尝试后回退(教训: 改动上线前必须本地/线上冒烟)
+- **code-split 回退**(834e24fb): 页面 lazy 疑似致 React 未挂载(一直加载中) → 回退整页打包
+- **显式刷新按钮回退**(d11c1c0c): 项目已有即时联动(写→invalidate_all→事件重拉秒级), 按钮冗余
+
+---
 ## 2026-09-08 规则页融合看板计算逻辑(规则=业务计算引擎配置) + 审查加固 P0/P1/P2 + 模式跟随(重大)
 > **主线**: feat/edgeone, 当日 22 commit(规则融合→审查加固→参数载体/告警开关→类型契约→模式跟随→优化清单)。
 > **验证**: 全链路线上实测, local_test 91/91。

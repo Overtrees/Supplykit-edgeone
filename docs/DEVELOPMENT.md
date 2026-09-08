@@ -662,3 +662,12 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **性能**: evaluate_many params 预解析(循环外一次) + 按事件检测计算变量 + 规则缓存复用 → 121s→3.2s; 参数载体规则 _is_alert_rule 过滤 → 快速路径
 - **前端坑(新增)**: ①组件顶部 useEffect 引用后声明 const → TDZ(改用已解构 store 值) ②ErrorBoundary 加'回到看板'(完整重拉自愈) ③CSS 变量'利用收敛'优于删除(内联样式统一到变量/全局类)
 - **实时性**: aux TTL 300→60s; health 版本指纹补 rules/suppliers/config(外部改库也触发前端 30s 轮询); 30s 静默刷新兜底无事件路径
+
+### 15.24 晚间稳定性攻坚 + PA 清理 + 静态分析治本(2026-09-08)
+- **静态分析铁律**: try/except 吞异常 = 功能"从未生效"的温床 —— 定期 pyflakes 全量扫描; 本轮 2 个真 bug(otif_min 定义在 otif_map 后 → NameError 被吞 → **OTIF 置信恒 1.0**; cleansing defaultdict 导入名错 → **库存联动从未生效**) 均为 try 块内 NameError 静默; 未使用 import/变量 + 前端孤儿文件同步清理
+- **空白页三根因**: ①useToast 在 Provider 外 null(no-op 不崩) ②渲染层引用 useMemo 局部变量(ReferenceError) ③组件构建期缺实现(ToastAutoClear) → 构建失败。**任何 React 重构上线前必须本地 build + 线上冒烟**, 空白页=最高优先级
+- **维护层(空态防线)**: index.html 内嵌'系统维护中'占位 + main.tsx 渲染异常兜底; 文案须与'加载中'区分(防误报); 改动若疑似致构建失败, 先回退恢复功能性修复再重做
+- **任务轮询模式**: 统一静默刷新(clearCache+loadAll, 不整页 reload 消除闪烁) + visibilityState hidden 暂停轮询(回前台立即补查) + localStorage 标记驱动(任务提交自动感知)
+- **code-split 教训**: 页面 lazy + React 18 UMD 构建环境未验证 → 一直加载中(React 未挂载) → 回退整页打包; **平台构建产物差异(UMD/CDN)下路由级 code-split 需先验证**
+- **UI 冗余判定**: 显式刷新按钮在"写→invalidate_all→事件重拉秒级"链路下冗余(移除); 功能修复优先于新 UI 元素
+- **跳转定位规范**: 一次性定位语义(loc_search/highlight)必须离开页面清理, 防污染共享搜索/残留兜底提示; 聚合维度跳转(断货 bc 行→C 仓多仓行)按 SKU 高亮全部行
