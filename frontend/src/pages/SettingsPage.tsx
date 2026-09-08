@@ -6,7 +6,7 @@ import { useToast } from '../components/Toast'
 import { t } from "../locale"
 import ConfirmDialog from '../components/ConfirmDialog'
 
-const VERSION = '2.0.0'
+const VERSION = (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) ? __APP_VERSION__ : '2.0.0'  // 构建注入(package.json version), 发版改 package.json
 const BUILD = new Date().toISOString().slice(0,10)
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
