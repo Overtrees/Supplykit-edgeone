@@ -64,6 +64,8 @@ const INV_WH_LABEL = { own:'自有仓', platform:'平台仓', platform_b:'B仓' 
 export default function App() {
   const [page, setPage] = useState('dash')
   const navigateTo = (p: string) => { setPage(p); clearCache(); clearInflight(); const _s = useAppStore.getState(); if (_s.prodBatch || _s.prodSelIds?.length) { _s.setProdBatch(false); _s.setProdBatchSel([]) }; if (p === 'dash') { useAppStore.getState().bumpPageVersion() }
+    // 离开进销存页清除跳转高亮(一次性定位语义) —— 重进页面不再触发定位检查/残留兜底提示
+    if (p !== 'inv') { setHighlightSku(''); setHighlightWarehouse('') }
     // 跳转定位用的搜索词(loc_search 标记)在离开进销存页时清理 —— 避免污染产品/供应商等共享搜索的页面
     try { if (p !== 'inv' && sessionStorage.getItem('loc_search')) { sessionStorage.removeItem('loc_search'); useAppStore.getState().setHammerSearch('') } } catch(e) {} }
   ;(window as any).__setPage = (p: string) => { navigateTo(p); closeHammerMenu() }
