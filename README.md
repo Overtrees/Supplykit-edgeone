@@ -3,13 +3,13 @@
 <p align="center">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React">
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Cloudflare%20Pages-deployed-F38020?logo=cloudflare" alt="Cloudflare Pages">
+  <img src="https://img.shields.io/badge/TiDB-Serverless-2EA5E0?logo=tidb" alt="TiDB">
+  <img src="https://img.shields.io/badge/EdgeOne%20Makers-deployed-F38020" alt="EdgeOne Makers">
   <img src="https://img.shields.io/badge/status-production-brightgreen" alt="Status">
-  <img src="https://img.shields.io/github/last-commit/Overtrees/Supplykit" alt="Last commit">
 </p>
 
 <p align="center">
-  <a href="https://supplykit-frontend.pages.dev">🌐 在线体验</a> ·
+  <a href="https://supplykit.top">🌐 在线体验</a> ·
   <a href="#产品亮点">亮点</a> ·
   <a href="#功能总览">功能</a> ·
   <a href="#快速开始">开发</a> ·
@@ -22,16 +22,17 @@
 
 面向电商供应链运营人员的**轻量级数据工作台**，定位为 ERP 与 Excel 之间的"中间层工具"——不做 ERP 的流程管理，也不替代 Excel 的灵活性。
 
-从原始导出文件到补货建议，一条链路打通。SupplyKit 做"自动化"（数据清洗、补货计算、看板监控），Excel 做"灵活性"（深度分析、报表排版），各司其职。
+从原始导出文件到补货决策，一条链路打通。SupplyKit 做"自动化"（数据清洗、补货计算、断货预警、看板监控），Excel 做"灵活性"（深度分析、报表排版），各司其职。
 
 ### 解决了什么
 
 | 痛点 | 方案 |
 |------|------|
-| 京东/天猫后台导出数据杂乱，手动清洗费时 | 智能列名匹配 + 可视化映射，一次配置永久复用 |
+| 京东/天猫后台导出数据杂乱，手动清洗费时 | 智能列名匹配 + 可视化映射，一次配置永久复用，导入即时联动库存/规则 |
 | 补货靠经验拍脑袋，不同人算出来不一样 | 三窗口滚动预测日销 + BBCC/传统双模式，结果可复现可追溯 |
-| B 仓超期仓储费、C 仓断货风险没人盯 | 双阈值预警（15天/90天）+ 濒临断货 TOP10，自动告警推送到看板 |
-| Excel 做报表，每次都要重新拉数 | 看板 30s 静默刷新 + 15s 版本轮询，打开即用 |
+| B 仓超期仓储费、C 仓断货风险没人盯 | 濒临断货**三级判定**（Adj-DOS vs 补货周期）+ 采购&补货告警卡，自动联动 |
+| 规则配置与看板计算脱节 | **规则=业务计算引擎配置**：断货/健康计算参数融合进规则编辑页，卡片同源读取 |
+| Excel 做报表，每次都要重新拉数 | 看板 30s 静默刷新 + 版本指纹轮询，打开即用 |
 
 ---
 
@@ -40,221 +41,184 @@
 ### 🎯 从数据到决策，三步完成
 
 ```
-导入 → 智能匹配 → 预览确认 → 一键执行
+导入 → 智能匹配 → 预览确认 → 一键执行（自动联动库存/规则评估）
   ↓
-补货建议 → 查看/导出 → 标记操作 → 追踪入库 → 仓储费预警
+补货建议 → 查看/导出 → 执行下单 → 导入在途列完成闭环 → 断货/采购卡即时反映
 ```
 
 ### 🌐 多渠道支持，数据独立隔离
 
-```
-┌─ 全局渠道筛选 ─────────────────┐
-│ [☰] [京东 ▼]     实时        │  ← 切换一次，所有页面联动
-└────────────────────────────────┘
-```
-
-京东/其他渠道（天猫、唯品会等）的数据完全隔离：
-- 库存、商品、规则、配置、告警均按渠道独立存储
-- 补货建议按渠道查询对应数据
-- 清洗导入时标记渠道来源
+京东/其他渠道（天猫、唯品会等）的数据完全隔离：库存、商品、规则、配置、告警均按渠道独立；清洗导入自动标记渠道归属。
 
 ### 🔐 JWT 认证，支持访客模式
 
-- 基于 HS256 JWT 的完整认证系统（零第三方依赖）
-- 首次使用需设置密码（`/api/auth/setup`），自动创建管理员账号
-- 所有业务 API 强制鉴权，未授权 401
-- **访客模式**：`demo / demo123`（仅可查看，不可修改数据），适合在线体验
-- 未来可扩展多用户（users 表已建）
+- HS256 JWT（零依赖）+ PBKDF2 密码哈希，首次设置管理员账号
+- **访客模式** `demo / demo123`（只读，403 拦截写操作），适合在线体验
 
-### 🔄 双模式补货，适配不同供应链模型
+### 🔄 双模式补货 + 全页模式跟随
 
 | 模式 | 一句话 | 适用渠道 |
 |------|--------|---------|
-| **BBCC** | 全国一盘棋，盯 B 仓库存能不能撑住 C 仓消耗 | 京东 |
-| **传统** | 按仓逐条算，各仓独立补货 | 京东 / 其他渠道 |
+| **BBCC** | 全国一盘棋：供应商统一发 B 仓 → B→C 调拨补 C 缺口 | 京东 |
+| **传统** | 按仓逐条算，各仓独立补货（供应商直发各仓） | 京东 / 其他渠道 |
 
-### 📊 看板一页尽览，按渠道自动切换
+看板断货/低库存/健康/采购&补货卡、进销存 B 仓维度、规则 lit 双线**全部跟随补货模式**切换。
 
-- GMV 趋势 + 店铺分布 + 订单阶段转化漏斗
-- 库存健康度（自有仓/平台仓/B仓三视图）
-- **濒临断货 TOP10** — 按可撑天数排序
-- 规则引擎告警按渠道隔离，看板 30s 静默刷新自动更新
+### 📊 看板一页尽览，按渠道/模式自动切换
+
+- GMV 趋势 + 店铺/品牌分布 + 订单阶段转化漏斗
+- **濒临断货三级预警**：Adj-DOS（修正可售天数：在仓+在途×OTIF置信+调拨）≤ 补货周期 L/T → 🔴 紧急 / 🟠 预警 / 🟡 关注；动态安全库存 SS、小时流速加速、季节系数全接入
+- **采购&补货告警卡**：与建议页同源（补货=建议需补、采购=需采，行标签区分）
+- 低库存卡按模式过滤维度（bbcc→BC盘+own / 传统→C仓+own）
+- 告警逐仓（SKU×仓）、恢复自动关闭、30s 静默刷新
+
+### ⚙️ 规则引擎 = 业务计算引擎配置
+
+- **看板计算参数融合规则**：断货判定（OTIF 下限/动态SS Z值/加速阈值/分级 Buffer）与健康分档参数配置在规则编辑页，**断货卡/健康卡同源读取，即时生效**（停用规则=回默认）
+- 条件字段支持看板同源计算变量（`inv.adj_dos`/`inv.buffer`/`health.score`/`params.lit` 等）+ `or` 多组
+- **类型模板化**：选类型自动带出事件+条件+参数（超卖→order.created+quantity>avail 等），防事件-变量错配
+- **告警开关**：内置断货/健康规则为参数载体（不重复告警，卡片已承载）；自定义规则默认开告警，开关即时联动（关=清存量/开=评估生成）
+- 触发即命中恢复关闭、动作审计（params.log 写 quality_logs）、立即运行（双渠道全量 3s）
 
 ### 🧹 数据清洗，告别 Excel 手工
 
-- 上传 Excel/CSV → 自动识别 30+ 种中文列名 → 可视化映射
-- 支持 6 种导入类型：订单 / 库存 / 平台仓库存 / 入库 / 出库 / 商品
-- 导入时标记渠道（京东/其他），数据自动隔离
-- 支持模板保存复用，异步导入 + 进度追踪
-- 去重保护 + 异常记录
-
-### ⚙️ 规则引擎，按渠道独立
-
-- 规则按渠道（京东/其他）独立创建和生效
-- 条件编辑无需写代码，下拉选字段 + 设阈值即可
-- 支持百分比比较（如"安全库存的 30%"）
-- **组合表达式**：四则运算（可用+在途、安全线-可用、可用/日销可撑天数、订单数量×单价）
-- **日销注入**：每日定时任务提供日销，支持"可撑天数<7"类断货风险规则
-- 告警实时推送到看板，点击跳转库存详情
-
-### 📋 列选择器，自定义表格显示
-
-- 所有表格页面支持自定义列显隐 + 拖拽排序
-- 列配置按页面和仓库类型独立持久化
-- 移动端触摸拖拽支持
+- 上传 Excel/CSV → 自动识别 30+ 中文列名 → 可视化映射 → 模板复用
+- 6 类导入（订单/自有仓库存/平台仓库存/B仓库存/入库/出库/商品/供应商）+ 异步进度 + 去重保护
+- 导入自动联动：库存增减、规则评估、渠道归属
 
 ### ↩️ 操作撤销 + 回收站
 
-- 删除规则/订单后，toast 5秒撤销窗口，超时后永久删除
-- 设置页回收站可查看和恢复已删除数据，支持一键恢复
+删除规则/订单后 toast 5 秒撤销窗口；设置页回收站批量恢复/永久删除。
 
-### 📱 PWA 离线支持
+### 📱 PWA + 首次引导
 
-- 支持添加到主屏幕（iOS Safari → 分享 → 添加到主屏幕）
-- 网络优先策略，离线时使用缓存，核心功能可用
-- 支持 `display: standalone` 全屏运行
-
-### 🎨 首次使用引导
-
-- 首次打开展示欢迎页，产品定位 + 4 核心功能入口卡片
-- "开始体验"按钮一键填充种子数据，跳过直接进入
-- 设置页可重置欢迎页，重新显示引导
+支持添加到主屏幕离线运行；首次使用欢迎页一键填充种子数据（异步分步任务）。
 
 ---
 
 > [!IMPORTANT]
-> **演示与免责声明**：本系统为供应链数据清洗与补货决策的**演示项目**。内置种子数据（品牌、商品、供应商、店铺及全部业务数据）均为**虚构示例**，与任何真实企业、品牌或个人无关，不构成任何实际商业信息或推荐。请勿将演示数据用于真实业务决策。
+> **演示与免责声明**：本系统为供应链数据清洗与补货决策的**演示项目**。内置种子数据均为**虚构示例**，与任何真实企业、品牌或个人无关。请勿将演示数据用于真实业务决策。
 
 ## 功能总览
 
 | 页面 | 核心能力 |
 |------|---------|
-| 📊 **看板** | GMV趋势 / 店铺GMV / 漏斗转化 / 库存健康度 / 濒临断货TOP10 / 告警 / 30s静默刷新 / **按渠道过滤** |
-| 💡 **补货建议** | BBCC全国汇总 / 传统按仓 / 三窗口滚动日销 / B仓超储预警 / 一键标记操作 / **渠道筛选** |
-| 📦 **采购建议** | 14+28天融合日销 / 系统总库存视角 / MOQ兜底 / 导出Excel |
-| 🧹 **数据清洗** | 6种导入类型 / 渠道标记 / 智能列名匹配 / 字段映射 / 模板复用 / 异步导入 / 自定义字段 |
-| ⚙️ **规则引擎** | 事件驱动 / 条件可视化编辑 / 百分比比较 / 告警模板变量 / **按渠道独立** |
-| 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / **按渠道过滤** |
-| 📦 **进销存台账** | 自有仓/平台仓/B仓三视图 / 周转计算 / **列选择器拖拽排序** |
-| 🏷️ **商品/供应商** | CRUD / 搜索 / **平台列标识渠道** |
-| ⚠️ **异常记录** | 数据质量日志 |
+| 📊 **看板** | GMV趋势 / 店铺/品牌GMV / 漏斗 / 健康度 / 断货三级 / 低库存(模式过滤) / 采购&补货 / 待处理 / 30s刷新+版本指纹 |
+| 💡 **补货建议** | BBCC 两步法（C缺口→B调拨）/ 传统逐仓 / 三窗口日销 / B仓仓储费 / 已下单标记 / 导出 |
+| 📦 **采购建议** | 14+28 融合日销 / 系统总库存 / 供应商级参数+MOQ聚合 / 采购告警 / 导出 |
+| 🧹 **数据清洗** | 6 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
+| ⚙️ **规则引擎** | 计算参数融合(断货/健康) / 计算变量字段 / or 多组 / 类型模板 / 告警开关 / 立即运行 / 审计 |
+| 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / 软删撤销+回收站 |
+| 📦 **进销存台账** | 自有/平台/B仓三视图(模式跟随) / 批次效期 / 当月进出 / 告警跳转定位 |
+| 🏷️ **商品/供应商** | CRUD / 搜索 / 批次效期 |
+| ⚠️ **异常记录** | 数据质量日志（分页加载更多）/ 断货审计 |
 
 ### 大数据能力（万级 SKU 业务量）
 
 | 能力 | 说明 |
 |------|------|
-| **后端真分页** | 滞销/补货/进销存/商品接口 `page/page_size` 返回 `{items,total}`，只算当前页 |
-| **前端滚动懒加载** | IntersectionObserver 哨兵逐页加载（200px 预载），避免一次拉全量 |
-| **SQL 聚合** | 滞销最后销售日 `GROUP BY sku` 替代全量遍历（35s→4.2s） |
-| **缓存版本号联动** | 订单/库存/商品/清洗/规则/参数变更 → 版本号递增 → 缓存即时失效重算 |
-| **加载失败区分** | ErrorRetry 组件：加载失败显示错误+重试，不误显示"暂无数据" |
+| 后端分页 + 前端滚动懒加载 | page/page_size + IntersectionObserver 哨兵逐页 |
+| 分析缓存四维保障 | 写操作 `invalidate_all()` 中央失效（不等 TTL）；缓存 key 含 channel/mode |
+| 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s |
+| 实时性 | stock-risk 独立 30s TTL；aux 60s；事件驱动全链路刷新；30s 兜底 |
 
 ---
 
 ## 快速开始（开发）
 
 ```bash
-git clone https://github.com/Overtrees/Supplykit.git
-cd Supplykit
+git clone https://github.com/Overtrees/Supplykit-edgeone.git
+cd Supplykit-edgeone
+
+# 后端本地回归（mock db + TestClient，改代码先跑）
+cd cloud-functions/api && python3 local_test.py        # 91 项全过
 
 # 前端
 cd frontend && npm install && npm run dev
 
-# 后端
-cd ../backend && pip install -r requirements.txt
-uvicorn app.main:app --reload
-
-# 一键填充种子数据（设置页按钮或 API）：
-# 1000 SKU/渠道 × 60 天 × 10万+订单，12% 低库存场景，约 2.5 分钟完成
-curl -X POST https://overtrees.pythonanywhere.com/api/seed/fill
+# 3.10 语法门禁（部署前）
+python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), feature_version=(3,10))"
 ```
 
-环境变量：
+环境变量（Makers 项目 env，部署时快照）：
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `VITE_API_BASE_URL` | 后端 API 地址 | `https://overtrees.pythonanywhere.com` |
-| `SQLITE_PATH` | 数据库路径 | `app/supplykit.db` |
-| `CORS_ORIGINS` | 跨域来源 | `*` |
-| `PYTHONANYWHERE_TOKEN` | PA 部署 Token | — |
+| 变量 | 说明 |
+|------|------|
+| `TIDB_HOST/PORT/USER/PASSWORD/DB/SSL` | TiDB Serverless 连接 |
+| `DB_BACKEND` | `tidb` |
+| `JWT_SECRET` | 固定值（防多实例竞态） |
+| `CRON_SECRET` | 定时任务校验 |
 
 ---
 
 ## 架构
 
 ```
-┌─ 前端 (Cloudflare Pages) ─────────────────────┐
-│  React 18 · TypeScript · ECharts 5 · Zustand   │
-│  Axios(缓存+去重+统一响应解包) · 版本轮询15s     │
-│  看板30s静默刷新 · WebSocket(可选)              │
-└──────────────────────┬─────────────────────────┘
-                       │ HTTPS
-┌─ 后端 (PythonAnywhere) ───────────────────────┐
-│  FastAPI · 18 路由模块 · 90+ 个测试             │
-│  ├─ 业务: dashboard / replenishment / purchase │
-│  │        insights / cleansing / rules / ...   │
-│  ├─ 核心: sales_utils(日销融合)                │
-│  │        response(统一响应)                   │
-│  │        cleansing_parser(文件解析)           │
-│  │        cleansing_templates(模板管理)        │
-│  └─ 基础: database.py(SQLite ORM + 版本管理)   │
-│         scheduler.py(APScheduler 定时任务)     │
-│         events.py(EventBus)                   │
-└──────────────────────┬─────────────────────────┘
+┌─ 前端 (Cloudflare Pages, 同源部署) ──────────┐
+│  React 18 · TypeScript · ECharts 5 · Zustand  │
+│  Axios(30s缓存+在途去重+统一解包) · 版本指纹30s │
+│  看板30s静默刷新 · 事件驱动全链路刷新           │
+└──────────────────────┬────────────────────────┘
+                       │ HTTPS (supplykit.top, 免签公开)
+┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
+│  FastAPI · 17 路由模块 · local_test 91 项     │
+│  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
+│  ├─ 业务: dashboard(断货三级/健康) /         │
+│  │        replenishment / purchase / insights │
+│  │        cleansing / rules(计算参数融合) /   │
+│  │        cron(7端点) / tasks(seed分步) / ... │
+│  ├─ 核心: core/rules.py(表达式引擎+计算变量)  │
+│  │        biz/sales.py(三窗口日销融合)       │
+│  └─ 基础: db.py(TiDB 原生)                   │
+└──────────────────────┬────────────────────────┘
                        │
-┌─ 数据库 ──────────────────────────────────────┐
-│  SQLite (WAL模式) · 每日自动备份 · 版本管理     │
-│  可迁 PostgreSQL (ORM 接口兼容 supabase-py)    │
-└───────────────────────────────────────────────┘
+┌─ 数据库 ────────────────────────────────────┐
+│  TiDB Serverless (pymysql DictCursor)        │
+└──────────────────────────────────────────────┘
 ```
 
-### 后端路由一览（18个）
+### 后端路由一览（17 个）
 
 | 路由 | 前缀 | 功能 |
 |------|------|------|
-| `dashboard` | `/api/dashboard` | 看板摘要 + 濒临断货TOP10 |
-| `replenishment` | `/api/insights` | BBCC/传统补货建议 + 导出 |
-| `purchase` | `/api/insights` | 采购建议 + 导出 |
-| `insights` | `/api/insights` | 慢动识别 / 趋势 / 同步 / 库存带日销 |
-| `cleansing` | `/api/cleansing` | 数据清洗导入 + 模板/字段管理 |
-| `orders/inventory` | `/api/*` | 订单/库存 CRUD |
-| `products/suppliers` | `/api/*` | 商品/供应商 CRUD |
-| `rules` | `/api/rules` | 规则引擎 CRUD |
-| `alerts/events` | `/api/*` | 告警/事件记录 |
-| `purchase_orders` | `/api/purchase-orders` | 采购单标记 + 入库日期追踪 |
-| `replenishment_config` | `/api/replenishment-config` | 补货参数 + 活动系数 |
-| `records` | `/api/records` | 出入库记录 |
-| `quality_logs` | `/api/quality-logs` | 质量日志 |
-| `sync_tasks` | `/api/sync-tasks` | 同步任务状态 |
-| `ws` | `/ws/events` | WebSocket 实时推送 |
+| `dashboard` | `/api/dashboard` | 看板摘要/aux/stock-risk（30s TTL 独立） |
+| `replenishment` | `/api/insights` | BBCC/传统补货建议 |
+| `purchase` | `/api/insights` | 采购建议/滞销处置建议/批量处置 |
+| `insights` | `/api/insights` | 慢动识别/进销存 with-sales/ping |
+| `cleansing` | `/api/cleansing` | 清洗导入/模板/任务 |
+| `orders/products/inventory` | `/api/*` | 分页 CRUD/软删/批量/缺货清单 |
+| `suppliers` | `/api/*` | 供应商 CRUD |
+| `rules` | `/api/rules` | 规则 CRUD/测试/批量/**evaluate(立即运行)** |
+| `alerts` | `/api/alerts` | 告警列表/计数（逐仓） |
+| `tasks` | `/api/*` | seed 填充分步/reset/导出 |
+| `purchase-orders` | `/api/purchase-orders` | 采购单标记+到仓日期 |
+| `replenishment-config` | `/api/replenishment-config` | 补货参数(mode 前缀)/slow-cats/seasons/history |
+| `misc` | `/api/*` | quality-logs(分页)/monitor/db/diag |
+| `batches` | `/api/batches` | 批次明细 |
+| `auth` | `/api/auth` | setup/login/check |
+| `cron` | `/api/cron` | 7 端点（snapshot/freshness/archive/cleanup/daily-rules/recycle/push-alerts） |
+| `analysis_cache` | — | 中央缓存失效注册表 |
 
 ### 项目结构
 
 ```
 frontend/src/
-├── pages/ (10个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory / Products / Suppliers / Quality / Settings
-├── components/ (10个): Chart / Sidebar / Toast / Card / ErrorBoundary / Icons / ...
-├── store/useAppStore.ts          Zustand + WebSocket
-├── api/client.ts                 Axios + 缓存 + 统一响应
-└── App.tsx / main.tsx / theme.ts
+├── pages/ (13个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
+│                 Products / Suppliers / Quality / Settings / Task / Login / ...
+├── components/ (13个): Chart / Sidebar / Toast / ErrorBoundary / Icons / hammer/(9) / ...
+├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态
+├── api/client.ts                 Axios + 缓存 + 统一响应解包
+└── App.tsx / main.tsx / theme.ts / styles.css
 
-backend/app/
-├── main.py                       FastAPI 入口
-├── api/routes/ (18个路由模块)
-├── core/
-│   ├── database.py               SQLite ORM + 任务持久化 + 索引 + 渠道迁移
-│   ├── sales_utils.py            三窗口日销滚动预测 + sku_to_channel
-│   ├── replenishment_cache.py     补货缓存(15min + 版本号失效) + dashboard_cache.py 看板缓存(同步重建)
-│   ├── response.py               统一响应 ok()/fail()
-│   ├── dashboard_cache.py        看板缓存
-│   ├── cleansing_parser.py       文件解析 + 字段清洗
-│   ├── cleansing_templates.py    模板管理 + 系统字段定义
-│   ├── rules.py                 规则引擎
-│   ├── events.py                EventBus
-│   └── scheduler.py             APScheduler
-├── tests/ (11个文件, 90+个测试)
-│   test_core.py (34) / test_e2e.py (13) / test_more.py (9)
-└── seed_realistic.py             模拟数据生成器
+cloud-functions/api/
+├── index.py                      FastAPI 入口（行首 app=, 鉴权, 启动自愈 ALTER/补种/退役）
+├── db.py                         TiDB 原生数据层（pymysql DictCursor）
+├── biz/sales.py                  三窗口日销滚动预测 + 逐仓/全国C仓双口径
+├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
+├── routes/ (17个)                业务路由
+└── local_test.py                 本地回归 91 项（mock db + TestClient）
+
+scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
 
 ---
@@ -263,26 +227,31 @@ backend/app/
 
 ### 日销滚动预测（三窗口融合）
 
-7天/14天/28天三个窗口各自做 3σ 异常剔除 + 近3天1.5倍加权，按趋势信号自动分配权重：
+7/14/28 天窗口各自 3σ 异常剔除 + 近 3 天 1.5 倍加权，按趋势信号自动分配权重；BBCC 用全国 C 仓合计日销，传统用逐仓日销（与断货判定同源）。
 
-| 趋势 | 7天权重 | 14天权重 | 28天权重 |
-|------|---------|---------|---------|
-| 📈📈 持续上行 | 50% | 30% | 20% |
-| ➡️➡️ 平稳 | 10% | 20% | 70% |
-| 📉📉 持续下行 | 40% | 35% | 25% |
+### 濒临断货三级判定（供应链时间线优先）
+
+```
+Adj-DOS = (在仓可用 + 在途×OTIF置信 + B→C调拨×1.0) ÷ 日销(×季节系数×加速倍率)
+OTIF    = suppliers.score/5 (0.6~1.0)；动态安全库存 SS = Z(1.65)×日销σ×√L/T
+🔴 紧急: Adj-DOS ≤ L/T（含已断） | 🟠 预警: ≤L/T+1 且 Buffer≤1.2 | 🟡 关注: Buffer≤1.0
+```
+
+参数可在规则页"濒临断货预警"规则中配置（卡片同源读取），停用规则=回默认。
 
 ### BBCC 两步法
 
 ```
-C仓缺口 = max(日销×前置期 − C仓可用 − B→C在途, 0)
-实补 = min(C仓缺口, B仓可用)
+C缺口 = max(日销×前置期 − C可用 − B→C在途, 0)
+B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
+供应商统一发 B 仓 → B→C 调拨补 C；采购闭环：导出建议→评估→下单→导入在途列
 ```
 
 ### 采购建议公式
 
 ```
-建议采购 = max(日销(14+28融合)×采购前置期 + 安全库存 − 系统总库存, 0)
-兜底: max(采购量, MOQ)
+建议采购 = max(日销(14+28融合)×采购前置期 + 安全库存 − 系统总库存 − 已下单在途, 0)
+供应商级参数(前置期/安全天数/MOQ) 回退全局；同供应商合计<MOQ 按占比放大
 ```
 
 ---
@@ -290,10 +259,7 @@ C仓缺口 = max(日销×前置期 − C仓可用 − B→C在途, 0)
 ## 测试
 
 ```bash
-cd backend
-python -m pytest tests/ -v          # 全部 90+ 个
-python -m pytest tests/test_e2e.py  # 端到端
-python -m pytest tests/test_more.py # 补充测试
+cd cloud-functions/api && python3 local_test.py   # 91 项（auth/看板/补货/清洗/规则/开关联动/字符串契约）
 ```
 
 ---
@@ -302,27 +268,23 @@ python -m pytest tests/test_more.py # 补充测试
 
 | 组件 | 位置 | 方式 |
 |------|------|------|
-| [前端](https://supplykit-frontend.pages.dev) | Cloudflare Pages | 推 `main` 自动构建 |
-| [后端 API](https://overtrees.pythonanywhere.com) | PythonAnywhere | `curl` 上传 + `reload` |
-| [API 文档](https://overtrees.pythonanywhere.com/api/docs) | Swagger UI | 自动生成 |
-| 数据库 | SQLite | 每日 2:00 自动备份 |
+| 前端+后端 | **EdgeOne Makers**（makers-8gstkvheqm2c, Area=overseas 免备案） | push `edgeone` 远程自动构建 |
+| 生产域名 | **supplykit.top**（免签公开访问） | CNAME → supplykit.top.pages.dnsoe6.com |
+| 数据库 | **TiDB Serverless** | pymysql 直连 |
 
-> **CI/CD**：后端使用 GitHub Actions（`.github/workflows/deploy-backend.yml`）自动上传 + reload + health check；前端由 Cloudflare Pages 监听 `main` 分支自动构建。Sentry sourcemap 在构建时自动上传。
->
-> **自愈体系**：GitHub Actions `self-heal.yml` 每 10 分钟检查 `/api/health`，非 200 自动调 PA API reload（挂后 ≤10 分钟恢复）；UptimeRobot 每 5 分钟 ping 保活。
+```bash
+# 部署：提交后推送 edgeone 远程 → Makers Git 集成自动构建
+git push edgeone feat/edgeone
+# 构建状态查询（DescribePagesDeployments）；部署后冒烟 /api/health
+```
 
-| 时间 | 任务 |
-|------|------|
-| 每 10 分钟 | 自愈检查（health + 自动 reload） |
-| 每 30 分钟 | 库存同步 |
-| 每天 02:00 | 数据库备份（sqlite3 在线备份 API + 进程内验证） |
-| 每天 03:00 | 日志清理 |
-| 每天 04:00 | 规则评估（滞销识别等） |
+> **定时任务**：cron 7 端点由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
+> **自愈**：index.py 启动幂等（补索引/补列/内置规则补种与退役）；cron freshness 守护快照。
 
 ---
 
 <p align="center">
-  <a href="https://github.com/Overtrees/Supplykit">GitHub 仓库</a> ·
-  <a href="https://supplykit-frontend.pages.dev">在线体验</a> ·
-  <a href="https://overtrees.pythonanywhere.com/api/docs">API 文档</a>
+  <a href="https://supplykit.top">在线体验</a> ·
+  <a href="docs/DEVELOPMENT.md">开发规范</a> ·
+  <a href="CHANGELOG.md">变更日志</a>
 </p>
