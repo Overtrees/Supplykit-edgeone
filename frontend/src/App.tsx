@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react"
 import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { api } from './api/client'
-import { ToastProvider, useToast } from './components/Toast'
+import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
 import ProductPage from './pages/ProductPage'
 import SupplierPage from './pages/SupplierPage'
 import InsightsPage from './pages/InsightsPage'
@@ -72,9 +72,7 @@ export default function App() {
   const [highlightSku, setHighlightSku] = useState('')
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
   const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
-  const toast = useToast()
-  // 页面切换立即清 toast —— 任务完成等提示不跨页残留(曾堆积且超时不清的痛点)
-  useEffect(() => { toast.clear() }, [page])
+  const toast = useToast()  // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 全局后台任务轮询（跨页面、挂后台均有效）
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
@@ -390,6 +388,7 @@ export default function App() {
     <>
       {!loggedIn ? <LoginPage onLogin={() => { try { localStorage.removeItem('c_welcome_seen') } catch {} setLoggedIn(true); window.location.reload() }} />
       : <ToastProvider>
+      <ToastAutoClear page={page} />
       {/* 主内容 — 侧边栏打开时显示菜单，关闭时显示页面 */}
       <header style={{display:showWelcome?'none':''}}>
         <div className="header-inner">

@@ -1,4 +1,4 @@
-import React, { useState, createContext, useContext } from 'react'
+import React, { useState, createContext, useContext, useEffect, useRef } from 'react'
 
 interface ToastItem {
   id: number
@@ -15,7 +15,7 @@ interface ToastContextValue {
   clear: () => void
 }
 
-const ToastContext = createContext<ToastContextValue>(null!)
+// 默认 no-op: Provider 外调用(如 App 组件体任务轮询)不崩, Provider 内正常 —— 防止 NullPointer 崩溃
 
 export function useToast() { return useContext(ToastContext) }
 
