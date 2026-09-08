@@ -145,8 +145,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             import json as _json
             from db import query as _qry3, execute as _exec4
             for _ch in ("jd", "other"):
-                _ck = _qry3("SELECT COUNT(*) AS c FROM rules WHERE name='濒临断货预警' AND channel=%s "
-                            "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or {}
+                _ck = (_qry3("SELECT COUNT(*) AS c FROM rules WHERE name='濒临断货预警' AND channel=%s "
+                             "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or [{}])[0]
                 if not int(_ck.get("c") or 0):
                     _lit = 3 if _ch == "jd" else 10
                     _exec4("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, "
@@ -157,8 +157,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                             _json.dumps({"lit": _lit, "otif_min": 0.6, "ss_z": 1.65, "accel_ratio": 1.3,
                                          "accel_min_qty": 10, "buffer_orange": 1.2, "buffer_yellow": 1.0,
                                          "orange_slack_days": 1, "include_avail_zero": 1}, ensure_ascii=False)))
-                _ck2 = _qry3("SELECT COUNT(*) AS c FROM rules WHERE name='库存健康监控' AND channel=%s "
-                             "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or {}
+                _ck2 = (_qry3("SELECT COUNT(*) AS c FROM rules WHERE name='库存健康监控' AND channel=%s "
+                              "AND (deleted_at IS NULL OR deleted_at='')", [_ch]) or [{}])[0]
                 if not int(_ck2.get("c") or 0):
                     _exec4("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, "
                            "severity, is_active, channel, params) VALUES(%s,%s,%s,%s,%s,%s,%s,1,%s,%s)",
