@@ -642,7 +642,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
             var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
             var lv = RISK_LV[x.level]
-            return <div key={i} onClick={function(){onAlert && onAlert(x.sku, _showOwn ? 'own' : 'platform', x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+            return <div key={i} onClick={function(){
+              // bc 合计行(bbcc 专属): 跳 C 仓维度(platform) + 聚合高亮该 SKU 所有 C 仓行(不传具体仓)
+              // —— 满足 bc 一盘棋语义: 看全国 C 仓分布, 而非单一仓
+              var _isBC = x.type === 'BC' || x.warehouse === 'BC'
+              onAlert && onAlert(x.sku, _isBC ? 'platform' : (_showOwn ? 'own' : 'platform'), _isBC ? '' : x.warehouse)
+            }} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{minWidth:0,flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:4,fontWeight:600,fontSize:12,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                   {lv ? <span className={'pill ' + (x.level === 'red' ? 'danger' : x.level === 'orange' ? 'warning' : 'info')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{lv.t}</span> : null}

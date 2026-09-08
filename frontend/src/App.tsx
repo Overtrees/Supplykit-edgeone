@@ -355,7 +355,7 @@ export default function App() {
       // 标记定位搜索(离开进销存页时自动清理, 不污染其他共享搜索的页面)
       try { sessionStorage.setItem('loc_search', sku) } catch(e) {}
     }
-    if (wh) setHighlightWarehouse(wh)
+    if (wh !== undefined) setHighlightWarehouse(wh || '')  // ''=聚合高亮(bc 行跳 C 仓全仓行), 空则清残留
     // 从告警跳进销存时同步切到对应仓库维度(own/platform/platform_b), 保证高亮可见
     if (whType === 'own' || whType === 'platform' || whType === 'platform_b') {
       useAppStore.getState().setHammerWhType(whType)
