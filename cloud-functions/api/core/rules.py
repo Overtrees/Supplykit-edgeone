@@ -438,8 +438,9 @@ def evaluate_stock_skus(channel, limit=100000):
                 pass
         inv_ctxs.append(base)
         daily_ctxs.append(base)
-    r1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules)
-    r2, hits = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules, return_hits=True)
+    r1, hits1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules, return_hits=True)
+    r2, hits2 = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules, return_hits=True)
+    hits = hits1 | hits2
     out = list(dict.fromkeys(r1 + r2))
     # 恢复自动关闭(完整性): 每日全量快照下, 该事件规则 alert_type 的 active 告警
     # 若 SKU×仓 未命中(已恢复/不满足) → inactive, 防止库存补足后旧告警残留虚高计数
