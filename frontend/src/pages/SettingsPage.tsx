@@ -336,7 +336,6 @@ export default function SettingsPage() {
     {confirm === 'recycle' ? <RecycleBin onClose={() => setConfirm(null)} toast={toast} /> : <div style={{padding:'16px 0',maxWidth:500,margin:'0 auto'}}>
       <Group title="连接状态">
         <Row label="后端服务" value={status} sub={`${ping}ms · ${lastCheck}`} />
-        <Row label="API 地址" value={(() => { try { return window.location.host || '-' } catch { return '-' } })()} sub="EdgeOne Makers · 同源免签" />
         <Row label="实时连接" value={wsStatus === 'connected' ? '已连接' : wsStatus === 'polling' ? '轮询中' : '已断开'} />
         <LastRow label="当前渠道" value={channel === 'jd' ? '京东' : '其他渠道'} />
       </Group>
