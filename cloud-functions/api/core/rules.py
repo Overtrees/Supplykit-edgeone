@@ -234,7 +234,10 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
             # (bbcc→b_to_c+c_safety, traditional→lead_time; 与断货卡模式双线一致)
             _rp2 = dict(rule.get("_params") or {})
             if "lit" not in _rp2 and ctx.get("lit_trad") is not None:
-                _rp2["lit"] = ctx.get("lit_bbcc" if str(rule.get("mode")) == "bbcc" else "lit_trad")
+                _m = str(rule.get("mode") or "")
+                if not _m:
+                    _m = "bbcc" if ctx.get("channel") == "jd" else "traditional"  # 未指定=跟随渠道默认模式
+                _rp2["lit"] = ctx.get("lit_bbcc" if _m == "bbcc" else "lit_trad")
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
                     "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
