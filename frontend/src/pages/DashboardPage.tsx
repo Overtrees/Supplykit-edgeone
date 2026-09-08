@@ -246,7 +246,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     xAxis: { type: 'category', data: storeData.map(i => i.name) || [],
       // 品牌维度标签太多(35+)重叠→隐藏, 用悬浮/点击 tooltip 显示名称; 店铺维度保留(数量少, 截断+旋转)
       axisLabel: _storeDim === 'brand'
-        ? { show: false }
+        ? { show: true, interval: 'auto', fontSize: 8, margin: 4,
+            formatter: (v) => { const t = String(v||''); return t.length > 5 ? t.slice(0,5)+'…' : t } }
         : { fontSize: 8, interval: 0, rotate: storeData.length > 8 ? 35 : 0, margin: 6,
             formatter: (v) => { const t = String(v||''); if (t.length > 6) return t.slice(0,6)+'…'; return t },
             width: 64, overflow: 'truncate' } },
@@ -254,7 +255,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       axisLabel: { fontSize: 8, formatter: (v) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) }, splitNumber: 4,
       max: (v) => Math.ceil(v.max * 1.15 / 1000) * 1000 },
     series: [{ type: 'bar', barMaxWidth: 26, data: storeData.map((i, idx) => ({ value: Math.round(_g(i) * 100) / 100, itemStyle: { color: ['#f59e0b','#06b6d4','#8b5cf6','#ec4899','#10b981','#f97316'][idx % 6] } })) || [] }],
-    grid: { containLabel: true, top: 8, bottom: _storeDim === 'brand' ? 8 : (storeData.length > 8 ? 42 : 30), left: 8, right: 12 }
+    grid: { containLabel: true, top: 8, bottom: _storeDim === 'brand' ? 30 : (storeData.length > 8 ? 42 : 30), left: 8, right: 12 }
   }}, [dashboard, periodTab, gmvView, _storeDim])
 
   const barOption = useMemo(() => {
@@ -523,7 +524,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span onClick={function(){setStoreDim('store')}} className="clickable" style={{fontSize:9,padding:'2px 6px',borderRadius:99,cursor:'pointer',fontWeight:_storeDim==='store'?600:400,background:_storeDim==='store'?'var(--card)':'transparent',color:_storeDim==='store'?'var(--text)':'var(--muted2)',whiteSpace:'nowrap'}}>店铺</span>
             <span onClick={function(){setStoreDim('brand')}} className="clickable" style={{fontSize:9,padding:'2px 6px',borderRadius:99,cursor:'pointer',fontWeight:_storeDim==='brand'?600:400,background:_storeDim==='brand'?'var(--card)':'transparent',color:_storeDim==='brand'?'var(--text)':'var(--muted2)',whiteSpace:'nowrap'}}>品牌</span>
           </span>
-        </div><Chart option={storeOption} height={170} /></div>
+        </div>
+        <div style={{ overflowX: _storeDim === 'brand' ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ width: _storeDim === 'brand' ? Math.max((storeData && storeData.length || 1) * 30, 340) : '100%' }}>
+            <Chart option={storeOption} height={170} />
+          </div>
+        </div>
+        </div>
     </div>
 
     <div className="chart-row-3">

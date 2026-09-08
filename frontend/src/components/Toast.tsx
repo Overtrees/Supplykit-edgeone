@@ -12,6 +12,7 @@ interface ToastContextValue {
   add: (t: Omit<ToastItem, 'id'>) => void
   success: (msg: string) => void
   error: (msg: string) => void
+  clear: () => void
 }
 
 const ToastContext = createContext<ToastContextValue>(null!)
@@ -27,8 +28,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }
   const success = (msg: string) => add({ type: 'success', title: msg })
   const error = (msg: string) => add({ type: 'error', title: msg })
+  const clear = () => setToasts([])
 
-  return <ToastContext.Provider value={{ add, success, error }}>
+  return <ToastContext.Provider value={{ add, success, error, clear }}>
     {children}
     <div style={{ position: 'fixed', top: 'calc(env(safe-area-inset-top) + 12px)', right: 16, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
       {toasts.slice(-3).map(t => (

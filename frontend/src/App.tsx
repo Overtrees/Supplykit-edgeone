@@ -73,6 +73,8 @@ export default function App() {
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
   const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
   const toast = useToast()
+  // 页面切换立即清 toast —— 任务完成等提示不跨页残留(曾堆积且超时不清的痛点)
+  useEffect(() => { toast.clear() }, [page])
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 全局后台任务轮询（跨页面、挂后台均有效）
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
