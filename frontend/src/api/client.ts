@@ -36,8 +36,12 @@ instance.interceptors.request.use((config: any) => {
   return config
 })
 
-// 在途请求去重 Map
+// 在途请求去重 Map(防同一 URL 并发重复请求)
+// ⚠ 挂起兜底: Makers 函数慢/冷启动时请求可能 30s+ 未完成, 若无限复用挂起 promise,
+//   后续同 URL 请求全部卡死(loadCfg 等永不返回 → UI 显示旧值, 重进页面才恢复)
+//   → 超过 INFLIGHT_TTL 的在途视为挂起, 删除并重新发起
 const inflight = new Map()
+const INFLIGHT_TTL = 15000
 
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
 instance.interceptors.response.use(
@@ -89,19 +93,25 @@ const apiGet = async <T = any>(url: string, config: Record<string, any> = {}): P
     return { data: _d, status: 200, statusText: 'OK', headers: {}, config }
   }
   
-  // 2) 在途去重
+  // 2) 在途去重(挂起兜底: 超 INFLIGHT_TTL 的旧在途不再复用, 防慢请求卡死后续刷新)
   if (inflight.has(key)) {
-    return inflight.get(key)
+    const p: any = inflight.get(key)
+    if (p && p.__ts && Date.now() - p.__ts > INFLIGHT_TTL) {
+      inflight.delete(key)
+    } else {
+      return p
+    }
   }
   
   // 3) 发起新请求
-  const promise = instance.get(url, config).then(r => ({
+  const promise: any = instance.get(url, config).then(r => ({
     data: r.data,
     status: r.status,
     statusText: r.statusText,
     headers: r.headers,
     config: r.config,
   }))
+  promise.__ts = Date.now()
   inflight.set(key, promise)
   return promise
 }
