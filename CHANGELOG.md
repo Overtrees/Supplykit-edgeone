@@ -1,3 +1,29 @@
+## 2026-09-09 全天: 质量门禁 + 线上事故处置 + 参数回退治本 + seed 填充首通 + 缓存/inflight 加固
+> **主线**: feat/edgeone, 当日 6 commit(质量门禁→渲染崩溃修复→参数回退根因→seed TiDB 首通→即时更新强化→inflight 挂起兜底)。
+> **验证**: 37 文件 eslint 0/0 + tsc + local_test 91/91 + smoke 线上冒烟 + 一键重置填充链路完整跑通。
+
+### 线上事故处置(渲染崩溃, 22d422b5)
+- 质量门禁清理时**自动脚本(remove_var)把 10 处 `const [x,setX]=useState` 错改成 `const [[,setX]]=useState`**(多套一层括号) → 运行时对 useState 返回的 number 解构迭代 → **"number is not iterable"**, 登录页都进不去(ErrorBoundary 兜底)
+- **教训**: tsc/lint 均无法捕获(语法合法) —— 自动脚本改代码后必须浏览器级验证; 事故恢复: 批量还原单层解构 + 推送 + 线上确认
+
+### 参数保存回退治本(303987c0, 完整根因链)
+- **现象**: 补货参数/活动系数保存成功, 切 tab 回来变回旧值, 重进规则页才看到新值
+- **根因链(代码排查闭环)**: ①生产库并存**无前缀旧键**(b_to_c_days=3)与 mode 前缀新键 → loadCfg 直接 spread 全键被旧值覆盖 → 加 mD 前缀解析(与 loadAll 同源) ②loadSeasons 读本地 cfg 旧 JSON → 总是 GET ③滞销参数页面重进丢(loadAll 不解析) → 补解析+tab 加载 ④**终极真凶: client.ts 在途去重(inflight)挂起**——某次 config GET 挂起(函数慢, 30s 超时未到)期间所有 loadCfg 复用挂起 promise → 永不 resolve → setCfg 不执行 → UI 旧值; 重进=模块重建 inflight 清空 → 恢复。证据: 切 tab 无 XHR 请求 + 无 [API] 日志 + 后端数据一直正确
+- **修复双保险**: loadCfg 等 `&t=Date.now()`(新 key 绕过挂起 inflight, dbb78c23) + inflight 超 15s 挂起兜底删除重发(9608749a, 治本)
+
+### 活动系数内置默认兜底(303987c0)
+- 后端 get_seasons 空库返回默认 3 条(618大促×1.5/双11×1.5/年货节×1.3, **enabled=false 默认关**, 开启才纳入日销); 自定义存储优先
+- 补货(bbcc/传统)/采购建议三处计算链路均已按 enabled 判断; **滞销判定确认不纳入活动系数**(看最后销售日, 设计正确)
+
+### seed 空库填充首次 TiDB 跑通(6112a4de)
+- 一键重置填充链路线上全通(reset→fill 10 步): 订单 18.7 万生成/库存 17000/批次 32424/出入库 4038+3002/告警+快照(日期更新到今天)
+- **演练暴露 bug**: _seed_alerts SQL 违反 TiDB only_full_group_by(非聚合列未包聚合) → 1055 → 三列改 MAX(); 全库 GROUP BY 扫描其余合规
+- 数据基线: GMV 33.9M/60678单/1091告警; 断货 bc195/c1874/own272; 补货 1000 需补 175(与历史吻合)
+
+### 缓存/即时性分层原则(9608749a 沉淀)
+- api.get 30s 缓存=高频读接口(看板等)降 RU 的核心, 保留; 写操作 invalidateCache 全清(秒级); 低频参数页 `t` 参数完全绕缓存(即时); inflight=并发去重非缓存, 需防挂起
+
+---
 ## 2026-09-09 前端质量门禁(TS 原生 lint) + 构建失败通知 + 密钥审计 + 深色适配
 > **主线**: feat/edgeone; ESLint 从 PA 遗留(无 TS 解析器)重构为 @typescript-eslint 原生适配。
 > **验证**: 37 文件 eslint 0/0 全绿 + tsc 通过 + smoke_check 线上冒烟通过。

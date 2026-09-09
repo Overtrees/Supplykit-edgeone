@@ -679,3 +679,12 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **构建失败通知链路**: ①scripts/preflight.sh 本地门禁(3.10 语法+pyflakes+local_test+lint+tsc) ②.github/workflows/preflight.yml push/PR 跑 lint/format/tsc + 后端回归, 失败自动 webhook 通知(GitHub Secrets: WEBHOOK_URL, 钉钉/企微 text) ③scripts/smoke_check.py 部署后冒烟(health JSON=函数路由存活/前端 #root/可选 token 业务接口, 失败 webhook)
 - **密钥/配置审计**(scripts/audit_secrets.py): 硬编码密钥模式扫描(AWS/私钥/API key/password/token 等, 排除 node_modules/vendor/dist) + .env 跟踪审计 + .gitignore 覆盖检查 + 后端 os.environ 清单(部署必需 env 一览); **实测修复: frontend/.env 曾被 git 跟踪(含 Sentry DSN 等)→ git rm --cached + .gitignore 加固(.env/.env.local/dist/export_files)**
 - **深色模式适配补漏**: styles.css 变量体系完善但 React 挂载前的静态占位硬编码浅色 → index.html #app-fallback 与 main.tsx 维护层改用 var(--bg/--text/--muted) + meta theme-color 加 dark media; 骨架屏 .skeleton 已有 dark 覆盖(#2C2C2E)
+
+### 15.26 参数保存回退治本 + seed TiDB 首通 + 缓存/inflight 机制(2026-09-09)
+- **自动脚本改代码铁律**: 脚本化重构(var→let→const/删未用变量)必须**浏览器级验证**——本轮 remove_var 把 `const [x,setX]=useState` 错改成 `const [[,setX]]=useState`(多套一层括号), 语法合法且 tsc/lint 全过, 但运行时对 useState 返回的 number 解构迭代 → 全站渲染崩溃("number is not iterable", 登录页都进不去)。**事故恢复链路**: 批量还原→推送→线上冒烟→浏览器确认
+- **参数保存回退根因链(代码排查方法论)**: ①存储层: 生产库并存无前缀旧键与 mode 前缀新键(seed 旧版遗留) → 前端加载必须 mode 前缀优先+无前缀兜底(loadCfg 与 loadAll 同源解析) ②前端 state: loadSeasons 不得读本地 cfg 旧 JSON(保存后可能旧) → 总是 GET ③滞销参数页面重进丢(loadAll 不解析 slow_cats 等) → 补解析+tab 进入加载 ④**终极真凶 client.ts inflight 挂起**: 在途去重 promise 挂起(Makers 函数慢/冷启动, axios 30s 超时未到不清理) → 同 URL 后续请求全部复用挂起 promise → await 永不 resolve → setCfg 不执行 → UI 旧值; **重进页面=模块重建 inflight 清空 → 恢复**(与"退出重进才看到"吻合)。**排查证据闭环**: XHR hook 无请求 + console 无 [API] 日志 + 后端数据一直正确 → 定位为"请求层未发出/挂起"
+- **修复双保险**: 低频参数加载 `&t=Date.now()` 新 key 绕过挂起 inflight(参数页即时性) + inflight 超 INFLIGHT_TTL(15s) 删除重发(治本, 防所有接口同病)
+- **缓存分层原则**: 30s 缓存服务高频读接口(看板 RU 优化)保留; 写操作 invalidateCache 全清(秒级一致); 低频小数据接口完全绕缓存; inflight 是并发去重非缓存, 必须带挂起兜底
+- **活动系数默认兜底模式**: 空库返回内置默认(enabled=false 默认关, 开启才纳入计算), 有自定义存储则以自定义为权威(自定义优先); 计算链路(_season_factor/采购建议)按 enabled 过滤
+- **seed 演练价值**: 未实测的生成链路必然有坑 —— 空库填充首次 TiDB 跑通即暴露 only_full_group_by(非聚合列 SELECT 需包聚合); 演练是上线前必须项
+- **无痕模式排查要点**: 无痕只清 HTTP 缓存, 不影响 axios 内存态(inflight/cache Map) —— 无痕下复现的"缓存类"问题优先查应用内存层而非浏览器缓存
