@@ -552,7 +552,7 @@ def _sync_batches(channel, rows):
         touched.add((sku, wh, wt))
         ins.append({"sku": sku, "warehouse": wh, "warehouse_type": wt, "channel": channel,
                     "prod_date": pd, "exp_date": ed,
-                    "qty": int(c.get("available_qty") or c.get("qty") or 0)})
+                    "qty": int(c.get("available_qty") or c.get("quantity") or c.get("qty") or 0)})
     for sku, wh, wt in touched:
         try:
             execute("DELETE FROM batches WHERE sku=%s AND warehouse=%s AND channel=%s",
