@@ -28,6 +28,7 @@ const SYS_FIELDS = [
   {t:'product_name',l:'商品',tp:'string'},{t:'total_amount',l:'金额',tp:'number'},
   {t:'order_status',l:'状态',tp:'string'},{t:'ordered_at',l:'下单日期',tp:'date'},
   {t:'paid_at',l:'入库日期',tp:'date'},
+  {t:'prod_date',l:'生产日期(可选,入库记录)',tp:'date'},{t:'exp_date',l:'到期日期(可选,入库记录)',tp:'date'},
   {t:'source_order_id',l:'原始单号',tp:'string'},{t:'sku',l:'SKU',tp:'string'},
   {t:'quantity',l:'数量',tp:'number'},{t:'unit_price',l:'单价',tp:'number'},
   {t:'supplier',l:'供应商',tp:'string'},{t:'supplier_code',l:'供应商编码',tp:'string'},
