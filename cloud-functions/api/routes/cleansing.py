@@ -448,7 +448,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "score", "status", "channel", "brand"],
                             cleaned, conflict_mode, "supplier_code")
     if target == "inbound":
-        s, f = _write_batch("inbound_records",
+        s, f, ed = _write_batch("inbound_records",
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse"],
                             cleaned, conflict_mode, "sku", "inbound_date")
@@ -460,13 +460,13 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                 _sync_batches(channel, _br)
         except Exception:
             pass
-        return s, f
+        return s, f, ed
     if target == "outbound":
         return _write_batch("outbound_records",
                             ["sku", "product_name", "quantity", "target_warehouse", "outbound_date",
                              "channel", "prod_date", "exp_date", "warehouse"],
                             cleaned, conflict_mode, "sku", "outbound_date")
-    return 0, len(cleaned)
+    return 0, len(cleaned), []
 
 
 def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
