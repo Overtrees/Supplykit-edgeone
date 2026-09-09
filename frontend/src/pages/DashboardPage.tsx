@@ -56,6 +56,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [fullRisk, setFullRisk] = useState(null)       // 濒临断货完整列表
   const [chLoading, setChLoading] = useState(false)
   const [dashErr, setDashErr] = useState('')
+  const dashFailRef = useRef(0)  // 兜底重试失败计数: 连续 >=2 次后提供"刷新页面"强刷兜底(WebView/实例连接异常时重连恢复)
   // 弹窗数据加载(四维完整性): 告警用大 limit 分组配额拿全量; 濒临断货用 full=1; 缺货按维度拉全量
   const loadFullAlerts = async () => { try { const r = await api.get('/api/alerts?channel=' + channel + '&limit=20000', {timeout: 60000}); setFullAlerts(r.data || []) } catch(e) { setFullAlerts([]) } }
   const loadFullRisk = async () => {
@@ -157,8 +158,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           retries += 1
           if (retries > 3 || seq !== reqSeq.current) { clearInterval(timer); return }
           Promise.allSettled([
-            api.get('/api/dashboard/summary'),
-            api.get('/api/dashboard/stock-risk'),
+            api.get('/api/dashboard/summary?t=' + Date.now()),
+            api.get('/api/dashboard/stock-risk?t=' + Date.now()),
           ]).then(([s2, r2]) => {
             if (seq !== reqSeq.current) { clearInterval(timer); return }
             const d2 = s2.status === 'fulfilled' ? s2.value.data : null
@@ -346,7 +347,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const rpWhView = _whView(_acRpWh)
 
   if (chLoading) return <div className="card" style={{padding:16}}>{[1,2,3,4,5,6,7].map(i=><div key={i} className="skeleton" style={{height:80,marginBottom:8,borderRadius:24}}/>)}</div>
-  if (dashErr && !dashboard) return <ErrorRetry error={dashErr} onRetry={() => { window.__setPage && window.__setPage('dash') }} />
+  if (dashErr && !dashboard) return <ErrorRetry error={dashErr} onRetry={() => { dashFailRef.current += 1; window.__setPage && window.__setPage('dash') }} onReload={dashFailRef.current >= 2 ? () => { location.reload() } : null} />
   return <>
     <div className="card-grid" style={{marginBottom:16}}>
       {/* 1. GMV 卡 — 加环比微趋势线 + 日均 */}

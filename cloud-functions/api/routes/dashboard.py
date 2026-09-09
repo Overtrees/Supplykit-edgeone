@@ -9,7 +9,7 @@ from routes.common import ok, PAID_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
 
-from routes.analysis_cache import register as _register_cache
+from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 _register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear(), _accel_cache.clear()))
 
 _PAID = tuple(PAID_STATUSES)
@@ -27,11 +27,15 @@ _SUMMARY_TTL = 30
 @router.get("/dashboard/summary")
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
-    """看板汇总(30s TTL 缓存——与前端 30s 静默刷新同频, 多用户共享大幅降 RU; 数据变化最多 30s 可见)"""
-    _key = "%s|%s|%s" % (channel, start_date, end_date)
-    _c = _summary_cache.get(_key)
-    if _c and _time.time() - _c[0] < _SUMMARY_TTL:
-        return ok(_c[1])
+    """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)"""
+    _key = "dash_summary|%s|%s|%s" % (channel, start_date, end_date)
+    _result = _cache_get(_key, _SUMMARY_TTL,
+                         lambda: _build_summary(channel, start_date, end_date))
+    return ok(_result)
+
+
+def _build_summary(channel, start_date, end_date):
+    """summary 计算体(共享缓存 builder; 原函数体迁移)"""
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
@@ -44,9 +48,7 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
             "AND ordered_at >= %%s AND ordered_at < %%s "
             "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
-        _result = _assemble(rows, channel, start_date, end_date)
-        _summary_cache[_key] = (_time.time(), _result)
-        return ok(_result)
+        return _assemble(rows, channel, start_date, end_date)
 
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
@@ -55,9 +57,7 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
         (channel, (now - timedelta(days=59)).strftime("%Y-%m-%d") + " 00:00:00"))
-    _result = _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
-    _summary_cache[_key] = (_time.time(), _result)
-    return ok(_result)
+    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
 
 
 def _assemble(rows, channel, start_date, end_date):
@@ -283,16 +283,18 @@ _RISK_TTL = 30
 @router.get("/dashboard/aux")
 @traced
 def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
-    """看板辅助聚合(300s TTL 缓存): alerts(分组配额, 低库存组按补货模式过滤维度) + alertCounts
+    """看板辅助聚合(60s 共享表缓存——TiDB 表跨实例一致): alerts(分组配额, 低库存组按补货模式过滤维度) + alertCounts
     + stockOverview + bcOutOfStock + stockRisk
 
     模式跟随: bbcc → 低库存显示 BC 盘(platform/platform_b)+own(集货仓=B仓调拨源);
     traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
     """
-    _key = "%s|%s" % (channel, mode)
-    _c = _aux_cache.get(_key)
-    if _c and _time.time() - _c[0] < _AUX_TTL:
-        return ok(_c[1])
+    _key = "dash_aux|%s|%s" % (channel, mode)
+    return ok(_cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode)))
+
+
+def _build_aux(channel, mode):
+    """aux 计算体(共享缓存 builder)"""
     from routes.alerts import _FIELDS as _AF
     # 低库存维度过滤(跟随补货模式): bbcc → BC+own; traditional → C+own(白名单拼接)
     _wh_in = "('own','platform','platform_b')" if mode == "bbcc" else "('own','platform')"
@@ -364,21 +366,15 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
                           "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
         "bcOutOfStock": bc_out,
     }
-    _aux_cache[_key] = (_time.time(), _aux_result)
-    return ok(_aux_result)
+    return _aux_result
 
 
 @router.get("/dashboard/stock-risk")
 @traced
 def stock_risk(channel: str = "jd", full: int = 0):
-    """濒临断货(独立接口, 30s TTL —— 比 aux 300s 实时, 数据变更由 invalidate_all 立即失效)"""
-    _key = "%s|%s" % (channel, full)
-    _c = _risk_cache.get(_key)
-    if _c and _time.time() - _c[0] < _RISK_TTL:
-        return ok(_c[1])
-    _p = _stock_risk(channel, full=full)
-    _risk_cache[_key] = (_time.time(), _p)
-    return ok(_p)
+    """濒临断货(30s 共享表缓存 —— 比 aux 实时, 数据变更由 invalidate_all 全局立即失效)"""
+    _key = "stock_risk|%s|%s" % (channel, full)
+    return ok(_cache_get(_key, _RISK_TTL, lambda: _stock_risk(channel, full=full)))
 
 
 _accel_cache = {}
@@ -409,11 +405,14 @@ def _hourly_accel(channel, now, ratio=1.3, min_qty=10.0):
 
     比值 ≥ ratio(默认1.3) 且样本量足够(≥min_qty 单) → 视为加速(大促/秒杀), 返回 {sku: 倍率}
     (需求按当前流速放大 → adj_dos 缩短 → 更易判濒临)
-    内部 60s 缓存: 当天订单近 1 小时基本不变, 避免 stock-risk 每次重算重复查 orders
+    60s 共享表缓存: 当天订单近 1 小时基本不变, 避免 stock-risk 每次重算重复查 orders
     """
-    _c = _accel_cache.get(channel)
-    if _c and _time.time() - _c[0] < _ACCEL_TTL:
-        return _c[1]
+    _key = "accel|%s|%s|%s" % (channel, ratio, min_qty)
+    return _cache_get(_key, _ACCEL_TTL,
+                      lambda: _compute_accel(channel, now, ratio, min_qty))
+
+
+def _compute_accel(channel, now, ratio, min_qty):
     from datetime import timedelta
     paid = tuple(PAID_STATUSES)
     today = now.strftime("%Y-%m-%d")
@@ -443,7 +442,6 @@ def _hourly_accel(channel, now, ratio=1.3, min_qty=10.0):
         hq = hist.get(sku, 0)
         if hq >= min_qty and tq / hq >= ratio:
             out[sku] = round(tq / hq, 2)
-    _accel_cache[channel] = (_time.time(), out)
     return out
 
 

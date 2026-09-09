@@ -8,7 +8,7 @@ from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predic
 
 router = APIRouter(tags=["insights"])
 
-from routes.analysis_cache import register as _register_cache
+from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 _register_cache(lambda: _repl_cache.clear())
 
 
@@ -21,20 +21,22 @@ _REPL_TTL = 300
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
                                   search: str = ""):
-    """补货建议(60s TTL 缓存全量, 分页/搜索在缓存后处理——降 RU): mode=bbcc/traditional"""
-    _key = "%s|%s" % (channel, mode)
-    _c = _repl_cache.get(_key)
-    if _c and _time.time() - _c[0] < _REPL_TTL:
-        _all = _c[1]
-        if search:
-            _sq = search.lower()
-            _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()
-                    or _sq in str(s.get("product_name", "")).lower()
-                    or _sq in str(s.get("barcode", "")).lower()]
-        if page > 0 and page_size > 0:
-            return ok({"items": _all[(page - 1) * page_size: page * page_size],
-                       "total": len(_all), "page": page, "page_size": page_size})
-        return ok(_all)
+    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索在缓存后处理——降 RU): mode=bbcc/traditional"""
+    _key = "repl|%s|%s" % (channel, mode)
+    _all = _cache_get(_key, _REPL_TTL, lambda: _build_repl(channel, mode))
+    if search:
+        _sq = search.lower()
+        _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()
+                or _sq in str(s.get("product_name", "")).lower()
+                or _sq in str(s.get("barcode", "")).lower()]
+    if page > 0 and page_size > 0:
+        return ok({"items": _all[(page - 1) * page_size: page * page_size],
+                   "total": len(_all), "page": page, "page_size": page_size})
+    return ok(_all)
+
+
+def _build_repl(channel, mode):
+    """补货建议计算体(共享缓存 builder, 返回全量列表)"""
     cfg = _config(channel, mode)
     products = _products(channel)
     inv = _inventory(channel)
@@ -241,17 +243,7 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
     # 排序: 需补货优先, 缺口大优先
     suggestions.sort(key=lambda s: (-(1 if (s.get("suggested_qty") or 0) > 0 or (s.get("b_suggested") or 0) > 0 else 0),
                                      -(s.get("suggested_qty") or 0), -(s.get("daily_sales") or 0), s.get("sku", "")))
-    if search:
-        sq = search.lower()
-        suggestions = [s for s in suggestions if sq in str(s.get("sku", "")).lower()
-                       or sq in str(s.get("product_name", "")).lower()
-                       or sq in str(s.get("barcode", "")).lower()]
-    _repl_cache[_key] = (_time.time(), suggestions)
-    if page > 0 and page_size > 0:
-        total = len(suggestions)
-        return ok({"items": suggestions[(page - 1) * page_size: page * page_size],
-                   "total": total, "page": page, "page_size": page_size})
-    return ok(suggestions)
+    return suggestions
 
 
 def _config(channel, mode):

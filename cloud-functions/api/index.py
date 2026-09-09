@@ -145,6 +145,14 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
             except Exception:
                 pass
+        # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)
+        try:
+            _exec("CREATE TABLE IF NOT EXISTS analysis_cache ("
+                  "`key` VARCHAR(160) PRIMARY KEY, "
+                  "value MEDIUMTEXT, "
+                  "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+        except Exception:
+            pass
         # 启动补列(幂等): alerts.warehouse —— 告警逐仓化(规则引擎去重+seed 生成+展示均按 SKU×仓)
         try:
             from db import query as _qry

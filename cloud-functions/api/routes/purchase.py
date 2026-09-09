@@ -11,7 +11,7 @@ from db import query, one, execute, executemany
 from routes.common import ok, fail, traced
 router = APIRouter(tags=["purchase"])
 
-from routes.analysis_cache import register as _register_cache
+from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 _register_cache(lambda: _purchase_cache.clear())
 
 
@@ -89,17 +89,19 @@ _PURCHASE_TTL = 300
 @traced
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
                          search: str = ""):
-    """采购建议(60s TTL 缓存, 搜索在缓存后过滤——降 RU): 系统总库存+供应商级参数+目标周转+采购告警"""
-    _key = "%s|%s" % (channel, mode)
-    _c = _purchase_cache.get(_key)
-    if _c and _time.time() - _c[0] < _PURCHASE_TTL:
-        _all = _c[1]
-        if search:
-            _sq = search.lower()
-            _all = [r for r in _all if _sq in str(r.get("sku", "")).lower()
-                    or _sq in str(r.get("product_name", "")).lower()
-                    or _sq in str(r.get("barcode", "")).lower()]
-        return ok({"suggestions": _all})
+    """采购建议(300s 共享表缓存——TiDB 表跨实例一致, 搜索在缓存后过滤——降 RU): 系统总库存+供应商级参数+目标周转+采购告警"""
+    _key = "purchase|%s|%s" % (channel, mode)
+    _all = _cache_get(_key, _PURCHASE_TTL, lambda: _build_purchase(channel, mode, days))
+    if search:
+        _sq = search.lower()
+        _all = [r for r in _all if _sq in str(r.get("sku", "")).lower()
+                or _sq in str(r.get("product_name", "")).lower()
+                or _sq in str(r.get("barcode", "")).lower()]
+    return ok({"suggestions": _all})
+
+
+def _build_purchase(channel, mode, days=28):
+    """采购建议计算体(共享缓存 builder, 返回全量列表; 缓存命中时跳过 purchase_need 告警评估——与原语义一致)"""
     from biz.sales import load_daily_sales, calc_sales_multi
 
     raw = {}
@@ -289,13 +291,7 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
         pass
 
     result.sort(key=lambda x: x["days_to_empty"])
-    _purchase_cache[_key] = (_time.time(), result)
-    if search:
-        sq = search.lower()
-        result = [r for r in result if sq in str(r.get("sku", "")).lower()
-                  or sq in str(r.get("product_name", "")).lower()
-                  or sq in str(r.get("barcode", "")).lower()]
-    return ok({"suggestions": result})
+    return result
 
 
 # ── 滞销处置建议(disposal-suggestions) ──────────────────────────────────
