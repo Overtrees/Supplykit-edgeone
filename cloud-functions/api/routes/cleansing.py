@@ -203,6 +203,10 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
         evaluated = 0
         try:
+            from db import execute as _e6
+            _e6("INSERT INTO quality_logs(log_type, level, message, source) "
+                "VALUES('cleansing_eval','info',%s,'cleansing')",
+                ("评估进入 target=%s cleaned=%d" % (target, len(cleaned)),))
             from core.rules import evaluate_many, load_rules_for
             if target == "order":
                 seen = set()
