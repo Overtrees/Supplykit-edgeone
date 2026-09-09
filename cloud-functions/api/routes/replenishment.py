@@ -20,10 +20,12 @@ _REPL_TTL = 300
 @traced
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
-                                  search: str = ""):
-    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索在缓存后处理——降 RU): mode=bbcc/traditional"""
+                                  search: str = "", need_only: int = 0):
+    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索/need_only 在缓存后处理——降 RU): mode=bbcc/traditional"""
     _key = "repl|%s|%s" % (channel, mode)
     _all = _cache_get(_key, _REPL_TTL, lambda: _build_repl(channel, mode))
+    if need_only:
+        _all = [s for s in _all if (s.get("suggested_qty") or 0) > 0 or (s.get("b_suggested") or 0) > 0]
     if search:
         _sq = search.lower()
         _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()

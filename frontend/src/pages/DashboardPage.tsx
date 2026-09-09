@@ -87,8 +87,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     setProcLoading(true)
     try {
       const [r, p] = await Promise.all([
-        api.get('/api/insights/replenishment?days=28&mode=' + _replMode + '&channel=' + channel, {timeout: 90000}),
-        api.get('/api/insights/purchase?days=28&mode=' + _replMode + '&channel=' + channel, {timeout: 90000}),
+        api.get('/api/insights/replenishment?days=28&mode=' + _replMode + '&channel=' + channel + '&need_only=1', {timeout: 90000}),
+        api.get('/api/insights/purchase?days=28&mode=' + _replMode + '&channel=' + channel + '&need_only=1', {timeout: 90000}),
       ])
       const repData = r.data || {}
       const repItems = Array.isArray(repData) ? repData : (repData.items || [])

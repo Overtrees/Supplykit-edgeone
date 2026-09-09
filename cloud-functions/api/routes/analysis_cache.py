@@ -66,5 +66,11 @@ def invalidate_all():
                 fn()
             except Exception:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        # 失效失败可见性(四维-实时性): 缓存未清则 TTL 内读旧值, 记 quality_logs 供审计
+        try:
+            from db import execute as _e2
+            _e2("INSERT INTO quality_logs(log_type, level, message, source) "
+                "VALUES('cache_invalidate','error',%s,'api')", (str(e)[:200],))
+        except Exception:
+            pass

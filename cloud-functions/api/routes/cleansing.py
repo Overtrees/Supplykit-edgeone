@@ -197,7 +197,7 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                         deltas[(_sku, _wh, _wt)] += _d
                         _wht[(_sku, _wh, _wt)] = _wt
                 if deltas:
-                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()}, 300)
+                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
         except Exception:
             pass
         # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
@@ -207,16 +207,18 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
             if target == "order":
                 seen = set()
                 skus = [c.get("sku") for c in cleaned
-                        if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))][:300]
+                        if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
                 inv_map = {}
                 if skus:
-                    ph = ",".join(["%s"] * len(skus))
-                    for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
-                                   "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % (channel, ph),
-                                   [channel] + skus):
-                        inv_map[r.get("sku")] = int(r.get("avail") or 0)
+                    for _i in range(0, len(skus), 200):
+                        _batch = skus[_i:_i + 200]
+                        _ph = ",".join(["%s"] * len(_batch))
+                        for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+                                       "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % (channel, _ph),
+                                       [channel] + _batch):
+                            inv_map[r.get("sku")] = int(r.get("avail") or 0)
                 o_ctxs = []
-                for c in cleaned[:300]:
+                for c in cleaned:
                     sku = c.get("sku")
                     if not sku:
                         continue
@@ -231,7 +233,7 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     evaluated = len(o_ctxs)
             elif target in ("inventory", "platform_inv", "inventory_b"):
                 i_ctxs = []
-                for c in cleaned[:300]:
+                for c in cleaned:
                     sku = c.get("sku")
                     if not sku:
                         continue
@@ -347,9 +349,12 @@ async def cleansing_templates_save(request: Request):
 
 
 # ── 写入逻辑(按目标类型) ────────────────────────────────────────────────
-def _adjust_inventory(channel, deltas, evaluate_skus=300):
-    """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则评估"""
-    from core.rules import evaluate
+def _adjust_inventory(channel, deltas, evaluate_skus=None):
+    """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则批量评估(全量 SKU)
+
+    完整性: 不限量 —— 大文件联动 SKU 全覆盖(原 300 上限曾致 >300 SKU 导入后规则评估缺失, 告警漏报);
+    性能: evaluate_many 一次加载规则 + executemany 批量(原单条 evaluate 循环 N×查询)
+    """
     if not deltas:
         return 0, []
     n = 0
@@ -364,18 +369,22 @@ def _adjust_inventory(channel, deltas, evaluate_skus=300):
             execute("INSERT INTO inventory(sku, warehouse, warehouse_type, available_qty, safety_qty, channel) "
                     "VALUES(%s,%s,%s,%s,10,%s)", [sku, wh or "", wht or "own", max(0, delta), channel])
         n += 1
-        if len(touched) < evaluate_skus:
+        if sku not in touched:
             touched.append(sku)
-    seen = set()
-    for sku in touched:
-        if sku in seen:
-            continue
-        seen.add(sku)
-        inv = one("SELECT sku, warehouse, warehouse_type, product_name, available_qty, safety_qty, "
-                  "in_transit_qty FROM inventory WHERE sku=%s AND channel=%s LIMIT 1", [sku, channel])
-        if inv:
-            evaluate("inventory.changed", {"sku": sku, "channel": channel, "inv": inv})
-    return n, list(seen)
+    skus = touched
+    try:
+        from core.rules import evaluate_many, load_rules_for
+        ctxs = []
+        for sku in skus:
+            inv = one("SELECT sku, warehouse, warehouse_type, product_name, available_qty, safety_qty, "
+                      "in_transit_qty FROM inventory WHERE sku=%s AND channel=%s LIMIT 1", [sku, channel])
+            if inv:
+                ctxs.append({"sku": sku, "channel": channel, "inv": inv})
+        if ctxs:
+            evaluate_many("inventory.changed", ctxs, channel, load_rules_for("inventory.changed", channel))
+    except Exception:
+        pass
+    return n, skus
 
 
 def _write_rows(target, channel, conflict_mode, cleaned):
