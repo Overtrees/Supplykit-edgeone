@@ -455,7 +455,9 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
             for c in allowed_cols:
                 if c in it and it[c] is not None and str(it[c]) != "":
                     row[c] = it[c]
-            if not row or not all(row.get(k) for k in keys if k in row):
+            # 严谨性: key 列必须存在且有值(原 `k in row` 跳过缺失列 → 无有效映射的导入
+            # 也会写入空记录污染数据); 缺 key 的行判失败
+            if not row or not all(k in row and row.get(k) for k in keys):
                 failed += 1
                 continue
             rows.append(row)
