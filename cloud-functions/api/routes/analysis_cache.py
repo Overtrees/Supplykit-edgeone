@@ -52,8 +52,21 @@ def cache_get(key, ttl, builder):
                 "VALUES(%s,%s,NOW(6))",
                 (key, json.dumps(val, ensure_ascii=False, default=str)))
         return val
-    except Exception:
-        return builder()  # 任何异常降级直算(表缺失/连接问题不阻塞业务)
+    except Exception as e:
+        # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
+        # 自愈本身也失败才降级直算(保底不阻塞业务)
+        try:
+            from db import execute as _e3
+            _e3("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+            _e3("CREATE TABLE IF NOT EXISTS analysis_cache ("
+                "`key` VARCHAR(160) PRIMARY KEY, value MEDIUMTEXT, "
+                "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+            _e3("INSERT INTO quality_logs(log_type, level, message, source) "
+                "VALUES('cache_error','error',%s,'api')",
+                ("cache_get 降级直算: %s" % str(e)[:150],))
+        except Exception:
+            pass
+        return builder()
 
 
 def invalidate_all():

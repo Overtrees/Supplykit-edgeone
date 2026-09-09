@@ -529,7 +529,7 @@ def _build_snapshot():
     execute(
         "INSERT INTO daily_sales_snapshot(date, channel, sku, warehouse, order_count) "
         "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
-        "WHERE order_status IN ('待发货','已发货','已完成','申请退款') "
+        "WHERE order_status IN ('已完成') "
         "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
         "GROUP BY DATE(ordered_at), channel, sku, warehouse "
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [start])

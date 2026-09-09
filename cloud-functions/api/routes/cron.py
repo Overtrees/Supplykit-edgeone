@@ -22,7 +22,7 @@ from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["cron"])
 
-PAID = ("待发货", "已发货", "已完成", "申请退款")
+PAID = ("已完成",)  # 销量池口径(仅钱货两清且离仓的实销; 待发货走扣减池, 其余状态屏蔽)
 _PAID_SQL = ",".join("'%s'" % s for s in PAID)
 
 

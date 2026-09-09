@@ -281,8 +281,24 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                      "cleansing"))
         except Exception:
             pass
+        _msg = "成功 %d 条, 跳过 %d 条" % (success, failed)
+        # 前置提示(严谨性): 订单状态口径 + 混渠道(轻量提示, 不做系统联动)
+        try:
+            if target == "order":
+                from collections import Counter as _C
+                _sc = _C((c.get("order_status") or "未知") for c in cleaned)
+                _ignore = {k: v for k, v in _sc.items() if k not in ("已完成", "待发货")}
+                if _ignore:
+                    _msg += " · 注意: %s 不计入销量池(仅已完成), 已发货/待确认/退款类不参与补货采购计算" % \
+                            ("; ".join("%s×%d" % (k, v) for k, v in _ignore.items()))
+            _chs = {c.get("channel") for c in cleaned if c.get("channel")}
+            if len(_chs) > 1:
+                _msg += " · 文件含 %d 种渠道(%s), 已按行渠道落库, 建议单渠道导入" % \
+                        (len(_chs), ",".join(sorted(_chs)))
+        except Exception:
+            pass
         return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
-                "error": "", "message": "成功 %d 条, 跳过 %d 条" % (success, failed),
+                "error": "", "message": _msg,
                 "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted,
                 "failed_details": err_details[:20]}
     except Exception as e:
@@ -436,6 +452,14 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse"],
                             cleaned, conflict_mode, "sku", "inbound_date")
+        # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 覆盖式维护
+        # (效期管控数据源: 进销存批次效期预警/临期处置建议)
+        try:
+            _br = [c for c in cleaned if (c.get("prod_date") or "") or (c.get("exp_date") or "")]
+            if _br:
+                _sync_batches(channel, _br)
+        except Exception:
+            pass
         return s, f
     if target == "outbound":
         return _write_batch("outbound_records",
@@ -506,3 +530,42 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
                         err_details.append({"sku": str(r.get("sku") or r.get("supplier_code") or ""),
                                             "reason": str(e1)[:80], "row": str(r)[:200]})
     return success, failed, err_details
+
+
+def _sync_batches(channel, rows):
+    """批次效期同步(清洗导入库存含 prod_date/exp_date 列时): 按 SKU×仓 覆盖式维护 batches
+    (效期管控数据源: 进销存批次效期预警/临期处置建议)
+    文件即权威: 先删该 SKU×仓 旧批次, 再插入(含效期列的行)"""
+    from db import executemany as _em
+    if not rows:
+        return 0
+    touched = set()
+    ins = []
+    for c in rows:
+        sku = c.get("sku")
+        if not sku:
+            continue
+        wh = str(c.get("warehouse") or "")
+        wt = str(c.get("warehouse_type") or "")
+        pd = str(c.get("prod_date") or "")[:10]
+        ed = str(c.get("exp_date") or "")[:10]
+        touched.add((sku, wh, wt))
+        ins.append({"sku": sku, "warehouse": wh, "warehouse_type": wt, "channel": channel,
+                    "prod_date": pd, "exp_date": ed,
+                    "qty": int(c.get("available_qty") or c.get("qty") or 0)})
+    for sku, wh, wt in touched:
+        try:
+            execute("DELETE FROM batches WHERE sku=%s AND warehouse=%s AND channel=%s",
+                    [sku, wh, channel])
+        except Exception:
+            pass
+    for i in range(0, len(ins), 200):
+        chunk = ins[i:i + 200]
+        cols = list(chunk[0].keys())
+        try:
+            _em("INSERT INTO batches(%s) VALUES(%s)" % (
+                ", ".join("`%s`" % x for x in cols), ", ".join(["%s"] * len(cols))),
+                [tuple(r[c] for c in cols) for r in chunk])
+        except Exception:
+            pass
+    return len(ins)

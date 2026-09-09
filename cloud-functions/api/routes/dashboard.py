@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one
-from routes.common import ok, PAID_STATUSES, traced
+from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
 
@@ -414,7 +414,7 @@ def _hourly_accel(channel, now, ratio=1.3, min_qty=10.0):
 
 def _compute_accel(channel, now, ratio, min_qty):
     from datetime import timedelta
-    paid = tuple(PAID_STATUSES)
+    paid = tuple(SALES_STATUSES)  # 加速判定用日销口径(排除申请退款)
     today = now.strftime("%Y-%m-%d")
     since = (now - timedelta(days=3)).strftime("%Y-%m-%d 00:00:00")
     cur_h = now.hour

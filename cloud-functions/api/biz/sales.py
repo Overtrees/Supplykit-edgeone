@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta, timezone
 
 from db import query
+from routes.common import SALES_STATUSES as _SS  # 日销口径: 发货消耗状态(排除申请退款)
 
 
 def load_daily_sales(cutoff_days, channel, skus=None):
@@ -29,13 +30,13 @@ def load_daily_sales(cutoff_days, channel, skus=None):
         "WHERE channel=%s AND date>=%s", (channel, cutoff))
     for r in rows:
         _add(str(r.get("sku") or ""), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
-    # 2. 当天已支付订单补足(口径: 待发货/已发货/已完成/申请退款)
+    # 2. 当天已支付订单补足(口径: 发货消耗状态——待发货/已发货/已完成, 申请退款不消耗库存)
     today_rows = query(
         "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
         "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
         (channel, today + " 00:00:00"))
     for o in today_rows:
-        if (o.get("order_status") or "") not in ("待发货", "已发货", "已完成", "申请退款"):
+        if (o.get("order_status") or "") not in _SS:
             continue
         _add(str(o.get("sku") or ""), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
     return daily
@@ -67,7 +68,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
         "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
         (channel, today + " 00:00:00"))
     for o in today_rows:
-        if (o.get("order_status") or "") not in ("待发货", "已发货", "已完成", "申请退款"):
+        if (o.get("order_status") or "") not in _SS:
             continue
         _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
     return by_sku, by_sku_wh
