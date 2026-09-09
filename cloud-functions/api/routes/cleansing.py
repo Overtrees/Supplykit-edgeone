@@ -452,12 +452,13 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse"],
                             cleaned, conflict_mode, "sku", "inbound_date")
-        # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 覆盖式维护
+        # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 维护
+        # 更新方式联动导入冲突模式(conflict_mode): overwrite=删旧插新(文件即权威) / sum=同效期 qty 累加
         # (效期管控数据源: 进销存批次效期预警/临期处置建议)
         try:
             _br = [c for c in cleaned if (c.get("prod_date") or "") or (c.get("exp_date") or "")]
             if _br:
-                _sync_batches(channel, _br)
+                _sync_batches(channel, _br, conflict_mode)
         except Exception:
             pass
         return s, f, ed
@@ -532,10 +533,12 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
     return success, failed, err_details
 
 
-def _sync_batches(channel, rows):
-    """批次效期同步(清洗导入库存含 prod_date/exp_date 列时): 按 SKU×仓 覆盖式维护 batches
+def _sync_batches(channel, rows, conflict_mode="overwrite"):
+    """批次效期同步(入库记录导入含 prod_date/exp_date 列时): 按 SKU×仓 维护 batches
     (效期管控数据源: 进销存批次效期预警/临期处置建议)
-    文件即权威: 先删该 SKU×仓 旧批次, 再插入(含效期列的行)"""
+    更新方式联动导入冲突模式:
+    - overwrite(默认): 文件即权威 —— 删该 SKU×仓 旧批次, 插入文件批次
+    - sum: 累加 —— 同 SKU×仓×效期(prod_date+exp_date)批次 qty 累加(多次入库同批次累加), 不同效期独立行"""
     from db import executemany as _em
     if not rows:
         return 0
@@ -553,6 +556,25 @@ def _sync_batches(channel, rows):
         ins.append({"sku": sku, "warehouse": wh, "warehouse_type": wt, "channel": channel,
                     "prod_date": pd, "exp_date": ed,
                     "qty": int(c.get("available_qty") or c.get("quantity") or c.get("qty") or 0)})
+    if conflict_mode == "sum":
+        # 累加模式: 同 SKU×仓×效期批次 qty 累加(不同效期=不同批次独立行)
+        for it in ins:
+            try:
+                exist = one("SELECT id, qty FROM batches WHERE sku=%s AND warehouse=%s "
+                            "AND channel=%s AND prod_date=%s AND exp_date=%s",
+                            [it["sku"], it["warehouse"], it["channel"],
+                             it["prod_date"], it["exp_date"]])
+                if exist:
+                    execute("UPDATE batches SET qty=%s WHERE id=%s",
+                            [int(exist.get("qty") or 0) + it["qty"], exist.get("id")])
+                else:
+                    execute("INSERT INTO batches(sku, warehouse, warehouse_type, channel, "
+                            "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                            [it["sku"], it["warehouse"], it["warehouse_type"], it["channel"],
+                             it["prod_date"], it["exp_date"], it["qty"]])
+            except Exception:
+                pass
+        return len(ins)
     for sku, wh, wt in touched:
         try:
             execute("DELETE FROM batches WHERE sku=%s AND warehouse=%s AND channel=%s",
