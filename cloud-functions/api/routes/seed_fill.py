@@ -504,7 +504,7 @@ def _seed_alerts():
     for ch in ['jd', 'other']:
         rows = query(
             "SELECT sku, warehouse, warehouse_type, MAX(product_name) AS name, "
-            "available_qty AS avail, in_transit_qty AS transit, safety_qty AS safety "
+            "MAX(available_qty) AS avail, MAX(in_transit_qty) AS transit, MAX(safety_qty) AS safety "
             "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])
         for r in rows:
             sku, name = r.get('sku'), r.get('name') or r.get('sku')
