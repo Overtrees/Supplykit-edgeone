@@ -22,6 +22,10 @@ def register(clear_fn):
 
 _FAILED = object()
 
+# 业务口径/算法版本: 变更时递增(cache busting) —— 表缓存跨部署存活(与内存缓存不同,
+# 部署新代码后 TTL 内可能命中旧口径数据), 升版本后旧缓存自然 miss 重建, 保四维准确性
+_CACHE_V = "c1"
+
 
 def _loads(value):
     try:
@@ -32,6 +36,7 @@ def _loads(value):
 
 def cache_get(key, ttl, builder):
     """共享表缓存读: 命中(存在且 TTL 内)返回缓存; 否则 builder() 重算落表"""
+    key = "%s|%s" % (_CACHE_V, key)
     try:
         from db import one, execute
         row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
