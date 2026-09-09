@@ -173,15 +173,28 @@ async def put_slow_cats(request: Request):
     return ok({"updated": len(items)})
 
 
+# 内置默认活动系数(空库/未自定义时兜底): 开关默认关闭, 开启后才纳入日销计算
+# (补货 bbcc/传统 与 采购建议 三处计算链路均读 season_config_{mode} 并只取 enabled 项)
+_DEFAULT_SEASONS = [
+    {"key": "618", "name": "618大促", "factor": 1.5, "enabled": False},
+    {"key": "1111", "name": "双11大促", "factor": 1.5, "enabled": False},
+    {"key": "nianhuo", "name": "年货节", "factor": 1.3, "enabled": False},
+]
+
+
 @router.get("/replenishment-config/seasons")
 @traced
 def get_seasons(channel: str = "jd", mode: str = "bbcc"):
     row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
               ("season_config_" + mode, channel))
     try:
-        return ok(json.loads((row or {}).get("value") or "[]"))
+        stored = json.loads((row or {}).get("value") or "[]")
+        if isinstance(stored, list) and stored:
+            return ok(stored)  # 自定义优先: 用户保存的列表为权威
     except Exception:
-        return ok([])
+        pass
+    # 无自定义存储 → 内置默认兜底
+    return ok([dict(s) for s in _DEFAULT_SEASONS])
 
 
 @router.put("/replenishment-config/seasons")
