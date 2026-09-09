@@ -254,12 +254,14 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                                   load_rules_for("inventory.changed", channel))
                     evaluated = len(i_ctxs)
         except Exception as _ee:
-            # 评估失败可见性(四维-可靠性): 不阻断导入, 但记 quality_logs 供审计(修复 evaluated 静默 0)
+            # 评估失败可见性(四维-可靠性): 不阻断导入, 但记 quality_logs(含完整堆栈) 供审计
             try:
+                import traceback as _tb6
                 from db import execute as _e5
-                _e5("INSERT INTO quality_logs(log_type, level, message, source) "
-                    "VALUES('cleansing_eval','error',%s,'cleansing')",
-                    ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),))
+                _e5("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('cleansing_eval','error',%s,%s,'cleansing')",
+                    ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),
+                     _tb6.format_exc(limit=20)[-1800:]))
             except Exception:
                 pass
         from routes.analysis_cache import invalidate_all
