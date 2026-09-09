@@ -23,7 +23,7 @@ const toast = useToast()
 const {channel: globalChannel, hammerSearch, hammerCols, prodBatch, prodSelIds, setProdBatchSel, setProdBatchFilterLen, prodBatchVersion, prodBatchAllReq} = useAppStore()
 const selIds = prodSelIds || []
 const setSelIds = setProdBatchSel
-const [[, setBatchBusy]] = useState(false)
+const [, setBatchBusy] = useState(false)
 const s = hammerSearch || ''
 const fl = ld ? [] : list
 const loadProd=(p)=>{const seq=++reqSeq.current;if(p===1)setLd(true);else setLoadingMore(true);api.get('/api/products?page='+p+'&page_size=100&channel='+globalChannel+'&search='+encodeURIComponent(s),{timeout:90000}).then(r=>{if(seq!==reqSeq.current)return;const d=r.data||{};const items=d.items||d||[];setPgTotal(d.total||items.length||0);setPg(p); pgRef.current = p;setList(prev=>p===1?items:[...prev,...items]);setLoadErr('');setLd(false);setLoadingMore(false);const _m={...useAppStore.getState().batchStateMap};(items||[]).forEach(it=>{if(it&&it.id)_m[it.id]=it.is_active?1:0});useAppStore.setState({batchStateMap:_m})}).catch(()=>{if(seq===reqSeq.current){setLd(false);setLoadingMore(false);setList([]);setLoadErr('加载失败，可能是网络异常或服务暂不可用')}})}

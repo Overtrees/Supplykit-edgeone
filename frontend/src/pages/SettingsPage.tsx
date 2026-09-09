@@ -185,7 +185,7 @@ export default function SettingsPage() {
   const [status, setStatus] = useState('检查中...')
   const [ping, setPing] = useState(0)
   const [lastCheck, setLastCheck] = useState('')
-  const [[, setDbSize]] = useState('')
+  const [, setDbSize] = useState('')
   const [cacheSize, setCacheSize] = useState(0)
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   const [refreshing, setRefreshing] = useState(false)

@@ -47,10 +47,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
-  const [[_riskTab, ]] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
+  const [_riskTab] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store')  // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
-  const [[, setFullOut]] = useState(null)        // 缺货弹窗完整数据(按当前视图维度)
+  const [, setFullOut] = useState(null)        // 缺货弹窗完整数据(按当前视图维度)
   const [oosList, setOosList] = useState(null)        // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [fullAlerts, setFullAlerts] = useState(null)   // 告警弹窗完整数据(点击时拉取)
   const [fullRisk, setFullRisk] = useState(null)       // 濒临断货完整列表

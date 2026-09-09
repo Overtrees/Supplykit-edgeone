@@ -69,7 +69,7 @@ export default function InsightsPage() {
   const toast = useToast()
   const [replen, setReplen] = useState([])
   const [purchase, setPurchase] = useState([])
-  const [[slowMoving, ]] = useState([])
+  const [slowMoving] = useState([])
   // 滞销处置建议（SKU×仓库粒度 + 批量处置）
   const [disposals, setDisposals] = useState([])
   const [disposalsLoading, setDisposalsLoading] = useState(true)
@@ -83,14 +83,14 @@ export default function InsightsPage() {
   // 各区块加载状态
   const [replenLoading, setReplenLoading] = useState(true)
   const [purchaseLoading, setPurchaseLoading] = useState(true)
-  const [[, setSlowLoading]] = useState(true)
-  const [[, setReplenLimit]] = useState(100)
+  const [, setSlowLoading] = useState(true)
+  const [, setReplenLimit] = useState(100)
   const [replenTotal, setReplenTotal] = useState(0)
-  const [[, setReplenPage]] = useState(1)
+  const [, setReplenPage] = useState(1)
   const replenPageRef = useRef(1)
   const [replenLoadingMore, setReplenLoadingMore] = useState(false)
   const [purchaseLimit, setPurchaseLimit] = useState(50)
-  const [[, setSlowLimit]] = useState(50)
+  const [, setSlowLimit] = useState(50)
 
   const {channel: globalChannel, hammerInsightsTab: tab, hammerReplenMode, setHammerReplenMode, hammerCols, hammerData, dataVersion, prodBatch, prodSelIds, setProdBatch, setProdBatchSel, prodBatchAllReq} = useAppStore()
   useEffect(() => { setProdBatch(false); setProdBatchSel([]) }, [globalChannel, tab])

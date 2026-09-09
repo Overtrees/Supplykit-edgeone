@@ -18,7 +18,7 @@ export default function QualityPage() {
   const { channelVersion, loading } = useAppStore()
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
-  const [[, setPage]] = useState(1)
+  const [, setPage] = useState(1)
   const [ld, setLd] = useState(true)
   const [moreLoading, setMoreLoading] = useState(false)
   const pageRef = useRef(1)
