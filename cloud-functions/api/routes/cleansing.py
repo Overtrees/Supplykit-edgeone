@@ -226,7 +226,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     o_ctxs.append({"sku": sku, "channel": channel,
                                    "order": {"quantity": oq},
                                    "order_qty": oq,
-                                   "available_stock": inv_map.get(sku, 0)})
+                                   "available_stock": inv_map.get(sku, 0),
+                                   "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
                 if o_ctxs:
                     evaluate_many("order.created", o_ctxs, channel,
                                   load_rules_for("order.created", channel))
@@ -248,8 +249,15 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     evaluate_many("inventory.changed", i_ctxs, channel,
                                   load_rules_for("inventory.changed", channel))
                     evaluated = len(i_ctxs)
-        except Exception:
-            pass
+        except Exception as _ee:
+            # 评估失败可见性(四维-可靠性): 不阻断导入, 但记 quality_logs 供审计(修复 evaluated 静默 0)
+            try:
+                from db import execute as _e5
+                _e5("INSERT INTO quality_logs(log_type, level, message, source) "
+                    "VALUES('cleansing_eval','error',%s,'cleansing')",
+                    ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),))
+            except Exception:
+                pass
         from routes.analysis_cache import invalidate_all
         invalidate_all()
         try:
