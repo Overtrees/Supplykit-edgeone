@@ -203,10 +203,6 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
         evaluated = 0
         try:
-            from db import execute as _e6
-            _e6("INSERT INTO quality_logs(log_type, level, message, source) "
-                "VALUES('cleansing_eval','info',%s,'cleansing')",
-                ("评估进入 target=%s cleaned=%d" % (target, len(cleaned)),))
             from core.rules import evaluate_many, load_rules_for
             if target == "order":
                 seen = set()
@@ -218,7 +214,7 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                         _batch = skus[_i:_i + 200]
                         _ph = ",".join(["%s"] * len(_batch))
                         for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
-                                       "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % (channel, _ph),
+                                       "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                                        [channel] + _batch):
                             inv_map[r.get("sku")] = int(r.get("avail") or 0)
                 o_ctxs = []
