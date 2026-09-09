@@ -1,0 +1,79 @@
+name: Preflight 门禁 + 构建失败通知
+
+# 用途: push/PR 时跑前端 lint+格式+tsc 与后端语法+回归 —— 构建失败立即 webhook 通知
+# 说明: Makers 为 Git 集成自动构建, 本 workflow 是独立于 Makers 的预检层
+#       (lint/tsc/回归不合格 = 必构建失败, 提前拦截; 部署后另跑 scripts/smoke_check.py)
+# 通知: GitHub Secrets 配置 WEBHOOK_URL(钉钉/企微 text webhook)后, 任一 job 失败自动通知
+on:
+  push:
+    branches: [feat/edgeone, main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: 前端 lint/格式/tsc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        run: cd frontend && npm ci --no-audit --no-fund
+      - name: ESLint(无警告门禁)
+        run: cd frontend && npm run lint
+      - name: Prettier 格式检查
+        run: cd frontend && npm run format:check
+      - name: TypeScript 类型检查
+        run: cd frontend && npx tsc --noEmit
+
+  backend:
+    name: 后端语法/回归
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: 安装依赖
+        run: pip install fastapi uvicorn pymysql httpx python-multipart openpyxl
+      - name: Python 3.10 语法门禁
+        run: |
+          cd cloud-functions/api && for f in $(find . -name "*.py"); do
+            python3 -c "import ast; ast.parse(open('$f').read(), feature_version=(3,10))" || exit 1
+          done
+      - name: local_test 回归
+        run: cd cloud-functions/api && python3 local_test.py
+
+  notify:
+    name: 失败通知
+    needs: [frontend, backend]
+    if: ${{ always() && (needs.frontend.result == 'failure' || needs.backend.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 发送 webhook 通知(需 GitHub Secrets: WEBHOOK_URL)
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          FRONT_RESULT: ${{ needs.frontend.result }}
+          BACK_RESULT: ${{ needs.backend.result }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "⚠ WEBHOOK_URL 未配置, 跳过通知(配置方法: Settings → Secrets → WEBHOOK_URL)"
+            exit 0
+          fi
+          MSG="【SupplyKit Preflight 失败】${{ github.ref_name }} @ ${{ github.sha }}
+分支: ${{ github.ref }}
+前端(lint/tsc): $FRONT_RESULT
+后端(local_test): $BACK_RESULT
+提交者: ${{ github.actor }}
+查看: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          jq -n --arg c "$MSG" '{msgtype:"text", text:{content:$c}}' \
+            | curl -s -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" -d @- \
+            || echo "通知发送失败(不影响结果)"

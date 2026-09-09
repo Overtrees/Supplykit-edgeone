@@ -8,7 +8,7 @@ import { api } from '../../api/client'
 interface HammerInsightsProps { channel: string }
 
 export default function HammerInsights({ channel }: HammerInsightsProps) {
-  const { hammerPanel, setHammerPanel, setHammerCols, hammerInsightsTab, setHammerInsightsTab, hammerReplenMode, setHammerReplenMode, hammerData, setHammerData, prodBatch, setProdBatch, prodSelIds, setProdBatchSel, requestProdBatchAll } = useAppStore()
+  const {hammerPanel, setHammerPanel, setHammerCols, hammerInsightsTab, setHammerInsightsTab, hammerReplenMode, setHammerReplenMode, hammerData, setHammerData} = useAppStore()
   const toast = useToast()
   const [bpOpen, setBpOpen] = useState(false)
   const [bpAction, setBpAction] = useState('mark')

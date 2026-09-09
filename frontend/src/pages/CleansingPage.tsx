@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import { IconClipboard, IconPackage, IconImport, IconExport, IconTrendUp, IconLightning, IconCheck, IconAlert, IconLoading, IconFolder, IconTag } from '../components/Icons'
+import {IconPackage, IconTrendUp, IconLightning, IconCheck, IconAlert, IconLoading, IconFolder} from '../components/Icons'
 import { t } from "../locale"
 
-const API = import.meta.env.VITE_API_BASE_URL || ''
+
 const INV_FIELDS = [
   {t:'warehouse',l:'仓库',tp:'string'},{t:'sku',l:'SKU',tp:'string'},{t:'barcode',l:'69码',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
   {t:'channel',l:'平台',tp:'string'},
@@ -82,7 +82,7 @@ export default function CleansingPage() {
   const [cols,setCols] = useState([])
   const [tr,setTr] = useState(0)
   const [tt,setTt] = useState('order')
-  const { hammerCleansingTarget, setHammerCleansingTarget, hammerCleansingConflict } = useAppStore()
+  const {setHammerCleansingTarget, hammerCleansingConflict} = useAppStore()
   useEffect(() => { setHammerCleansingTarget(tt) }, [tt])
   const { hammerCleansingChannel: ch, setHammerCleansingChannel: setCh } = useAppStore()
   const [mp,setMp] = useState({})
@@ -181,7 +181,7 @@ export default function CleansingPage() {
         return
       }
       const totalRows = d.total_rows || '?'
-      let finished = false; let threshold = setTimeout(() => {
+      let finished = false; const threshold = setTimeout(() => {
         if (!finished) {
           finished = true
           toast.add({type:'success', title:'导入任务已提交', duration:6000, action:{label:'查看进度 →', handler:()=>{ window.__setPage && window.__setPage('tasks') }}})

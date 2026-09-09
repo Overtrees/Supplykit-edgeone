@@ -1,4 +1,4 @@
-import React,{useEffect,useState, useRef} from 'react'
+import React,{useEffect, useState} from 'react'
 import {api} from '../api/client'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
@@ -13,7 +13,6 @@ function Skeleton(){return <div>{[1,2,3].map(i=><div key={i} style={{display:'fl
 </div>)}</div>}
 
 import { useAppStore } from '../store/useAppStore'
-import { clearCache } from '../api/client'
 import { t } from "../locale"
 export default function SupplierPage(){const[list,setList]=useState([]);const[ld,setLd]=useState(true);const[loadErr,setLoadErr]=useState('')
 const[visCols,setVisCols]=useState(()=>getVis(COL_KEY())||COLS.map(c=>c.id))

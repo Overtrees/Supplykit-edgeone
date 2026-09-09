@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react'
-import { api } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
@@ -56,29 +55,29 @@ const LastRow = ({ label, value, sub, onClick, danger, loading }) => (
 )
 
 function RecycleBin({ onClose, toast }) {
-  var [rules, setRules] = useState([])
+  const [rules, setRules] = useState([])
   useEffect(function() {
-    var header = document.querySelector('header')
+    const header = document.querySelector('header')
     if (header) header.style.display = 'none'
     return function() { if (header) header.style.display = '' }
   }, [])
-  var [orders, setOrders] = useState([])
-  var [loading, setLoading] = useState(true)
+  const [orders, setOrders] = useState([])
+  const [loading, setLoading] = useState(true)
   // 批量操作：selected = {rules: Set<id>, orders: Set<id>}
-  var [selected, setSelected] = useState({ rules: new Set(), orders: new Set() })
-  var [batchBusy, setBatchBusy] = useState(false)
+  const [selected, setSelected] = useState({ rules: new Set(), orders: new Set() })
+  const [batchBusy, setBatchBusy] = useState(false)
 
   // 数据加载函数（提取自 useEffect，供初始化与批量操作后刷新复用）
-  var loadData = function() {
+  const loadData = function() {
     setLoading(true)
-    var _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}
+    const _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}
     Promise.all([
       fetch(API + '/api/rules?channel=all&include_deleted=1', {headers:_auth}).then(function(r) { return r.json() }),
       fetch(API + '/api/orders?page=1&page_size=200', {headers:_auth}).then(function(r) { return r.json() }),
     ]).then(function([rData, oData]) {
-      var items = rData.data || rData || []
+      const items = rData.data || rData || []
       setRules(items.filter(function(x) { return x.deleted_at }))
-      var o = oData.data || oData || []
+      const o = oData.data || oData || []
       setOrders(Array.isArray(o) ? o.filter(function(x) { return x.deleted_at }) : [])
       setLoading(false)
     }).catch(function() { setLoading(false) })
@@ -86,27 +85,27 @@ function RecycleBin({ onClose, toast }) {
 
   useEffect(function() { loadData() }, [])
 
-  var toggleSel = function(type, id) {
+  const toggleSel = function(type, id) {
     setSelected(function(prev) {
-      var next = new Set(prev[type])
+      const next = new Set(prev[type])
       if (next.has(id)) next.delete(id); else next.add(id)
       return { ...prev, [type]: next }
     })
   }
-  var toggleAll = function(type, items) {
+  const toggleAll = function(type, items) {
     setSelected(function(prev) {
-      var all = items.length > 0 && items.every(function(x) { return prev[type].has(x.id) })
-      var next = new Set()
+      const all = items.length > 0 && items.every(function(x) { return prev[type].has(x.id) })
+      const next = new Set()
       if (!all) items.forEach(function(x) { next.add(x.id) })
       return { ...prev, [type]: next }
     })
   }
-  var batchAction = async function(type, action, label) {
-    var ids = Array.from(selected[type])
+  const batchAction = async function(type, action, label) {
+    const ids = Array.from(selected[type])
     if (ids.length === 0) { toast.error('请先勾选要' + label + '的项'); return }
     setBatchBusy(true)
     try {
-      var _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}
+      const _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}
       if (type === 'rules' && action === 'permanent-delete') {
         await fetch(API + '/api/rules/batch', { method:'POST', headers:_auth, body: JSON.stringify({action:'purge', ids: ids}) })
       } else {
@@ -118,7 +117,7 @@ function RecycleBin({ onClose, toast }) {
       try { toast.success(label + '完成: ' + ids.length + ' 项') } catch(e) { window.alert(label + '完成: ' + ids.length + ' 项') }
       loadData()
       setSelected(function(prev) {
-        var next = new Set(prev[type]); ids.forEach(function(id) { next.delete(id) })
+        const next = new Set(prev[type]); ids.forEach(function(id) { next.delete(id) })
         return { ...prev, [type]: next }
       })
     } catch(e) {
@@ -126,15 +125,15 @@ function RecycleBin({ onClose, toast }) {
     }
     setBatchBusy(false)
   }
-  var confirmPurge = function(type) {
-    var ids = Array.from(selected[type])
+  const confirmPurge = function(type) {
+    const ids = Array.from(selected[type])
     if (ids.length === 0) { toast.error('请先勾选要永久删除的项'); return }
     if (window.confirm('永久删除 ' + ids.length + ' 项？此操作不可撤销')) batchAction(type, 'permanent-delete', '永久删除')
   }
 
-  var renderList = function(type, items) {
+  const renderList = function(type, items) {
     if (items.length === 0) return <div className="small muted" style={{padding:'20px',textAlign:'center',fontSize:13}}>{type==='rules'?t("recycle.empty_rules"):t("recycle.empty_orders")}</div>
-    var allSelected = items.length > 0 && items.every(function(x) { return selected[type].has(x.id) })
+    const allSelected = items.length > 0 && items.every(function(x) { return selected[type].has(x.id) })
     return <>
       <div style={{display:'flex',gap:6,padding:'8px 4px',flexWrap:'wrap'}}>
         <span onClick={function(){toggleAll(type, items)}} className="clickable" style={{fontSize:12,padding:'5px 12px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer'}}>{allSelected ? '取消全选' : '全选'}</span>
@@ -143,7 +142,7 @@ function RecycleBin({ onClose, toast }) {
       </div>
       <div style={{background:'var(--card)',borderRadius:32,overflow:'hidden'}}>
         {items.map(function(x) {
-          var isSel = selected[type].has(x.id)
+          const isSel = selected[type].has(x.id)
           return <div key={x.id} onClick={function(){toggleSel(type, x.id)}} className="clickable" style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid var(--border)',background:isSel?'rgba(29,78,216,0.08)':'transparent'}}>
             <span style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
               <span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,flexShrink:0}}>{isSel?'✓':''}</span>
@@ -186,7 +185,7 @@ export default function SettingsPage() {
   const [status, setStatus] = useState('检查中...')
   const [ping, setPing] = useState(0)
   const [lastCheck, setLastCheck] = useState('')
-  const [dbSize, setDbSize] = useState('')
+  const [[, setDbSize]] = useState('')
   const [cacheSize, setCacheSize] = useState(0)
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   const [refreshing, setRefreshing] = useState(false)

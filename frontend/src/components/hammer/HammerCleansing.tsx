@@ -3,7 +3,7 @@ import { useAppStore } from "../../store/useAppStore"
 interface HammerCleansingProps { channel: string }
 
 export default function HammerCleansing({ channel }: HammerCleansingProps) {
-  const { hammerPanel, setHammerPanel, hammerCleansingChannel, setHammerCleansingChannel, hammerCleansingTarget, hammerCleansingConflict, setHammerCleansingConflict } = useAppStore()
+  const {hammerCleansingChannel, setHammerCleansingChannel, hammerCleansingTarget, hammerCleansingConflict, setHammerCleansingConflict} = useAppStore()
   const target = hammerCleansingChannel === 'jd' ? '京东' : '其他渠道'
   const sameAsGlobal = hammerCleansingChannel === channel
   const isInOut = hammerCleansingTarget === 'inbound' || hammerCleansingTarget === 'outbound'

@@ -7,27 +7,27 @@ interface OrderItem {
   deleted_at?: string | null
 }
 
-interface AppState {
-  channel: string; channelVersion: number; pageVersion: number; dataLoaded: boolean
-  dashboard: any; orders: OrderItem[]; orderTotal: number; orderPage: number
-  inventory: any[]; qualityLogs: any[]; alerts: any[]; stockRisk: any[]; alertCounts: any; bcOutOfStock: any[]
-  loading: boolean; orderLoading: boolean; orderLoadErr: string; orderSearch: string; orderStatus: string
-  wsStatus: string; ws: WebSocket | null; importLogs: any[]
-  hammerPanel: string | null; hammerSearch: string; hammerData: Record<string, any>
-  hammerCleansingTarget: string; hammerCleansingConflict: string
-  hammerCols: Record<string, string[]> | null
-  prodBatch: boolean
-  prodSelIds: number[]
-  prodFilterLen: number
-  prodBatchVersion: number
-  prodBatchAllReq: number
-  /** 批量面板按钮状态判断: id → is_active(1/0), 页面加载数据后同步 */
-  batchStateMap: Record<number, number>
-  hammerDashPeriod: string; hammerInsightsTab: string; hammerReplenMode: string
-  hammerRulesTab: string; hammerRuleNewVersion: number; hammerRulesMode: string
-  hammerWhType: string
-  customDateStart: string; customDateEnd: string
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
@@ -130,7 +130,7 @@ export const useAppStore = create((set, get) => ({
     const cds = get().customDateStart
     const cde = get().customDateEnd
     // opts.refresh=true: dashboard 请求带 refresh=1（填充/导入完成后强制同步重建，不用旧值）
-    var dashUrl = '/api/dashboard/summary'
+    let dashUrl = '/api/dashboard/summary'
     if (ds === 'custom' && cds && cde) dashUrl += '?start_date=' + cds + '&end_date=' + cde
     if (opts && opts.refresh) dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'refresh=1'
     try {

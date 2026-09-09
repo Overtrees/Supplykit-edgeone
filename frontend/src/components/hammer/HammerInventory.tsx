@@ -3,7 +3,7 @@ import { t } from "../../locale"
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
-import { INV_COLS, INV_COL_KEY, getInvVis, invColKey, INV_WH_LABEL } from './configs'
+import {INV_COLS, getInvVis, invColKey, INV_WH_LABEL} from './configs'
 import { IconExport } from '../Icons'
 
 interface HammerInventoryProps { channel: string }

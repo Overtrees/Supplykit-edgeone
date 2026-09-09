@@ -1,3 +1,24 @@
+## 2026-09-09 前端质量门禁(TS 原生 lint) + 构建失败通知 + 密钥审计 + 深色适配
+> **主线**: feat/edgeone; ESLint 从 PA 遗留(无 TS 解析器)重构为 @typescript-eslint 原生适配。
+> **验证**: 37 文件 eslint 0/0 全绿 + tsc 通过 + smoke_check 线上冒烟通过。
+
+### ESLint TS 原生重构(项目名 supplychain-v1-frontend → supplykit-frontend)
+- 旧配置无 TS 解析器/React hooks 规则(PA 遗留, lint 从未真正生效); 新配置: @typescript-eslint/parser + recommended + react-hooks(rules-of-hooks=error) + unused-imports(未用 import=error 自动删) + no-var + no-empty(allowEmptyCatch) + prefer-const
+- **存量清理: 162 errors + 151 warnings → 0/0 全绿**(37 文件): no-var 97(脚本 var→let→const) / no-empty 62(空 catch 语义化) / **3 处 rules-of-hooks 真 bug**(回调内 useToast()→组件顶部 toast 变量) / 未用 import 11 手动删 / 变量冗余分层(import 强制, 变量留待 strict 化由 tsc 接管)
+- **iSH 内存铁律**: 沙箱内存不足 → eslint 全量**假通过/崩溃**(bad_alloc) —— 权威门禁放 CI, 本地分目录/逐文件 + tsc 安全回归
+
+### 构建失败通知链路
+- scripts/preflight.sh 本地门禁(3.10 语法+pyflakes+local_test+lint+tsc) / .github/workflows/preflight.yml(push/PR lint+tsc+后端回归, 失败 webhook 通知, GitHub Secrets: WEBHOOK_URL) / scripts/smoke_check.py 部署后冒烟(health JSON=函数路由存活+前端 #root, 失败 webhook)
+- smoke_check 线上实测: supplykit.top health JSON(ok/db=ok) + 前端 #root ✓
+
+### 密钥/配置审计(scripts/audit_secrets.py)
+- 硬编码密钥扫描 + .env 跟踪审计 + .gitignore 覆盖 + 后端 os.environ 必需清单(9 个)
+- **实测修复: frontend/.env 曾被 git 跟踪 → git rm --cached + .gitignore 加固(.env/.env.local/dist/export_files)**
+
+### 深色模式适配补漏
+- index.html #app-fallback + main.tsx 维护层硬编码浅色 → var(--bg/--text/--muted) + theme-color dark media; 骨架屏已有 dark 覆盖
+
+---
 ## 2026-09-08 晚间: 稳定性攻坚(空白页/构建/维护层) + PA 清理 + 静态分析治本 + 体验优化
 > **主线**: feat/edgeone, 当日累计 43 commit(下午 21 条为 15:58 后新增)。
 > **验证**: local_test 91/91, tsc 通过, 线上全链路实测。

@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../components/Icons'
-import { t } from '../locale'
 import ErrorRetry from '../components/ErrorRetry'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''

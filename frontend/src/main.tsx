@@ -18,9 +18,9 @@ function showMaintenance() {
   if (document.getElementById('app-maintenance')) return
   const d = document.createElement('div')
   d.id = 'app-maintenance'
-  d.style.cssText = "position:fixed;inset:0;z-index:99999;background:#f2f2f7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,sans-serif"
-  d.innerHTML = '<div style="font-size:26px;font-weight:800;color:#0f172a">SupplyKit</div>'
-    + '<div style="font-size:14px;color:#64748b">系统正在维护中，请稍后重试</div>'
+  d.style.cssText = "position:fixed;inset:0;z-index:99999;background:var(--bg,#f2f2f7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,sans-serif"
+  d.innerHTML = '<div style="font-size:26px;font-weight:800;color:var(--text,#0f172a)">SupplyKit</div>'
+    + '<div style="font-size:14px;color:var(--muted,#64748b)">系统正在维护中，请稍后重试</div>'
     + '<button id="app-reload" style="margin-top:6px;padding:8px 24px;border:none;border-radius:99px;background:#007AFF;color:#fff;font-size:14px;cursor:pointer">刷新</button>'
   document.body.appendChild(d)
   document.getElementById('app-reload').onclick = () => { location.reload() }

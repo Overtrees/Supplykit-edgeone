@@ -50,7 +50,7 @@ const sevLbl = s => s==='error'?'严重':s==='info'?t("rules.severity_info"):t("
 
 const pc = j => {
   try {
-    const c = JSON.parse(j); let rt = c.rightType||'field'; let r = c.right||'inv.safety_qty'; let pct = 100; let wh = c.warehouse||''
+    const c = JSON.parse(j); let rt = c.rightType||'field'; let r = c.right||'inv.safety_qty'; let pct = 100; const wh = c.warehouse||''
     const m = typeof r==='string'?r.match(/^max\(1,\s*(\w+(?:\.\w+)*)\s*\*\s*([\d.]+)\)$/):null
     if (m) { r=m[1]; rt='pct'; pct=Math.round(parseFloat(m[2])*100) }
     if (!rt||rt==='field') { const f=LF.find(x=>x.v===r); if(!f&&typeof r==='string'&&!r.replace('.','').match(/^\d+$/))rt='text'; else if(!f)rt='number' }
@@ -126,7 +126,7 @@ export default function RulesPage() {
   const [f, setF] = useState(defaultF)
   const [cond, setCond] = useState({left:'inv.available_qty', op:'<', right:'inv.safety_qty', rightType:'field', pctValue:100, warehouse:''})
   const [rParams, setRParams] = useState({})
-  const { channel: globalChannel, setChannel: setGlobalChannel, hammerRulesTab: tab, hammerRuleNewVersion, hammerRulesMode, hammerSearch, prodBatch, setProdBatch, prodSelIds, setProdBatchSel, setProdBatchFilterLen, prodBatchVersion, bumpProdBatchVersion, prodBatchAllReq } = useAppStore()
+  const {channel: globalChannel, setChannel: setGlobalChannel, hammerRulesTab: tab, hammerRuleNewVersion, hammerRulesMode, hammerSearch, prodBatch, prodSelIds, setProdBatchSel, setProdBatchFilterLen, prodBatchVersion, prodBatchAllReq} = useAppStore()
   useEffect(() => {
     api.get('/api/replenishment-config/slow-cats?channel=' + globalChannel).then(r => { if (Array.isArray(r.data)) setSlowCats(r.data) }).catch(() => {})
   }, [globalChannel])
@@ -227,7 +227,7 @@ export default function RulesPage() {
     clearCache()
     await load(globalChannel); window.dispatchEvent(new Event('rules-changed'))
     addDebug('del load 完成')
-    var timer = setTimeout(async function() {
+    const timer = setTimeout(async function() {
       await fetch(API+'/api/rules/'+id+'/permanent-delete', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()},method:'POST'})
     }, 5000)
     toast.add({type:'success', title:t("common.delete"), duration:5000, action: {label: t("undo.undo"), handler: async function() {

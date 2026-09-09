@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, {useEffect, useRef} from 'react'
 import { t } from '../locale'
 import { NAV } from '../App'
 import { NAV_ICONS } from './Icons'

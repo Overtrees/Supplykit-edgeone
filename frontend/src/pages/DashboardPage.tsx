@@ -27,7 +27,7 @@ const RISK_LV = {
 interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string, sku?: string) => void }
 
 export default function DashboardPage({ onAlert, onGoInsights }: DashboardPageProps) {
-  const { dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, loading, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion } = useAppStore()
+  const {dashboard, inventory, qualityLogs, alerts, stockRisk, alertCounts, bcOutOfStock, channel, hammerDashPeriod: periodTab, hammerReplenMode, pageVersion} = useAppStore()
   const [healthTab, setHealthTab] = useState(() => { try { const h = localStorage.getItem('health_tab') || (channel === 'jd' ? 'own' : 'platform'); return ((channel !== 'jd' || (hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional')) !== 'bbcc') && h === 'platform_b') ? 'platform' : h } catch { return channel === 'jd' ? 'own' : 'platform' } })
   // 渠道切换归一化: platform_b(B 仓)为 jd BBCC 专属维度, other 渠道强制 platform(避免残留空维度显示)
   // 渠道/模式切换归一化: platform_b(B仓)为 jd+bbcc 专属, 其他组合强制 platform
@@ -47,10 +47,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
-  const [_riskTab, setRiskTab] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
+  const [[_riskTab, ]] = useState('c')   // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store')  // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
-  const [fullOut, setFullOut] = useState(null)        // 缺货弹窗完整数据(按当前视图维度)
+  const [[, setFullOut]] = useState(null)        // 缺货弹窗完整数据(按当前视图维度)
   const [oosList, setOosList] = useState(null)        // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [fullAlerts, setFullAlerts] = useState(null)   // 告警弹窗完整数据(点击时拉取)
   const [fullRisk, setFullRisk] = useState(null)       // 濒临断货完整列表
@@ -236,11 +236,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
 
   const storeOption = useMemo(() => {
     // 店铺看盘子 / 品牌看渗透(跨店按brand归集, join products.brand)
-    var storeData = _storeDim === 'brand'
+    const storeData = _storeDim === 'brand'
       ? (dashboard?.period_brands?.[periodTab] || dashboard?.brands || [])
       : (dashboard?.period_stores?.[periodTab] || dashboard?.stores || [])
     // GMV 视角切换: 净GMV=总GMV-退款(后端 stores/brands 已带 net_gmv)
-    var _g = (i) => gmvView === 'net' ? (i.net_gmv != null ? i.net_gmv : i.gmv)
+    const _g = (i) => gmvView === 'net' ? (i.net_gmv != null ? i.net_gmv : i.gmv)
         : gmvView === 'payout' ? (i.payout != null ? i.payout : i.gmv) : i.gmv
     return {
     tooltip: { trigger: 'axis', valueFormatter: (v) => '¥' + Number(v).toLocaleString('zh-CN', {minimumFractionDigits:2,maximumFractionDigits:2}), extraCssText: 'z-index:1000', hideDelay: 100 },
@@ -317,14 +317,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const _srOwn = { items: _sr0.ownItems || [], total: _sr0.ownTotal || 0, critical: _sr0.ownCritical || 0, warning: _sr0.ownWarning || 0 }
   const _showOwn = false
   const _r = _replMode === 'traditional'
-    ? (function(){ var _merged = [].concat(_sr.items||[], _srOwn.items||[]).sort(function(a,b){return (a.days_to_empty||999)-(b.days_to_empty||999)}); var _tot = ( _sr.total||0 ) + ( _srOwn.total||0 ); var _c = ( _sr.critical||0 ) + ( _srOwn.critical||0 ); var _w = ( _sr.warning||0 ) + ( _srOwn.warning||0 ); var _full = [].concat(_sr.items||[], _srOwn.items||[]).sort(function(a,b){return (a.days_to_empty||999)-(b.days_to_empty||999)}); return {items: _merged.slice(0,10), total: _tot, critical: _c, warning: _w, _full: _full} })()
+    ? (function(){ const _merged = [].concat(_sr.items||[], _srOwn.items||[]).sort(function(a,b){return (a.days_to_empty||999)-(b.days_to_empty||999)}); const _tot = ( _sr.total||0 ) + ( _srOwn.total||0 ); const _c = ( _sr.critical||0 ) + ( _srOwn.critical||0 ); const _w = ( _sr.warning||0 ) + ( _srOwn.warning||0 ); const _full = [].concat(_sr.items||[], _srOwn.items||[]).sort(function(a,b){return (a.days_to_empty||999)-(b.days_to_empty||999)}); return {items: _merged.slice(0,10), total: _tot, critical: _c, warning: _w, _full: _full} })()
     : _sr
   const riskCritical = _r.critical != null ? _r.critical : (_r.items||[]).filter(x => x.days_to_empty < 3).length
   const riskWarning = _r.warning != null ? _r.warning : (_r.items||[]).filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
     // 缺货列表 = stockOverview.items(本身就是 avail<=0 的缺货SKU, 含warehouse_type)
   // 缺货列表 = 当前视图维度全量(oosList, 随 healthTab 拉取); 未加载时回退旧逻辑
-  var _oosSrc = oosList || (healthTab === 'bc' ? (bcOutOfStock || []) : (healthTab === 'own' ? (inventory||[]).filter(x => x.warehouse_type === 'own') : (inventory||[]).filter(x => x.warehouse_type === 'platform')))
-  var outOfStockItems = _oosSrc.slice(0,3)
+  const _oosSrc = oosList || (healthTab === 'bc' ? (bcOutOfStock || []) : (healthTab === 'own' ? (inventory||[]).filter(x => x.warehouse_type === 'own') : (inventory||[]).filter(x => x.warehouse_type === 'platform')))
+  const outOfStockItems = _oosSrc.slice(0,3)
   // 待处理卡 告警×仓库维度: 用后端精确 by_warehouse(全量), 按补货模式聚合展示——
   // BBCC 看全盘 B+C(与健康卡bc一致), 传统多仓不涉及B仓。曾用截断列表filter(200样本 vs 全量)
   function _whView(w) {
@@ -423,10 +423,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
       <div className="card" style={{borderRadius:26,boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16}}>
         {(()=>{
-          var healthData = dashboard?.health_index?.[healthTab]||{}
-          var isJd = channel === 'jd'
-          var bcActive = healthTab === 'bc' || healthTab === 'platform'
-          var bcLabel = healthTab === 'platform' ? 'C仓' : 'BC'
+          const healthData = dashboard?.health_index?.[healthTab]||{}
+          const isJd = channel === 'jd'
+          const bcActive = healthTab === 'bc' || healthTab === 'platform'
+          const bcLabel = healthTab === 'platform' ? 'C仓' : 'BC'
           return <>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
               <div className="small muted" style={{fontSize:12,lineHeight:1.2}}>库存{t("dash.healthy")}度</div>
@@ -506,10 +506,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </div>
               <div style={{flexShrink:0}}>
               {_r.items.slice(0,3).map((x,i) => {
-                var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
-                var lv = RISK_LV[x.level]
+                const whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+                const lv = RISK_LV[x.level]
                 return (
-                <div key={i} onClick={function(){ var _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0,cursor:'pointer'}}>
+                <div key={i} onClick={function(){ const _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{fontSize:9,color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0,cursor:'pointer'}}>
                   <span style={{color:'var(--muted)'}}>{i+1}.</span> {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
                 </div>)
               })}
@@ -649,12 +649,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:32,padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
           {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
-            var whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
-            var lv = RISK_LV[x.level]
+            const whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
+            const lv = RISK_LV[x.level]
             return <div key={i} onClick={function(){
               // bc 合计行(bbcc 专属): 跳 C 仓维度(platform) + 聚合高亮该 SKU 所有 C 仓行(不传具体仓)
               // —— 满足 bc 一盘棋语义: 看全国 C 仓分布, 而非单一仓
-              var _isBC = x.type === 'BC' || x.warehouse === 'BC'
+              const _isBC = x.type === 'BC' || x.warehouse === 'BC'
               onAlert && onAlert(x.sku, _isBC ? 'platform' : (_showOwn ? 'own' : 'platform'), _isBC ? '' : x.warehouse)
             }} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:16,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{minWidth:0,flex:1}}>

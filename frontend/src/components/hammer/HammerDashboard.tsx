@@ -10,7 +10,7 @@ export default function HammerDashboard({ channel }) {
   const [startVal, setStartVal] = useState(customDateStart || '')
   const [endVal, setEndVal] = useState(customDateEnd || '')
 
-  if (!startVal) { var d = new Date(); d.setDate(d.getDate() - 29); setStartVal(d.toISOString().slice(0,10)) }
+  if (!startVal) { const d = new Date(); d.setDate(d.getDate() - 29); setStartVal(d.toISOString().slice(0,10)) }
   if (!endVal) { setEndVal(new Date().toISOString().slice(0,10)) }
 
   return (

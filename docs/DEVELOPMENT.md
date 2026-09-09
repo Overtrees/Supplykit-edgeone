@@ -671,3 +671,11 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **code-split 教训**: 页面 lazy + React 18 UMD 构建环境未验证 → 一直加载中(React 未挂载) → 回退整页打包; **平台构建产物差异(UMD/CDN)下路由级 code-split 需先验证**
 - **UI 冗余判定**: 显式刷新按钮在"写→invalidate_all→事件重拉秒级"链路下冗余(移除); 功能修复优先于新 UI 元素
 - **跳转定位规范**: 一次性定位语义(loc_search/highlight)必须离开页面清理, 防污染共享搜索/残留兜底提示; 聚合维度跳转(断货 bc 行→C 仓多仓行)按 SKU 高亮全部行
+
+### 15.25 前端质量门禁(TS 原生 lint) + 构建失败通知 + 密钥审计 + 深色适配(2026-09-09)
+- **ESLint 重构为 TS 原生**(项目名 supplychain-v1-frontend → **supplykit-frontend**): 旧配置无 TS 解析器/React hooks 规则(PA 遗留); 现为 @typescript-eslint/parser + recommended + react-hooks(rules-of-hooks=error, exhaustive-deps=off 人工 review) + unused-imports(未用 import=error 自动删) + no-var/error + no-empty(allowEmptyCatch)/error + prefer-const/warn(CI --fix 自动) + console/debugger/warn; **unused 变量分层**: import 强制, 变量冗余量大治理风险>收益 → 关闭, 未来 strict 化由 tsc noUnusedLocals 接管
+- **存量清理成果**: 162 errors(no-var 97/no-empty 62/hooks 3)+151 warnings → **0/0 全绿**(37 文件); no-empty 62 中主流是空 catch(allowEmptyCatch 语义化); var→let→const 脚本化; 未用 import 手动+脚本删; **3 处 rules-of-hooks 真 bug**(回调内 useToast()→组件顶部 toast 变量)
+- **iSH 内存铁律(重要)**: iSH 沙箱内存不足 → eslint 全量扫描**不可靠**(std::bad_alloc 崩溃 或 **静默假通过**: 输出 0 问题 exit 0 但实际 160 err)——必须以 --format json 抽查戳穿; 对策: ①分目录/逐文件跑(单目录内存可控) ②**权威门禁放 CI(GitHub Actions)**, 本地 preflight 注明以 CI 为准 ③tsc --noEmit 做安全回归(删改后验证, 稳定快速)
+- **构建失败通知链路**: ①scripts/preflight.sh 本地门禁(3.10 语法+pyflakes+local_test+lint+tsc) ②.github/workflows/preflight.yml push/PR 跑 lint/format/tsc + 后端回归, 失败自动 webhook 通知(GitHub Secrets: WEBHOOK_URL, 钉钉/企微 text) ③scripts/smoke_check.py 部署后冒烟(health JSON=函数路由存活/前端 #root/可选 token 业务接口, 失败 webhook)
+- **密钥/配置审计**(scripts/audit_secrets.py): 硬编码密钥模式扫描(AWS/私钥/API key/password/token 等, 排除 node_modules/vendor/dist) + .env 跟踪审计 + .gitignore 覆盖检查 + 后端 os.environ 清单(部署必需 env 一览); **实测修复: frontend/.env 曾被 git 跟踪(含 Sentry DSN 等)→ git rm --cached + .gitignore 加固(.env/.env.local/dist/export_files)**
+- **深色模式适配补漏**: styles.css 变量体系完善但 React 挂载前的静态占位硬编码浅色 → index.html #app-fallback 与 main.tsx 维护层改用 var(--bg/--text/--muted) + meta theme-color 加 dark media; 骨架屏 .skeleton 已有 dark 覆盖(#2C2C2E)

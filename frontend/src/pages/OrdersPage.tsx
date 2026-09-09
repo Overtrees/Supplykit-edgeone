@@ -44,14 +44,14 @@ export default function OrdersPage() {
   // 加载平台仓库存（按 SKU+仓库 维度）
   const delOrder = async () => {
     if (!confirmDel) return
-    var id = confirmDel
+    const id = confirmDel
     setConfirmDel(null)
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       const r = await fetch(`${API}/api/orders/${id}`, {method:'DELETE', headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
       if (r.ok) {
         useAppStore.getState().loadAll()
-        var timer = setTimeout(async function() {
+        const timer = setTimeout(async function() {
           await fetch(`${API}/api/orders/${id}/permanent-delete`, {method:'POST', headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
         }, 5000)
         // 组件卸载/页面切换时清理定时器，防止软删订单残留（服务端 30 天回收站兜底）
@@ -92,7 +92,7 @@ export default function OrdersPage() {
             if(col.id==='quantity')return <td key={col.id} className="col-qty">{x.quantity}</td>
             if(col.id==='unit_price')return <td key={col.id} className="col-price">¥{Number(x.unit_price||x.total_amount/(x.quantity||1)).toLocaleString()}</td>
             if(col.id==='amount')return <td key={col.id} className="col-price">¥{Number(x.total_amount).toLocaleString()}</td>
-            if(col.id==='status')return <td key={col.id}><span className={'pill ' + (function(){var s=x.order_status||'';if(s.includes('完成')||s.includes('签收')||s.includes('收货'))return 'success';if(s.includes('退款')||s.includes('取消')||s.includes('退货')||s.includes('售后'))return 'danger';if(s.includes('发货')||s.includes('出库'))return 'info';return 'warning'})()}>{x.order_status}</span></td>
+            if(col.id==='status')return <td key={col.id}><span className={'pill ' + (function(){const s=x.order_status||'';if(s.includes('完成')||s.includes('签收')||s.includes('收货'))return 'success';if(s.includes('退款')||s.includes('取消')||s.includes('退货')||s.includes('售后'))return 'danger';if(s.includes('发货')||s.includes('出库'))return 'info';return 'warning'})()}>{x.order_status}</span></td>
             if(col.id==='date')return <td key={col.id} className="col-date">{x.ordered_at}</td>
             if(col.id==='paid_at')return <td key={col.id} className="col-date">{x.paid_at||'-'}</td>
 

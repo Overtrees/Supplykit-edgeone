@@ -7,16 +7,17 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Supplykit" />
     <meta name="theme-color" content="#f2f2f7">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
     <link rel="manifest" href="/manifest.json">
     <title>Supplykit</title>
     <meta name="color-scheme" content="light dark">
-    <style>:root{--bg:#f2f2f7}@media(prefers-color-scheme:dark){:root{--bg:#000000}}html,body,#root{margin:0;padding:0;background:var(--bg)}</style>
+    <style>:root{--bg:#f2f2f7;--text:#0f172a;--muted:#64748b}@media(prefers-color-scheme:dark){:root{--bg:#000000;--text:#f1f5f9;--muted:#94a3b8}}html,body,#root{margin:0;padding:0;background:var(--bg)}</style>
   </head>
   <body>
     <div id="root">
-      <div id="app-fallback" style="position:fixed;inset:0;background:#f2f2f7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
-        <div style="font-size:26px;font-weight:800;color:#0f172a">SupplyKit</div>
-        <div style="font-size:14px;color:#64748b">加载中…</div>
+      <div id="app-fallback" style="position:fixed;inset:0;background:var(--bg,#f2f2f7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
+        <div style="font-size:26px;font-weight:800;color:var(--text,#0f172a)">Supplykit</div>
+        <div style="font-size:14px;color:var(--muted,#64748b)">加载中…</div>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>

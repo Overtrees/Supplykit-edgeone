@@ -49,7 +49,7 @@ function renderNote(text) {
 
 const defVis = (cols) => { try { const s = localStorage.getItem('c_cols_insights_' + (hammerInsightsTab || 'replen') + '_' + (globalChannel || 'jd')); if (s) { const p = JSON.parse(s); if (p.length > 0) return p } } catch {} return cols.map(c => c.id) }
 const defVisTrad = (cols) => { try { const s = localStorage.getItem('c_cols_insights_traditional_' + (globalChannel || 'jd')); if (s) { const p = JSON.parse(s); if (p.length > 0) return p } } catch {} return cols.map(c => c.id) }
-const API = import.meta.env.VITE_API_BASE_URL || ''
+
 const getVis = (m, ch) => { try { return JSON.parse(localStorage.getItem('c_cols_insights_' + ch + '_' + m) || 'null') } catch{return null} }
 const safeGet = (key, def) => { try { return localStorage.getItem(key) ?? def } catch { return def } }
 const safeSet = (key, val) => { try { localStorage.setItem(key, val) } catch {} }
@@ -69,7 +69,7 @@ export default function InsightsPage() {
   const toast = useToast()
   const [replen, setReplen] = useState([])
   const [purchase, setPurchase] = useState([])
-  const [slowMoving, setSlowMoving] = useState([])
+  const [[slowMoving, ]] = useState([])
   // 滞销处置建议（SKU×仓库粒度 + 批量处置）
   const [disposals, setDisposals] = useState([])
   const [disposalsLoading, setDisposalsLoading] = useState(true)
@@ -83,27 +83,27 @@ export default function InsightsPage() {
   // 各区块加载状态
   const [replenLoading, setReplenLoading] = useState(true)
   const [purchaseLoading, setPurchaseLoading] = useState(true)
-  const [slowLoading, setSlowLoading] = useState(true)
-  const [replenLimit, setReplenLimit] = useState(100)
+  const [[, setSlowLoading]] = useState(true)
+  const [[, setReplenLimit]] = useState(100)
   const [replenTotal, setReplenTotal] = useState(0)
-  const [replenPage, setReplenPage] = useState(1)
+  const [[, setReplenPage]] = useState(1)
   const replenPageRef = useRef(1)
   const [replenLoadingMore, setReplenLoadingMore] = useState(false)
   const [purchaseLimit, setPurchaseLimit] = useState(50)
-  const [slowLimit, setSlowLimit] = useState(50)
+  const [[, setSlowLimit]] = useState(50)
 
-  const { channel: globalChannel, hammerInsightsTab: tab, hammerReplenMode, setHammerReplenMode, hammerCols, hammerData, dataVersion, prodBatch, prodSelIds, setProdBatch, setProdBatchSel, requestProdBatchAll, prodBatchAllReq } = useAppStore()
+  const {channel: globalChannel, hammerInsightsTab: tab, hammerReplenMode, setHammerReplenMode, hammerCols, hammerData, dataVersion, prodBatch, prodSelIds, setProdBatch, setProdBatchSel, prodBatchAllReq} = useAppStore()
   useEffect(() => { setProdBatch(false); setProdBatchSel([]) }, [globalChannel, tab])
   // 批量模式全选(断言: 锤子面板"全选" requestProdBatchAll → 全选当前过滤列表)
   useEffect(() => { if (prodBatchAllReq > 0) { const s = useAppStore.getState(); const all = filteredDisp.map(x => x.sku + '|' + x.warehouse); s.setProdBatchSel(s.prodSelIds.length === all.length && all.length > 0 ? [] : all) } }, [prodBatchAllReq])
   const replenMode = (globalChannel !== 'jd' && hammerReplenMode === 'bbcc') ? 'traditional' : hammerReplenMode
   const currentCols = replenMode === 'bbcc' ? BBCC_COLS : TRAD_COLS
   const [visCols, setVisCols] = useState(() => {
-    var saved = getVis(replenMode, globalChannel)
-    var defaultCols = replenMode==='bbcc'?defVis(BBCC_COLS):defVisTrad(TRAD_COLS)
+    let saved = getVis(replenMode, globalChannel)
+    const defaultCols = replenMode==='bbcc'?defVis(BBCC_COLS):defVisTrad(TRAD_COLS)
     if (saved) {
       // 过滤掉已不存在的列ID（如旧版 combined_turn → cur_turn）
-      var validIds = currentCols.map(function(c) { return c.id })
+      const validIds = currentCols.map(function(c) { return c.id })
       saved = saved.filter(function(id) { return validIds.includes(id) })
       if (saved.length === 0) saved = defaultCols
     } else {
@@ -158,8 +158,8 @@ export default function InsightsPage() {
   useEffect(() => {
     const saved = hammerCols?.['insights_'+replenMode]
     if (saved) {
-      var validIds = currentCols.map(function(c) { return c.id })
-      var filtered = saved.filter(function(id) { return validIds.includes(id) })
+      const validIds = currentCols.map(function(c) { return c.id })
+      const filtered = saved.filter(function(id) { return validIds.includes(id) })
       setVisCols(filtered.length > 0 ? filtered : (replenMode==='bbcc'?defVis(BBCC_COLS):defVisTrad(TRAD_COLS)))
     } else {
       const ls = getVis(replenMode, globalChannel)
@@ -188,7 +188,7 @@ export default function InsightsPage() {
     try {
       const r = await api.get('/api/insights/replenishment?days=28&mode=' + mode + '&channel=' + ch + '&page=' + page + '&page_size=100&search=' + encodeURIComponent(insightSearch), {timeout: 90000})
       if (seq !== replenSeq.current) return
-      let data = r.data
+      const data = r.data
       let total = 0
       let items = []
       // 分页结构 {items,total}
@@ -413,7 +413,7 @@ export default function InsightsPage() {
                       // 闭包旧replenPage bug: observer只创建一次, 回调捕获创建时旧值→反复加载同页
                       // 修复: 用 ref 实时读最新 page, 避免重复加载同一页(数据重复致'滚到3100条还是那批在途0')
                       if (entries[0].isIntersecting && !replenLoadingMore) {
-                        var next = replenPageRef.current + 1
+                        const next = replenPageRef.current + 1
                         replenPageRef.current = next
                         loadReplen(replenMode, globalChannel, next)
                       }
@@ -559,7 +559,7 @@ export default function InsightsPage() {
           ) : (
             <>
               <div style={{overflow:'auto',maxHeight:"calc(100vh - 180px)"}} onScroll={function(e){
-                  var el = e.target
+                  const el = e.target
                   // IntersectionObserver 仅在交叉状态变化时回调——持续在视口不重复触发导致卡加载
                   // 改用滚动监听: 每次滚动检测接近底部即加载下一页
                   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 250 && !slowLoadingMore && (slowTotal === 0 || filteredDisp.length < slowTotal)) {

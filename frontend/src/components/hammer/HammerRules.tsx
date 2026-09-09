@@ -7,7 +7,7 @@ interface HammerRulesProps { channel: string; onShowHistory?: (ch: string) => vo
 
 export default function HammerRules({ channel, onShowHistory }: HammerRulesProps) {
   const toast = useToast()
-  const { hammerRulesTab, setHammerRulesTab, bumpHammerRuleNew, hammerRulesMode, setHammerRulesMode, hammerSearch, setHammerSearch, prodBatch, setProdBatch, prodSelIds, batchStateMap } = useAppStore()
+  const {hammerRulesTab, setHammerRulesTab, bumpHammerRuleNew, hammerRulesMode, setHammerRulesMode, hammerSearch, setHammerSearch, prodBatch, prodSelIds, batchStateMap} = useAppStore()
   // 批量按钮状态判断: 所选全部启用→批量启用禁用; 所选全部停用→批量停用禁用; 混合→都可用
   const selSt = prodSelIds || []
   const stMap = batchStateMap || {}

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react"
 import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
-import { api } from './api/client'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
 import ProductPage from './pages/ProductPage'
 import SupplierPage from './pages/SupplierPage'
@@ -29,8 +28,6 @@ import HammerOrders from './components/hammer/HammerOrders'
 import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
 import { t } from "./locale"
-import { IconStatusOnline, IconStatusWarning, IconStatusOffline, IconExport } from './components/Icons'
-import { PRODUCT_COLS, prodColKey, getProdVis, SUPPLIER_COLS, suppColKey, getSuppVis, ORDER_COLS, ORDER_STATUSES, orderColKey, getOrderVis, INS_BBCC_COLS, INS_TRAD_COLS, INS_PURCHASE_COLS, INS_SLOW_COLS, insColKey, getInsVis, insDefVis, insDefVisTrad, INV_COLS, INV_COL_KEY, getInvVis, INV_WH_LABEL } from './components/hammer/configs'
 
 export const NAV = [
   { id:'dash',label:t('nav.dash')},{id:'products',label:t('nav.products')},{id:'suppliers',label:t('nav.suppliers')},
@@ -40,26 +37,6 @@ export const NAV = [
   {id:'settings',label:t('nav.settings')},
 ]
 
-
-/* 进销存页: 锤子菜单列选择器 + 搜索 + 仓库筛选 + 导出 */
-const INV_COLS = {
-  own: [
-    {id:'warehouse',label:'仓库'},{id:'sku',label:'SKU'},{id:'barcode',label:'69码'},{id:'name',label:'商品'},
-    {id:'begin',label:'期初库存'},{id:'transit',label:'在途'},{id:'month_in',label:'当月采购入库'},
-    {id:'month_out',label:'当月出库'},{id:'avail',label:'可用'},{id:'turnover',label:'在库周转'},
-  ],
-  platform: [
-    {id:'channel',label:'平台'},{id:'warehouse',label:'仓库'},{id:'sku',label:'SKU'},{id:'barcode',label:'69码'},{id:'name',label:'商品'},
-    {id:'transit',label:'在途'},{id:'avail',label:'可用'},
-  ],
-  platform_b: [
-    {id:'channel',label:'平台'},{id:'warehouse',label:'仓库'},{id:'sku',label:'SKU'},{id:'barcode',label:'69码'},{id:'name',label:'商品'},
-    {id:'transit',label:'供应商-B仓'},{id:'c_transit',label:'B-C调拨在途'},{id:'avail',label:'可用'},
-  ],
-}
-const INV_COL_KEY = 'c_cols_inventory'
-const getInvVis = (wt) => { try { return JSON.parse(localStorage.getItem(INV_COL_KEY + '_' + wt) || 'null') } catch{return null} }
-const INV_WH_LABEL = { own:'自有仓', platform:'平台仓', platform_b:'B仓' }
 
 export default function App() {
   const [page, setPage] = useState('dash')
@@ -71,7 +48,7 @@ export default function App() {
   ;(window as any).__setPage = (p: string) => { navigateTo(p); closeHammerMenu() }
   const [highlightSku, setHighlightSku] = useState('')
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
-  const { inventory, qualityLogs, startPolling, stopAll, wsStatus, channel, setChannel, hammerData, setHammerPanel } = useAppStore()
+  const {inventory, qualityLogs, startPolling, stopAll, channel, setChannel, hammerData, setHammerPanel} = useAppStore()
   const toast = useToast()  // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
@@ -223,7 +200,7 @@ export default function App() {
   useEffect(() => { checkApi(); const t = setInterval(checkApi, 30000); return () => clearInterval(t) }, [checkApi])
 
   // 数据版本轮询：后端_ cache_version 变化时自动刷新
-  const [dbVersion, setDbVersion] = useState(0)
+  const [[, setDbVersion]] = useState(0)
   const versionRef = useRef(0)
   useEffect(() => {
     const poll = setInterval(async () => {
@@ -537,19 +514,19 @@ export default function App() {
             try { localStorage.setItem('c_welcome_seen','1') } catch {}
             setShowWelcome(false)
             try {
-              var r = await fetch(API + '/api/seed/fill', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()},method:'POST'})
-              var d = await r.json()
+              const r = await fetch(API + '/api/seed/fill', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()},method:'POST'})
+              const d = await r.json()
               if (d.ok) {
                 if (d.data?.requires_reset) {
-                  useToast().error('已有数据，请在设置页先「一键重置」')
+                  toast.error('已有数据，请在设置页先「一键重置」')
                   return
                 }
-                var taskId = d.data?.task_id
+                const taskId = d.data?.task_id
                 if (taskId) {
                   try { localStorage.setItem('c_seed_task', taskId) } catch {}
-                  useToast().success('种子数据填充中，可前往任务管理查看进度')
+                  toast.success('种子数据填充中，可前往任务管理查看进度')
                 }
-              } else useToast().error('填充失败: ' + (d.error || ''))
+              } else toast.error('填充失败: ' + (d.error || ''))
             } catch(e) {}
           }} className="btn btn-primary" style={{width:'100%',padding:'14px',fontSize:16,fontWeight:600,marginBottom:10}}>{t("welcome.start")}</button>
           <button onClick={function(){localStorage.setItem('c_welcome_seen','1');setShowWelcome(false)}}

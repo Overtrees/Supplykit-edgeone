@@ -1,5 +1,6 @@
 import axios from 'axios'
 
+/* eslint-disable no-console -- API 调试日志(开发期保留, 便于追接口链路) */
 const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 // 响应缓存（内存）
