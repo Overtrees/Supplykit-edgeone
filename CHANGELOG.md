@@ -1,3 +1,30 @@
+## 2026-09-09 下午-晚间: 共享表缓存治本(Makers 多实例) + 清洗导入四维加固 + 销量池口径 + 批次效期可选链路
+> **主线**: feat/edgeone, 当日累计 19 commit(6c1bc874 后 13 个: 缓存治本→清洗四维 bug 链→口径→批次效期)。
+> **验证**: local_test 91/91 + 线上实测(评估 evaluated 0→1 / inbound 导入成功 / 批次同步 / 状态提示)。
+
+### 共享表缓存治本(6c1bc874/1f1d139d) —— 多实例下内存缓存失效的根治
+- **背景**: Makers cloud-functions 请求模式(无状态/每请求环境/多实例)——实测 replen 连续 3 次 4.0/4.0/3.0s=每次全量重算, 内存缓存命中率≈0; invalidate_all 只清当前实例 → 跨实例旧值
+- **方案**: 聚合缓存迁 TiDB 表 analysis_cache(跨实例共享): cache_get(key,ttl,builder) + TIMESTAMPDIFF 免时区坑 + 异常自愈(删坏 key/建表/记日志)再降级; invalidate_all=DELETE 全表(全局失效); key 加口径版本前缀 c1(部署跨实例存活防旧口径)
+- 接入: summary/aux/stock-risk/_hourly_accel/replenishment/purchase; 效果: 命中后<1s(实测 4s→2-3s 仅剩下载)
+
+### 清洗导入四维 bug 链(2828671e~cf5f7670) —— 实测暴露一串沉睡 bug
+- **channel 占位 bug(最深)**: SKU 查询 `% (channel, _ph)` 把 channel 值化 → pymysql 参数多 1 → **任何订单导入规则评估静默失败(evaluated 恒 0)**; 改 ('%s',_ph)
+- **inbound 3 元组解包**: _write_batch 返回 3 元组被解包 2 个 → **inbound 导入从未成功过**; 修复 + fallback 对齐
+- 300 上限移除(大文件告警漏报) / key 列严格校验(无映射不写空记录) / o_ctxs 补 inv.available_qty(超卖判定) / 评估异常记日志(不再静默)
+- replen/purchase need_only=1(看板卡响应 678KB→~100KB)
+
+### 销量池口径落地(bef1fe30) —— 采购补货只认"已完成"
+- **销量池=仅"已完成"**(钱货两清且离仓): 日销/快照构建(cron/seed)/加速判定全切换; GMV 展示口径 4 状态保留(PAID_STATUSES)
+- 待发货锁定/ERP 联动**暂不做**(用户决策: 现阶段数据来源均为导入; 未来平台 API 导入订单/库存后纳入联动计划)
+- 订单导入前置提示: 非发货状态计数提示("申请退款×1; 已发货×1 不计入销量池"); 混渠道文件提示
+- 存量快照旧口径 → 过渡态(下次 cron snapshot 重建 90 天全按新口径)
+
+### 批次效期可选链路(bef1fe30/b027b38b/26d8a3bd) —— 由入库记录负责, 不强制
+- inbound 导入含 prod_date/exp_date(前端映射可选字段) → inbound_records + **覆盖式同步 batches**(SKU×仓 删旧插新, 文件即权威)
+- 未映射/留空 → 不同步不误删旧批次(不维护批次的商家可跳过); 消费方: 进销存批次效期预警/临期处置建议
+- qty 取 quantity 列修正
+
+---
 ## 2026-09-09 全天: 质量门禁 + 线上事故处置 + 参数回退治本 + seed 填充首通 + 缓存/inflight 加固
 > **主线**: feat/edgeone, 当日 6 commit(质量门禁→渲染崩溃修复→参数回退根因→seed TiDB 首通→即时更新强化→inflight 挂起兜底)。
 > **验证**: 37 文件 eslint 0/0 + tsc + local_test 91/91 + smoke 线上冒烟 + 一键重置填充链路完整跑通。
