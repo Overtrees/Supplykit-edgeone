@@ -76,6 +76,48 @@ const ALIAS = {
   "分类":"category","商品分类":"category",
 }
 
+// 各导入类型专属字段集(下拉按类型过滤, 避免订单页出现库存/出入库无关字段)
+const ORDER_FIELDS = [
+  {t:'order_no',l:'订单号',tp:'string'},{t:'source_order_id',l:'原始单号',tp:'string'},
+  {t:'store',l:'店铺',tp:'string'},{t:'warehouse',l:'仓库',tp:'string'},
+  {t:'sku',l:'SKU',tp:'string'},{t:'barcode',l:'69码',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'quantity',l:'数量',tp:'number'},{t:'unit_price',l:'单价',tp:'number'},
+  {t:'total_amount',l:'金额',tp:'number'},{t:'discount_amount',l:'折扣',tp:'number'},
+  {t:'freight_amount',l:'运费',tp:'number'},{t:'subsidy_amount',l:'平台补贴',tp:'number'},
+  {t:'tax_amount',l:'税费',tp:'number'},{t:'actual_amount',l:'实付金额',tp:'number'},
+  {t:'order_status',l:'状态',tp:'string'},{t:'ordered_at',l:'下单日期',tp:'date'},
+  {t:'paid_at',l:'支付日期',tp:'date'},{t:'shipped_at',l:'发货时间',tp:'date'},
+  {t:'platform',l:'平台',tp:'string'},{t:'channel',l:'渠道',tp:'string'},
+  {t:'data_source',l:'数据来源',tp:'string'},{t:'supplier',l:'供应商',tp:'string'},
+  {t:'sender',l:'收货人',tp:'string'},{t:'sender_phone',l:'收货电话',tp:'string'},
+  {t:'remark',l:'备注',tp:'string'},
+]
+const INBOUND_FIELDS = [
+  {t:'sku',l:'SKU',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'quantity',l:'数量',tp:'number'},{t:'supplier',l:'供应商',tp:'string'},
+  {t:'inbound_date',l:'入库日期',tp:'date'},{t:'channel',l:'渠道',tp:'string'},
+  {t:'warehouse',l:'仓库',tp:'string'},{t:'prod_date',l:'生产日期',tp:'date'},
+  {t:'exp_date',l:'到期日期',tp:'date'},{t:'remark',l:'备注',tp:'string'},
+]
+const OUTBOUND_FIELDS = [
+  {t:'sku',l:'SKU',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'quantity',l:'数量',tp:'number'},{t:'target_warehouse',l:'目标仓库',tp:'string'},
+  {t:'outbound_date',l:'出库日期',tp:'date'},{t:'channel',l:'渠道',tp:'string'},
+  {t:'warehouse',l:'仓库',tp:'string'},{t:'prod_date',l:'生产日期',tp:'date'},
+  {t:'exp_date',l:'到期日期',tp:'date'},{t:'remark',l:'备注',tp:'string'},
+]
+const SUPPLIER_FIELDS = [
+  {t:'supplier_code',l:'供应商编码',tp:'string'},{t:'supplier_name',l:'供应商名称',tp:'string'},
+  {t:'contact_person',l:'联系人',tp:'string'},{t:'contact_phone',l:'联系电话',tp:'string'},
+  {t:'score',l:'评分',tp:'number'},{t:'status',l:'状态',tp:'string'},
+  {t:'channel',l:'渠道',tp:'string'},{t:'brand',l:'品牌',tp:'string'},
+]
+const TARGET_FIELDS = {order: ORDER_FIELDS, inventory: INV_FIELDS, platform_inv: INV_FIELDS,
+                       inventory_b: INV_FIELDS, product: PROD_FIELDS, supplier: SUPPLIER_FIELDS,
+                       inbound: INBOUND_FIELDS, outbound: OUTBOUND_FIELDS}
+const TARGET_TARGETS = {}
+for (const _k in TARGET_FIELDS) TARGET_TARGETS[_k] = TARGET_FIELDS[_k].map(f => f.t)
+
 // 归一化别名扩展(列名兼容: 英文/变体/去空格符号; 供自动识别第二个匹配层)
 const _nk = (s) => String(s || '').toLowerCase().replace(/[\s_\-/（）()【】·]/g, '')
 const ALIAS_EXT = {
@@ -152,7 +194,9 @@ export default function CleansingPage() {
       const customAlias = getAliasMap()
       ;(d.columns||[]).forEach(c => {
         // 识别优先级: 用户自定义别名(历史手工映射记忆) → 系统精确 ALIAS → 归一化别名(英文/变体)
-        const key = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
+        // 目标必须属于当前导入类型字段集(避免订单页识别出库存/出入库无关字段)
+        let key = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
+        if (key && TARGET_TARGETS[tt] && !TARGET_TARGETS[tt].includes(key)) key = ''
         if (key) a[c.name] = { target: key, type: 'string' }
       })
       setMp(a)
@@ -279,9 +323,11 @@ export default function CleansingPage() {
       </div> : <span className="step" style={{color:'var(--primary)'}}><IconLoading size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />{bs}...</span>)}
     </div>
 
-    {s === 0 && <div style={{textAlign:'center',padding:40}}>
-      <div style={{display:'flex',justifyContent:'center',gap:8,marginBottom:16}}>
-        <select value={tt} onChange={e=>setTt(e.target.value)} style={{fontSize:16,padding:'8px 16px',border:'1px solid var(--border)',borderRadius:32,outline:'none',background:'var(--card)',minWidth:180}}>
+    {s === 0 && <div style={{textAlign:'center',padding:'36px 16px'}}>
+      <div style={{fontSize:17,fontWeight:700,marginBottom:6}}>选择导入类型</div>
+      <div className="small muted" style={{fontSize:12,marginBottom:18}}>订单 / 库存 / 出入库 / 商品 / 供应商</div>
+      <div style={{display:'flex',justifyContent:'center',gap:8,marginBottom:24}}>
+        <select value={tt} onChange={e=>setTt(e.target.value)} style={{fontSize:15,padding:'11px 16px',border:'1px solid var(--border)',borderRadius:99,outline:'none',background:'var(--card)',minWidth:200,minHeight:46}}>
           <option value='order'>导入订单</option>
           <optgroup label="库存">
             <option value='inventory'>自有仓库存</option>
@@ -296,11 +342,11 @@ export default function CleansingPage() {
           <option value='supplier'>导入供应商</option>
         </select>
       </div>
-      <label className="btn btn-primary">
+      <label className="btn btn-primary" style={{minHeight:46,padding:'0 28px',display:'inline-flex',alignItems:'center',gap:6,borderRadius:99,fontSize:15,fontWeight:600}}>
         {bs?'识别中...':t("cleansing.select_file")}
         <input type="file" accept=".csv,.xlsx" style={{display:'none'}} onChange={e=>{const fi=e.target.files[0];if(fi)detect(fi)}} />
       </label>
-      <div className="small muted" style={{marginTop:8}}>CSV / Excel · 中文列名自动匹配</div>
+      <div className="small muted" style={{marginTop:12,fontSize:12}}>支持 CSV / Excel · 智能识别列名 · 手工映射为主</div>
     </div>}
 
     {s === 1 && <div>
@@ -327,12 +373,12 @@ export default function CleansingPage() {
       </div>
       {Array.isArray(cf) && <div style={{marginBottom:12,border:'1px solid var(--border)',borderRadius:32,padding:14,background:'var(--bg)'}}>
         <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>自定义字段</div>
-        {cf.map((f,i) => <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-          <input value={f.l} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,l:v}:x))}} placeholder="字段名" style={{flex:1,fontSize:16,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
-          <select value={f.tp} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,tp:v}:x))}} style={{fontSize:14,padding:'6px 10px',border:'1px solid var(--border)',borderRadius:32}}>
+        {cf.map((f,i) => <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+          <input value={f.l} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,l:v}:x))}} placeholder="字段名" style={{flex:'1 1 150px',minWidth:120,fontSize:15,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:99,outline:'none',background:'var(--card)'}}/>
+          <select value={f.tp} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,tp:v}:x))}} style={{fontSize:13,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',flexShrink:0}}>
             <option value="string">文本</option><option value="number">数字</option><option value="date">日期</option>
           </select>
-          <button onClick={()=>delField(i)} className="clickable" style={{background:'rgba(225,29,72,0.12)',border:'none',borderRadius:32,cursor:'pointer',padding:'6px 12px',fontSize:13,color:'var(--danger)',minHeight:36}}>删除</button>
+          <button onClick={()=>delField(i)} className="clickable" style={{background:'rgba(225,29,72,0.12)',border:'none',borderRadius:99,cursor:'pointer',padding:'8px 14px',fontSize:13,color:'var(--danger)',flexShrink:0,minHeight:36}}>删除</button>
         </div>)}
         <button onClick={addField} className="clickable" style={{padding:'7px 16px',fontSize:13,border:'1px dashed #94a3b8',borderRadius:32,background:'var(--card)',cursor:'pointer',color:'var(--muted)',width:'100%',minHeight:36}}>+ 添加自定义字段</button>
       </div>}
@@ -361,7 +407,7 @@ export default function CleansingPage() {
         <select value={mp[c.name]?.target || ''} onChange={e=>{const v=e.target.value;setMp(p=>({...p,[c.name]:{target:v,type:'string'}}));saveAlias(c.name,v)}}
           style={{fontSize:14,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,flex:1,minWidth:130,background:'var(--card)',minHeight:36}}>
           <option value="">-- 不映射 --</option>
-          {(tt==='inventory'?INV_FIELDS:tt==='product'?PROD_FIELDS:SYS_FIELDS).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
+          {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
           {cf.filter(f => f.t && f.l).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
         </select>
         <div style={{fontSize:11,width:50,textAlign:'right',flexShrink:0}}>
@@ -395,7 +441,7 @@ export default function CleansingPage() {
           // 按来源列显示：只显示有映射的列（target 非空），unmap 的列直接不出现
           const mappedSources = Object.entries(mp).filter(([, v]) => v && v.target)
           const cols = mappedSources.map(([src, cfg]) => {
-            const sf = SYS_FIELDS.find(x => x.t === cfg.target) || cf.find(x => x.t === cfg.target)
+            const sf = (TARGET_FIELDS[tt] || SYS_FIELDS).find(x => x.t === cfg.target) || cf.find(x => x.t === cfg.target)
             return {src, target: cfg.target, label: sf ? sf.l : cfg.target}
           })
           // 脏数据预检: 重复 SKU 集合(表体行标红用)
@@ -433,9 +479,9 @@ export default function CleansingPage() {
         </div>
       </div>}
     {s === 1 && <div style={{marginTop:16,display:'flex',gap:10}}>
-      <button onClick={()=>setS(0)} className="clickable" style={{flex:1,padding:'10px',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:40}}>← 返回</button>
-      <button onClick={preview} className="clickable" style={{flex:1,padding:'10px',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:40}}>下一步 预览 →</button>
-      <button onClick={quickExecute} className="clickable" style={{flex:1,padding:'10px',fontSize:14,border:'none',borderRadius:99,background:'var(--success)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:40,display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center'}}><IconLightning size={14} /> 一键执行</button>
+      <button onClick={()=>setS(0)} className="clickable" style={{flexShrink:0,width:88,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42,whiteSpace:'nowrap'}}>← 返回</button>
+      <button onClick={preview} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}>下一步 · 预览</button>
+      <button onClick={quickExecute} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--success)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}><IconLightning size={14} /> 一键执行</button>
     </div>}
 
     {s === 3 && res && <div style={{textAlign:'center',padding:40}}>
