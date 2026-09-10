@@ -66,7 +66,7 @@ export default function ConfirmDialog({ open, title, desc, confirmLabel = t("com
           <div onClick={onConfirm} className="clickable" style={{
             flex:1,
             borderRadius:22,padding:14,
-            background:'#ff3b30',
+            background:'var(--danger)',
             cursor:'pointer',textAlign:'center',
           }}>
             <span style={{fontSize:15,fontWeight:700,color:'#fff'}}>{confirmLabel}</span>

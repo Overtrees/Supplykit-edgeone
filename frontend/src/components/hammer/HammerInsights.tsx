@@ -76,8 +76,8 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
   // 处置动作定义(滞销业务特性: 标记/退货/清仓/促销; 已处理的不可再勾选)
   const DISPOSE_ACTIONS = {
     mark: { icon: <IconCheck size={13} />, label: '标记已处理', desc: '确认库存已清理或不再处理', color: 'var(--success)' },
-    return: { icon: <IconReturn size={13} />, label: '退货供应商', desc: '向供应商退货, 回收占用资金', color: '#f59e0b' },
-    clearance: { icon: <IconMoney size={13} />, label: '清仓甩卖', desc: '大力度清库, 尽快释放资金', color: '#8b5cf6' },
+    return: { icon: <IconReturn size={13} />, label: '退货供应商', desc: '向供应商退货, 回收占用资金', color: 'var(--warning)' },
+    clearance: { icon: <IconMoney size={13} />, label: '清仓甩卖', desc: '大力度清库, 尽快释放资金', color: 'var(--accent-purple)' },
     promo: { icon: <IconTag size={13} />, label: '降价促销', desc: '降价促销拉动动销', color: '#06b6d4' },
   }
   const runDispose = async () => {

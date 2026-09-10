@@ -19,9 +19,9 @@ const fmtWh = (w) => {
 const alertAge = (c) => { if (!c) return ''; try { const d = Math.floor((Date.now() - new Date(String(c).replace(' ', 'T')))/86400000); return d >= 1 ? ' · 持续' + d + '天' : '' } catch(e) { return '' } }
 
 const RISK_LV = {
-  red: { c: '#ef4444', t: '紧急' },
-  orange: { c: '#f97316', t: '预警' },
-  yellow: { c: '#eab308', t: '关注' },
+  red: { c: 'var(--danger)', t: '紧急' },
+  orange: { c: 'var(--warning)', t: '预警' },
+  yellow: { c: 'var(--accent-yellow)', t: '关注' },
 }
 
 interface DashboardPageProps { onAlert?: (sku: string, whType?: string, wh?: string) => void; onGoInsights?: (tab: string, sku?: string) => void }
@@ -373,7 +373,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               if (!prev) return null
               const pct = ((last - prev) / prev * 100)
               const _cmpLabel = periodTab === 'today' ? '较昨日' : (periodTab === 'week' ? '较上周' : '较上月')
-              return <span style={{fontSize:11,fontWeight:600,color:pct >= 0 ? 'var(--success)' : '#ef4444'}}>
+              return <span style={{fontSize:11,fontWeight:600,color:pct >= 0 ? 'var(--success)' : 'var(--danger)'}}>
                 {pct >= 0 ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}% <span style={{fontSize:9,fontWeight:400,color:'var(--muted2)'}}>{_cmpLabel}</span>
               </span>
             })()}
@@ -395,13 +395,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       <div className="card" style={{borderRadius:26,boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16}}>
         <div className="small muted" style={{fontSize:12,lineHeight:1.2}}>待处理</div>
         <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
-          <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? '#ef4444' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? '#f59e0b' : 'var(--text)')}}>
+          <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)')}}>
             {errCount+(dashboard?.summary?.active_alerts||0)}
           </div>
           <div className="card-sub" style={{marginTop:6}}>
             <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'#ef4444'}}/>{errCount} 异常</span>
-              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'#f59e0b'}}/>{dashboard?.summary?.active_alerts||0} 告警{criticalAlerts > 0 ? <span style={{color:'#ef4444',fontSize:10}}>({criticalAlerts} 严重)</span> : ''}</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'var(--danger)'}}/>{errCount} 异常</span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'var(--warning)'}}/>{dashboard?.summary?.active_alerts||0} 告警{criticalAlerts > 0 ? <span style={{color:'var(--danger)',fontSize:10}}>({criticalAlerts} 严重)</span> : ''}</span>
             </div>
             {(lowStockAlerts.length > 0 || procTotal > 0) && <>
               <div style={{fontSize:10,display:'flex',gap:8,marginTop:6}}>
@@ -461,14 +461,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </div>
             </div>
             <div key={'h'+healthTab} style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4,animation:'fadeIn 0.18s ease'}}>
-              <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'#ef4444':healthData.level==='warning'?'#f59e0b':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
+              <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'var(--danger)':healthData.level==='warning'?'var(--warning)':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
               <div className="card-sub" style={{marginTop:4}}>
                 <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   <span style={{color:'var(--success)'}}>● {healthData.healthy||0}健康</span>
                   <span style={{color:'var(--warning)'}}>● {healthData.warning||0}{t("dash.low")}</span>
                 </div>
                 <div style={{fontSize:10,marginTop:3}}>
-                  <span style={{color:'#ef4444'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
+                  <span style={{color:'var(--danger)'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
                   <span style={{color:'var(--muted2)'}}> · {healthData.total||0} SKU</span>
                 </div>
               </div>
@@ -497,10 +497,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </div>
           : <>
               <div style={{marginBottom:4,paddingTop:6,minHeight:0}}>
-                <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,color:'#ef4444',marginBottom:1,whiteSpace:'nowrap'}}>{_r.total}</div>
+                <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,color:'var(--danger)',marginBottom:1,whiteSpace:'nowrap'}}>{_r.total}</div>
                 <div className="card-sub" style={{marginTop:0,fontSize:11,lineHeight:1.4}}>{t("dash.min_days")} {_r.items[0].days_to_empty} {t("dash.days_out")}</div>
                 {(riskCritical > 0 || riskWarning > 0 || _r.total > riskCritical + riskWarning) && <div style={{fontSize:10,display:'flex',gap:4,marginTop:1,flexWrap:'wrap',lineHeight:1.3}}>
-                  {riskCritical > 0 && <span style={{color:'#ef4444'}}>● {riskCritical} {t("dash.critical")}</span>}
+                  {riskCritical > 0 && <span style={{color:'var(--danger)'}}>● {riskCritical} {t("dash.critical")}</span>}
                   {riskWarning > 0 && <span style={{color:'var(--warning)'}}>● {riskWarning} {t("dash.warning")}</span>}
                   {_r.total > riskCritical + riskWarning && <span style={{color:'var(--muted2)'}}>● {_r.total - riskCritical - riskWarning} 观察</span>}
                 </div>}
@@ -566,7 +566,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
                   {x.product_name || x.sku}
                 </span>
-                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,fontSize:12,color:x.tag==='采购'?'#f59e0b':'#ef4444'}}>+{x.qty}</span>}
+                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,fontSize:12,color:x.tag==='采购'?'var(--warning)':'var(--danger)'}}>+{x.qty}</span>}
               </div>
               <div className="small muted" style={{fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:2}}>{x.sku}{x.wh ? ' · ' + x.wh : ''} · {(x.note ? String(x.note).slice(0,36) : (x.days_to_empty > 999 ? '库存充足' : '可撑' + x.days_to_empty + '天'))}</div>
             </div>
@@ -610,7 +610,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')} style={{flexShrink:0,fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>{x.tag}</span>
                   {x.product_name || x.sku}
                 </span>
-                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,color:x.tag==='采购'?'#f59e0b':'#ef4444'}}>+{x.qty}</span>}
+                {x.qty > 0 && <span style={{flexShrink:0,fontWeight:700,color:x.tag==='采购'?'var(--warning)':'var(--danger)'}}>+{x.qty}</span>}
               </div>
               <div className="small muted" style={{fontSize:10}}>{x.sku}{x.wh ? ' · ' + x.wh : ''} · {(x.note ? String(x.note).slice(0,50) : (x.days_to_empty > 999 ? '库存充足' : '可撑' + x.days_to_empty + '天'))}</div>
             </div>
@@ -666,7 +666,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <div className="small muted" style={{fontSize:10}}>日销 {x.daily_sales} · 可用 {x.available_qty}</div>
               </div>
               <span title={x.warehouse || ''} style={{fontSize:9,padding:'1px 5px',borderRadius:4,background:'var(--bg)',color:'var(--muted)',flexShrink:0}}>{whLabel}</span>
-              <span style={{fontSize:11,fontWeight:600,color:lv ? lv.c : '#ef4444',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
+              <span style={{fontSize:11,fontWeight:600,color:lv ? lv.c : 'var(--danger)',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
             </div>
           })}
           <div onClick={function(){setShowAllRisk(false)}} className="clickable" style={{borderRadius:22,padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>

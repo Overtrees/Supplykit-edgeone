@@ -193,19 +193,19 @@ export const IconTrendFlat: React.FC<IconProps> = (p) => (
 // ─── 状态指示 ───
 
 export const IconStatusOnline: React.FC<IconProps> = (p) => (
-  <svg {...s(p)} viewBox="0 0 24 24" fill="#22c55e">
+  <svg {...s(p)} viewBox="0 0 24 24" fill="var(--success)">
     <circle cx="12" cy="12" r="6" />
   </svg>
 )
 
 export const IconStatusWarning: React.FC<IconProps> = (p) => (
-  <svg {...s(p)} viewBox="0 0 24 24" fill="#eab308">
+  <svg {...s(p)} viewBox="0 0 24 24" fill="var(--accent-yellow)">
     <circle cx="12" cy="12" r="6" />
   </svg>
 )
 
 export const IconStatusOffline: React.FC<IconProps> = (p) => (
-  <svg {...s(p)} viewBox="0 0 24 24" fill="#ef4444">
+  <svg {...s(p)} viewBox="0 0 24 24" fill="var(--danger)">
     <circle cx="12" cy="12" r="6" />
   </svg>
 )

@@ -71,7 +71,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               <button onClick={() => delField(i)} className="clickable" style={{ background: 'rgba(225,29,72,0.12)', border: 'none', borderRadius: 99, cursor: 'pointer', padding: '9px 14px', fontSize: 13, color: 'var(--danger)', flexShrink: 0 }}>删除</button>
             </div>
           ))}
-          <button onClick={addField} className="clickable" style={{ padding: '9px 16px', fontSize: 13, border: '1px dashed #94a3b8', borderRadius: 99, background: 'var(--card)', cursor: 'pointer', color: 'var(--muted)', width: '100%' }}>+ 添加自定义字段</button>
+          <button onClick={addField} className="clickable" style={{ padding: '9px 16px', fontSize: 13, border: '1px dashed var(--muted2)', borderRadius: 99, background: 'var(--card)', cursor: 'pointer', color: 'var(--muted)', width: '100%' }}>+ 添加自定义字段</button>
         </div>
 
         <div onClick={onClose} className="clickable" style={{ borderRadius: 22, padding: 12, marginTop: 10, background: 'var(--primary)', textAlign: 'center', cursor: 'pointer' }}>

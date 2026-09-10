@@ -22,7 +22,7 @@ const Row = ({ label, value, sub, onClick, danger, loading }) => (
   <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48,borderBottom:'1px solid var(--border)'}}>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:16,color:danger?'#ef4444':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
+        <div style={{fontSize:16,color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
           {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--primary)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
           {label}
         </div>
@@ -40,7 +40,7 @@ const LastRow = ({ label, value, sub, onClick, danger, loading }) => (
   <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48}}>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:16,color:danger?'#ef4444':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
+        <div style={{fontSize:16,color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
           {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--danger)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
           {label}
         </div>

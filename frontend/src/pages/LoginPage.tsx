@@ -49,7 +49,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             onKeyDown={e => e.key === 'Enter' && doLogin()}
             style={{width:'100%',padding:'12px 16px',fontSize:16,border:'1px solid var(--border)',borderRadius:32,marginBottom:16,outline:'none',background:'var(--bg)',color:'var(--text)',boxSizing:'border-box'}}
           />
-          {error && <div style={{color:'#ef4444',fontSize:13,marginBottom:12,textAlign:'center'}}>{error}</div>}
+          {error && <div style={{color:'var(--danger)',fontSize:13,marginBottom:12,textAlign:'center'}}>{error}</div>}
           <button onClick={doLogin} disabled={loading}
             style={{width:'100%',padding:'14px',fontSize:16,fontWeight:600,border:'none',borderRadius:32,cursor:'pointer',background:'var(--primary)',color:'#fff',opacity:loading?0.6:1}}>
             {loading ? '登录中...' : '登录'}

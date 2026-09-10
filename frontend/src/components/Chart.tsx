@@ -34,7 +34,7 @@ export default function Chart({ option, height = 260 }: ChartProps) {
         const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' })
         const cs = getComputedStyle(document.documentElement)
         const textColor = cs.getPropertyValue('--text').trim() || '#0f172a'
-        const mutedColor = cs.getPropertyValue('--muted').trim() || '#64748b'
+        const mutedColor = cs.getPropertyValue('--muted').trim() || 'var(--muted)'
         const opt = {
           backgroundColor: 'transparent',
           ...option,
