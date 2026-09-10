@@ -63,7 +63,7 @@ def cache_get(key, ttl, builder):
                 "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
             _e3("INSERT INTO quality_logs(log_type, level, message, source) "
                 "VALUES('cache_error','error',%s,'api')",
-                ("cache_get 降级直算: %s" % str(e)[:150],))
+                ("cache_get 降级直算[%s]: %s" % (str(key)[:80], str(e)[:150]),))
         except Exception:
             pass
         return builder()

@@ -215,7 +215,7 @@ input,select{background:var(--card);color:var(--text);border-color:var(--border)
 @keyframes sheetIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
 
 /* 底部弹窗操作按钮(关闭/取消/保存)——类化, 不用内联圆角 */
-.sheet-close,.sheet-cancel{border-radius:var(--radius-card);padding:12px;font-size:15px;font-weight:600;text-align:center;cursor:pointer;border:none}
+.sheet-close,.sheet-cancel,.sheet-danger{border-radius:var(--radius-card);padding:12px;font-size:15px;font-weight:600;text-align:center;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center}
 .sheet-close{background:var(--primary);color:#fff}
 .sheet-cancel{background:var(--card);color:var(--text);border:1px solid var(--border)}
 .sheet-danger{background:var(--danger);color:#fff;border:none}
