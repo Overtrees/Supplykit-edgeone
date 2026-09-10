@@ -352,7 +352,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   return <>
     <div className="card-grid" style={{marginBottom:16}}>
       {/* 1. GMV 卡 — 加环比微趋势线 + 日均 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden',overflow:'hidden'}}>
+      <div className="card stat-card">
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>{periodTab === 'custom' ? '自定义' : periodLabel[periodTab]} GMV</div>
           {/* GMV 视角切换(总/净/回款), 样式对齐健康小卡 tab: 紧凑segmented pill + 短标签 */}
@@ -487,7 +487,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 4. 濒临断货预警 — 全量计数, 弹窗看完整 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden',overflow:'hidden'}}>
+      <div className="card stat-card">
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''}</div>
 
