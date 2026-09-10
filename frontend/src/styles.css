@@ -198,3 +198,7 @@ input,select{background:var(--card);color:var(--text);border-color:var(--border)
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-thumb{background:rgba(148,163,184,0.4);border-radius:99px}
 ::-webkit-scrollbar-track{background:transparent}
+
+/* 清洗导入: 数据源标签(商智日销/京东采购单) —— 依托锤子菜单 tab 视觉 */
+.ds-tag{display:inline-flex;align-items:center;gap:4;padding:6px 12px;font-size:12px;border-radius:99px;cursor:pointer;border:1px solid var(--border);color:var(--muted);background:var(--card);font-weight:500;transition:all .15s}
+.ds-tag.active{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:600}

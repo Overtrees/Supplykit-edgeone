@@ -170,12 +170,22 @@ export default function CleansingPage() {
   const {setHammerCleansingTarget, hammerCleansingConflict} = useAppStore()
   useEffect(() => { setHammerCleansingTarget(tt) }, [tt])
   const { hammerCleansingChannel: ch, setHammerCleansingChannel: setCh } = useAppStore()
+  const goStep = (n) => { setS(n); useAppStore.getState().setHammerCleansingStep(n) }
+  // 映射页当前映射同步(模板管理弹窗保存用) + 模板应用/自定义字段变更事件
+  useEffect(() => { (window as any).__curMp = mp }, [mp])
+  useEffect(() => {
+    const onApply = (e: any) => { const d = e.detail; if (d && typeof d === 'object') setMp(d) }
+    const onCfChanged = () => { try { setCf(JSON.parse(localStorage.getItem('c_cf') || '[]')) } catch {} }
+    window.addEventListener('apply-template', onApply as any)
+    window.addEventListener('custom-fields-changed', onCfChanged)
+    return () => { window.removeEventListener('apply-template', onApply as any); window.removeEventListener('custom-fields-changed', onCfChanged) }
+  }, [])
   const [mp,setMp] = useState({})
   const [pv,setPv] = useState(null)
   const [res,setRes] = useState(null)
   const [bs,setBs] = useState('')
   const [cf,setCf] = useState(() => { try { return JSON.parse(localStorage.getItem('c_cf')||'[]') } catch { return [] } })
-  const [templates, setTemplates] = useState([])
+  const [templates, setTemplates] = useState([]) // 模板管理已移至锤子菜单弹窗(此处仅兼容引用)
   const saveCf = (v) => { setCf(v); try { localStorage.setItem('c_cf', JSON.stringify(v)) } catch {} }
 
   const loadTemplates = async () => { try { const r = await api.get('/api/cleansing/templates'); setTemplates(r.data || []) } catch(e) {} }
@@ -212,7 +222,7 @@ export default function CleansingPage() {
         if (key) a[c.name] = { target: key, type: 'string' }
       })
       setMp(a)
-      setS(1)  // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
+      goStep(1)  // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
       setBs('')
       if (Object.keys(a).length > 0) toast.success('已自动识别 ' + Object.keys(a).length + ' 列（未识别的列请在下方手工选择目标字段）')
       else toast('未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）')
@@ -227,7 +237,7 @@ export default function CleansingPage() {
       const r = await api.post('/api/cleansing/preview', fd, {timeout: 60000})
       const d = r.data
       if (!d.ok) { toast.error(d.error||'预览失败'); setBs(''); return }
-      setPv(d); setS(2)
+      setPv(d); goStep(2)
     } catch(e) {
       const msg = e.response?.data?.error || e.message || '请求失败'
       toast.error('预览失败: '+msg)
@@ -285,7 +295,7 @@ export default function CleansingPage() {
       if (!d.ok) { toast.error(d.error||'提交失败'); setBs(''); execLock.current = false; return }
       // 同步结果(<400行后端直接返回success/failed) → 直接显示, 不走轮询
       if (d.success !== undefined) {
-        setRes(d); setS(3); setBs(''); execLock.current = false
+        setRes(d); goStep(3); setBs(''); execLock.current = false
         toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
         return
       }
@@ -305,7 +315,7 @@ export default function CleansingPage() {
             const sd = sr.data
             if (sd.status === 'done') {
               finished = true; clearTimeout(threshold); clearInterval(poll)
-              setRes(sd.result); setS(3); setBs(''); toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
+              setRes(sd.result); goStep(3); setBs(''); toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
             } else if (sd.status === 'error') {
               finished = true; clearTimeout(threshold); clearInterval(poll)
               toast.error('失败: '+sd.error); setBs('')
@@ -384,46 +394,15 @@ export default function CleansingPage() {
 
     {s === 1 && <div>
       <div style={{marginBottom:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:8}}>
-          <div style={{fontSize:15,fontWeight:700}}>映射字段 <span className="small muted" style={{fontWeight:400}}>· 目标: {tt}</span></div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:10,marginBottom:8}}>
           {tt==='order' && <span style={{display:'inline-flex',gap:4,verticalAlign:'middle'}}>
-            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jdzx_sale'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--border)'}}><IconTrendUp size={12} /> 商智日销</span>
-            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jd_po'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--border)'}}><IconPackage size={12} /> 京东采购单</span>
+            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className={'ds-tag'+(mp?._meta?.data_source==='jdzx_sale'?' active':'')}><IconTrendUp size={12} /> 商智日销</span>
+            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className={'ds-tag'+(mp?._meta?.data_source==='jd_po'?' active':'')}><IconPackage size={12} /> 京东采购单</span>
           </span>}
         </div>
         <div className="small muted" style={{fontSize:12,marginBottom:6}}>表格文件共 <b style={{color:'var(--text)'}}>{cols.length}</b> 列 · <b style={{color:'var(--text)'}}>{tr}</b> 行</div>
         <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b><span className="small muted" style={{marginLeft:4}}>（导入时丢弃）</span></div>
       </div>
-      <div style={{display:'flex',gap:8,marginBottom:12,alignItems:'center',flexWrap:'wrap'}}>
-        <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center',flexWrap:'wrap',background:'var(--bg)',borderRadius:20,padding:10}}>
-        <select id="tmplSelect" style={{flex:1,fontSize:14,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:99,minWidth:140,minHeight:38,outline:'none',background:'var(--card)'}}>
-          <option value="">加载映射模板...</option>
-          {Array.isArray(templates) && templates.filter(t => t.doc_type === tt).map(t => <option key={t.id} value={t.mapping}>{t.name}</option>)}
-          {Array.isArray(templates) && templates.filter(t => t.doc_type !== tt).length > 0 && <option disabled style={{color:'var(--muted2)',fontSize:11}}>── {tt==='order'?'库存':'订单'}模板（{templates.filter(t=>t.doc_type!==tt).length}个） ──</option>}
-        </select>
-        <button onClick={()=>{const s=document.getElementById('tmplSelect');if(s.value)try{const m=typeof s.value==='string'&&s.value.startsWith('{')?JSON.parse(s.value):s.value;setMp(m&&typeof m==='object'?m:{})}catch(e){console.error(e)}}} className="clickable" style={{padding:'8px 14px',fontSize:13,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',minHeight:38,flexShrink:0}}>应用</button>
-        <input id="tmplName" placeholder="新模板名称" style={{width:116,fontSize:14,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:99,outline:'none',minHeight:38,flexShrink:0}}/>
-        <button onClick={async()=>{
-          const n=document.getElementById('tmplName').value;if(!n)return toast.error('请输入模板名称');
-          try {
-            const r=await api.post('/api/cleansing/templates',{name:n,doc_type:tt,mapping:mp});
-            const msg=r?.data?.message||'模板已保存';
-            document.getElementById('tmplName').value='';loadTemplates();toast.success(msg);
-          } catch(e){toast.error('模板保存失败: '+(e.response?.data?.detail||e.message));}
-        }} className="clickable" style={{padding:'8px 16px',fontSize:13,background:'var(--primary)',color:'var(--card)',border:'none',borderRadius:99,cursor:'pointer',minHeight:38,flexShrink:0}}>保存模板</button>
-        </div>
-      </div>
-      {Array.isArray(cf) && <div style={{marginBottom:14,border:'1px solid var(--border)',borderRadius:20,padding:14,background:'var(--bg)'}}>
-        <div style={{fontSize:12.5,fontWeight:600,marginBottom:10,display:'flex',alignItems:'center',gap:6}}>自定义字段<span className="small muted" style={{fontSize:11,fontWeight:400}}>可自定义映射目标字段名</span></div>
-        {cf.map((f,i) => <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
-          <input value={f.l} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,l:v}:x))}} placeholder="字段名" style={{flex:'1 1 150px',minWidth:120,fontSize:15,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:99,outline:'none',background:'var(--card)'}}/>
-          <select value={f.tp} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,tp:v}:x))}} style={{fontSize:13,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',flexShrink:0}}>
-            <option value="string">文本</option><option value="number">数字</option><option value="date">日期</option>
-          </select>
-          <button onClick={()=>delField(i)} className="clickable" style={{background:'rgba(225,29,72,0.12)',border:'none',borderRadius:99,cursor:'pointer',padding:'8px 14px',fontSize:13,color:'var(--danger)',flexShrink:0,minHeight:36}}>删除</button>
-        </div>)}
-        <button onClick={addField} className="clickable" style={{padding:'7px 16px',fontSize:13,border:'1px dashed #94a3b8',borderRadius:32,background:'var(--card)',cursor:'pointer',color:'var(--muted)',width:'100%',minHeight:36}}>+ 添加自定义字段</button>
-      </div>}
       <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,marginBottom:10}}>
         <span style={{fontSize:14,fontWeight:700}}>列映射</span>
         <span className="small muted" style={{fontSize:11}}>选择文件列对应的目标字段 · 未映射列导入时丢弃</span>
@@ -520,12 +499,12 @@ export default function CleansingPage() {
           </div>
         })()}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          {btn('← 返回', ()=>{setS(1);setPv(null)}, 'ghost')}
+          {btn('← 返回', ()=>{goStep(1);setPv(null)}, 'ghost')}
           {btn('确认写入 ('+pv.total+' 条)', doExecute, 'success')}
         </div>
       </div>}
     {s === 1 && <div style={{marginTop:16,display:'flex',gap:10}}>
-      <button onClick={()=>setS(0)} className="clickable" style={{flexShrink:0,width:88,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42,whiteSpace:'nowrap'}}>← 返回</button>
+      <button onClick={()=>goStep(0)} className="clickable" style={{flexShrink:0,width:88,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42,whiteSpace:'nowrap'}}>← 返回</button>
       <button onClick={preview} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}>下一步 · 预览</button>
       <button onClick={quickExecute} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--success)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}><IconLightning size={14} /> 一键执行</button>
     </div>}
@@ -553,13 +532,13 @@ export default function CleansingPage() {
         </div>
       )}
       <div style={{display:'flex',gap:8,justifyContent:'center'}}>
-        <button onClick={()=>{setS(0);setF(null);setCols([]);setTr(0);setMp({});setPv(null);setRes(null)}}
+        <button onClick={()=>{goStep(0);setF(null);setCols([]);setTr(0);setMp({});setPv(null);setRes(null)}}
           className="btn btn-ghost">重新开始</button>
         <label className="btn btn-success" style={{display:'inline-flex',alignItems:'center',gap:4}}>
           <IconFolder size={14} /> 导入相同格式
           <input type="file" accept=".csv,.xlsx" style={{display:'none'}} onChange={e=>{
             const fi=e.target.files[0]
-            if(fi){setF(fi);setBs('识别中');setS(1);detect(fi)}
+            if(fi){setF(fi);setBs('识别中');goStep(1);detect(fi)}
           }}/>
         </label>
       </div>

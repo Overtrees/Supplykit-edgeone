@@ -1,10 +1,14 @@
-import React from "react"
+import React, { useState } from "react"
 import { useAppStore } from "../../store/useAppStore"
 import { IconTag } from "../../components/Icons"
+import TemplateManageDialog from "../../components/TemplateManageDialog"
 interface HammerCleansingProps { channel: string }
 
 export default function HammerCleansing({ channel }: HammerCleansingProps) {
-  const {hammerCleansingChannel, setHammerCleansingChannel, hammerCleansingTarget, hammerCleansingConflict, setHammerCleansingConflict} = useAppStore()
+  const {hammerCleansingChannel, setHammerCleansingChannel, hammerCleansingTarget, hammerCleansingConflict, setHammerCleansingConflict, hammerCleansingStep} = useAppStore()
+  const [tmplDlgOpen, setTmplDlgOpen] = useState(false)
+  const inMapStep = hammerCleansingStep === 1  // 仅映射页(步骤2)显示 模版管理/状态映射
+  const isOrder = hammerCleansingTarget === 'order'
   const target = hammerCleansingChannel === 'jd' ? '京东' : '其他渠道'
   const sameAsGlobal = hammerCleansingChannel === channel
   const isInOut = hammerCleansingTarget === 'inbound' || hammerCleansingTarget === 'outbound'
@@ -40,12 +44,24 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
             </div>
           </div>
         )}
-        <button onClick={() => window.dispatchEvent(new Event('cleansing-colmap-open'))}
-          className="hammer-btn btn-ghost"
-          style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:4,color:'var(--primary)',marginTop:10,minHeight:36}}>
-          <IconTag size={13} /> 表格列状态映射
-        </button>
+        {inMapStep && (
+          <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button onClick={() => setTmplDlgOpen(true)}
+              className="hammer-btn btn-ghost"
+              style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',gap:4,color:'var(--primary)',minHeight:36}}>
+              模版管理
+            </button>
+            {isOrder && (
+              <button onClick={() => window.dispatchEvent(new Event('cleansing-colmap-open'))}
+                className="hammer-btn btn-ghost"
+                style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',gap:4,color:'var(--primary)',minHeight:36}}>
+                <IconTag size={13} /> 表格列状态映射
+              </button>
+            )}
+          </div>
+        )}
       </div>
+      {tmplDlgOpen && <TemplateManageDialog tt={hammerCleansingTarget} onClose={() => setTmplDlgOpen(false)} />}
     </div>
   )
 }

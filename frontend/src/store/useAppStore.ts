@@ -83,6 +83,9 @@ export const useAppStore = create((set, get) => ({
   setHammerCleansingTarget: (t) => set({ hammerCleansingTarget: t }),
   hammerCleansingConflict: 'sum',
   setHammerCleansingConflict: (m) => set({ hammerCleansingConflict: m }),
+  // 清洗流程当前步骤(锤子菜单按步骤条件显示按钮: 模版管理/状态映射仅映射页 0=选文件 1=映射 2=预览 3=完成)
+  hammerCleansingStep: 0,
+  setHammerCleansingStep: (s) => set({ hammerCleansingStep: s }),
   hammerRulesTab: 'rules',
   setHammerRulesTab: (t) => set({ hammerRulesTab: t }),
   hammerRuleNewVersion: 0,
