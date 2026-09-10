@@ -79,7 +79,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     total = int(total.get("c") or 0)
     sel = ("SELECT i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
            "i.safety_qty, i.product_name, i.month_inbound, i.month_outbound, i.beginning_stock, "
-           "i.turnover_days, i.barcode, p.brand, p.price, "
+           "i.turnover_days, i.barcode, i.ext_json, p.brand, p.price, "
            "(SELECT COUNT(*) FROM batches b WHERE b.sku=i.sku AND b.warehouse=i.warehouse AND b.channel=i.channel) AS batch_count "
            "FROM inventory i LEFT JOIN products p ON p.sku=i.sku AND p.channel=i.channel WHERE %s")
     if page > 0 and page_size > 0:

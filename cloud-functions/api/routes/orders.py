@@ -7,7 +7,7 @@ from routes.common import ok, traced
 router = APIRouter(tags=["orders"])
 
 _FIELDS = "id, order_no, sku, barcode, product_name, store, warehouse, quantity, unit_price, " \
-          "total_amount, order_status, ordered_at, paid_at, platform, channel, deleted_at"
+          "total_amount, order_status, ordered_at, paid_at, platform, channel, deleted_at, ext_json"
 
 
 @router.get("/orders")

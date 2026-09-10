@@ -153,6 +153,19 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
         except Exception:
             pass
+        # 启动补列(幂等): 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B 2026-09-10)
+        try:
+            from db import query as _qryX
+            for _t in ("orders", "inventory", "products", "suppliers",
+                       "inbound_records", "outbound_records"):
+                try:
+                    _hx = {str(r.get("Field") or "") for r in _qryX("SHOW COLUMNS FROM `%s`" % _t)}
+                    if "ext_json" not in _hx:
+                        _exec("ALTER TABLE `%s` ADD COLUMN ext_json TEXT" % _t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # 启动补列(幂等): 入库/出库记录带商品属性列(69码/平台/品牌/店铺/分类/单价/箱规/单位/重量/体积/状态)
         # —— 出入库明细展示与导出需要商品属性, 原 schema 仅 10 列(用户需求 2026-09-10)
         try:

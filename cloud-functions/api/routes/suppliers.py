@@ -9,7 +9,7 @@ from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["suppliers"])
 
-_FIELDS = "id, supplier_code, supplier_name, contact_person, contact_phone, score, status, channel, brand"
+_FIELDS = "id, supplier_code, supplier_name, contact_person, contact_phone, score, status, channel, brand, ext_json"
 
 
 @router.get("/suppliers")
@@ -309,6 +309,40 @@ def get_status_map(channel: str = "jd"):
     except Exception:
         pass
     return ok([dict(x) for x in _DEFAULT_STATUS_MAP])
+
+
+@router.get("/replenishment-config/custom-columns")
+@traced
+def get_custom_columns():
+    """自定义列配置(全局, channel=''): {order:[{name,type}], inventory:[...], product:[...], supplier:[...], inbound:[...], outbound:[...]}"""
+    row = one("SELECT value FROM replenishment_config WHERE `key`='custom_columns' AND channel=''")
+    try:
+        stored = json.loads((row or {}).get("value") or "{}")
+        if isinstance(stored, dict):
+            return ok(stored)
+    except Exception:
+        pass
+    return ok({})
+
+
+@router.put("/replenishment-config/custom-columns")
+@traced
+async def put_custom_columns(request: Request):
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    data = d.get("items") or d.get("data") or {}
+    old = one("SELECT value FROM replenishment_config WHERE `key`='custom_columns' AND channel=''")
+    _log_cfg_history("", "custom_columns", (old or {}).get("value", ""),
+                     json.dumps(data, ensure_ascii=False))
+    execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('custom_columns',%s,'') "
+            "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            (json.dumps(data, ensure_ascii=False),))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok({"updated": True})
 
 
 @router.put("/replenishment-config/order-status-map")

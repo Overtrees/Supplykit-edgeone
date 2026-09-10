@@ -527,9 +527,17 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
         rows = []
         for it in chunk:
             row = {}
-            for c in allowed_cols:
-                if c in it and it[c] is not None and str(it[c]) != "":
-                    row[c] = it[c]
+            ext = {}
+            for c, v in it.items():
+                if c == "_meta" or v is None or str(v) == "":
+                    continue
+                if c in allowed_cols:
+                    row[c] = v
+                else:
+                    # 自定义列(用户动态新增, 非标准字段) → ext_json 合并存储
+                    ext[c] = v
+            if ext:
+                row["ext_json"] = json.dumps(ext, ensure_ascii=False)
             # 严谨性: key 列必须存在且有值(原 `k in row` 跳过缺失列 → 无有效映射的导入
             # 也会写入空记录污染数据); 缺 key 的行判失败
             if not row or not all(k in row and row.get(k) for k in keys):
