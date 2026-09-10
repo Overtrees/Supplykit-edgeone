@@ -428,9 +428,9 @@ export default function RulesPage() {
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:'var(--font-15)',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {rule.name}
-            <span className={'pill '+(rule.is_active?'success':'warning')} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{rule.is_active?'启用':'停用'}</span>
-            <span className={'pill '+sevCls(rule.severity)} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{sevLbl(rule.severity)}</span>
-            {rule.mode && <span style={{fontSize:'var(--font-10)',color:'var(--muted2)',background:'var(--bg)',padding:'8px 10px',minHeight:30,borderRadius:'var(--radius-full)'}}>{modeLbl}</span>}
+            <span className={'pill '+(rule.is_active?'success':'warning')}>{rule.is_active?'启用':'停用'}</span>
+            <span className={'pill '+sevCls(rule.severity)}>{sevLbl(rule.severity)}</span>
+            {rule.mode && <span className="pill" style={{fontSize:'var(--font-10)',color:'var(--muted2)',background:'var(--bg)'}}>{modeLbl}</span>}
           </div>
           <div style={{marginTop:6,padding:'8px 12px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-13)',color:'var(--primary)',display:'block'}}>
             <IconScale size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} /> {condText}
