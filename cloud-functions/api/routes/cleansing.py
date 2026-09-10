@@ -72,9 +72,18 @@ def _parse_table(data: bytes, fname: str):
         sep = ","
     reader = csv.reader(io.StringIO(text), delimiter=sep)
     all_rows = list(reader)
+    # 单列/误判兜底: Sniffer 对竖线/中文逗号等常失效(实测), 手动探测候选分隔符
+    # 判定: 候选分隔后表头行分裂 >1 列且前 5 行列数一致 → 采用
+    if len(all_rows) <= 1 or not (all_rows and max((len(r) for r in all_rows[:10]), default=1) > 1):
+        for _s in ("\t", ";", "|", "，", "、", ","):
+            _rr = list(csv.reader(io.StringIO(text), delimiter=_s))
+            if _rr and len(_rr[0]) > 1 and \
+               all(len(r) == len(_rr[0]) for r in _rr[:5] if any(str(x).strip() for x in r)):
+                sep, all_rows = _s, _rr
+                break
     if not all_rows:
         return [], []
-    headers = [h.strip() for h in all_rows[0]]
+    headers = [h.strip() for h in all_rows[0] if h.strip()]
     rows = []
     for r in all_rows[1:]:
         if not any(str(c).strip() for c in r):
