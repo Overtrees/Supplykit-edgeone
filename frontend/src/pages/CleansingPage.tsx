@@ -240,16 +240,16 @@ export default function CleansingPage() {
   const [colMap, setColMap] = useState({})
   const [colMapSaving, setColMapSaving] = useState(false)
   const [colMapCol, setColMapCol] = useState('order_status')
-  const loadColMap = async () => { try { const r = await api.get('/api/replenishment-config/column-value-map?channel=' + hammerCleansingChannel + '&t=' + Date.now()); setColMap(r.data && typeof r.data === 'object' ? r.data : {}) } catch(e) {} }
+  const loadColMap = async () => { try { const r = await api.get('/api/replenishment-config/column-value-map?channel=' + ch + '&t=' + Date.now()); setColMap(r.data && typeof r.data === 'object' ? r.data : {}) } catch(e) {} }
   useEffect(() => {
     const h = () => { loadColMap(); setColMapOpen(true) }
     window.addEventListener('cleansing-colmap-open', h)
     return () => window.removeEventListener('cleansing-colmap-open', h)
-  }, [hammerCleansingChannel])
+  }, [ch])
   const saveColMap = async () => {
     setColMapSaving(true)
     try {
-      await api.put('/api/replenishment-config/column-value-map?channel=' + hammerCleansingChannel, {items: colMap})
+      await api.put('/api/replenishment-config/column-value-map?channel=' + ch, {items: colMap})
       toast.success('列映射已保存，导入时即时生效')
       setColMapOpen(false)
     } catch(e) { toast.error('保存失败: ' + (e.message || '')) }
@@ -555,7 +555,7 @@ export default function CleansingPage() {
       <div onClick={()=>setColMapOpen(false)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
       <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:32,padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'80vh',overflowY:'auto'}}>
         <div style={{fontWeight:700,fontSize:16,marginBottom:2,textAlign:'center'}}>表格列状态映射</div>
-        <div style={{textAlign:'center',fontSize:11,color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{hammerCleansingChannel==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
+        <div style={{textAlign:'center',fontSize:11,color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{ch==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
           <span style={{fontSize:13,fontWeight:600,flexShrink:0}}>映射列</span>
           <select value={colMapCol} onChange={e=>setColMapCol(e.target.value)} style={{flex:1,fontSize:14,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',outline:'none'}}>
