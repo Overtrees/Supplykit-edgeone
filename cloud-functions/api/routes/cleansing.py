@@ -42,9 +42,23 @@ def _parse_table(data: bytes, fname: str):
     """解析 CSV/XLSX → (headers, rows); rows 为 list[dict]"""
     if fname.endswith(".xlsx"):
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        ws = wb.active
-        rows_iter = ws.iter_rows(values_only=True)
+        # 小文件普通模式(兼容非标准/无维度信息文件): read_only 下 max_row/max_column 可能误判 1×1
+        # (实测: 采购订单明细导出(非图书).xlsx read_only 读到 1列0行, 普通模式 48列9行)
+        # 大文件(>=10MB)仍用 read_only(标准文件可靠, 省内存)
+        _rb = len(data) >= 10 * 1024 * 1024
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=_rb, data_only=True)
+        except Exception:
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        # 取第一个有数据的 sheet(active 可能是空壳/标题页)
+        _ws = None
+        for _s in wb.worksheets:
+            if _s.max_row and _s.max_column:
+                _ws = _s
+                break
+        if _ws is None:
+            _ws = wb.active
+        rows_iter = _ws.iter_rows(values_only=True)
         headers = None
         rows = []
         for r in rows_iter:
