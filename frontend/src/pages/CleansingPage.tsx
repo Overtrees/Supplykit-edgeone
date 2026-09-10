@@ -411,6 +411,7 @@ export default function CleansingPage() {
             document.getElementById('tmplName').value='';loadTemplates();toast.success(msg);
           } catch(e){toast.error('模板保存失败: '+(e.response?.data?.detail||e.message));}
         }} className="clickable" style={{padding:'8px 16px',fontSize:13,background:'var(--primary)',color:'var(--card)',border:'none',borderRadius:99,cursor:'pointer',minHeight:38,flexShrink:0}}>保存模板</button>
+        </div>
       </div>
       {Array.isArray(cf) && <div style={{marginBottom:14,border:'1px solid var(--border)',borderRadius:20,padding:14,background:'var(--bg)'}}>
         <div style={{fontSize:12.5,fontWeight:600,marginBottom:10,display:'flex',alignItems:'center',gap:6}}>自定义字段<span className="small muted" style={{fontSize:11,fontWeight:400}}>可自定义映射目标字段名</span></div>
