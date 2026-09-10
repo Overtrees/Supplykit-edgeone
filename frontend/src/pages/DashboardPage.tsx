@@ -270,13 +270,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         const idx = p[0]?.dataIndex ?? 0; const item = f[idx]
         return `${item.name}<br/>数量: ${item.value}单<br/>占比: ${item.percentage}%<br/>转化率: ${item.conversion}%`
       }},
-      grid: { containLabel: true, top: 4, bottom: 6 },
+      grid: { containLabel: true, top: 4, bottom: 6, right: 58 },
       xAxis: { type: 'value', show: false },
       yAxis: { type: 'category', data: names, axisLabel: { fontSize: 10 } },
       series: [{
         type: 'bar', data: values.map((v, i) => ({ value: v, itemStyle: { color: ['#f59e0b','#06b6d4','#8b5cf6','#ec4899','#10b981'][i % 5] } })),
         barWidth: '60%',
-        label: { show: true, position: 'right', fontSize: 10, formatter: (p) => `${p.value}单`, textBorderColor: 'transparent' }
+        label: { show: true, position: 'right', fontSize: 10, formatter: (p) => p.value >= 10000 ? (p.value / 10000).toFixed(1) + '万单' : `${p.value}单`, textBorderColor: 'transparent' }
       }]
     }
   }, [dashboard, periodTab])
