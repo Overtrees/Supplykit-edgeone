@@ -22,7 +22,12 @@ header{padding-top:env(safe-area-inset-top,0px);position:fixed;top:0;left:0;righ
 /* 内容容器 */
 .container{max-width:1200px;margin:0 auto;padding:calc(70px + env(safe-area-inset-top,0px)) 16px calc(20px + env(safe-area-inset-bottom,0px));min-height:100svh}
 
-.card{background:var(--card);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-card);position:relative;overflow:hidden}.card::before{content:'';position:absolute;top:0;left:0;right:0;height:40%;background:var(--highlight-card);border-radius:var(--radius-lg) var(--radius-lg) 0 0;pointer-events:none}.muted{color:var(--muted)}.small{font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.pill{display:inline-block;padding:3px 10px;border-radius:var(--radius-full);font-size:12px;font-weight:600;min-height:26px;line-height:20px;white-space:nowrap}.warning{background:#fffbeb;color:#b45309}.success{background:#ecfdf5;color:var(--success)}.danger{background:#fff1f2;color:var(--danger)}.info{background:#eff6ff;color:var(--primary)}.section-title{font-weight:700;margin-bottom:12px;font-size:15px}
+.card{background:var(--card);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-card);position:relative;overflow:hidden}.card::before{content:'';position:absolute;top:0;left:0;right:0;height:40%;background:var(--highlight-card);border-radius:var(--radius-lg) var(--radius-lg) 0 0;pointer-events:none}
+/* 看板统计小卡(4个: GMV/待处理/健康/断货) —— 从内联收敛为全局类(圆角专用档26+轻阴影+正方形比例) */
+.stat-card::before{border-radius:var(--radius-card-sm) var(--radius-card-sm) 0 0}
+.stat-card{background:var(--card);border-radius:var(--radius-card-sm);box-shadow:0 1px 6px rgba(0,0,0,0.04);container-type:inline-size;aspect-ratio:1;display:flex;flex-direction:column;padding:16px;overflow:hidden;position:relative}
+
+.muted{color:var(--muted)}.small{font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.pill{display:inline-block;padding:3px 10px;border-radius:var(--radius-full);font-size:12px;font-weight:600;min-height:26px;line-height:20px;white-space:nowrap}.warning{background:#fffbeb;color:#b45309}.success{background:#ecfdf5;color:var(--success)}.danger{background:#fff1f2;color:var(--danger)}.info{background:#eff6ff;color:var(--primary)}.section-title{font-weight:700;margin-bottom:12px;font-size:15px}
 table{width:100%;border-collapse:collapse;min-width:480px}
 th{text-align:left;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);padding:8px 8px;white-space:nowrap;min-width:72px;font-weight:600}
 td{padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:middle;overflow-wrap:break-word;word-break:break-word;font-size:13px;line-height:1.4}

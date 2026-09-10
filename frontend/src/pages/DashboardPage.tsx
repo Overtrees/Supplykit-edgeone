@@ -393,7 +393,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 2. {t("dash.pending")}卡 — 按仓库维度拆分 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
+      <div className="card stat-card">
         <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>待处理</div>
         <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
           <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)')}}>
@@ -423,7 +423,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
+      <div className="card stat-card">
         {(()=>{
           const healthData = dashboard?.health_index?.[healthTab]||{}
           const isJd = channel === 'jd'
