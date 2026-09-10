@@ -401,7 +401,7 @@ export default function CleansingPage() {
           </span>}
         </div>
         <div className="small muted" style={{fontSize:12,marginBottom:6}}>表格文件共 <b style={{color:'var(--text)'}}>{cols.length}</b> 列 · <b style={{color:'var(--text)'}}>{tr}</b> 行</div>
-        <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b><span className="small muted" style={{marginLeft:4}}>（导入时丢弃）</span></div>
+        <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b></div>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,marginBottom:10}}>
         <span style={{fontSize:14,fontWeight:700}}>列映射</span>
@@ -544,10 +544,10 @@ export default function CleansingPage() {
       </div>
     </div>}
 
-    {colMapOpen && <div style={{position:'fixed',inset:0,zIndex:4000}}>
-      <div onClick={()=>setColMapOpen(false)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
-      <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:32,padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'80vh',overflowY:'auto'}}>
-        <div style={{fontWeight:700,fontSize:16,marginBottom:2,textAlign:'center'}}>表格列状态映射</div>
+    {colMapOpen && <div onClick={()=>setColMapOpen(false)} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
+    {colMapOpen && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      <div onClick={(e)=>e.stopPropagation()} className="material-regular" style={{width:'100%',maxWidth:600,borderRadius:32,padding:'18px 14px calc(14px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',pointerEvents:'auto',maxHeight:'70vh',overflowY:'auto'}}>
+        <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center'}}>表格列状态映射</div>
         <div style={{textAlign:'center',fontSize:11,color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{ch==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
           <span style={{fontSize:13,fontWeight:600,flexShrink:0}}>映射列</span>
@@ -569,8 +569,8 @@ export default function CleansingPage() {
           <button onClick={()=>setColMap(p=>({...p,order_status:[{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>填充内置默认</button>
         </div>
         <div style={{display:'flex',gap:10,marginTop:14}}>
-          <button onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42}}>取消</button>
-          <button disabled={colMapSaving} onClick={saveColMap} className="clickable" style={{flex:1,padding:'11px 0',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42}}>{colMapSaving?'保存中...':'保存'}</button>
+          <div onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,borderRadius:22,padding:12,background:'var(--card)',textAlign:'center',cursor:'pointer',border:'1px solid var(--border)'}}><span style={{fontSize:15,fontWeight:600,color:'var(--text)'}}>取消</span></div>
+          <div onClick={()=>{if(!colMapSaving)saveColMap()}} className="clickable" style={{flex:1,borderRadius:22,padding:12,background:'var(--primary)',textAlign:'center',cursor:'pointer',opacity:colMapSaving?0.6:1}}><span style={{fontSize:15,fontWeight:600,color:'#fff'}}>{colMapSaving?'保存中...':'保存'}</span></div>
         </div>
       </div>
     </div>}

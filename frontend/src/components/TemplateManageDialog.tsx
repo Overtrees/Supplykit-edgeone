@@ -27,21 +27,23 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
   const btnG: any = { fontSize: 13, borderRadius: 99, cursor: 'pointer', minHeight: 38 }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 4500 }}>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'var(--overlay)' }} />
-      <div className="material-regular" style={{ position: 'fixed', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', maxWidth: 560, margin: '0 auto', borderRadius: 32, padding: '18px 16px calc(16px + env(safe-area-inset-bottom))', boxShadow: 'var(--shadow-sheet)', maxHeight: '78vh', overflowY: 'auto' }}>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 2, textAlign: 'center' }}>模板管理</div>
-        <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--muted2)', marginBottom: 12 }}>映射模板 + 自定义字段 · 应用后立即生效到映射页</div>
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
+        <div onClick={(e) => e.stopPropagation()} className="material-regular" style={{ width: '100%', maxWidth: 600, borderRadius: 32, padding: '18px 14px calc(14px + env(safe-area-inset-bottom))', boxShadow: 'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)', pointerEvents: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12, textAlign: 'center', color: 'var(--text)' }}>模板管理</div>
 
         {/* 模板区 */}
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>映射模板</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg)', borderRadius: 20, padding: 10, marginBottom: 6 }}>
-          <select value="" onChange={(e) => { const v = e.target.value; if (v) { try { const m = typeof v === 'string' && v.startsWith('{') ? JSON.parse(v) : v; if (m && typeof m === 'object') { window.dispatchEvent(new CustomEvent('apply-template', { detail: m })); toast.success('模板已应用') } } catch (e2) {} } }}
-            style={{ flex: 1, fontSize: 14, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 99, minWidth: 140, minHeight: 38, outline: 'none', background: 'var(--card)' }}>
-            <option value="">选择映射模板...</option>
-            {(templates.filter(t => t.doc_type === tt)).map(t => <option key={t.id} value={t.mapping}>{t.name}</option>)}
-            {templates.filter(t => t.doc_type !== tt).length > 0 && <option disabled style={{ color: 'var(--muted2)', fontSize: 11 }}>── {tt === 'order' ? '库存' : '订单'}模板（{templates.filter(t => t.doc_type !== tt).length}个） ──</option>}
-          </select>
+        <div style={{ background: 'var(--card)', borderRadius: 16, padding: 12, marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            <select value="" onChange={(e) => { const v = e.target.value; if (v) { try { const m = typeof v === 'string' && v.startsWith('{') ? JSON.parse(v) : v; if (m && typeof m === 'object') { window.dispatchEvent(new CustomEvent('apply-template', { detail: m })); toast.success('模板已应用') } } catch (e2) {} } }}
+              style={{ flex: 1, fontSize: 14, padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 99, minHeight: 40, outline: 'none', background: 'var(--card)' }}>
+              <option value="">选择映射模板...</option>
+              {(templates.filter(t => t.doc_type === tt)).map(t => <option key={t.id} value={t.mapping}>{t.name}</option>)}
+              {templates.filter(t => t.doc_type !== tt).length > 0 && <option disabled style={{ color: 'var(--muted2)', fontSize: 11 }}>── {tt === 'order' ? '库存' : '订单'}模板（{templates.filter(t => t.doc_type !== tt).length}个） ──</option>}
+            </select>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
           <input value={tmplName} onChange={e => setTmplName(e.target.value)} placeholder="新模板名称" style={{ ...fieldStyle, flex: '1 1 150px', minWidth: 120 }} />
@@ -71,10 +73,11 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           <button onClick={addField} className="clickable" style={{ padding: '9px 16px', fontSize: 13, border: '1px dashed #94a3b8', borderRadius: 99, background: 'var(--card)', cursor: 'pointer', color: 'var(--muted)', width: '100%' }}>+ 添加自定义字段</button>
         </div>
 
-        <div style={{ marginTop: 14 }}>
-          <button onClick={onClose} className="clickable" style={{ width: '100%', padding: '11px 0', fontSize: 14, border: 'none', borderRadius: 99, background: 'var(--primary)', color: '#fff', cursor: 'pointer', fontWeight: 600, minHeight: 42 }}>完成</button>
+        <div onClick={onClose} className="clickable" style={{ borderRadius: 22, padding: 12, marginTop: 10, background: 'var(--primary)', textAlign: 'center', cursor: 'pointer' }}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>关闭</span>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
