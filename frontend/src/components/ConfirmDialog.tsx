@@ -54,21 +54,11 @@ export default function ConfirmDialog({ open, title, desc, confirmLabel = t("com
         {/* 按钮行 */}
         <div style={{display:'flex',gap:8}}>
           {/* 取消按钮 */}
-          <div onClick={onCancel} className="clickable" style={{
-            flex:1,
-            borderRadius:'var(--radius-card)',padding:14,
-            background:'var(--primary)',
-            cursor:'pointer',textAlign:'center',
-          }}>
+          <div onClick={onCancel} className="clickable sheet-close" style={{flex:1}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>{cancelLabel}</span>
           </div>
           {/* 确认按钮 */}
-          <div onClick={onConfirm} className="clickable" style={{
-            flex:1,
-            borderRadius:'var(--radius-card)',padding:14,
-            background:'var(--danger)',
-            cursor:'pointer',textAlign:'center',
-          }}>
+          <div onClick={onConfirm} className="clickable sheet-danger" style={{flex:1}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:700,color:'#fff'}}>{confirmLabel}</span>
           </div>
         </div>

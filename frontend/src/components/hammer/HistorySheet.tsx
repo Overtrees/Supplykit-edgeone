@@ -58,11 +58,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
           </div>
         )}
         {!loading && <div style={{flexShrink:0,marginTop:10}}>
-          <div onPointerDown={(e) => { e.stopPropagation(); onClose() }} className="clickable" style={{
-            borderRadius:'var(--radius-card)',padding:14,
-            background:'var(--primary)',
-            cursor:'pointer',textAlign:'center',
-          }}>
+          <div onPointerDown={(e) => { e.stopPropagation(); onClose() }} className="clickable sheet-close">
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>}

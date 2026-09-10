@@ -593,7 +593,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <div className="small muted" style={{fontSize:'var(--font-xs)'}}>{x.description}<span style={{color:'var(--muted2)',fontSize:'var(--font-10)'}}>{alertAge(x.created_at)}</span></div>
             </div>
           })}
-          <div onClick={function(){setShowAllLowStock(false)}} className="clickable" style={{borderRadius:'var(--radius-card)',padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllLowStock(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
@@ -616,7 +616,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <div className="small muted" style={{fontSize:'var(--font-10)'}}>{x.sku}{x.wh ? ' · ' + x.wh : ''} · {(x.note ? String(x.note).slice(0,50) : (x.days_to_empty > 999 ? '库存充足' : '可撑' + x.days_to_empty + '天'))}</div>
             </div>
           })}
-          <div onClick={function(){setShowAllProc(false)}} className="clickable" style={{borderRadius:'var(--radius-card)',padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllProc(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
@@ -639,7 +639,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <div className="small muted" style={{fontSize:'var(--font-xs)'}}>{x.description}<span style={{color:'var(--muted2)',fontSize:'var(--font-10)'}}>{alertAge(x.created_at)}</span></div>
             </div>
           })}
-          <div onClick={function(){setShowAllOther(false)}} className="clickable" style={{borderRadius:'var(--radius-card)',padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllOther(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
@@ -670,7 +670,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <span style={{fontSize:'var(--font-xs)',fontWeight:600,color:lv ? lv.c : 'var(--danger)',flexShrink:0,minWidth:38,textAlign:'right'}}>{x.days_to_empty} 天</span>
             </div>
           })}
-          <div onClick={function(){setShowAllRisk(false)}} className="clickable" style={{borderRadius:'var(--radius-card)',padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllRisk(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
@@ -687,7 +687,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <span title={x.warehouse || ''} style={{fontSize:'var(--font-10)',color:'var(--muted)',background:'var(--bg)',padding:'0 6px',borderRadius:'var(--radius-full)',flexShrink:0}}>{(x.warehouse ? fmtWh(x.warehouse) : (healthTab === 'bc' || x.warehouse_type === 'bc' ? 'BC' : (healthTab === 'own' ? '自有' : '平台')))}</span>
             </div>
           })}
-          <div onClick={function(){setShowAllOut(false)}} className="clickable" style={{borderRadius:'var(--radius-card)',padding:12,marginTop:8,background:'var(--primary)',textAlign:'center',cursor:'pointer'}}>
+          <div onClick={function(){setShowAllOut(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>

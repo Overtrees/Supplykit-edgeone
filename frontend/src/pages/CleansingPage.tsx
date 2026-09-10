@@ -559,8 +559,8 @@ export default function CleansingPage() {
           <button onClick={()=>setColMap(p=>({...p,order_status:[{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:'var(--font-sm)',padding:'7px 14px',minHeight:36}}>填充内置默认</button>
         </div>
         <div style={{display:'flex',gap:10,marginTop:14}}>
-          <div onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,borderRadius:'var(--radius-card)',padding:12,background:'var(--card)',textAlign:'center',cursor:'pointer',border:'1px solid var(--border)'}}><span style={{fontSize:'var(--font-15)',fontWeight:600,color:'var(--text)'}}>取消</span></div>
-          <div onClick={()=>{if(!colMapSaving)saveColMap()}} className="clickable" style={{flex:1,borderRadius:'var(--radius-card)',padding:12,background:'var(--primary)',textAlign:'center',cursor:'pointer',opacity:colMapSaving?0.6:1}}><span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>{colMapSaving?'保存中...':'保存'}</span></div>
+          <div onClick={()=>setColMapOpen(false)} className="clickable sheet-cancel" style={{flex:1}}><span style={{fontSize:'var(--font-15)',fontWeight:600}}>取消</span></div>
+          <div onClick={()=>{if(!colMapSaving)saveColMap()}} className="clickable sheet-close" style={{flex:1,opacity:colMapSaving?0.6:1}}><span style={{fontSize:'var(--font-15)',fontWeight:600}}>{colMapSaving?'保存中...':'保存'}</span></div>
         </div>
       </div>
     </div>}
