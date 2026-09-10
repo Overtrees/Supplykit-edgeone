@@ -95,18 +95,28 @@ const ORDER_FIELDS = [
   {t:'remark',l:'备注',tp:'string'},
 ]
 const INBOUND_FIELDS = [
-  {t:'sku',l:'SKU',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'sku',l:'SKU',tp:'string'},{t:'barcode',l:'69码',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'brand',l:'品牌',tp:'string'},{t:'store',l:'店铺',tp:'string'},{t:'category',l:'分类',tp:'string'},
   {t:'quantity',l:'数量',tp:'number'},{t:'supplier',l:'供应商',tp:'string'},
   {t:'inbound_date',l:'入库日期',tp:'date'},{t:'channel',l:'渠道',tp:'string'},
+  {t:'platform',l:'平台',tp:'string'},
   {t:'warehouse',l:'仓库',tp:'string'},{t:'prod_date',l:'生产日期',tp:'date'},
-  {t:'exp_date',l:'到期日期',tp:'date'},{t:'remark',l:'备注',tp:'string'},
+  {t:'exp_date',l:'到期日期',tp:'date'},{t:'price',l:'单价',tp:'number'},
+  {t:'box_qty',l:'箱规',tp:'number'},{t:'unit',l:'单位',tp:'string'},
+  {t:'weight',l:'重量/KG',tp:'number'},{t:'volume',l:'体积/方',tp:'number'},
+  {t:'status',l:'状态',tp:'string'},{t:'remark',l:'备注',tp:'string'},
 ]
 const OUTBOUND_FIELDS = [
-  {t:'sku',l:'SKU',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'sku',l:'SKU',tp:'string'},{t:'barcode',l:'69码',tp:'string'},{t:'product_name',l:'商品',tp:'string'},
+  {t:'brand',l:'品牌',tp:'string'},{t:'store',l:'店铺',tp:'string'},{t:'category',l:'分类',tp:'string'},
   {t:'quantity',l:'数量',tp:'number'},{t:'target_warehouse',l:'目标仓库',tp:'string'},
   {t:'outbound_date',l:'出库日期',tp:'date'},{t:'channel',l:'渠道',tp:'string'},
+  {t:'platform',l:'平台',tp:'string'},
   {t:'warehouse',l:'仓库',tp:'string'},{t:'prod_date',l:'生产日期',tp:'date'},
-  {t:'exp_date',l:'到期日期',tp:'date'},{t:'remark',l:'备注',tp:'string'},
+  {t:'exp_date',l:'到期日期',tp:'date'},{t:'price',l:'单价',tp:'number'},
+  {t:'box_qty',l:'箱规',tp:'number'},{t:'unit',l:'单位',tp:'string'},
+  {t:'weight',l:'重量/KG',tp:'number'},{t:'volume',l:'体积/方',tp:'number'},
+  {t:'status',l:'状态',tp:'string'},{t:'remark',l:'备注',tp:'string'},
 ]
 const SUPPLIER_FIELDS = [
   {t:'supplier_code',l:'供应商编码',tp:'string'},{t:'supplier_name',l:'供应商名称',tp:'string'},

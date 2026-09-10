@@ -153,6 +153,33 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
         except Exception:
             pass
+        # 启动补列(幂等): 入库/出库记录带商品属性列(69码/平台/品牌/店铺/分类/单价/箱规/单位/重量/体积/状态)
+        # —— 出入库明细展示与导出需要商品属性, 原 schema 仅 10 列(用户需求 2026-09-10)
+        try:
+            from db import query as _qryC
+            for _t in ("inbound_records", "outbound_records"):
+                try:
+                    _have = {str(r.get("Field") or "") for r in _qryC("SHOW COLUMNS FROM `%s`" % _t)}
+                except Exception:
+                    continue
+                for _col, _ddl in (("barcode", "VARCHAR(64) DEFAULT ''"),
+                                   ("platform", "VARCHAR(32) DEFAULT ''"),
+                                   ("brand", "VARCHAR(64) DEFAULT ''"),
+                                   ("store", "VARCHAR(64) DEFAULT ''"),
+                                   ("category", "VARCHAR(64) DEFAULT ''"),
+                                   ("price", "DECIMAL(12,2) DEFAULT 0"),
+                                   ("box_qty", "INT DEFAULT 0"),
+                                   ("unit", "VARCHAR(16) DEFAULT ''"),
+                                   ("weight", "DECIMAL(10,2) DEFAULT 0"),
+                                   ("volume", "DECIMAL(10,4) DEFAULT 0"),
+                                   ("status", "VARCHAR(16) DEFAULT ''")):
+                    if _col not in _have:
+                        try:
+                            _exec("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _col, _ddl))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         # 启动补列(幂等): alerts.warehouse —— 告警逐仓化(规则引擎去重+seed 生成+展示均按 SKU×仓)
         try:
             from db import query as _qry
