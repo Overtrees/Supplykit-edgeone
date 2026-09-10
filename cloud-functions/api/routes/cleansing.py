@@ -148,6 +148,9 @@ async def cleansing_preview(file: UploadFile = File(...), mapping: str = Form("{
         _, rows = _parse_table(data, fname)
         mp = json.loads(mapping or "{}")
         cleaned = _clean_rows(rows, mp)
+        # 零映射兜底(严谨性): 无任何有效值 → 明确提示而非静默返回 0 条
+        if not any(any(str(v) not in ("", "None", "none") for v in it.values()) for it in cleaned):
+            return {"ok": False, "error": "未配置有效列映射，请先在字段映射界面选择目标字段后再预览"}
         return {"ok": True, "preview": cleaned[:50], "total": len(cleaned),
                 "target": target, "channel": channel, "conflict_mode": conflict_mode}
     except Exception as e:

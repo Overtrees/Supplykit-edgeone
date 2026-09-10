@@ -76,6 +76,36 @@ const ALIAS = {
   "分类":"category","商品分类":"category",
 }
 
+// 归一化别名扩展(列名兼容: 英文/变体/去空格符号; 供自动识别第二个匹配层)
+const _nk = (s) => String(s || '').toLowerCase().replace(/[\s_\-/（）()【】·]/g, '')
+const ALIAS_EXT = {
+  '订单号':'order_no','订单编号':'order_no','采购单号':'order_no','订单id':'order_no','单号':'order_no','单据编号':'order_no',
+  'orderno':'order_no','orderid':'order_no','order_no':'order_no',
+  '商品编号':'sku','货号':'sku','商品编码':'sku','sku':'sku','itemid':'sku','item_id':'sku','客服sku':'sku',
+  '商品名称':'product_name','产品名称':'product_name','名称':'product_name','品名':'product_name',
+  'productname':'product_name','itemname':'product_name','product_name':'product_name','货品名称':'product_name',
+  '数量':'quantity','采购数量':'quantity','订货数量':'quantity','件数':'quantity',
+  'qty':'quantity','quantity':'quantity','订购数量':'quantity',
+  '单价':'unit_price','价格':'unit_price','采购价格':'unit_price','unitprice':'unit_price','price':'unit_price',
+  '金额':'total_amount','总金额':'total_amount','采购金额':'total_amount','实收金额':'total_amount','总额':'total_amount','订单金额':'total_amount',
+  'totalamount':'total_amount','amount':'total_amount','total':'total_amount',
+  '店铺':'store','店铺名':'store','门店':'store','store':'store','店铺名称':'store',
+  '仓库':'warehouse','京东仓库':'warehouse','发货仓':'warehouse','发货仓库':'warehouse','所属仓库':'warehouse',
+  'warehouse':'warehouse','仓库名称':'warehouse',
+  '状态':'order_status','订单状态':'order_status','orderstatus':'order_status','order_status':'order_status',
+  'status':'order_status','交易状态':'order_status',
+  '日期':'ordered_at','订购时间':'ordered_at','下单时间':'ordered_at','订单日期':'ordered_at','下单日期':'ordered_at','订购日期':'ordered_at','下单时间time':'ordered_at',
+  'date':'ordered_at','orderdate':'ordered_at','orderedat':'ordered_at',
+  '供应商':'supplier','supplier':'supplier','供应商名称':'supplier_name','供应商编码':'supplier_code','供应商编号':'supplier_code',
+  '联系人':'contact_person','联系电话':'contact_phone','评分':'score',
+  '备注':'remark','remark':'remark','平台':'platform','platform':'platform','订单来源':'platform',
+  '生产日期':'prod_date','生产日':'prod_date','proddate':'prod_date','生产年月':'prod_date',
+  '到期日期':'exp_date','到期日':'exp_date','失效日期':'exp_date','有效期至':'exp_date','expdate':'exp_date','保质期至':'exp_date',
+  '入库日期':'paid_at','入库时间':'paid_at','支付时间':'paid_at','paidat':'paid_at','实际入库日期':'paid_at',
+  '出库日期':'outbound_date','outdate':'outbound_date','出库时间':'outbound_date',
+  '品牌':'brand','brand':'brand','分类':'category','商品分类':'category','category':'category','品类':'category',
+}
+
 export default function CleansingPage() {
   const toast = useToast()
   const [s,setS] = useState(0)
@@ -111,12 +141,20 @@ export default function CleansingPage() {
       const a = {}
       let mappedCount = 0
       ;(d.columns||[]).forEach(c => {
-        const key = ALIAS[c.name]
+        // 第一层: 精确 ALIAS; 第二层: 归一化别名(英文/变体/去空格符号)
+        const key = ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
         if (key) { a[c.name] = { target: key, type: 'string' }; mappedCount++ }
       })
       if (Object.keys(a).length > 0) setMp(a)
       setS(1)
-      if ((d.columns||[]).length > 0 && mappedCount === (d.columns||[]).length) {
+      // 自动预览条件: 目标关键字段已映射即自动进入预览(不必全部列匹配——用户表列名未必全覆盖)
+      const KEY_COLS = {order:['order_no','sku','warehouse'], inventory:['sku','warehouse'],
+                        platform_inv:['sku','warehouse'], inventory_b:['sku','warehouse'],
+                        inbound:['sku','warehouse'], outbound:['sku','warehouse'],
+                        product:['sku'], supplier:['supplier_code']}
+      const _tgts = Object.values(a).map(x => x.target)
+      const _hasKey = (KEY_COLS[tt] || []).every(k => _tgts.includes(k))
+      if ((d.columns||[]).length > 0 && mappedCount > 0 && _hasKey) {
         setMp(a)
         setBs('预览中')
         const fd2 = new FormData(); fd2.append('file', file); fd2.append('mapping', JSON.stringify(a)); fd2.append('target', tt)
