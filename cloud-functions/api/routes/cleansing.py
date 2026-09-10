@@ -65,7 +65,8 @@ def _parse_table(data: bytes, fname: str):
     else:
         text = raw.decode("utf-8", errors="replace")
     try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;")
+        # 分隔符探测扩展到多平台导出常见分隔: 逗号/制表/分号/竖线/中文逗号顿号
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;|，、")
         sep = dialect.delimiter
     except Exception:
         sep = ","

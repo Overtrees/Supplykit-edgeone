@@ -304,7 +304,7 @@ export default function CleansingPage() {
     </div>}
 
     {s === 1 && <div>
-      <div style={{fontSize:13,marginBottom:12}}>已识别 {cols.length} 列 · {tr} 行 · 目标: {tt}{tt==='order' && <span style={{marginLeft:8,display:'inline-flex',gap:4,verticalAlign:'middle'}}>
+      <div style={{fontSize:13,marginBottom:12}}>共 <b>{cols.length}</b> 列 · {tr} 行 · 目标: {tt} · 已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b>（导入时丢弃）{tt==='order' && <span style={{marginLeft:8,display:'inline-flex',gap:4,verticalAlign:'middle'}}>
         <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jdzx_sale'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--border)'}}><IconTrendUp size={12} /> 商智日销</span>
         <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jd_po'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--border)'}}><IconPackage size={12} /> 京东采购单</span>
       </span>}</div>
@@ -348,8 +348,14 @@ export default function CleansingPage() {
         const isShared = currentTarget && targetCounts[currentTarget] > 1
         return (<div key={c.name} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,marginBottom:6}}>
         <div style={{flex:1,fontSize:14,fontWeight:500,minWidth:0}}>
-          {c.name}
-          {matched && sf && <span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>→ {sf.l} ({sf.t})</span>}
+          <span style={{display:'inline-flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+            {c.name}
+            {mp[c.name]?.target
+              ? <span className="pill success" style={{fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>✓ 已映射</span>
+              : <span className="pill warning" style={{fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>未映射 · 导入时丢弃</span>}
+          </span>
+          {mp[c.name]?.target ? (()=>{const sf2=SYS_FIELDS.find(x=>x.t===mp[c.name].target)||cf.find(x=>x.t===mp[c.name].target);return sf2?<span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>→ {sf2.l} ({sf2.t})</span>:null})()
+            : (matched && sf ? <span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>智能建议 → {sf.l} ({sf.t})</span> : null)}
         </div>
         <div style={{fontSize:12,color:'var(--muted2)',flexShrink:0}}>→</div>
         <select value={mp[c.name]?.target || ''} onChange={e=>{const v=e.target.value;setMp(p=>({...p,[c.name]:{target:v,type:'string'}}));saveAlias(c.name,v)}}
