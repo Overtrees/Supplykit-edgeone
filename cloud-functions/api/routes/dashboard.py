@@ -418,12 +418,14 @@ def _compute_accel(channel, now, ratio, min_qty):
     today = now.strftime("%Y-%m-%d")
     since = (now - timedelta(days=3)).strftime("%Y-%m-%d 00:00:00")
     cur_h = now.hour
+    # IN 参数化(曾 % 预格式化整条 SQL 只给 IN 参数 → channel/ordered_at %s 无参数 → not enough arguments)
+    _in = ",".join(["%s"] * len(paid))
     rows = query(
         "SELECT sku, DATE(ordered_at) AS d, HOUR(ordered_at) AS h, SUM(quantity) AS q "
         "FROM orders WHERE channel=%s AND ordered_at>=%s "
-        "AND order_status IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
-        "GROUP BY sku, DATE(ordered_at), HOUR(ordered_at)" % (",".join(["'%s'" % s for s in paid])),
-        [channel, since])
+        "AND order_status IN (" + _in + ") AND (deleted_at IS NULL OR deleted_at='') "
+        "GROUP BY sku, DATE(ordered_at), HOUR(ordered_at)",
+        [channel, since] + list(paid))
     hist = {}
     today_q = {}
     for r in rows:
