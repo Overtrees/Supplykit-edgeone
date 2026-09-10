@@ -69,6 +69,16 @@ def seed_fill_status(task_id: str = ""):
     status = row.get("status") or "not_found"
     if status in ("done", "error"):
         return {"data": {"status": status}}
+    # 防并发续跑(前端 App+Settings 双轮询/多实例): 原子抢占 updated_at 锁
+    # 3 秒内已有请求续跑过 → 本次跳过(步骤执行中轮询不再重复触发, 防步骤并发冲突)
+    try:
+        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
+                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
+                          [task_id])
+        if not _locked:
+            return {"data": {"status": "running"}}  # 已有请求在续跑, 跳过本次(防并发)
+    except Exception:
+        pass
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json

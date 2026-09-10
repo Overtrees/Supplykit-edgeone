@@ -229,21 +229,12 @@ export default function SettingsPage() {
     } catch {}
   }, [])
 
-  // 种子填充任务轮询：完成后恢复按钮状态
+  // 种子填充状态: 由 App 全局轮询负责(续跑有后端并发锁防护), 完成事件恢复按钮状态
   useEffect(() => {
-    const seedTask = (() => { try { return localStorage.getItem('c_seed_task') } catch { return null } })()
-    if (!seedTask || !seeding) return
-    const poll = setInterval(async () => {
-      try {
-        const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {headers:{'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
-        const d = await r.json()
-        if (d.data?.status === 'done' || d.data?.status === 'error') {
-          clearInterval(poll); setSeeding(false)
-          if (d.data?.status === 'done') { try { localStorage.removeItem('c_seed_task') } catch {}; window.location.reload() }
-        }
-      } catch { clearInterval(poll); setSeeding(false) }
-    }, 3000)
-    return () => clearInterval(poll)
+    const h = () => { setSeeding(false) }
+    window.addEventListener('seed-done', h)
+    window.addEventListener('seed-error', h)
+    return () => { window.removeEventListener('seed-done', h); window.removeEventListener('seed-error', h) }
   }, [])
 
   const clearLocalCache = () => {

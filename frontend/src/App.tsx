@@ -82,6 +82,7 @@ export default function App() {
           if (d.data?.status === 'done') {
             clearInterval(poll); try { localStorage.removeItem('c_seed_task') } catch {}
             toast.success('种子数据填充完成')
+            window.dispatchEvent(new Event('seed-done'))
             refreshAll()
           } else if (d.data?.status === 'error' || d.data?.status === 'not_found') {
             // not_found 容错：任务可能刚提交数据库写入有延迟，重试 3 次才清理
