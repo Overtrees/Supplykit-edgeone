@@ -173,6 +173,15 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         if not cleaned:
             return {"ok": True, "task_id": task_id, "success": 0, "failed": 0,
                     "error": "", "message": "文件为空或无有效映射"}
+        # 订单状态归一化(写入前, 渠道级映射): sale→'已完成'(进销量池), blocked/未识别→保留原值(不入销量池)
+        if target == "order":
+            try:
+                from routes.suppliers import _norm_order_status as _nos
+                for c in cleaned:
+                    if c.get("order_status"):
+                        c["order_status"] = _nos(channel, str(c["order_status"]))
+            except Exception:
+                pass
         success, failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
         elapsed = round(time.time() - started, 1)
         # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
@@ -290,7 +299,7 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
             if target == "order":
                 from collections import Counter as _C
                 _sc = _C((c.get("order_status") or "未知") for c in cleaned)
-                _ignore = {k: v for k, v in _sc.items() if k not in ("已完成", "待发货")}
+                _ignore = {k: v for k, v in _sc.items() if k != "已完成"}
                 if _ignore:
                     _msg += " · 注意: %s 不计入销量池(仅已完成), 已发货/待确认/退款类不参与补货采购计算" % \
                             ("; ".join("%s×%d" % (k, v) for k, v in _ignore.items()))

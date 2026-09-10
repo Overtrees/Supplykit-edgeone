@@ -95,6 +95,8 @@ export default function RulesPage() {
   const [seasons, setSeasons] = useState([])
   // 滞销品类配置（自定义条目，仿活动系数）
   const [slowCats, setSlowCats] = useState([])
+  const [statusMap, setStatusMap] = useState([])
+  const [statusMapSaving, setStatusMapSaving] = useState(false)
   const [transitDays, setTransitDays] = useState('3')
   const [fundThreshold, setFundThreshold] = useState('10000')
   useEffect(() => { if (cfg.transit_days) setTransitDays(cfg.transit_days) }, [cfg.transit_days])
@@ -166,6 +168,7 @@ export default function RulesPage() {
   const loadCfg = async (mode, ch) => { try { const m=mode||cfg.replenishment_mode||'bbcc'; const c=ch||globalChannel; const r=await api.get('/api/replenishment-config?mode='+m+'&channel='+c+'&t='+Date.now());if(r.data&&Object.keys(r.data).length>0){const mP='mode_'+m+'_';const mD={};Object.entries(r.data).forEach(([k,v])=>{if(k.startsWith(mP))mD[k.slice(mP.length)]=v});setCfg(p=>({...p,...r.data,...mD,replenishment_mode:m}))}else if(c!=='jd'){const fallback=await api.get('/api/replenishment-config?mode='+m+'&channel=jd');if(fallback.data)setCfg(p=>({...p,...fallback.data,replenishment_mode:m}))}setCfg(p => ({...p, replenishment_mode: m}));return r.data||{} } catch(e) { return {} } }
   const loadSeasons = async (mode, ch) => { try { const m=mode||cfg.replenishment_mode||'bbcc'; const c=ch||globalChannel; const r=await api.get('/api/replenishment-config/seasons?mode='+m+'&channel='+c+'&t='+Date.now()); setSeasons(r.data||[]) } catch(e) {} }
   const loadSlowCfg = async () => { try { const c=globalChannel; const [rc,rf]=await Promise.all([api.get('/api/replenishment-config/slow-cats?channel='+c+'&t='+Date.now()),api.get('/api/replenishment-config?channel='+c+'&t='+Date.now())]); if(rc.data)setSlowCats(Array.isArray(rc.data)?rc.data:[]); if(rf.data){ if(rf.data.transit_days)setTransitDays(rf.data.transit_days); if(rf.data.slow_fund_threshold)setFundThreshold(rf.data.slow_fund_threshold) } } catch(e) {} }
+  const loadStatusMap = async () => { try { const c=globalChannel; const r=await api.get('/api/replenishment-config/order-status-map?channel='+c+'&t='+Date.now()); setStatusMap(Array.isArray(r.data)?r.data:[]) } catch(e) {} }
   const loadAll = async (ch) => { setLoading(true); const c=ch||globalChannel; const savedMode=(()=>{try{return localStorage.getItem('c_replen_mode_'+c)}catch{return null}})(); const m=c!=='jd'?'traditional':(savedMode||'bbcc'); clearCache(); clearInflight(); try{const _s=localStorage.getItem('c_supplier_'+c);if(_s)setSelectedSupplier(_s)}catch{} await Promise.all([ (async()=>{try{await load(c)}catch(e){}})(), (async()=>{try{const flat=await api.get('/api/replenishment-config?channel='+c);if(flat.data){setCfg(p=>{const mP='mode_'+m+'_';const mD={};Object.entries(flat.data).forEach(([k,v])=>{if(k.startsWith(mP))mD[k.slice(mP.length)]=v});return{...p,...flat.data,...mD,replenishment_mode:m}});const sK='season_config_'+m;try{const sd=JSON.parse(flat.data[sK]||'[]');setSeasons(Array.isArray(sd)?sd:[])}catch{};try{if(flat.data.slow_cats){const sc=JSON.parse(flat.data.slow_cats);setSlowCats(Array.isArray(sc)?sc:[])};if(flat.data.transit_days)setTransitDays(flat.data.transit_days);if(flat.data.slow_fund_threshold)setFundThreshold(flat.data.slow_fund_threshold)}catch{}}}catch(e){}})(), (async()=>{try{const sr=await api.get('/api/suppliers?channel='+c);if(sr.data)setSuppliers(sr.data.map(x=>x.supplier_code).filter(Boolean))}catch(e){}})() ]); setLoading(false) }
   useEffect(() => { loadAll() }, [globalChannel])
   // tab/模式切换时加载配置，补货参数页加骨架过渡
@@ -173,7 +176,7 @@ export default function RulesPage() {
     const seq = ++reqSeq.current
     if (tab === 'params') {
       setLoading(true)
-      Promise.all([loadCfg(hammerRulesMode), loadSeasons(hammerRulesMode)])
+      Promise.all([loadCfg(hammerRulesMode), loadSeasons(hammerRulesMode), loadStatusMap()])
         .catch(() => {})
         .finally(() => { if (reqSeq.current === seq) setLoading(false) })
     } else if (tab === 'purchase') {
@@ -556,6 +559,24 @@ export default function RulesPage() {
       <button onClick={()=>setSeasons(p=>[...p,{key:'new',name:'新活动',factor:1.2,enabled:true}])} className="btn btn-ghost clickable" style={{fontSize:13,padding:'8px 16px',width:'100%',minHeight:40}}>+ 添加活动</button>
       <div style={{marginTop:12}}>
         <button disabled={seasonsSaving} onClick={async()=>{setSeasonsSaving(true);const m=cfg.replenishment_mode||'bbcc';const ch=globalChannel;try{await api.put('/api/replenishment-config/seasons?mode='+m+'&channel='+ch,{items:seasons});await loadCfg(m,ch);toast.success('已保存'); window.dispatchEvent(new Event('rules-changed'))}catch(e){saveErr(e)}setSeasonsSaving(false)}} className="btn btn-primary" style={{width:'100%',display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42,opacity:seasonsSaving?0.6:1}}>{seasonsSaving?<><IconLoading size={14} /> 保存中...</>:<><IconSave size={14} /> 保存</>}</button>
+      </div>
+
+      {/* 订单状态映射(渠道级: 平台状态→档位; 不区分补货模式; 影响补货/采购/断货销量池) */}
+      <div className='section-title' style={{marginTop:22,marginBottom:4,display:'flex',alignItems:'center',gap:4}}><IconTag size={14} /> 订单状态映射（渠道级 · 影响补货/采购/断货销量池）</div>
+      <div className="small muted" style={{fontSize:11,marginBottom:8}}>平台/商家状态名 → 档位：<b>销量池</b>=计入日均实销（导入时归一化为"已完成"）；<b>屏蔽</b>=不入销量池（保留原值）。导入订单时按此自动归一化，未配置的状态默认屏蔽并保留原值（提示补充）。</div>
+      {statusMap.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,marginBottom:6}}>
+        <input value={s.name||''} onChange={e=>setStatusMap(p=>p.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder='平台状态名(如 交易成功)' style={{flex:1,minWidth:100,fontSize:15,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
+        <select value={s.group||'blocked'} onChange={e=>setStatusMap(p=>p.map((x,j)=>j===i?{...x,group:e.target.value}:x))} style={{fontSize:13,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',minHeight:36}}>
+          <option value='sale'>✅ 销量池</option><option value='blocked'>⛔ 屏蔽</option>
+        </select>
+        <button onClick={()=>setStatusMap(p=>p.filter((_,j)=>j!==i))} className="clickable" style={{fontSize:12,color:'var(--danger)',cursor:'pointer',padding:'4px 8px',border:'none',background:'transparent',flexShrink:0}}>✕</button>
+      </div>)}
+      <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
+        <button onClick={()=>setStatusMap(p=>[...p,{name:'',group:'blocked'}])} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>+ 添加状态</button>
+        <button onClick={()=>setStatusMap([{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}])} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>填充内置默认</button>
+      </div>
+      <div style={{marginTop:12}}>
+        <button disabled={statusMapSaving} onClick={async()=>{setStatusMapSaving(true);const ch=globalChannel;try{await api.put('/api/replenishment-config/order-status-map?channel='+ch,{items:statusMap});toast.success('状态映射已保存');window.dispatchEvent(new Event('rules-changed'))}catch(e){saveErr(e)}setStatusMapSaving(false)}} className="btn btn-primary" style={{width:'100%',display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42,opacity:statusMapSaving?0.6:1}}>{statusMapSaving?<><IconLoading size={14} /> 保存中...</>:<><IconSave size={14} /> 保存</>}</button>
       </div>
     </>}
 

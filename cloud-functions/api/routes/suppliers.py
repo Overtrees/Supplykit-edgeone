@@ -182,6 +182,74 @@ _DEFAULT_SEASONS = [
 ]
 
 
+# ── 订单状态映射(渠道级: 平台状态文案 → 档位; 不区分补货模式, 影响补货/采购/断货销量池) ──
+# 档位: sale=计入销量池(归一化为"已完成") / blocked=屏蔽(保留原值, 自然不进销量池)
+_DEFAULT_STATUS_MAP = [
+    {"name": "已完成", "group": "sale"}, {"name": "交易成功", "group": "sale"},
+    {"name": "确认收货", "group": "sale"}, {"name": "已签收", "group": "sale"},
+    {"name": "妥投", "group": "sale"}, {"name": "Closed", "group": "sale"}, {"name": "Completed", "group": "sale"},
+    {"name": "待发货", "group": "blocked"}, {"name": "已发货", "group": "blocked"},
+    {"name": "待确认", "group": "blocked"}, {"name": "待付款", "group": "blocked"},
+    {"name": "已取消", "group": "blocked"}, {"name": "已退款", "group": "blocked"},
+    {"name": "退款中", "group": "blocked"}, {"name": "申请退款", "group": "blocked"},
+    {"name": "已退货", "group": "blocked"}, {"name": "运输中", "group": "blocked"}, {"name": "在途", "group": "blocked"},
+]
+
+
+def _status_map_items(channel):
+    """读订单状态映射(自定义优先, 空则内置默认); 返回 {状态名: 档位}"""
+    row = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
+    try:
+        stored = json.loads((row or {}).get("value") or "[]")
+        if isinstance(stored, list) and stored:
+            return {x.get("name"): x.get("group") for x in stored if x.get("name")}
+    except Exception:
+        pass
+    return {x.get("name"): x.get("group") for x in _DEFAULT_STATUS_MAP if x.get("name")}
+
+
+def _norm_order_status(channel, raw):
+    """订单状态归一化(导入写入时): sale → '已完成'(进销量池); blocked/未识别 → 保留原值(不进销量池)"""
+    if not raw:
+        return raw
+    g = _status_map_items(channel).get(str(raw).strip(), "blocked")
+    return "已完成" if g == "sale" else raw
+
+
+@router.get("/replenishment-config/order-status-map")
+@traced
+def get_status_map(channel: str = "jd"):
+    row = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
+    try:
+        stored = json.loads((row or {}).get("value") or "[]")
+        if isinstance(stored, list) and stored:
+            return ok(stored)
+    except Exception:
+        pass
+    return ok([dict(x) for x in _DEFAULT_STATUS_MAP])
+
+
+@router.put("/replenishment-config/order-status-map")
+@traced
+async def put_status_map(request: Request):
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channel = d.get("channel", "jd")
+    items = d.get("items") or []
+    old = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
+    _log_cfg_history(channel, "order_status_map", (old or {}).get("value", ""),
+                     json.dumps(items, ensure_ascii=False))
+    execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('order_status_map',%s,%s) "
+            "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            (json.dumps(items, ensure_ascii=False), channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok({"updated": len(items)})
+
+
 @router.get("/replenishment-config/seasons")
 @traced
 def get_seasons(channel: str = "jd", mode: str = "bbcc"):
