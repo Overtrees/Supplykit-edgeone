@@ -171,6 +171,7 @@ export default function CleansingPage() {
   useEffect(() => { setHammerCleansingTarget(tt) }, [tt])
   const { hammerCleansingChannel: ch, setHammerCleansingChannel: setCh } = useAppStore()
   const goStep = (n) => { setS(n); useAppStore.getState().setHammerCleansingStep(n) }
+  const [mp,setMp] = useState({})
   // 映射页当前映射同步(模板管理弹窗保存用) + 模板应用/自定义字段变更事件
   useEffect(() => { (window as any).__curMp = mp }, [mp])
   useEffect(() => {
@@ -180,7 +181,6 @@ export default function CleansingPage() {
     window.addEventListener('custom-fields-changed', onCfChanged)
     return () => { window.removeEventListener('apply-template', onApply as any); window.removeEventListener('custom-fields-changed', onCfChanged) }
   }, [])
-  const [mp,setMp] = useState({})
   const [pv,setPv] = useState(null)
   const [res,setRes] = useState(null)
   const [bs,setBs] = useState('')
