@@ -25,13 +25,13 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
       </div>
       <div className="hammer-panel">
         {!sameAsGlobal && (
-          <div style={{fontSize:10,color:'var(--warning)',textAlign:'center',background:'rgba(245,158,11,0.1)',borderRadius:32,padding:'4px 8px'}}>
+          <div style={{fontSize:'var(--font-10)',color:'var(--warning)',textAlign:'center',background:'rgba(245,158,11,0.1)',borderRadius:'var(--radius-lg)',padding:'4px 8px'}}>
             ⚠️ 当前全局主体是「{channel === 'jd' ? '京东' : '其他渠道'}」，导入后请切换主体查看该数据
           </div>
         )}
         {isInOut && (
           <div style={{marginTop:12}}>
-            <div style={{fontSize:12,fontWeight:600,textAlign:'center',marginBottom:8}}>重复数据冲突处理</div>
+            <div style={{fontSize:'var(--font-sm)',fontWeight:600,textAlign:'center',marginBottom:8}}>重复数据冲突处理</div>
             <div className="hammer-segmented">
               <span onClick={()=>setHammerCleansingConflict('sum')}
                 className={'hammer-segment' + (hammerCleansingConflict==='sum' ? ' active' : '')}>

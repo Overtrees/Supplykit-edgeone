@@ -17,12 +17,12 @@ const renderTmpl = (text) => {
   if (!text) return null
   const parts = text.split(/(\{(\w+)\})/g)
   return parts.map((p,i) => {
-    if (i%3===1) return <span key={i} style={{display:'inline-block',background:'rgba(29,78,216,0.1)',color:'var(--primary)',padding:'0 4px',borderRadius:4,fontWeight:600,fontSize:10}}>{VARS[parts[i+1]]||parts[i+1]}</span>
+    if (i%3===1) return <span key={i} style={{display:'inline-block',background:'rgba(29,78,216,0.1)',color:'var(--primary)',padding:'0 4px',borderRadius:4,fontWeight:600,fontSize:'var(--font-10)'}}>{VARS[parts[i+1]]||parts[i+1]}</span>
     if (i%3===2) return null
     return <span key={i}>{p}</span>
   })
 }
-const IS = {width:'100%',padding:'8px 12px',fontSize:16,border:'1px solid var(--border)',borderRadius:32,marginTop:4,outline:'none',background:'var(--card)',boxSizing:'border-box'}
+const IS = {width:'100%',padding:'8px 12px',fontSize:'var(--font-lg)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginTop:4,outline:'none',background:'var(--card)',boxSizing:'border-box'}
 
 const LF = [
   {l:'可用库存',v:'inv.available_qty'},{l:'安全库存',v:'inv.safety_qty'},{l:'在途库存',v:'inv.in_transit_qty'},
@@ -249,15 +249,15 @@ export default function RulesPage() {
   const paramFields = isBBCC ? [] : [{k:'lead_time_days',l:'前置期(天)'},{k:'safety_multiplier',l:'安全库存天数'},{k:'turnover_warning_90',l:'周转考核红线(天)'}]
   const purchaseFields = [{k:'purchase_lead_days',l:'采购前置(天)'},{k:'purchase_safety_days',l:'采购安全库存(天)'},{k:'moq',l:'MOQ最小起订(件)'},{k:'max_turnover_days',l:'目标周转(天)'}]
 
-  if (loading) return <div className='card'><div className='section-title'><div className="skeleton" style={{width:120,height:20}}/></div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>{[1,2,3,4,5,6].map(i=><div key={i}><div className="skeleton" style={{width:64,height:12,marginBottom:6}}/><div className="skeleton" style={{width:'100%',height:36}}/></div>)}</div><div style={{marginTop:16}}><div className="skeleton" style={{width:80,height:36,borderRadius:99}}/></div></div>
+  if (loading) return <div className='card'><div className='section-title'><div className="skeleton" style={{width:120,height:20}}/></div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>{[1,2,3,4,5,6].map(i=><div key={i}><div className="skeleton" style={{width:64,height:12,marginBottom:6}}/><div className="skeleton" style={{width:'100%',height:36}}/></div>)}</div><div style={{marginTop:16}}><div className="skeleton" style={{width:80,height:36,borderRadius:'var(--radius-full)'}}/></div></div>
 
   return <>
     {/* ── 调试面板（localStorage 设 c_debug_rules=1 启用） ── */}
     {(() => { try { return localStorage.getItem('c_debug_rules') === '1' } catch { return false } })() && (
-      <div style={{marginBottom:12,padding:10,borderRadius:12,border:'1px solid var(--warning)',background:'rgba(245,158,11,0.08)',fontSize:11,fontFamily:'monospace'}}>
+      <div style={{marginBottom:12,padding:10,borderRadius:'var(--radius-sm)',border:'1px solid var(--warning)',background:'rgba(245,158,11,0.08)',fontSize:'var(--font-xs)',fontFamily:'monospace'}}>
         <div style={{fontWeight:700,marginBottom:4}}>🔍 规则页调试追踪（关闭: localStorage 设 c_debug_rules=0）</div>
         <div style={{color:'var(--text-secondary)',marginBottom:4}}>当前 rules state: <b>{rules.length}</b> 条 | filteredRules: <b>{filteredRules.length}</b> 条 | 渠道: <b>{globalChannel}</b> | tab: <b>{tab}</b></div>
-        <button onClick={() => setDebugLog([])} style={{marginRight:6,padding:'2px 8px',borderRadius:8,border:'1px solid var(--border)',background:'transparent',fontSize:11}}>清空日志</button>
+        <button onClick={() => setDebugLog([])} style={{marginRight:6,padding:'2px 8px',borderRadius:'var(--radius-xs)',border:'1px solid var(--border)',background:'transparent',fontSize:'var(--font-xs)'}}>清空日志</button>
         {debugLog.length === 0 ? <div style={{color:'var(--muted2)'}}>暂无操作日志</div> : debugLog.map((l, i) => (
           <div key={i} style={{borderTop:'1px dashed var(--border)',padding:'2px 0'}}>
             <span style={{color:'var(--muted2)'}}>[{l.t}]</span> {l.msg}
@@ -273,24 +273,24 @@ export default function RulesPage() {
 
     {/* ── 规则列表 ── */}
     {tab==='rules' && <>
-      {editing !== null && <div style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:32,padding:16,marginBottom:16}}>
+      {editing !== null && <div style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',padding:16,marginBottom:16}}>
         <div style={{fontWeight:600,marginBottom:12}}>{editing.id?t("rules.edit"):t("rules.new_btn") + '规则'}</div>
 
         {/* 名称 + {t("rules.severity")} + 补货模式 */}
         <div style={{display:'flex',gap:12,alignItems:'flex-end',marginBottom:14,flexWrap:'wrap'}}>
-          <label style={{flex:1,minWidth:140,fontSize:12}}>{t("rules.name")}<input value={f.name} onChange={e=>setF({...f,name:e.target.value})} style={IS} placeholder='例：低库存预警'/></label>
-          <label style={{fontSize:12}}>级别
+          <label style={{flex:1,minWidth:140,fontSize:'var(--font-sm)'}}>{t("rules.name")}<input value={f.name} onChange={e=>setF({...f,name:e.target.value})} style={IS} placeholder='例：低库存预警'/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>级别
             <div className="hammer-segmented" style={{marginTop:4,flexShrink:0}}>
               {[{v:'warning',t:'警告',c:'var(--warning)'},{v:'error',t:t("rules.severity_error"),c:'var(--danger)'},{v:'info',t:'提示',c:'var(--primary)'}].map(({v,t,c}) =>
                 <span key={v} onClick={()=>setF({...f,severity:v})} className={'hammer-segment' + (f.severity===v?' active':'')} style={{minWidth:46,color:f.severity===v?c:undefined,fontWeight:f.severity===v?700:undefined}}>{t}</span>
               )}
             </div>
           </label>
-          <label style={{fontSize:12}}>补货模式
-            <select value={f.mode||''} onChange={e=>setF({...f,mode:e.target.value})} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:80}}>{MODES.filter(m => m.v !== 'bbcc' || globalChannel === 'jd').map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select>
+          <label style={{fontSize:'var(--font-sm)'}}>补货模式
+            <select value={f.mode||''} onChange={e=>setF({...f,mode:e.target.value})} style={{...IS,fontSize:'var(--font-13)',marginTop:4,width:'100%',minWidth:80}}>{MODES.filter(m => m.v !== 'bbcc' || globalChannel === 'jd').map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select>
           </label>
-          <label style={{fontSize:12}}>规则类型
-            <select value={f.alert_type||'low_stock'} onChange={e=>{const at=e.target.value;setF({...f,alert_type:at,event:(TYPE_TEMPLATE[at]||{}).event||f.event});const tm=(TYPE_TEMPLATE[at]||{}).cond;if(tm)setCond({...tm});setRParams(defaultParams(at))}} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
+          <label style={{fontSize:'var(--font-sm)'}}>规则类型
+            <select value={f.alert_type||'low_stock'} onChange={e=>{const at=e.target.value;setF({...f,alert_type:at,event:(TYPE_TEMPLATE[at]||{}).event||f.event});const tm=(TYPE_TEMPLATE[at]||{}).cond;if(tm)setCond({...tm});setRParams(defaultParams(at))}} style={{...IS,fontSize:'var(--font-13)',marginTop:4,width:'100%',minWidth:110}}>
               <option value='low_stock'>低库存(安全线)</option>
               <option value='stockout'>濒临断货(看板同源)</option>
               <option value='health'>健康监控(看板同源)</option>
@@ -299,55 +299,55 @@ export default function RulesPage() {
               <option value='custom'>自定义</option>
             </select>
           </label>
-          <label style={{fontSize:12}}>触发事件
-            <select value={f.event||'inventory.changed'} onChange={e=>setF({...f,event:e.target.value})} style={{...IS,fontSize:13,marginTop:4,width:'100%',minWidth:110}}>
+          <label style={{fontSize:'var(--font-sm)'}}>触发事件
+            <select value={f.event||'inventory.changed'} onChange={e=>setF({...f,event:e.target.value})} style={{...IS,fontSize:'var(--font-13)',marginTop:4,width:'100%',minWidth:110}}>
               {EVENTS.map(ev=><option key={ev.value} value={ev.value}>{ev.label}</option>)}
             </select>
           </label>
         </div>
 
         {/* 触发条件 — 一句话 */}
-        <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:32,padding:14,marginBottom:14}}>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconScale size={14} /> 触发条件</div>
+        <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',padding:14,marginBottom:14}}>
+          <div style={{fontWeight:600,fontSize:'var(--font-13)',marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconScale size={14} /> 触发条件</div>
           <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
             <span className="text-14 font-500">当</span>
-            <select value={cond.warehouse} onChange={e=>setCond(p=>({...p,warehouse:e.target.value}))} style={{...IS,flex:1,minWidth:60,fontSize:13}}>{WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w=><option key={w.v} value={w.v}>{w.l}</option>)}</select>
-            <select value={cond.left} onChange={e=>setCond(p=>({...p,left:e.target.value}))} style={{...IS,flex:2,minWidth:120,fontSize:14}}>{LF.map(f=><option key={f.v} value={f.v}>{f.l}</option>)}</select>
-            <select value={cond.op} onChange={e=>setCond(p=>({...p,op:e.target.value}))} style={{...IS,width:70,fontSize:14,textAlign:'center'}}>{OPS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select>
+            <select value={cond.warehouse} onChange={e=>setCond(p=>({...p,warehouse:e.target.value}))} style={{...IS,flex:1,minWidth:60,fontSize:'var(--font-13)'}}>{WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w=><option key={w.v} value={w.v}>{w.l}</option>)}</select>
+            <select value={cond.left} onChange={e=>setCond(p=>({...p,left:e.target.value}))} style={{...IS,flex:2,minWidth:120,fontSize:'var(--font-md)'}}>{LF.map(f=><option key={f.v} value={f.v}>{f.l}</option>)}</select>
+            <select value={cond.op} onChange={e=>setCond(p=>({...p,op:e.target.value}))} style={{...IS,width:70,fontSize:'var(--font-md)',textAlign:'center'}}>{OPS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select>
             <span style={{display:'flex',alignItems:'center',gap:4,flex:2,minWidth:140}}>
-              <input type='number' value={cond.pctValue||0} onChange={e=>setCond(p=>({...p,pctValue:parseInt(e.target.value)||0,rightType:'pct',right:'inv.safety_qty'}))} min={1} max={200} style={{...IS,width:'auto',flex:1,fontSize:14,textAlign:'center'}}/>
-              <span style={{fontSize:13,color:'var(--muted2)',fontWeight:500,whiteSpace:'nowrap'}}>
+              <input type='number' value={cond.pctValue||0} onChange={e=>setCond(p=>({...p,pctValue:parseInt(e.target.value)||0,rightType:'pct',right:'inv.safety_qty'}))} min={1} max={200} style={{...IS,width:'auto',flex:1,fontSize:'var(--font-md)',textAlign:'center'}}/>
+              <span style={{fontSize:'var(--font-13)',color:'var(--muted2)',fontWeight:500,whiteSpace:'nowrap'}}>
                 {cond.left==='inv.days_since_last' ? '天' : cond.left==='inv.available_qty' ? '%（安全库存百分比）' : cond.left==='order.quantity' ? '件' : cond.left==='order.total_amount' ? '元' : '%'}
               </span>
             </span>
           </div>
-          <div className='small' style={{marginTop:8,padding:'6px 10px',background:'var(--bg)',borderRadius:32,fontSize:13,color:'var(--primary)'}}>
+          <div className='small' style={{marginTop:8,padding:'6px 10px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-13)',color:'var(--primary)'}}>
             <IconClipboard size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />
             当 <b>{WHS.find(w=>w.v===cond.warehouse)?.l||'全部'}</b> <b>{fieldLbl(cond.left)}</b> {opLbl(cond.op)} <b>{cond.pctValue||0}{cond.left==='inv.days_since_last'?'天':cond.left==='inv.available_qty'?'%':'件'}</b>
-            {cond.left==='inv.available_qty' ? <span style={{color:'var(--muted2)',fontSize:11}}>（安全库存的 {cond.pctValue||0}%）</span> : ''}
+            {cond.left==='inv.available_qty' ? <span style={{color:'var(--muted2)',fontSize:'var(--font-xs)'}}>（安全库存的 {cond.pctValue||0}%）</span> : ''}
             时
             {(cond.or||[]).map((o,i)=>(<span key={i} style={{color:'var(--primary)'}}> <b>或</b> {WHS.find(w=>w.v===o.warehouse)?.l||'全部'} <b>{fieldLbl(o.left)}</b> {opLbl(o.op)} <b>{o.right}</b></span>))}
           </div>
           {/* P2 或条件组(可拓展: 多条件任一满足即触发, 如断货'时间线或缓冲破位') */}
           {(cond.or||[]).map((o, i) => (
-            <div key={i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8,padding:'8px 10px',background:'var(--bg)',borderRadius:32,border:'1px dashed var(--border)'}}>
+            <div key={i} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginTop:8,padding:'8px 10px',background:'var(--bg)',borderRadius:'var(--radius-lg)',border:'1px dashed var(--border)'}}>
               <span className="text-13 font-600" style={{color:'var(--primary)'}}>或</span>
-              <select value={o.warehouse} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],warehouse:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:60,fontSize:12}}>{WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w=><option key={w.v} value={w.v}>{w.l}</option>)}</select>
-              <select value={o.left} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],left:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:2,minWidth:110,fontSize:12}}>{LF.map(f=><option key={f.v} value={f.v}>{f.l}</option>)}</select>
-              <select value={o.op} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],op:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,width:64,fontSize:12,textAlign:'center'}}>{OPS.map(x=><option key={x.v} value={x.v}>{x.l}</option>)}</select>
+              <select value={o.warehouse} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],warehouse:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:60,fontSize:'var(--font-sm)'}}>{WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w=><option key={w.v} value={w.v}>{w.l}</option>)}</select>
+              <select value={o.left} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],left:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,flex:2,minWidth:110,fontSize:'var(--font-sm)'}}>{LF.map(f=><option key={f.v} value={f.v}>{f.l}</option>)}</select>
+              <select value={o.op} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],op:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,width:64,fontSize:'var(--font-sm)',textAlign:'center'}}>{OPS.map(x=><option key={x.v} value={x.v}>{x.l}</option>)}</select>
               <input type="number" step="any" value={o.right==='inv.safety_qty'?'':o.right} placeholder={o.right==='inv.safety_qty'?'安全线':''}
-                onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],right:e.target.value||'inv.safety_qty',rightType:'number'};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:80,fontSize:12}}/>
-              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:12,color:'var(--danger)',cursor:'pointer',padding:'4px 6px'}}>✕</span>
+                onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],right:e.target.value||'inv.safety_qty',rightType:'number'};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:80,fontSize:'var(--font-sm)'}}/>
+              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'4px 6px'}}>✕</span>
             </div>
           ))}
-          <button onClick={()=>setCond(p=>({...p,or:[...(p.or||[]),{left:'inv.buffer',op:'<=',right:'1',rightType:'number',warehouse:'',pctValue:100}]}))} className="clickable" style={{marginTop:8,fontSize:12,padding:'4px 12px',borderRadius:99,border:'1px dashed var(--primary)',background:'transparent',color:'var(--primary)',cursor:'pointer'}}>＋ 或条件（任一满足触发）</button>
+          <button onClick={()=>setCond(p=>({...p,or:[...(p.or||[]),{left:'inv.buffer',op:'<=',right:'1',rightType:'number',warehouse:'',pctValue:100}]}))} className="clickable" style={{marginTop:8,fontSize:'var(--font-sm)',padding:'4px 12px',borderRadius:'var(--radius-full)',border:'1px dashed var(--primary)',background:'transparent',color:'var(--primary)',cursor:'pointer'}}>＋ 或条件（任一满足触发）</button>
         </div>
 
         {/* 告警内容 */}
-        <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:32,padding:14}}>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容
+        <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',padding:14}}>
+          <div style={{fontWeight:600,fontSize:'var(--font-13)',marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconAlert size={14} /> 告警内容
             <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:4}}>
-              <span className="muted2" style={{fontSize:10}}>生成告警</span>
+              <span className="muted2" style={{fontSize:'var(--font-10)'}}>生成告警</span>
               <span className="hammer-segmented" style={{flexShrink:0}}>
                 <span className={'hammer-segment' + (rParams.alert_enabled !== '0' ? ' active' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'1'})} style={{minWidth:34,padding:'2px 6px'}}>开</span>
                 <span className={'hammer-segment' + (rParams.alert_enabled === '0' ? ' active' : '')} onClick={()=>setRParams({...rParams,alert_enabled:'0'})} style={{minWidth:34,padding:'2px 6px'}}>关</span>
@@ -355,27 +355,27 @@ export default function RulesPage() {
             </span>
           </div>
           <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:8}}>
-            <label style={{flex:1,minWidth:180,fontSize:12}}>
+            <label style={{flex:1,minWidth:180,fontSize:'var(--font-sm)'}}>
               告警标题
-              <div style={{marginTop:4,padding:'8px 12px',background:'var(--bg)',borderRadius:32,fontSize:14,minHeight:36,border:'1px solid var(--border)',display:'flex',alignItems:'center',flexWrap:'wrap',gap:3}}>
-                {renderTmpl(f.alert_title) || <span className="muted" style={{fontSize:12}}>输入文字或点击下方按钮插入变量</span>}
+              <div style={{marginTop:4,padding:'8px 12px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-md)',minHeight:36,border:'1px solid var(--border)',display:'flex',alignItems:'center',flexWrap:'wrap',gap:3}}>
+                {renderTmpl(f.alert_title) || <span className="muted" style={{fontSize:'var(--font-sm)'}}>输入文字或点击下方按钮插入变量</span>}
               </div>
-              <input value={f.alert_title} onChange={e=>setF({...f,alert_title:e.target.value})} style={{...IS,fontSize:13,marginTop:4}} placeholder='输入文字，点击下方按钮插入变量'/>
+              <input value={f.alert_title} onChange={e=>setF({...f,alert_title:e.target.value})} style={{...IS,fontSize:'var(--font-13)',marginTop:4}} placeholder='输入文字，点击下方按钮插入变量'/>
               <div style={{display:'flex',gap:4,marginTop:4,flexWrap:'wrap'}}>
                 {[{v:'{product_name}',l:'商品名'},{v:'{sku}',l:'SKU'}].map(t=>
-                  <span key={t.v} onClick={()=>setF({...f,alert_title:f.alert_title+t.v})} className="clickable" style={{padding:'4px 12px',borderRadius:99,fontSize:12,background:'rgba(29,78,216,0.1)',color:'var(--primary)',cursor:'pointer',border:'1px solid rgba(29,78,216,0.2)',display:'inline-flex',alignItems:'center',gap:3}}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{t.l}</span>
+                  <span key={t.v} onClick={()=>setF({...f,alert_title:f.alert_title+t.v})} className="clickable" style={{padding:'4px 12px',borderRadius:'var(--radius-full)',fontSize:'var(--font-sm)',background:'rgba(29,78,216,0.1)',color:'var(--primary)',cursor:'pointer',border:'1px solid rgba(29,78,216,0.2)',display:'inline-flex',alignItems:'center',gap:3}}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{t.l}</span>
                 )}
               </div>
             </label>
-            <label style={{flex:1,minWidth:180,fontSize:12}}>
+            <label style={{flex:1,minWidth:180,fontSize:'var(--font-sm)'}}>
               告警描述
-              <div style={{marginTop:4,padding:'8px 12px',background:'var(--bg)',borderRadius:32,fontSize:14,minHeight:36,border:'1px solid var(--border)',display:'flex',alignItems:'center',flexWrap:'wrap',gap:3}}>
-                {renderTmpl(f.alert_desc) || <span className="muted" style={{fontSize:12}}>输入文字或点击下方按钮插入变量</span>}
+              <div style={{marginTop:4,padding:'8px 12px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-md)',minHeight:36,border:'1px solid var(--border)',display:'flex',alignItems:'center',flexWrap:'wrap',gap:3}}>
+                {renderTmpl(f.alert_desc) || <span className="muted" style={{fontSize:'var(--font-sm)'}}>输入文字或点击下方按钮插入变量</span>}
               </div>
-              <input value={f.alert_desc} onChange={e=>setF({...f,alert_desc:e.target.value})} style={{...IS,fontSize:13,marginTop:4}} placeholder='输入文字，点击下方按钮插入变量'/>
+              <input value={f.alert_desc} onChange={e=>setF({...f,alert_desc:e.target.value})} style={{...IS,fontSize:'var(--font-13)',marginTop:4}} placeholder='输入文字，点击下方按钮插入变量'/>
               <div style={{display:'flex',gap:4,marginTop:4,flexWrap:'wrap'}}>
                 {[{v:'{avail}',l:'可用量'},{v:'{safety}',l:'安全线'},{v:'{sku}',l:'SKU'}].map(t=>
-                  <span key={t.v} onClick={()=>setF({...f,alert_desc:f.alert_desc+t.v})} className="clickable" style={{padding:'4px 12px',borderRadius:99,fontSize:12,background:'rgba(29,78,216,0.1)',color:'var(--primary)',cursor:'pointer',border:'1px solid rgba(29,78,216,0.2)',display:'inline-flex',alignItems:'center',gap:3}}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{t.l}</span>
+                  <span key={t.v} onClick={()=>setF({...f,alert_desc:f.alert_desc+t.v})} className="clickable" style={{padding:'4px 12px',borderRadius:'var(--radius-full)',fontSize:'var(--font-sm)',background:'rgba(29,78,216,0.1)',color:'var(--primary)',cursor:'pointer',border:'1px solid rgba(29,78,216,0.2)',display:'inline-flex',alignItems:'center',gap:3}}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{t.l}</span>
                 )}
               </div>
             </label>
@@ -384,9 +384,9 @@ export default function RulesPage() {
 
         {/* 业务计算参数(融合: 断货/健康类规则携带看板计算参数, 保存进 rules.params; stock-risk/health_index 同源读取) */}
         {(f.alert_type === 'stockout' || f.alert_type === 'health') && (
-          <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:32,padding:14,marginTop:14}}>
-            <div style={{fontWeight:600,fontSize:13,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>⚙️ {f.alert_type === 'stockout' ? '断货计算参数(看板断货卡同源)' : '健康分档参数(看板健康卡同源)'}</div>
-            <div className="muted2" style={{fontSize:11,marginBottom:8}}>
+          <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',padding:14,marginTop:14}}>
+            <div style={{fontWeight:600,fontSize:'var(--font-13)',marginBottom:4,display:'flex',alignItems:'center',gap:4}}>⚙️ {f.alert_type === 'stockout' ? '断货计算参数(看板断货卡同源)' : '健康分档参数(看板健康卡同源)'}</div>
+            <div className="muted2" style={{fontSize:'var(--font-xs)',marginBottom:8}}>
               {f.alert_type === 'stockout'
                 ? '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值'
                 : '配置后看板库存健康度分档(good/warning)即时按此计算，停用/删除本规则则回默认值'}
@@ -399,10 +399,10 @@ export default function RulesPage() {
                    ['orange_slack_days','橙灯天数余量(默认1)'],['include_avail_zero','已断纳入红灯 1/0'],['log','审计日志 1/0(触发写 quality_logs)']]
                 : [['health_good','健康档位线(默认85)'],['health_warning','预警档位线(默认60)'],['log','审计日志 1/0(触发写 quality_logs)']]
               ).map(([k, l]) => (
-                <label key={k} style={{fontSize:12}}>{l}
+                <label key={k} style={{fontSize:'var(--font-sm)'}}>{l}
                   <input type="number" step="any" value={rParams[k] ?? ''}
                     onChange={e=>setRParams({...rParams, [k]: e.target.value})}
-                    style={{...IS,fontSize:13,marginTop:2,padding:'6px 10px'}} placeholder="默认值"/>
+                    style={{...IS,fontSize:'var(--font-13)',marginTop:2,padding:'6px 10px'}} placeholder="默认值"/>
                 </label>
               ))}
             </div>
@@ -422,26 +422,26 @@ export default function RulesPage() {
         const whLbl = WHS.find(w=>w.v===condInfo.warehouse)?.l||'全部'
         const modeLbl = MODES.find(m=>m.v===(rule.mode||''))?.l||'全部'
         const condText = `当 ${whLbl} ${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${condInfo.rightType==='pct'?fieldLbl(condInfo.right)+'的'+condInfo.pctValue+'%':(condInfo.rightType==='field'?fieldLbl(condInfo.right):condInfo.right)}`
-        return <div key={rule.id} onClick={()=>{if(!prodBatch){const c=pc(rule.condition_json||'{}');setEditing(rule);setF({name:rule.name,event:rule.event,alert_type:rule.alert_type||'low_stock',alert_title:rule.alert_title||'',alert_desc:rule.alert_desc||'',severity:rule.severity||'warning',mode:rule.mode||'',condition_json:rule.condition_json||'{}'});setRParams(rule.params||{});setCond(c)}}} style={{cursor:prodBatch?'default':'pointer',padding:'14px 16px',border:'1px solid var(--border)',borderRadius:32,marginBottom:8,background:prodBatch&&selIds.includes(rule.id)?'rgba(29,78,216,0.08)':'transparent'}}>
-        {prodBatch && <span onClick={(e)=>{e.stopPropagation();const ids=selIds;setSelIds(ids.includes(rule.id)?ids.filter(i=>i!==rule.id):[...ids,rule.id])}} className="clickable" style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:selIds.includes(rule.id)?'var(--primary)':'var(--border)',background:selIds.includes(rule.id)?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11}}>{selIds.includes(rule.id)?'✓':''}</span><span style={{fontSize:12,color:'var(--muted2)'}}>选择</span></span>}
+        return <div key={rule.id} onClick={()=>{if(!prodBatch){const c=pc(rule.condition_json||'{}');setEditing(rule);setF({name:rule.name,event:rule.event,alert_type:rule.alert_type||'low_stock',alert_title:rule.alert_title||'',alert_desc:rule.alert_desc||'',severity:rule.severity||'warning',mode:rule.mode||'',condition_json:rule.condition_json||'{}'});setRParams(rule.params||{});setCond(c)}}} style={{cursor:prodBatch?'default':'pointer',padding:'14px 16px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginBottom:8,background:prodBatch&&selIds.includes(rule.id)?'rgba(29,78,216,0.08)':'transparent'}}>
+        {prodBatch && <span onClick={(e)=>{e.stopPropagation();const ids=selIds;setSelIds(ids.includes(rule.id)?ids.filter(i=>i!==rule.id):[...ids,rule.id])}} className="clickable" style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:selIds.includes(rule.id)?'var(--primary)':'var(--border)',background:selIds.includes(rule.id)?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)'}}>{selIds.includes(rule.id)?'✓':''}</span><span style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>选择</span></span>}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:600,fontSize:15,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+          <div style={{fontWeight:600,fontSize:'var(--font-15)',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {rule.name}
-            <span className={'pill '+(rule.is_active?'success':'warning')} style={{fontSize:10,padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{rule.is_active?'启用':'停用'}</span>
-            <span className={'pill '+sevCls(rule.severity)} style={{fontSize:10,padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{sevLbl(rule.severity)}</span>
-            {rule.mode && <span style={{fontSize:10,color:'var(--muted2)',background:'var(--bg)',padding:'2px 8px',borderRadius:99}}>{modeLbl}</span>}
+            <span className={'pill '+(rule.is_active?'success':'warning')} style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{rule.is_active?'启用':'停用'}</span>
+            <span className={'pill '+sevCls(rule.severity)} style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{sevLbl(rule.severity)}</span>
+            {rule.mode && <span style={{fontSize:'var(--font-10)',color:'var(--muted2)',background:'var(--bg)',padding:'2px 8px',borderRadius:'var(--radius-full)'}}>{modeLbl}</span>}
           </div>
-          <div style={{marginTop:6,padding:'8px 12px',background:'var(--bg)',borderRadius:32,fontSize:13,color:'var(--primary)',display:'block'}}>
+          <div style={{marginTop:6,padding:'8px 12px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-13)',color:'var(--primary)',display:'block'}}>
             <IconScale size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} /> {condText}
           </div>
-          <div style={{fontSize:12,color:'var(--muted)',marginTop:4,display:'flex',flexWrap:'wrap',gap:3,alignItems:'center'}}>
+          <div style={{fontSize:'var(--font-sm)',color:'var(--muted)',marginTop:4,display:'flex',flexWrap:'wrap',gap:3,alignItems:'center'}}>
             {renderTmpl(rule.alert_title) || <span className="small muted">无标题</span>}
             {rule.alert_desc ? <><span style={{color:'var(--muted2)',margin:'0 3px'}}>·</span>{renderTmpl(rule.alert_desc)}</> : ''}
           </div>
         </div>
         <div style={{display:'flex',gap:8,flexShrink:0,alignItems:'flex-start'}}>
-          <button onClick={()=>{setTestRule(rule);setTestParams(rule.params||{});setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0,adj_dos:'',buffer:'',health_score:100});setTestResult(null)}} className="clickable" style={{fontSize:13,padding:'6px 14px',minHeight:36,borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
+          <button onClick={()=>{setTestRule(rule);setTestParams(rule.params||{});setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0,adj_dos:'',buffer:'',health_score:100});setTestResult(null)}} className="clickable" style={{fontSize:'var(--font-13)',padding:'6px 14px',minHeight:36,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
 
         </div>
         </div>
@@ -452,17 +452,17 @@ export default function RulesPage() {
     {/* ── 补货参数 ── */}
     {tab==='params' && <div>
       {isBBCC ? <>
-        <div className='section-title' style={{fontSize:14,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconPackage size={14} /> C 仓</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>{cParams.map(({k,l,h})=><label key={k} style={{fontSize:13}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/>{h && <div className='small muted' style={{fontSize:11,marginTop:2}}>{h}</div>}</label>)}</div>
-        <div className='section-title' style={{fontSize:14,marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconFactory size={14} /> B 仓</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:20}}>{bParams.map(({k,l})=><label key={k} style={{fontSize:13}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/></label>)}</div>
-      </> : <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:20}}>{paramFields.map(({k,l})=><label key={k} style={{fontSize:13}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/></label>)}</div>}
+        <div className='section-title' style={{fontSize:'var(--font-md)',marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconPackage size={14} /> C 仓</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>{cParams.map(({k,l,h})=><label key={k} style={{fontSize:'var(--font-13)'}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/>{h && <div className='small muted' style={{fontSize:'var(--font-xs)',marginTop:2}}>{h}</div>}</label>)}</div>
+        <div className='section-title' style={{fontSize:'var(--font-md)',marginBottom:10,display:'flex',alignItems:'center',gap:4}}><IconFactory size={14} /> B 仓</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:20}}>{bParams.map(({k,l})=><label key={k} style={{fontSize:'var(--font-13)'}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/></label>)}</div>
+      </> : <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:20}}>{paramFields.map(({k,l})=><label key={k} style={{fontSize:'var(--font-13)'}}>{l}<input value={cfg[k]||''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} style={IS}/></label>)}</div>}
       <button disabled={saving} onClick={async()=>{setSaving(true);const m=cfg.replenishment_mode||'bbcc';const ch=globalChannel;try{const toSave={};[...cParams,...bParams,...paramFields].forEach(f=>{if(cfg[f.k]!==undefined)toSave[f.k]=cfg[f.k]});await api.put('/api/replenishment-config?mode='+m+'&channel='+ch,toSave);setCfg(p=>({...p,...toSave}));toast.success('已保存'); window.dispatchEvent(new Event('rules-changed'))}catch(e){saveErr(e)}setSaving(false)}} className="btn btn-primary" style={{width:'100%',display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42}}>{saving?<><IconLoading size={14} /> 保存中...</>:<><IconSave size={14} /> 保存</>}</button>
     </div>}
 
     {/* ── 采购参数 ── */}
     {tab === 'purchase' && <div>
-      <div style={{fontSize:12,color:'var(--muted2)',marginBottom:8}}>供应商起订（可选）</div>
+      <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:8}}>供应商起订（可选）</div>
       <div className="hammer-btn-row" style={{marginBottom:12}}>
         <select value={selectedSupplier} onChange={e=>{setSelectedSupplier(e.target.value);try{localStorage.setItem('c_supplier_'+globalChannel,e.target.value)}catch{}}}
           className="hammer-select">
@@ -474,7 +474,7 @@ export default function RulesPage() {
         {purchaseFields.map(({k,l})=>{
           const isSupKey = k === 'moq' || k === 'purchase_lead_days' || k === 'purchase_safety_days'
           const actualKey = selectedSupplier && isSupKey ? `${k}_${selectedSupplier}` : k
-          return <label key={actualKey} style={{fontSize:13}}>
+          return <label key={actualKey} style={{fontSize:'var(--font-13)'}}>
             {l}{selectedSupplier && isSupKey && <span className='small muted'>（{selectedSupplier}）</span>}
             <input value={cfg[actualKey]||''} onChange={e=>setCfg(p=>({...p,[actualKey]:e.target.value}))} className="hammer-input"/>
           </label>
@@ -485,11 +485,11 @@ export default function RulesPage() {
 
     {/* ── 滞销参数（自定义品类条目，仿活动系数） ── */}
     {tab === 'slow' && <div>
-      <div className="small muted" style={{marginBottom:10,fontSize:12}}>按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段</div>
-      {slowCats.map((s,i)=><div key={s.key||i} style={{padding:'10px 14px',border:'1px solid var(--border)',borderRadius:32,marginBottom:8}}>
+      <div className="small muted" style={{marginBottom:10,fontSize:'var(--font-sm)'}}>按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段</div>
+      {slowCats.map((s,i)=><div key={s.key||i} style={{padding:'10px 14px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginBottom:8}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
-          <input value={s.name} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder='品类名(如 食品)' style={{flex:1,minWidth:80,fontSize:16,padding:'6px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
-          <label style={{fontSize:12,display:'flex',alignItems:'center',gap:4,cursor:'pointer',flexShrink:0}} onClick={()=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,enabled:!(x.enabled!==false)}:x))}>
+          <input value={s.name} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder='品类名(如 食品)' style={{flex:1,minWidth:80,fontSize:'var(--font-lg)',padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',outline:'none'}}/>
+          <label style={{fontSize:'var(--font-sm)',display:'flex',alignItems:'center',gap:4,cursor:'pointer',flexShrink:0}} onClick={()=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,enabled:!(x.enabled!==false)}:x))}>
             <svg width="20" height="20" viewBox="0 0 18 18" style={{flexShrink:0}}>
               {s.enabled!==false ? (
                 <><circle cx="9" cy="9" r="8" fill="var(--primary)" /><path d="M5.5 9.5l2 2 3.5-3.5" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" /></>
@@ -498,47 +498,47 @@ export default function RulesPage() {
               )}
             </svg>
           </label>
-          <span onClick={()=>setSlowCats(p=>p.filter((_,j)=>j!==i))} className="clickable" style={{color:'var(--danger)',fontSize:16,cursor:'pointer',flexShrink:0}}>×</span>
+          <span onClick={()=>setSlowCats(p=>p.filter((_,j)=>j!==i))} className="clickable" style={{color:'var(--danger)',fontSize:'var(--font-lg)',cursor:'pointer',flexShrink:0}}>×</span>
         </div>
         <div style={{display:'flex',gap:8,marginBottom:8,flexWrap:'wrap'}}>
-          <label style={{fontSize:12,flex:1,minWidth:80}}>滞销线(天)
+          <label style={{fontSize:'var(--font-sm)',flex:1,minWidth:80}}>滞销线(天)
             <input type='number' value={s.slow_days} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,slow_days:parseInt(e.target.value)||30}:x))} style={{...IS,marginTop:2}}/>
           </label>
-          <label style={{fontSize:12,flex:1,minWidth:80}}>观察线(天) <span style={{color:'var(--muted2)'}}>留空自动</span>
+          <label style={{fontSize:'var(--font-sm)',flex:1,minWidth:80}}>观察线(天) <span style={{color:'var(--muted2)'}}>留空自动</span>
             <input type='number' value={s.observe_days ?? ''} placeholder={String(Math.max(Math.floor(parseInt(s.slow_days||30) / 2), 15))} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,observe_days: e.target.value===''?'':parseInt(e.target.value)||''}:x))} style={{...IS,marginTop:2}}/>
           </label>
-          <label style={{fontSize:12,flex:1,minWidth:80}}>临期线(月)
+          <label style={{fontSize:'var(--font-sm)',flex:1,minWidth:80}}>临期线(月)
             <input type='number' value={s.shelf_months} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,shelf_months:parseInt(e.target.value)||3}:x))} style={{...IS,marginTop:2}}/>
           </label>
         </div>
-        <label style={{fontSize:12,display:'block'}}>品类名单（逗号分隔，匹配商品"分类"字段）
+        <label style={{fontSize:'var(--font-sm)',display:'block'}}>品类名单（逗号分隔，匹配商品"分类"字段）
           <input value={s.cats||''} onChange={e=>setSlowCats(p=>p.map((x,j)=>j===i?{...x,cats:e.target.value}:x))} placeholder='酱油,薯片,糖果...' style={{...IS,marginTop:2}}/>
         </label>
       </div>)}
       <div style={{marginTop:16}}>
-        <label style={{fontSize:13,display:'flex',alignItems:'center',gap:10}}>物流在途(天)
-          <input value={transitDays} onChange={e=>setTransitDays(e.target.value)} style={{...IS,width:80,fontSize:14,textAlign:'center'}}/>
-          <span className="small muted" style={{fontSize:11}}>库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3 标临近）</span>
+        <label style={{fontSize:'var(--font-13)',display:'flex',alignItems:'center',gap:10}}>物流在途(天)
+          <input value={transitDays} onChange={e=>setTransitDays(e.target.value)} style={{...IS,width:80,fontSize:'var(--font-md)',textAlign:'center'}}/>
+          <span className="small muted" style={{fontSize:'var(--font-xs)'}}>库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3 标临近）</span>
         </label>
-        <label style={{fontSize:13,display:'flex',alignItems:'center',gap:10,marginTop:8}}>资金占用线(¥)
-          <input value={fundThreshold} onChange={e=>setFundThreshold(e.target.value)} style={{...IS,width:80,fontSize:14,textAlign:'center'}}/>
-          <span className="small muted" style={{fontSize:11}}>滞销品资金占用(库存×单价)超此线 → 升级「处置」等级(默认 10000)</span>
+        <label style={{fontSize:'var(--font-13)',display:'flex',alignItems:'center',gap:10,marginTop:8}}>资金占用线(¥)
+          <input value={fundThreshold} onChange={e=>setFundThreshold(e.target.value)} style={{...IS,width:80,fontSize:'var(--font-md)',textAlign:'center'}}/>
+          <span className="small muted" style={{fontSize:'var(--font-xs)'}}>滞销品资金占用(库存×单价)超此线 → 升级「处置」等级(默认 10000)</span>
         </label>
       </div>
       <div style={{marginTop:12}}>
-        <button onClick={()=>setSlowCats(p=>[...p,{key:'new'+Date.now(),name:'新品类',slow_days:30,observe_days:'',shelf_months:3,cats:'',enabled:true}])} className="btn btn-ghost clickable" style={{fontSize:13,padding:'8px 16px',width:'100%',minHeight:40}}>+ 添加品类</button>
+        <button onClick={()=>setSlowCats(p=>[...p,{key:'new'+Date.now(),name:'新品类',slow_days:30,observe_days:'',shelf_months:3,cats:'',enabled:true}])} className="btn btn-ghost clickable" style={{fontSize:'var(--font-13)',padding:'8px 16px',width:'100%',minHeight:40}}>+ 添加品类</button>
       </div>
       <div style={{marginTop:12}}>
         <button disabled={saving} onClick={async()=>{setSaving(true);const ch=globalChannel;try{const r=await api.put('/api/replenishment-config/slow-cats?channel='+ch,{items:slowCats});await api.put('/api/replenishment-config?channel='+ch,{transit_days:transitDays||'',slow_fund_threshold:fundThreshold||''});toast.success('已保存'); window.dispatchEvent(new Event('rules-changed'))}catch(e){saveErr(e)}setSaving(false)}} className="btn btn-primary" style={{width:'100%',display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42}}>{saving?<><IconLoading size={14} /> 保存中...</>:<><IconSave size={14} /> 保存</>}</button>
         </div>
       </div>}
     {tab === 'params' && <><div className='section-title' style={{marginTop:16,marginBottom:8,display:'flex',alignItems:'center',gap:4}}><IconTag size={14} /> 活动系数</div>
-      {seasons.map((s,i)=><div key={s.key||i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:'1px solid var(--border)',borderRadius:32,marginBottom:8}}>
-        <input value={s.name} onChange={e=>setSeasons(p=>p.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder='618大促' style={{flex:1,minWidth:80,fontSize:16,padding:'6px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
+      {seasons.map((s,i)=><div key={s.key||i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginBottom:8}}>
+        <input value={s.name} onChange={e=>setSeasons(p=>p.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder='618大促' style={{flex:1,minWidth:80,fontSize:'var(--font-lg)',padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',outline:'none'}}/>
         <span className='small muted'>×</span>
-        <input type='number' value={s.factor} onChange={e=>setSeasons(p=>p.map((x,j)=>j===i?{...x,factor:parseFloat(e.target.value)||1}:x))} step='0.1' min='1' max='3' style={{width:70,fontSize:16,padding:'6px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
+        <input type='number' value={s.factor} onChange={e=>setSeasons(p=>p.map((x,j)=>j===i?{...x,factor:parseFloat(e.target.value)||1}:x))} step='0.1' min='1' max='3' style={{width:70,fontSize:'var(--font-lg)',padding:'6px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',outline:'none'}}/>
         <span className='small muted'>倍</span>
-        <label style={{fontSize:12,display:'flex',alignItems:'center',gap:4,cursor:'pointer',flexShrink:0}} onClick={()=>setSeasons(p=>p.map((x,j)=>j===i?{...x,enabled:!(x.enabled!==false)}:x))}>
+        <label style={{fontSize:'var(--font-sm)',display:'flex',alignItems:'center',gap:4,cursor:'pointer',flexShrink:0}} onClick={()=>setSeasons(p=>p.map((x,j)=>j===i?{...x,enabled:!(x.enabled!==false)}:x))}>
           <svg width="20" height="20" viewBox="0 0 18 18" style={{flexShrink:0}}>
             {s.enabled!==false ? (
               <>
@@ -551,9 +551,9 @@ export default function RulesPage() {
           </svg>
           启用
         </label>
-        <button onClick={()=>setSeasons(p=>p.filter((_,j)=>j!==i))} className="clickable" style={{fontSize:13,padding:'6px 14px',minHeight:36,borderRadius:99,border:'none',background:'var(--danger)',color:'#fff',cursor:'pointer',fontWeight:600,flexShrink:0}}>删除</button>
+        <button onClick={()=>setSeasons(p=>p.filter((_,j)=>j!==i))} className="clickable" style={{fontSize:'var(--font-13)',padding:'6px 14px',minHeight:36,borderRadius:'var(--radius-full)',border:'none',background:'var(--danger)',color:'#fff',cursor:'pointer',fontWeight:600,flexShrink:0}}>删除</button>
       </div>)}
-      <button onClick={()=>setSeasons(p=>[...p,{key:'new',name:'新活动',factor:1.2,enabled:true}])} className="btn btn-ghost clickable" style={{fontSize:13,padding:'8px 16px',width:'100%',minHeight:40}}>+ 添加活动</button>
+      <button onClick={()=>setSeasons(p=>[...p,{key:'new',name:'新活动',factor:1.2,enabled:true}])} className="btn btn-ghost clickable" style={{fontSize:'var(--font-13)',padding:'8px 16px',width:'100%',minHeight:40}}>+ 添加活动</button>
       <div style={{marginTop:12}}>
         <button disabled={seasonsSaving} onClick={async()=>{setSeasonsSaving(true);const m=cfg.replenishment_mode||'bbcc';const ch=globalChannel;try{await api.put('/api/replenishment-config/seasons?mode='+m+'&channel='+ch,{items:seasons});await loadCfg(m,ch);toast.success('已保存'); window.dispatchEvent(new Event('rules-changed'))}catch(e){saveErr(e)}setSeasonsSaving(false)}} className="btn btn-primary" style={{width:'100%',display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:42,opacity:seasonsSaving?0.6:1}}>{seasonsSaving?<><IconLoading size={14} /> 保存中...</>:<><IconSave size={14} /> 保存</>}</button>
       </div>
@@ -563,16 +563,16 @@ export default function RulesPage() {
     {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发） ── */}
     {testRule && <div style={{position:'fixed',inset:0,zIndex:4000}}>
       <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
-      <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:32,padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'75vh',overflowY:'auto'}}>
-        <div style={{fontWeight:700,fontSize:16,marginBottom:4,textAlign:'center'}}>规则测试</div>
-        <div style={{textAlign:'center',fontSize:12,color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
+      <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:'var(--radius-lg)',padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'75vh',overflowY:'auto'}}>
+        <div style={{fontWeight:700,fontSize:'var(--font-lg)',marginBottom:4,textAlign:'center'}}>规则测试</div>
+        <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-          <label style={{fontSize:12}}>可用量<input type="number" value={testInv.available_qty} onChange={e=>setTestInv(p=>({...p,available_qty:e.target.value}))} style={IS}/></label>
-          <label style={{fontSize:12}}>安全线<input type="number" value={testInv.safety_qty} onChange={e=>setTestInv(p=>({...p,safety_qty:e.target.value}))} style={IS}/></label>
-          <label style={{fontSize:12}}>在途<input type="number" value={testInv.in_transit_qty} onChange={e=>setTestInv(p=>({...p,in_transit_qty:e.target.value}))} style={IS}/></label>
-          <label style={{fontSize:12}}>滞销天数<input type="number" value={testInv.days_since_last} onChange={e=>setTestInv(p=>({...p,days_since_last:e.target.value}))} style={IS}/></label>
-          <label style={{fontSize:12}}>订单数量<input type="number" value={testInv.order_quantity} onChange={e=>setTestInv(p=>({...p,order_quantity:e.target.value}))} style={IS}/></label>
-          <label style={{fontSize:12}}>仓库主体
+          <label style={{fontSize:'var(--font-sm)'}}>可用量<input type="number" value={testInv.available_qty} onChange={e=>setTestInv(p=>({...p,available_qty:e.target.value}))} style={IS}/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>安全线<input type="number" value={testInv.safety_qty} onChange={e=>setTestInv(p=>({...p,safety_qty:e.target.value}))} style={IS}/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>在途<input type="number" value={testInv.in_transit_qty} onChange={e=>setTestInv(p=>({...p,in_transit_qty:e.target.value}))} style={IS}/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>滞销天数<input type="number" value={testInv.days_since_last} onChange={e=>setTestInv(p=>({...p,days_since_last:e.target.value}))} style={IS}/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>订单数量<input type="number" value={testInv.order_quantity} onChange={e=>setTestInv(p=>({...p,order_quantity:e.target.value}))} style={IS}/></label>
+          <label style={{fontSize:'var(--font-sm)'}}>仓库主体
             <select value={testInv.warehouse_type} onChange={e=>setTestInv(p=>({...p,warehouse_type:e.target.value}))} style={IS}>
               <option value="">全部</option>
               <option value="platform">C仓</option>
@@ -588,14 +588,14 @@ export default function RulesPage() {
           const _needHealth = _cj.includes('health.')
           const _needParams = _cj.includes('params.') && testParams && Object.keys(testParams).length > 0
           if (!_needAdj && !_needBuf && !_needHealth && !_needParams) return null
-          return <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg)',borderRadius:24,border:'1px solid var(--border)'}}>
-            <div style={{fontWeight:600,fontSize:12,marginBottom:8}}>⚙️ 计算变量/规则参数（与看板判定同源，可调预览）</div>
+          return <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg)',borderRadius:'var(--radius-card)',border:'1px solid var(--border)'}}>
+            <div style={{fontWeight:600,fontSize:'var(--font-sm)',marginBottom:8}}>⚙️ 计算变量/规则参数（与看板判定同源，可调预览）</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-              {_needAdj && <label style={{fontSize:12}}>可售天数 Adj-DOS<input type="number" step="any" value={testInv.adj_dos} onChange={e=>setTestInv(p=>({...p,adj_dos:e.target.value}))} style={IS} placeholder="例 2.5"/></label>}
-              {_needBuf && <label style={{fontSize:12}}>缓冲比 Buffer<input type="number" step="any" value={testInv.buffer} onChange={e=>setTestInv(p=>({...p,buffer:e.target.value}))} style={IS} placeholder="例 0.8"/></label>}
-              {_needHealth && <label style={{fontSize:12}}>库存健康分<input type="number" step="any" value={testInv.health_score} onChange={e=>setTestInv(p=>({...p,health_score:e.target.value}))} style={IS} placeholder="例 60"/></label>}
+              {_needAdj && <label style={{fontSize:'var(--font-sm)'}}>可售天数 Adj-DOS<input type="number" step="any" value={testInv.adj_dos} onChange={e=>setTestInv(p=>({...p,adj_dos:e.target.value}))} style={IS} placeholder="例 2.5"/></label>}
+              {_needBuf && <label style={{fontSize:'var(--font-sm)'}}>缓冲比 Buffer<input type="number" step="any" value={testInv.buffer} onChange={e=>setTestInv(p=>({...p,buffer:e.target.value}))} style={IS} placeholder="例 0.8"/></label>}
+              {_needHealth && <label style={{fontSize:'var(--font-sm)'}}>库存健康分<input type="number" step="any" value={testInv.health_score} onChange={e=>setTestInv(p=>({...p,health_score:e.target.value}))} style={IS} placeholder="例 60"/></label>}
               {_needParams && Object.keys(testParams).map(k => (
-                <label key={k} style={{fontSize:12}}>参数 {k}
+                <label key={k} style={{fontSize:'var(--font-sm)'}}>参数 {k}
                   <input type="number" step="any" value={testParams[k]} onChange={e=>setTestParams(p=>({...p,[k]:e.target.value}))} style={IS}/>
                 </label>
               ))}
@@ -607,15 +607,15 @@ export default function RulesPage() {
           <button onClick={()=>setTestRule(null)} className="btn btn-ghost" style={{flex:1,minHeight:42}}>关闭</button>
         </div>
         {testResult && (
-          <div style={{marginTop:14,padding:'12px 14px',borderRadius:24,background: testResult.triggered ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.08)',border:'1px solid',borderColor: testResult.triggered ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.3)'}}>
-            <div style={{fontWeight:700,fontSize:15,color: testResult.triggered ? 'var(--success)' : 'var(--danger)',marginBottom:6}}>
+          <div style={{marginTop:14,padding:'12px 14px',borderRadius:'var(--radius-card)',background: testResult.triggered ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.08)',border:'1px solid',borderColor: testResult.triggered ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.3)'}}>
+            <div style={{fontWeight:700,fontSize:'var(--font-15)',color: testResult.triggered ? 'var(--success)' : 'var(--danger)',marginBottom:6}}>
               {testResult.triggered ? '✓ 触发告警' : '✗ 未触发'}
             </div>
-            {testResult.triggered && <div style={{fontSize:12,color:'var(--text)'}}>
+            {testResult.triggered && <div style={{fontSize:'var(--font-sm)',color:'var(--text)'}}>
               <div><b>{testResult.alert_title}</b></div>
               <div className="small muted">{testResult.alert_desc}</div>
             </div>}
-            {testResult.detail && <div style={{fontSize:11,color:'var(--muted2)',marginTop:8,borderTop:'1px dashed var(--border)',paddingTop:8}}>
+            {testResult.detail && <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginTop:8,borderTop:'1px dashed var(--border)',paddingTop:8}}>
               条件: 当 <b>{testResult.detail.warehouse ? (testResult.detail.warehouse==='platform_b'?'B仓':testResult.detail.warehouse==='platform'?'C仓':'自有仓') : '全部'}</b> {testResult.detail.left} {testResult.detail.op} {testResult.detail.right}
               <br/>计算: 左侧值 = {String(testResult.detail.left_value)}
               {String(testResult.detail.right_value).startsWith('max(') ? <>，右侧 = {testResult.detail.right_value}</> : <>，右侧值 = {String(testResult.detail.right_value)}</>}

@@ -356,20 +356,20 @@ export default function CleansingPage() {
     {s > 0 && <div className="step-indicator">
       {['上传文件','映射字段','预览确认','完成'].map((l,i) => <span key={i} className={'step'+(s===i?' active':'')+(s>i?' done':'')}>{s>i?<IconCheck size={12} style={{display:'inline',verticalAlign:'middle',marginRight:2}} />:''}{l}</span>)}
       {bs && (bs.includes('%') ? <div className="step w-full">
-        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4,color:'var(--primary)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:'var(--font-sm)',marginBottom:4,color:'var(--primary)'}}>
           <span><IconLoading size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />{bs.split('%')[0]}%</span><span>{bs.split('(')[1]?.replace(')','')||''}</span>
         </div>
-        <div style={{height:6,background:'var(--border)',borderRadius:99,overflow:'hidden'}}>
-          <div style={{height:'100%',width:bs.split('%')[0]+'%',background:'var(--primary)',borderRadius:99,transition:'width 0.3s'}}></div>
+        <div style={{height:6,background:'var(--border)',borderRadius:'var(--radius-full)',overflow:'hidden'}}>
+          <div style={{height:'100%',width:bs.split('%')[0]+'%',background:'var(--primary)',borderRadius:'var(--radius-full)',transition:'width 0.3s'}}></div>
         </div>
       </div> : <span className="step" style={{color:'var(--primary)'}}><IconLoading size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />{bs}...</span>)}
     </div>}
 
     {s === 0 && <div style={{textAlign:'center',padding:'36px 16px'}}>
       <div style={{fontSize:17,fontWeight:700,marginBottom:6}}>选择导入类型</div>
-      <div className="small muted" style={{fontSize:12,marginBottom:18}}>订单 / 库存 / 出入库 / 商品 / 供应商</div>
+      <div className="small muted" style={{fontSize:'var(--font-sm)',marginBottom:18}}>订单 / 库存 / 出入库 / 商品 / 供应商</div>
       <div style={{display:'flex',justifyContent:'center',gap:8,marginBottom:24}}>
-        <select value={tt} onChange={e=>setTt(e.target.value)} style={{fontSize:15,padding:'11px 16px',border:'1px solid var(--border)',borderRadius:99,outline:'none',background:'var(--card)',minWidth:200,minHeight:46}}>
+        <select value={tt} onChange={e=>setTt(e.target.value)} style={{fontSize:'var(--font-15)',padding:'11px 16px',border:'1px solid var(--border)',borderRadius:'var(--radius-full)',outline:'none',background:'var(--card)',minWidth:200,minHeight:46}}>
           <option value='order'>导入订单</option>
           <optgroup label="库存">
             <option value='inventory'>自有仓库存</option>
@@ -384,18 +384,18 @@ export default function CleansingPage() {
           <option value='supplier'>导入供应商</option>
         </select>
       </div>
-      <label className="btn btn-primary" style={{minHeight:46,padding:'0 28px',display:'inline-flex',alignItems:'center',gap:6,borderRadius:99,fontSize:15,fontWeight:600,opacity:bs?0.65:1,pointerEvents:bs?'none':'auto'}}>
+      <label className="btn btn-primary" style={{minHeight:46,padding:'0 28px',display:'inline-flex',alignItems:'center',gap:6,borderRadius:'var(--radius-full)',fontSize:'var(--font-15)',fontWeight:600,opacity:bs?0.65:1,pointerEvents:bs?'none':'auto'}}>
         {bs?'识别中...':t("cleansing.select_file")}
         <input type="file" accept=".csv,.xlsx" style={{display:'none'}} onChange={e=>{const fi=e.target.files[0];if(fi)detect(fi)}} />
       </label>
-      {bs && <div style={{marginTop:14,display:'flex',justifyContent:'center',alignItems:'center',gap:5,color:'var(--primary)',fontSize:13}}><IconLoading size={14} /> 正在识别文件...</div>}
-      <div className="small muted" style={{marginTop:bs?8:12,fontSize:12}}>支持 CSV / Excel · 智能识别列名 · 手工映射为主</div>
+      {bs && <div style={{marginTop:14,display:'flex',justifyContent:'center',alignItems:'center',gap:5,color:'var(--primary)',fontSize:'var(--font-13)'}}><IconLoading size={14} /> 正在识别文件...</div>}
+      <div className="small muted" style={{marginTop:bs?8:12,fontSize:'var(--font-sm)'}}>支持 CSV / Excel · 智能识别列名 · 手工映射为主</div>
     </div>}
 
     {s === 1 && <div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,marginBottom:10}}>
-        <span style={{fontSize:14,fontWeight:700}}>列映射</span>
-        <span className="small muted" style={{fontSize:11}}>选择文件列对应的目标字段 · 未映射列导入时丢弃</span>
+        <span style={{fontSize:'var(--font-md)',fontWeight:700}}>列映射</span>
+        <span className="small muted" style={{fontSize:'var(--font-xs)'}}>选择文件列对应的目标字段 · 未映射列导入时丢弃</span>
       </div>
       {cols.map(c => {
         const matched = ALIAS[c.name]
@@ -407,26 +407,26 @@ export default function CleansingPage() {
         }
         const currentTarget = mp[c.name]?.target
         const isShared = currentTarget && targetCounts[currentTarget] > 1
-        return (<div key={c.name} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:'1px solid var(--border)',borderRadius:24,marginBottom:8}}>
-        <div style={{flex:1,fontSize:14,fontWeight:500,minWidth:0}}>
+        return (<div key={c.name} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:'1px solid var(--border)',borderRadius:'var(--radius-card)',marginBottom:8}}>
+        <div style={{flex:1,fontSize:'var(--font-md)',fontWeight:500,minWidth:0}}>
           <span style={{display:'inline-flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {c.name}
             {mp[c.name]?.target
-              ? <span className="pill success" style={{fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>✓ 已映射</span>
-              : <span className="pill warning" style={{fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>未映射 · 导入时丢弃</span>}
+              ? <span className="pill success" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>✓ 已映射</span>
+              : <span className="pill warning" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>未映射 · 导入时丢弃</span>}
           </span>
-          {mp[c.name]?.target ? (()=>{const sf2=SYS_FIELDS.find(x=>x.t===mp[c.name].target)||cf.find(x=>x.t===mp[c.name].target);return sf2?<span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>→ {sf2.l} ({sf2.t})</span>:null})()
-            : (matched && sf ? <span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>智能建议 → {sf.l} ({sf.t})</span> : null)}
+          {mp[c.name]?.target ? (()=>{const sf2=SYS_FIELDS.find(x=>x.t===mp[c.name].target)||cf.find(x=>x.t===mp[c.name].target);return sf2?<span className="small muted" style={{display:'block',fontSize:'var(--font-xs)',marginTop:1}}>→ {sf2.l} ({sf2.t})</span>:null})()
+            : (matched && sf ? <span className="small muted" style={{display:'block',fontSize:'var(--font-xs)',marginTop:1}}>智能建议 → {sf.l} ({sf.t})</span> : null)}
         </div>
-        <div style={{fontSize:12,color:'var(--muted2)',flexShrink:0}}>→</div>
+        <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',flexShrink:0}}>→</div>
         <select value={mp[c.name]?.target || ''} onChange={e=>{const v=e.target.value;setMp(p=>({...p,[c.name]:{target:v,type:'string'}}));saveAlias(c.name,v)}}
-          style={{fontSize:14,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,flex:1,minWidth:130,background:'var(--card)',minHeight:36}}>
+          style={{fontSize:'var(--font-md)',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',flex:1,minWidth:130,background:'var(--card)',minHeight:36}}>
           <option value="">-- 不映射 --</option>
           {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
           {cf.filter(f => f.t && f.l).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
         </select>
-        <div style={{fontSize:11,width:50,textAlign:'right',flexShrink:0}}>
-          {isShared ? <span className="pill warning" style={{fontSize:9,padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>×{targetCounts[currentTarget]}</span> : null}
+        <div style={{fontSize:'var(--font-xs)',width:50,textAlign:'right',flexShrink:0}}>
+          {isShared ? <span className="pill warning" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>×{targetCounts[currentTarget]}</span> : null}
         </div>
       </div>)
       })}
@@ -447,7 +447,7 @@ export default function CleansingPage() {
           skuVals.forEach(v => { if (v === '') return; seen.set(v, (seen.get(v)||0)+1); if (seen.get(v) > 1) dupSkus.add(v) })
           const missing = skuVals.filter(v => v === '').length
           if (missing === 0 && dupSkus.size === 0) return null
-          return <div style={{fontSize:11,color:'var(--danger)',background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.2)',borderRadius:24,padding:'8px 12px',marginBottom:8}}>
+          return <div style={{fontSize:'var(--font-xs)',color:'var(--danger)',background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.2)',borderRadius:'var(--radius-card)',padding:'8px 12px',marginBottom:8}}>
             ⚠ 预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）—— 建议返回修正后导入
           </div>
         })()}
@@ -466,7 +466,7 @@ export default function CleansingPage() {
           _skuVals.forEach(v => { if (!v) return; _seen.set(v, (_seen.get(v)||0)+1); if (_seen.get(v) > 1) dupSkus.add(v) })
           if (cols.length === 0) return <div className="small muted" style={{padding:20,textAlign:'center'}}>没有已映射的字段，请返回并设置字段映射</div>
           return <div style={{marginBottom:12}}>
-            <div style={{fontSize:11,color:'var(--muted2)',marginBottom:4}}>← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →</div>
+            <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginBottom:4}}>← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →</div>
             <div style={{overflow:"auto",maxHeight:"calc(100vh - 180px)"}}>
             <table><thead><tr style={{position:"sticky",top:0,background:"var(--card)",zIndex:1}}>{cols.map(col => (
               <th key={col.src} style={{minWidth:80,whiteSpace:'nowrap',verticalAlign:'top'}}>
@@ -481,7 +481,7 @@ export default function CleansingPage() {
               const issue = skuVal === '' ? '缺SKU' : (dupSkus.has(skuVal) ? '重复SKU' : '')
               return <tr key={i} style={issue ? {background:'rgba(239,68,68,0.06)'} : undefined}>
                 {cols.map(col => (
-                  <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',color:issue && col.target==='sku' ? 'var(--danger)' : undefined}}>{String(r[col.target]||'')}{issue && col.target==='sku' ? <span style={{fontSize:9,color:'var(--danger)',marginLeft:4}}>⚠{issue}</span> : null}</td>
+                  <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',color:issue && col.target==='sku' ? 'var(--danger)' : undefined}}>{String(r[col.target]||'')}{issue && col.target==='sku' ? <span style={{fontSize:'var(--font-9)',color:'var(--danger)',marginLeft:4}}>⚠{issue}</span> : null}</td>
                 ))}
               </tr>
             })}</tbody></table>
@@ -494,27 +494,27 @@ export default function CleansingPage() {
         </div>
       </div>}
     {s === 1 && <div style={{marginTop:16,display:'flex',gap:10}}>
-      <button onClick={()=>goStep(0)} className="clickable" style={{flexShrink:0,width:88,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42,whiteSpace:'nowrap'}}>← 返回</button>
-      <button onClick={preview} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}>下一步 · 预览</button>
-      <button onClick={quickExecute} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:14,border:'none',borderRadius:99,background:'var(--success)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}><IconLightning size={14} /> 一键执行</button>
+      <button onClick={()=>goStep(0)} className="clickable" style={{flexShrink:0,width:88,padding:'11px 0',fontSize:'var(--font-md)',border:'1px solid var(--border)',borderRadius:'var(--radius-full)',background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42,whiteSpace:'nowrap'}}>← 返回</button>
+      <button onClick={preview} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:'var(--font-md)',border:'none',borderRadius:'var(--radius-full)',background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}>下一步 · 预览</button>
+      <button onClick={quickExecute} className="clickable" style={{flex:1,padding:'11px 12px',fontSize:'var(--font-md)',border:'none',borderRadius:'var(--radius-full)',background:'var(--success)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42,display:'inline-flex',alignItems:'center',gap:5,justifyContent:'center',whiteSpace:'nowrap'}}><IconLightning size={14} /> 一键执行</button>
     </div>}
 
     {s === 3 && res && <div style={{textAlign:'center',padding:40}}>
       <div style={{fontSize:32,marginBottom:4}}>{res.success > 0 ? <IconCheck size={32} style={{color:'var(--success)'}} /> : <IconAlert size={32} style={{color:'var(--warning)'}} />}</div>
-      {f?.name ? <div className="small muted" style={{fontSize:12,marginBottom:8}}>{f.name}</div> : ''}
-      <div style={{fontWeight:700,fontSize:18,marginBottom:4,color:res.error ? "var(--danger)" : ""}}>
+      {f?.name ? <div className="small muted" style={{fontSize:'var(--font-sm)',marginBottom:8}}>{f.name}</div> : ''}
+      <div style={{fontWeight:700,fontSize:'var(--font-18)',marginBottom:4,color:res.error ? "var(--danger)" : ""}}>
         {res.error ? '清洗失败' : (res.success > 0 ? '清洗完成' : '清洗完成（无新增）')}
       </div>
-      <div className="small muted" style={{marginBottom:16}}>{res.error || res.message || ''}{res.error ? <span style={{marginLeft:6,fontSize:12,color:'var(--warning)'}}>（侧边栏 <IconAlert size={12} style={{display:'inline',verticalAlign:'middle'}} /> 查看详情）</span> : ''}</div>
+      <div className="small muted" style={{marginBottom:16}}>{res.error || res.message || ''}{res.error ? <span style={{marginLeft:6,fontSize:'var(--font-sm)',color:'var(--warning)'}}>（侧边栏 <IconAlert size={12} style={{display:'inline',verticalAlign:'middle'}} /> 查看详情）</span> : ''}</div>
       <div style={{display:'flex',justifyContent:'center',gap:24,marginBottom:16}}>
         <div><div style={{fontSize:24,fontWeight:700,color:'var(--success)'}}>{res.success}</div><div className="small muted">成功</div></div>
         <div><div style={{fontSize:24,fontWeight:700,color:res.failed > 0 ? 'var(--danger)' : 'var(--muted2)'}}>{res.failed}</div><div className="small muted">跳过</div></div>
       </div>
       {res.failed > 0 && Array.isArray(res.failed_details) && res.failed_details.length > 0 && (
-        <div style={{textAlign:'left',background:'var(--bg)',borderRadius:24,padding:'10px 14px',marginBottom:14,maxHeight:180,overflowY:'auto'}}>
-          <div style={{fontWeight:600,fontSize:12,marginBottom:6,color:'var(--danger)'}}>失败明细（可对照修正后重新导入）</div>
+        <div style={{textAlign:'left',background:'var(--bg)',borderRadius:'var(--radius-card)',padding:'10px 14px',marginBottom:14,maxHeight:180,overflowY:'auto'}}>
+          <div style={{fontWeight:600,fontSize:'var(--font-sm)',marginBottom:6,color:'var(--danger)'}}>失败明细（可对照修正后重新导入）</div>
           {res.failed_details.map((d, i) => (
-            <div key={i} style={{fontSize:11,color:'var(--muted2)',padding:'3px 0',borderBottom:'0.5px solid var(--border)',display:'flex',gap:8}}>
+            <div key={i} style={{fontSize:'var(--font-xs)',color:'var(--muted2)',padding:'3px 0',borderBottom:'0.5px solid var(--border)',display:'flex',gap:8}}>
               <span className="mono" style={{color:'var(--text)',flexShrink:0}}>{d.sku || '-'}</span>
               <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.reason || ''}</span>
             </div>
@@ -536,31 +536,31 @@ export default function CleansingPage() {
 
     {colMapOpen && <div onClick={()=>setColMapOpen(false)} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
     {colMapOpen && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-      <div onClick={(e)=>e.stopPropagation()} className="material-regular" style={{width:'100%',maxWidth:600,borderRadius:32,padding:'18px 14px calc(14px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',pointerEvents:'auto',maxHeight:'70vh',overflowY:'auto'}}>
-        <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center'}}>表格列状态映射</div>
-        <div style={{textAlign:'center',fontSize:11,color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{ch==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
+      <div onClick={(e)=>e.stopPropagation()} className="material-regular" style={{width:'100%',maxWidth:600,borderRadius:'var(--radius-lg)',padding:'18px 14px calc(14px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',pointerEvents:'auto',maxHeight:'70vh',overflowY:'auto'}}>
+        <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center'}}>表格列状态映射</div>
+        <div style={{textAlign:'center',fontSize:'var(--font-xs)',color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{ch==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
-          <span style={{fontSize:13,fontWeight:600,flexShrink:0}}>映射列</span>
-          <select value={colMapCol} onChange={e=>setColMapCol(e.target.value)} style={{flex:1,fontSize:14,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',outline:'none'}}>
+          <span style={{fontSize:'var(--font-13)',fontWeight:600,flexShrink:0}}>映射列</span>
+          <select value={colMapCol} onChange={e=>setColMapCol(e.target.value)} style={{flex:1,fontSize:'var(--font-md)',padding:'8px 12px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',background:'var(--card)',outline:'none'}}>
             <option value="order_status">订单状态（销量池判定）</option>
           </select>
         </div>
         {(colMap[colMapCol]||[]).map((s,i)=>(
-          <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,marginBottom:6}}>
-            <input value={s.name||''} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,name:e.target.value}:x)}))} placeholder='值(如 交易成功)' style={{flex:1,minWidth:100,fontSize:15,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
-            <select value={s.group||'blocked'} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,group:e.target.value}:x)}))} style={{fontSize:13,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',minHeight:36}}>
+          <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginBottom:6}}>
+            <input value={s.name||''} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,name:e.target.value}:x)}))} placeholder='值(如 交易成功)' style={{flex:1,minWidth:100,fontSize:'var(--font-15)',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',outline:'none'}}/>
+            <select value={s.group||'blocked'} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,group:e.target.value}:x)}))} style={{fontSize:'var(--font-13)',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',background:'var(--card)',minHeight:36}}>
               <option value='sale'>✅ 销量池</option><option value='blocked'>⛔ 屏蔽</option>
             </select>
-            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:12,color:'var(--danger)',cursor:'pointer',padding:'4px 8px',border:'none',background:'transparent',flexShrink:0}}>✕</button>
+            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'4px 8px',border:'none',background:'transparent',flexShrink:0}}>✕</button>
           </div>
         ))}
         <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
-          <button onClick={()=>setColMap(p=>({...p,[colMapCol]:[...(p[colMapCol]||[]),{name:'',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>+ 添加值</button>
-          <button onClick={()=>setColMap(p=>({...p,order_status:[{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>填充内置默认</button>
+          <button onClick={()=>setColMap(p=>({...p,[colMapCol]:[...(p[colMapCol]||[]),{name:'',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:'var(--font-sm)',padding:'7px 14px',minHeight:36}}>+ 添加值</button>
+          <button onClick={()=>setColMap(p=>({...p,order_status:[{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:'var(--font-sm)',padding:'7px 14px',minHeight:36}}>填充内置默认</button>
         </div>
         <div style={{display:'flex',gap:10,marginTop:14}}>
-          <div onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,borderRadius:22,padding:12,background:'var(--card)',textAlign:'center',cursor:'pointer',border:'1px solid var(--border)'}}><span style={{fontSize:15,fontWeight:600,color:'var(--text)'}}>取消</span></div>
-          <div onClick={()=>{if(!colMapSaving)saveColMap()}} className="clickable" style={{flex:1,borderRadius:22,padding:12,background:'var(--primary)',textAlign:'center',cursor:'pointer',opacity:colMapSaving?0.6:1}}><span style={{fontSize:15,fontWeight:600,color:'#fff'}}>{colMapSaving?'保存中...':'保存'}</span></div>
+          <div onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,borderRadius:'var(--radius-card)',padding:12,background:'var(--card)',textAlign:'center',cursor:'pointer',border:'1px solid var(--border)'}}><span style={{fontSize:'var(--font-15)',fontWeight:600,color:'var(--text)'}}>取消</span></div>
+          <div onClick={()=>{if(!colMapSaving)saveColMap()}} className="clickable" style={{flex:1,borderRadius:'var(--radius-card)',padding:12,background:'var(--primary)',textAlign:'center',cursor:'pointer',opacity:colMapSaving?0.6:1}}><span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>{colMapSaving?'保存中...':'保存'}</span></div>
         </div>
       </div>
     </div>}

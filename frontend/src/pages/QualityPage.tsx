@@ -58,15 +58,15 @@ export default function QualityPage() {
   for (const [day, items] of days) {
     rows.push(
       <div key={day} style={{marginBottom:12}}>
-        <div style={{fontSize:11,fontWeight:600,color:'var(--muted2)',marginBottom:4}}>{day} · {items.length} 条</div>
+        <div style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--muted2)',marginBottom:4}}>{day} · {items.length} 条</div>
         <div style={{overflow:'auto',maxHeight:'calc(100vh - 180px)'}}>
         <table style={{minWidth:400}}><tbody>
           {items.map(x => (
             <tr key={x.id}>
-              <td style={{whiteSpace:'nowrap',padding:'5px 6px',width:72,fontSize:12}}>{TYPE_LABEL[x.log_type||x.issue_type] || x.log_type||x.issue_type}</td>
-              <td style={{maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',padding:'5px 6px',fontSize:12}} title={x.message||x.issue_message}>{x.message||x.issue_message}</td>
-              <td style={{padding:'5px 6px',width:44}}><span className={'pill '+(x.level==='error'||x.severity==='error'?'danger':x.level==='warning'||x.severity==='warning'?'warning':'info')} style={{fontSize:10}}>{LEVEL_LABEL[x.level||x.severity] || x.level||x.severity}</span></td>
-              <td className="mono" style={{fontSize:11,padding:'5px 6px',width:64,color:'var(--muted2)'}}>{(x.created_at||'').slice(11,16) || '-'}</td>
+              <td style={{whiteSpace:'nowrap',padding:'5px 6px',width:72,fontSize:'var(--font-sm)'}}>{TYPE_LABEL[x.log_type||x.issue_type] || x.log_type||x.issue_type}</td>
+              <td style={{maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',padding:'5px 6px',fontSize:'var(--font-sm)'}} title={x.message||x.issue_message}>{x.message||x.issue_message}</td>
+              <td style={{padding:'5px 6px',width:44}}><span className={'pill '+(x.level==='error'||x.severity==='error'?'danger':x.level==='warning'||x.severity==='warning'?'warning':'info')} style={{fontSize:'var(--font-10)'}}>{LEVEL_LABEL[x.level||x.severity] || x.level||x.severity}</span></td>
+              <td className="mono" style={{fontSize:'var(--font-xs)',padding:'5px 6px',width:64,color:'var(--muted2)'}}>{(x.created_at||'').slice(11,16) || '-'}</td>
             </tr>
           ))}
         </tbody></table></div>
@@ -83,7 +83,7 @@ export default function QualityPage() {
         {rows}
         {list.length < total && (
           <div className="text-center" style={{padding:'10px 0'}}>
-            <button className="btn btn-ghost" style={{fontSize:12,padding:'6px 16px',cursor:'pointer'}}
+            <button className="btn btn-ghost" style={{fontSize:'var(--font-sm)',padding:'6px 16px',cursor:'pointer'}}
               onClick={() => load(pageRef.current + 1)} disabled={moreLoading}>
               {moreLoading ? '加载中...' : `加载更多 (${list.length}/${total})`}
             </button>

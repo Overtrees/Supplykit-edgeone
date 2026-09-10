@@ -14,22 +14,22 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
     }}>
       <div onClick={e => e.stopPropagation()} className="material-regular" style={{
         width:'100%',maxWidth:600,
-        borderRadius:32,
+        borderRadius:'var(--radius-lg)',
         padding:'18px 14px calc(14px + env(safe-area-inset-bottom))',
         boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',
         pointerEvents:'auto',
         maxHeight:'70vh',overflowY:'auto',
       }}>
-        <div style={{fontSize:18,fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>配置变更历史</div>
+        <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>配置变更历史</div>
         {loading ? (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
             {[1,2,3].map(i => (
-              <div key={i} style={{padding:'10px 12px',background:'var(--card)',borderRadius:16,fontSize:12}}>
+              <div key={i} style={{padding:'10px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',fontSize:'var(--font-sm)'}}>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
-                  <div className="skeleton" style={{width:'40%',height:12,borderRadius:6}} />
-                  <div className="skeleton" style={{width:'20%',height:12,borderRadius:6}} />
+                  <div className="skeleton" style={{width:'40%',height:12,borderRadius:'var(--radius-xs)'}} />
+                  <div className="skeleton" style={{width:'20%',height:12,borderRadius:'var(--radius-xs)'}} />
                 </div>
-                <div className="skeleton" style={{width:'70%',height:12,borderRadius:6}} />
+                <div className="skeleton" style={{width:'70%',height:12,borderRadius:'var(--radius-xs)'}} />
               </div>
             ))}
           </div>
@@ -40,15 +40,15 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
             {data.map((h, i) => {
               const key = h.key.replace(/^mode_(bbcc|traditional)_/, '')
               const modeInfo = h.mode ? (h.mode === 'bbcc' ? 'BBCC' : '传统') : ''
-              return <div key={h.id || i} style={{padding:'10px 12px',background:'var(--card)',borderRadius:16,fontSize:12}}>
+              return <div key={h.id || i} style={{padding:'10px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',fontSize:'var(--font-sm)'}}>
                 <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:4}}>
                   <span className="font-600 text-11">
                     {key}{modeInfo ? ` (${modeInfo})` : ''}
-                    <span style={{fontWeight:400,fontSize:10,color:'var(--muted2)',marginLeft:4}}>{h.channel === 'jd' ? '京东' : '其他'}</span>
+                    <span style={{fontWeight:400,fontSize:'var(--font-10)',color:'var(--muted2)',marginLeft:4}}>{h.channel === 'jd' ? '京东' : '其他'}</span>
                   </span>
-                  <span style={{fontSize:10,color:'var(--muted2)',flexShrink:0}}>{h.created_at?.slice(5,16) || ''}</span>
+                  <span style={{fontSize:'var(--font-10)',color:'var(--muted2)',flexShrink:0}}>{h.created_at?.slice(5,16) || ''}</span>
                 </div>
-                <div style={{fontSize:11,color:'var(--muted2)',display:'flex',gap:4,flexWrap:'wrap'}}>
+                <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',display:'flex',gap:4,flexWrap:'wrap'}}>
                   <span style={{color:'var(--danger)',textDecoration:'line-through'}}>{h.old_value || '(空)'}</span>
                   <span className="muted2">→</span>
                   <span style={{color:'var(--success)'}}>{h.new_value || '(空)'}</span>
@@ -59,11 +59,11 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
         )}
         {!loading && <div style={{flexShrink:0,marginTop:10}}>
           <div onPointerDown={(e) => { e.stopPropagation(); onClose() }} className="clickable" style={{
-            borderRadius:22,padding:14,
+            borderRadius:'var(--radius-card)',padding:14,
             background:'var(--primary)',
             cursor:'pointer',textAlign:'center',
           }}>
-            <span style={{fontSize:15,fontWeight:600,color:'#fff'}}>关闭</span>
+            <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>}
       </div>

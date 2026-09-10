@@ -103,14 +103,14 @@ export default function TaskPage() {
                   {Array.isArray(task.steps) && task.steps.length > 0 && (
                     <div style={{marginTop:6,display:'flex',flexDirection:'column',gap:3}}>
                       {task.steps.map((s, i) => (
-                        <div key={i} style={{display:'flex',alignItems:'center',gap:6,fontSize:11}}>
+                        <div key={i} style={{display:'flex',alignItems:'center',gap:6,fontSize:'var(--font-xs)'}}>
                           <span style={{color: s.status === 'ok' ? 'var(--success)' : s.status === 'error' ? 'var(--danger)' : 'var(--muted2)'}}>
                             {s.status === 'ok' ? '✓' : s.status === 'error' ? '✗' : ''}
                           </span>
                           <span style={{color:'var(--text)',flex:1}}>{s.name}</span>
-                          {s.status === 'ok' && <span style={{color:'var(--muted2)',fontSize:10}}>{s.elapsed}s</span>}
-                          {s.status === 'error' && <span style={{color:'var(--danger)',fontSize:10}}>{String(s.error||'').slice(0,30)}</span>}
-                          {s.status === 'running' && <><span style={{color:'var(--primary)',fontSize:10}}>进行中</span><span className="hammer-spinner" style={{width:10,height:10,borderWidth:1.5}} /></>}
+                          {s.status === 'ok' && <span style={{color:'var(--muted2)',fontSize:'var(--font-10)'}}>{s.elapsed}s</span>}
+                          {s.status === 'error' && <span style={{color:'var(--danger)',fontSize:'var(--font-10)'}}>{String(s.error||'').slice(0,30)}</span>}
+                          {s.status === 'running' && <><span style={{color:'var(--primary)',fontSize:'var(--font-10)'}}>进行中</span><span className="hammer-spinner" style={{width:10,height:10,borderWidth:1.5}} /></>}
                         </div>
                       ))}
                     </div>

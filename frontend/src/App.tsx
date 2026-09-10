@@ -472,14 +472,14 @@ export default function App() {
              page === 'insights' ? <HammerInsights channel={channel} /> :
              page === 'cleansing' ? <HammerCleansing channel={channel} /> :
              page === 'rules' ? <HammerRules channel={channel} onShowHistory={loadHistory} /> : (
-            <div style={{color:'var(--muted)',fontSize:13,textAlign:'center'}}>
-              <div style={{fontSize:11,color:'var(--muted2)',marginBottom:4}}>
+            <div style={{color:'var(--muted)',fontSize:'var(--font-13)',textAlign:'center'}}>
+              <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginBottom:4}}>
                 {channel === 'jd' ? '京东' : '其他'} · {page}
               </div>
-              <div style={{fontSize:13,color:'var(--text)',marginBottom:4}}>
+              <div style={{fontSize:'var(--font-13)',color:'var(--text)',marginBottom:4}}>
                 {hammerData[channel]?.[page] ? `${(hammerData[channel]?.[page]?.length ?? 0)} 条记录` : '暂无数据'}
               </div>
-              <div style={{fontSize:11,color:'var(--muted2)',marginTop:8}}>
+              <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginTop:8}}>
                 功能待添加
               </div>
             </div>
@@ -494,7 +494,7 @@ export default function App() {
           <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',maxWidth:360,margin:'0 auto',width:'100%'}}>
           <div style={{textAlign:'center',marginBottom:32}}>
             <div style={{fontSize:32,fontWeight:800,color:'var(--text)',marginBottom:8,letterSpacing:'-0.5px'}}>{t("welcome.title")}</div>
-            <div style={{fontSize:15,color:'var(--muted2)',lineHeight:1.5}}>电商供应链数据清洗<br/>与补货决策看板</div>
+            <div style={{fontSize:'var(--font-15)',color:'var(--muted2)',lineHeight:1.5}}>电商供应链数据清洗<br/>与补货决策看板</div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:32}}>
             {[
@@ -503,10 +503,10 @@ export default function App() {
               {svg:'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',title:'导数据',desc:'数据清洗导入',page:'cleansing'},
               {svg:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',title:'设规则',desc:'规则引擎配置',page:'rules'},
             ].map(function(card) {
-              return <div key={card.page} className="clickable" style={{background:'var(--card)',borderRadius:26,padding:18,textAlign:'center',cursor:'default',border:'0.5px solid var(--border)',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
+              return <div key={card.page} className="clickable" style={{background:'var(--card)',borderRadius:'var(--radius-card)',padding:18,textAlign:'center',cursor:'default',border:'0.5px solid var(--border)',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
                 <div style={{marginBottom:8}}><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={card.svg}/></svg></div>
-                <div style={{fontSize:15,fontWeight:600,color:'var(--text)',marginBottom:3}}>{card.title}</div>
-                <div style={{fontSize:12,color:'var(--muted2)'}}>{card.desc}</div>
+                <div style={{fontSize:'var(--font-15)',fontWeight:600,color:'var(--text)',marginBottom:3}}>{card.title}</div>
+                <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>{card.desc}</div>
               </div>
             })}
           </div>
@@ -528,9 +528,9 @@ export default function App() {
                 }
               } else toast.error('填充失败: ' + (d.error || ''))
             } catch(e) {}
-          }} className="btn btn-primary" style={{width:'100%',padding:'14px',fontSize:16,fontWeight:600,marginBottom:10}}>{t("welcome.start")}</button>
+          }} className="btn btn-primary" style={{width:'100%',padding:'14px',fontSize:'var(--font-lg)',fontWeight:600,marginBottom:10}}>{t("welcome.start")}</button>
           <button onClick={function(){localStorage.setItem('c_welcome_seen','1');setShowWelcome(false)}}
-            className="btn btn-ghost clickable" style={{width:'100%',padding:'10px',fontSize:14,color:'var(--muted2)'}}>{t("welcome.skip")}</button>
+            className="btn btn-ghost clickable" style={{width:'100%',padding:'10px',fontSize:'var(--font-md)',color:'var(--muted2)'}}>{t("welcome.skip")}</button>
           </div>
         </div>
       )}

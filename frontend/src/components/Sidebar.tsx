@@ -68,7 +68,7 @@ export default function Sidebar({ page, onClose, onNavigate, lowStock, errCount,
                   width:'100%', minHeight:50, border:'none',
                   background:'transparent',
                   borderRadius:17, display:'flex', alignItems:'center', gap:11,
-                  padding:'8px 10px', color:'var(--text)', fontSize:14,
+                  padding:'8px 10px', color:'var(--text)', fontSize:'var(--font-md)',
                   fontFamily:'inherit', cursor:'pointer', textAlign:'left',
                   fontWeight:400, marginBottom:2
                 }}>
@@ -76,10 +76,10 @@ export default function Sidebar({ page, onClose, onNavigate, lowStock, errCount,
                   <IconComp size={20} />
                 </span>}
                 <span style={{ minWidth:0, flex:1 }}>
-                  <span style={{ display:'block', fontSize:15, fontWeight:400, letterSpacing:'-0.1px' }}>
+                  <span style={{ display:'block', fontSize:'var(--font-15)', fontWeight:400, letterSpacing:'-0.1px' }}>
                     {item.label}
                   </span>
-                  <span style={{ display:'block', fontSize:11, color:'var(--muted2)', marginTop:2 }}>
+                  <span style={{ display:'block', fontSize:'var(--font-xs)', color:'var(--muted2)', marginTop:2 }}>
                     {item.id === 'dash' && t('nav.dash')}
                     {item.id === 'insights' && t('nav.insights')}
                     {item.id === 'orders' && t('nav.orders')}
@@ -93,9 +93,9 @@ export default function Sidebar({ page, onClose, onNavigate, lowStock, errCount,
                   </span>
                 </span>
                 {item.id === 'quality' && errCount > 0 &&
-                  <span style={{ background:'var(--danger)', color:'#fff', borderRadius:99, fontSize:11, fontWeight:700, padding:'1px 7px', minWidth:20, textAlign:'center' }}>{errCount}</span>}
+                  <span style={{ background:'var(--danger)', color:'#fff', borderRadius:'var(--radius-full)', fontSize:'var(--font-xs)', fontWeight:700, padding:'1px 7px', minWidth:20, textAlign:'center' }}>{errCount}</span>}
                 {item.id === 'inv' && lowStock > 0 &&
-                  <span style={{ background:'var(--warning)', color:'#fff', borderRadius:99, fontSize:11, fontWeight:700, padding:'1px 7px', minWidth:20, textAlign:'center' }}>{lowStock}</span>}
+                  <span style={{ background:'var(--warning)', color:'#fff', borderRadius:'var(--radius-full)', fontSize:'var(--font-xs)', fontWeight:700, padding:'1px 7px', minWidth:20, textAlign:'center' }}>{lowStock}</span>}
               </button>
             </div>
           })}

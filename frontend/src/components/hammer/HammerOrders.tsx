@@ -110,7 +110,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
           <div className="flex flex-wrap gap-4">
             {ORDER_STATUSES.map(s => (
               <span key={s} onClick={() => setOrderFilterLocal('', s)}
-                style={{fontSize:12,padding:'4px 10px',borderRadius:99,cursor:'pointer',
+                style={{fontSize:'var(--font-sm)',padding:'4px 10px',borderRadius:'var(--radius-full)',cursor:'pointer',
                   background: (orderStatus === s || (!orderStatus && !s)) ? 'var(--primary)' : 'var(--gray)',
                   color: (orderStatus === s || (!orderStatus && !s)) ? '#fff' : 'var(--text)',
                   fontWeight: orderStatus === s ? 600 : 400

@@ -11,8 +11,8 @@ const API = import.meta.env.VITE_API_BASE_URL || ''
 
 const Group = ({ title, children }) => (
   <div style={{marginBottom:20}}>
-    {title && <div style={{fontSize:13,fontWeight:400,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 16px 6px 16px'}}>{title}</div>}
-    <div style={{background:'var(--card)',borderRadius:32,overflow:'hidden'}}>
+    {title && <div style={{fontSize:'var(--font-13)',fontWeight:400,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 16px 6px 16px'}}>{title}</div>}
+    <div style={{background:'var(--card)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
       {children}
     </div>
   </div>
@@ -22,14 +22,14 @@ const Row = ({ label, value, sub, onClick, danger, loading }) => (
   <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48,borderBottom:'1px solid var(--border)'}}>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:16,color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
+        <div style={{fontSize:'var(--font-lg)',color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
           {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--primary)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
           {label}
         </div>
-        {sub && <div style={{fontSize:12,color:'var(--muted2)',marginTop:2}}>{sub}</div>}
+        {sub && <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',marginTop:2}}>{sub}</div>}
       </div>
       <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
-        {value && <span style={{fontSize:15,color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
+        {value && <span style={{fontSize:'var(--font-15)',color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
         {onClick && !loading && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{flexShrink:0,opacity:0.3}}><path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
       </div>
     </div>
@@ -40,14 +40,14 @@ const LastRow = ({ label, value, sub, onClick, danger, loading }) => (
   <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48}}>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:16,color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
+        <div style={{fontSize:'var(--font-lg)',color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
           {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--danger)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
           {label}
         </div>
-        {sub && <div style={{fontSize:12,color:'var(--muted2)',marginTop:2}}>{sub}</div>}
+        {sub && <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',marginTop:2}}>{sub}</div>}
       </div>
       <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
-        {value && <span style={{fontSize:15,color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
+        {value && <span style={{fontSize:'var(--font-15)',color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
         {onClick && !loading && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{flexShrink:0,opacity:0.3}}><path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
       </div>
     </div>
@@ -132,23 +132,23 @@ function RecycleBin({ onClose, toast }) {
   }
 
   const renderList = function(type, items) {
-    if (items.length === 0) return <div className="small muted" style={{padding:'20px',textAlign:'center',fontSize:13}}>{type==='rules'?t("recycle.empty_rules"):t("recycle.empty_orders")}</div>
+    if (items.length === 0) return <div className="small muted" style={{padding:'20px',textAlign:'center',fontSize:'var(--font-13)'}}>{type==='rules'?t("recycle.empty_rules"):t("recycle.empty_orders")}</div>
     const allSelected = items.length > 0 && items.every(function(x) { return selected[type].has(x.id) })
     return <>
       <div style={{display:'flex',gap:6,padding:'8px 4px',flexWrap:'wrap'}}>
-        <span onClick={function(){toggleAll(type, items)}} className="clickable" style={{fontSize:12,padding:'5px 12px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer'}}>{allSelected ? '取消全选' : '全选'}</span>
-        <span onClick={function(){batchAction(type, 'restore', '恢复')}} className="clickable" style={{fontSize:12,padding:'5px 12px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--success)',cursor:'pointer'}}>批量恢复 ({selected[type].size})</span>
-        <span onClick={function(){confirmPurge(type)}} className="clickable" style={{fontSize:12,padding:'5px 12px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',color:'var(--danger)',cursor:'pointer'}}>永久删除 ({selected[type].size})</span>
+        <span onClick={function(){toggleAll(type, items)}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer'}}>{allSelected ? '取消全选' : '全选'}</span>
+        <span onClick={function(){batchAction(type, 'restore', '恢复')}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--success)',cursor:'pointer'}}>批量恢复 ({selected[type].size})</span>
+        <span onClick={function(){confirmPurge(type)}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--danger)',cursor:'pointer'}}>永久删除 ({selected[type].size})</span>
       </div>
-      <div style={{background:'var(--card)',borderRadius:32,overflow:'hidden'}}>
+      <div style={{background:'var(--card)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
         {items.map(function(x) {
           const isSel = selected[type].has(x.id)
           return <div key={x.id} onClick={function(){toggleSel(type, x.id)}} className="clickable" style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid var(--border)',background:isSel?'rgba(29,78,216,0.08)':'transparent'}}>
             <span style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
-              <span style={{width:18,height:18,borderRadius:6,border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,flexShrink:0}}>{isSel?'✓':''}</span>
-              <span style={{fontSize:14,color:'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{type==='rules'?x.name:(x.order_no + ' - ' + (x.product_name||''))}</span>
+              <span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',flexShrink:0}}>{isSel?'✓':''}</span>
+              <span style={{fontSize:'var(--font-md)',color:'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{type==='rules'?x.name:(x.order_no + ' - ' + (x.product_name||''))}</span>
             </span>
-            {!isSel && <span style={{fontSize:11,color:'var(--muted2)',flexShrink:0,marginLeft:8}}>{x.deleted_at ? String(x.deleted_at).slice(0,10) : ''}</span>}
+            {!isSel && <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)',flexShrink:0,marginLeft:8}}>{x.deleted_at ? String(x.deleted_at).slice(0,10) : ''}</span>}
           </div>
         })}
       </div>
@@ -157,23 +157,23 @@ function RecycleBin({ onClose, toast }) {
 
   return <div style={{display:'flex',flexDirection:'column',minHeight:'100%',background:'var(--bg)',padding:'0 0 calc(0px + env(safe-area-inset-bottom, 20px))',boxSizing:'border-box'}}>
     <div style={{position:'fixed',left:0,right:0,top:0,zIndex:5001,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px',background:'transparent'}}>
-      <div style={{fontSize:16,fontWeight:600,color:'var(--text)',padding:'0 14px',borderRadius:99,minHeight:48,display:'flex',alignItems:'center',marginLeft:16,background:'var(--bg-thin)',backdropFilter:'var(--blur-thin)',WebkitBackdropFilter:'var(--blur-thin)',border:'0.5px solid var(--border-light)'}}>{t("settings.recycle_bin")}</div>
+      <div style={{fontSize:'var(--font-lg)',fontWeight:600,color:'var(--text)',padding:'0 14px',borderRadius:'var(--radius-full)',minHeight:48,display:'flex',alignItems:'center',marginLeft:16,background:'var(--bg-thin)',backdropFilter:'var(--blur-thin)',WebkitBackdropFilter:'var(--blur-thin)',border:'0.5px solid var(--border-light)'}}>{t("settings.recycle_bin")}</div>
       <div onClick={onClose} className="clickable" style={{width:48,height:48,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',flexShrink:0,marginRight:16,background:'var(--bg-thin)',backdropFilter:'var(--blur-thin)',WebkitBackdropFilter:'var(--blur-thin)',border:'0.5px solid var(--border-light)'}}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
       </div>
     </div>
     <div style={{padding:'calc(env(safe-area-inset-top, 0px) + 44px) 16px 16px',maxWidth:500,margin:'0 auto',width:'100%'}}>
     {loading ? <div style={{padding:'0 4px'}}>{[1,2,3].map(function(i) {
-      return <div key={i} style={{background:'var(--card)',borderRadius:32,padding:16,marginBottom:8}}>
+      return <div key={i} style={{background:'var(--card)',borderRadius:'var(--radius-lg)',padding:16,marginBottom:8}}>
         <div className="skeleton" style={{width:'40%',height:14,marginBottom:8}} />
         <div className="skeleton" style={{width:'70%',height:14}} />
       </div>
     })}</div> : <>
-      <div style={{fontSize:13,fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginBottom:0}}>{t("recycle.deleted_rules")}</div>
+      <div style={{fontSize:'var(--font-13)',fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginBottom:0}}>{t("recycle.deleted_rules")}</div>
       {renderList('rules', rules)}
-      <div style={{fontSize:13,fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginTop:16,marginBottom:0}}>{t("recycle.deleted_orders")}</div>
+      <div style={{fontSize:'var(--font-13)',fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginTop:16,marginBottom:0}}>{t("recycle.deleted_orders")}</div>
       {renderList('orders', orders)}
-      {batchBusy && <div style={{textAlign:'center',padding:16,fontSize:12,color:'var(--muted2)'}}>处理中...</div>}
+      {batchBusy && <div style={{textAlign:'center',padding:16,fontSize:'var(--font-sm)',color:'var(--muted2)'}}>处理中...</div>}
     </>}
     </div>
   </div>
@@ -363,16 +363,16 @@ export default function SettingsPage() {
 
       <Group title="告警推送">
         <div style={{padding:14}}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Webhook 地址</div>
-          <div className="small muted" style={{fontSize:11,marginBottom:8}}>钉钉/企业微信机器人地址，新告警每 30 分钟推送到该地址（留空不推送）</div>
+          <div style={{fontSize:'var(--font-13)',fontWeight:600,marginBottom:4}}>Webhook 地址</div>
+          <div className="small muted" style={{fontSize:'var(--font-xs)',marginBottom:8}}>钉钉/企业微信机器人地址，新告警每 30 分钟推送到该地址（留空不推送）</div>
           <div style={{display:'flex',gap:8}}>
-            <input value={webhookUrl} onChange={e=>setWebhookUrl(e.target.value)} placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." style={{flex:1,fontSize:14,padding:'10px 12px',borderRadius:99,border:'1px solid var(--border)',background:'var(--card)',outline:'none',minWidth:0}} />
-            <button onClick={saveWebhook} disabled={webhookSaving} className="btn btn-primary" style={{flexShrink:0,minHeight:40,padding:'0 18px',fontSize:14}}>{webhookSaving?'保存中...':'保存'}</button>
+            <input value={webhookUrl} onChange={e=>setWebhookUrl(e.target.value)} placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." style={{flex:1,fontSize:'var(--font-md)',padding:'10px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',outline:'none',minWidth:0}} />
+            <button onClick={saveWebhook} disabled={webhookSaving} className="btn btn-primary" style={{flexShrink:0,minHeight:40,padding:'0 18px',fontSize:'var(--font-md)'}}>{webhookSaving?'保存中...':'保存'}</button>
           </div>
         </div>
       </Group>
 
-      <div style={{textAlign:'center',marginTop:24,fontSize:12,color:'var(--muted2)'}}>
+      <div style={{textAlign:'center',marginTop:24,fontSize:'var(--font-sm)',color:'var(--muted2)'}}>
         SupplyKit · 供应链数据工作台
       </div>
 

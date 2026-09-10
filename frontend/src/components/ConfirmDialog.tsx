@@ -34,20 +34,20 @@ export default function ConfirmDialog({ open, title, desc, confirmLabel = t("com
       {/* 面板本体 */}
       <div onClick={e => e.stopPropagation()} className="material-regular" style={{
         width:'100%',maxWidth:600,
-        borderRadius:32,
+        borderRadius:'var(--radius-lg)',
         padding:'18px 14px calc(14px + env(safe-area-inset-bottom))',
         boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',
         pointerEvents:'auto',
       }}>
         {/* 标题 */}
         {title && <div style={{
-          textAlign:'center',fontSize:18,fontWeight:700,marginBottom:12,
+          textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,
           color:'var(--text)',
         }}>{title}</div>}
 
         {/* 描述 */}
         {desc && <div style={{
-          fontSize:13,lineHeight:1.45,color:'var(--muted2)',
+          fontSize:'var(--font-13)',lineHeight:1.45,color:'var(--muted2)',
           textAlign:'center',marginBottom:16,padding:'0 4px',
         }}>{desc}</div>}
 
@@ -56,20 +56,20 @@ export default function ConfirmDialog({ open, title, desc, confirmLabel = t("com
           {/* 取消按钮 */}
           <div onClick={onCancel} className="clickable" style={{
             flex:1,
-            borderRadius:22,padding:14,
+            borderRadius:'var(--radius-card)',padding:14,
             background:'var(--primary)',
             cursor:'pointer',textAlign:'center',
           }}>
-            <span style={{fontSize:15,fontWeight:600,color:'#fff'}}>{cancelLabel}</span>
+            <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>{cancelLabel}</span>
           </div>
           {/* 确认按钮 */}
           <div onClick={onConfirm} className="clickable" style={{
             flex:1,
-            borderRadius:22,padding:14,
+            borderRadius:'var(--radius-card)',padding:14,
             background:'var(--danger)',
             cursor:'pointer',textAlign:'center',
           }}>
-            <span style={{fontSize:15,fontWeight:700,color:'#fff'}}>{confirmLabel}</span>
+            <span style={{fontSize:'var(--font-15)',fontWeight:700,color:'#fff'}}>{confirmLabel}</span>
           </div>
         </div>
       </div>
