@@ -23,6 +23,7 @@
 - **P0 主题正确性**: 30+ 内联语义 hex → 业务 token(新增 --accent-yellow/--accent-purple 含 dark); 图表系列色保留; **业务分级色跨页同源**(断货三级/健康/滞销/效期/告警 severity 色恒定)
 - **P1 Token+组件**: styles.css 补档(圆角 8/24、字号 9~18、间距 8/24/32、动效 .15s); 20 文件 borderRadius/fontSize 内联→token; JSX CSS 变量字符串包裹修复
 - **P2 体验**: 统一动效(transition+按压 scale+弹窗 sheetIn) / 触达热区(minHeight32) / 区块间距 8px 网格
+- **圆角档位定稿**: 小卡专属 `--radius-card-sm:26px`(P1 曾误并入 24 属过度收敛, 已恢复); `--radius-card:24px` 全库零引用删除; 小卡统一 overflow:hidden 裁剪 ::before 高光使阴影/高光圆角与本体同步
 
 ### 看板/规则修复
 - 漏斗 label 截断治本: grid right 58 恒定留白 + ≥1万→'x.x万单'格式化

@@ -352,7 +352,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   return <>
     <div className="card-grid" style={{marginBottom:16}}>
       {/* 1. GMV 卡 — 加环比微趋势线 + 日均 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
+      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden',overflow:'hidden'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>{periodTab === 'custom' ? '自定义' : periodLabel[periodTab]} GMV</div>
           {/* GMV 视角切换(总/净/回款), 样式对齐健康小卡 tab: 紧凑segmented pill + 短标签 */}
@@ -393,7 +393,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 2. {t("dash.pending")}卡 — 按仓库维度拆分 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16}}>
+      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
         <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>待处理</div>
         <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
           <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)')}}>
@@ -423,7 +423,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16}}>
+      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
         {(()=>{
           const healthData = dashboard?.health_index?.[healthTab]||{}
           const isJd = channel === 'jd'
@@ -487,7 +487,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
 
       {/* 4. 濒临断货预警 — 全量计数, 弹窗看完整 */}
-      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden'}}>
+      <div className="card" style={{borderRadius:'var(--radius-card-sm)',boxShadow:'0 1px 6px rgba(0,0,0,0.04)',containerType:'inline-size',aspectRatio:'1',display:'flex',flexDirection:'column',padding:16,overflow:'hidden',overflow:'hidden'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''}</div>
 

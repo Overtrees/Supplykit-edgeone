@@ -701,5 +701,6 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **JSX 结构改动铁律**: ①CSS 变量在 JSX style 对象必须字符串包裹(`fontSize:'var(--x)'`, 裸 var() 报错) ②fixed 弹窗若父容器有 backdrop-filter/transform 会被捕获(包含块) → **createPortal(body) 是弹窗标准做法** ③批量正则替换后必须 tsc 稳定双次(iSH 内存抖动 bad_alloc 假通过; 曾推送 JSX 未闭合+TDZ 两次线上崩溃)
 - **设计系统收敛(hue 方法论)**: 语义 token 优先于内联 hex(30+处 #ef4444 等 → --danger/--warning/--success, 深色自动正确); **业务分级色跨页同源**(断货三级/健康/滞销/效期/告警 severity 红色恒=紧急); 图表多系列色数组保留不 token 化; token 档位补全(圆角 8/24、字号 9~18)后组件收敛
 - **echarts 坑**: ①bar label position right 超出 grid 被 clip → grid right 恒定留白+大数格式化('x.x万单') ②value 轴默认 max 自动取整导致不同量级 bar 占比随机(数据比例相同但视觉不同) → **xAxis max 显式固定**(总订单×1.15) 两渠道 bar 长度恒定一致
+- **圆角档位收敛红线**: 收敛不是全并入统一值——**业务/层级专属档要保留**(看板小卡 26 是专属档, 曾误并入 24 属过度收敛已恢复); token 删除前 grep 全库(tsx+css) 零引用才删; 卡片内 absolute 伪元素(::before 高光)圆角需与本体同步(小卡 overflow:hidden 裁剪)
 - **架构取舍(动态自定义列)**: ext_json 数据链路(表补列/清洗写入保全自定义字段/接口返回/custom-columns 配置)保留为基础设施; 前端动态列 UI 因**低频 + 一次性补列更划算**(30分钟 vs 常驻功能 3-4 倍成本)而回退 — 新增列需求走一次性补列流程
 - **交互约定**: 模版管理/状态映射等页面工具入口放锤子菜单并按**步骤+导入类型**条件显示(hammerCleansingStep 同步); 底部弹窗统一看板'还有N条'同款; 触达热区 minHeight32; 动效 --motion-fast .15s
