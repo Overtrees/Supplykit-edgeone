@@ -343,8 +343,8 @@ export default function CleansingPage() {
     className={`btn btn-${bs?'ghost':color}`}>{label}</button>
 
   return <div className="card">
-    <div className="step-indicator">
-      {['上传文件','字段映射','预览确认','完成'].map((l,i) => <span key={i} className={'step'+(s===i?' active':'')+(s>i?' done':'')}>{s>i?<IconCheck size={12} style={{display:'inline',verticalAlign:'middle',marginRight:2}} />:''}{l}</span>)}
+    {s > 0 && <div className="step-indicator">
+      {['上传文件','映射字段','预览确认','完成'].map((l,i) => <span key={i} className={'step'+(s===i?' active':'')+(s>i?' done':'')}>{s>i?<IconCheck size={12} style={{display:'inline',verticalAlign:'middle',marginRight:2}} />:''}{l}</span>)}
       {bs && (bs.includes('%') ? <div className="step w-full">
         <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4,color:'var(--primary)'}}>
           <span><IconLoading size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />{bs.split('%')[0]}%</span><span>{bs.split('(')[1]?.replace(')','')||''}</span>
@@ -353,7 +353,7 @@ export default function CleansingPage() {
           <div style={{height:'100%',width:bs.split('%')[0]+'%',background:'var(--primary)',borderRadius:99,transition:'width 0.3s'}}></div>
         </div>
       </div> : <span className="step" style={{color:'var(--primary)'}}><IconLoading size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} />{bs}...</span>)}
-    </div>
+    </div>}
 
     {s === 0 && <div style={{textAlign:'center',padding:'36px 16px'}}>
       <div style={{fontSize:17,fontWeight:700,marginBottom:6}}>选择导入类型</div>
@@ -374,18 +374,26 @@ export default function CleansingPage() {
           <option value='supplier'>导入供应商</option>
         </select>
       </div>
-      <label className="btn btn-primary" style={{minHeight:46,padding:'0 28px',display:'inline-flex',alignItems:'center',gap:6,borderRadius:99,fontSize:15,fontWeight:600}}>
+      <label className="btn btn-primary" style={{minHeight:46,padding:'0 28px',display:'inline-flex',alignItems:'center',gap:6,borderRadius:99,fontSize:15,fontWeight:600,opacity:bs?0.65:1,pointerEvents:bs?'none':'auto'}}>
         {bs?'识别中...':t("cleansing.select_file")}
         <input type="file" accept=".csv,.xlsx" style={{display:'none'}} onChange={e=>{const fi=e.target.files[0];if(fi)detect(fi)}} />
       </label>
-      <div className="small muted" style={{marginTop:12,fontSize:12}}>支持 CSV / Excel · 智能识别列名 · 手工映射为主</div>
+      {bs && <div style={{marginTop:14,display:'flex',justifyContent:'center',alignItems:'center',gap:5,color:'var(--primary)',fontSize:13}}><IconLoading size={14} /> 正在识别文件...</div>}
+      <div className="small muted" style={{marginTop:bs?8:12,fontSize:12}}>支持 CSV / Excel · 智能识别列名 · 手工映射为主</div>
     </div>}
 
     {s === 1 && <div>
-      <div style={{fontSize:13,marginBottom:12}}>共 <b>{cols.length}</b> 列 · {tr} 行 · 目标: {tt} · 已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b>（导入时丢弃）{tt==='order' && <span style={{marginLeft:8,display:'inline-flex',gap:4,verticalAlign:'middle'}}>
-        <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jdzx_sale'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--border)'}}><IconTrendUp size={12} /> 商智日销</span>
-        <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jd_po'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--border)'}}><IconPackage size={12} /> 京东采购单</span>
-      </span>}</div>
+      <div style={{marginBottom:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:8}}>
+          <div style={{fontSize:15,fontWeight:700}}>映射字段 <span className="small muted" style={{fontWeight:400}}>· 目标: {tt}</span></div>
+          {tt==='order' && <span style={{display:'inline-flex',gap:4,verticalAlign:'middle'}}>
+            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jdzx_sale'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jdzx_sale'?'var(--primary)':'var(--border)'}}><IconTrendUp size={12} /> 商智日销</span>
+            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className="clickable" style={{padding:'4px 10px',fontSize:12,borderRadius:99,border:'1px solid',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:3,background:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--card)',color:mp?._meta?.data_source==='jd_po'?'#fff':'var(--muted)',borderColor:mp?._meta?.data_source==='jd_po'?'var(--primary)':'var(--border)'}}><IconPackage size={12} /> 京东采购单</span>
+          </span>}
+        </div>
+        <div className="small muted" style={{fontSize:12,marginBottom:6}}>表格文件共 <b style={{color:'var(--text)'}}>{cols.length}</b> 列 · <b style={{color:'var(--text)'}}>{tr}</b> 行</div>
+        <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b><span className="small muted" style={{marginLeft:4}}>（导入时丢弃）</span></div>
+      </div>
       <div style={{display:'flex',gap:8,marginBottom:12,alignItems:'center',flexWrap:'wrap'}}>
         <select id="tmplSelect" style={{flex:1,fontSize:16,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,minWidth:140}}>
           <option value="">加载映射模板...</option>
