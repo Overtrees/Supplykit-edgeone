@@ -57,14 +57,9 @@ export default function Chart({ option, height = 260 }: ChartProps) {
         }
         chart.setOption(opt)
         inst.current = chart
-        // 首屏加载修复: 容器初始宽 0(卡片在视口外/布局未完成)时 init 后不可见 ——
-        // ResizeObserver 监听容器尺寸(0→实际宽)自动 resize; 双 rAF 兜底初始强制 resize
-        const ro = new ResizeObserver(() => { try { chart.resize() } catch(e){} })
-        if (ref.current) ro.observe(ref.current)
-        requestAnimationFrame(() => requestAnimationFrame(() => { try { chart.resize() } catch(e){} }))
         const resize = () => chart.resize()
         window.addEventListener('resize', resize)
-        return () => { ro.disconnect(); window.removeEventListener('resize', resize); try { chart.dispose() } catch(e) {} }
+        return () => { window.removeEventListener('resize', resize); try { chart.dispose() } catch(e) {} }
       } catch(e) { console.error('Chart error:', e) }
     }, 100)
     return () => clearTimeout(timer)
