@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import {IconPackage, IconTrendUp, IconLightning, IconCheck, IconAlert, IconLoading, IconFolder} from '../components/Icons'
+import {IconLightning, IconCheck, IconAlert, IconLoading, IconFolder} from '../components/Icons'
 import { t } from "../locale"
 
 
