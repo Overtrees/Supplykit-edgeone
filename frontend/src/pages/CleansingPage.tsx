@@ -393,16 +393,6 @@ export default function CleansingPage() {
     </div>}
 
     {s === 1 && <div>
-      <div style={{marginBottom:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:10,marginBottom:8}}>
-          {tt==='order' && <span style={{display:'inline-flex',gap:4,verticalAlign:'middle'}}>
-            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jdzx_sale'}}))} className={'ds-tag'+(mp?._meta?.data_source==='jdzx_sale'?' active':'')}><IconTrendUp size={12} /> 商智日销</span>
-            <span onClick={()=>setMp(p=>({...p,_meta:{data_source:'jd_po'}}))} className={'ds-tag'+(mp?._meta?.data_source==='jd_po'?' active':'')}><IconPackage size={12} /> 京东采购单</span>
-          </span>}
-        </div>
-        <div className="small muted" style={{fontSize:12,marginBottom:6}}>表格文件共 <b style={{color:'var(--text)'}}>{cols.length}</b> 列 · <b style={{color:'var(--text)'}}>{tr}</b> 行</div>
-        <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b></div>
-      </div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,marginBottom:10}}>
         <span style={{fontSize:14,fontWeight:700}}>列映射</span>
         <span className="small muted" style={{fontSize:11}}>选择文件列对应的目标字段 · 未映射列导入时丢弃</span>

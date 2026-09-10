@@ -133,7 +133,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     : fl.length === 0
       ? (loadErr ? <ErrorRetry error={loadErr} onRetry={() => loadInv(1)} /> : <EmptyState icon='package' title={s?t("inv.empty_matched"):t("common.empty")} desc={s?'换个关键词试试':'通过清洗导入库存数据'} action={!s&&<button className="btn btn-primary" onClick={()=>window.__setPage&&window.__setPage('cleansing')}>去导入数据 →</button>} />)
       : <div style={{overflow:'auto',maxHeight:'calc(100vh - 180px)'}}>
-        <div style={{fontSize:11,color:'var(--muted2)',marginBottom:4}}>{t("common.showing")} {visCols.length}/{INV_COLS[whType].length} {t("common.columns")}</div>
+        
       <table><colgroup>{visCols.map(id=>{const col=INV_COLS[whType].find(c=>c.id===id);return col?<col key={col.id} />:null})}</colgroup>
         <thead style={{position:"sticky",top:0,background:"var(--card)",zIndex:1}}><tr>{visCols.map(id=>{const col=INV_COLS[whType].find(c=>c.id===id);if(!col)return null;let el;if(col.id==='month_in')el=<th key={col.id}>{col.label}<br/><span className='small' style={{fontWeight:400}}>{monthRange}</span></th>;else if(col.id==='month_out')el=<th key={col.id}>{col.label}<br/><span className='small' style={{fontWeight:400}}>{monthRange}</span></th>;else el=<th key={col.id}>{col.label}</th>;return el})}</tr></thead>
       <tbody>{fl.map(x => {
