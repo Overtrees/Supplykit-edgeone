@@ -265,13 +265,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     const f = dashboard?.period_funnel?.[periodTab] || dashboard?.funnel || []
     const names = f.map(x => x.name)
     const values = f.map(x => x.value)
+    const ftotal = (f[0] && f[0].value) || 1
     return {
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, extraCssText: 'z-index:1000', hideDelay: 100, formatter: (p) => {
         const idx = p[0]?.dataIndex ?? 0; const item = f[idx]
         return `${item.name}<br/>数量: ${item.value}单<br/>占比: ${item.percentage}%<br/>转化率: ${item.conversion}%`
       }},
       grid: { containLabel: true, top: 4, bottom: 6, right: 58 },
-      xAxis: { type: 'value', show: false },
+      xAxis: { type: 'value', show: false, max: ftotal * 1.15 },
       yAxis: { type: 'category', data: names, axisLabel: { fontSize: 10 } },
       series: [{
         type: 'bar', data: values.map((v, i) => ({ value: v, itemStyle: { color: ['#f59e0b','#06b6d4','#8b5cf6','#ec4899','#10b981'][i % 5] } })),
