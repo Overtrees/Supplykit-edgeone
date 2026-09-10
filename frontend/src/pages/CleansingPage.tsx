@@ -367,7 +367,7 @@ export default function CleansingPage() {
 
     {s === 0 && <div style={{textAlign:'center',padding:'36px 16px'}}>
       <div style={{fontSize:17,fontWeight:700,marginBottom:6}}>选择导入类型</div>
-      <div className="small muted" style={{fontSize:'var(--font-sm)',marginBottom:18}}>订单 / 库存 / 出入库 / 商品 / 供应商</div>
+      <div className="small muted" style={{fontSize:'var(--font-sm)',marginBottom:16}}>订单 / 库存 / 出入库 / 商品 / 供应商</div>
       <div style={{display:'flex',justifyContent:'center',gap:8,marginBottom:24}}>
         <select value={tt} onChange={e=>setTt(e.target.value)} style={{fontSize:'var(--font-15)',padding:'11px 16px',border:'1px solid var(--border)',borderRadius:'var(--radius-full)',outline:'none',background:'var(--card)',minWidth:200,minHeight:46}}>
           <option value='order'>导入订单</option>
@@ -551,7 +551,7 @@ export default function CleansingPage() {
             <select value={s.group||'blocked'} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,group:e.target.value}:x)}))} style={{fontSize:'var(--font-13)',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',background:'var(--card)',minHeight:36}}>
               <option value='sale'>✅ 销量池</option><option value='blocked'>⛔ 屏蔽</option>
             </select>
-            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'4px 8px',border:'none',background:'transparent',flexShrink:0}}>✕</button>
+            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32,border:'none',background:'transparent',flexShrink:0}}>✕</button>
           </div>
         ))}
         <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>

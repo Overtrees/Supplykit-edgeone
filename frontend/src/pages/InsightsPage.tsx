@@ -459,7 +459,7 @@ export default function InsightsPage() {
           </div>
           <div className="section-title" style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
             <span>采购建议</span>
-            {globalChannel==='jd' && <span className="pill" style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{replenMode==='bbcc'?'BBCC 口径(含B仓)':'传统口径(不含B仓)'}</span>}
+            {globalChannel==='jd' && <span className="pill" style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{replenMode==='bbcc'?'BBCC 口径(含B仓)':'传统口径(不含B仓)'}</span>}
             <span className="muted2" style={{fontSize:'var(--font-xs)',fontWeight:400}}>显示 {purchaseVisCols.length}/{PURCHASE_COLS.length} 列 · 已加载 {Math.min(purchaseLimit, filteredPurchase.length)}/{filteredPurchase.length} 条{insightSearch ? ` · "${insightSearch}"` : ''}</span>
           </div>
           {purchaseLoading ? (
@@ -576,7 +576,7 @@ export default function InsightsPage() {
                       const s = useAppStore.getState()
                       const done = !!x.disposed
                       return <tr key={key} onClick={()=>{ if (prodBatch && !done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{opacity:done?0.4:1,background:prodBatch&&isSel?'rgba(29,78,216,0.08)':'transparent',cursor:prodBatch&&!done?'pointer':'default'}}>
-                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); if (!done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{padding:'4px 8px',textAlign:'center'}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':(done?'var(--border)':'var(--border)'),background:isSel?'var(--primary)':(done?'rgba(148,163,184,0.15)':'transparent'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',opacity:done?0.35:1}}>{done?'✓':(isSel?'✓':'')}</span></td>}
+                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); if (!done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{padding:'9px 12px',minHeight:32,textAlign:'center'}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':(done?'var(--border)':'var(--border)'),background:isSel?'var(--primary)':(done?'rgba(148,163,184,0.15)':'transparent'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',opacity:done?0.35:1}}>{done?'✓':(isSel?'✓':'')}</span></td>}
                         {slowVisCols.map(id => {
                           const col = SLOW_COLS.find(c => c.id === id)
                           if (!col) return <td key={id}></td>
@@ -587,7 +587,7 @@ export default function InsightsPage() {
                           if (col.id === 'warehouse') return <td key={id} style={{fontSize:'var(--font-sm)'}}>{x.warehouse}</td>
                           if (col.id === 'days') return <td key={id} style={{fontWeight:600,color:x.days_zero>=90?'var(--danger)':(x.days_zero>=30?'var(--warning)':'var(--muted)'),fontSize:'var(--font-sm)'}}>{x.days_zero==999?'∞':x.days_zero}天</td>
                           if (col.id === 'stock') return <td key={id} style={{fontSize:'var(--font-sm)'}}>{x.stock}</td>
-                          if (col.id === 'level') return <td key={id}><span className={`pill ${x.level==='black'?'danger':x.level==='red'?'danger':x.level==='yellow'?'warning':'info'}`} style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{x.level==='black'?'紧急':x.level==='red'?'处置':x.level==='yellow'?'滞销':'观察'}</span></td>
+                          if (col.id === 'level') return <td key={id}><span className={`pill ${x.level==='black'?'danger':x.level==='red'?'danger':x.level==='yellow'?'warning':'info'}`} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{x.level==='black'?'紧急':x.level==='red'?'处置':x.level==='yellow'?'滞销':'观察'}</span></td>
                           if (col.id === 'note') return <td key={id} style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}>{(x.reason||[]).join(' · ')}<span style={{color:'var(--text)',fontWeight:600}}> → {x.suggestion}</span></td>
                           return <td key={id}></td>
                         })}

@@ -448,7 +448,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </span>}
                 {(!isJd || _replMode !== 'bbcc') && <span onClick={function(){setHealthWithSave('platform')}}
                   className="clickable"
-                  style={{fontSize:'var(--font-10)',padding:'2px 8px',borderRadius:'var(--radius-full)',cursor:'pointer',fontWeight:healthTab==='platform'?600:400,background:healthTab==='platform'?'var(--card)':'transparent',color:healthTab==='platform'?'var(--text)':'var(--muted2)'}}>平台</span>}
+                  style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,borderRadius:'var(--radius-full)',cursor:'pointer',fontWeight:healthTab==='platform'?600:400,background:healthTab==='platform'?'var(--card)':'transparent',color:healthTab==='platform'?'var(--text)':'var(--muted2)'}}>平台</span>}
                 {bcMenuOpen && <div onClick={function(){setBcMenuOpen(false)}} style={{position:'fixed',inset:0,zIndex:9}} />}
                 {bcMenuOpen && <div style={{position:'absolute',top:'calc(100% + 4px)',right:0,background:'var(--card)',borderRadius:'var(--radius-sm)',border:'0.5px solid var(--border)',boxShadow:'0 4px 12px rgba(0,0,0,0.1)',overflow:'hidden',minWidth:64,zIndex:10}}>
                   {healthTab === 'bc'

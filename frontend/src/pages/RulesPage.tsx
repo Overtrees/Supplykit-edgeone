@@ -257,7 +257,7 @@ export default function RulesPage() {
       <div style={{marginBottom:12,padding:10,borderRadius:'var(--radius-sm)',border:'1px solid var(--warning)',background:'rgba(245,158,11,0.08)',fontSize:'var(--font-xs)',fontFamily:'monospace'}}>
         <div style={{fontWeight:700,marginBottom:4}}>🔍 规则页调试追踪（关闭: localStorage 设 c_debug_rules=0）</div>
         <div style={{color:'var(--text-secondary)',marginBottom:4}}>当前 rules state: <b>{rules.length}</b> 条 | filteredRules: <b>{filteredRules.length}</b> 条 | 渠道: <b>{globalChannel}</b> | tab: <b>{tab}</b></div>
-        <button onClick={() => setDebugLog([])} style={{marginRight:6,padding:'2px 8px',borderRadius:'var(--radius-xs)',border:'1px solid var(--border)',background:'transparent',fontSize:'var(--font-xs)'}}>清空日志</button>
+        <button onClick={() => setDebugLog([])} style={{marginRight:6,padding:'8px 10px',minHeight:30,borderRadius:'var(--radius-xs)',border:'1px solid var(--border)',background:'transparent',fontSize:'var(--font-xs)'}}>清空日志</button>
         {debugLog.length === 0 ? <div style={{color:'var(--muted2)'}}>暂无操作日志</div> : debugLog.map((l, i) => (
           <div key={i} style={{borderTop:'1px dashed var(--border)',padding:'2px 0'}}>
             <span style={{color:'var(--muted2)'}}>[{l.t}]</span> {l.msg}
@@ -337,7 +337,7 @@ export default function RulesPage() {
               <select value={o.op} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],op:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,width:64,fontSize:'var(--font-sm)',textAlign:'center'}}>{OPS.map(x=><option key={x.v} value={x.v}>{x.l}</option>)}</select>
               <input type="number" step="any" value={o.right==='inv.safety_qty'?'':o.right} placeholder={o.right==='inv.safety_qty'?'安全线':''}
                 onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],right:e.target.value||'inv.safety_qty',rightType:'number'};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:80,fontSize:'var(--font-sm)'}}/>
-              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'4px 6px'}}>✕</span>
+              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32}}>✕</span>
             </div>
           ))}
           <button onClick={()=>setCond(p=>({...p,or:[...(p.or||[]),{left:'inv.buffer',op:'<=',right:'1',rightType:'number',warehouse:'',pctValue:100}]}))} className="clickable" style={{marginTop:8,fontSize:'var(--font-sm)',padding:'4px 12px',borderRadius:'var(--radius-full)',border:'1px dashed var(--primary)',background:'transparent',color:'var(--primary)',cursor:'pointer'}}>＋ 或条件（任一满足触发）</button>
@@ -428,9 +428,9 @@ export default function RulesPage() {
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:'var(--font-15)',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {rule.name}
-            <span className={'pill '+(rule.is_active?'success':'warning')} style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{rule.is_active?'启用':'停用'}</span>
-            <span className={'pill '+sevCls(rule.severity)} style={{fontSize:'var(--font-10)',padding:'2px 8px',minHeight:'auto',lineHeight:'18px'}}>{sevLbl(rule.severity)}</span>
-            {rule.mode && <span style={{fontSize:'var(--font-10)',color:'var(--muted2)',background:'var(--bg)',padding:'2px 8px',borderRadius:'var(--radius-full)'}}>{modeLbl}</span>}
+            <span className={'pill '+(rule.is_active?'success':'warning')} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{rule.is_active?'启用':'停用'}</span>
+            <span className={'pill '+sevCls(rule.severity)} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{sevLbl(rule.severity)}</span>
+            {rule.mode && <span style={{fontSize:'var(--font-10)',color:'var(--muted2)',background:'var(--bg)',padding:'8px 10px',minHeight:30,borderRadius:'var(--radius-full)'}}>{modeLbl}</span>}
           </div>
           <div style={{marginTop:6,padding:'8px 12px',background:'var(--bg)',borderRadius:'var(--radius-lg)',fontSize:'var(--font-13)',color:'var(--primary)',display:'block'}}>
             <IconScale size={12} style={{display:'inline',verticalAlign:'middle',marginRight:4}} /> {condText}

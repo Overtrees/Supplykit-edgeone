@@ -114,7 +114,7 @@ export default function OrdersPage() {
         <span className="small muted">跳至</span>
         <input type="number" min={1} max={totalPages} defaultValue={orderPage}
           onKeyDown={e=>{if(e.key==='Enter'){const v=parseInt(e.target.value);if(v>=1&&v<=totalPages)setOrderPage(v)}}}
-          style={{width:50,fontSize:'var(--font-sm)',padding:'4px 6px',border:'none',borderRadius:'var(--radius-lg)',textAlign:'center',background:'var(--card)',color:'var(--text)',boxSizing:'border-box',outline:'none'}} />
+          style={{width:50,fontSize:'var(--font-sm)',padding:'9px 12px',minHeight:32,border:'none',borderRadius:'var(--radius-lg)',textAlign:'center',background:'var(--card)',color:'var(--text)',boxSizing:'border-box',outline:'none'}} />
         <span className="small muted">页</span>
       </span>
     </div>}
