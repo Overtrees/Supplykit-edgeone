@@ -395,13 +395,14 @@ export default function CleansingPage() {
         <div style={{fontSize:12}}>已映射 <b style={{color:'var(--success)'}}>{Object.values(mp||{}).filter(v=>v&&v.target).length}</b> · 未映射 <b style={{color:'var(--danger)'}}>{cols.length - Object.values(mp||{}).filter(v=>v&&v.target).length}</b><span className="small muted" style={{marginLeft:4}}>（导入时丢弃）</span></div>
       </div>
       <div style={{display:'flex',gap:8,marginBottom:12,alignItems:'center',flexWrap:'wrap'}}>
-        <select id="tmplSelect" style={{flex:1,fontSize:16,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,minWidth:140}}>
+        <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center',flexWrap:'wrap',background:'var(--bg)',borderRadius:20,padding:10}}>
+        <select id="tmplSelect" style={{flex:1,fontSize:14,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:99,minWidth:140,minHeight:38,outline:'none',background:'var(--card)'}}>
           <option value="">加载映射模板...</option>
           {Array.isArray(templates) && templates.filter(t => t.doc_type === tt).map(t => <option key={t.id} value={t.mapping}>{t.name}</option>)}
           {Array.isArray(templates) && templates.filter(t => t.doc_type !== tt).length > 0 && <option disabled style={{color:'var(--muted2)',fontSize:11}}>── {tt==='order'?'库存':'订单'}模板（{templates.filter(t=>t.doc_type!==tt).length}个） ──</option>}
         </select>
-        <button onClick={()=>{const s=document.getElementById('tmplSelect');if(s.value)try{const m=typeof s.value==='string'&&s.value.startsWith('{')?JSON.parse(s.value):s.value;setMp(m&&typeof m==='object'?m:{})}catch(e){console.error(e)}}} className="clickable" style={{padding:'7px 16px',fontSize:13,border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',cursor:'pointer',minHeight:36}}>应用</button>
-        <input id="tmplName" placeholder="新模板名称" style={{width:130,fontSize:16,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
+        <button onClick={()=>{const s=document.getElementById('tmplSelect');if(s.value)try{const m=typeof s.value==='string'&&s.value.startsWith('{')?JSON.parse(s.value):s.value;setMp(m&&typeof m==='object'?m:{})}catch(e){console.error(e)}}} className="clickable" style={{padding:'8px 14px',fontSize:13,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',minHeight:38,flexShrink:0}}>应用</button>
+        <input id="tmplName" placeholder="新模板名称" style={{width:116,fontSize:14,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:99,outline:'none',minHeight:38,flexShrink:0}}/>
         <button onClick={async()=>{
           const n=document.getElementById('tmplName').value;if(!n)return toast.error('请输入模板名称');
           try {
@@ -409,10 +410,10 @@ export default function CleansingPage() {
             const msg=r?.data?.message||'模板已保存';
             document.getElementById('tmplName').value='';loadTemplates();toast.success(msg);
           } catch(e){toast.error('模板保存失败: '+(e.response?.data?.detail||e.message));}
-        }} className="clickable" style={{padding:'7px 16px',fontSize:13,background:'var(--primary)',color:'var(--card)',border:'none',borderRadius:32,cursor:'pointer',minHeight:36}}>保存</button>
+        }} className="clickable" style={{padding:'8px 16px',fontSize:13,background:'var(--primary)',color:'var(--card)',border:'none',borderRadius:99,cursor:'pointer',minHeight:38,flexShrink:0}}>保存模板</button>
       </div>
-      {Array.isArray(cf) && <div style={{marginBottom:12,border:'1px solid var(--border)',borderRadius:32,padding:14,background:'var(--bg)'}}>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>自定义字段</div>
+      {Array.isArray(cf) && <div style={{marginBottom:14,border:'1px solid var(--border)',borderRadius:20,padding:14,background:'var(--bg)'}}>
+        <div style={{fontSize:12.5,fontWeight:600,marginBottom:10,display:'flex',alignItems:'center',gap:6}}>自定义字段<span className="small muted" style={{fontSize:11,fontWeight:400}}>可自定义映射目标字段名</span></div>
         {cf.map((f,i) => <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
           <input value={f.l} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,l:v}:x))}} placeholder="字段名" style={{flex:'1 1 150px',minWidth:120,fontSize:15,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:99,outline:'none',background:'var(--card)'}}/>
           <select value={f.tp} onChange={e=>{const v=e.target.value;setCf(p=>p.map((x,k)=>k===i?{...x,tp:v}:x))}} style={{fontSize:13,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',flexShrink:0}}>
@@ -422,6 +423,10 @@ export default function CleansingPage() {
         </div>)}
         <button onClick={addField} className="clickable" style={{padding:'7px 16px',fontSize:13,border:'1px dashed #94a3b8',borderRadius:32,background:'var(--card)',cursor:'pointer',color:'var(--muted)',width:'100%',minHeight:36}}>+ 添加自定义字段</button>
       </div>}
+      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,marginBottom:10}}>
+        <span style={{fontSize:14,fontWeight:700}}>列映射</span>
+        <span className="small muted" style={{fontSize:11}}>选择文件列对应的目标字段 · 未映射列导入时丢弃</span>
+      </div>
       {cols.map(c => {
         const matched = ALIAS[c.name]
         const sf = SYS_FIELDS.find(x => x.t === matched)
@@ -432,7 +437,7 @@ export default function CleansingPage() {
         }
         const currentTarget = mp[c.name]?.target
         const isShared = currentTarget && targetCounts[currentTarget] > 1
-        return (<div key={c.name} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,marginBottom:6}}>
+        return (<div key={c.name} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:'1px solid var(--border)',borderRadius:24,marginBottom:8}}>
         <div style={{flex:1,fontSize:14,fontWeight:500,minWidth:0}}>
           <span style={{display:'inline-flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {c.name}
