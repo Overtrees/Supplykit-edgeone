@@ -130,6 +130,16 @@ export default function CleansingPage() {
   const addField = () => saveCf([...cf, {t:'field_'+Date.now(), l:'自定义字段', tp:'string'}])
   const delField = (i) => saveCf(cf.filter((_,k) => k !== i))
 
+  // 用户自定义别名记忆(核心): 手工映射过的 (列名→目标) 存 localStorage, 下次同列名自动识别
+  const getAliasMap = () => { try { return JSON.parse(localStorage.getItem('c_alias_map') || '{}') } catch { return {} } }
+  const saveAlias = (colName, target) => {
+    try {
+      const m = getAliasMap()
+      if (target) m[colName] = target
+      else delete m[colName]
+      localStorage.setItem('c_alias_map', JSON.stringify(m))
+    } catch {}
+  }
   const detect = async (file) => {
     setF(file); setBs('识别中')
     const fd = new FormData(); fd.append('file', file)
@@ -139,33 +149,17 @@ export default function CleansingPage() {
       if (!d.ok) { toast.error(d.error||'识别失败'); setBs(''); return }
       setCols(d.columns||[]); setTr(d.total||0)
       const a = {}
-      let mappedCount = 0
+      const customAlias = getAliasMap()
       ;(d.columns||[]).forEach(c => {
-        // 第一层: 精确 ALIAS; 第二层: 归一化别名(英文/变体/去空格符号)
-        const key = ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
-        if (key) { a[c.name] = { target: key, type: 'string' }; mappedCount++ }
+        // 识别优先级: 用户自定义别名(历史手工映射记忆) → 系统精确 ALIAS → 归一化别名(英文/变体)
+        const key = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
+        if (key) a[c.name] = { target: key, type: 'string' }
       })
-      if (Object.keys(a).length > 0) setMp(a)
-      setS(1)
-      // 自动预览条件: 目标关键字段已映射即自动进入预览(不必全部列匹配——用户表列名未必全覆盖)
-      const KEY_COLS = {order:['order_no','sku','warehouse'], inventory:['sku','warehouse'],
-                        platform_inv:['sku','warehouse'], inventory_b:['sku','warehouse'],
-                        inbound:['sku','warehouse'], outbound:['sku','warehouse'],
-                        product:['sku'], supplier:['supplier_code']}
-      const _tgts = Object.values(a).map(x => x.target)
-      const _hasKey = (KEY_COLS[tt] || []).every(k => _tgts.includes(k))
-      if ((d.columns||[]).length > 0 && mappedCount > 0 && _hasKey) {
-        setMp(a)
-        setBs('预览中')
-        const fd2 = new FormData(); fd2.append('file', file); fd2.append('mapping', JSON.stringify(a)); fd2.append('target', tt)
-        try {
-          const r2 = await api.post('/api/cleansing/preview', fd2)
-          const d2 = r2.data
-          if (!d2.ok) { toast.error(d2.error||'预览失败'); setBs(''); return }
-          setPv(d2); setS(2)
-        } catch(e) { toast.error('请求异常: '+e.message) }
-        setBs('')
-      }
+      setMp(a)
+      setS(1)  // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
+      setBs('')
+      if (Object.keys(a).length > 0) toast.success('已自动识别 ' + Object.keys(a).length + ' 列（未识别的列请在下方手工选择目标字段）')
+      else toast('未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）')
     } catch(e) { toast.error('请求异常: '+e.message) }
     setBs('')
   }
@@ -358,7 +352,7 @@ export default function CleansingPage() {
           {matched && sf && <span className="small muted" style={{display:'block',fontSize:11,marginTop:1}}>→ {sf.l} ({sf.t})</span>}
         </div>
         <div style={{fontSize:12,color:'var(--muted2)',flexShrink:0}}>→</div>
-        <select value={mp[c.name]?.target || ''} onChange={e=>{const v=e.target.value;setMp(p=>({...p,[c.name]:{target:v,type:'string'}}))}}
+        <select value={mp[c.name]?.target || ''} onChange={e=>{const v=e.target.value;setMp(p=>({...p,[c.name]:{target:v,type:'string'}}));saveAlias(c.name,v)}}
           style={{fontSize:14,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,flex:1,minWidth:130,background:'var(--card)',minHeight:36}}>
           <option value="">-- 不映射 --</option>
           {(tt==='inventory'?INV_FIELDS:tt==='product'?PROD_FIELDS:SYS_FIELDS).map(f => <option key={f.t} value={f.t}>{f.l}</option>)}
