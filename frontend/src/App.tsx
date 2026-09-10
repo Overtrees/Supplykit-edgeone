@@ -503,7 +503,7 @@ export default function App() {
               {svg:'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',title:'导数据',desc:'数据清洗导入',page:'cleansing'},
               {svg:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',title:'设规则',desc:'规则引擎配置',page:'rules'},
             ].map(function(card) {
-              return <div key={card.page} className="clickable" style={{background:'var(--card)',borderRadius:'var(--radius-lg)',padding:16,textAlign:'center',cursor:'default',border:'0.5px solid var(--border)',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
+              return <div key={card.page} className="clickable" style={{background:'var(--card)',borderRadius:'var(--radius-card-sm)',padding:16,textAlign:'center',cursor:'default',border:'0.5px solid var(--border)',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
                 <div style={{marginBottom:8}}><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={card.svg}/></svg></div>
                 <div style={{fontSize:'var(--font-15)',fontWeight:600,color:'var(--text)',marginBottom:3}}>{card.title}</div>
                 <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>{card.desc}</div>
