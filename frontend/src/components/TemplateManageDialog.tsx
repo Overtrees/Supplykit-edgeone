@@ -1,6 +1,7 @@
 // 模板管理弹窗(清洗页锤子菜单入口): 映射模板加载/应用/保存 + 自定义字段(合并)
 // 与映射页分离前样式一致; 应用模板/字段变更通过事件通知映射页
 import React, { useState, useEffect } from "react"
+import { createPortal } from "react-dom"
 import { api } from "../api/client"
 import { useToast } from "../components/Toast"
 
@@ -26,7 +27,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
   const fieldStyle: any = { fontSize: 15, padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 99, outline: 'none', background: 'var(--card)' }
   const btnG: any = { fontSize: 13, borderRadius: 99, cursor: 'pointer', minHeight: 38 }
 
-  return (
+  return createPortal((
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
       <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
@@ -79,5 +80,5 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
         </div>
       </div>
     </>
-  )
+  ), document.body)
 }
