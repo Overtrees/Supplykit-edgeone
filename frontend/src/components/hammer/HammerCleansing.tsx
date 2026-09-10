@@ -1,5 +1,6 @@
 import React from "react"
 import { useAppStore } from "../../store/useAppStore"
+import { IconTag } from "../../components/Icons"
 interface HammerCleansingProps { channel: string }
 
 export default function HammerCleansing({ channel }: HammerCleansingProps) {
@@ -39,6 +40,11 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
             </div>
           </div>
         )}
+        <button onClick={() => window.dispatchEvent(new Event('cleansing-colmap-open'))}
+          className="hammer-btn btn-ghost"
+          style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:4,color:'var(--primary)',marginTop:10,minHeight:36}}>
+          <IconTag size={13} /> 表格列状态映射
+        </button>
       </div>
     </div>
   )

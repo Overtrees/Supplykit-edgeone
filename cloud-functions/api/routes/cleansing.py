@@ -200,10 +200,10 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         # 订单状态归一化(写入前, 渠道级映射): sale→'已完成'(进销量池), blocked/未识别→保留原值(不入销量池)
         if target == "order":
             try:
-                from routes.suppliers import _norm_order_status as _nos
+                from routes.suppliers import _norm_column_value as _ncol
                 for c in cleaned:
                     if c.get("order_status"):
-                        c["order_status"] = _nos(channel, str(c["order_status"]))
+                        c["order_status"] = _ncol(channel, "order_status", str(c["order_status"]))
             except Exception:
                 pass
         success, failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)

@@ -235,6 +235,26 @@ export default function CleansingPage() {
     setBs('')
   }
 
+  // 表格列状态映射(清洗页锤子菜单入口; 渠道级隔离; 通用列值→档位, 当前 order_status)
+  const [colMapOpen, setColMapOpen] = useState(false)
+  const [colMap, setColMap] = useState({})
+  const [colMapSaving, setColMapSaving] = useState(false)
+  const [colMapCol, setColMapCol] = useState('order_status')
+  const loadColMap = async () => { try { const r = await api.get('/api/replenishment-config/column-value-map?channel=' + hammerCleansingChannel + '&t=' + Date.now()); setColMap(r.data && typeof r.data === 'object' ? r.data : {}) } catch(e) {} }
+  useEffect(() => {
+    const h = () => { loadColMap(); setColMapOpen(true) }
+    window.addEventListener('cleansing-colmap-open', h)
+    return () => window.removeEventListener('cleansing-colmap-open', h)
+  }, [hammerCleansingChannel])
+  const saveColMap = async () => {
+    setColMapSaving(true)
+    try {
+      await api.put('/api/replenishment-config/column-value-map?channel=' + hammerCleansingChannel, {items: colMap})
+      toast.success('列映射已保存，导入时即时生效')
+      setColMapOpen(false)
+    } catch(e) { toast.error('保存失败: ' + (e.message || '')) }
+    setColMapSaving(false)
+  }
   const execLock = useRef(false)
   const doExecute = async () => {
     if (execLock.current) return
@@ -528,6 +548,37 @@ export default function CleansingPage() {
             if(fi){setF(fi);setBs('识别中');setS(1);detect(fi)}
           }}/>
         </label>
+      </div>
+    </div>}
+
+    {colMapOpen && <div style={{position:'fixed',inset:0,zIndex:4000}}>
+      <div onClick={()=>setColMapOpen(false)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
+      <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:32,padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'80vh',overflowY:'auto'}}>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:2,textAlign:'center'}}>表格列状态映射</div>
+        <div style={{textAlign:'center',fontSize:11,color:'var(--muted2)',marginBottom:12}}>按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{hammerCleansingChannel==='jd'?'京东':'其他渠道'}（全局主体隔离）</div>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <span style={{fontSize:13,fontWeight:600,flexShrink:0}}>映射列</span>
+          <select value={colMapCol} onChange={e=>setColMapCol(e.target.value)} style={{flex:1,fontSize:14,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',outline:'none'}}>
+            <option value="order_status">订单状态（销量池判定）</option>
+          </select>
+        </div>
+        {(colMap[colMapCol]||[]).map((s,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',border:'1px solid var(--border)',borderRadius:32,marginBottom:6}}>
+            <input value={s.name||''} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,name:e.target.value}:x)}))} placeholder='值(如 交易成功)' style={{flex:1,minWidth:100,fontSize:15,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,outline:'none'}}/>
+            <select value={s.group||'blocked'} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,group:e.target.value}:x)}))} style={{fontSize:13,padding:'7px 10px',border:'1px solid var(--border)',borderRadius:32,background:'var(--card)',minHeight:36}}>
+              <option value='sale'>✅ 销量池</option><option value='blocked'>⛔ 屏蔽</option>
+            </select>
+            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:12,color:'var(--danger)',cursor:'pointer',padding:'4px 8px',border:'none',background:'transparent',flexShrink:0}}>✕</button>
+          </div>
+        ))}
+        <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
+          <button onClick={()=>setColMap(p=>({...p,[colMapCol]:[...(p[colMapCol]||[]),{name:'',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>+ 添加值</button>
+          <button onClick={()=>setColMap(p=>({...p,order_status:[{name:'已完成',group:'sale'},{name:'交易成功',group:'sale'},{name:'确认收货',group:'sale'},{name:'已签收',group:'sale'},{name:'妥投',group:'sale'},{name:'Closed',group:'sale'},{name:'Completed',group:'sale'},{name:'待发货',group:'blocked'},{name:'已发货',group:'blocked'},{name:'待确认',group:'blocked'},{name:'待付款',group:'blocked'},{name:'已取消',group:'blocked'},{name:'已退款',group:'blocked'},{name:'退款中',group:'blocked'},{name:'申请退款',group:'blocked'},{name:'已退货',group:'blocked'},{name:'运输中',group:'blocked'},{name:'在途',group:'blocked'}]}))} className="btn btn-ghost clickable" style={{fontSize:12,padding:'7px 14px',minHeight:36}}>填充内置默认</button>
+        </div>
+        <div style={{display:'flex',gap:10,marginTop:14}}>
+          <button onClick={()=>setColMapOpen(false)} className="clickable" style={{flex:1,padding:'11px 0',fontSize:14,border:'1px solid var(--border)',borderRadius:99,background:'var(--card)',cursor:'pointer',fontWeight:600,minHeight:42}}>取消</button>
+          <button disabled={colMapSaving} onClick={saveColMap} className="clickable" style={{flex:1,padding:'11px 0',fontSize:14,border:'none',borderRadius:99,background:'var(--primary)',color:'#fff',cursor:'pointer',fontWeight:600,minHeight:42}}>{colMapSaving?'保存中...':'保存'}</button>
+        </div>
       </div>
     </div>}
 

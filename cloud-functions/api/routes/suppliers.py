@@ -216,6 +216,88 @@ def _norm_order_status(channel, raw):
     return "已完成" if g == "sale" else raw
 
 
+# ── 列值映射(渠道级, 通用: 列名 → [{值, 档位}]; 当前 order_status, 未来可拓展其他列做指定字段筛选) ──
+_DEFAULT_COLUMN_MAP = {
+    "order_status": [
+        {"name": "已完成", "group": "sale"}, {"name": "交易成功", "group": "sale"},
+        {"name": "确认收货", "group": "sale"}, {"name": "已签收", "group": "sale"},
+        {"name": "妥投", "group": "sale"}, {"name": "Closed", "group": "sale"}, {"name": "Completed", "group": "sale"},
+        {"name": "待发货", "group": "blocked"}, {"name": "已发货", "group": "blocked"},
+        {"name": "待确认", "group": "blocked"}, {"name": "待付款", "group": "blocked"},
+        {"name": "已取消", "group": "blocked"}, {"name": "已退款", "group": "blocked"},
+        {"name": "退款中", "group": "blocked"}, {"name": "申请退款", "group": "blocked"},
+        {"name": "已退货", "group": "blocked"}, {"name": "运输中", "group": "blocked"}, {"name": "在途", "group": "blocked"},
+    ]
+}
+
+
+def _column_map_items(channel, col):
+    """读指定列的值映射 {值: 档位}; 优先 column_value_map, 兼容旧 order_status_map, 兜底内置默认"""
+    row = one("SELECT value FROM replenishment_config WHERE `key`='column_value_map' AND channel=%s", [channel])
+    try:
+        m = json.loads((row or {}).get("value") or "{}")
+        if isinstance(m, dict) and m:
+            items = m.get(col)
+            if isinstance(items, list) and items:
+                return {x.get("name"): x.get("group") for x in items if x.get("name")}
+    except Exception:
+        pass
+    if col == "order_status":
+        row2 = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
+        try:
+            st = json.loads((row2 or {}).get("value") or "[]")
+            if isinstance(st, list) and st:
+                return {x.get("name"): x.get("group") for x in st if x.get("name")}
+        except Exception:
+            pass
+    d = _DEFAULT_COLUMN_MAP.get(col)
+    return {x.get("name"): x.get("group") for x in (d or []) if x.get("name")}
+
+
+def _norm_column_value(channel, col, raw):
+    """列值归一化(导入写入时): 命中 sale 档位且为销量池列 → 归一化标准值; 其余保留原值"""
+    if not raw:
+        return raw
+    g = _column_map_items(channel, col).get(str(raw).strip(), "blocked")
+    if col == "order_status" and g == "sale":
+        return "已完成"
+    return raw
+
+
+@router.get("/replenishment-config/column-value-map")
+@traced
+def get_column_value_map(channel: str = "jd"):
+    row = one("SELECT value FROM replenishment_config WHERE `key`='column_value_map' AND channel=%s", [channel])
+    try:
+        stored = json.loads((row or {}).get("value") or "{}")
+        if isinstance(stored, dict) and stored:
+            return ok(stored)
+    except Exception:
+        pass
+    return ok({k: [dict(x) for x in v] for k, v in _DEFAULT_COLUMN_MAP.items()})
+
+
+@router.put("/replenishment-config/column-value-map")
+@traced
+async def put_column_value_map(request: Request):
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channel = d.get("channel", "jd")
+    data = d.get("data") or d.get("items") or {}
+    old = one("SELECT value FROM replenishment_config WHERE `key`='column_value_map' AND channel=%s", [channel])
+    _log_cfg_history(channel, "column_value_map", (old or {}).get("value", ""),
+                     json.dumps(data, ensure_ascii=False))
+    execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('column_value_map',%s,%s) "
+            "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            (json.dumps(data, ensure_ascii=False), channel))
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok({"updated": sum(len(v or []) for v in data.values()) if isinstance(data, dict) else 0})
+
+
 @router.get("/replenishment-config/order-status-map")
 @traced
 def get_status_map(channel: str = "jd"):
