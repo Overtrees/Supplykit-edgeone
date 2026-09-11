@@ -1,7 +1,7 @@
 """原生 inventory 路由(方案 B): 缺货清单 + 单条删除(契约与旧 backend 一致)"""
 from fastapi import APIRouter
 
-from db import query, execute
+from db import query, one, execute
 from routes.common import ok, traced
 
 router = APIRouter(tags=["inventory"])
@@ -33,6 +33,14 @@ def out_of_stock(channel: str = "jd", wh: str = "own", limit: int = 0):
             "FROM inventory WHERE channel=%s AND warehouse_type=%s AND available_qty<=0 "
             "ORDER BY id DESC" + _lim, [channel, wh])
     return ok(rows)
+
+
+@router.get("/inventory/sample")
+def inventory_sample(channel: str = "jd"):
+    """规则测试'用真实库存填充': 取该渠道一条真实库存样本(演示/调试真实数据下条件触发)"""
+    return ok(one("SELECT sku, available_qty, safety_qty, in_transit_qty, warehouse_type, product_name "
+                  "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' "
+                  "ORDER BY id LIMIT 1", [channel]) or {})
 
 
 @router.delete("/inventory/{iid}")

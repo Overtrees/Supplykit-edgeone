@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert, IconClose, IconGear, IconCheck } from '../components/Icons'
+import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert, IconClose, IconGear, IconCheck, IconLightning } from '../components/Icons'
 import { t } from "../locale"
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -89,6 +89,7 @@ export default function RulesPage() {
   const [testInv, setTestInv] = useState({ available_qty: 0, safety_qty: 0, in_transit_qty: 0, warehouse_type: '', days_since_last: 0, order_quantity: 0 })
   const [testResult, setTestResult] = useState(null)
   const [testParams, setTestParams] = useState({})
+  const [testSampleSku, setTestSampleSku] = useState('')
   const [testLoading, setTestLoading] = useState(false)
 
   const runTest = async () => {
@@ -427,6 +428,7 @@ export default function RulesPage() {
         )}
 
         <div style={{marginTop:16,display:'flex',gap:10}}>
+          <button onClick={()=>{const _c = cond; setTestRule({...(editing||{}), condition_json: JSON.stringify(_c)}); setTestParams(typeof rParams === 'string' ? (function(){try{return JSON.parse(rParams||'{}')}catch{return{}}}()) : (rParams||{})); setTestInv(defaultTestInv(pc(JSON.stringify(_c)))); setTestResult(null)}} className="btn btn-ghost" style={{flex:1,minHeight:40,display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center'}}><IconLightning size={14} /> 测试</button>
           <button onClick={save} disabled={saveLoading} className="btn btn-primary" style={{flex:1,display:'inline-flex',alignItems:'center',gap:4,justifyContent:'center',minHeight:40}}>{saveLoading ? <><IconLoading size={14} /> 保存中...</> : <><IconSave size={14} /> {t("common.save")}</>}</button>
           <button onClick={cancelEdit} className="btn btn-ghost" style={{flex:1,background:'var(--warning)',color:'#fff',minHeight:40}}>{t("common.cancel")}</button>
         </div>
@@ -458,8 +460,6 @@ export default function RulesPage() {
           </div>
         </div>
         <div style={{display:'flex',gap:8,flexShrink:0,alignItems:'flex-start'}}>
-          <button onClick={()=>{setTestRule(rule);setTestParams(function(){try{const _p = typeof rule.params === 'string' ? JSON.parse(rule.params || '{}') : (rule.params || {}); return (_p && typeof _p === 'object' && !Array.isArray(_p)) ? _p : {}}catch{return {}}}());setTestInv(defaultTestInv(condInfo));setTestResult(null)}} className="clickable" style={{fontSize:'var(--font-13)',padding:'6px 14px',minHeight:36,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
-
         </div>
         </div>
       </div>})}
@@ -583,7 +583,11 @@ export default function RulesPage() {
       <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
       <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
         <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>规则测试</div>
-        <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
+        <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:10}}>{testRule.name}</div>
+        <div style={{display:'flex',gap:6,marginBottom:10,alignItems:'center'}}>
+          <button onClick={async()=>{try{const r=await api.get('/api/inventory/sample?channel='+globalChannel);const d=r.data||{};if(d.sku){setTestInv(p=>({...p,available_qty:d.available_qty||0,safety_qty:d.safety_qty||0,in_transit_qty:d.in_transit_qty||0,warehouse_type:d.warehouse_type||p.warehouse_type}));setTestSampleSku(d.sku)}}catch{}}} className="clickable" style={{fontSize:'var(--font-xs)',padding:'4px 10px',minHeight:28,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600,display:'inline-flex',alignItems:'center',gap:4}}><IconLightning size={12}/> 用真实库存填充</button>
+          {testSampleSku && <span style={{fontSize:'var(--font-10)',color:'var(--muted2)'}}>样本: {testSampleSku}</span>}
+        </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
           <label style={{fontSize:'var(--font-sm)'}}>可用量<input type="number" value={testInv.available_qty} onChange={e=>setTestInv(p=>({...p,available_qty:e.target.value}))} style={IS}/></label>
           <label style={{fontSize:'var(--font-sm)'}}>安全线<input type="number" value={testInv.safety_qty} onChange={e=>setTestInv(p=>({...p,safety_qty:e.target.value}))} style={IS}/></label>
@@ -634,7 +638,7 @@ export default function RulesPage() {
               <div className="small muted">{testResult.alert_desc}</div>
             </div>}
             {testResult.detail && <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginTop:8,borderTop:'1px dashed var(--border)',paddingTop:8}}>
-              条件: 当 <b>{testResult.detail.warehouse ? (testResult.detail.warehouse==='platform_b'?'B仓':testResult.detail.warehouse==='platform'?'C仓':'自有仓') : '全部'}</b> {testResult.detail.left} {testResult.detail.op} {testResult.detail.right}
+              条件: 当 <b>{testResult.detail.warehouse ? (testResult.detail.warehouse==='platform_b'?'B仓':testResult.detail.warehouse==='platform'?'C仓':'自有仓') : '全部'}</b> {fieldLbl(testResult.detail.left)} {opLbl(testResult.detail.op)} {String(testResult.detail.right).includes('.') ? fieldLbl(testResult.detail.right) : testResult.detail.right}
               <br/>计算: 左侧值 = {String(testResult.detail.left_value)}
               {String(testResult.detail.right_value).startsWith('max(') ? <>，右侧 = {testResult.detail.right_value}</> : <>，右侧值 = {String(testResult.detail.right_value)}</>}
             </div>}
