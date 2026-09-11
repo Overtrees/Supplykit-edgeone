@@ -25,18 +25,67 @@ _SUMMARY_TTL = 30
 
 
 
+def _daily_maintenance():
+    """应用层每日维护(治本: 不依赖 edgeone schedules——实测未自动触发)
+    抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
+    内容: ①快照新鲜度自愈(MAX(date) 落后昨天 → 重建 90 天快照, 应用层替代 cron/snapshot)"""
+    try:
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
+        if not _got:
+            return  # 今天已维护(本实例或其他实例)
+        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot") or {}
+        _m = str(_r.get("m") or "")[:10]
+        _yest = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        if (not _m) or _m < _yest:
+            execute(
+                "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
+                "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+                "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
+                "AND ordered_at >= %s "
+                "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+                "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
+                [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
+    except Exception:
+        pass
+
+
+def _sync_health_snapshot(channel, health):
+    """健康分快照幂等写入(每次 summary 请求, ON DUPLICATE 键 date+channel, 多实例安全)——
+    健康趋势数据源: 不依赖 schedules, 看板每次访问刷新当天分"""
+    try:
+        if not isinstance(health, dict):
+            try:
+                import json as _j2
+                health = _j2.loads(health or "{}")
+            except Exception:
+                return
+        _sc = health.get("score")
+        if _sc is None and not health.get("own"):
+            return
+        execute("INSERT INTO health_snapshot(`date`, channel, score, own_score, platform_score, bc_score) "
+                "VALUES(%s,%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
+                "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
+                [datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel,
+                 int(_sc) if _sc is not None else -1,
+                 int((health.get("own") or {}).get("score") or -1),
+                 int((health.get("platform") or {}).get("score") or -1),
+                 int((health.get("bc") or {}).get("score") or -1)])
+    except Exception:
+        pass
+
+
 @router.get("/dashboard/health-trend")
 @traced
 def health_trend(channel: str = "jd", days: int = 14):
-    """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)
-    主动兜底: 今天无记录时立即计算健康分入库(不依赖 summary upsert 的实例路径), 保证趋势持续积累"""
+    """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)"""
     try:
         rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
                      "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
                      [channel, min(int(days), 60)])
     except Exception:
         rows = []
-    _out = []
     _out = []
     for r in reversed(rows or []):
         _d = str(r.get("date") or "")[:10]
@@ -51,10 +100,13 @@ def health_trend(channel: str = "jd", days: int = 14):
 @router.get("/dashboard/summary")
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
-    """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)"""
+    """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
+    附带: 应用层每日维护(快照新鲜度自愈, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
+    _daily_maintenance()
     _key = "dash_summary|%s|%s|%s" % (channel, start_date, end_date)
     _result = _cache_get(_key, _SUMMARY_TTL,
                          lambda: _build_summary(channel, start_date, end_date))
+    _sync_health_snapshot(channel, (_result or {}).get("health_index") if isinstance(_result, dict) else None)
     return ok(_result)
 
 
