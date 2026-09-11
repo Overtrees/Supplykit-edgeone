@@ -55,6 +55,40 @@ def _daily_maintenance():
             pass
 
 
+def _daily_rules_guard():
+    """每日规则应用层兜底(不依赖 schedules——平台实测从未触发):
+    maintenance_log(date+'daily_rules' 主键) 抢占, 抢到则后台线程执行 run_daily_rules()(不阻塞 summary);
+    失败回滚抢占标记, 下次 summary 请求重试(多实例安全)"""
+    try:
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
+        if not _got:
+            return  # 今天已评估(本实例或其他实例)
+
+        def _run():
+            try:
+                from routes.cron import run_daily_rules
+                _r = run_daily_rules()
+                execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                        "VALUES('maint','info',%s,'dash')",
+                        ("应用层兜底 daily-rules 完成: 孤儿清理 %d, 规则触发 %d"
+                         % (_r.get("orphan_cleaned") or 0, len(_r.get("rules_triggered") or [])),))
+            except Exception as _e:
+                try:
+                    # 失败回滚抢占标记 → 下次 summary 请求重试
+                    execute("DELETE FROM maintenance_log WHERE `date`=%s AND task='daily_rules'", [_today])
+                    execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                            "VALUES('maint','error',%s,%s,'dash')",
+                            ("daily_rules 应用层兜底失败", str(_e)[:200]))
+                except Exception:
+                    pass
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        pass
+
+
 def _sync_health_snapshot(channel, health):
     """健康分快照幂等写入(每次 summary 请求, ON DUPLICATE 键 date+channel, 多实例安全)——
     健康趋势数据源: 不依赖 schedules, 看板每次访问刷新当天分"""
@@ -106,8 +140,9 @@ def health_trend(channel: str = "jd", days: int = 14):
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
-    附带: 应用层每日维护(快照新鲜度自愈, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
+    附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
     _daily_maintenance()
+    _daily_rules_guard()
     _key = "dash_summary|%s|%s|%s" % (channel, start_date, end_date)
     _result = _cache_get(_key, _SUMMARY_TTL,
                          lambda: _build_summary(channel, start_date, end_date))

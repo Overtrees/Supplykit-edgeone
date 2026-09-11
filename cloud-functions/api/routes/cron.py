@@ -139,12 +139,9 @@ async def cron_cleanup_logs(request: Request):
     return ok({"total": total, "deleted": deleted})
 
 
-@router.post("/cron/daily-rules")
-@traced
-async def cron_daily_rules(request: Request):
-    """每日规则: 全量规则评估(低库存/紧急补货/超卖/滞销 + 用户自定义) + 孤儿告警清理"""
-    if not _authed(request):
-        return fail("未授权", 401)
+def run_daily_rules() -> dict:
+    """每日规则全量评估(同步, 供 cron 路由与应用层兜底共用):
+    孤儿告警清理 + 旧 SKU 级告警清理 + 双渠道全量规则评估 + 健康分快照 + risk_summary 审计日志"""
     # 1. 孤儿告警清理: active 且 source in (rules_engine,event_bus) 的 alert_type 已无 active 规则 → inactive
     cleaned = 0
     for r in query("SELECT DISTINCT alert_type, channel FROM alerts "
@@ -211,7 +208,26 @@ async def cron_daily_rules(request: Request):
                     "VALUES('risk_summary','info',%s,'cron')", (_msg,))
     except Exception:
         pass
-    return ok({"orphan_cleaned": cleaned, "rules_triggered": triggered})
+    return {"orphan_cleaned": cleaned, "rules_triggered": triggered}
+
+
+@router.post("/cron/daily-rules")
+@traced
+async def cron_daily_rules(request: Request):
+    """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()"""
+    if not _authed(request):
+        return fail("未授权", 401)
+    return ok(run_daily_rules())
+
+
+@router.post("/cron/ping")
+@traced
+async def cron_ping(request: Request):
+    """调度连通性测试: 无条件写日志 —— 验证 EdgeOne schedules 是否真正触发函数"""
+    if not _authed(request):
+        return fail("未授权", 401)
+    _log("info", "schedules ping 触发(平台调度验证)")
+    return ok({"pong": True, "ts": datetime.now(timezone.utc).isoformat()})
 
 
 @router.post("/cron/recycle")
