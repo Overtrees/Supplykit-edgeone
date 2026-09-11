@@ -61,6 +61,7 @@ async def create_rule(request: Request):
              d.get("channel", "jd"), d.get("mode", ""), _pjson))
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则新建 → 看板/接口缓存即时失效
+    _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({"id": 0})
 
 
@@ -117,7 +118,54 @@ async def update_rule(rid: int, request: Request):
                 pass
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则编辑 → 缓存即时失效
+    _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
+
+
+def _schedule_rule_eval():
+    """规则变更 → 即时重算告警(四维: 准确/完整不等每日评估; 不阻塞响应)
+
+    脏标记循环: eval_pending 单行(task='rules') INSERT ON DUPLICATE 打标(多实例安全),
+    后台线程 DELETE 抢占(rowcount=1 才评估, 串行) → run_daily_rules()(含孤儿清理, 与
+    每日任务同源同口径) → 循环再查新标记(密集保存合并为尾追评估, 不叠加并发)"""
+    try:
+        try:
+            execute("INSERT INTO eval_pending(`task`, updated_at) VALUES('rules', NOW(6)) "
+                    "ON DUPLICATE KEY UPDATE updated_at=NOW(6)")
+        except Exception:
+            # 表缺失自愈(首次部署竞态): 建表后重试一次
+            try:
+                from db import execute as _ex0
+                _ex0("CREATE TABLE IF NOT EXISTS eval_pending ("
+                     "`task` VARCHAR(32) PRIMARY KEY, "
+                     "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+                execute("INSERT INTO eval_pending(`task`, updated_at) VALUES('rules', NOW(6)) "
+                        "ON DUPLICATE KEY UPDATE updated_at=NOW(6)")
+            except Exception:
+                return
+    except Exception:
+        return
+
+    def _worker():
+        try:
+            from routes.cron import run_daily_rules
+            while True:
+                got = execute("DELETE FROM eval_pending WHERE `task`='rules'")
+                if not got:
+                    break  # 其他实例/线程在评估中, 标记已消费
+                try:
+                    run_daily_rules()
+                except Exception:
+                    pass
+                # 评估期间又有新变更 → 尾追再评估一轮; 无则退出
+        except Exception:
+            pass
+
+    try:
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
 
 
 def _close_alerts_for_rules(ids):
@@ -153,6 +201,7 @@ def restore_rule(rid: int):
     execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id=%s", [rid])
     from routes.analysis_cache import invalidate_all
     invalidate_all()
+    _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
 
 
@@ -162,6 +211,7 @@ def permanent_delete_rule(rid: int):
     execute("DELETE FROM rules WHERE id=%s", [rid])
     from routes.analysis_cache import invalidate_all
     invalidate_all()
+    _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
 
 
@@ -204,6 +254,7 @@ async def rules_batch(request: Request):
         return fail("未知操作: " + str(action))
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 批量启用/停用/删除/恢复/永久删 → 看板告警计数/规则联动即时失效
+    _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({"updated": len(ids)})
 
 

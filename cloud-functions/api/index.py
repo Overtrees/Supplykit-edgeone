@@ -153,6 +153,10 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "`key` VARCHAR(160) PRIMARY KEY, "
                   "value MEDIUMTEXT, "
                   "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+            # 规则变更即时重算告警(2026-09-11): 脏标记单行, 线程 DELETE 抢占串行评估
+            _exec("CREATE TABLE IF NOT EXISTS eval_pending ("
+                  "`task` VARCHAR(32) PRIMARY KEY, "
+                  "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
         except Exception:
             pass
         # 启动补列(幂等): 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B 2026-09-10)

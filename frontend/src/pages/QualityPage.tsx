@@ -15,7 +15,7 @@ const LEVEL_LABEL = { warning: '警告', error: '异常', info: '提示' }
 const PAGE_SIZE = 200
 
 export default function QualityPage() {
-  const { channelVersion, loading } = useAppStore()
+  const { channelVersion } = useAppStore()
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
   const [, setPage] = useState(1)
@@ -44,7 +44,7 @@ export default function QualityPage() {
   }
   useEffect(() => { setList([]); setTotal(0); load(1) }, [channelVersion])
 
-  if (loading && list.length === 0 && ld) return <div className="card"><div className="section-title">{t("nav.quality")}</div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
+  if (ld && list.length === 0) return <div className="card"><div className="section-title">{t("nav.quality")}</div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
 
   const groups = {}
   for (const x of list) {

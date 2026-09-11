@@ -526,11 +526,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 const lv = RISK_LV[x.level]
                 return (
                 <div key={i} onClick={function(){ const _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{fontSize:'var(--font-9)',color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0,cursor:'pointer'}}>
-                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
+                  {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
                 </div>)
               })}
               </div>
-              {_r.total > 3 && <button onClick={()=>{loadFullRisk();setShowAllRisk(true)}} className="clickable" style={{width:'100%',padding:'5px 0 2px',border:'none',borderRadius:0,background:'transparent',fontSize:'var(--font-10)',color:'var(--muted)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0}}>还有 {_r.total - 3} 条...</button>}
+              {_r.total > 3 && <button onClick={()=>{loadFullRisk();setShowAllRisk(true)}} aria-label={`还有 ${_r.total - 3} 条`} className="clickable" style={{width:'100%',padding:'5px 0 2px',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+              </button>}
             </>}
       </div>
     </div>
