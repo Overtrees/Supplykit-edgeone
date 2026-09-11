@@ -611,8 +611,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       {/* 低库存告警弹窗 */}
       {showAllLowStock && <div onClick={function(){setShowAllLowStock(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
       {showAllLowStock && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>低库存告警 · 共 {lowStockTotal} 条</div>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+          <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>低库存告警 · 共 {lowStockTotal} 条</div>
+          <div style={{overflowY:'auto',minHeight:0,flex:1}}>
           {(fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock' && (_replMode === 'bbcc' ? ['own','platform','platform_b'] : ['own','platform']).includes(x.warehouse_type)) : lowStockAlerts).map(function(x) {
             return <div key={x.id} onClick={function(){onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
@@ -628,14 +629,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllLowStock(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          </div>
         </div>
       </div>}
 
       {/* 采购&补货告警弹窗(重构: 补货建议需补 + 采购建议需采, 行标签区分, 模式跟随) */}
       {showAllProc && <div onClick={function(){setShowAllProc(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
       {showAllProc && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>采购&补货告警 · 共 {procTotal} 条</div>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+          <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>采购&补货告警 · 共 {procTotal} 条</div>
+          <div style={{overflowY:'auto',minHeight:0,flex:1}}>
           {(procList || []).map(function(x, i) {
             return <div key={i} onClick={function(){onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen', x.sku)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
@@ -651,14 +654,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllProc(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          </div>
         </div>
       </div>}
 
       {/* 其他告警弹窗(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义, 明细落点) */}
       {showAllOther && <div onClick={function(){setShowAllOther(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
       {showAllOther && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>其他告警 · 共 {otherTotal} 条</div>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+          <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>其他告警 · 共 {otherTotal} 条</div>
+          <div style={{overflowY:'auto',minHeight:0,flex:1}}>
           {(fullAlerts ? fullAlerts.filter(x => !['low_stock','replenish','purchase_need'].includes(x.alert_type)) : []).map(function(x) {
             return <div key={x.id} onClick={function(){onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',marginBottom:6}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start',marginBottom:2}}>
@@ -674,14 +679,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllOther(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          </div>
         </div>
       </div>}
 
       {/* 濒临断货完整列表弹窗 */}
       {showAllRisk && <div onClick={function(){setShowAllRisk(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
       {showAllRisk && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+          <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
+          <div style={{overflowY:'auto',minHeight:0,flex:1}}>
           {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
             const whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
             const lv = RISK_LV[x.level]
@@ -705,14 +712,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllRisk(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          </div>
         </div>
       </div>}
 
       {/* 缺货列表弹窗（按当前健康卡视图维度: own/平台行级, bc合计; 完整数据) */}
       {showAllOut && <div onClick={function(){setShowAllOut(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
       {showAllOut && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-          <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>缺货 · 共 {_oosSrc.length} 条</div>
+        <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+          <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>缺货 · 共 {_oosSrc.length} 条</div>
+          <div style={{overflowY:'auto',minHeight:0,flex:1}}>
           {_oosSrc.map(function(x, i) {
             return <div key={i} className="clickable" style={{padding:'8px 12px',background:'var(--card)',borderRadius:'var(--radius-md)',marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
               <div style={{fontWeight:600,fontSize:'var(--font-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>{i+1}. {x.product_name || x.sku}</div>
@@ -721,6 +730,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           })}
           <div onClick={function(){setShowAllOut(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
+          </div>
           </div>
         </div>
       </div>}

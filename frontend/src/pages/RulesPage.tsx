@@ -581,8 +581,9 @@ export default function RulesPage() {
     {testRule && <>
       <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'transparent',zIndex:9998}} />
       <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-      <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
-        <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>规则测试</div>
+      <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+        <div style={{alignSelf:'center',background:'var(--glass-bg)',backdropFilter:'var(--blur-regular)',WebkitBackdropFilter:'var(--blur-regular)',borderRadius:'var(--radius-full)',padding:'7px 16px',marginBottom:12,textAlign:'center',fontSize:'var(--font-18)',fontWeight:700,color:'var(--text)',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>规则测试</div>
+        <div style={{overflowY:'auto',minHeight:0,flex:1}}>
         <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:10}}>{testRule.name}</div>
         <div style={{display:'flex',gap:6,marginBottom:10,alignItems:'center'}}>
           <button onClick={async()=>{try{const r=await api.get('/api/inventory/sample?channel='+globalChannel);const d=r.data||{};if(d.sku){setTestInv(p=>({...p,available_qty:d.available_qty||0,safety_qty:d.safety_qty||0,in_transit_qty:d.in_transit_qty||0,warehouse_type:d.warehouse_type||p.warehouse_type}));setTestSampleSku(d.sku)}}catch{}}} className="clickable" style={{fontSize:'var(--font-xs)',padding:'4px 10px',minHeight:28,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600,display:'inline-flex',alignItems:'center',gap:4}}><IconLightning size={12}/> 用真实库存填充</button>
@@ -644,6 +645,7 @@ export default function RulesPage() {
             </div>}
           </div>
         )}
+        </div>
       </div>
     </div>
     </>}
