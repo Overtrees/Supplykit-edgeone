@@ -187,6 +187,22 @@ async def cron_daily_rules(request: Request):
             _ho = str((_hi or {}).get("own", {}).get("score") if _hi else "-")
             _hp = str((_hi or {}).get("platform", {}).get("score") if _hi else "-")
             _hb = str((_hi or {}).get("bc", {}).get("score") if _hi else "-")
+            try:
+                from routes.dashboard import _health_index as _hix
+                _hs2 = _hix(_ch)
+                _sc2 = _hs2.get("score")
+                from db import execute as _exH
+                from datetime import datetime as _dth, timezone as _tzh
+                _d0 = _dth.now(_tzh.utc).strftime("%Y-%m-%d")
+                _exH("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
+                     "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
+                     "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
+                     [_d0, _ch, int(_sc2) if _sc2 is not None else -1,
+                      int((_hs2.get("own") or {}).get("score") or -1),
+                      int((_hs2.get("platform") or {}).get("score") or -1),
+                      int((_hs2.get("bc") or {}).get("score") or -1)])
+            except Exception:
+                pass
             _msg = "[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d | 健康: %s分(own%s/platform%s/bc%s)" % (
                 _ch, _t, _r, _o, max(_t - _r - _o, 0),
                 _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0,

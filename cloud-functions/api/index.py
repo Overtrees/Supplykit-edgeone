@@ -147,6 +147,7 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 pass
         # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)
         try:
+            _exec("CREATE TABLE IF NOT EXISTS health_snapshot (`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, score INT DEFAULT 0, own_score INT DEFAULT -1, platform_score INT DEFAULT -1, bc_score INT DEFAULT -1, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date, channel))")
             _exec("CREATE TABLE IF NOT EXISTS analysis_cache ("
                   "`key` VARCHAR(160) PRIMARY KEY, "
                   "value MEDIUMTEXT, "

@@ -52,6 +52,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllOut, setShowAllOut] = useState(false)
   const [, setFullOut] = useState(null)        // 缺货弹窗完整数据(按当前视图维度)
   const [oosList, setOosList] = useState(null)        // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
+  const [healthTrend, setHealthTrend] = useState([])   // 健康分数趋势(近14天, health-trend 接口)
   const [fullAlerts, setFullAlerts] = useState(null)   // 告警弹窗完整数据(点击时拉取)
   const [fullRisk, setFullRisk] = useState(null)       // 濒临断货完整列表
   const [chLoading, setChLoading] = useState(false)
@@ -78,6 +79,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       const d = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || [])
       setOosList(d)
     }).catch(() => setOosList([]))
+    // 健康分数趋势(近14天, health-trend 接口; 快照由 summary/cron 每日记录)
+    api.get('/api/dashboard/health-trend?channel=' + channel + '&days=14&t=' + Date.now(), {timeout: 30000}).then(r => {
+      setHealthTrend(Array.isArray(r.data) ? r.data : [])
+    }).catch(() => setHealthTrend([]))
   }, [healthTab, channel])
   const reqSeq = useRef(0)
   // 补货模式(看板卡片/接口参数跟随): bbcc(仅 jd) / traditional(other 强制 + jd 可选)
@@ -468,20 +473,29 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span style={{color:'var(--success)'}}>● {healthData.healthy||0}健康</span>
                   <span style={{color:'var(--warning)'}}>● {healthData.warning||0}{t("dash.low")}</span>
                 </div>
-                <div style={{fontSize:'var(--font-10)',marginTop:3}}>
-                  <span style={{color:'var(--danger)'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
+                <div style={{fontSize:'var(--font-10)',marginTop:3,display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
+                  <span onClick={function(){ if (_oosSrc.length > 0) setShowAllOut(true) }} className="clickable" style={{color:'var(--danger)',cursor: _oosSrc.length > 0 ? 'pointer' : 'default'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
                   <span style={{color:'var(--muted2)'}}> · {healthData.total||0} SKU</span>
                 </div>
+                {/* 健康分数趋势(近14天, 按当前维度) —— 原缺货前3+还有N条区 */}
+                {(() => {
+                  const _key = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
+                  const _trend = (Array.isArray(healthTrend) ? healthTrend : []).filter(x => x[_key] != null && x[_key] > 0)
+                  if (_trend.length < 2) return null
+                  return <div style={{marginTop:6,height:40}}>
+                    <Chart option={{
+                      grid: { left: 0, right: 0, top: 4, bottom: 0 },
+                      xAxis: { type: 'category', show: false, data: _trend.map(x => String(x.date).slice(5)) },
+                      yAxis: { type: 'value', show: false, min: 0, max: 100 },
+                      series: [{ type: 'line', data: _trend.map(x => x[_key]), smooth: true, symbol: 'none',
+                        lineStyle: { width: 2, color: healthData.level === 'danger' ? 'var(--danger)' : healthData.level === 'warning' ? 'var(--warning)' : 'var(--success)' },
+                        areaStyle: { opacity: 0.12, color: healthData.level === 'danger' ? 'var(--danger)' : healthData.level === 'warning' ? 'var(--warning)' : 'var(--success)' } }],
+                      animationDuration: 400,
+                    }} height={40} />
+                  </div>
+                })()}
               </div>
             </div>
-            {healthData.out_of_stock > 0 && outOfStockItems.length > 0 && <div style={{marginTop:4}}>
-              {outOfStockItems.map((x,i) => (
-                <div key={i} style={{fontSize:'var(--font-9)',color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0}}>
-                  <span style={{color:'var(--muted)'}}>{i+1}.</span> {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4}}>{x.warehouse ? fmtWh(x.warehouse) : (healthTab === 'own' ? '自有' : healthTab === 'bc' ? 'BC' : (channel === 'jd' ? 'C仓' : '平台'))}</span>
-                </div>
-              ))}
-              {_oosSrc.length > 3 && <div onClick={function(){setShowAllOut(true)}} className="clickable" style={{textAlign:'left',fontSize:'var(--font-10)',color:'var(--muted)',padding:'4px 0',cursor:'pointer'}}>还有 {_oosSrc.length - 3} 条...</div>}
-            </div>}
           </>
         })()}
       </div>

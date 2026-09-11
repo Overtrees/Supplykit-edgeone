@@ -24,6 +24,28 @@ _summary_cache = {}
 _SUMMARY_TTL = 30
 
 
+
+@router.get("/dashboard/health-trend")
+@traced
+def health_trend(channel: str = "jd", days: int = 14):
+    """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)"""
+    try:
+        rows = query("SELECT date, score, own_score, platform_score, bc_score "
+                     "FROM health_snapshot WHERE channel=%s ORDER BY date DESC LIMIT %s",
+                     [channel, min(int(days), 60)])
+    except Exception:
+        rows = []
+    _out = []
+    for r in reversed(rows or []):
+        _d = str(r.get("date") or "")[:10]
+        if not _d or str(r.get("score") or "") in ("-1", ""):
+            continue
+        _out.append({"date": _d, "score": int(r.get("score") or 0),
+                     "own": int(r.get("own_score") or -1), "platform": int(r.get("platform_score") or -1),
+                     "bc": int(r.get("bc_score") or -1)})
+    return ok(_out)
+
+
 @router.get("/dashboard/summary")
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
@@ -266,6 +288,20 @@ def _assemble(rows, channel, start_date, end_date):
                      "month": _funnel_range(d30, today_s)}
     if start_date and end_date:
         period_funnel["custom"] = _funnel_range(start_date, end_date)
+
+    # 健康分快照(趋势数据源): 每日 upsert(首次 summary 请求记录当天分, 历史积累)
+    try:
+        _hs = health.get("score")
+        execute("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
+                "VALUES(%s,%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
+                "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
+                [today_s, channel, int(_hs) if _hs is not None else -1,
+                 int((health.get("own") or {}).get("score") or -1),
+                 int((health.get("platform") or {}).get("score") or -1),
+                 int((health.get("bc") or {}).get("score") or -1)])
+    except Exception:
+        pass
 
     return {"summary": summary, "periods": periods, "trend": trend_data,
             "funnel": funnel_res, "period_funnel": period_funnel, "health_index": health, "stores": stores,
