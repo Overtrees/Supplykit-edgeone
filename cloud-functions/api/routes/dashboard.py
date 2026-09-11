@@ -245,7 +245,6 @@ def _assemble(rows, channel, start_date, end_date):
     if start_date and end_date:
         period_stores["custom"] = _stores_range(start_date, end_date)
         period_brands["custom"] = _brands_range(start_date)
-    period_brands = {"today": brands, "week": brands, "month": brands}
     def _funnel_range(d0, d1):
         _ft = {}
         for (d, st, s2), (gv, sb, cn) in day_rows.items():
