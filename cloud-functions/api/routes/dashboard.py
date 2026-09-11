@@ -216,13 +216,60 @@ def _assemble(rows, channel, start_date, end_date):
         pass
     brands = [{"name": k, "gmv": v, "net_gmv": v, "payout": v}
               for k, v in sorted(brands_map.items(), key=lambda x: -x[1])]
+    def _brands_range(d0):
+        """按起始日聚合品牌 GMV(周期联动)"""
+        try:
+            _bm = {}
+            for _r2 in query(
+                    "SELECT COALESCE(p.brand,'') AS brand, "
+                    "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
+                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g "
+                    "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
+                    "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
+                    "AND o.ordered_at>=%%s GROUP BY p.brand" % _status_cond(),
+                    [channel, d0 + " 00:00:00"]):
+                _b = _r2.get("brand") or ""
+                if not _b or _b == "未分类":
+                    continue
+                _bm[_b] = round(float(_r2.get("g") or 0), 2)
+            return [{"name": k, "gmv": v, "net_gmv": v, "payout": v}
+                    for k, v in sorted(_bm.items(), key=lambda x: -x[1])]
+        except Exception:
+            return []
+    period_brands = {"today": _brands_range(today_s),
+                     "week": _brands_range(d7),
+                     "month": _brands_range(d30)}
     period_stores = {"today": _stores_range(today_s, today_s),
                      "week": _stores_range(d7, today_s),
                      "month": _stores_range(d30, today_s)}
+    if start_date and end_date:
+        period_stores["custom"] = _stores_range(start_date, end_date)
+        period_brands["custom"] = _brands_range(start_date)
     period_brands = {"today": brands, "week": brands, "month": brands}
+    def _funnel_range(d0, d1):
+        _ft = {}
+        for (d, st, s2), (gv, sb, cn) in day_rows.items():
+            if d0 <= (d or "") <= d1:
+                _ft[st] = _ft.get(st, 0) + cn
+        _total = sum(_ft.values())
+        _stages = [("总订单", _total, 100.0)]
+        for n in ["待确认", "待发货", "已发货", "已完成"]:
+            v = _ft.get(n, 0)
+            _stages.append((n, v, round(v / _total * 100, 1) if _total else 0))
+        _out = []
+        for i, (n, v, pct) in enumerate(_stages):
+            prev = _stages[i - 1][1] if i > 0 else _total
+            _out.append({"name": n, "value": v, "percentage": pct,
+                         "conversion": round(min(v / prev * 100, 100), 1) if prev else 0})
+        return _out
+    period_funnel = {"today": _funnel_range(today_s, today_s),
+                     "week": _funnel_range(d7, today_s),
+                     "month": _funnel_range(d30, today_s)}
+    if start_date and end_date:
+        period_funnel["custom"] = _funnel_range(start_date, end_date)
 
     return {"summary": summary, "periods": periods, "trend": trend_data,
-            "funnel": funnel_res, "health_index": health, "stores": stores,
+            "funnel": funnel_res, "period_funnel": period_funnel, "health_index": health, "stores": stores,
             "brands": brands, "period_stores": period_stores, "period_brands": period_brands}
 
 
