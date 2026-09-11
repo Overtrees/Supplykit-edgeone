@@ -63,6 +63,13 @@
 ### 过程 Bug 闭环
 - hammerCleansingChannel TDZ(解构别名 ch) / __curMp useEffect 声明前引用 TDZ / goStep 递归误替换 / 模板工具条 JSX 未闭合(推送后立即修复) — 教训: JSX 结构改动必须以 tsc 稳定输出为准(iSH 内存抖动致 bad_alloc 假通过)
 
+### 晚间收尾(20:30 后 8 commit: 任务并发/缓存/图表/圆角)
+- **seed 一键填充双轮询并发续跑冲突修复(8a250ca0)**: Settings 轮询 + App 轮询双请求同时续跑步骤冲突 → 后端 `seed_fill_status` 原子抢占锁(updated_at 3s 时间窗, 并发请求跳过续跑) + 前端移除 Settings 轮询改 App `seed-done/seed-error` 事件联动(按钮状态恢复); reset 为同步接口不受影响 —— **异步任务续跑必须原子抢占(状态机+时间窗), 轮询源只保留一个**
+- **accel SQL 参数化(d108fa70)**: `_compute_accel` IN 组 `%` 预格式化只给 1 参数 → channel/ordered_at %s 无值(not enough arguments, 每次调用降级直算=全量重算, 线上 cache_error 留痕) → 改 IN 占位+params 拼接; 全库扫描同类预格式化仅此一处 —— **与次日 _log(453f30e1) 同款教训: Python 预格式化 % 与 SQL 参数化混用即雷**
+- **图表 ResizeObserver 试验回退(5559a15e)**: ResizeObserver+双rAF+notMerge 引入新问题(周期切换不动) → 放弃回退 setOption+window resize; 容器首屏 0 宽另用 Chart 组件内 ResizeObserver 触发重绘解决(665fab0d) —— **echarts 重绘方案实测为准, 试验失败及时回退留档**
+- **BusyBox grep --include 假象(665fab0d 教训)**: iSH BusyBox grep 不支持 `--include` → 报错吞掉后误判 `--radius-card:24px` 零引用 → 删 token 后 17 处直角(第二天修复) —— **删 token/符号前必须确认 grep 工具能力, BusyBox 用 find+xargs 或 python 扫描**
+- **按钮类化+小卡圆角定稿(665fab0d/345d8d77/eac77a45)**: sheet-close/cancel/danger 按钮类(去内联圆角); 4 小卡统一 stat-card 类——::before 高光 32 弧被 overflow:hidden 裁剪到本体 26 露切割线, 高光/阴影/本体圆角必须同步
+
 ---
 ## 2026-09-09 下午-晚间: 共享表缓存治本(Makers 多实例) + 清洗导入四维加固 + 销量池口径 + 批次效期可选链路
 > **主线**: feat/edgeone, 当日累计 19 commit(6c1bc874 后 13 个: 缓存治本→清洗四维 bug 链→口径→批次效期)。

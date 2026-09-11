@@ -704,6 +704,10 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **圆角档位收敛红线**: 收敛不是全并入统一值——**业务/层级专属档要保留**(看板小卡 26 是专属档, 曾误并入 24 属过度收敛已恢复); token 删除前 grep 全库(tsx+css) 零引用才删; 卡片内 absolute 伪元素(::before 高光)圆角需与本体同步(小卡 overflow:hidden 裁剪)
 - **架构取舍(动态自定义列)**: ext_json 数据链路(表补列/清洗写入保全自定义字段/接口返回/custom-columns 配置)保留为基础设施; 前端动态列 UI 因**低频 + 一次性补列更划算**(30分钟 vs 常驻功能 3-4 倍成本)而回退 — 新增列需求走一次性补列流程
 - **交互约定**: 模版管理/状态映射等页面工具入口放锤子菜单并按**步骤+导入类型**条件显示(hammerCleansingStep 同步); 底部弹窗统一看板'还有N条'同款; 触达热区 minHeight32; 动效 --motion-fast .15s
+- **异步任务续跑原子抢占(08-10 晚间)**: seed 双轮询并发续跑冲突 → 后端 `seed_fill_status` 原子抢占锁(updated_at 3s 时间窗, 并发请求跳过续跑) + 前端**轮询源只保留一个**(移除 Settings 轮询改 App 事件联动 seed-done/seed-error)。**设计规范: 任何可续跑的异步任务(seed/clean/export)必须 状态机+时间窗原子抢占, 前端轮询单源**
+- **BusyBox grep --include 陷阱(08-10 晚间)**: iSH BusyBox grep 不支持 `--include` → 误判 token 零引用 → 删 `--radius-card:24px` 后 17 处直角。**删 token/符号前必须验证 grep 工具能力**: BusyBox 用 `find dir -name '*.ext' | xargs grep` 或 python 扫描; 与 iSH 内存 bad_alloc 假通过同属"工具不可信, 以双重验证为准"
+- **echarts 重绘方案实测回退(08-10 晚间)**: ResizeObserver+双rAF+notMerge 引入新问题(周期切换不动) → 回退 setOption+window resize; 容器首屏 0 宽问题由 Chart 组件内 ResizeObserver 触发重绘解决。**教训: 图表重绘方案以真实场景实测为准, 失败及时回退留档, 勿叠加多套机制**
+- **SQL 预格式化 vs 参数化(08-10 晚间 d108fa70 / 09-11 _log 同源)**: `_compute_accel` IN 组 `% 预格式化只给 1 参数 → 其余 %s 无值(not enough arguments, 每次调用降级直算=全量重算); 全库仅此一处, 但两天后 _log 又踩同类(TypeError 被吞)。**规则: SQL 一律 %s 参数化 + params 元组, 杜绝 Python % 预拼 SQL 字符串(IN 组用 join 占位)**
 
 ### 15.29 Makers schedules 定时任务 3 bug 全修复 + 调度探针(2026-09-11)
 > 背景: 质量日志无 cron 记录曾被误判"平台调度从未触发"→ 平台控制台"日志分析"页发现 `scfRequestId + statusCode=405` 实锤**调度一直在触发**。3 个 bug 全部线上实证修复。
