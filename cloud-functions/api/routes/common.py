@@ -21,6 +21,22 @@ def fail(msg, status=400):
     return {"ok": False, "error": msg}
 
 
+def try_err(src, what, exc=None, details=""):
+    """静默吞异常纪律(2026-09-11 体检): except 分支统一自记 quality_logs 留痕(不阻断降级流程)
+    用法: except Exception as e: try_err("dashboard", "season_factor 降级", e)
+    —— 防 _log 式静默 bug(曾因 except pass 吞 TypeError 致全 cron 日志从未写入)"""
+    try:
+        from db import execute as _e
+        _msg = what
+        if exc is not None:
+            _msg += ": %s: %s" % (type(exc).__name__, str(exc)[:200])
+        _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
+           "VALUES('quiet_error','warning',%s,%s,%s)",
+           (_msg[:200], details[:300], src))
+    except Exception:
+        pass
+
+
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()

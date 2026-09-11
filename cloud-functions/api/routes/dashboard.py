@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one, execute
-from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced
+from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced, try_err
 
 router = APIRouter(tags=["dashboard"])
 
@@ -662,12 +662,14 @@ def _stock_risk(channel, full: int = 0):
         from routes.replenishment import _season_factor
         factor_trad = _season_factor(channel, "traditional")
         factor_bbcc = _season_factor(channel, "bbcc")
-    except Exception:
+    except Exception as _e:
+        try_err("dash", "season_factor 加载降级", _e)
         factor_trad = factor_bbcc = 1.0
     try:
         from datetime import datetime as _dt, timezone as _tz
         accel = _hourly_accel(channel, _dt.now(_tz.utc), ratio=accel_ratio, min_qty=accel_min_qty)
-    except Exception:
+    except Exception as _e:
+        try_err("dash", "hourly_accel 计算降级", _e)
         accel = {}
 
     by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)

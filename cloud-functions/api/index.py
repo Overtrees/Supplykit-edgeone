@@ -136,6 +136,12 @@ app.include_router(cron_router)
 # ── 启动自动补索引(幂等, 免费额度 RU 优化: 看板 60 天范围查询走 (channel, ordered_at) 区间) ──
 _INDEXES = [
     ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
+    ("idx_alerts_ch_status_created", "alerts", "channel, status, created_at"),  # 告警分组配额/列表查询(2026-09-11 体检)
+    ("idx_rules_ch_active", "rules", "channel, is_active"),  # 规则列表/评估孤儿查询(2026-09-11 体检)
+]
+# 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
+_DROP_INDEXES = [
+    ("idx_orders_sku", "orders"),  # 被 idx_orders_sku_ordered_at(sku,ordered_at,channel) 前缀覆盖
 ]
 if os.environ.get("DB_BACKEND", "tidb") == "tidb":
     try:
@@ -143,6 +149,11 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
         for _iname, _tbl, _cols in _INDEXES:
             try:
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
+            except Exception:
+                pass
+        for _iname, _tbl in _DROP_INDEXES:
+            try:
+                _exec("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname, _tbl))
             except Exception:
                 pass
         # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)

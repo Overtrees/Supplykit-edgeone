@@ -26,12 +26,29 @@ def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_s
 @router.get("/monitor")
 @traced
 def monitor():
-    """APM 简化: 最近接口错误统计(内存级统计从简)"""
+    """APM(轻量实化, 2026-09-11 体检): quality_logs 实时聚合——错误/慢请求留痕即观测面
+    (Makers 无状态请求环境, 无进程级 uptime/rps metrics; 慢路径与最新错误可下钻)"""
+    from datetime import datetime, timezone as _tz
     err = one("SELECT COUNT(*) AS c FROM quality_logs WHERE level='error'") or {}
     slow = one("SELECT COUNT(*) AS c FROM quality_logs WHERE log_type='slow_request'") or {}
-    return ok({"uptime": 0, "total_requests": 0, "avg_response_ms": 0,
-               "error_count": int(err.get("c") or 0), "error_rate": 0.0,
-               "slow_count": int(slow.get("c") or 0), "slowest_paths": []})
+    today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+    err_today = one("SELECT COUNT(*) AS c FROM quality_logs "
+                    "WHERE level='error' AND DATE(created_at)=%s", [today]) or {}
+    slow_today = one("SELECT COUNT(*) AS c FROM quality_logs "
+                     "WHERE log_type='slow_request' AND DATE(created_at)=%s", [today]) or {}
+    slow_rows = query("SELECT message, created_at FROM quality_logs "
+                      "WHERE log_type='slow_request' ORDER BY id DESC LIMIT 20") or []
+    slowest = [{"path": (r.get("message") or "")[:120],
+                "at": str(r.get("created_at") or "")[:19]} for r in slow_rows]
+    latest_err = query("SELECT message, details, created_at FROM quality_logs "
+                       "WHERE level='error' ORDER BY id DESC LIMIT 5") or []
+    errs = [{"msg": (r.get("message") or "")[:150],
+             "detail": (r.get("details") or "")[:200],
+             "at": str(r.get("created_at") or "")[:19]} for r in latest_err]
+    return ok({"totals": {"error": int(err.get("c") or 0), "slow": int(slow.get("c") or 0)},
+               "today": {"error": int(err_today.get("c") or 0), "slow": int(slow_today.get("c") or 0)},
+               "slowest_paths": slowest, "latest_errors": errs,
+               "note": "无进程级 metrics(Makers 无状态), 以 quality_logs 留痕为观测面"})
 
 
 @router.post("/db/diag")

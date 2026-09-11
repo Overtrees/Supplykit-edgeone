@@ -8,6 +8,7 @@
 import json
 
 from db import query, one, execute, executemany
+from routes.common import try_err
 
 
 def _resolve_single(expr, ctx):
@@ -269,8 +270,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                             "source, related_sku, related_rule_id, warehouse_type, warehouse, channel) "
                             "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s)",
                             inserts[i:i + 100])
-            except Exception:
-                pass
+            except Exception as _e:
+                try_err("rules", "告警批量写入失败(%d条)" % len(inserts[i:i + 100]), _e)
     if return_hits:
         return list(dict.fromkeys(triggered)), hits
     return list(dict.fromkeys(triggered))
@@ -361,14 +362,14 @@ def evaluate_stock_skus(channel, limit=100000):
                     return default
             _lit_trad = _mcv("lead_time_days", "traditional", 10)
             _lit_bbcc = _mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估加载补货周期配置降级", _e)
         try:
             # 看板计算参数(规则 params 优先, 兼容 config)
             from routes.dashboard import _rule_params
             _rp = _rule_params("stockout")
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估加载看板计算参数降级", _e)
         try:
             for _r3 in query("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
                 try:
@@ -377,8 +378,8 @@ def evaluate_stock_skus(channel, limit=100000):
                                                               float(_rp.get("otif_min", 0.6))) if _sc > 0 else 1.0
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估加载 OTIF 降级", _e)
         try:
             from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
             _by_sku, _ = load_daily_sales_grouped(28, channel)
@@ -391,21 +392,21 @@ def evaluate_stock_skus(channel, limit=100000):
                     _m = sum(_vl) / len(_vl)
                     _v = sum((x - _m) ** 2 for x in _vl) / len(_vl)
                     _sigma[_s] = _v ** 0.5
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估日销聚合降级", _e)
         try:
             from routes.dashboard import _hourly_accel
             _accel = _hourly_accel(channel, now,
                                    ratio=float(_rp.get("accel_ratio", 1.3)),
                                    min_qty=float(_rp.get("accel_min_qty", 10)))
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估小时加速降级", _e)
         if _need_health:
             try:
                 from routes.dashboard import _health_index
                 _health = (_health_index(channel) or {}).get("score")
-            except Exception:
-                pass
+            except Exception as _e:
+                try_err("rules", "评估健康分降级", _e)
         # SKU 聚合(avail/transit/safety + 供应商)
         _agg = {}
         _prod_sup = {}
@@ -413,8 +414,8 @@ def evaluate_stock_skus(channel, limit=100000):
             for _r4 in query("SELECT sku, supplier_code FROM products WHERE channel=%s "
                              "AND (deleted_at IS NULL OR deleted_at='')", [channel]):
                 _prod_sup[_r4.get("sku")] = _r4.get("supplier_code") or ""
-        except Exception:
-            pass
+        except Exception as _e:
+            try_err("rules", "评估加载供应商映射降级", _e)
         for _r in rows:
             _sku = str(_r.get("sku") or "")
             _st = _agg.setdefault(_sku, {"avail": 0, "transit": 0, "safety": 0})

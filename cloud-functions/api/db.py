@@ -64,6 +64,16 @@ def execute(sql, params=None):
         cur.close()
 
 
+def execute_id(sql, params=None):
+    """写操作返回 lastrowid(自增主键; create 类接口返回真实 id 用, 2026-09-11 体检)"""
+    cur = conn().cursor()
+    try:
+        cur.execute(sql, params or ())
+        return cur.lastrowid or 0
+    finally:
+        cur.close()
+
+
 def executemany(sql, seq_of_params):
     cur = conn().cursor()
     try:

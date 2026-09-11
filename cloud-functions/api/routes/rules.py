@@ -4,7 +4,7 @@ import json
 from fastapi import APIRouter
 from fastapi import Request
 
-from db import query, one, execute
+from db import query, one, execute, execute_id
 from routes.common import ok, fail, traced
 
 router = APIRouter(tags=["rules"])
@@ -53,16 +53,16 @@ async def create_rule(request: Request):
     cond = d.get("condition") or d.get("condition_json") or {}
     _params = d.get("params")
     _pjson = json.dumps(_params, ensure_ascii=False) if isinstance(_params, dict) else None
-    execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, params) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (name, d.get("event", ""), json.dumps(cond, ensure_ascii=False),
-             d.get("alert_type", ""), d.get("alert_title", ""), d.get("alert_desc", ""),
-             d.get("severity", "warning"), 1 if d.get("is_active", 1) else 0,
-             d.get("channel", "jd"), d.get("mode", ""), _pjson))
+    _rid = execute_id("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, params) "
+                      "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                      (name, d.get("event", ""), json.dumps(cond, ensure_ascii=False),
+                       d.get("alert_type", ""), d.get("alert_title", ""), d.get("alert_desc", ""),
+                       d.get("severity", "warning"), 1 if d.get("is_active", 1) else 0,
+                       d.get("channel", "jd"), d.get("mode", ""), _pjson))
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则新建 → 看板/接口缓存即时失效
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
-    return ok({"id": 0})
+    return ok({"id": _rid})
 
 
 @router.put("/rules/{rid}")
