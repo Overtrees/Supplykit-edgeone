@@ -715,3 +715,18 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **调度连通性可观测方案**: 保留 `schedule-ping-2`(每日 13:55 北京 → /api/cron/ping)为**常驻探针**, 任何调度问题通过 quality_logs 最新 ping 记录 5 分钟定位; 平台侧仍无 schedules 查询/日志 API
 - **双保险运行**: 7 个正式任务(archive 1:05/cleanup-logs 3:05/freshness 3:10/snapshot 3:35/daily-rules 4:05/recycle 4:35/push-alerts 8:30 北京)现已随双方法修复自动执行; 应用层兜底(_daily_maintenance 快照自愈 + _daily_rules_guard 后台线程评估, maintenance_log 抢占)与平台 cron 双跑, 幂等可接受
 - **应用层兜底设计**: summary 请求时 `INSERT IGNORE maintenance_log(date+task)` 抢占(多实例安全) → `threading.Thread` 后台执行 run_daily_rules(不阻塞响应) → 失败 DELETE 标记下次重试; run_daily_rules 抽为同步函数供路由与应用层共用
+
+### 15.30 规则即时重算 + 全项目体检 P0/P1/P2 + UI 设计语言统一(2026-09-11 下午-晚间)
+- **规则变更即时重算(替代'改规则等每日评估'24h 时滞)**: `_schedule_rule_eval()` —— eval_pending 表(task 主键)单行 `INSERT ON DUPLICATE` 打脏标记(多实例安全) → 后台 `threading.Thread` `DELETE` 抢占(rowcount=1 才评估, 串行) → `run_daily_rules()`(与每日任务同源同口径含孤儿清理) → **尾追循环**(评估完再查有无新标记)合并密集保存不叠加并发。触发点: create/update/restore/permanent-delete/batch(delete 除外——_close_alerts_for_rules 已即时关告警)。告警从 24h 时滞 → ~40s(看板 30s 静默刷新呈现)
+- **体检索引结论(db/diag SHOW INDEX 实证)**: orders 12 索引冗余(idx_orders_ordered_at≈复合前缀/idx_orders_sku≈sku_ordered_at 前缀→写放大); **alerts 缺 channel 复合(分组配额查询扫描大); rules 无查询索引**。修复: `_INDEXES` 机制加 alerts(channel,status,created_at)+rules(channel,is_active); 新增 `_DROP_INDEXES` 幂等删 idx_orders_sku。**新建表/索引必须走 _INDEXES 机制, 不手改线上**
+- **静默吞异常纪律(try_err)**: `_log` TypeError 前科(被 except pass 吞两天)→ 制度化 `common.try_err(src, what, exc)`: except 分支统一自记 quality_logs('quiet_error',warning), 不阻断降级流程但留痕可查。核心路径(evaluate 内 7 处: 告警批量写失败/补货周期/规则参数/OTIF/日销聚合/小时加速/健康分/供应商映射 + dashboard season/accel 2 处)先替换
+- **monitor 实化**: Makers 无状态环境无进程级 metrics → 以 quality_logs 为观测面(totals/today/slowest_paths 最近20/latest_errors 最近5), 去掉恒 0 占位误导
+- **create_rule 真实 id**: `db.execute_id`(lastrowid) 新增——create 类接口返回真实自增 id(告别 id:0 占位), 前端无需重新 load 拿 id
+- **P2 单测**: `_grade_risk` 从 _stock_risk 抽为模块级纯函数(等价重构, 闭包薄壳转发闭包变量)→ 7 边界用例(red/orange/yellow/不入选 × 边界, 回归 91→98)。**核心算法(分级边界/评估精度)持续抽纯函数补单测**
+- **EXPLAIN 慢查询诊断(2026-09-11)**: summary 60 天聚合 `TableFullScan 187K 行`(12.7万订单, 60 天窗口覆盖几乎全部数据 → 索引选择性差属正常, 慢=聚合固有成本)→ **物化日级汇总表**(orders_day_agg: GMV/单数/退款按 date+channel+status+store 预聚合)为专项; evaluate inventory SQL 侧正常(1.7万行), 36s 大头是 **Python 密集**(逐 SKU×规则解析 + _health_index 每次重算 + 全量日销聚合)→ 缓存 health_index/规则预编译为专项
+- **quality_logs 膨胀治理**: id 达 159 万级(写删循环), 行数曾 63——daily_maintenance 增加"COUNT>500 → 删到 300"(与 cron cleanup-logs 同逻辑幂等, maintenance_log 抢占保证日级一次, **不依赖 platform cron 双保险**)
+- **UI 设计语言(iOS 18 天气小组件风, 2026-09-11 四小卡同构)**: ①大数字 `clamp(17px,8cqi,28px)` + `fontVariantNumeric:'tabular-nums'`(等宽防跳动) ②标题 `fontWeight:600 + letterSpacing:0.2` ③色点统一「●」字符(与三级统计同渲染, 不用 6px span 方块) ④语义色状态行 600 ⑤间距 4-6-8-10 网格 ⑥空态 44px 圆底 checkmark SVG + 文案 ⑦`stat-card` aspect-ratio:1 + padding 16 —— **内容超寸会截断, 垂直压缩是常态**(数字 28px + marginTop 4 + 行距 2 为标准)
+- **底部弹窗标准模板(全站统一)**: 遮罩 `fixed inset:0 background:transparent zIndex:9998`(透明不遮挡) + 内容外 `fixed left:0 right:0 bottom+14 zIndex:9999 flex center padding:0 14px pointerEvents:none` + 内 `width:100% maxWidth:600 radius-lg padding:18px 14px+safe boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)' maxHeight:70vh pointerEvents:auto`
+- **长文本 flex 截断规范**: 行内多段(flex 容器 `alignItems:center gap:N`): 主文本 `flex:1 minWidth:0 overflow:hidden textOverflow:ellipsis whiteSpace:nowrap` + 标签 `flexShrink:0`(溢出只省略主文本, 标签常显); title 属性给全名兜底
+- **emoji 图标规范**: 装饰性图标一律走 `components/Icons.tsx` SVG 集(30+); **保留场景**: 文案箭头(→ 流程语义)、语义状态点(●○)、状态徽章文本(Inventory ✓正常/⚠️临近/✗否/⚫过期——带色文字非图标)、原生 option 内标记(✅⛔ 不支持 SVG)、🎉 等情感文案。新增图标先加 Icons.tsx
+- **展开更多入口统一**: 全部 ••• SVG(14px, var(--primary) 蓝, aria-label 保留)——断货/低库存/采购三卡同款

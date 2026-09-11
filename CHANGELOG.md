@@ -8,6 +8,26 @@
 - **schedule-ping-2 保留为常驻调度探针**(每日 13:55 写日志); 7 个正式任务明天起自动执行; 应用层兜底(快照自愈+daily-rules guard)与平台 cron 双保险
 - 详见 docs/DEVELOPMENT.md §15.29
 
+### 规则变更即时重算(下午, 四维优化)
+- **`_schedule_rule_eval`**: eval_pending 单行脏标记(INSERT ON DUPLICATE, 多实例安全) → 后台线程 DELETE 抢占(rowcount=1 串行评估) → run_daily_rules()(与每日任务同源含孤儿清理) → 尾追循环合并密集保存; 触发 create/update/restore/permanent-delete/batch 5 点
+- 实证: 14:17 测试规则创建 → 2s 内自动评估落日志 → 删除清理无风暴; 告警从"24h 时滞"→ ~40s(看板 30s 静默刷新呈现)
+
+### 全项目体检 + P0/P1/P2 落地
+- **P0 索引**: alerts 补 `(channel,status,created_at)` + rules 补 `(channel,is_active)`; **P1**: orders 删冗余 idx_orders_sku(_DROP_INDEXES 幂等机制, 12→11 索引)
+- **P0 try_err 纪律**: common.py helper——except 统一自记 quality_logs(evaluate 内 7 处降级/写失败 + dashboard 2 处替换); _log 前科教训制度化
+- **P1 monitor 实化**: totals/today/slowest_paths/latest_errors 真实数据(Makers 无状态, 以 quality_logs 为观测面); create_rule 返回真实 id(execute_id lastrowid, 告别 0 占位)
+- **P2**: `_grade_risk` 抽纯函数 + 7 边界单测(回归 98); EXPLAIN 诊断——summary 12.7万行全表聚合(60天窗口覆盖全部数据, 索引选择性差属正常)→物化日表专项目; evaluate 36s = Python 密集(逐SKU×规则+健康分重算)专项
+- **隐性风险**: quality_logs 膨胀治理——daily_maintenance 加"超 500 截断至 300"(不依赖 cron, maintenance_log 抢占双保险); 缓存竞态窗口(毫秒级最终一致)/每请求连接(Makers 形态固有)/自动 EXPLAIN(观测已够) 三项告知不引入
+
+### UI 设计语言统一(iOS 18 天气小组件风, 逐卡打磨)
+- **四小卡同构**: 大数字 clamp(17-28px)+tabular-nums 等宽防跳动 / 标题 600+letterSpacing 0.2 / 色点统一「●」字符 / 语义色状态行 600 / 间距 4-6-8-10 网格 / 空态 44px 圆底 checkmark
+- **断货卡**: 去序号; 三级统计纯文字(去胶囊背景); 去重复"最快X天"; 长 SKU flex 截断(名称省略、仓标签常显、title 全名); ••• SVG 展开(蓝 primary)
+- **待处理卡**: 紧急数右置标题行; 状态行 ●异常(danger)/●告警(warning) 语义色; 分类行/明细分层
+- **GMV/健康卡**: 统一 17-28px+tabular-nums; 健康分层重组单行三组(健康/偏低/缺货)+SKU 淡化
+- **底部弹窗标准模板**: 遮罩 9998 透明 + flex 包裹 9999 + inset 顶部高光 + font-18 标题 + maxWidth 600 + 70vh(规则测试弹窗对齐; 原 560/75vh/无高光)
+- **emoji→SVG 化 25 处(10 文件)**: ✕→IconClose ⚙→IconGear ✓→IconCheck ⚡→IconLightning ⚠→IconWarning 📦→IconPackage 💡→IconLightbulb ⚖→IconScale——统一 Icons.tsx 管理; 保留: 文案箭头/状态标签(Inventory 徽章)/option 内标记/🎉
+- **杂项**: 质量日志页空态延迟修复(骨架屏本地 ld 不依赖全局 loading); 登录页声明文案更新; 全看板展开入口统一 •••
+
 ## 2026-09-10: 清洗导入全链路打磨(UI/UX+解析治本) + 设计系统收敛(hue 方法论) + 看板图表修复 + 动态列/列映射架构
 > **主线**: feat/edgeone, 当日 31 commit(导入功能/解析修复→映射页 UI 重构→列映射/动态列架构→设计系统 P0/P1/P2→看板图表修复)。
 > **验证**: tsc 0 errors + local_test 91/91 + 线上冒烟/浏览器验证。
