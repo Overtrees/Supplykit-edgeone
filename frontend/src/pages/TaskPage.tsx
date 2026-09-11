@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
-import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../components/Icons'
+import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo, IconCheck, IconClose } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -105,7 +105,7 @@ export default function TaskPage() {
                       {task.steps.map((s, i) => (
                         <div key={i} style={{display:'flex',alignItems:'center',gap:6,fontSize:'var(--font-xs)'}}>
                           <span style={{color: s.status === 'ok' ? 'var(--success)' : s.status === 'error' ? 'var(--danger)' : 'var(--muted2)'}}>
-                            {s.status === 'ok' ? '✓' : s.status === 'error' ? '✗' : ''}
+                            {s.status === 'ok' ? <IconCheck size={12} /> : s.status === 'error' ? <IconClose size={12} /> : ''}
                           </span>
                           <span style={{color:'var(--text)',flex:1}}>{s.name}</span>
                           {s.status === 'ok' && <span style={{color:'var(--muted2)',fontSize:'var(--font-10)'}}>{s.elapsed}s</span>}

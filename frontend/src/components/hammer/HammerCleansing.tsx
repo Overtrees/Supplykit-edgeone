@@ -1,3 +1,4 @@
+import { IconTag, IconWarning } from '../../components/Icons'
 import React, { useState } from "react"
 import { useAppStore } from "../../store/useAppStore"
 import { IconTag } from "../../components/Icons"
@@ -26,7 +27,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
       <div className="hammer-panel">
         {!sameAsGlobal && (
           <div style={{fontSize:'var(--font-10)',color:'var(--warning)',textAlign:'center',background:'rgba(245,158,11,0.1)',borderRadius:'var(--radius-lg)',padding:'9px 12px',minHeight:32}}>
-            ⚠️ 当前全局主体是「{channel === 'jd' ? '京东' : '其他渠道'}」，导入后请切换主体查看该数据
+            <IconWarning size={13} style={{verticalAlign:-2}} /> 当前全局主体是「{channel === 'jd' ? '京东' : '其他渠道'}」，导入后请切换主体查看该数据
           </div>
         )}
         {isInOut && (

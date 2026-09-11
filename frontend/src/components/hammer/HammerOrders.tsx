@@ -3,7 +3,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
 import { ORDER_COLS, ORDER_STATUSES, orderColKey, getOrderVis } from './configs'
-import { IconExport } from '../Icons'
+import { IconExport, IconCheck } from '../Icons'
 import { t } from '../../locale'
 
 interface HammerOrdersProps { channel: string }
@@ -48,7 +48,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
           </div>
           <div className="hammer-row">
             <button onClick={() => setHammerPanel(hammerPanel === 'filter' ? null : 'filter')}
-              className="btn-ghost hammer-btn">{t('common.filter')}{orderStatus ? ' ✓' : ''}</button>
+              className="btn-ghost hammer-btn">{t('common.filter')}{orderStatus ? <IconCheck size={12} style={{verticalAlign:-2}} /> : ''}</button>
             <button onClick={doExport} disabled={exporting}
               className="clickable btn-ghost hammer-btn" style={{opacity:exporting?0.5:1}}>
               {exporting ? <span className="hammer-spinner" /> : <IconExport size={13} />} {exporting ? t('common.exporting') : t('common.export')}

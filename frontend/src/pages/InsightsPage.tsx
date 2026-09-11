@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import { IconTrendUp, IconTrendDown, IconTrendFlat, IconUndo } from '../components/Icons'
+import { IconTrendUp, IconTrendDown, IconTrendFlat, IconUndo, IconPackage, IconLightbulb, IconCheck } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
 import { t } from "../locale"
 
@@ -428,7 +428,7 @@ export default function InsightsPage() {
           )}
           {/* 已下单明细（仅BBCC模式）：B 仓入库批次 + 在库天数监控，超储预警用 */}
           {replenMode==='bbcc' && orderedItems.length > 0 && <details style={{marginTop:12}} open>
-            <summary className="small muted" style={{cursor:'pointer',fontSize:'var(--font-sm)',fontWeight:600}}>📦 已下单 {orderedItems.length} 项 · 点击查看入库日期与仓储天数</summary>
+            <summary className="small muted" style={{cursor:'pointer',fontSize:'var(--font-sm)',fontWeight:600}}><IconPackage size={14} style={{verticalAlign:-3}} /> 已下单 {orderedItems.length} 项 · 点击查看入库日期与仓储天数</summary>
             <div style={{fontSize:'var(--font-sm)',marginTop:8}}>
               {orderedItems.map((po, i) => {
                 const daysSinceArrival = po.arrival_date ? Math.floor((new Date() - new Date(po.arrival_date)) / (1000*60*60*24)) : null
@@ -455,7 +455,7 @@ export default function InsightsPage() {
       {tab === 'purchase' && (
         <div className="card">
           <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',background:'var(--bg)',borderRadius:'var(--radius-card)',padding:'8px 12px',marginBottom:10,lineHeight:1.7}}>
-            💡 <b>采购闭环</b>：导出采购建议 → 内部评估执行下单 → <b>清洗导入库存（含在途列）</b>更新在途 → 建议自动抵扣，完成闭环
+            <IconLightbulb size={13} style={{verticalAlign:-2}} /> <b>采购闭环</b>：导出采购建议 → 内部评估执行下单 → <b>清洗导入库存（含在途列）</b>更新在途 → 建议自动抵扣，完成闭环
           </div>
           <div className="section-title" style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
             <span>采购建议</span>
@@ -576,11 +576,11 @@ export default function InsightsPage() {
                       const s = useAppStore.getState()
                       const done = !!x.disposed
                       return <tr key={key} onClick={()=>{ if (prodBatch && !done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{opacity:done?0.4:1,background:prodBatch&&isSel?'rgba(29,78,216,0.08)':'transparent',cursor:prodBatch&&!done?'pointer':'default'}}>
-                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); if (!done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{padding:'9px 12px',minHeight:32,textAlign:'center'}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':(done?'var(--border)':'var(--border)'),background:isSel?'var(--primary)':(done?'rgba(148,163,184,0.15)':'transparent'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',opacity:done?0.35:1}}>{done?'✓':(isSel?'✓':'')}</span></td>}
+                        {prodBatch && <td onClick={(e)=>{e.stopPropagation(); if (!done) { s.setProdBatchSel(isSel ? s.prodSelIds.filter(k=>k!==key) : [...s.prodSelIds, key]) } }} style={{padding:'9px 12px',minHeight:32,textAlign:'center'}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':(done?'var(--border)':'var(--border)'),background:isSel?'var(--primary)':(done?'rgba(148,163,184,0.15)':'transparent'),display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',opacity:done?0.35:1}}>{done?<IconCheck size={12} />:(isSel?<IconCheck size={12} />:'')}</span></td>}
                         {slowVisCols.map(id => {
                           const col = SLOW_COLS.find(c => c.id === id)
                           if (!col) return <td key={id}></td>
-                          if (col.id === 'processed') return <td key={id}>{x.disposed ? <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}>✓ 已处理</span> : <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}>-</span>}</td>
+                          if (col.id === 'processed') return <td key={id}>{x.disposed ? <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}><IconCheck size={12} style={{verticalAlign:-2}} /> 已处理</span> : <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}>-</span>}</td>
                           if (col.id === 'brand') return <td key={id} style={{fontSize:'var(--font-sm)'}}>{x.brand||'-'}</td>
                           if (col.id === 'sku') return <td key={id} className="mono" style={{fontSize:'var(--font-sm)'}}>{x.sku}</td>
                           if (col.id === 'name') return <td key={id} style={{fontSize:'var(--font-13)'}}>{x.product_name}</td>

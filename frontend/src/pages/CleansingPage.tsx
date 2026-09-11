@@ -1,8 +1,8 @@
+import { IconLightning, IconCheck, IconAlert, IconLoading, IconFolder, IconClose, IconWarning } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import {IconLightning, IconCheck, IconAlert, IconLoading, IconFolder} from '../components/Icons'
 import { t } from "../locale"
 
 
@@ -412,7 +412,7 @@ export default function CleansingPage() {
           <span style={{display:'inline-flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
             {c.name}
             {mp[c.name]?.target
-              ? <span className="pill success" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>✓ 已映射</span>
+              ? <span className="pill success" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px',display:'inline-flex',alignItems:'center',gap:3}}><IconCheck size={11} style={{verticalAlign:-1}} /> 已映射</span>
               : <span className="pill warning" style={{fontSize:'var(--font-9)',padding:'1px 6px',minHeight:'auto',lineHeight:'16px'}}>未映射 · 导入时丢弃</span>}
           </span>
           {mp[c.name]?.target ? (()=>{const sf2=SYS_FIELDS.find(x=>x.t===mp[c.name].target)||cf.find(x=>x.t===mp[c.name].target);return sf2?<span className="small muted" style={{display:'block',fontSize:'var(--font-xs)',marginTop:1}}>→ {sf2.l} ({sf2.t})</span>:null})()
@@ -448,7 +448,7 @@ export default function CleansingPage() {
           const missing = skuVals.filter(v => v === '').length
           if (missing === 0 && dupSkus.size === 0) return null
           return <div style={{fontSize:'var(--font-xs)',color:'var(--danger)',background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.2)',borderRadius:'var(--radius-card)',padding:'8px 12px',marginBottom:8}}>
-            ⚠ 预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）—— 建议返回修正后导入
+            <IconWarning size={13} style={{verticalAlign:-2}} /> 预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）—— 建议返回修正后导入
           </div>
         })()}
         {(() => {
@@ -481,7 +481,7 @@ export default function CleansingPage() {
               const issue = skuVal === '' ? '缺SKU' : (dupSkus.has(skuVal) ? '重复SKU' : '')
               return <tr key={i} style={issue ? {background:'rgba(239,68,68,0.06)'} : undefined}>
                 {cols.map(col => (
-                  <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',color:issue && col.target==='sku' ? 'var(--danger)' : undefined}}>{String(r[col.target]||'')}{issue && col.target==='sku' ? <span style={{fontSize:'var(--font-9)',color:'var(--danger)',marginLeft:4}}>⚠{issue}</span> : null}</td>
+                  <td key={col.src} style={{minWidth:80,whiteSpace:'nowrap',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',color:issue && col.target==='sku' ? 'var(--danger)' : undefined}}>{String(r[col.target]||'')}{issue && col.target==='sku' ? <span style={{fontSize:'var(--font-9)',color:'var(--danger)',marginLeft:4}}><IconWarning size={11} style={{verticalAlign:-2}} />{issue}</span> : null}</td>
                 ))}
               </tr>
             })}</tbody></table>
@@ -551,7 +551,7 @@ export default function CleansingPage() {
             <select value={s.group||'blocked'} onChange={e=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).map((x,j)=>j===i?{...x,group:e.target.value}:x)}))} style={{fontSize:'var(--font-13)',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',background:'var(--card)',minHeight:36}}>
               <option value='sale'>✅ 销量池</option><option value='blocked'>⛔ 屏蔽</option>
             </select>
-            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32,border:'none',background:'transparent',flexShrink:0}}>✕</button>
+            <button onClick={()=>setColMap(p=>({...p,[colMapCol]:(p[colMapCol]||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32,border:'none',background:'transparent',flexShrink:0}}><IconClose size={16} /></button>
           </div>
         ))}
         <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>

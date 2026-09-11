@@ -46,6 +46,16 @@ def _daily_maintenance():
                 "GROUP BY DATE(ordered_at), channel, sku, warehouse "
                 "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
                 [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
+        # ② quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
+        #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
+        try:
+            _c = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
+            if int(_c.get("c") or 0) > 500:
+                _k = one("SELECT id FROM quality_logs ORDER BY id DESC LIMIT 300") or {}
+                if _k.get("id"):
+                    execute("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")])
+        except Exception:
+            pass
     except Exception as _me:
         try:
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "

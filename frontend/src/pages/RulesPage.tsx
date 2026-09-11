@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
-import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert } from '../components/Icons'
+import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert, IconClose, IconGear, IconCheck } from '../components/Icons'
 import { t } from "../locale"
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -337,7 +337,7 @@ export default function RulesPage() {
               <select value={o.op} onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],op:e.target.value};setCond(p=>({...p,or}))}} style={{...IS,width:64,fontSize:'var(--font-sm)',textAlign:'center'}}>{OPS.map(x=><option key={x.v} value={x.v}>{x.l}</option>)}</select>
               <input type="number" step="any" value={o.right==='inv.safety_qty'?'':o.right} placeholder={o.right==='inv.safety_qty'?'安全线':''}
                 onChange={e=>{const or=[...(cond.or||[])];or[i]={...or[i],right:e.target.value||'inv.safety_qty',rightType:'number'};setCond(p=>({...p,or}))}} style={{...IS,flex:1,minWidth:80,fontSize:'var(--font-sm)'}}/>
-              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32}}>✕</span>
+              <span onClick={()=>setCond(p=>({...p,or:(p.or||[]).filter((_,j)=>j!==i)}))} className="clickable" style={{fontSize:'var(--font-sm)',color:'var(--danger)',cursor:'pointer',padding:'9px 12px',minHeight:32}}><IconClose size={16} /></span>
             </div>
           ))}
           <button onClick={()=>setCond(p=>({...p,or:[...(p.or||[]),{left:'inv.buffer',op:'<=',right:'1',rightType:'number',warehouse:'',pctValue:100}]}))} className="clickable" style={{marginTop:8,fontSize:'var(--font-sm)',padding:'4px 12px',borderRadius:'var(--radius-full)',border:'1px dashed var(--primary)',background:'transparent',color:'var(--primary)',cursor:'pointer'}}>＋ 或条件（任一满足触发）</button>
@@ -385,7 +385,7 @@ export default function RulesPage() {
         {/* 业务计算参数(融合: 断货/健康类规则携带看板计算参数, 保存进 rules.params; stock-risk/health_index 同源读取) */}
         {(f.alert_type === 'stockout' || f.alert_type === 'health') && (
           <div style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',padding:14,marginTop:14}}>
-            <div style={{fontWeight:600,fontSize:'var(--font-13)',marginBottom:4,display:'flex',alignItems:'center',gap:4}}>⚙️ {f.alert_type === 'stockout' ? '断货计算参数(看板断货卡同源)' : '健康分档参数(看板健康卡同源)'}</div>
+            <div style={{fontWeight:600,fontSize:'var(--font-13)',marginBottom:4,display:'flex',alignItems:'center',gap:4}}><IconGear size={13} style={{verticalAlign:-2}} /> {f.alert_type === 'stockout' ? '断货计算参数(看板断货卡同源)' : '健康分档参数(看板健康卡同源)'}</div>
             <div className="muted2" style={{fontSize:'var(--font-xs)',marginBottom:8}}>
               {f.alert_type === 'stockout'
                 ? '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值'
@@ -423,7 +423,7 @@ export default function RulesPage() {
         const modeLbl = MODES.find(m=>m.v===(rule.mode||''))?.l||'全部'
         const condText = `当 ${whLbl} ${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${condInfo.rightType==='pct'?fieldLbl(condInfo.right)+'的'+condInfo.pctValue+'%':(condInfo.rightType==='field'?fieldLbl(condInfo.right):condInfo.right)}`
         return <div key={rule.id} onClick={()=>{if(!prodBatch){const c=pc(rule.condition_json||'{}');setEditing(rule);setF({name:rule.name,event:rule.event,alert_type:rule.alert_type||'low_stock',alert_title:rule.alert_title||'',alert_desc:rule.alert_desc||'',severity:rule.severity||'warning',mode:rule.mode||'',condition_json:rule.condition_json||'{}'});setRParams(rule.params||{});setCond(c)}}} style={{cursor:prodBatch?'default':'pointer',padding:'14px 16px',border:'1px solid var(--border)',borderRadius:'var(--radius-lg)',marginBottom:8,background:prodBatch&&selIds.includes(rule.id)?'rgba(29,78,216,0.08)':'transparent'}}>
-        {prodBatch && <span onClick={(e)=>{e.stopPropagation();const ids=selIds;setSelIds(ids.includes(rule.id)?ids.filter(i=>i!==rule.id):[...ids,rule.id])}} className="clickable" style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:selIds.includes(rule.id)?'var(--primary)':'var(--border)',background:selIds.includes(rule.id)?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)'}}>{selIds.includes(rule.id)?'✓':''}</span><span style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>选择</span></span>}
+        {prodBatch && <span onClick={(e)=>{e.stopPropagation();const ids=selIds;setSelIds(ids.includes(rule.id)?ids.filter(i=>i!==rule.id):[...ids,rule.id])}} className="clickable" style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:selIds.includes(rule.id)?'var(--primary)':'var(--border)',background:selIds.includes(rule.id)?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)'}}>{selIds.includes(rule.id)?<IconCheck size={12} />:''}</span><span style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>选择</span></span>}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:'var(--font-15)',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
@@ -560,11 +560,12 @@ export default function RulesPage() {
 
     </>}
 
-    {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发） ── */}
-    {testRule && <div style={{position:'fixed',inset:0,zIndex:4000}}>
-      <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'var(--overlay)'}} />
-      <div className="material-regular" style={{position:'fixed',left:14,right:14,bottom:'calc(env(safe-area-inset-bottom) + 14px)',maxWidth:560,margin:'0 auto',borderRadius:'var(--radius-lg)',padding:'18px 16px calc(16px + env(safe-area-inset-bottom))',boxShadow:'var(--shadow-sheet)',maxHeight:'75vh',overflowY:'auto'}}>
-        <div style={{fontWeight:700,fontSize:'var(--font-lg)',marginBottom:4,textAlign:'center'}}>规则测试</div>
+    {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发）—— 底部 sheet 标准模板(2026-09-11 对齐看板弹窗) ── */}
+    {testRule && <>
+      <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'transparent',zIndex:9998}} />
+      <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
+        <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>规则测试</div>
         <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
           <label style={{fontSize:'var(--font-sm)'}}>可用量<input type="number" value={testInv.available_qty} onChange={e=>setTestInv(p=>({...p,available_qty:e.target.value}))} style={IS}/></label>
@@ -589,7 +590,7 @@ export default function RulesPage() {
           const _needParams = _cj.includes('params.') && testParams && Object.keys(testParams).length > 0
           if (!_needAdj && !_needBuf && !_needHealth && !_needParams) return null
           return <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg)',borderRadius:'var(--radius-card)',border:'1px solid var(--border)'}}>
-            <div style={{fontWeight:600,fontSize:'var(--font-sm)',marginBottom:8}}>⚙️ 计算变量/规则参数（与看板判定同源，可调预览）</div>
+            <div style={{fontWeight:600,fontSize:'var(--font-sm)',marginBottom:8}}><IconGear size={14} style={{verticalAlign:-2}} /> 计算变量/规则参数（与看板判定同源，可调预览）</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
               {_needAdj && <label style={{fontSize:'var(--font-sm)'}}>可售天数 Adj-DOS<input type="number" step="any" value={testInv.adj_dos} onChange={e=>setTestInv(p=>({...p,adj_dos:e.target.value}))} style={IS} placeholder="例 2.5"/></label>}
               {_needBuf && <label style={{fontSize:'var(--font-sm)'}}>缓冲比 Buffer<input type="number" step="any" value={testInv.buffer} onChange={e=>setTestInv(p=>({...p,buffer:e.target.value}))} style={IS} placeholder="例 0.8"/></label>}
@@ -609,7 +610,7 @@ export default function RulesPage() {
         {testResult && (
           <div style={{marginTop:14,padding:'12px 14px',borderRadius:'var(--radius-card)',background: testResult.triggered ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.08)',border:'1px solid',borderColor: testResult.triggered ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.3)'}}>
             <div style={{fontWeight:700,fontSize:'var(--font-15)',color: testResult.triggered ? 'var(--success)' : 'var(--danger)',marginBottom:6}}>
-              {testResult.triggered ? '✓ 触发告警' : '✗ 未触发'}
+              {testResult.triggered ? <><IconCheck size={15} style={{verticalAlign:-3}} /> 触发告警</> : <><IconClose size={15} style={{verticalAlign:-3}} /> 未触发</>}
             </div>
             {testResult.triggered && <div style={{fontSize:'var(--font-sm)',color:'var(--text)'}}>
               <div><b>{testResult.alert_title}</b></div>
@@ -623,7 +624,8 @@ export default function RulesPage() {
           </div>
         )}
       </div>
-    </div>}
+    </div>
+    </>}
   </div>
   </>
 }

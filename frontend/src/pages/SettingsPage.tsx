@@ -1,3 +1,4 @@
+import { IconCheck } from '../components/Icons'
 import React, { useState, useEffect } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, clearInflight } from '../api/client'
@@ -145,7 +146,7 @@ function RecycleBin({ onClose, toast }) {
           const isSel = selected[type].has(x.id)
           return <div key={x.id} onClick={function(){toggleSel(type, x.id)}} className="clickable" style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid var(--border)',background:isSel?'rgba(29,78,216,0.08)':'transparent'}}>
             <span style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
-              <span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',flexShrink:0}}>{isSel?'✓':''}</span>
+              <span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',flexShrink:0}}>{isSel?<IconCheck size={12} />:''}</span>
               <span style={{fontSize:'var(--font-md)',color:'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{type==='rules'?x.name:(x.order_no + ' - ' + (x.product_name||''))}</span>
             </span>
             {!isSel && <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)',flexShrink:0,marginLeft:8}}>{x.deleted_at ? String(x.deleted_at).slice(0,10) : ''}</span>}

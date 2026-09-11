@@ -369,10 +369,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           </div>
         </div>
         <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
-          <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+          <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontVariantNumeric:'tabular-nums'}}>
             {(() => { const _g = gmvView === 'net' ? (periodMeta.net_gmv != null ? periodMeta.net_gmv : ((periodMeta.gmv||0) - (dashboard?.summary?.refund_amount||0))) : (gmvView === 'payout' ? (periodMeta.payout != null ? periodMeta.payout : ((periodMeta.gmv||0) - (dashboard?.summary?.refund_amount||0) - (dashboard?.summary?.subsidy_amount||0))) : periodMeta.gmv); return '¥' + Number(_g||0).toLocaleString() })()}
           </div>
-          <div className="card-sub" style={{marginTop:6,display:'flex',alignItems:'center',gap:6}}>
+          <div className="card-sub" style={{marginTop:6,display:'flex',alignItems:'center',gap:8}}>
             <span>{periodMeta.orders} 单</span>
             {(() => {
               const last = Number(periodMeta.gmv||0), prev = Number(periodMeta.prev_gmv||0)
@@ -397,34 +397,44 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         </div>}
       </div>
 
-      {/* 2. {t("dash.pending")}卡 — 按仓库维度拆分 */}
+      {/* 2. {t("dash.pending")}卡 — iOS 18 天气风: 数字主角/语义状态行/分级明细 */}
       <div className="card stat-card">
-        <div className="small muted" style={{fontSize:'var(--font-sm)',lineHeight:1.2}}>待处理</div>
-        <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4}}>
-          <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)')}}>
-            {errCount+(dashboard?.summary?.active_alerts||0)}
-          </div>
-          <div className="card-sub" style={{marginTop:6}}>
-            <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'var(--danger)'}}/>{errCount} 异常</span>
-              <span style={{display:'inline-flex',alignItems:'center',gap:3}}><span style={{width:6,height:6,borderRadius:3,background:'var(--warning)'}}/>{dashboard?.summary?.active_alerts||0} 告警{criticalAlerts > 0 ? <span style={{color:'var(--danger)',fontSize:'var(--font-10)'}}>({criticalAlerts} 严重)</span> : ''}</span>
-            </div>
-            {(lowStockAlerts.length > 0 || procTotal > 0) && <>
-              <div style={{fontSize:'var(--font-10)',display:'flex',gap:8,marginTop:6}}>
-                <span style={{color:'var(--muted2)'}}>● 低库存 {lowStockTotal}</span>
-                {slowMovingTotal > 0 && <span style={{color:'var(--muted2)'}}>● 滞销 {slowMovingTotal}</span>}
-                <span style={{color:'var(--muted2)'}}>● 采购&补货 {procTotal}</span>
-              </div>
-              <div style={{fontSize:'var(--font-9)',display:'flex',gap:6,marginTop:5,color:'var(--muted)'}}>
-                <span>{_replMode === 'bbcc' ? 'BC' : 'C'}{lsWhView.main} {t("dash.own")}{lsWhView.own}</span>
-                <span style={{color:'var(--border)'}}>|</span>
-                <span>采购{procList.filter(x=>x.tag==='采购').length} · 补货{procList.filter(x=>x.tag==='补货').length}</span>
-                {otherTotal > 0 && <span style={{color:'var(--muted)'}}>|</span>}
-                {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable pill info" style={{cursor:'pointer',fontSize:'var(--font-10)',padding:'1px 8px',minHeight:'auto',lineHeight:'16px'}}>其他 {otherTotal}</span>}
-              </div>
-            </>}
-          </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',minHeight:14}}>
+          <div style={{fontSize:'var(--font-sm)',fontWeight:600,color:'var(--muted)',letterSpacing:0.2,lineHeight:1.2}}>{t("dash.pending")}</div>
+          {criticalAlerts > 0 && <span style={{fontSize:'var(--font-10)',fontWeight:600,color:'var(--danger)'}}>{t("dash.critical")} {criticalAlerts}</span>}
         </div>
+        {((errCount + (dashboard?.summary?.active_alerts||0)) === 0)
+          ? <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:6}}>
+              <div style={{width:44,height:44,borderRadius:'50%',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--success)'}}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              </div>
+              <div style={{fontSize:'var(--font-sm)',fontWeight:500,color:'var(--muted2)'}}>{t("dash.no_alerts")}</div>
+            </div>
+          : <>
+              <div style={{marginTop:4}}>
+                <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)'),fontVariantNumeric:'tabular-nums',marginBottom:1}}>
+                  {errCount+(dashboard?.summary?.active_alerts||0)}
+                </div>
+                <div className="card-sub" style={{marginTop:2,display:'flex',gap:10,flexWrap:'wrap'}}>
+                  <span style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--danger)'}}>● {errCount} 异常</span>
+                  <span style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--warning)'}}>● {dashboard?.summary?.active_alerts||0} 告警</span>
+                </div>
+              </div>
+              {(lowStockAlerts.length > 0 || procTotal > 0) && <>
+                <div style={{fontSize:'var(--font-10)',display:'flex',gap:10,marginTop:8,flexWrap:'wrap',lineHeight:1.4}}>
+                  <span style={{color:'var(--muted2)'}}>● 低库存 {lowStockTotal}</span>
+                  {slowMovingTotal > 0 && <span style={{color:'var(--muted2)'}}>● 滞销 {slowMovingTotal}</span>}
+                  <span style={{color:'var(--muted2)'}}>● 采购&补货 {procTotal}</span>
+                </div>
+                <div style={{fontSize:'var(--font-10)',display:'flex',gap:8,marginTop:4,alignItems:'center',color:'var(--muted)',flexWrap:'wrap'}}>
+                  <span>{_replMode === 'bbcc' ? 'BC' : 'C'}{lsWhView.main} {t("dash.own")}{lsWhView.own}</span>
+                  <span style={{color:'var(--border)'}}>|</span>
+                  <span>采购{procList.filter(x=>x.tag==='采购').length} · 补货{procList.filter(x=>x.tag==='补货').length}</span>
+                  {otherTotal > 0 && <span style={{color:'var(--muted)'}}>|</span>}
+                  {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable pill info" style={{cursor:'pointer',fontSize:'var(--font-10)',padding:'1px 8px',minHeight:'auto',lineHeight:'16px'}}>其他 {otherTotal}</span>}
+                </div>
+              </>}
+            </>}
       </div>
 
       {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
@@ -467,16 +477,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </div>
             </div>
             <div key={'h'+healthTab} style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',marginBottom:4,animation:'fadeIn 0.18s ease'}}>
-              <div className="card-value" style={{fontSize:'clamp(18px,9cqi,30px)',fontWeight:700,lineHeight:1.1,color:healthData.level==='danger'?'var(--danger)':healthData.level==='warning'?'var(--warning)':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
+              <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,fontVariantNumeric:'tabular-nums',color:healthData.level==='danger'?'var(--danger)':healthData.level==='warning'?'var(--warning)':'var(--success)'}}>{healthData.score != null ? (healthData.score + '分') : '—'}</div>
               <div className="card-sub" style={{marginTop:4}}>
-                <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                  <span style={{color:'var(--success)'}}>● {healthData.healthy||0}健康</span>
-                  <span style={{color:'var(--warning)'}}>● {healthData.warning||0}{t("dash.low")}</span>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginTop:2,flexWrap:'wrap'}}>
+                  <span style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--success)'}}>● {healthData.healthy||0}健康</span>
+                  <span style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--warning)'}}>● {healthData.warning||0}{t("dash.low")}</span>
+                  <span onClick={function(){ if (_oosSrc.length > 0) setShowAllOut(true) }} className="clickable" style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--danger)',cursor: _oosSrc.length > 0 ? 'pointer' : 'default'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
                 </div>
-                <div style={{fontSize:'var(--font-10)',marginTop:3,display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
-                  <span onClick={function(){ if (_oosSrc.length > 0) setShowAllOut(true) }} className="clickable" style={{color:'var(--danger)',cursor: _oosSrc.length > 0 ? 'pointer' : 'default'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
-                  <span style={{color:'var(--muted2)'}}> · {healthData.total||0} SKU</span>
-                </div>
+                <div style={{fontSize:'var(--font-10)',marginTop:2,color:'var(--muted2)'}}>{healthData.total||0} SKU</div>
                 {/* 健康分数趋势(近14天, 按当前维度) —— 原缺货前3+还有N条区 */}
                 {(() => {
                   const _key = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
@@ -571,7 +579,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <div className="small muted" style={{fontSize:'var(--font-xs)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:2}}>{x.description}</div>
               </div>
             ))}
-        {lowStockTotal > 5 && <button onClick={()=>{loadFullAlerts();setShowAllLowStock(true)}} className="clickable" style={{width:'100%',padding:8,border:'none',borderRadius:0,background:'transparent',fontSize:'var(--font-sm)',color:'var(--muted)',cursor:'pointer',fontFamily:'inherit'}}>还有 {lowStockTotal - 5} 条...</button>}
+        {lowStockTotal > 5 && <button onClick={()=>{loadFullAlerts();setShowAllLowStock(true)}} aria-label={`还有 ${lowStockTotal - 5} 条`} className="clickable" style={{width:'100%',padding:'5px 0 2px',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+              </button>}
       </div>
       <div className="card" style={{height:'auto',overflow:'visible'}}>
         <div className="section-title">采购&补货告警{procTotal > 0 ? ` (${procTotal})` : ''}</div>
@@ -593,7 +603,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </div>
           ))
         )}
-        {procTotal > 5 && <button onClick={()=>{setShowAllProc(true)}} className="clickable" style={{width:'100%',padding:8,border:'none',borderRadius:0,background:'transparent',fontSize:'var(--font-sm)',color:'var(--muted)',cursor:'pointer',fontFamily:'inherit'}}>还有 {procTotal - 5} 条...</button>}
+        {procTotal > 5 && <button onClick={()=>{setShowAllProc(true)}} aria-label={`还有 ${procTotal - 5} 条`} className="clickable" style={{width:'100%',padding:'5px 0 2px',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+              </button>}
       </div>
     </div>
       {/* 低库存告警弹窗 */}

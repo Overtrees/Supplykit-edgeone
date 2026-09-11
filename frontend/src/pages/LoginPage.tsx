@@ -1,3 +1,4 @@
+import { IconScale } from '../components/Icons'
 import React, { useState } from 'react'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -58,7 +59,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             访客模式：<b>demo</b> / <b>demo123</b>（仅可查看，无需注册）
           </div>
           <div style={{marginTop:10,padding:'8px 12px',fontSize:'var(--font-10)',color:'var(--muted2)',textAlign:'center',lineHeight:1.5,borderTop:'1px solid var(--border)'}}>
-            ⚖️ 演示系统：所有品牌、商品、供应商及数据均为虚构示例，与任何真实企业或个人无关
+            <IconScale size={12} style={{verticalAlign:-2}} /> 声明：系统所使用的演示数据涉及品牌、商品、供应商为虚构，与任何真实企业或个人无关
           </div>
         </div>
       </div>

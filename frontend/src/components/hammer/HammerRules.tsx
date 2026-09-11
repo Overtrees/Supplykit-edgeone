@@ -1,3 +1,4 @@
+import { IconCheck, IconLightning } from '../Icons'
 import React, { useState } from "react"
 import { useAppStore } from "../../store/useAppStore"
 import { useToast } from "../../components/Toast"
@@ -78,7 +79,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
           </button>
           <button onClick={() => setSearchOpen(!searchOpen)} className="hammer-btn btn-ghost"
             style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
-            搜索{hammerSearch ? ' ✓' : ''}
+            搜索{hammerSearch ? <IconCheck size={12} style={{verticalAlign:-2}} /> : ''}
           </button>
         </div>
         <div className="hammer-row-2">
@@ -93,7 +94,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
         </div>
         <button onClick={runEvaluate} disabled={evaluating}
           className="hammer-btn btn-ghost" style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4,width:'100%',color:'var(--primary)',opacity:evaluating?0.6:1,marginTop:8}}>
-          {evaluating ? <span className="hammer-spinner" /> : '⚡'} {evaluating ? '评估中(全量 SKU×仓)...' : '立即运行全部规则'}
+          {evaluating ? <span className="hammer-spinner" /> : <IconLightning size={14} style={{verticalAlign:-2}} />} {evaluating ? '评估中(全量 SKU×仓)...' : '立即运行全部规则'}
         </button>
         {batchOpen && (
           <div className="hammer-panel">
