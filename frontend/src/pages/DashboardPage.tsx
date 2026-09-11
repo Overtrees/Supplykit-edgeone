@@ -520,17 +520,19 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   {_r.total > riskCritical + riskWarning && <span style={{color:'var(--muted2)'}}>● {_r.total - riskCritical - riskWarning} 观察</span>}
                 </div>}
               </div>
-              <div style={{flexShrink:0}}>
+              <div style={{flexShrink:0,paddingTop:6}}>
               {_r.items.slice(0,3).map((x,i) => {
                 const whLabel = fmtWh(x.warehouse) || (x.type === 'C' ? 'C仓' : (x.type === 'OWN' ? '自有' : (x.type === 'B' ? 'B仓' : (_replMode === 'bbcc' ? 'BC' : 'C仓'))))
                 const lv = RISK_LV[x.level]
                 return (
-                <div key={i} onClick={function(){ const _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{fontSize:'var(--font-9)',color:'var(--muted2)',lineHeight:1.25,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:i===0?2:0,cursor:'pointer'}}>
-                  {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginRight:2,verticalAlign:'1px'}} /> : null} {x.product_name || x.sku} <span style={{fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4,verticalAlign:'1px'}}>{whLabel}</span>
+                <div key={i} title={x.product_name || x.sku} onClick={function(){ const _b = x.type==='BC' || x.warehouse==='BC'; onAlert && onAlert(x.sku, x.type==='OWN' ? 'own' : 'platform', _b ? '' : x.warehouse) }} className="clickable" style={{display:'flex',alignItems:'center',gap:3,fontSize:'var(--font-9)',color:'var(--muted2)',lineHeight:1.3,overflow:'hidden',cursor:'pointer'}}>
+                  {lv ? <span style={{display:'inline-block',width:6,height:6,borderRadius:3,background:lv.c,marginLeft:2,flexShrink:0}} /> : null}
+                  <span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.product_name || x.sku}</span>
+                  <span style={{flexShrink:0,fontSize:8,color:'var(--muted)',background:'var(--bg)',padding:'0 4px',borderRadius:4}}>{whLabel}</span>
                 </div>)
               })}
               </div>
-              {_r.total > 3 && <button onClick={()=>{loadFullRisk();setShowAllRisk(true)}} aria-label={`还有 ${_r.total - 3} 条`} className="clickable" style={{width:'100%',padding:'5px 0 2px',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
+              {_r.total > 3 && <button onClick={()=>{loadFullRisk();setShowAllRisk(true)}} aria-label={`还有 ${_r.total - 3} 条`} className="clickable" style={{width:'100%',padding:'7px 0 2px',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
               </button>}
             </>}
