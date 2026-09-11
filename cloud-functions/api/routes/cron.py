@@ -37,11 +37,18 @@ def _authed(request: Request) -> bool:
 
 
 def _log(level, message, source="cron"):
+    """写 quality_logs —— 参数化(勿用 % 拼接: 多 %s 单值会 TypeError 被吞致全 cron 日志从未写入)"""
     try:
-        execute("INSERT INTO quality_logs(log_type, level, message, source) VALUES('cron','%s',%s,%s)"
-                % level, (message, source))
-    except Exception:
-        pass
+        execute("INSERT INTO quality_logs(log_type, level, message, source) VALUES('cron',%s,%s,%s)",
+                (level, message, source))
+    except Exception as _e:
+        # 记录 _log 自身失败(不再静默)
+        try:
+            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('maint','error',%s,%s,'cron')",
+                    ("_log 写入失败", str(_e)[:300]))
+        except Exception:
+            pass
 
 
 def _build_snapshot(rebuild_days=90):
