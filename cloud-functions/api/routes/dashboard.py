@@ -49,8 +49,13 @@ def health_trend(channel: str = "jd", days: int = 14):
             rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
                          "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
                          [channel, min(int(days), 60)])
-    except Exception:
-        pass
+    except Exception as _he2:
+        try:
+            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('health_trend','error',%s,%s,'dash')",
+                    ("health-trend 兜底失败", str(_he2)[:200]))
+        except Exception:
+            pass
     _out = []
     for r in reversed(rows or []):
         _d = str(r.get("date") or "")[:10]
