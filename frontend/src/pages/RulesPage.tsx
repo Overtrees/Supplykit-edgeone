@@ -3,6 +3,7 @@ import { api, clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
 import { IconPackage, IconTag, IconFactory, IconClipboard, IconScale, IconSave, IconLoading, IconAlert, IconClose, IconGear, IconCheck, IconLightning } from '../components/Icons'
+import { createPortal } from 'react-dom'
 import { t } from "../locale"
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -578,7 +579,8 @@ export default function RulesPage() {
     </>}
 
     {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发）—— 底部 sheet 标准模板(2026-09-11 对齐看板弹窗) ── */}
-    {testRule && <>
+    {testRule && createPortal(
+      <>
       <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'transparent',zIndex:9998}} />
       <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
       <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
@@ -648,7 +650,9 @@ export default function RulesPage() {
         </div>
       </div>
     </div>
-    </>}
+    </>,
+    document.body
+  )}
   </div>
   </>
 }

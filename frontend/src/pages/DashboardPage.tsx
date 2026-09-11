@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react"
+import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
@@ -609,8 +610,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       </div>
     </div>
       {/* 低库存告警弹窗 */}
-      {showAllLowStock && <div onClick={function(){setShowAllLowStock(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllLowStock && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {showAllLowStock && createPortal(
+        <>
+      <div onClick={function(){setShowAllLowStock(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />
+            <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>低库存告警 · 共 {lowStockTotal} 条</div>
           {(fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock' && (_replMode === 'bbcc' ? ['own','platform','platform_b'] : ['own','platform']).includes(x.warehouse_type)) : lowStockAlerts).map(function(x) {
@@ -629,11 +632,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
-      </div>}
+      </div>
+        </>,
+        document.body
+      )}
 
       {/* 采购&补货告警弹窗(重构: 补货建议需补 + 采购建议需采, 行标签区分, 模式跟随) */}
-      {showAllProc && <div onClick={function(){setShowAllProc(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllProc && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {showAllProc && createPortal(
+        <>
+      <div onClick={function(){setShowAllProc(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />
+            <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>采购&补货告警 · 共 {procTotal} 条</div>
           {(procList || []).map(function(x, i) {
@@ -652,11 +660,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
-      </div>}
+      </div>
+        </>,
+        document.body
+      )}
 
       {/* 其他告警弹窗(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义, 明细落点) */}
-      {showAllOther && <div onClick={function(){setShowAllOther(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllOther && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {showAllOther && createPortal(
+        <>
+      <div onClick={function(){setShowAllOther(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />
+            <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>其他告警 · 共 {otherTotal} 条</div>
           {(fullAlerts ? fullAlerts.filter(x => !['low_stock','replenish','purchase_need'].includes(x.alert_type)) : []).map(function(x) {
@@ -675,11 +688,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
-      </div>}
+      </div>
+        </>,
+        document.body
+      )}
 
       {/* 濒临断货完整列表弹窗 */}
-      {showAllRisk && <div onClick={function(){setShowAllRisk(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllRisk && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {showAllRisk && createPortal(
+        <>
+      <div onClick={function(){setShowAllRisk(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />
+            <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条</div>
           {(fullRisk && fullRisk.length ? fullRisk : (_r._full || _r.items || [])).map(function(x, i) {
@@ -706,11 +724,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
-      </div>}
+      </div>
+        </>,
+        document.body
+      )}
 
       {/* 缺货列表弹窗（按当前健康卡视图维度: own/平台行级, bc合计; 完整数据) */}
-      {showAllOut && <div onClick={function(){setShowAllOut(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />}
-      {showAllOut && <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
+      {showAllOut && createPortal(
+        <>
+      <div onClick={function(){setShowAllOut(false)}} style={{position:'fixed',inset:0,zIndex:9998,background:'transparent'}} />
+            <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
         <div onClick={function(e){e.stopPropagation()}} className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
           <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>缺货 · 共 {_oosSrc.length} 条</div>
           {_oosSrc.map(function(x, i) {
@@ -723,6 +746,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
         </div>
-      </div>}
+      </div>
+        </>,
+        document.body
+      )}
 </>
 }
