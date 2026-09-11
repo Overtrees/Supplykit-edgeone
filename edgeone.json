@@ -57,7 +57,7 @@
     },
     {
       "name": "schedule-ping-test",
-      "cron": "35 12 * * *",
+      "cron": "30 13 * * *",
       "timezone": "Asia/Shanghai",
       "path": "/api/cron/ping"
     }

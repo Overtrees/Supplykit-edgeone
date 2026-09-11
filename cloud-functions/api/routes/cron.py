@@ -58,7 +58,7 @@ def _build_snapshot(rebuild_days=90):
     return int(r.get("c") or 0)
 
 
-@router.post("/cron/snapshot")
+@router.api_route("/cron/snapshot", methods=["GET","POST"])
 @traced
 async def cron_snapshot(request: Request):
     if not _authed(request):
@@ -68,7 +68,7 @@ async def cron_snapshot(request: Request):
     return ok({"snapshot_rows": n})
 
 
-@router.post("/cron/freshness")
+@router.api_route("/cron/freshness", methods=["GET","POST"])
 @traced
 async def cron_freshness(request: Request):
     """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建"""
@@ -84,7 +84,7 @@ async def cron_freshness(request: Request):
     return ok({"rebuilt": False, "max_date": m})
 
 
-@router.post("/cron/archive")
+@router.api_route("/cron/archive", methods=["GET","POST"])
 @traced
 async def cron_archive(request: Request):
     """归档 90 天前订单 → daily_stats(写入成功才删除原订单, 防数据丢失)"""
@@ -122,7 +122,7 @@ async def cron_archive(request: Request):
     return ok({"archived": len(old), "stats_rows": ok_n})
 
 
-@router.post("/cron/cleanup-logs")
+@router.api_route("/cron/cleanup-logs", methods=["GET","POST"])
 @traced
 async def cron_cleanup_logs(request: Request):
     if not _authed(request):
@@ -211,7 +211,7 @@ def run_daily_rules() -> dict:
     return {"orphan_cleaned": cleaned, "rules_triggered": triggered}
 
 
-@router.post("/cron/daily-rules")
+@router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
 async def cron_daily_rules(request: Request):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()"""
@@ -220,7 +220,7 @@ async def cron_daily_rules(request: Request):
     return ok(run_daily_rules())
 
 
-@router.post("/cron/ping")
+@router.api_route("/cron/ping", methods=["GET","POST"])
 @traced
 async def cron_ping(request: Request):
     """调度连通性测试: 无条件写日志 —— 验证 EdgeOne schedules 是否真正触发函数"""
@@ -230,7 +230,7 @@ async def cron_ping(request: Request):
     return ok({"pong": True, "ts": datetime.now(timezone.utc).isoformat()})
 
 
-@router.post("/cron/recycle")
+@router.api_route("/cron/recycle", methods=["GET","POST"])
 @traced
 async def cron_recycle(request: Request):
     """回收站清理: 软删超过 30 天的订单/规则永久删除(deleted_at != '' 且 < now-30d)"""
@@ -246,7 +246,7 @@ async def cron_recycle(request: Request):
     return ok({"deleted": total})
 
 
-@router.post("/cron/push-alerts")
+@router.api_route("/cron/push-alerts", methods=["GET","POST"])
 @traced
 async def cron_push_alerts(request: Request):
     """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)"""
