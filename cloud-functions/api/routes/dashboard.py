@@ -34,28 +34,9 @@ def health_trend(channel: str = "jd", days: int = 14):
         rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
                      "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
                      [channel, min(int(days), 60)])
-        if not rows or str(rows[0].get("date") or "")[:10] != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
-            _h = _health_index(channel)
-            _sc = _h.get("score")
-            execute("INSERT INTO health_snapshot(`date`, channel, score, own_score, platform_score, bc_score) "
-                    "VALUES(%s,%s,%s,%s,%s,%s) "
-                    "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
-                    "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
-                    [datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel,
-                     int(_sc) if _sc is not None else -1,
-                     int((_h.get("own") or {}).get("score") or -1),
-                     int((_h.get("platform") or {}).get("score") or -1),
-                     int((_h.get("bc") or {}).get("score") or -1)])
-            rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
-                         "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
-                         [channel, min(int(days), 60)])
-    except Exception as _he2:
-        try:
-            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
-                    "VALUES('health_trend','error',%s,%s,'dash')",
-                    ("health-trend 兜底失败", str(_he2)[:200]))
-        except Exception:
-            pass
+    except Exception:
+        rows = []
+    _out = []
     _out = []
     for r in reversed(rows or []):
         _d = str(r.get("date") or "")[:10]
@@ -309,25 +290,6 @@ def _assemble(rows, channel, start_date, end_date):
                      "month": _funnel_range(d30, today_s)}
     if start_date and end_date:
         period_funnel["custom"] = _funnel_range(start_date, end_date)
-
-    # 健康分快照(趋势数据源): 每日 upsert(首次 summary 请求记录当天分, 历史积累)
-    try:
-        _hs = health.get("score")
-        execute("INSERT INTO health_snapshot(`date`, channel, score, own_score, platform_score, bc_score) "
-                "VALUES(%s,%s,%s,%s,%s,%s) "
-                "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
-                "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
-                [today_s, channel, int(_hs) if _hs is not None else -1,
-                 int((health.get("own") or {}).get("score") or -1),
-                 int((health.get("platform") or {}).get("score") or -1),
-                 int((health.get("bc") or {}).get("score") or -1)])
-    except Exception as _hsnap:
-        try:
-            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
-                    "VALUES('health_snap','error',%s,%s,'dash')",
-                    ("health_snapshot upsert 失败", str(_hsnap)[:200]))
-        except Exception:
-            pass
 
     return {"summary": summary, "periods": periods, "trend": trend_data,
             "funnel": funnel_res, "period_funnel": period_funnel, "health_index": health, "stores": stores,
