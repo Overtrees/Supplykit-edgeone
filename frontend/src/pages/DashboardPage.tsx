@@ -628,6 +628,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllLowStock(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+          <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
         </div>
       </div>}
 
@@ -651,6 +653,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllProc(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+          <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
         </div>
       </div>}
 
@@ -674,6 +678,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllOther(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+          <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
         </div>
       </div>}
 
@@ -705,6 +711,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllRisk(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+          <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
         </div>
       </div>}
 
@@ -722,6 +730,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           <div onClick={function(){setShowAllOut(false)}} className="clickable sheet-close" style={{marginTop:8}}>
             <span style={{fontSize:'var(--font-15)',fontWeight:600,color:'#fff'}}>关闭</span>
           </div>
+          {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+          <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
         </div>
       </div>}
 </>

@@ -441,7 +441,7 @@ export default function RulesPage() {
           </div>
         </div>
         <div style={{display:'flex',gap:8,flexShrink:0,alignItems:'flex-start'}}>
-          <button onClick={()=>{setTestRule(rule);setTestParams(rule.params||{});setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0,adj_dos:'',buffer:'',health_score:100});setTestResult(null)}} className="clickable" style={{fontSize:'var(--font-13)',padding:'6px 14px',minHeight:36,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
+          <button onClick={()=>{setTestRule(rule);setTestParams(function(){try{const _p = typeof rule.params === 'string' ? JSON.parse(rule.params || '{}') : (rule.params || {}); return (_p && typeof _p === 'object' && !Array.isArray(_p)) ? _p : {}}catch{return {}}}());setTestInv({available_qty:0,safety_qty:0,in_transit_qty:0,warehouse_type:condInfo.warehouse||'',days_since_last:0,order_quantity:0,adj_dos:'',buffer:'',health_score:100});setTestResult(null)}} className="clickable" style={{fontSize:'var(--font-13)',padding:'6px 14px',minHeight:36,borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer',fontWeight:600}}>测试</button>
 
         </div>
         </div>
@@ -564,7 +564,7 @@ export default function RulesPage() {
     {testRule && <>
       <div onClick={()=>setTestRule(null)} style={{position:'fixed',inset:0,background:'transparent',zIndex:9998}} />
       <div style={{position:'fixed',left:0,right:0,bottom:'calc(env(safe-area-inset-bottom) + 14px)',zIndex:9999,display:'flex',justifyContent:'center',padding:'0 14px',pointerEvents:'none'}}>
-      <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px calc(14px + env(safe-area-inset-bottom))",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
+      <div className="material-regular" style={{width:"100%",maxWidth:600,borderRadius:'var(--radius-lg)',padding:"18px 14px 12px",boxShadow:"var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)",pointerEvents:"auto",maxHeight:"70vh",overflowY:"auto"}}>
         <div style={{fontSize:'var(--font-18)',fontWeight:700,marginBottom:12,textAlign:'center',color:'var(--text)'}}>规则测试</div>
         <div style={{textAlign:'center',fontSize:'var(--font-sm)',color:'var(--muted2)',marginBottom:14}}>{testRule.name}</div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
@@ -623,6 +623,8 @@ export default function RulesPage() {
             </div>}
           </div>
         )}
+        {/* iOS 安全区占位块(滚动容器 padding-bottom 不参与滚动, 内容占位保证滚到底仍留白) */}
+        <div style={{height:'calc(14px + env(safe-area-inset-bottom, 0px))',flexShrink:0}} />
       </div>
     </div>
     </>}
