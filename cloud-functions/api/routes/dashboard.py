@@ -46,8 +46,13 @@ def _daily_maintenance():
                 "GROUP BY DATE(ordered_at), channel, sku, warehouse "
                 "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
                 [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
-    except Exception:
-        pass
+    except Exception as _me:
+        try:
+            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('maint','error',%s,%s,'dash')",
+                    ("daily_maintenance 失败", str(_me)[:200]))
+        except Exception:
+            pass
 
 
 def _sync_health_snapshot(channel, health):
