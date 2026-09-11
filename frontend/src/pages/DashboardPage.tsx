@@ -481,7 +481,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 {(() => {
                   const _key = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
                   const _trend = (Array.isArray(healthTrend) ? healthTrend : []).filter(x => x[_key] != null && x[_key] > 0)
-                  if (_trend.length < 2) return null
+                  if (_trend.length < 2) return <div style={{marginTop:8,fontSize:'var(--font-10)',color:'var(--muted2)',textAlign:'center'}}>健康趋势积累中 · 每日记录，明日可见曲线</div>
                   return <div style={{marginTop:6,height:40}}>
                     <Chart option={{
                       grid: { left: 0, right: 0, top: 4, bottom: 0 },
