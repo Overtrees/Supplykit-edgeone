@@ -28,13 +28,29 @@ _SUMMARY_TTL = 30
 @router.get("/dashboard/health-trend")
 @traced
 def health_trend(channel: str = "jd", days: int = 14):
-    """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)"""
+    """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)
+    主动兜底: 今天无记录时立即计算健康分入库(不依赖 summary upsert 的实例路径), 保证趋势持续积累"""
     try:
         rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
                      "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
                      [channel, min(int(days), 60)])
+        if not rows or str(rows[0].get("date") or "")[:10] != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            _h = _health_index(channel)
+            _sc = _h.get("score")
+            execute("INSERT INTO health_snapshot(`date`, channel, score, own_score, platform_score, bc_score) "
+                    "VALUES(%s,%s,%s,%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
+                    "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
+                    [datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel,
+                     int(_sc) if _sc is not None else -1,
+                     int((_h.get("own") or {}).get("score") or -1),
+                     int((_h.get("platform") or {}).get("score") or -1),
+                     int((_h.get("bc") or {}).get("score") or -1)])
+            rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
+                         "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
+                         [channel, min(int(days), 60)])
     except Exception:
-        rows = []
+        pass
     _out = []
     for r in reversed(rows or []):
         _d = str(r.get("date") or "")[:10]
