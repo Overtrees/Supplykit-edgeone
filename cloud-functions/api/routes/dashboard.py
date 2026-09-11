@@ -30,8 +30,8 @@ _SUMMARY_TTL = 30
 def health_trend(channel: str = "jd", days: int = 14):
     """健康分数趋势(近 N 天每日 score/own/platform/bc, 旧→新; 数据源 health_snapshot)"""
     try:
-        rows = query("SELECT date, score, own_score, platform_score, bc_score "
-                     "FROM health_snapshot WHERE channel=%s ORDER BY date DESC LIMIT %s",
+        rows = query("SELECT `date`, score, own_score, platform_score, bc_score "
+                     "FROM health_snapshot WHERE channel=%s ORDER BY `date` DESC LIMIT %s",
                      [channel, min(int(days), 60)])
     except Exception:
         rows = []
@@ -292,7 +292,7 @@ def _assemble(rows, channel, start_date, end_date):
     # 健康分快照(趋势数据源): 每日 upsert(首次 summary 请求记录当天分, 历史积累)
     try:
         _hs = health.get("score")
-        execute("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
+        execute("INSERT INTO health_snapshot(`date`, channel, score, own_score, platform_score, bc_score) "
                 "VALUES(%s,%s,%s,%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
                 "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
