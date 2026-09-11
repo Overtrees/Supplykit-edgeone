@@ -1,3 +1,13 @@
+## 2026-09-11: Makers schedules 定时任务 3 bug 全修复(405 GET 触发 / _log 吞日志 / 同名改 cron 不重建) + 调度探针 + cron 全链路闭环实证
+> **主线**: feat/edgeone, commits 92507a00→453f30e1(应用层维护兜底 → daily-rules 兜底 → 双方法路由 → _log 参数化)。
+> **验证**: local_test 91/91 + 3.10 语法门禁 + 线上手动/自动全链路(13:54 平台自动触发成功写日志)。
+
+### 定时任务(重点)
+- **平台调度从未"未触发"——是 3 个 bug 叠加致全部 cron 静默失败**: ①平台用 GET 触发(文档默认 POST 不符) → POST-only 路由 405 ②`_log` 格式化 TypeError 吞掉全部 cron 日志(质量日志无记录 ≠ 未触发) ③同名任务改 cron 平台不重建(换名即触发)
+- **修复+实证**: 8 路由改 `api_route(methods=[GET,POST])`(72a8c4d9) / _log 参数化+异常自记(453f30e1) / schedule-ping-2 新任务名当日触发(13:54 北京, id 1560012)
+- **schedule-ping-2 保留为常驻调度探针**(每日 13:55 写日志); 7 个正式任务明天起自动执行; 应用层兜底(快照自愈+daily-rules guard)与平台 cron 双保险
+- 详见 docs/DEVELOPMENT.md §15.29
+
 ## 2026-09-10: 清洗导入全链路打磨(UI/UX+解析治本) + 设计系统收敛(hue 方法论) + 看板图表修复 + 动态列/列映射架构
 > **主线**: feat/edgeone, 当日 31 commit(导入功能/解析修复→映射页 UI 重构→列映射/动态列架构→设计系统 P0/P1/P2→看板图表修复)。
 > **验证**: tsc 0 errors + local_test 91/91 + 线上冒烟/浏览器验证。

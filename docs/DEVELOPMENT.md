@@ -704,3 +704,14 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **圆角档位收敛红线**: 收敛不是全并入统一值——**业务/层级专属档要保留**(看板小卡 26 是专属档, 曾误并入 24 属过度收敛已恢复); token 删除前 grep 全库(tsx+css) 零引用才删; 卡片内 absolute 伪元素(::before 高光)圆角需与本体同步(小卡 overflow:hidden 裁剪)
 - **架构取舍(动态自定义列)**: ext_json 数据链路(表补列/清洗写入保全自定义字段/接口返回/custom-columns 配置)保留为基础设施; 前端动态列 UI 因**低频 + 一次性补列更划算**(30分钟 vs 常驻功能 3-4 倍成本)而回退 — 新增列需求走一次性补列流程
 - **交互约定**: 模版管理/状态映射等页面工具入口放锤子菜单并按**步骤+导入类型**条件显示(hammerCleansingStep 同步); 底部弹窗统一看板'还有N条'同款; 触达热区 minHeight32; 动效 --motion-fast .15s
+
+### 15.29 Makers schedules 定时任务 3 bug 全修复 + 调度探针(2026-09-11)
+> 背景: 质量日志无 cron 记录曾被误判"平台调度从未触发"→ 平台控制台"日志分析"页发现 `scfRequestId + statusCode=405` 实锤**调度一直在触发**。3 个 bug 全部线上实证修复。
+
+- **Bug1 平台调度用 GET 触发(405 根因)**: 官方文档 edgeone-json 写 method **默认 POST**, 但平台实际以 **GET** 发起(SFC 定时触发器默认 GET) → 8 个 `@router.post` cron 路由全 FastAPI 405 静默失败, 路由逻辑从未执行。修复: 全部改 `@router.api_route(methods=["GET","POST"])`(72a8c4d9)。**教训: Makers schedules 触发方法与文档不符, cron 路由必须双方法; 平台请求级观测只有控制台日志分析(保留 24h, 无 API)**
+- **Bug2 `_log` 格式化 TypeError 吞日志**: `execute("...VALUES('cron','%s',%s,%s)" % level, ...)` —— 3 个 %s 单值格式化 → TypeError 被 `except Exception: pass` 吞 → **所有 cron 日志(除直接 execute 的 risk_summary)从未写入**。修复: 参数化 + 异常自记(453f30e1)。**教训: quality_logs 无记录 ≠ 调度未触发; except pass 会掩盖日志链路自身故障, 日志写入必须可自证**
+- **Bug3 同名任务改 cron 疑似不重建**: schedule-ping-test `35 12`→`30 13` 后 13:30 未触发(12:35 旧注册仍工作); 换新名 schedule-ping-2(13:55) 当日即触发(1560012)。**改 cron 建议换新任务名**
+- **验证链**: 12:35 平台 405(旧 URL, 控制台日志) → 13:32 手动 405 对照(旧部署 URL 无 GET) → 13:39/13:45 手动 GET 200(新部署, 模拟平台调度方式) → 13:50 应用层兜底 daily-rules 首跑(dash 完成日志) → **13:54 平台自动触发 schedule-ping-2 成功写日志(全链路闭环)**
+- **调度连通性可观测方案**: 保留 `schedule-ping-2`(每日 13:55 北京 → /api/cron/ping)为**常驻探针**, 任何调度问题通过 quality_logs 最新 ping 记录 5 分钟定位; 平台侧仍无 schedules 查询/日志 API
+- **双保险运行**: 7 个正式任务(archive 1:05/cleanup-logs 3:05/freshness 3:10/snapshot 3:35/daily-rules 4:05/recycle 4:35/push-alerts 8:30 北京)现已随双方法修复自动执行; 应用层兜底(_daily_maintenance 快照自愈 + _daily_rules_guard 后台线程评估, maintenance_log 抢占)与平台 cron 双跑, 幂等可接受
+- **应用层兜底设计**: summary 请求时 `INSERT IGNORE maintenance_log(date+task)` 抢占(多实例安全) → `threading.Thread` 后台执行 run_daily_rules(不阻塞响应) → 失败 DELETE 标记下次重试; run_daily_rules 抽为同步函数供路由与应用层共用
