@@ -300,8 +300,13 @@ def _assemble(rows, channel, start_date, end_date):
                  int((health.get("own") or {}).get("score") or -1),
                  int((health.get("platform") or {}).get("score") or -1),
                  int((health.get("bc") or {}).get("score") or -1)])
-    except Exception:
-        pass
+    except Exception as _hsnap:
+        try:
+            execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                    "VALUES('health_snap','error',%s,%s,'dash')",
+                    ("health_snapshot upsert 失败", str(_hsnap)[:200]))
+        except Exception:
+            pass
 
     return {"summary": summary, "periods": periods, "trend": trend_data,
             "funnel": funnel_res, "period_funnel": period_funnel, "health_index": health, "stores": stores,
