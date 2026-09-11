@@ -609,6 +609,18 @@ def _compute_accel(channel, now, ratio, min_qty):
     return out
 
 
+def _grade_risk(adj_dos, buffer, lit, orange_slack=1.0, buffer_orange=1.2, buffer_yellow=1.0):
+    """濒临断货三级分级(纯函数, P2 单测面; 供应链时间线优先):
+    red=可售天数击穿补货周期 / orange=逼近周期且缓冲破位 / yellow=缓冲破位但时间尚够"""
+    if adj_dos <= lit:
+        return True, "red"
+    if adj_dos <= lit + orange_slack and buffer <= buffer_orange:
+        return True, "orange"
+    if buffer <= buffer_yellow:
+        return True, "yellow"
+    return False, None
+
+
 def _stock_risk(channel, full: int = 0):
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
     from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
@@ -729,14 +741,7 @@ def _stock_risk(channel, full: int = 0):
         return otif_map.get(sup, 1.0) if sup else 1.0
 
     def _grade(adj_dos, buffer, lit):
-        """三级分级(供应链时间线优先), 返回 (入选?, level); 阈值可由规则页'看板计算'配置"""
-        if adj_dos <= lit:
-            return True, "red"
-        if adj_dos <= lit + orange_slack and buffer <= buffer_orange:
-            return True, "orange"
-        if buffer <= buffer_yellow:
-            return True, "yellow"
-        return False, None
+        return _grade_risk(adj_dos, buffer, lit, orange_slack, buffer_orange, buffer_yellow)
 
     # C 维度(传统多仓: 逐仓粒度 —— 一个 SKU 一个仓库一行, 该仓库存/该仓日销/该仓可撑天数)
     c_items = []

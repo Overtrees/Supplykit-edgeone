@@ -418,5 +418,16 @@ check("rules 字符串参数 params.lit '3' 数值化比较", _check_condition(
       {"left": "inv.adj_dos", "op": "<=", "right": "params.lit"},
       {"inv": {"adj_dos": 2.5}, "params": {"lit": "3"}}), "字符串参数未数值化")
 
+# ── P2 核心算法单测: 濒临断货三级分级边界(_grade_risk 纯函数) ──
+from routes.dashboard import _grade_risk
+_g = _grade_risk
+check("grade red: adj_dos<lit", _g(2.0, 10.0, 3.0) == (True, "red"), str(_g(2.0, 10.0, 3.0)))
+check("grade red 边界: adj_dos==lit", _g(3.0, 10.0, 3.0) == (True, "red"), str(_g(3.0, 10.0, 3.0)))
+check("grade orange: 逼近+缓冲破位", _g(3.5, 1.0, 3.0, 1.0, 1.2, 1.0) == (True, "orange"), str(_g(3.5, 1.0, 3.0, 1.0, 1.2, 1.0)))
+check("grade orange 边界: adj_dos==lit+slack 且 buffer<=orange", _g(4.0, 1.2, 3.0, 1.0, 1.2, 1.0) == (True, "orange"), str(_g(4.0, 1.2, 3.0, 1.0, 1.2, 1.0)))
+check("grade yellow: 缓冲破位但时间尚够", _g(5.0, 0.9, 3.0, 1.0, 1.2, 1.0) == (True, "yellow"), str(_g(5.0, 0.9, 3.0, 1.0, 1.2, 1.0)))
+check("grade 不入选: 缓冲充足", _g(5.0, 2.0, 3.0, 1.0, 1.2, 1.0) == (False, None), str(_g(5.0, 2.0, 3.0, 1.0, 1.2, 1.0)))
+check("grade 不入选: 逼近但缓冲未破位", _g(3.5, 1.5, 3.0, 1.0, 1.2, 1.0) == (False, None), str(_g(3.5, 1.5, 3.0, 1.0, 1.2, 1.0)))
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
