@@ -4,7 +4,7 @@ import time as _time
 
 from fastapi import APIRouter
 
-from db import query, one
+from db import query, one, execute
 from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced
 
 router = APIRouter(tags=["dashboard"])
