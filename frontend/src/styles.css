@@ -62,7 +62,7 @@ input,select,button,textarea{font-family:inherit;font-size:16px}input[type="file
 .icon{color:var(--text);flex-shrink:0}
 .icon-muted{color:var(--muted2);flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
 /* 通用工具类 */
 .flex{display:flex}.flex-center{align-items:center}.flex-between{display:flex;justify-content:space-between;align-items:center}
@@ -212,7 +212,7 @@ input,select{background:var(--card);color:var(--text);border-color:var(--border)
 .clickable,.btn,.pill,.hammer-btn,.hammer-segment,.ds-tag,.hammer-tab{transition:background .15s,color .15s,opacity .15s,border-color .15s,transform .15s}
 .clickable:active,.hammer-btn:active,.hammer-segment:active{transform:scale(.97)}
 .material-regular{animation:sheetIn .22s ease}
-@keyframes sheetIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes sheetIn{from{opacity:0}to{opacity:1}}
 
 /* 底部弹窗操作按钮(关闭/取消/保存)——类化, 不用内联圆角 */
 .sheet-close,.sheet-cancel,.sheet-danger{border-radius:var(--radius-card);padding:12px;font-size:15px;font-weight:600;text-align:center;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center}
