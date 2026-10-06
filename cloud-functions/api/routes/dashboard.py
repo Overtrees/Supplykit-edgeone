@@ -223,7 +223,7 @@ def _build_summary(channel, start_date, end_date):
             "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
             "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
             (channel, today + " 00:00:00"))
-        return _assemble(agg + today_rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+        return _assemble(list(agg) + list(today_rows), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
         "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
