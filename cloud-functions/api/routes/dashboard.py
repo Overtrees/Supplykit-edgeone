@@ -349,11 +349,14 @@ def _assemble(rows, channel, start_date, end_date):
 
     periods = {
         "today": {"gmv": tg, "orders": to, "days": 1, "prev_gmv": pg, "prev_orders": po,
-                  "net_gmv": round(tg - _refund(today_s, today_s), 2), "subsidy_amount": round(_sub(today_s, today_s), 2)},
+                  "net_gmv": round(tg - _refund(today_s, today_s), 2), "subsidy_amount": round(_sub(today_s, today_s), 2),
+                  "payout": round(tg - _refund(today_s, today_s) - _sub(today_s, today_s), 2)},
         "week": {"gmv": wg, "orders": wo, "days": 7, "prev_gmv": pwg, "prev_orders": pwo,
-                 "net_gmv": round(wg - _refund(d7, today_s), 2), "subsidy_amount": round(_sub(d7, today_s), 2)},
+                 "net_gmv": round(wg - _refund(d7, today_s), 2), "subsidy_amount": round(_sub(d7, today_s), 2),
+                 "payout": round(wg - _refund(d7, today_s) - _sub(d7, today_s), 2)},
         "month": {"gmv": mg, "orders": mo, "days": 30, "prev_gmv": pmg, "prev_orders": pmo,
-                  "net_gmv": round(mg - _refund(d30, today_s), 2), "subsidy_amount": round(_sub(d30, today_s), 2)},
+                  "net_gmv": round(mg - _refund(d30, today_s), 2), "subsidy_amount": round(_sub(d30, today_s), 2),
+                  "payout": round(mg - _refund(d30, today_s) - _sub(d30, today_s), 2)},
     }
 
     health = _health_index(channel)
@@ -377,13 +380,17 @@ def _assemble(rows, channel, start_date, end_date):
 
     # 周期店铺(前端店铺 GMV 卡周期联动)
     def _stores_range(d0, d1):
-        sg = {}
+        sg = {}; srf = {}; ssb = {}
         for (d, st, s2), (gv, sb, cn) in day_rows.items():
-            if d0 <= (d or "") <= d1 and st in _PAID:
-                sg[s2] = sg.get(s2, 0) + gv
+            if d0 <= (d or "") <= d1:
+                if st in _PAID:
+                    sg[s2] = sg.get(s2, 0) + gv
+                    ssb[s2] = ssb.get(s2, 0) + sb
+                if st == "申请退款":
+                    srf[s2] = srf.get(s2, 0) + gv
         return [{"name": k, "gmv": round(v, 2),
-                 "net_gmv": round(v - store_refund.get(k, 0), 2),
-                 "payout": round(v - store_refund.get(k, 0) - store_subsidy.get(k, 0), 2)}
+                 "net_gmv": round(v - srf.get(k, 0), 2),
+                 "payout": round(v - srf.get(k, 0) - ssb.get(k, 0), 2)}
                 for k, v in sorted(sg.items(), key=lambda x: -x[1])]
 
     periods["today_trend"] = _trend_range(today_s, today_s)
@@ -396,20 +403,26 @@ def _assemble(rows, channel, start_date, end_date):
         _br = query(
             "SELECT COALESCE(p.brand,'') AS brand, "
             "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
-            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g "
+            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
+            "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
+            "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
+            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
             "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
             "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
-            "AND o.ordered_at>=%%s GROUP BY p.brand" % _status_cond(),
+            "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
             [channel, d60 + " 00:00:00"])
         for _r in _br:
             _b = _r.get("brand") or "未分类"
             if not _b or _b == "未分类":
                 continue
-            brands_map[_b] = round(float(_r.get("g") or 0), 2)
+            brands_map[_b] = {"g": round(float(_r.get("g") or 0), 2),
+                              "rf": round(float(_r.get("rf") or 0), 2),
+                              "sb": round(float(_r.get("sb") or 0), 2)}
     except Exception:
         pass
-    brands = [{"name": k, "gmv": v, "net_gmv": v, "payout": v}
-              for k, v in sorted(brands_map.items(), key=lambda x: -x[1])]
+    brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
+              "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
+              for k, v in sorted(brands_map.items(), key=lambda x: -x[1]["g"])]
     def _brands_range(d0):
         """按起始日聚合品牌 GMV(周期联动)"""
         try:
@@ -417,17 +430,23 @@ def _assemble(rows, channel, start_date, end_date):
             for _r2 in query(
                     "SELECT COALESCE(p.brand,'') AS brand, "
                     "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
-                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g "
+                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
+                    "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
+                    "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
+                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
                     "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
                     "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
-                    "AND o.ordered_at>=%%s GROUP BY p.brand" % _status_cond(),
+                    "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
                     [channel, d0 + " 00:00:00"]):
                 _b = _r2.get("brand") or ""
                 if not _b or _b == "未分类":
                     continue
-                _bm[_b] = round(float(_r2.get("g") or 0), 2)
-            return [{"name": k, "gmv": v, "net_gmv": v, "payout": v}
-                    for k, v in sorted(_bm.items(), key=lambda x: -x[1])]
+                _bm[_b] = {"g": round(float(_r2.get("g") or 0), 2),
+                           "rf": round(float(_r2.get("rf") or 0), 2),
+                           "sb": round(float(_r2.get("sb") or 0), 2)}
+            return [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
+                     "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
+                    for k, v in sorted(_bm.items(), key=lambda x: -x[1]["g"])]
         except Exception:
             return []
     period_brands = {"today": _brands_range(today_s),
@@ -443,7 +462,8 @@ def _assemble(rows, channel, start_date, end_date):
                              "days": (datetime.strptime(end_date, "%Y-%m-%d") - datetime.strptime(start_date, "%Y-%m-%d")).days + 1,
                              "prev_gmv": 0, "prev_orders": 0,
                              "net_gmv": round(_cg - _refund(start_date, end_date), 2),
-                             "subsidy_amount": round(_sub(start_date, end_date), 2)}
+                             "subsidy_amount": round(_sub(start_date, end_date), 2),
+                             "payout": round(_cg - _refund(start_date, end_date) - _sub(start_date, end_date), 2)}
         period_stores["custom"] = _stores_range(start_date, end_date)
         period_brands["custom"] = _brands_range(start_date)
     def _funnel_range(d0, d1):
