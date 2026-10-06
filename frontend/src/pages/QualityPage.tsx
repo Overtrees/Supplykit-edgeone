@@ -23,13 +23,14 @@ export default function QualityPage() {
   const [moreLoading, setMoreLoading] = useState(false)
   const pageRef = useRef(1)
   const reqSeq = useRef(0)
+  const [scope, setScope] = useState('')   // 日志分级: ''全部 / user用户层 / dev开发者层
 
   // 分页加载(>200 条不再截断, 底部加载更多)
   const load = (p) => {
     const seq = ++reqSeq.current
     if (p === 1) setLd(true)
     else setMoreLoading(true)
-    api.get('/api/quality-logs?page=' + p + '&page_size=' + PAGE_SIZE)
+    api.get('/api/quality-logs?page=' + p + '&page_size=' + PAGE_SIZE + '&scope=' + scope)
       .then(r => {
         if (seq !== reqSeq.current) { setLd(false); setMoreLoading(false); return }
         const d = r.data || {}
@@ -42,9 +43,16 @@ export default function QualityPage() {
       })
       .catch(() => { if (seq === reqSeq.current) { setLd(false); setMoreLoading(false); setList([]) } })
   }
-  useEffect(() => { setList([]); setTotal(0); load(1) }, [channelVersion])
+  useEffect(() => { setList([]); setTotal(0); load(1) }, [channelVersion, scope])
 
-  if (ld && list.length === 0) return <div className="card"><div className="section-title">{t("nav.quality")}</div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
+  if (ld && list.length === 0) return <div className="card"><div className="section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>{t("nav.quality")}
+            <span style={{display:'inline-flex',gap:2,background:'var(--bg)',borderRadius:'var(--radius-full)',padding:2}}>
+              {['','user','dev'].map(s => (
+                <span key={s} onClick={()=>setScope(s)} className="clickable"
+                  style={{fontSize:'var(--font-9)',padding:'2px 6px',borderRadius:'var(--radius-full)',cursor:'pointer',fontWeight:scope===s?600:400,background:scope===s?'var(--card)':'transparent',color:scope===s?'var(--text)':'var(--muted2)',whiteSpace:'nowrap'}}>{s===''?'全部':s==='user'?'用户':'开发者'}</span>
+              ))}
+            </span>
+          </div><div>{[1,2,3].map(i => <div key={i} className="skeleton" style={{height:36,marginBottom:4}} />)}</div></div>
 
   const groups = {}
   for (const x of list) {
@@ -75,7 +83,14 @@ export default function QualityPage() {
   }
 
   return <div className="card">
-    <div className="section-title">{t("nav.quality")}</div>
+    <div className="section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>{t("nav.quality")}
+            <span style={{display:'inline-flex',gap:2,background:'var(--bg)',borderRadius:'var(--radius-full)',padding:2}}>
+              {['','user','dev'].map(s => (
+                <span key={s} onClick={()=>setScope(s)} className="clickable"
+                  style={{fontSize:'var(--font-9)',padding:'2px 6px',borderRadius:'var(--radius-full)',cursor:'pointer',fontWeight:scope===s?600:400,background:scope===s?'var(--card)':'transparent',color:scope===s?'var(--text)':'var(--muted2)',whiteSpace:'nowrap'}}>{s===''?'全部':s==='user'?'用户':'开发者'}</span>
+              ))}
+            </span>
+          </div>
     {list.length === 0 ? (
       <div className="small muted" style={{padding:24,textAlign:'center'}}>{t("quality.empty")}</div>
     ) : (

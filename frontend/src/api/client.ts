@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { reportError } from './logger'
 
 /* eslint-disable no-console -- API 调试日志(开发期保留, 便于追接口链路) */
 const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
@@ -74,6 +75,12 @@ instance.interceptors.response.use(
     const key = cacheKey(cfg.method || 'get', cfg.url || '', cfg.params)
     inflight.delete(key)
     console.debug(`[API] ${(cfg.method||'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
+    // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
+    const status = (error.response || {}).status
+    if (!status || status >= 500) {
+      reportError('api_http_error', ((error.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
+        status ? ('HTTP ' + status + ' ' + JSON.stringify(error.response?.data || '').slice(0, 400)) : 'network-error', status && status >= 500 ? 'error' : 'warning')
+    }
     return Promise.reject(error)
   }
 )

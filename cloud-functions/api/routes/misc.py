@@ -10,17 +10,56 @@ router = APIRouter(tags=["misc"])
 
 @router.get("/quality-logs")
 @traced
-def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_size: int = 0):
-    """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}"""
+def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_size: int = 0, scope: str = ""):
+    """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
+    scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
+    # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)
+    _SCOPE_TYPES = {
+        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
+                 "format_error", "field_warning", "field_error", "mapping_info"),
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
+    }
+    where = ""
+    params = []
+    if scope in _SCOPE_TYPES:
+        where = " WHERE log_type IN (%s)" % ",".join(["%s"] * len(_SCOPE_TYPES[scope]))
+        params = list(_SCOPE_TYPES[scope])
     if page > 0 and page_size > 0:
-        r = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
+        r = one("SELECT COUNT(*) AS c FROM quality_logs" + where, params) or {}
         total = int(r.get("c") or 0)
         rows = query("SELECT id, log_type, level, message, details, source, created_at FROM quality_logs "
-                     "ORDER BY id DESC LIMIT %s OFFSET %s", [page_size, (page - 1) * page_size])
+                     + where + " ORDER BY id DESC LIMIT %s OFFSET %s", params + [page_size, (page - 1) * page_size])
         return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
     rows = query("SELECT id, log_type, level, message, details, source, created_at FROM quality_logs "
-                 "ORDER BY id DESC LIMIT %s", [limit])
+                 + where + " ORDER BY id DESC LIMIT %s", params + [limit])
     return ok(rows)
+
+
+@router.post("/logs/frontend")
+@traced
+async def frontend_log(request: Request):
+    """前端异常统一收口: JS 错误/未处理 Promise 拒绝/组件渲染错误/API HTTP 错误 → quality_logs(source=frontend)
+    供开发者排查前端问题(用户层看不到); 限长防滥用"""
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    msg = (d.get("message") or "").strip()[:200]
+    if not msg:
+        return ok({})
+    lt = (d.get("log_type") or "frontend_error")[:40]
+    det = (d.get("details") or "")[:800]
+    _url = (d.get("url") or "")[:200]
+    try:
+        execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                "VALUES(%s,%s,%s,%s,'frontend')",
+                (lt, d.get("level") or "error",
+                 msg + (" @" + _url[-80:] if _url else ""), det))
+    except Exception:
+        pass
+    return ok({})
 
 
 @router.get("/monitor")

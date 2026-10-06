@@ -1,6 +1,7 @@
 import React from 'react'
 import { IconAlert } from './Icons'
 import { t } from "../locale"
+import { reportError } from '../api/logger'
 
 interface ErrorBoundaryProps { children: React.ReactNode }
 interface ErrorBoundaryState { err: Error | null }
@@ -12,6 +13,10 @@ interface ErrorBoundaryState { err: Error | null }
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { err: null }
   static getDerivedStateFromError(err: Error): ErrorBoundaryState { return { err } }
+  componentDidCatch(err: Error, info: React.ErrorInfo) {
+    // 统一收口: 组件渲染错误上报(开发者层)
+    reportError('component_error', err.message || String(err), ((err.stack || '') + '\n' + (info.componentStack || '')).slice(0, 800))
+  }
   render() {
     if (this.state.err) {
       return (

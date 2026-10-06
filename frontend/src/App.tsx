@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react"
 import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
+import { reportError } from './api/logger'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
 import ProductPage from './pages/ProductPage'
 import SupplierPage from './pages/SupplierPage'
@@ -57,6 +58,24 @@ export default function App() {
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
   const [taskVersion, setTaskVersion] = useState(0)
   const lastTaskSig = useRef('')
+  // 全局异常统一收口(2026-09-15): JS 错误/未处理 Promise 拒绝 → 上报 quality_logs(source=frontend, 开发者层)
+  useEffect(() => {
+    const onErr = (e: ErrorEvent) => {
+      if (e.message) reportError('window_error', e.message, (e.filename || '') + ':' + (e.lineno || ''))
+    }
+    const onRej = (e: PromiseRejectionEvent) => {
+      const r = e.reason
+      reportError('unhandled_rejection',
+        (r && (r.message || String(r))) || 'Promise rejected',
+        r && r.stack ? String(r.stack).slice(0, 800) : '')
+    }
+    window.addEventListener('error', onErr)
+    window.addEventListener('unhandledrejection', onRej)
+    return () => {
+      window.removeEventListener('error', onErr)
+      window.removeEventListener('unhandledrejection', onRej)
+    }
+  }, [])
   useEffect(() => {
     const check = setInterval(() => {
       const seed = (() => { try { return localStorage.getItem('c_seed_task') } catch { return null } })()
