@@ -411,7 +411,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </div>
               <div style={{fontSize:'var(--font-sm)',fontWeight:500,color:'var(--muted2)'}}>{t("dash.no_alerts")}</div>
             </div>
-          : <>
+          : <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
               <div style={{marginTop:4}}>
                 <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,color:errCount+(dashboard?.summary?.active_alerts||0) > 10 ? 'var(--danger)' : (errCount+(dashboard?.summary?.active_alerts||0) > 5 ? 'var(--warning)' : 'var(--text)'),fontVariantNumeric:'tabular-nums',marginBottom:1}}>
                   {errCount+(dashboard?.summary?.active_alerts||0)}
@@ -435,7 +435,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   {otherTotal > 0 && <span onClick={function(e){e.stopPropagation();loadFullAlerts();setShowAllOther(true)}} className="clickable pill info" style={{cursor:'pointer',fontSize:'var(--font-10)',padding:'1px 8px',minHeight:'auto',lineHeight:'16px'}}>其他 {otherTotal}</span>}
                 </div>
               </>}
-            </>}
+          </div>}
       </div>
 
       {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
@@ -486,21 +486,19 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span onClick={function(){ if (_oosSrc.length > 0) setShowAllOut(true) }} className="clickable" style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--danger)',cursor: _oosSrc.length > 0 ? 'pointer' : 'default'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
                 </div>
                 <div style={{fontSize:'var(--font-10)',marginTop:2,color:'var(--muted2)'}}>{healthData.total||0} SKU</div>
-                {/* 健康分数趋势(近14天, 按当前维度) —— 原缺货前3+还有N条区 */}
+                {/* 健康分数趋势(近14天, 按当前维度) —— CSS 柱状条, 与 GMV 卡同构(22px, 档位语义色, 最新高亮) */}
                 {(() => {
                   const _key = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
                   const _trend = (Array.isArray(healthTrend) ? healthTrend : []).filter(x => x[_key] != null && x[_key] > 0)
                   if (_trend.length < 2) return null
-                  return <div style={{marginTop:6,height:40}}>
-                    <Chart option={{
-                      grid: { left: 0, right: 0, top: 4, bottom: 0 },
-                      xAxis: { type: 'category', show: false, data: _trend.map(x => String(x.date).slice(5)) },
-                      yAxis: { type: 'value', show: false, min: 0, max: 100 },
-                      series: [{ type: 'line', data: _trend.map(x => x[_key]), smooth: true, symbol: 'none',
-                        lineStyle: { width: 2, color: healthData.level === 'danger' ? 'var(--danger)' : healthData.level === 'warning' ? 'var(--warning)' : 'var(--success)' },
-                        areaStyle: { opacity: 0.12, color: healthData.level === 'danger' ? 'var(--danger)' : healthData.level === 'warning' ? 'var(--warning)' : 'var(--success)' } }],
-                      animationDuration: 400,
-                    }} height={40} />
+                  const _hColor = (s) => s >= 85 ? 'var(--success)' : s >= 60 ? 'var(--warning)' : 'var(--danger)'
+                  return <div style={{height:22,marginTop:8,display:'flex',alignItems:'flex-end',gap:1.5}}>
+                    {_trend.map((x, idx) => {
+                      const v = Number(x[_key]) || 0
+                      const h = Math.max(v / 100 * 18, 2)
+                      const isLast = idx === _trend.length - 1
+                      return <div key={idx} title={`${String(x.date).slice(5)} ${v}分`} style={{flex:1,height:h,borderRadius:'2px 2px 0 0',background:_hColor(v),opacity:isLast ? 1 : 0.6}} />
+                    })}
                   </div>
                 })()}
               </div>
@@ -521,7 +519,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </div>
               <div style={{fontSize:'var(--font-sm)',fontWeight:500,color:'var(--muted2)'}}>{t("dash.stock_ok")}</div>
             </div>
-          : <>
+          : <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
               <div style={{marginTop:4}}>
                 <div className="card-value" style={{fontSize:'clamp(17px,8cqi,28px)',fontWeight:700,lineHeight:1.15,color:'var(--danger)',fontVariantNumeric:'tabular-nums',marginBottom:1}}>{_r.total}</div>
                 <div className="card-sub" style={{marginTop:0,fontSize:'var(--font-xs)',color:'var(--muted)',lineHeight:1.4}}>{t("dash.min_days")} {_r.items[0].days_to_empty} {t("dash.days_out")}</div>
@@ -546,7 +544,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               {_r.total > 3 && <button onClick={()=>{loadFullRisk();setShowAllRisk(true)}} aria-label={`还有 ${_r.total - 3} 条`} className="clickable" style={{width:'100%',padding:'4px 0 0',border:'none',borderRadius:0,background:'transparent',color:'var(--primary)',cursor:'pointer',fontFamily:'inherit',textAlign:'left',flexShrink:0,display:'flex',alignItems:'center'}}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
               </button>}
-            </>}
+          </div>}
       </div>
     </div>
 
