@@ -94,10 +94,10 @@ async def cron_freshness(request: Request):
 @router.api_route("/cron/archive", methods=["GET","POST"])
 @traced
 async def cron_archive(request: Request):
-    """归档 90 天前订单 → daily_stats(写入成功才删除原订单, 防数据丢失)"""
+    """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)"""
     if not _authed(request):
         return fail("未授权", 401)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
     old = query(
         "SELECT id, ordered_at, channel, store, sku, order_status, total_amount, quantity "
         "FROM orders WHERE DATE(ordered_at) < %s AND (deleted_at IS NULL OR deleted_at='')",
