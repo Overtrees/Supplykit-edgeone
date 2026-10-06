@@ -403,9 +403,9 @@ def _assemble(rows, channel, start_date, end_date):
     try:
         _br = query(
             "SELECT COALESCE(p.brand,'') AS brand, "
-            "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
+            "SUM(IF(%s, o.total_amount - COALESCE(o.discount_amount,0) "
             "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
-            "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
+            "SUM(IF(%s, COALESCE(o.subsidy_amount,0), 0)) AS sb, "
             "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
             "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
             "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
@@ -430,9 +430,9 @@ def _assemble(rows, channel, start_date, end_date):
             _bm = {}
             for _r2 in query(
                     "SELECT COALESCE(p.brand,'') AS brand, "
-                    "SUM(IF(o.order_status IN (%s), o.total_amount - COALESCE(o.discount_amount,0) "
+                    "SUM(IF(%s, o.total_amount - COALESCE(o.discount_amount,0) "
                     "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
-                    "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
+                    "SUM(IF(%s, COALESCE(o.subsidy_amount,0), 0)) AS sb, "
                     "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
                     "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
                     "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
