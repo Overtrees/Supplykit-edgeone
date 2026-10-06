@@ -235,6 +235,12 @@ def _build_summary(channel, start_date, end_date):
 
 
 def _assemble(rows, channel, start_date, end_date):
+    # 行形态归一(兼容 DictCursor list[dict] 与非 DictCursor tuple rows——列序=SELECT 顺序)
+    _cols = ("d", "order_status", "store", "g", "sub", "cnt")
+    _norm = []
+    for _r in (rows or []):
+        _norm.append(_r if isinstance(_r, dict) else dict(zip(_cols, list(_r))))
+    rows = _norm
     gmv = pending = refund = refund_amt = subsidy = total_orders = paid_orders = 0
     trend = {}
     store_gmv = {}
