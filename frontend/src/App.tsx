@@ -13,6 +13,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import OrdersPage from './pages/OrdersPage'
 import InventoryPage from './pages/InventoryPage'
 import QualityPage from './pages/QualityPage'
+import DevModePage from './pages/DevModePage'
 import SettingsPage from './pages/SettingsPage'
 import TaskPage from './pages/TaskPage'
 import LoginPage from './pages/LoginPage'
@@ -383,6 +384,7 @@ export default function App() {
       case 'quality': return wrap(<QualityPage key={pageId} />)
       case 'tasks': return wrap(<TaskPage key={pageId} />)
       case 'settings': return wrap(<SettingsPage key={pageId} />)
+      case 'devmode': return wrap(<DevModePage key={pageId} />)
       default: return null
     }
   }

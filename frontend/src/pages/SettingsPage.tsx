@@ -1,5 +1,5 @@
 import { IconCheck } from '../components/Icons'
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
@@ -190,6 +190,9 @@ export default function SettingsPage() {
   const [cacheSize, setCacheSize] = useState(0)
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   const [refreshing, setRefreshing] = useState(false)
+  // 开发者模式(彩蛋入口): 连续点版本号 6 次开启, localStorage 持久化(iOS/Android 惯例)
+  const devTap = useRef(0)
+  const [devMode, setDevMode] = useState(() => { try { return localStorage.getItem('c_dev_mode') === '1' } catch { return false } })
 
 
   const checkConnection = async () => {
@@ -335,10 +338,14 @@ export default function SettingsPage() {
         <Row label="刷新连接" onClick={checkConnection} loading={refreshing} />
         <Row label="清除本地缓存" sub={cacheSize > 0 ? `${cacheSize}KB` : '无缓存'} onClick={() => { if (cacheSize > 0) setConfirm('cache'); else toast.success('暂无缓存需要清除') }} />
         <LastRow label="回收站" sub="查看已删除的规则和订单，可恢复或永久删除" onClick={() => setConfirm('recycle')} />
+        {devMode && <LastRow label="开发者模式" sub="版本/构建信息 · 异常日志分析" onClick={() => { try { (window as any).__setPage && (window as any).__setPage('devmode') } catch(e) {} }} />}
       </Group>
 
       <Group title="系统信息">
-        <Row label="版本号" value={`v${VERSION}`} />
+        <Row label="版本号" value={`v${VERSION}`} onClick={() => {
+            devTap.current += 1
+            if (devTap.current >= 6) { try { localStorage.setItem('c_dev_mode', '1') } catch {}; setDevMode(true); toast.success('开发者模式已开启') } else if (devTap.current >= 4) { toast.info(`再点 ${6 - devTap.current} 次开启开发者模式`) }
+          }} />
         <Row label="构建日期" value={BUILD} />
         <Row label="前端" value="React 18 + TypeScript" />
         <LastRow label="后端" value="FastAPI + TiDB · EdgeOne Makers" />
