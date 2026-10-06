@@ -418,6 +418,14 @@ def _assemble(rows, channel, start_date, end_date):
             brands_map[_b] = {"g": round(float(_r.get("g") or 0), 2),
                               "rf": round(float(_r.get("rf") or 0), 2),
                               "sb": round(float(_r.get("sb") or 0), 2)}
+        # 临时诊断(2026-10-06 品牌值排查): 记录实际执行结果
+        try:
+            _dbg = [(str(_x.get("brand") or "")[:8], round(float(_x.get("g") or 0), 1)) for _x in (_br or [])[:3]]
+            execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                    "VALUES('brand_diag','info',%s,'dash')",
+                    ("brands d60 rows=%d first=%s" % (len(_br or []), str(_dbg[:2])),))
+        except Exception:
+            pass
     except Exception:
         pass
     brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
