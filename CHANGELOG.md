@@ -1,3 +1,33 @@
+## 2026-10-06: 看板提速物化表(10s→0.77s) + 异常日志统一收口 + 回收站重构 + 开发者模式 + 数据仿真全链路 + custom 日期强实时联动
+> **主线**: feat/edgeone, commits 13091f83→764cd9bc(物化表/强实时/日志收口/dev模式/回收站/67码时间/Aggregate 降级/custom 联动/中卡统一)。
+> **验证**: local_test 98/98 + tsc 0 + eslint 0 + 线上实测(summary 0.77s→2s 强实时、custom 持久化、定时任务/健康趋势链路)。
+
+### 看板提速 + 强实时(物化表)
+- **orders_day_agg 物化日级汇总表**: summary 60 天聚合从 19 万行全表扫 → agg 3591 行(数据量降 52 倍), 非缓存 10s→0.77s; M0 启动抢注建 90 天 + 每日近3天增量 + MAX 落后重建
+- **强实时改造**: agg 覆盖 <昨天, **昨天+今天实时直查 orders**(补录/新增当日立即反映); 近2天直查失败降级仅 agg; agg 空降级直查 60 天; agg 路径整体异常降级直查——三层降级闭环
+- **行形态归一(报告 TypeError list+tuple 根治)**: 线上 today_rows 返回 tuple 行(与 DictCursor 预期 dict 不符, 机制未完全破解)——`_assemble` 行归一化(dict 直接用, tuple 按 SELECT 列序 zip 转 dict), 兼容两种真实形态不依赖类型假设
+- **排查方法论**: 报错先调接口看真实返回/完整 traceback(不本地模拟猜); 部署指纹核对(行号/代码形态); pages-api 不可达时直接轮询生产接口
+
+### 异常日志统一收口 + 开发者模式
+- **前端异常上报**: POST /api/logs/frontend → quality_logs(source=frontend)——全局捕获(window error/unhandledrejection) + ErrorBoundary componentDidCatch + axios 拦截器 5xx/网络错误, logger.ts 限频 5 分钟去重
+- **score 分级**: quality-logs scope 参数(user 业务层/dev 排查层 log_type 白名单); 质量日志页固定用户维度
+- **开发者模式**: 设置页版本号 6 次点击彩蛋 → DevModePage(连接状态 ping/环境信息/运行概况 monitor 4卡/日志分析底部弹窗 scope=dev)
+
+### 回收站重构(公共件化)
+- **RecyclePage 独立页**(App header 显示, back-btn 返回上一级 settings)+ **HammerRecycle 锤子菜单**(3按钮: 全选/取消+批量恢复一排, 永久删除单独行, 溢出保护, store 共享计数 + 事件 ref 转发单次绑定防双击抵消)
+- **ListGroup 公共组件**: Group/Row/LastRow/ListItem 抽离——设置/开发者/回收三页视觉单一来源(inline padding 0 16 / minHeight 48 / inset16 分隔线); toggleAll 空类型视为已全选
+
+### 数据域(67码/时间仿真/保留期)
+- **67 码全链路**: M1 迁移 barcode JOIN 补齐 18.7 万(pymysql %% 转义教训/WHERE 幂等/分批5万/后台线程) + **订单导入自动查补**(cleansing 写入前按 sku 查 products)——未来不再空
+- **时间仿真**: seed `_rand_hm` 8-22 点随机时分(订单/出入库) + M2/M3 历史随机化; 前端日期去 T 格式化
+- **archive 保留 90→365 天**: 容量实证(当前 85MB/5GB 1.7%, 365 天约 330MB-1.35GB 最坏 27%), 年同比价值; 超 365 天归档 daily_stats
+
+### UI 体系与 custom 联动
+- **健康卡趋势柱三段演进定稿**: 绝对比例(不可辨)→相对拉伸(恒定时矮条)→**分段敏感度**(base=5+v/100*13 绝对基础, span>5 分叠加 (v-min)/span*7 相对补偿, 柱色=档位绿橙红)
+- **custom 日期 tab 联动根治**: periods.custom 补齐(GMV 卡) + setCustomDate 持久化(刷新不丢) + **三处直连 summary(主 load/重试/静默)统一带 custom 参数**(12万↔4000 跳变根治)
+- **中卡横屏统一**: 店铺/品牌 GMV 图高 170→200 与漏斗齐平; 四小卡上松下紧统一(待处理/断货); health platform tab 样式统一; 时间 tab 语义对齐(近7天/近30天)
+- **fixed 定位回归铁律落地**: 弹窗 createPortal(document.body) + sheetIn/fadeIn 动画去 transform(纯 opacity)
+
 ## 2026-09-11: Makers schedules 定时任务 3 bug 全修复(405 GET 触发 / _log 吞日志 / 同名改 cron 不重建) + 调度探针 + cron 全链路闭环实证
 > **主线**: feat/edgeone, commits 92507a00→453f30e1(应用层维护兜底 → daily-rules 兜底 → 双方法路由 → _log 参数化)。
 > **验证**: local_test 91/91 + 3.10 语法门禁 + 线上手动/自动全链路(13:54 平台自动触发成功写日志)。

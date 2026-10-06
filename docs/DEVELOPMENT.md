@@ -735,3 +735,14 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **emoji 图标规范**: 装饰性图标一律走 `components/Icons.tsx` SVG 集(30+); **保留场景**: 文案箭头(→ 流程语义)、语义状态点(●○)、状态徽章文本(Inventory ✓正常/⚠️临近/✗否/⚫过期——带色文字非图标)、原生 option 内标记(✅⛔ 不支持 SVG)、🎉 等情感文案。新增图标先加 Icons.tsx
 - **展开更多入口统一**: 全部 ••• SVG(14px, var(--primary) 蓝, aria-label 保留)——断货/低库存/采购三卡同款
 - **fixed 定位回归铁律(09-11 事故, 排查两天)**: transform 动画在 **fixed 元素自身或其祖先**上创建包含块 → fixed 不再相对视口 → `bottom: calc(env(safe-area-inset-bottom)+14px)` 相对包含块 → 底部偏移/遮挡观感。事故源: 09-10 动效统一给页面容器 main 加 `animation:fadeIn(translateY)` + 给弹窗 `.material-regular` 加 `animation:sheetIn(translateY)`。**规则**: ①fixed 元素及其祖先链禁用 transform/filter/backdrop-filter/will-change/contain **动画**(入场动画一律**纯 opacity keyframes**) ②底部弹窗一律 `createPortal(document.body)`(脱离全部祖先) ③`:active scale` 等点击反馈在元素自身不影响自身 fixed(仅祖先影响后代) ④排查方法论: 祖先 transform/filter → body/#root height/overflow → viewport meta(viewport-fit=cover) → env safe-area → `git log -S "animation"` 定位引入 commit(回归必查最近动效/样式 commit)
+
+### 15.31 看板提速物化表 + 日志收口 + 公共件体系(2026-10-06)
+- **物化日级汇总表(orders_day_agg)模式(10s→0.77s)**: 高成本聚合(60 天 19 万行 GROUP BY)预聚到日级表(date/channel/status/store 主键)——**读取量降 52 倍**(3591 行)。**关键设计**: ①构建幂等(ON DUPLICATE 累加, 与业务 SQL 同口径 `_status_cond`) ②初始化 M0 抢注(migration_log)一次性 + 每日近3天增量 + MAX(date) 落后重建兜底 ③**强实时**: agg 覆盖 <昨天, **昨天+今天实时直查 orders**(补录/回填当日立即反映——四维实时性边界消除) ④**三层降级**: 近2天直查失败→仅 agg / agg 空→直查 60 天 / agg 路径整体异常→直查(每层 try 独立, 不阻塞看板)。**消费方统一行归一**(dict/tuple 行 zip 转 dict)防行形态差异
+- **pymysql `%` 转义铁律**: 参数化 SQL 内 `DATE_FORMAT('%%Y-%%m-%%d')` 必须 `%%`——`%` 被当格式化占位符会 "not enough arguments"(曾致迁移 INSERT IGNORE 抢注成功但 UPDATE 从未执行=假成功)。**SQL 一律 %s 参数化 + params 元组, 杜绝 Python % 预拼 SQL**
+- **聚合接口强实时规范**: 当日数据的聚合展示(看板/漏斗)直接用**源表实时查**而非物化表——物化表天然滞后, 近 N 天窗口直查是强实时标准做法(直查窗口 = 日单量级可接受)
+- **前端异常统一收口(前后端一表)**: `POST /api/logs/frontend` → quality_logs(source=frontend); 全局捕获(error/unhandledrejection/ErrorBoundary/axios 5xx) + **限频去重**(同 type+message 5 分钟 1 条内存 Map); scope 分级(user 业务层/dev 排查层 log_type 白名单)——质量日志页=用户层, 开发者页=dev 层
+- **事件联动 ref 转发铁律**: window 事件监听用 **ref 转发 + 单次绑定**(useEffect 空依赖绑一次, handler 恒调 `xxRef.current`)——**依赖 selected/state 重绑会出现新旧双 handler 并存, 一事件触发两次互相抵消**(回收页全选/取消第二次点击无反应根因)
+- **ListGroup 公共件(视觉统一单一来源)**: Group/Row/LastRow/ListItem——行规范(padding 0 16 / 内层 14px 0 / minHeight 48 / inset 16 分隔线), 分组卡列表不用"每行独立卡片条"模式(背景+圆角+marginBottom 内联行与分隔线行是两套风格, 必须统一)
+- **custom 日期持久化 + 参数一致**: 自定义周期 start/end 必须持久化 localStorage(刷新恢复)+ **所有 summary 请求统一带 custom 参数**(loadAll/主 load/重试/静默刷新——两套请求参数不一致→响应交替覆盖→视图跳变)
+- **健康柱分段敏感度(折中定稿)**: `base = 5 + v/100*13`(绝对基础, 分数语义) + `span>5` 时叠加 `(v-min)/span*7`(相对补偿, 大波动肉眼可见)——5 分内如实/超 5 分显著; 柱色=绝对档位(绿/橙/红)——绝对比例(0.18px/分不可辨)与纯相对拉伸(恒定时 4px 矮条)两版弱点互补
+- **订单保留期决策**: archive 90→365 天——容量实证(information_schema 85MB/5GB 上限 1.7%, 365 天约 330MB-1.35GB 最坏 27%); RU 控制(agg/快照维护窗口保持 90 天不随保留期延长); 超期归档 daily_stats(SKU 日级汇总兜底)
