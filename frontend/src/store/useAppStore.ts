@@ -69,6 +69,11 @@ export const useAppStore = create((set, get) => ({
   sidebarOpen: false,
   setSidebarOpen: (v) => set({ sidebarOpen: v }),
   hammerPanel: null,
+  // 回收页共享状态(2026-09-15: 页面与锤子菜单联动)——selected 计数 + 忙碌标志
+  recycleSel: { rules: 0, orders: 0 },
+  recycleBusy: false,
+  setRecycleSel: (sel) => set({ recycleSel: sel }),
+  setRecycleBusy: (b) => set({ recycleBusy: b }),
   setHammerPanel: (panel) => set({ hammerPanel: panel }),
   hammerSearch: '',
   setHammerSearch: (text) => set({ hammerSearch: text }),

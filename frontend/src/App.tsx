@@ -14,6 +14,7 @@ import OrdersPage from './pages/OrdersPage'
 import InventoryPage from './pages/InventoryPage'
 import QualityPage from './pages/QualityPage'
 import DevModePage from './pages/DevModePage'
+import RecyclePage from './pages/RecyclePage'
 import SettingsPage from './pages/SettingsPage'
 import TaskPage from './pages/TaskPage'
 import LoginPage from './pages/LoginPage'
@@ -24,6 +25,7 @@ import HammerProducts from './components/hammer/HammerProducts'
 import HammerInsights from './components/hammer/HammerInsights'
 import HammerCleansing from './components/hammer/HammerCleansing'
 import HammerRules from './components/hammer/HammerRules'
+import HammerRecycle from './components/hammer/HammerRecycle'
 import HammerDashboard from './components/hammer/HammerDashboard'
 import HammerInventory from './components/hammer/HammerInventory'
 import HammerOrders from './components/hammer/HammerOrders'
@@ -385,6 +387,7 @@ export default function App() {
       case 'tasks': return wrap(<TaskPage key={pageId} />)
       case 'settings': return wrap(<SettingsPage key={pageId} />)
       case 'devmode': return wrap(<DevModePage key={pageId} />)
+      case 'recycle': return wrap(<RecyclePage key={pageId} />)
       default: return null
     }
   }
@@ -426,7 +429,7 @@ export default function App() {
             /* 其他页：左侧返回按钮，右侧锤子按钮 + 渠道筛选 */
             <>
               <div className="header-left">
-                <button className="back-btn" onClick={() => navigateTo('dash')}>
+                <button className="back-btn" onClick={() => navigateTo(page === 'devmode' || page === 'recycle' ? 'settings' : 'dash')}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="19 12 5 12"/><polyline points="11 18 5 12 11 6"/></svg>
                 </button>
               </div>
@@ -493,7 +496,8 @@ export default function App() {
              page === 'inv' ? <HammerInventory channel={channel} /> :
              page === 'insights' ? <HammerInsights channel={channel} /> :
              page === 'cleansing' ? <HammerCleansing channel={channel} /> :
-             page === 'rules' ? <HammerRules channel={channel} onShowHistory={loadHistory} /> : (
+             page === 'rules' ? <HammerRules channel={channel} onShowHistory={loadHistory} /> :
+             page === 'recycle' ? <HammerRecycle /> : (
             <div style={{color:'var(--muted)',fontSize:'var(--font-13)',textAlign:'center'}}>
               <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginBottom:4}}>
                 {channel === 'jd' ? '京东' : '其他'} · {page}

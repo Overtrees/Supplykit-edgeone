@@ -1,237 +1,27 @@
-import { IconCheck } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
-import { t } from "../locale"
 import ConfirmDialog from '../components/ConfirmDialog'
+import { Group, Row, LastRow } from '../components/ListGroup'
 
 const VERSION = (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) ? __APP_VERSION__ : '2.0.0'  // 构建注入(package.json version), 发版改 package.json
 const BUILD = new Date().toISOString().slice(0,10)
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
-const Group = ({ title, children }) => (
-  <div style={{marginBottom:20}}>
-    {title && <div style={{fontSize:'var(--font-13)',fontWeight:400,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 16px 6px 16px'}}>{title}</div>}
-    <div style={{background:'var(--card)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
-      {children}
-    </div>
-  </div>
-)
-
-const Row = ({ label, value, sub, onClick, danger, loading }) => (
-  <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48,borderBottom:'1px solid var(--border)'}}>
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:'var(--font-lg)',color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
-          {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--primary)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
-          {label}
-        </div>
-        {sub && <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',marginTop:2}}>{sub}</div>}
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
-        {value && <span style={{fontSize:'var(--font-15)',color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
-        {onClick && !loading && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{flexShrink:0,opacity:0.3}}><path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-      </div>
-    </div>
-  </div>
-)
-
-const LastRow = ({ label, value, sub, onClick, danger, loading }) => (
-  <div onClick={loading ? undefined : onClick} className={onClick && !loading ? 'clickable' : ''} style={{padding:'0 16px',cursor:onClick && !loading ? 'pointer' : 'default',background:'var(--card)',opacity:loading?0.5:1}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 0',minHeight:48}}>
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:'var(--font-lg)',color:danger?'var(--danger)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:6}}>
-          {loading && <span style={{display:'inline-block',width:14,height:14,border:'2px solid var(--danger)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}} />}
-          {label}
-        </div>
-        {sub && <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)',marginTop:2}}>{sub}</div>}
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
-        {value && <span style={{fontSize:'var(--font-15)',color:'var(--muted2)',maxWidth:160,textAlign:'right',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{value}</span>}
-        {onClick && !loading && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{flexShrink:0,opacity:0.3}}><path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-      </div>
-    </div>
-  </div>
-)
-
-function RecycleBin({ onClose, toast }) {
-  const [rules, setRules] = useState([])
-  useEffect(function() {
-    const header = document.querySelector('header')
-    if (header) header.style.display = 'none'
-    return function() { if (header) header.style.display = '' }
-  }, [])
-  const [orders, setOrders] = useState([])
-  const [loading, setLoading] = useState(true)
-  // 批量操作：selected = {rules: Set<id>, orders: Set<id>}
-  const [selected, setSelected] = useState({ rules: new Set(), orders: new Set() })
-  const [batchBusy, setBatchBusy] = useState(false)
-
-  // 数据加载函数（提取自 useEffect，供初始化与批量操作后刷新复用）
-  const loadData = function() {
-    setLoading(true)
-    const _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}
-    Promise.all([
-      fetch(API + '/api/rules?channel=all&include_deleted=1', {headers:_auth}).then(function(r) { return r.json() }),
-      fetch(API + '/api/orders?page=1&page_size=200', {headers:_auth}).then(function(r) { return r.json() }),
-    ]).then(function([rData, oData]) {
-      const items = rData.data || rData || []
-      setRules(items.filter(function(x) { return x.deleted_at }))
-      const o = oData.data || oData || []
-      setOrders(Array.isArray(o) ? o.filter(function(x) { return x.deleted_at }) : [])
-      setLoading(false)
-    }).catch(function() { setLoading(false) })
-  }
-
-  useEffect(function() { loadData() }, [])
-
-  const toggleSel = function(type, id) {
-    setSelected(function(prev) {
-      const next = new Set(prev[type])
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return { ...prev, [type]: next }
-    })
-  }
-  const toggleAll = function(type, items) {
-    setSelected(function(prev) {
-      const all = items.length > 0 && items.every(function(x) { return prev[type].has(x.id) })
-      const next = new Set()
-      if (!all) items.forEach(function(x) { next.add(x.id) })
-      return { ...prev, [type]: next }
-    })
-  }
-  const batchAction = async function(type, action, label) {
-    const ids = Array.from(selected[type])
-    if (ids.length === 0) { toast.error('请先勾选要' + label + '的项'); return }
-    setBatchBusy(true)
-    try {
-      const _auth = {'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})(), 'Content-Type':'application/json'}
-      if (type === 'rules' && action === 'permanent-delete') {
-        await fetch(API + '/api/rules/batch', { method:'POST', headers:_auth, body: JSON.stringify({action:'purge', ids: ids}) })
-      } else {
-        await Promise.all(ids.map(function(id) {
-          return fetch(API + '/api/' + type + '/' + id + '/' + action, { method:'POST', headers:_auth })
-        }))
-      }
-      // toast 可能因 Context 问题不可用，try/catch 降级
-      try { toast.success(label + '完成: ' + ids.length + ' 项') } catch(e) { window.alert(label + '完成: ' + ids.length + ' 项') }
-      loadData()
-      setSelected(function(prev) {
-        const next = new Set(prev[type]); ids.forEach(function(id) { next.delete(id) })
-        return { ...prev, [type]: next }
-      })
-    } catch(e) {
-      try { toast.error(label + '失败: ' + e.message) } catch(e2) { window.alert(label + '失败: ' + e.message) }
-    }
-    setBatchBusy(false)
-  }
-  const confirmPurge = function(type) {
-    const ids = Array.from(selected[type])
-    if (ids.length === 0) { toast.error('请先勾选要永久删除的项'); return }
-    if (window.confirm('永久删除 ' + ids.length + ' 项？此操作不可撤销')) batchAction(type, 'permanent-delete', '永久删除')
-  }
-
-  const renderList = function(type, items) {
-    if (items.length === 0) return <div className="small muted" style={{padding:'20px',textAlign:'center',fontSize:'var(--font-13)'}}>{type==='rules'?t("recycle.empty_rules"):t("recycle.empty_orders")}</div>
-    const allSelected = items.length > 0 && items.every(function(x) { return selected[type].has(x.id) })
-    return <>
-      <div style={{display:'flex',gap:6,padding:'8px 4px',flexWrap:'wrap'}}>
-        <span onClick={function(){toggleAll(type, items)}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)',cursor:'pointer'}}>{allSelected ? '取消全选' : '全选'}</span>
-        <span onClick={function(){batchAction(type, 'restore', '恢复')}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--success)',cursor:'pointer'}}>批量恢复 ({selected[type].size})</span>
-        <span onClick={function(){confirmPurge(type)}} className="clickable" style={{fontSize:'var(--font-sm)',padding:'5px 12px',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--danger)',cursor:'pointer'}}>永久删除 ({selected[type].size})</span>
-      </div>
-      <div style={{background:'var(--card)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
-        {items.map(function(x) {
-          const isSel = selected[type].has(x.id)
-          return <div key={x.id} onClick={function(){toggleSel(type, x.id)}} className="clickable" style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid var(--border)',background:isSel?'rgba(29,78,216,0.08)':'transparent'}}>
-            <span style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
-              <span style={{width:18,height:18,borderRadius:'var(--radius-xs)',border:'1.5px solid',borderColor:isSel?'var(--primary)':'var(--border)',background:isSel?'var(--primary)':'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'var(--font-xs)',flexShrink:0}}>{isSel?<IconCheck size={12} />:''}</span>
-              <span style={{fontSize:'var(--font-md)',color:'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{type==='rules'?x.name:(x.order_no + ' - ' + (x.product_name||''))}</span>
-            </span>
-            {!isSel && <span style={{fontSize:'var(--font-xs)',color:'var(--muted2)',flexShrink:0,marginLeft:8}}>{x.deleted_at ? String(x.deleted_at).slice(0,10) : ''}</span>}
-          </div>
-        })}
-      </div>
-    </>
-  }
-
-  return <div style={{display:'flex',flexDirection:'column',minHeight:'100%',background:'var(--bg)',padding:'0 0 calc(0px + env(safe-area-inset-bottom, 20px))',boxSizing:'border-box'}}>
-    <div style={{position:'fixed',left:0,right:0,top:0,zIndex:5001,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px',background:'transparent'}}>
-      <div style={{fontSize:'var(--font-lg)',fontWeight:600,color:'var(--text)',padding:'0 14px',borderRadius:'var(--radius-full)',minHeight:48,display:'flex',alignItems:'center',marginLeft:16,background:'var(--bg-thin)',backdropFilter:'var(--blur-thin)',WebkitBackdropFilter:'var(--blur-thin)',border:'0.5px solid var(--border-light)'}}>{t("settings.recycle_bin")}</div>
-      <div onClick={onClose} className="clickable" style={{width:48,height:48,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',flexShrink:0,marginRight:16,background:'var(--bg-thin)',backdropFilter:'var(--blur-thin)',WebkitBackdropFilter:'var(--blur-thin)',border:'0.5px solid var(--border-light)'}}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-      </div>
-    </div>
-    <div style={{padding:'calc(env(safe-area-inset-top, 0px) + 44px) 16px 16px',maxWidth:500,margin:'0 auto',width:'100%'}}>
-    {loading ? <div style={{padding:'0 4px'}}>{[1,2,3].map(function(i) {
-      return <div key={i} style={{background:'var(--card)',borderRadius:'var(--radius-lg)',padding:16,marginBottom:8}}>
-        <div className="skeleton" style={{width:'40%',height:14,marginBottom:8}} />
-        <div className="skeleton" style={{width:'70%',height:14}} />
-      </div>
-    })}</div> : <>
-      <div style={{fontSize:'var(--font-13)',fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginBottom:0}}>{t("recycle.deleted_rules")}</div>
-      {renderList('rules', rules)}
-      <div style={{fontSize:'var(--font-13)',fontWeight:600,color:'var(--muted2)',textTransform:'uppercase',letterSpacing:0.3,padding:'0 4px 6px 4px',marginTop:16,marginBottom:0}}>{t("recycle.deleted_orders")}</div>
-      {renderList('orders', orders)}
-      {batchBusy && <div style={{textAlign:'center',padding:16,fontSize:'var(--font-sm)',color:'var(--muted2)'}}>处理中...</div>}
-    </>}
-    </div>
-  </div>
-}
 
 export default function SettingsPage() {
   const toast = useToast()
   const { channel, wsStatus } = useAppStore()
-  const [status, setStatus] = useState('检查中...')
-  const [ping, setPing] = useState(0)
-  const [lastCheck, setLastCheck] = useState('')
   const [, setDbSize] = useState('')
-  const [cacheSize, setCacheSize] = useState(0)
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
-  const [refreshing, setRefreshing] = useState(false)
   // 开发者模式(彩蛋入口): 连续点版本号 6 次开启, localStorage 持久化(iOS/Android 惯例)
   const devTap = useRef(0)
   const [devMode, setDevMode] = useState(() => { try { return localStorage.getItem('c_dev_mode') === '1' } catch { return false } })
 
 
-  const checkConnection = async () => {
-    setRefreshing(true)
-    const start = performance.now()
-    try {
-      const r = await fetch(API + '/api/insights/ping')
-      const ms = Math.round(performance.now() - start)
-      const d = await r.json()
-      setStatus(d.ok ? '正常' : '异常')
-      setPing(ms)
-      setLastCheck(new Date().toLocaleTimeString())
-      if (d.ok) toast.success('连接正常 · ' + ms + 'ms')
-    } catch {
-      setStatus('无法连接')
-      setPing(0)
-      setLastCheck(new Date().toLocaleTimeString())
-      toast.error('连接失败')
-    }
-    setRefreshing(false)
-  }
 
-  useEffect(() => {
-    checkConnection()
-    const timer = setInterval(checkConnection, 30000)
-    return () => clearInterval(timer)
-  }, [])
 
-  useEffect(() => {
-    try {
-      const s = localStorage.length
-      let total = 0
-      for (let i = 0; i < s; i++) {
-        const k = localStorage.key(i)
-        if (k) total += (localStorage.getItem(k) || '').length
-      }
-      setCacheSize(Math.round(total / 1024))
-    } catch {}
-  }, [])
 
   // 种子填充状态: 由 App 全局轮询负责(续跑有后端并发锁防护), 完成事件恢复按钮状态
   useEffect(() => {
@@ -241,20 +31,6 @@ export default function SettingsPage() {
     return () => { window.removeEventListener('seed-done', h); window.removeEventListener('seed-error', h) }
   }, [])
 
-  const clearLocalCache = () => {
-    const keys = []
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i)
-        if (k && (k.startsWith('c_cols_') || k.startsWith('c_ordered') || k.startsWith('c_replen_') || k.startsWith('c_page'))) {
-          keys.push(k)
-        }
-      }
-      keys.forEach(k => { try { localStorage.removeItem(k) } catch {} })
-      setCacheSize(0)
-      toast.success('缓存已清除')
-    } catch { toast.error('无法访问本地存储') }
-  }
 
   const [seeding, setSeeding] = useState(() => { try { return !!localStorage.getItem('c_seed_task') } catch { return false } })
   const [resetting, setResetting] = useState(false)
@@ -327,17 +103,9 @@ export default function SettingsPage() {
   }
 
   return <>
-    {confirm === 'recycle' ? <RecycleBin onClose={() => setConfirm(null)} toast={toast} /> : <div style={{padding:'16px 0',maxWidth:500,margin:'0 auto'}}>
-      <Group title="连接状态">
-        <Row label="后端服务" value={status} sub={`${ping}ms · ${lastCheck}`} />
-        <Row label="实时连接" value={wsStatus === 'connected' ? '已连接' : wsStatus === 'polling' ? '轮询中' : '已断开'} />
-        <LastRow label="当前渠道" value={channel === 'jd' ? '京东' : '其他渠道'} />
-      </Group>
-
+    <div style={{padding:'16px 0',maxWidth:500,margin:'0 auto'}}>
       <Group title="操作">
-        <Row label="刷新连接" onClick={checkConnection} loading={refreshing} />
-        <Row label="清除本地缓存" sub={cacheSize > 0 ? `${cacheSize}KB` : '无缓存'} onClick={() => { if (cacheSize > 0) setConfirm('cache'); else toast.success('暂无缓存需要清除') }} />
-        <LastRow label="回收站" sub="查看已删除的规则和订单，可恢复或永久删除" onClick={() => setConfirm('recycle')} />
+        <LastRow label="回收站" sub="查看已删除的规则和订单，可恢复或永久删除" onClick={() => { try { (window as any).__setPage && (window as any).__setPage('recycle') } catch(e) {} }} />
         {devMode && <LastRow label="开发者模式" sub="版本/构建信息 · 异常日志分析" onClick={() => { try { (window as any).__setPage && (window as any).__setPage('devmode') } catch(e) {} }} />}
       </Group>
 
@@ -346,9 +114,6 @@ export default function SettingsPage() {
             devTap.current += 1
             if (devTap.current >= 6) { try { localStorage.setItem('c_dev_mode', '1') } catch {}; setDevMode(true); toast.success('开发者模式已开启') } else if (devTap.current >= 4) { toast.info(`再点 ${6 - devTap.current} 次开启开发者模式`) }
           }} />
-        <Row label="构建日期" value={BUILD} />
-        <Row label="前端" value="React 18 + TypeScript" />
-        <LastRow label="后端" value="FastAPI + TiDB · EdgeOne Makers" />
       </Group>
 
       <Group title="界面">
@@ -396,16 +161,6 @@ export default function SettingsPage() {
           onCancel={() => setConfirm(null)}
         />
       )}
-      {confirm === 'cache' && (
-        <ConfirmDialog
-          open
-          title="清除本地缓存？"
-          desc="将清除列配置、搜索记录等本地缓存数据，不影响服务器数据。"
-          confirmLabel="清除"
-          onConfirm={() => { clearLocalCache(); setConfirm(null) }}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-    </div>}
+    </div>
 </>
 }
