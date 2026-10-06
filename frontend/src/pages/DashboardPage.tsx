@@ -562,7 +562,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         </div>
         <div style={{ overflowX: (storeDataLen > 8) ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}>
           <div style={{ width: (storeDataLen > 8) ? Math.max(storeDataLen * 30, 340) : '100%' }}>
-            <Chart option={storeOption} height={170} />
+            <Chart option={storeOption} height={200} />
           </div>
         </div>
         </div>
