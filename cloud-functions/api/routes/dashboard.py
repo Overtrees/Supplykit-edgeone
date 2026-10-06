@@ -189,6 +189,27 @@ def _rebuild_day_agg(days=90, channel=None):
         pass
 
 
+def _build_summary_agg(channel, days60, now):
+    """agg 路径(强实时): 前天及以前读 orders_day_agg, 昨天+今天实时直查 orders(补录/新增当日立即反映)
+    近 2 天直查失败降级仅 agg; 整体异常由调用方降级直查 60 天"""
+    today = now.strftime("%Y-%m-%d")
+    d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    agg = query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
+                "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
+                "GROUP BY `date`, order_status, store", [channel, days60, d1])
+    try:
+        recent = query(
+            "SELECT DATE(ordered_at) AS d, order_status, store, "
+            "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
+            "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
+            "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
+            "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
+            (channel, d1 + " 00:00:00"))
+    except Exception:
+        recent = []  # 近 2 天直查失败: 仅 agg(前天及以前), 不阻塞
+    return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+
+
 def _build_summary(channel, start_date, end_date):
     """summary 计算体(共享缓存 builder; 原函数体迁移)"""
     now = datetime.now(timezone.utc)
@@ -213,11 +234,10 @@ def _build_summary(channel, start_date, end_date):
     except Exception:
         _agg_ok = False
     if _agg_ok:
-        # 强实时(2026-10-06): agg 覆盖 < 昨天(前天及以前), 昨天+今天实时直查 orders —— 补录/新增当日立即反映
-        d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        agg = query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
-                    "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
-                    "GROUP BY `date`, order_status, store", [channel, days60, d1])
+        try:
+            return _build_summary_agg(channel, days60, now)  # agg 路径(强实时: 前天及以前 agg + 近2天直查); 异常降级下方直查
+        except Exception:
+            pass  # agg 路径整体失败 → 降级 60 天直查(_agg_ok 检查已过但查询异常, 不阻塞看板)
         try:
             recent = query(
                 "SELECT DATE(ordered_at) AS d, order_status, store, "
