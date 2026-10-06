@@ -1,4 +1,5 @@
 import React from 'react'
+import { IconCheck } from './Icons'
 
 // 全局列表分组组件(2026-09-15 抽公共: 设置页/开发者页/回收页三处复用, 视觉统一)
 // 结构: Group(title uppercase) > card(radius-lg) > Row(padding 0 16 / minHeight 48 / borderBottom)
@@ -38,6 +39,19 @@ export const LastRow = ({ label, value, sub, onClick, danger }: any) => (
         {value && <span style={{ fontSize: 'var(--font-15)', color: 'var(--muted2)', maxWidth: 160, textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>}
         {onClick && <span style={{ color: 'var(--muted2)', fontSize: 18 }}>›</span>}
       </div>
+    </div>
+  </div>
+)
+
+// 可选中列表行(2026-10-06: 回收页等批量选择场景)——与 Row 同构(padding 0 16 / 内层 14px 0 / minHeight 48 / borderBottom 缩进), 选中高亮 + 复选框
+export const ListItem = ({ label, isSel, onClick, right }: any) => (
+  <div onClick={onClick} className={onClick ? 'clickable' : ''} style={{ padding: '0 16px', cursor: onClick ? 'pointer' : 'default', background: isSel ? 'rgba(29,78,216,0.08)' : 'var(--card)' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0', minHeight: 48, borderBottom: '1px solid var(--border)' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+        <span style={{ width: 18, height: 18, borderRadius: 'var(--radius-xs)', border: '1.5px solid', borderColor: isSel ? 'var(--primary)' : 'var(--border)', background: isSel ? 'var(--primary)' : 'transparent', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 'var(--font-xs)', flexShrink: 0 }}>{isSel ? <IconCheck size={12} /> : ''}</span>
+        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      </span>
+      {!isSel && right && <span style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', flexShrink: 0, marginLeft: 8 }}>{right}</span>}
     </div>
   </div>
 )
