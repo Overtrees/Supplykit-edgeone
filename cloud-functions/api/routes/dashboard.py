@@ -213,17 +213,22 @@ def _build_summary(channel, start_date, end_date):
     except Exception:
         _agg_ok = False
     if _agg_ok:
+        # 强实时(2026-10-06): agg 覆盖 < 昨天(前天及以前), 昨天+今天实时直查 orders —— 补录/新增当日立即反映
+        d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
         agg = query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
                     "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
-                    "GROUP BY `date`, order_status, store", [channel, days60, today])
-        today_rows = query(
-            "SELECT DATE(ordered_at) AS d, order_status, store, "
-            "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
-            "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
-            "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
-            "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
-            (channel, today + " 00:00:00"))
-        return _assemble(list(agg) + list(today_rows), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+                    "GROUP BY `date`, order_status, store", [channel, days60, d1])
+        try:
+            recent = query(
+                "SELECT DATE(ordered_at) AS d, order_status, store, "
+                "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
+                "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
+                "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
+                "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
+                (channel, d1 + " 00:00:00"))
+        except Exception:
+            recent = []  # 近 2 天直查失败降级: 仅 agg(前天及以前), 不阻塞看板
+        return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
         "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
