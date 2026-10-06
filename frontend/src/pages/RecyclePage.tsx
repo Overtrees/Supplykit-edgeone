@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { IconCheck } from '../components/Icons'
-import { Group, Row } from '../components/ListGroup'
+import { Group } from '../components/ListGroup'
 import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -124,11 +124,11 @@ export default function RecyclePage() {
     <div style={{ padding: '16px 0', maxWidth: 500, margin: '0 auto' }}>
       {loading ? <div>{[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 48, borderRadius: 'var(--radius-lg)', marginBottom: 8 }} />)}</div> : <>
         <Group title={t('recycle.deleted_rules')}>
-          <Row label={`已删除规则 ${selected.rules.size > 0 ? '· 已选 ' + selected.rules.size : ''}`} sub="点击行勾选，批量操作见右上角锤子" />
+          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}>已删除规则 {selected.rules.size > 0 ? '· 已选 ' + selected.rules.size : ''} — 点击行勾选，批量操作见右上角锤子</div>
           {renderList('rules', rules)}
         </Group>
         <Group title={t('recycle.deleted_orders')}>
-          <Row label={`已删除订单 ${selected.orders.size > 0 ? '· 已选 ' + selected.orders.size : ''}`} sub="点击行勾选，批量操作见右上角锤子" />
+          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}>已删除订单 {selected.orders.size > 0 ? '· 已选 ' + selected.orders.size : ''} — 点击行勾选，批量操作见右上角锤子</div>
           {renderList('orders', orders)}
         </Group>
         {batchBusy && <div style={{ textAlign: 'center', padding: 16, fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>处理中...</div>}

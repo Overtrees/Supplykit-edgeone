@@ -46,7 +46,16 @@ def _daily_maintenance():
                 "GROUP BY DATE(ordered_at), channel, sku, warehouse "
                 "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
                 [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
-        # ② quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
+        # ② orders_day_agg 物化表增量(看板提速): 重建近 3 天(覆盖当天导入/删除) + MAX 落后则全量重建
+        try:
+            _rebuild_day_agg(3)
+            _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
+            _amax = str(_am.get("m") or "")[:10]
+            if not _amax or _amax < _yest:
+                _rebuild_day_agg(90)
+        except Exception:
+            pass
+        # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
         #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
         try:
             _c = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
@@ -160,6 +169,26 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     return ok(_result)
 
 
+def _rebuild_day_agg(days=90, channel=None):
+    """物化日级汇总 orders_day_agg(2026-09-15 看板提速): 同口径聚合历史订单(与 _build_summary 同 SQL)
+    幂等(ON DUPLICATE 累加); summary 历史区间读 agg(万级) 替代 19 万行直查"""
+    try:
+        _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        _chw = " AND channel=%s" if channel else ""
+        _chp = [channel] if channel else []
+        _sql = ("INSERT INTO orders_day_agg(`date`, channel, order_status, store, gmv, subsidy, cnt) "
+                "SELECT DATE(ordered_at), channel, order_status, store, "
+                "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)), "
+                "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)), COUNT(*) "
+                "FROM orders WHERE (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s%s "
+                "GROUP BY DATE(ordered_at), channel, order_status, store "
+                "ON DUPLICATE KEY UPDATE gmv=VALUES(gmv), subsidy=VALUES(subsidy), cnt=VALUES(cnt)"
+                % (_status_cond(), _status_cond(), _chw))
+        execute(_sql, [_start] + _chp)
+    except Exception:
+        pass
+
+
 def _build_summary(channel, start_date, end_date):
     """summary 计算体(共享缓存 builder; 原函数体迁移)"""
     now = datetime.now(timezone.utc)
@@ -176,13 +205,32 @@ def _build_summary(channel, start_date, end_date):
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
         return _assemble(rows, channel, start_date, end_date)
 
+    days60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
+    # 物化表优先(历史区间读 orders_day_agg 万级, 当天实时直查 orders): agg 不可用降级直查
+    try:
+        _aggc = one("SELECT COUNT(*) AS c FROM orders_day_agg WHERE channel=%s", [channel]) or {}
+        _agg_ok = int(_aggc.get("c") or 0) > 0
+    except Exception:
+        _agg_ok = False
+    if _agg_ok:
+        agg = query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
+                    "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
+                    "GROUP BY `date`, order_status, store", [channel, days60, today])
+        today_rows = query(
+            "SELECT DATE(ordered_at) AS d, order_status, store, "
+            "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
+            "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
+            "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
+            "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
+            (channel, today + " 00:00:00"))
+        return _assemble(agg + today_rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
         "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
         "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
-        (channel, (now - timedelta(days=59)).strftime("%Y-%m-%d") + " 00:00:00"))
+        (channel, days60 + " 00:00:00"))
     return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
 
 

@@ -170,6 +170,11 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
             # 一次性数据迁移登记表(2026-09-15: barcode 补齐 / 时间仿真随机化 —— INSERT IGNORE 抢注幂等)
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            # 看板提速物化表(2026-09-15): 日级订单汇总(历史区间 summary 读此替代 19 万行直查)
+            _exec("CREATE TABLE IF NOT EXISTS orders_day_agg ("
+                  "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "
+                  "store VARCHAR(60) NOT NULL, gmv DECIMAL(14,2) DEFAULT 0, subsidy DECIMAL(14,2) DEFAULT 0, cnt INT DEFAULT 0, "
+                  "PRIMARY KEY(`date`, channel, order_status, store))")
         except Exception:
             pass
         # ── 启动数据迁移(2026-09-15: barcode 补齐 / 时间仿真随机化)
@@ -180,6 +185,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             def _run_migrations():
                 try:
                     from db import one as _oneM
+                    # M0: 物化日级汇总初始化(首次构建 90 天历史; 此后每日 _daily_maintenance 增量)
+                    try:
+                        if _exec("INSERT IGNORE INTO migration_log(name) VALUES('day_agg_init')"):
+                            from routes.dashboard import _rebuild_day_agg
+                            _rebuild_day_agg(90)
+                    except Exception:
+                        pass
                     # M1: 订单 69 码补齐(products 全有 barcode, sku 全关联; 分批按 id, WHERE 空值幂等)
                     try:
                         _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
