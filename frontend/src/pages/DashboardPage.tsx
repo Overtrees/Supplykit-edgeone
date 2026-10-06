@@ -486,7 +486,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   <span onClick={function(){ if (_oosSrc.length > 0) setShowAllOut(true) }} className="clickable" style={{fontSize:'var(--font-xs)',fontWeight:600,color:'var(--danger)',cursor: _oosSrc.length > 0 ? 'pointer' : 'default'}}>● {healthData.out_of_stock||0}{t("dash.out_of_stock")}</span>
                 </div>
                 <div style={{fontSize:'var(--font-10)',marginTop:2,color:'var(--muted2)'}}>{healthData.total||0} SKU</div>
-                {/* 健康分数趋势(近14天, 按当前维度) —— CSS 柱状条: 柱高=区间相对拉伸(min→4px/max→18px, 波动可见), 柱色=绝对档位语义 */}
+                {/* 健康分数趋势(近14天, 按当前维度) —— CSS 柱状条: 绝对基础高度(分数语义) + 超5分波动叠加相对补偿(分段敏感度), 柱色=绝对档位 */}
                 {(() => {
                   const _key = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
                   const _trend = (Array.isArray(healthTrend) ? healthTrend : []).filter(x => x[_key] != null && x[_key] > 0)
@@ -497,7 +497,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   return <div style={{height:22,marginTop:8,display:'flex',alignItems:'flex-end',gap:1.5}}>
                     {_trend.map((x, idx) => {
                       const v = Number(x[_key]) || 0
-                      const h = Math.max(4 + (v - _min) / _span * 14, 2)
+                      const base = 5 + v / 100 * 13          // 绝对基础高度(0分5px / 100分18px)
+                      const rel = (v - _min) / _span * 7     // 相对波动补偿(≤7px)
+                      const h = _span > 5 ? Math.min(base + rel, 20) : base  // 跨度>5分叠加补偿(大波动可见), ≤5分如实
                       const isLast = idx === _trend.length - 1
                       return <div key={idx} title={`${String(x.date).slice(5)} ${v}分`} style={{flex:1,height:h,borderRadius:'2px 2px 0 0',background:_hColor(v),opacity:isLast ? 1 : 0.6}} />
                     })}
