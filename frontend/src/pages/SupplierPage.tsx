@@ -25,7 +25,13 @@ const loadSuppliers = () => {
 useEffect(() => { if (hammerCols?.suppliers) setVisCols(hammerCols.suppliers) }, [hammerCols])
 if(ld)return<div className='card'><div className='section-title'><span>{t("nav.suppliers")}</span></div><Skeleton/></div>
 const s = (hammerSearch || '').toLowerCase()
-const fl=s?list.filter(x=>(x.supplier_name||x.name||'').toLowerCase().includes(s)||(x.supplier_code||x.code||'').toLowerCase().includes(s)||(x.contact_person||'').toLowerCase().includes(s)||(x.contact_phone||x.phone||'').toLowerCase().includes(s)||(x.mobile||'').toLowerCase().includes(s)):list
+// 品牌列一行一品牌(2026-10-06): 数据 brand 逗号串拆为每品牌一行(供应商×品牌), 导出/展示友好
+const _flBase = s ? list.filter(x => (x.supplier_name || x.name || '').toLowerCase().includes(s) || (x.supplier_code || x.code || '').toLowerCase().includes(s) || (x.contact_person || '').toLowerCase().includes(s) || (x.contact_phone || x.phone || '').toLowerCase().includes(s) || (x.mobile || '').toLowerCase().includes(s)) : list
+const fl = _flBase.flatMap((x, xi) => {
+  const _bs = String(x.brand || '').split(/[，,]/).map(b => b.trim()).filter(Boolean)
+  const brands = _bs.length > 0 ? _bs : ['-']
+  return brands.map((b, bi) => ({ ...x, brand: b, _key: String(x._key || x.id || xi) + '_' + bi }))
+})
 return<div className='card'><div className='section-title' style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
   <span>供应商管理 <span className='small muted'>{t("common.total")} {list.length} {t("common.items")}</span></span>
 </div>
