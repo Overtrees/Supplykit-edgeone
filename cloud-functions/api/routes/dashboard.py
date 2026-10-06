@@ -437,6 +437,13 @@ def _assemble(rows, channel, start_date, end_date):
                      "week": _stores_range(d7, today_s),
                      "month": _stores_range(d30, today_s)}
     if start_date and end_date:
+        # 自定义区间: 补齐 periods.custom(GMV 卡周期联动), 无环比(前端 prev=0 跳过显示)
+        _cg, _co = _agg(start_date, end_date)
+        periods["custom"] = {"gmv": _cg, "orders": _co,
+                             "days": (datetime.strptime(end_date, "%Y-%m-%d") - datetime.strptime(start_date, "%Y-%m-%d")).days + 1,
+                             "prev_gmv": 0, "prev_orders": 0,
+                             "net_gmv": round(_cg - _refund(start_date, end_date), 2),
+                             "subsidy_amount": round(_sub(start_date, end_date), 2)}
         period_stores["custom"] = _stores_range(start_date, end_date)
         period_brands["custom"] = _brands_range(start_date)
     def _funnel_range(d0, d1):
