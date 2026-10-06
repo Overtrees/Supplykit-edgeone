@@ -211,7 +211,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       try {
         const _t = 't=' + Date.now()
         const [s, ax, sr] = await Promise.all([
-          api.get('/api/dashboard/summary?' + _t, {timeout: 60000}),
+          (() => { const _st = useAppStore.getState(); let _u = '/api/dashboard/summary?' + _t; if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd) _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd; return api.get(_u, {timeout: 60000}) })(),
           api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t, {timeout: 60000}),
           api.get('/api/dashboard/stock-risk?channel=' + channel + '&' + _t, {timeout: 60000}),
         ])

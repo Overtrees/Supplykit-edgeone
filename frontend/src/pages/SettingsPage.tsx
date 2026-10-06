@@ -110,7 +110,7 @@ export default function SettingsPage() {
       </Group>
 
       <Group title="系统信息">
-        <Row label="版本号" value={`v${VERSION}`} onClick={() => {
+        <LastRow label="版本号" value={`v${VERSION}`} onClick={() => {
             devTap.current += 1
             if (devTap.current >= 6) { try { localStorage.setItem('c_dev_mode', '1') } catch {}; setDevMode(true); toast.success('开发者模式已开启') } else if (devTap.current >= 4) { toast.info(`再点 ${6 - devTap.current} 次开启开发者模式`) }
           }} />
