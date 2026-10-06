@@ -7,6 +7,11 @@
 """
 import json
 import random
+
+def _rand_hm():
+    """仿真时间: 电商活跃时段 8-22 点随机时分秒(秒级仿真, 替代全 0 点)"""
+    return "%02d:%02d:%02d" % (random.randint(8, 22), random.randint(0, 59), random.randint(0, 59))
+
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -208,8 +213,8 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                                   'sku': sk['sku'], 'product_name': sk['name'], 'quantity': q,
                                   'unit_price': sk['price'], **_a,
                                   'order_status': random.choices(['已完成', '已发货'], [80, 20])[0],
-                                  'ordered_at': dt.strftime('%Y-%m-%d'),
-                                  'paid_at': dt.strftime('%Y-%m-%d'),
+                                  'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
+                                  'paid_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
                                   'channel': ch, 'platform': '京东' if label == 'jd' else '天猫',
                                   'data_source': 'seed'})
                     total += 1
@@ -225,8 +230,8 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
                               'sku': sk['sku'], 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,
-                              'ordered_at': dt.strftime('%Y-%m-%d'),
-                              'paid_at': paid_dt.strftime('%Y-%m-%d'),
+                              'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
+                              'paid_at': paid_dt.strftime('%Y-%m-%d ') + _rand_hm(),
                               'channel': ch, 'platform': '京东' if label == 'jd' else '天猫',
                               'data_source': 'seed'})
                 _pi += 1
@@ -370,7 +375,7 @@ def _seed_records():
                 _bp, _be, _wh = _b['pd'], _b['ed'], _b['wh']
             in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(50, 500),
                             'supplier': '供应商-%s' % sku[-3:],
-                            'inbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d'),
+                            'inbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
                             'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh})
         used = set()
         for _ in range(random.randint(1, min(2, max_days + 1))):
@@ -384,7 +389,7 @@ def _seed_records():
                 _bp, _be, _wh = _b['pd'], _b['ed'], _b['wh']
             out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(10, 100),
                              'target_warehouse': 'B仓',
-                             'outbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d'),
+                             'outbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
                              'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
                                   ('outbound_records', out_rows, 'outbound_date')):

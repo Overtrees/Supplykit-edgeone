@@ -456,6 +456,24 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         if "channel" not in it:
             it["channel"] = channel
     if target == "order":
+        # 69 码自动查补(2026-09-15): 导入文件未映射/为空时从 products 按 sku 拉取(products.barcode 已全量填充)
+        # —— 准确性(sku 1:1 唯一)/完整性(products 全有 barcode)/实时性(导入即补, 不再产生空 69 码)
+        try:
+            _miss = [r for r in cleaned if not (r.get("barcode") or "").strip()]
+            if _miss:
+                _skus = list({str(r.get("sku") or "").strip() for r in _miss if r.get("sku")})
+                if _skus:
+                    _bmap = {}
+                    for _b in query("SELECT sku, barcode FROM products WHERE sku IN (%s) "
+                                    "AND barcode IS NOT NULL AND barcode != ''"
+                                    % ",".join(["%s"] * len(_skus)), _skus):
+                        _bmap[str(_b.get("sku"))] = _b.get("barcode")
+                    for r in cleaned:
+                        _k = str(r.get("sku") or "").strip()
+                        if not (r.get("barcode") or "").strip() and _bmap.get(_k):
+                            r["barcode"] = _bmap[_k]
+        except Exception:
+            pass
         return _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
                              "quantity", "unit_price", "total_amount", "order_status",
