@@ -407,7 +407,7 @@ def _assemble(rows, channel, start_date, end_date):
             "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
             "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
             "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
-            "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
+            "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku "
             "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
             "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
             [channel, d60 + " 00:00:00"])
@@ -434,7 +434,7 @@ def _assemble(rows, channel, start_date, end_date):
                     "SUM(IF(o.order_status IN (%s), COALESCE(o.subsidy_amount,0), 0)) AS sb, "
                     "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
                     "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
-                    "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND o.channel=p.channel "
+                    "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku "
                     "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
                     "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
                     [channel, d0 + " 00:00:00"]):
