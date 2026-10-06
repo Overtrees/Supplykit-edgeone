@@ -6,7 +6,7 @@ import ErrorRetry from '../components/ErrorRetry'
 import Chart from '../components/Chart'
 import { t } from "../locale"
 
-const periodLabel = { today:'今日', week:'本周', month:'本月' }
+const periodLabel = { today:'今日', week:'近7天', month:'近30天' }
 
 // 仓库集合标签截断: 后端 warehouse 可能为 "北京仓,上海仓,成都仓" 集合(逗号连接) → 前2仓+等N仓, title 给完整
 const fmtWh = (w) => {
