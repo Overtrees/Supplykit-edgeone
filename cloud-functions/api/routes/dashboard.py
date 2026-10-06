@@ -398,6 +398,7 @@ def _assemble(rows, channel, start_date, end_date):
     periods["month_trend"] = _trend_range(d30, today_s)
 
     # 品牌维度(店铺 GMV 卡切品牌: 近 60 天 paid 订单按品牌聚合, join products)
+    # v4-paidset: g/sb 必须用 _status_cond()(PAID 4 状态含申请退款) —— 历史线上曾误用非支付状态集(待确认+已退货)导致品牌 GMV 低估/净额为负
     brands_map = {}
     try:
         _br = query(
@@ -418,14 +419,6 @@ def _assemble(rows, channel, start_date, end_date):
             brands_map[_b] = {"g": round(float(_r.get("g") or 0), 2),
                               "rf": round(float(_r.get("rf") or 0), 2),
                               "sb": round(float(_r.get("sb") or 0), 2)}
-        # 临时诊断(2026-10-06 品牌值排查): 记录实际执行结果
-        try:
-            _dbg = [(str(_x.get("brand") or "")[:8], round(float(_x.get("g") or 0), 1)) for _x in (_br or [])[:3]]
-            execute("INSERT INTO quality_logs(log_type, level, message, source) "
-                    "VALUES('brand_diag','info',%s,'dash')",
-                    ("brands d60 rows=%d first=%s" % (len(_br or []), str(_dbg[:2])),))
-        except Exception:
-            pass
     except Exception:
         pass
     brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),

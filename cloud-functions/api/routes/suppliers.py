@@ -15,8 +15,8 @@ _FIELDS = "id, supplier_code, supplier_name, contact_person, contact_phone, scor
 @router.get("/suppliers")
 @traced
 def list_suppliers(channel: str = "jd", search: str = ""):
-    where = "1=1"
-    params = []
+    where = "channel=%s"
+    params = [channel]
     if search:
         where += " AND (supplier_name LIKE %s OR supplier_code LIKE %s)"
         params += ["%%%s%%" % search] * 2
