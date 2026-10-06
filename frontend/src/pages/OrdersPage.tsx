@@ -94,7 +94,7 @@ export default function OrdersPage() {
             if(col.id==='amount')return <td key={col.id} className="col-price">¥{Number(x.total_amount).toLocaleString()}</td>
             if(col.id==='status')return <td key={col.id}><span className={'pill ' + (function(){const s=x.order_status||'';if(s.includes('完成')||s.includes('签收')||s.includes('收货'))return 'success';if(s.includes('退款')||s.includes('取消')||s.includes('退货')||s.includes('售后'))return 'danger';if(s.includes('发货')||s.includes('出库'))return 'info';return 'warning'})()}>{x.order_status}</span></td>
             if(col.id==='date')return <td key={col.id} className="col-date">{String(x.ordered_at||'').replace('T',' ').slice(0,16)}</td>
-            if(col.id==='paid_at')return <td key={col.id} className="col-date">{x.paid_at||'-'}</td>
+            if(col.id==='paid_at')return <td key={col.id} className="col-date">{String(x.paid_at||'').replace('T',' ').slice(0,16)||'-'}</td>
 
             return <td key={col.id} className="small muted" style={{fontSize:'var(--font-xs)'}}>-</td>
           })}</tr>

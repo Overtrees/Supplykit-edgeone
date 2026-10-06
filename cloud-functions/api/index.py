@@ -172,40 +172,43 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
         except Exception:
             pass
-        # ── 启动一次性数据迁移(幂等: migration_log 抢注 + WHERE 条件自防重复; 后台线程执行防冷启动超时) ──
+        # ── 启动数据迁移(2026-09-15: barcode 补齐 / 时间仿真随机化)
+        # 设计: 不抢注, 靠 WHERE 条件幂等(空值/0点) + 分批(5万) → 每次启动续跑, 中断下次续跑, 完成自然零行
+        # 注意: SQL 内 DATE_FORMAT 的 % 必须 %% 转义(pymysql 参数化时 % 被当占位符 → 曾致迁移假成功)
         try:
             import threading as _thM
             def _run_migrations():
                 try:
                     from db import one as _oneM
-                    # M1: 订单 69 码补齐(历史 18.7 万行全空, products 全有 barcode, sku 全关联)
+                    # M1: 订单 69 码补齐(products 全有 barcode, sku 全关联; 分批按 id, WHERE 空值幂等)
                     try:
-                        if _exec("INSERT IGNORE INTO migration_log(name) VALUES('order_barcode_fill')"):
+                        _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
+                        _mxn = int(_mx.get("m") or 0)
+                        for _lo in range(0, _mxn + 1, 50000):
                             _exec("UPDATE orders o JOIN products p ON o.sku=p.sku SET o.barcode=p.barcode "
-                                  "WHERE (o.barcode IS NULL OR o.barcode='') AND p.barcode IS NOT NULL AND p.barcode != ''")
+                                  "WHERE o.id BETWEEN %s AND %s AND (o.barcode IS NULL OR o.barcode='') "
+                                  "AND p.barcode IS NOT NULL AND p.barcode != ''", [_lo, _lo + 49999])
                     except Exception:
                         pass
-                    # M2: 订单时间仿真随机化(历史 0 点 → 活跃时段随机时分秒; WHERE RIGHT=00:00:00 幂等, 分批防超时)
+                    # M2: 订单时间仿真随机化(WHERE 0点幂等, 分批)
                     try:
-                        if _exec("INSERT IGNORE INTO migration_log(name) VALUES('order_time_rand')"):
-                            _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
-                            _mxn = int(_mx.get("m") or 0)
-                            for _lo in range(0, _mxn + 1, 50000):
-                                _exec("UPDATE orders SET "
-                                      "ordered_at = CONCAT(DATE_FORMAT(ordered_at,'%Y-%m-%d'),' ',"
-                                      "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')), "
-                                      "paid_at = CONCAT(DATE_FORMAT(paid_at,'%Y-%m-%d'),' ',"
-                                      "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
-                                      "WHERE id BETWEEN %s AND %s AND RIGHT(ordered_at,8)='00:00:00'", [_lo, _lo + 49999])
+                        _mx2 = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
+                        _mxn2 = int(_mx2.get("m") or 0)
+                        for _lo in range(0, _mxn2 + 1, 50000):
+                            _exec("UPDATE orders SET "
+                                  "ordered_at = CONCAT(DATE_FORMAT(ordered_at,'%%Y-%%m-%%d'),' ',"
+                                  "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')), "
+                                  "paid_at = CONCAT(DATE_FORMAT(paid_at,'%%Y-%%m-%%d'),' ',"
+                                  "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
+                                  "WHERE id BETWEEN %s AND %s AND RIGHT(ordered_at,8)='00:00:00'", [_lo, _lo + 49999])
                     except Exception:
                         pass
                     # M3: 出入库时间仿真随机化(同理)
                     try:
-                        if _exec("INSERT IGNORE INTO migration_log(name) VALUES('io_time_rand')"):
-                            for _tbl, _col in (('inbound_records', 'inbound_date'), ('outbound_records', 'outbound_date')):
-                                _exec("UPDATE `%s` SET `%s` = CONCAT(DATE_FORMAT(`%s`,'%%Y-%%m-%%d'),' ',"
-                                      "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
-                                      "WHERE RIGHT(`%s`,8)='00:00:00'" % (_tbl, _col, _col, _col))
+                        for _tbl, _col in (('inbound_records', 'inbound_date'), ('outbound_records', 'outbound_date')):
+                            _exec("UPDATE `%s` SET `%s` = CONCAT(DATE_FORMAT(`%s`,'%%Y-%%m-%%d'),' ',"
+                                  "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
+                                  "WHERE RIGHT(`%s`,8)='00:00:00'" % (_tbl, _col, _col, _col))
                     except Exception:
                         pass
                 except Exception:
