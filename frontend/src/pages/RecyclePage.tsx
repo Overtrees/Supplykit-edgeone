@@ -44,8 +44,9 @@ export default function RecyclePage() {
     syncSel(next)
   }
   const toggleAll = () => {
-    const allR = rules.length > 0 && rules.every(x => selected.rules.has(x.id))
-    const allO = orders.length > 0 && orders.every(x => selected.orders.has(x.id))
+    // 空类型视为已全选(不参与 all 判断——否则某类型无数据时 all 恒 false, 无法取消全选)
+    const allR = rules.length === 0 || rules.every(x => selected.rules.has(x.id))
+    const allO = orders.length === 0 || orders.every(x => selected.orders.has(x.id))
     const all = allR && allO
     syncSel({ rules: new Set(all ? [] : rules.map(x => x.id)), orders: new Set(all ? [] : orders.map(x => x.id)) })
   }
@@ -102,7 +103,7 @@ export default function RecyclePage() {
   const renderList = (type: 'rules' | 'orders', items: any[]) => {
     if (items.length === 0) return <div className="small muted" style={{ padding: '20px', textAlign: 'center', fontSize: 'var(--font-13)' }}>{type === 'rules' ? t('recycle.empty_rules') : t('recycle.empty_orders')}</div>
     return (
-      <div style={{ background: 'var(--card)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <>
         {items.map((x: any) => {
           const isSel = selected[type].has(x.id)
           return (
@@ -115,7 +116,7 @@ export default function RecyclePage() {
             </div>
           )
         })}
-      </div>
+      </>
     )
   }
 
