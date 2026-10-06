@@ -12,23 +12,26 @@ export default function HammerRecycle() {
   }
 
   // 溢出保护: 按钮文本 nowrap + ellipsis, 计数合并显示
-  const btnStyle: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+  const btnWidth: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
   return (
     <div>
       <div className="hammer-header">{t('settings.recycle_bin')}</div>
-      {/* 第一排: 全选/取消 + 批量恢复 */}
-      <div className="hammer-row">
-        <button onClick={() => dispatch('recycle-toggle-all')} className="btn-ghost hammer-btn" style={btnStyle}>全选/取消</button>
-        <button onClick={() => dispatch('recycle-restore')} disabled={recycleBusy || total === 0} className="btn-ghost hammer-btn" style={btnStyle}>
-          批量恢复{total > 0 ? ` (${total})` : ''}
-        </button>
-      </div>
-      {/* 第二排: 永久删除 单独一行 */}
-      <div className="hammer-row">
-        <button onClick={() => dispatch('recycle-purge')} disabled={recycleBusy || total === 0} className="btn-ghost hammer-btn" style={{ ...btnStyle, color: 'var(--danger)', width: '100%' }}>
-          永久删除{total > 0 ? ` (${total})` : ''}
-        </button>
+      {/* 与规则页同构: hammer-row-2x2(行间距8 + 行内gap8 + 按钮flex:1) */}
+      <div className="hammer-row-2x2">
+        {/* 第一排: 全选/取消 + 批量恢复 */}
+        <div className="hammer-row">
+          <button onClick={() => dispatch('recycle-toggle-all')} className="btn-ghost hammer-btn" style={btnWidth}>全选/取消</button>
+          <button onClick={() => dispatch('recycle-restore')} disabled={recycleBusy || total === 0} className="btn-ghost hammer-btn" style={btnWidth}>
+            批量恢复{total > 0 ? ` (${total})` : ''}
+          </button>
+        </div>
+        {/* 第二排: 永久删除 单独一行 */}
+        <div className="hammer-row">
+          <button onClick={() => dispatch('recycle-purge')} disabled={recycleBusy || total === 0} className="btn-ghost hammer-btn" style={{ ...btnWidth, color: 'var(--danger)' }}>
+            永久删除{total > 0 ? ` (${total})` : ''}
+          </button>
+        </div>
       </div>
       <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)', padding: '8px 2px 0', lineHeight: 1.5 }}>
         点击列表行勾选 → 锤子菜单批量操作。永久删除不可撤销。

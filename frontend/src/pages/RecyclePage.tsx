@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { IconCheck } from '../components/Icons'
 import { Group, Row } from '../components/ListGroup'
@@ -80,11 +80,14 @@ export default function RecyclePage() {
     if (window.confirm('永久删除 ' + n + ' 项？此操作不可撤销')) batchAction('permanent-delete', '永久删除')
   }
 
-  // 锤子菜单事件联动(HammerRecycle dispatch)
+  // 锤子菜单事件联动(HammerRecycle dispatch) —— ref 转发+单次绑定(根治 useEffect 重绑双 handler 抵消竞态)
+  const toggleAllRef = useRef(toggleAll); toggleAllRef.current = toggleAll
+  const batchActionRef = useRef(batchAction); batchActionRef.current = batchAction
+  const confirmPurgeRef = useRef(confirmPurge); confirmPurgeRef.current = confirmPurge
   useEffect(() => {
-    const hToggleAll = () => { toggleAll() }
-    const hRestore = () => { batchAction('restore', '恢复') }
-    const hPurge = () => { confirmPurge() }
+    const hToggleAll = () => { toggleAllRef.current() }
+    const hRestore = () => { batchActionRef.current('restore', '恢复') }
+    const hPurge = () => { confirmPurgeRef.current() }
     window.addEventListener('recycle-toggle-all', hToggleAll)
     window.addEventListener('recycle-restore', hRestore)
     window.addEventListener('recycle-purge', hPurge)
@@ -94,7 +97,7 @@ export default function RecyclePage() {
       window.removeEventListener('recycle-purge', hPurge)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, rules, orders])
+  }, [])
 
   const renderList = (type: 'rules' | 'orders', items: any[]) => {
     if (items.length === 0) return <div className="small muted" style={{ padding: '20px', textAlign: 'center', fontSize: 'var(--font-13)' }}>{type === 'rules' ? t('recycle.empty_rules') : t('recycle.empty_orders')}</div>
