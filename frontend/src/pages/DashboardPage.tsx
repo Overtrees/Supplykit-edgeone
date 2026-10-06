@@ -140,7 +140,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       // 首屏拆流: summary+aux 先渲染(不阻塞骨架屏), stock-risk 后置到达后更新断货卡
       // (stock-risk 含 OTIF/逐仓日销/动态SS/加速判定较重, 首屏先看 GMV/告警/健康, 断货 1-2s 补齐)
       Promise.allSettled([
-        api.get('/api/dashboard/summary?t=' + Date.now(), {timeout: 60000}),
+        (() => { const _st = useAppStore.getState(); let _u = '/api/dashboard/summary?t=' + Date.now(); if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd) _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd; return api.get(_u, {timeout: 60000}) })(),
         api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(), {timeout: 60000}),
       ]).then(([s, ax]) => {
         if (seq !== reqSeq.current) { setChLoading(false); return }  // 竞态丢弃
@@ -164,7 +164,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           retries += 1
           if (retries > 3 || seq !== reqSeq.current) { clearInterval(timer); return }
           Promise.allSettled([
-            api.get('/api/dashboard/summary?t=' + Date.now()),
+            (() => { const _st = useAppStore.getState(); let _u = '/api/dashboard/summary?t=' + Date.now(); if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd) _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd; return api.get(_u) })(),
             api.get('/api/dashboard/stock-risk?t=' + Date.now()),
           ]).then(([s2, r2]) => {
             if (seq !== reqSeq.current) { clearInterval(timer); return }
