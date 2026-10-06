@@ -27,7 +27,7 @@ function cleanupSourcemaps() {
 import pkg from './package.json'
 
 export default defineConfig({
-  define: { __APP_VERSION__: JSON.stringify(pkg.version || 'dev') },
+  define: { __APP_VERSION__: JSON.stringify(pkg.version || 'dev'), __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)) },
   plugins: [
     react(),
     // sourcemap 上传（有 SENTRY_AUTH_TOKEN 才生效，否则跳过）

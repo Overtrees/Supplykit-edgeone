@@ -43,42 +43,48 @@ export default function RecyclePage() {
     if (next[type].has(id)) next[type].delete(id); else next[type].add(id)
     syncSel(next)
   }
-  const toggleAll = (type: 'rules' | 'orders') => {
-    const items = type === 'rules' ? rules : orders
-    const all = items.length > 0 && items.every(x => selected[type].has(x.id))
-    const next = { ...selected, [type]: new Set(all ? [] : items.map(x => x.id)) }
-    syncSel(next)
+  const toggleAll = () => {
+    const allR = rules.length > 0 && rules.every(x => selected.rules.has(x.id))
+    const allO = orders.length > 0 && orders.every(x => selected.orders.has(x.id))
+    const all = allR && allO
+    syncSel({ rules: new Set(all ? [] : rules.map(x => x.id)), orders: new Set(all ? [] : orders.map(x => x.id)) })
   }
 
-  const batchAction = async (type: 'rules' | 'orders', action: string, label: string) => {
-    const ids = Array.from(selected[type])
-    if (ids.length === 0) { alert('请先勾选要' + label + '的项'); return }
+  const batchAction = async (action: string, label: string) => {
+    const ruleIds = Array.from(selected.rules), orderIds = Array.from(selected.orders)
+    const n = ruleIds.length + orderIds.length
+    if (n === 0) { alert('请先勾选要' + label + '的项'); return }
     setBatchBusy(true)
     try {
       const _auth = { 'Authorization': 'Bearer ' + (() => { try { return localStorage.getItem('c_token') } catch { return '' } })(), 'Content-Type': 'application/json' }
-      if (type === 'rules' && action === 'permanent-delete') {
-        await fetch(API + '/api/rules/batch', { method: 'POST', headers: _auth, body: JSON.stringify({ action: 'purge', ids: ids }) })
-      } else {
-        await Promise.all(ids.map(id => fetch(API + '/api/' + type + '/' + id + '/' + action, { method: 'POST', headers: _auth })))
+      // 规则: 永久删除走 batch purge(批量接口), 其余走单条
+      if (ruleIds.length) {
+        if (action === 'permanent-delete') {
+          await fetch(API + '/api/rules/batch', { method: 'POST', headers: _auth, body: JSON.stringify({ action: 'purge', ids: ruleIds }) })
+        } else {
+          await Promise.all(ruleIds.map(id => fetch(API + '/api/rules/' + id + '/' + action, { method: 'POST', headers: _auth })))
+        }
+      }
+      // 订单: 单条(restore/permanent-delete)
+      if (orderIds.length) {
+        await Promise.all(orderIds.map(id => fetch(API + '/api/orders/' + id + '/' + action, { method: 'POST', headers: _auth })))
       }
       loadData()
-      const next = { ...selected, [type]: new Set(selected[type]) }
-      ids.forEach(id => next[type].delete(id))
-      syncSel(next)
+      syncSel({ rules: new Set(), orders: new Set() })
     } catch (e: any) { alert(label + '失败: ' + e.message) }
     setBatchBusy(false)
   }
-  const confirmPurge = (type: 'rules' | 'orders') => {
-    const n = selected[type].size
+  const confirmPurge = () => {
+    const n = selected.rules.size + selected.orders.size
     if (n === 0) { alert('请先勾选要永久删除的项'); return }
-    if (window.confirm('永久删除 ' + n + ' 项？此操作不可撤销')) batchAction(type, 'permanent-delete', '永久删除')
+    if (window.confirm('永久删除 ' + n + ' 项？此操作不可撤销')) batchAction('permanent-delete', '永久删除')
   }
 
   // 锤子菜单事件联动(HammerRecycle dispatch)
   useEffect(() => {
-    const hToggleAll = (e: Event) => { toggleAll((e as CustomEvent).detail as 'rules' | 'orders') }
-    const hRestore = (e: Event) => { batchAction((e as CustomEvent).detail as 'rules' | 'orders', 'restore', '恢复') }
-    const hPurge = (e: Event) => { confirmPurge((e as CustomEvent).detail as 'rules' | 'orders') }
+    const hToggleAll = () => { toggleAll() }
+    const hRestore = () => { batchAction('restore', '恢复') }
+    const hPurge = () => { confirmPurge() }
     window.addEventListener('recycle-toggle-all', hToggleAll)
     window.addEventListener('recycle-restore', hRestore)
     window.addEventListener('recycle-purge', hPurge)
