@@ -422,7 +422,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 </div>
               </div>
               {(lowStockAlerts.length > 0 || procTotal > 0) && <>
-                <div style={{fontSize:'var(--font-10)',display:'flex',gap:10,marginTop:8,flexWrap:'wrap',lineHeight:1.4}}>
+                <div style={{fontSize:'var(--font-9)',display:'flex',gap:4,marginTop:8,flexWrap:'wrap',lineHeight:1.5,alignItems:'center'}}>
                   <span style={{color:'var(--muted2)'}}>● 低库存 {lowStockTotal}</span>
                   {slowMovingTotal > 0 && <span style={{color:'var(--muted2)'}}>● 滞销 {slowMovingTotal}</span>}
                   <span style={{color:'var(--muted2)'}}>● 采购&补货 {procTotal}</span>
