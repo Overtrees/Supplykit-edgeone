@@ -235,20 +235,9 @@ def _build_summary(channel, start_date, end_date):
         _agg_ok = False
     if _agg_ok:
         try:
-            return _build_summary_agg(channel, days60, now)  # agg 路径(强实时: 前天及以前 agg + 近2天直查); 异常降级下方直查
+            return _build_summary_agg(channel, days60, now)  # agg 路径(强实时); 异常整体降级下方直查
         except Exception:
-            pass  # agg 路径整体失败 → 降级 60 天直查(_agg_ok 检查已过但查询异常, 不阻塞看板)
-        try:
-            recent = query(
-                "SELECT DATE(ordered_at) AS d, order_status, store, "
-                "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
-                "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
-                "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
-                "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
-                (channel, d1 + " 00:00:00"))
-        except Exception:
-            recent = []  # 近 2 天直查失败降级: 仅 agg(前天及以前), 不阻塞看板
-        return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+            pass  # agg 路径失败 → 降级直查 60 天(不阻塞)
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
         "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
