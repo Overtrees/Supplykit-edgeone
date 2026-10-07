@@ -74,8 +74,38 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
     return by_sku, by_sku_wh
 
 
-def calc_sales_multi(daily_by_sku, windows=None):
-    """一次遍历计算多窗口日均(3σ 剔除 + 近3天1.5倍加权)——与旧版一致"""
+def smooth_promo_spikes(daily, now=None, max_win=28, hist_days=60, peak_ratio=5.0, cap_ratio=2.0):
+    """促销尖峰削峰: 近窗口单日销量 vs 窗口外历史基线(28-60 天日均)
+
+    峰值 > peak_ratio×基线 → 截断到 cap_ratio×基线(保留合理量, 不彻底抹掉);
+    无历史基线(新品/起量)不削——真实增长不被误杀。
+    返回处理后的 daily(供 calc_sales_multi 前调用)
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    hist_days_list = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max_win, hist_days)]
+    hist_nz = [daily.get(d, 0) for d in hist_days_list if daily.get(d, 0) > 0]
+    if not hist_nz:
+        return daily  # 无历史基线, 无法判别促销
+    baseline = sum(hist_nz) / len(hist_nz)
+    if baseline <= 0:
+        return daily
+    out = dict(daily)
+    win_days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max_win)]
+    for d in win_days:
+        v = out.get(d, 0)
+        if v > baseline * peak_ratio:
+            out[d] = round(baseline * cap_ratio, 2)
+    return out
+
+
+def calc_sales_multi(daily_by_sku, windows=None, sparse="plain"):
+    """一次遍历计算多窗口日均: 3σ 异常剔除(非零日统计) + 近3天1.5倍加权 + 统一摊薄语义
+
+    sparse 模式(窗口内非零日 < 3, 3σ 会把孤立销售日当离群清零):
+      - plain: 直接窗口日均(采购/看板求稳平滑, 与旧版一致)
+      - shrink: 按证据收缩 ×(nnz/3)(补货保守——不虚高也不误杀真实需求)
+    """
     if windows is None:
         windows = [7, 14, 28]
     now = datetime.now(timezone.utc)
@@ -83,27 +113,32 @@ def calc_sales_multi(daily_by_sku, windows=None):
     all_days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max_win)]
     results = {w: {} for w in windows}
     for key, daily in daily_by_sku.items():
-        n = len(daily)
         base_vals = [daily.get(d, 0) for d in all_days]
         for win in windows:
             vals = base_vals[:win]
             total = sum(vals)
-            base_avg = total / win
-            if n < 3 or win < 7:
-                results[win][key] = base_avg
+            if total <= 0:
+                results[win][key] = 0.0
                 continue
-            mean = sum(vals) / win
-            var = sum((v - mean) ** 2 for v in vals) / win
+            nz = [v for v in vals if v > 0]
+            nnz = len(nz)
+            base_avg = total / win
+            if nnz < 3:
+                # 稀疏: 不武断二选一(剔除=误杀真实需求 / 全额日均=促销虚高), 按证据强度收缩
+                results[win][key] = base_avg if sparse == "plain" else base_avg * (nnz / 3.0)
+                continue
+            # 稳定序列: 3σ 按非零日统计(0 日不拉大 σ → 稀疏窗口不被误杀), 近3天 1.5 倍加权
+            nz_mean = sum(nz) / nnz
+            var = sum((v - nz_mean) ** 2 for v in nz) / nnz
             std = var ** 0.5
-            threshold = max(3 * std, mean * 1.5)
+            threshold = max(3 * std, nz_mean * 1.5)
             ws = 0.0
-            wt = 0
             for idx, v in enumerate(reversed(vals)):
-                if abs(v - mean) <= threshold:
+                if v > 0 and abs(v - nz_mean) <= threshold:
                     w = 1.5 if idx >= win - 3 else 1.0
                     ws += v * w
-                    wt += w
-            results[win][key] = ws / wt if wt > 0 else 0
+            # 统一摊薄语义: 窗口日均(剔除离群日计 0) —— 与 base_avg 同口径
+            results[win][key] = ws / win
     return results
 
 

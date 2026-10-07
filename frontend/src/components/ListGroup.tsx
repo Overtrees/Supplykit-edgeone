@@ -158,7 +158,7 @@ export const LastRow = ({ label, value, sub, onClick, danger }: any) => (
 )
 
 // 可选中列表行(2026-10-06: 回收页等批量选择场景)——与 Row 同构(padding 0 16 / 内层 14px 0 / minHeight 48 / borderBottom 缩进), 选中高亮 + 复选框
-export const ListItem = ({ label, isSel, onClick, right }: any) => (
+export const ListItem = ({ label, isSel, onClick, right, last }: any) => (
   <div
     onClick={onClick}
     className={onClick ? 'clickable' : ''}
@@ -175,7 +175,7 @@ export const ListItem = ({ label, isSel, onClick, right }: any) => (
         alignItems: 'center',
         padding: '14px 0',
         minHeight: 48,
-        borderBottom: '1px solid var(--border)',
+        borderBottom: last ? 'none' : '1px solid var(--border)',
       }}
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>

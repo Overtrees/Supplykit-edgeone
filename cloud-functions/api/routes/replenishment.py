@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 
 from db import query, one
 from routes.common import ok, fail, traced, try_err
-from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict, smooth_promo_spikes
 
 router = APIRouter(tags=["insights"])
 
@@ -37,48 +37,6 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
     return ok(_all)
 
 
-# ── 临时诊断(2026-10-07 排查补货日销全 0, 定位后移除) ──────────────────────────
-@router.get("/insights/replenishment-diag")
-@traced
-async def replenishment_diag(request: Request, channel: str = "jd", mode: str = "bbcc"):
-    """admin 专用: 输出补货日销管道各环节内部量(by_sku/by_sku_wh/c_whs/daily_c/multi)"""
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
-    from routes.common import verify_token
-    if verify_token(token) != "admin":
-        return fail("仅 admin 可用", 403)
-    out = {}
-    try:
-        by_sku, by_sku_wh = load_daily_sales_grouped(60, channel)
-        out["by_sku_len"] = len(by_sku)
-        out["by_sku_wh_len"] = len(by_sku_wh)
-        out["by_sku_wh_sample"] = list(by_sku_wh.keys())[:5]
-        out["by_sku_sample_days"] = {k: len(v) for k, v in list(by_sku.items())[:3]}
-        c_whs = {r.get("warehouse") for r in query(
-            "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
-            [channel])}
-        out["c_whs"] = sorted(c_whs)
-        daily_c = {}
-        for wk, wd in by_sku_wh.items():
-            base, wh = wk.rsplit("|", 1)
-            if wh in c_whs:
-                m = daily_c.setdefault(base, {})
-                for d, q in wd.items():
-                    m[d] = m.get(d, 0) + q
-        out["daily_c_len"] = len(daily_c)
-        out["daily_c_sample"] = {k: len(v) for k, v in list(daily_c.items())[:3]}
-        multi = calc_sales_multi(daily_c, windows=[7, 14, 28])
-        out["s28_len"] = len(multi[28])
-        out["s28_sample"] = {k: round(v, 2) for k, v in list(multi[28].items())[:3]}
-        # 对照: 全仓口径(与采购一致)
-        multi_all = calc_sales_multi(by_sku, windows=[7, 14, 28])
-        out["all_s28_len"] = len(multi_all[28])
-        out["all_s28_sample"] = {k: round(v, 2) for k, v in list(multi_all[28].items())[:3]}
-    except Exception as e:
-        out["error"] = str(e)[:300]
-    return ok(out)
-
-
 def _build_repl(channel, mode):
     """补货建议计算体(共享缓存 builder, 返回全量列表)"""
     cfg = _config(channel, mode)
@@ -105,7 +63,9 @@ def _build_repl(channel, mode):
     else:
         daily_28 = by_sku
 
-    multi = calc_sales_multi(daily_28, windows=[7, 14, 28])
+    # 促销尖峰削峰: 近窗口单日峰值 > 5×历史基线(28-60天) → 截断(促销不推高趋势加权/活性门控)
+    daily_28 = {s: smooth_promo_spikes(d) for s, d in daily_28.items()}
+    multi = calc_sales_multi(daily_28, windows=[7, 14, 28], sparse="shrink")
     s7, s14, s28 = multi[7], multi[14], multi[28]
     fused = {}
     for sku in set(list(s7) + list(s14) + list(s28)):
@@ -139,7 +99,9 @@ def _build_repl(channel, mode):
             ds7 = round(s7.get(sku, 0), 1)
             ds14 = round(s14.get(sku, 0), 1)
             ds28 = round(s28.get(sku, 0), 1)
-            ds = round(fused.get(sku, 0) * season, 1)
+            # 活性门控: 近 7/14 天有销售=近期活跃(×1); 仅 28 天历史销售=弱化(×0.5); 全零=0
+            _act = 1.0 if (s7.get(sku, 0) > 0 or s14.get(sku, 0) > 0) else (0.5 if s28.get(sku, 0) > 0 else 0.0)
+            ds = round(fused.get(sku, 0) * season * _act, 1)
             # 安全天数(库存行 safety_days 优先, 回退配置)
             safety_days = float(cfg.get("safety_multiplier") or 0)
             effective_safety = round(ds * safety_days, 1) if ds > 0 else 0
@@ -252,7 +214,9 @@ def _build_repl(channel, mode):
             wk = "%s|%s" % (r.get("sku"), wh)
             wd = by_sku_wh.get(wk, {})
             wh_sales[wk] = wd
-        _wm = calc_sales_multi({k: v for k, v in wh_sales.items() if v}, windows=[7, 14, 28])
+        _wh_sm = {k: smooth_promo_spikes(v) for k, v in wh_sales.items() if v}
+        _wm = calc_sales_multi(_wh_sm, windows=[7, 14, 28],
+                               sparse="shrink")
         for r in inv:
             if r.get("warehouse_type") != "platform":
                 continue
@@ -262,7 +226,9 @@ def _build_repl(channel, mode):
             w7 = _wm[7].get(wk, 0)
             w14 = _wm[14].get(wk, 0)
             w28 = _wm[28].get(wk, 0)
-            ds = rolling_predict(w7, w14, w28) * season
+            # 活性门控(逐仓): 近 7/14 天该仓有销售=活跃(×1); 仅 28 天历史=弱化(×0.5)
+            _act = 1.0 if (w7 > 0 or w14 > 0) else (0.5 if w28 > 0 else 0.0)
+            ds = rolling_predict(w7, w14, w28) * season * _act
             avail = int(r.get("available_qty") or 0)
             transit = int(r.get("in_transit_qty") or 0)
             safety = int(r.get("safety_qty") or 0)

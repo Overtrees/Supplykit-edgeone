@@ -528,5 +528,54 @@ try:
 except Exception as _te_e:
     check("try_err 调用链正常(except pass 治理落点)", False, str(_te_e)[:120])
 
+# ── 核心算法单测: 日销稀疏收缩 + 3σ 非零日统计(2026-10-07 补货日销全 0 根因防复发) ──
+from biz.sales import calc_sales_multi
+from datetime import datetime as _dt4, timedelta as _td4, timezone as _tz4
+_now4 = _dt4.now(_tz4.utc)
+
+def _mk_daily(sales_days):
+    """sales_days: [(days_ago, qty)] → {date: qty}"""
+    return {(_now4 - _td4(days=k)).strftime('%Y-%m-%d'): q for k, q in sales_days}
+
+# 场景1: 近28天仅 1 天 12 件(真实数据 SKU-0014-J 形状) → shrink 收缩, plain 保持日均
+_d1 = _mk_daily([(27, 12)])
+_m1 = calc_sales_multi({'S': _d1}, windows=[28], sparse='shrink')
+_m1p = calc_sales_multi({'S': _d1}, windows=[28], sparse='plain')
+_v1 = _m1[28]['S']
+check("日销: 稀疏1天12件 shrink 收缩≈0.14(非0非虚高)", abs(_v1 - 12 / 28 / 3) < 0.001, "got %s" % _v1)
+check("日销: 同场景 plain 保持日均0.43(采购口径不受影响)", abs(_m1p[28]['S'] - 12 / 28) < 0.001, "got %s" % _m1p[28]['S'])
+# 场景2: 稳定序列每天5件 → 3σ 路径结果≈5(语义统一为摊薄日均后不变)
+_d2 = _mk_daily([(k, 5) for k in range(28)])
+_m2 = calc_sales_multi({'S': _d2}, windows=[28], sparse='shrink')
+check("日销: 稳定28天×5件 ≈5.27(近3天1.5倍加权正常)", abs(_m2[28]['S'] - 5.267857) < 0.01, "got %s" % _m2[28]['S'])
+# 场景3: 稳定序列含促销尖峰(28天×5件 + 1天40件) → 尖峰被3σ削(≈5非40)
+_d3 = _mk_daily([(k, 5) for k in range(28)] + [(7, 40)])
+_m3 = calc_sales_multi({'S': _d3}, windows=[28], sparse='shrink')
+check("日销: 稳定序列促销尖峰40件被削(≈5)", abs(_m3[28]['S'] - 5) < 1.0, "got %s" % _m3[28]['S'])
+# 场景4: 60天窗口多销售日但28天子窗口仅1天 → 3σ 不再全剔(原 bug: 0)
+_d4 = _mk_daily([(k, 8) for k in range(29, 62, 3)] + [(27, 12)])
+_m4 = calc_sales_multi({'S': _d4}, windows=[7, 14, 28], sparse='shrink')
+check("日销: 60天多日+28天1日 → s28=0.14非0(原3σ全剔)", abs(_m4[28]['S'] - 12 / 28 / 3) < 0.01, "got %s" % _m4[28]['S'])
+
+# ── 促销尖峰削峰(2026-10-07 近窗口促销识别) ──
+from biz.sales import smooth_promo_spikes
+# 场景5: 近7天 1 天 100 件促销 + 历史 60 天日均 1 件 → 削峰到 2×基线
+_d5 = _mk_daily([(k, 1) for k in range(28, 60)] + [(3, 100)])
+_s5 = smooth_promo_spikes(_d5)
+check("削峰: 近7天100件vs历史1件 → 截断到2件", _s5.get(_d5 and (_now4 - _td4(days=3)).strftime('%Y-%m-%d')) == 2.0,
+      "got %s" % _s5.get((_now4 - _td4(days=3)).strftime('%Y-%m-%d')))
+# 场景6: 新品(无历史)近7天每天10件 → 不削峰
+_d6 = _mk_daily([(k, 10) for k in range(7)])
+_s6 = smooth_promo_spikes(_d6)
+check("削峰: 无历史基线(新品)不削", _s6 == _d6)
+# 场景7: 真实增长(历史日均1, 近期每天5件) → 峰值5未超5×基线 → 不削
+_d7 = _mk_daily([(k, 1) for k in range(28, 60)] + [(k, 5) for k in range(7)])
+_s7 = smooth_promo_spikes(_d7)
+check("削峰: 真实增长(5件≤5×1)不削", _s7 == _d7)
+# 场景8: 削峰后近7天窗口日销不再被促销推高(1天100件 → 削到2件 → s7 收缩后≈0.095)
+_d8 = _mk_daily([(k, 1) for k in range(28, 60)] + [(3, 100)])
+_m8 = calc_sales_multi({'S': smooth_promo_spikes(_d8)}, windows=[7, 28], sparse='shrink')
+check("削峰: 促销后 s7≈0.095(不推高趋势加权)", abs(_m8[7]['S'] - 2 / 7 / 3) < 0.001, "got %s" % _m8[7]['S'])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

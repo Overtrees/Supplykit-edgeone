@@ -180,13 +180,14 @@ export default function RecyclePage() {
       )
     return (
       <>
-        {items.map((x: any) => (
+        {items.map((x: any, i: number) => (
           <ListItem
             key={x.id}
             label={type === 'rules' ? x.name : x.order_no + ' - ' + (x.product_name || '')}
             isSel={selected[type].has(x.id)}
             onClick={() => toggleSel(type, x.id)}
             right={x.deleted_at ? String(x.deleted_at).slice(0, 10) : ''}
+            last={i === items.length - 1}
           />
         ))}
       </>

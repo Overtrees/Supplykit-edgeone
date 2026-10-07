@@ -288,7 +288,7 @@ def _build_purchase(channel, mode, days=28):
             ph = ",".join(["%s"] * len(upd))
             execute("UPDATE alerts SET status='closed' WHERE alert_type='purchase_need' "
                     "AND related_sku IN (%s) AND status='active' AND channel=%s"
-                    % (ph, channel), upd + [channel])
+                    % ph, upd + [channel])
     except Exception as _e:
             try_err('purchase', '静默降级', _e)
 
