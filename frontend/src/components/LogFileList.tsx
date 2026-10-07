@@ -60,11 +60,8 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             <span className="pill info" style={{ fontSize: 'var(--font-10)', padding: '1px 8px', minHeight: 'auto', lineHeight: '18px', flexShrink: 0 }}>
               {f.count || 0} 条
             </span>
-            {!f.archived && (
-              <span style={{ fontSize: 'var(--font-9)', color: 'var(--primary)', flexShrink: 0 }}>实时</span>
-            )}
             <span style={{ marginLeft: 'auto', fontSize: 'var(--font-10)', color: 'var(--muted2)', flexShrink: 0 }}>
-              {String(f.updated_at || '').slice(5, 16).replace('T', ' ')}
+              {f.updated_at ? String(f.updated_at).slice(5, 16).replace('T', ' ') : '--'}
             </span>
             <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}>›</span>
           </div>
