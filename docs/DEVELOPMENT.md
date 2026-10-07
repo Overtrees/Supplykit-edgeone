@@ -774,3 +774,26 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **package-lock.json 必须 git 跟踪**: .gitignore 排除 → CI npm ci EUSAGE(CI 无 lock)——依赖锁定标准实践
 - **隔离测试方法**: 最简 workflow(单 job echo)绿 → 框架 OK 定位到 job 定义层; logs API 404 = run 无 job(非权限——token 完整 /user 200)
 - **Preflight 结构(可靠版)**: frontend(npm ci + lint + prettier --check + tsc) + backend(pip -r requirements + local_test + test_audit) + notify(`if: failure()` 内置函数——避免复杂 if 表达式解析风险; 需加 needs 才感知前序)
+
+### 15.36 补货日销三机制算法(2026-10-07 下半场, 补货日销全 0 根因)
+- **根因**: calc_sales_multi 3σ 按全窗口(含大片零)统计 → 60 天窗口多销售日但 28 天子窗口仅 1-2 个销售日时 σ 被零拉大 → threshold≈15×mean → 真实销售日被判离群全剔 → 补货日销 0(采购 n<3 短路 / 看板 fused 兜底 → 三消费方分化)
+- **calc_sales_multi 重写**: ①3σ 非零日统计(nz_mean/threshold, 0 日不拉大 σ) ②sparse 参数 plain/shrink(采购看板求稳 / 补货证据收缩 ×nnz/3) ③统一摊薄语义 ws/win
+- **smooth_promo_spikes(削峰)**: 近窗口单日峰值>5×历史基线(28-60天)→截断 2×基线; 无历史基线(新品)不削
+- **活性门控**: 近 7/14 有销售×1 / 仅 28 天历史×0.5 / 全零 0
+- **铁律**: 两分支语义不混——traditional 保持标准公式(ds×lead+safety−avail−transit, 静态 safety_qty), 只加需求门控 `_trad_suggested` 纯函数(ds<0.1 → 0, 安全线缺口不触发无需求补货); bbcc 保持 c_gap=ds×lead−avail−c_transit 结构
+- **口径确认**: 日销=仅已完成(销量池, 待发货走扣减池); GMV=PAID 4 状态——两口径分离
+- **0.0x 显示**: round 1 位显示 0.0 非 bug——稀疏→建议 0→不送是人为决策(箱规+物流)
+
+### 15.37 生产库排查方法论(2026-10-07 沉淀)
+- **/db/diag 是唯一稳的库查询路径**: admin/admin123(演示系统 admin) → POST /db/diag {sql} 任意 SELECT/SHOW/EXPLAIN(白名单, admin-only)——本地 TIDB env 存在但沙箱出站抖动(偶尔连通), 不可依赖
+- **临时诊断端点模式**: admin-only + 输出管道内部量(by_sku/c_whs/daily_c/multi 长度+样例) → 定位断裂点 → 排查后移除(线上 404 确认)
+- **判断部署生效**: 按 quality-logs 时间窗过滤(新旧错误并存是常态); 特征端点(移除的诊断 404 = 新版本已上线)
+- **分页假象**: 订单"全是 7.13" = 按 id DESC 排序 + 最新日约 1650 单占满前几页(种子 09-10 运行, 日期实为 07-13..09-10)
+- **SQL 参数化 IN 占位符**: 自生成 ph 直接字符串拼接安全(非用户数据), channel 等真实参数走 %s 参数化; `% ph` 裸串 = 1 参数对多占位符 TypeError
+
+### 15.38 前端 tsc 门禁修复要点(2026-10-07, 563→0)
+- **store 循环推断崩塌**: 裸函数引用 + create() 匿名 initializer → T 落 {} → 具名化 `create(initAppStore)`(ReturnType 推导)
+- **CSSProperties 字面量拓宽**: const 对象属性拓宽为 string → `: React.CSSProperties` 上下文标注
+- **ASI 坑**: 替换 `e.target.style`→`(e.target as HTMLElement).style` 后语句以 ( 开头 → 上一行被续调用("Type 'void' has no call signatures" 级联)——语句起始括号表达式必须 `;` 前缀
+- **tsc 语法错误跳过语义检查**: parse error 时看似 3 个错, 修完才暴露 104 个真错误——验证必须等完整 exit
+- **any 红线**: 精确 interface + [k:string]:unknown 索引签名 + String()/Number() 边界收敛(API 动态数据用 Record<string,unknown>, 不造假严格)

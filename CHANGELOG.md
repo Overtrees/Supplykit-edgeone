@@ -1,3 +1,35 @@
+## 2026-10-07(下半场): 补货日销全 0 根因终破(3σ 稀疏误杀) + 三机制日销算法 + 传统逐仓需求门控 + CI tsc 门禁全绿 + purchase 告警关闭 SQL 双修 + 回收页分割线
+> **主线**: feat/edgeone, commits fdc81c16→0423b29b(CI tsc 全绿 → 补货日销三机制 → purchase TypeError → 传统需求门控)。
+> **验证**: local_test 105→118(日销/削峰/门控 13 项新断言) + Preflight CI 全绿 + 线上 diag 实证(快照 970 SKU 数据完好) + 部署后接口验证(补货 0→11 非0 / traditional 163→0 / TypeError 零新增) + 浏览器 DOM 断言(回收页末行 borderBottom:none)。
+
+### 补货日销全 0 根因: 3σ 剔除把稀疏真实销售日当离群全剔
+- **现象**: 采购日销有数(0.3-0.4)但补货日销全 0(1000 条 daily_sales=0); 看板断货正常
+- **根因(本地无法复现, 线上 diag 实锤)**: calc_sales_multi 的 3σ 按全窗口(含大片零)统计 → 60 天窗口多销售日但 28 天子窗口仅 1-2 个销售日时 σ 被零拉大 → threshold=max(3σ,1.5×mean)≈15×mean → 真实销售日被判离群全剔 → 日销 0。**采购 28 天窗口 n<3 短路给 base_avg(0.4) 故正常; 看板有 fused 全仓兜底故正常**——三消费方口径分化
+- **排查方法(可复用)**: ①admin/admin123 → `/db/diag` 任意 SELECT(admin 专用, 生产库直查) ②本地 TIDB env 存在但沙箱出站抖动不可靠——diag 是唯一稳的库查询路径 ③临时部署 admin-only 诊断端点输出管道内部量(by_sku/c_whs/daily_c/multi)定位断裂点后移除
+- **数据实证**: 快照 60 天窗口 49,709 行(08-08..09-10, warehouse 全匹配 c_whs)、970 SKU 有 C 仓销售、SKU-0014-J 近 28 天单日 12 件 → SQL 直算 s28=0.43 vs 线上 0.0
+
+### 三机制日销算法(用户拍板: 参考 bbcc 需求驱动, 不搞混两分支语义)
+- **biz/sales.py calc_sales_multi 重写**: ①3σ 改**非零日统计**(nz_mean/threshold, 0 日不拉大 σ——稳定序列促销尖峰照常削, 孤立真实需求不误杀) ②`sparse` 参数: plain=采购/看板求稳(base_avg 原样) / shrink=补货按证据收缩 ×(nnz/3) ③统一摊薄日均语义 ws/win(与 base_avg 同口径)
+- **smooth_promo_spikes 新增**: 近窗口单日峰值 > 5×历史基线(28-60 天日均) → 截断 2×基线; 无历史基线(新品起量)不削——真实增长不被误杀
+- **replenishment 接入**: bbcc/traditional 均 shrink + 削峰 + **活性门控**(近 7/14 天有销售 ×1 / 仅 28 天历史 ×0.5 / 全零 0)
+- **传统逐仓需求门控(_trad_suggested 纯函数, 0423b29b)**: `suggested = ds×lead+safety−avail−transit` 保持传统公式(静态安全线语义不变), 但 ds < _MIN_DS(0.1, 近28天<2.8件) 视为无需求 → 0——安全线缺口不触发补货(安全线是需求波动缓冲, 无需求库存不会消耗)。修复"日销 0 但 163+91 个 SKU 报已濒临·需补货 216"(收缩后 ds≈0.0x>0 绕过原 if ds>0 门槛 + 静态 safety_qty=196 直接撑出补货量)
+- **业务口径确认(用户)**: 日销=仅已完成(SALES_STATUSES, cron PAID=('已完成',) 注释"待发货走扣减池"); GMV=PAID 4 状态(common.py) 两口径分离; 0.0x 日销显示 round 1 位=0.0 不是 bug——稀疏需求→建议 0→不送(箱规+物流成本人为决策)
+
+### purchase.py:289 告警关闭 SQL 双修(两次才修对)
+- 原 `% (ph, channel)`: ph(占位符串) 与 channel 双格式化 → 参数错位 → 每次采购重算报 TypeError, 告警从未关闭
+- 第一改 `% ph`(裸串): 1 参数对 2 占位符 → "not enough arguments"(本地验证当场抓住)
+- **终修**: ph 直接字符串拼接(自生成占位符串安全) + channel 走参数化 → 本地断言占位符数=参数数(3=3) → 线上 TypeError 零新增
+
+### 前端 CI tsc 门禁全绿(fdc81c16, 563→0)
+- **根因**: ①store 裸 `connectWebSocket()` 引用 + zustand 循环推断失败 → T 落 `{}`/unknown → 全项目 400+ 级联错误 ②`const IS={...}` 字面量拓宽为 string → 34 处 CSSProperties 报错 ③`e.target.style`/`parentNode._dragId` 拖拽代码 EventTarget 无 style
+- **修复**: store initializer 具名化(ReturnType 推导); `IS: React.CSSProperties` 上下文标注; api 方法 data?/config 可选; 新增 src/api/types.ts + src/vite-env.d.ts; **any 全清零**(用户红线: 精确 interface + [k:string]:unknown + String()/Number() 边界收敛); Toast 补 warning/info(运行时崩溃 bug); 拖拽语句起始分号(**ASI 坑**: 括号开头续调用上一行 setData → "Type 'void' has no call signatures" 级联); getVis(COL_KEY()) 误传参 3 处真实 bug
+
+### 回收页分割线(对齐 LastRow 先例)
+- ListGroup ListItem 加 `last` 属性(末行 borderBottom:none); 回收页规则/订单列表末行传 last; SettingsPage/DevModePage 昨日已用 LastRow——回收页是唯一遗漏; 浏览器 DOM 断言末行 borderBottom=none 0px
+
+### 排查坑
+- 部署后 quality-logs 新旧错误并存, 判断部署生效按时间窗过滤; GitHub push 偶发 Internal Server Error(Request ID 500, 等几分钟恢复); 订单日期"全是 7.13"是分页假象(按 id DESC, 种子 09-10 运行, 日期 07-13..09-10, 最新日约 1650 单占满前几页)
+
 ## 2026-10-07: 品牌负数双包裹 SQL 根治 + except pass 116 处治理(M3 迁移 TypeError 暴露根治) + 日志文件列表化(iPhone 式) + 工程审计三层防线 + CI 修复 + Makers Skills
 > **主线**: feat/edgeone, commits 54342dfd→19dbac99(品牌双包裹 → 供应商渠道 → 缓存 key → 审计/smoke/CI → except pass 治理 → M3 根治 → 日志文件列表化 → 交互定稿 → Makers Skills → preflight 修复)。
 > **验证**: local_test 98→105(审计/MOQ/try_err 链路) + test_audit 11 项 + smoke_test 16 项(线上) + 全页面接口 vs DB 交叉(13 页) + prettier/lint/tsc 全绿 + Preflight CI(后端绿, 前端修复中)。
