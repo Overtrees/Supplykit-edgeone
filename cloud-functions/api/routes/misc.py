@@ -92,11 +92,43 @@ def get_log_file(date: str = "", scope: str = ""):
 @router.get("/quality-logs/files")
 @traced
 def list_log_files(days: int = 30, scope: str = ""):
-    """日志文件列表(平铺): log_archives 近 N 天(date+scope), 每行 日期/条数/更新时间(按 scope 过滤; scope 空返回全部)"""
+    """日志文件列表(平铺): 归档表(历史保留) + 明细表实时日期(未归档标记 archived=False, 点击懒生成)
+    每行 date/count/updated_at/archived —— 明细清理后归档文件仍保留(回溯)"""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    _SCOPE_TYPES = {
+        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
+                 "format_error", "field_warning", "field_error", "mapping_info"),
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
+    }
     _sc = scope or "all"
-    rows = query("SELECT `date`, `count`, updated_at FROM log_archives WHERE scope=%s "
-                 "ORDER BY `date` DESC LIMIT %s", [_sc, days])
-    return ok({"items": rows, "scope": _sc, "days": days})
+    _cut = (_dt.now(_tz.utc) - _td(days=days)).strftime("%Y-%m-%d")
+    # 1) 归档表(历史文件, 明细清理后仍在)
+    arch = query("SELECT `date`, `count`, updated_at FROM log_archives WHERE scope=%s AND `date` >= %s "
+                 "ORDER BY `date` DESC", [_sc, _cut])
+    arch_map = {str(r.get("date") or "")[:10]: r for r in arch}
+    # 2) 明细表近 N 天按日(未归档日期 → 实时生成标记)
+    _in = ",".join(["%s"] * len(_SCOPE_TYPES.get(_sc, ())))
+    _rows = query("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM quality_logs "
+                  "WHERE log_type IN (%s) AND created_at >= %s GROUP BY d ORDER BY d DESC" % _in,
+                  list(_SCOPE_TYPES.get(_sc, ())) + [_cut + " 00:00:00"])
+    items = []
+    seen = set()
+    for r in _rows:
+        _d = str(r.get("d") or "")[:10]
+        _a = arch_map.get(_d)
+        items.append({"date": _d,
+                      "count": int((_a.get("count") if _a else None) or r.get("c") or 0),
+                      "updated_at": str(_a.get("updated_at") or "")[:19] if _a else "",
+                      "archived": bool(_a)})
+        seen.add(_d)
+    # 3) 归档表有但明细已清(历史保留)——仍列出
+    for _d2, _a2 in arch_map.items():
+        if _d2 not in seen:
+            items.append({"date": _d2, "count": _a2.get("count") or 0,
+                          "updated_at": str(_a2.get("updated_at") or "")[:19], "archived": True})
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return ok({"items": items[:days], "scope": _sc, "days": days})
     """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
     scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
     # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)
