@@ -215,12 +215,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                                   "WHERE id BETWEEN %s AND %s AND RIGHT(ordered_at,8)='00:00:00'", [_lo, _lo + 49999])
                     except Exception as _e:
                             try_err('index', '静默降级', _e)
-                    # M3: 出入库时间仿真随机化(同理)
+                    # M3: 出入库时间仿真随机化(同理; 2026-10-07 修复: Python % 格式化把 %%Y 变 %Y 后
+                    # pymysql 参数化再当占位符 → TypeError 迁移从未成功 —— 改 f-string 拼表名 + %% 交 pymysql 转义)
                     try:
                         for _tbl, _col in (('inbound_records', 'inbound_date'), ('outbound_records', 'outbound_date')):
-                            _exec("UPDATE `%s` SET `%s` = CONCAT(DATE_FORMAT(`%s`,'%%Y-%%m-%%d'),' ',"
+                            _exec(f"UPDATE `{_tbl}` SET `{_col}` = CONCAT(DATE_FORMAT(`{_col}`,'%%Y-%%m-%%d'),' ',"
                                   "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
-                                  "WHERE RIGHT(`%s`,8)='00:00:00'" % (_tbl, _col, _col, _col))
+                                  f"WHERE RIGHT(`{_col}`,8)='00:00:00'", [])
                     except Exception as _e:
                             try_err('index', '静默降级', _e)
                 except Exception as _e:
