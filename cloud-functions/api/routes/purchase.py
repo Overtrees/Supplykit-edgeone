@@ -286,9 +286,10 @@ def _build_purchase(channel, mode, days=28):
                         "'purchase_engine',%s,'active',%s)", ins[i:i + 100])
         if upd:
             ph = ",".join(["%s"] * len(upd))
+            # ph 为本函数生成的 %s 占位符串(非用户数据), 直接拼接安全; channel 走参数化
             execute("UPDATE alerts SET status='closed' WHERE alert_type='purchase_need' "
-                    "AND related_sku IN (%s) AND status='active' AND channel=%s"
-                    % ph, upd + [channel])
+                    "AND related_sku IN (" + ph + ") AND status='active' AND channel=%s",
+                    upd + [channel])
     except Exception as _e:
             try_err('purchase', '静默降级', _e)
 
