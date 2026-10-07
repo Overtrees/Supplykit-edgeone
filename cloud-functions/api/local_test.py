@@ -429,5 +429,88 @@ check("grade yellow: 缓冲破位但时间尚够", _g(5.0, 0.9, 3.0, 1.0, 1.2, 1
 check("grade 不入选: 缓冲充足", _g(5.0, 2.0, 3.0, 1.0, 1.2, 1.0) == (False, None), str(_g(5.0, 2.0, 3.0, 1.0, 1.2, 1.0)))
 check("grade 不入选: 逼近但缓冲未破位", _g(3.5, 1.5, 3.0, 1.0, 1.2, 1.0) == (False, None), str(_g(3.5, 1.5, 3.0, 1.0, 1.2, 1.0)))
 
+# ── 工程审计: SQL 双包裹防线(_status_cond 禁止嵌 IN %s —— 2026-10-06 品牌负数根因) ──
+import re as _re
+import os as _os
+_ROUTES_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "routes")
+_bad2 = []
+for _f in sorted(_os.listdir(_ROUTES_DIR)):
+    if not _f.endswith(".py"):
+        continue
+    _s = open(_os.path.join(_ROUTES_DIR, _f), encoding="utf-8").read()
+    for _m in _re.finditer(r'IN\s*\(\s*%s\s*\)', _s):
+        _seg = _s[max(0, _m.start() - 600):_m.end()]
+        if "def _status_cond" in _seg or "def _paid_cond" in _seg:
+            continue
+        if "_status_cond" in _seg:
+            _bad2.append("%s:%d" % (_f, _s[:_m.start()].count("\n") + 1))
+check("审计: 无 IN (%s) 与 _status_cond 同段(双包裹)", not _bad2, "; ".join(_bad2[:4]))
+
+# ── 工程审计: 缓存 key 维度参数完整性(2026-10-07 purchase/repl 缺 days 污染) ──
+_expect_keys = [
+    ("dash_summary|", ["channel", "start_date", "end_date"]),
+    ("dash_aux|", ["channel", "mode"]),
+    ("stock_risk|", ["channel", "full"]),
+    ("accel|", ["channel", "ratio", "min_qty"]),
+    ("purchase|", ["channel", "mode", "days"]),
+    ("repl|", ["channel", "mode", "days", "source"]),
+]
+_keyok = True
+_keymsg = ""
+for _f2 in sorted(_os.listdir(_ROUTES_DIR)):
+    if not _f2.endswith(".py"):
+        continue
+    _s2 = open(_os.path.join(_ROUTES_DIR, _f2), encoding="utf-8").read()
+    for _m2 in _re.finditer(r'_key\s*=\s*"([^"]+)"\s*%\s*\(([^)]*)\)', _s2):
+        _tmpl, _args = _m2.group(1), _m2.group(2)
+        _argnames = [a.strip().split("=")[0].strip() for a in _args.split(",") if a.strip()]
+        for _pfx, _need in _expect_keys:
+            if _tmpl.startswith(_pfx):
+                _missing = [p for p in _need if p not in _argnames]
+                if _missing or _tmpl.count("%s") != len(_need):
+                    _keyok = False
+                    _keymsg = "%s: %s 缺 %s" % (_pfx, _tmpl, _missing)
+check("审计: 缓存 key 含全部维度参数(purchase/repl 含 days/source)", _keyok, _keymsg)
+
+# ── 核心算法单测: 采购 MOQ 聚合放大(同供应商合计<起订量按占比放大) ──
+import db as _db3
+_old_q3 = _db3.query
+
+def _q3(sql, params=None):
+    if "FROM replenishment_config" in sql:
+        return [
+            {"key": "purchase_lead_days", "value": "7"},
+            {"key": "moq", "value": "100"},
+            {"key": "purchase_safety_days", "value": "5"},
+            {"key": "max_turnover_days", "value": "15"},
+            {"key": "season_config_bbcc", "value": "[]"},
+        ]
+    if "FROM products WHERE" in sql:
+        return [
+            {"sku": "SKU0001", "product_name": "禾味调味料1号", "barcode": "69-01", "brand": "禾味", "store": "自营旗舰店", "category": "调味", "box_qty": 12, "price": 10.0, "supplier_code": "SUP-A"},
+            {"sku": "SKU0002", "product_name": "山泉饮料2号", "barcode": "69-02", "brand": "山泉", "store": "自营旗舰店", "category": "饮料", "box_qty": 24, "price": 10.0, "supplier_code": "SUP-A"},
+        ]
+    if "FROM inventory WHERE" in sql:
+        return [
+            {"sku": "SKU0001", "warehouse_type": "platform", "warehouse": "华东C仓", "available_qty": 0, "in_transit_qty": 0, "safety_qty": 0, "safety_days": 0},
+            {"sku": "SKU0002", "warehouse_type": "platform", "warehouse": "华东C仓", "available_qty": 0, "in_transit_qty": 0, "safety_qty": 0, "safety_days": 0},
+        ]
+    return _old_q3(sql, params)
+
+_db3.query = _q3
+import routes.purchase as _rp
+_old_pq = _rp.query
+_rp.query = _q3  # _build_purchase 内部 query 为模块名字绑定, 需直改路由模块
+from routes.purchase import _build_purchase as _bp
+_moq = _bp("jd", "bbcc", 28)
+_supA = [r for r in _moq if (r.get("supplier_code") or "") == "SUP-A"]
+check("MOQ: 同供应商 2 SKU 均进入建议", len(_supA) == 2, "got %d" % len(_supA))
+_tot = sum((r.get("purchase_qty") or 0) for r in _supA)
+check("MOQ: 合计 84 < 起订 100 放大到 ≥100", _tot >= 100, "total=%d" % _tot)
+_has_note = any("起订" in (r.get("note") or "") for r in _supA)
+check("MOQ: note 含起订说明", _has_note)
+_rp.query = _old_pq
+_db3.query = _old_q3
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

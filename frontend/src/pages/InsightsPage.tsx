@@ -459,7 +459,7 @@ export default function InsightsPage() {
           </div>
           <div className="section-title" style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
             <span>采购建议</span>
-            {globalChannel==='jd' && <span className="pill" style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{replenMode==='bbcc'?'BBCC 口径(含B仓)':'传统口径(不含B仓)'}</span>}
+            {globalChannel==='jd' && <span className="pill" style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:'auto',lineHeight:'18px'}}>{replenMode==='bbcc'?'BBCC 口径(含B仓)':'传统口径(不含B仓)'}</span>}
             <span className="muted2" style={{fontSize:'var(--font-xs)',fontWeight:400}}>显示 {purchaseVisCols.length}/{PURCHASE_COLS.length} 列 · 已加载 {Math.min(purchaseLimit, filteredPurchase.length)}/{filteredPurchase.length} 条{insightSearch ? ` · "${insightSearch}"` : ''}</span>
           </div>
           {purchaseLoading ? (
@@ -587,7 +587,7 @@ export default function InsightsPage() {
                           if (col.id === 'warehouse') return <td key={id} style={{fontSize:'var(--font-sm)'}}>{x.warehouse}</td>
                           if (col.id === 'days') return <td key={id} style={{fontWeight:600,color:x.days_zero>=90?'var(--danger)':(x.days_zero>=30?'var(--warning)':'var(--muted)'),fontSize:'var(--font-sm)'}}>{x.days_zero==999?'∞':x.days_zero}天</td>
                           if (col.id === 'stock') return <td key={id} style={{fontSize:'var(--font-sm)'}}>{x.stock}</td>
-                          if (col.id === 'level') return <td key={id}><span className={`pill ${x.level==='black'?'danger':x.level==='red'?'danger':x.level==='yellow'?'warning':'info'}`} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:30,minHeight:'auto',lineHeight:'18px'}}>{x.level==='black'?'紧急':x.level==='red'?'处置':x.level==='yellow'?'滞销':'观察'}</span></td>
+                          if (col.id === 'level') return <td key={id}><span className={`pill ${x.level==='black'?'danger':x.level==='red'?'danger':x.level==='yellow'?'warning':'info'}`} style={{fontSize:'var(--font-10)',padding:'8px 10px',minHeight:'auto',lineHeight:'18px'}}>{x.level==='black'?'紧急':x.level==='red'?'处置':x.level==='yellow'?'滞销':'观察'}</span></td>
                           if (col.id === 'note') return <td key={id} style={{fontSize:'var(--font-xs)',color:'var(--muted2)'}}>{(x.reason||[]).join(' · ')}<span style={{color:'var(--text)',fontWeight:600}}> → {x.suggestion}</span></td>
                           return <td key={id}></td>
                         })}
