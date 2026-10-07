@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
-import { clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
-import ConfirmDialog from '../components/ConfirmDialog'
-import { Group, Row, LastRow } from '../components/ListGroup'
+import { Group, LastRow } from '../components/ListGroup'
 
 const VERSION = (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) ? __APP_VERSION__ : '2.0.0'  // 构建注入(package.json version), 发版改 package.json
 const BUILD = new Date().toISOString().slice(0,10)
@@ -14,26 +12,10 @@ export default function SettingsPage() {
   const toast = useToast()
   const { channel, wsStatus } = useAppStore()
   const [, setDbSize] = useState('')
-  const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   // 开发者模式(彩蛋入口): 连续点版本号 6 次开启, localStorage 持久化(iOS/Android 惯例)
   const devTap = useRef(0)
   const [devMode, setDevMode] = useState(() => { try { return localStorage.getItem('c_dev_mode') === '1' } catch { return false } })
 
-
-
-
-
-  // 种子填充状态: 由 App 全局轮询负责(续跑有后端并发锁防护), 完成事件恢复按钮状态
-  useEffect(() => {
-    const h = () => { setSeeding(false) }
-    window.addEventListener('seed-done', h)
-    window.addEventListener('seed-error', h)
-    return () => { window.removeEventListener('seed-done', h); window.removeEventListener('seed-error', h) }
-  }, [])
-
-
-  const [seeding, setSeeding] = useState(() => { try { return !!localStorage.getItem('c_seed_task') } catch { return false } })
-  const [resetting, setResetting] = useState(false)
   // 告警推送 webhook 配置（全局，存 replenishment_config.webhook_url）
   const [webhookUrl, setWebhookUrl] = useState('')
   const [webhookSaving, setWebhookSaving] = useState(false)
@@ -57,51 +39,6 @@ export default function SettingsPage() {
     setWebhookSaving(false)
   }
 
-  const doSeed = async () => {
-    setConfirm(null); setSeeding(true)
-    try {
-      const r = await fetch(API + '/api/seed/fill', {method:'POST', headers:{'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
-      const d = await r.json()
-      if (d.ok) {
-        if (d.data?.requires_reset) { toast.error('已有数据，请先重置'); setSeeding(false); setConfirm('reset'); return }
-        const taskId = d.data?.task_id
-        if (taskId) { try { localStorage.setItem('c_seed_task', taskId) } catch {} }
-        toast.add({type:'success', title:'填充任务已提交', duration:6000, action:{label:'查看进度 →', handler:()=>{ window.__setPage && window.__setPage('tasks') }}})
-      } else { toast.error('填充失败: ' + (d.error || '')); setSeeding(false) }
-    } catch { toast.error('填充失败'); setSeeding(false) }
-  }
-
-  const doReset = async () => {
-    setConfirm(null)
-    setResetting(true)
-    try {
-      const r = await fetch(API + '/api/seed/reset', {method:'POST', headers:{'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
-      const d = await r.json()
-      if (d.ok && d.data?.task_id) {
-        try { localStorage.setItem('c_reset_task', d.data.task_id) } catch {}
-        toast.success('重置任务已提交，后台清理中...')
-        // 轮询等待重置完成
-        const poll = setInterval(async () => {
-          try {
-            const sr = await fetch(API + '/api/seed/fill/status?task_id=' + d.data.task_id, {headers:{'Authorization':'Bearer ' + (()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
-            const sd = await sr.json()
-            if (sd.data?.status === 'done' || sd.data?.status === 'error') {
-              clearInterval(poll)
-              try { localStorage.removeItem('c_reset_task') } catch {}
-              clearCache(); clearInflight()
-              useAppStore.setState({ dashboard: null, alerts: [], stockRisk: [] })
-              toast.success('数据已重置，即将刷新')
-              setTimeout(() => window.location.reload(), 1500)
-            }
-          } catch { clearInterval(poll); setResetting(false) }
-        }, 2000)
-      } else {
-        toast.error('重置失败: ' + (d.error || ''))
-        setResetting(false)
-      }
-    } catch { toast.error('重置失败'); setResetting(false) }
-  }
-
   return <>
     <div style={{padding:'16px 0',maxWidth:500,margin:'0 auto'}}>
       <Group title="操作">
@@ -120,11 +57,6 @@ export default function SettingsPage() {
         <LastRow label="重置欢迎页" sub="重新显示首次使用引导" onClick={() => { try { localStorage.removeItem('c_welcome_seen') } catch {} toast.success('欢迎页已重置') }} />
       </Group>
 
-      <Group title="种子数据">
-        <Row label="一键填充" sub="生成 2,000 SKU × 60 天 × 10 万条模拟数据" onClick={() => setConfirm('fill')} loading={seeding} />
-        <LastRow label="一键重置" sub="清空所有数据恢复初始状态" onClick={() => setConfirm('reset')} danger loading={resetting} />
-      </Group>
-
       <Group title="告警推送">
         <div style={{padding:14}}>
           <div style={{fontSize:'var(--font-13)',fontWeight:600,marginBottom:4}}>Webhook 地址</div>
@@ -139,28 +71,6 @@ export default function SettingsPage() {
       <div style={{textAlign:'center',marginTop:24,fontSize:'var(--font-sm)',color:'var(--muted2)'}}>
         SupplyKit · 供应链数据工作台
       </div>
-
-      {/* 确认弹窗 */}
-      {confirm === 'fill' && (
-        <ConfirmDialog
-          open
-          title="生成种子数据？"
-          desc="将生成 160 个商品、60 天订单、9 个仓库库存等模拟数据，覆盖现有数据。"
-          confirmLabel="生成"
-          onConfirm={doSeed}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-      {confirm === 'reset' && (
-        <ConfirmDialog
-          open
-          title="重置所有数据？"
-          desc="此操作不可恢复。将清空订单、库存、商品、规则等全部数据。"
-          confirmLabel="重置"
-          onConfirm={doReset}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
     </div>
 </>
 }
