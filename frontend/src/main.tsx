@@ -18,17 +18,21 @@ function showMaintenance() {
   if (document.getElementById('app-maintenance')) return
   const d = document.createElement('div')
   d.id = 'app-maintenance'
-  d.style.cssText = "position:fixed;inset:0;z-index:99999;background:var(--bg,#f2f2f7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,sans-serif"
-  d.innerHTML = '<div style="font-size:26px;font-weight:800;color:var(--text,#0f172a)">SupplyKit</div>'
-    + '<div style="font-size:14px;color:var(--muted,var(--muted))">系统正在维护中，请稍后重试</div>'
-    + '<button id="app-reload" style="margin-top:6px;padding:8px 24px;border:none;border-radius:99px;background:#007AFF;color:#fff;font-size:14px;cursor:pointer">刷新</button>'
+  d.style.cssText =
+    'position:fixed;inset:0;z-index:99999;background:var(--bg,#f2f2f7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:-apple-system,sans-serif'
+  d.innerHTML =
+    '<div style="font-size:26px;font-weight:800;color:var(--text,#0f172a)">SupplyKit</div>' +
+    '<div style="font-size:14px;color:var(--muted,var(--muted))">系统正在维护中，请稍后重试</div>' +
+    '<button id="app-reload" style="margin-top:6px;padding:8px 24px;border:none;border-radius:99px;background:#007AFF;color:#fff;font-size:14px;cursor:pointer">刷新</button>'
   document.body.appendChild(d)
-  document.getElementById('app-reload').onclick = () => { location.reload() }
+  document.getElementById('app-reload').onclick = () => {
+    location.reload()
+  }
 }
 // 防误报: 仅 React 已挂载(render 发起后) + root 持续为空(挂载/重渲染瞬态排除) + 排除资源加载错误
 let _rendered = false
 function _maybeShowMaintenance() {
-  if (!_rendered) return  // React 挂载前不动(JS 未加载场景由 index.html 静态 fallback 兜底)
+  if (!_rendered) return // React 挂载前不动(JS 未加载场景由 index.html 静态 fallback 兜底)
   setTimeout(() => {
     const root = document.getElementById('root')
     if (!root || root.childElementCount !== 0) return
@@ -39,16 +43,18 @@ function _maybeShowMaintenance() {
     }, 2500)
   }, 500)
 }
-window.addEventListener('error', (e) => {
-  if (e.target && e.target !== window) return  // 资源加载失败(img/script/src)非致命, 不触发
+window.addEventListener('error', e => {
+  if (e.target && e.target !== window) return // 资源加载失败(img/script/src)非致命, 不触发
   _maybeShowMaintenance()
 })
 window.addEventListener('unhandledrejection', _maybeShowMaintenance)
 
-_rendered = true  // render 已发起: 之后 root 持续为空才算整树崩溃
+_rendered = true // render 已发起: 之后 root 持续为空才算整树崩溃
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ErrorBoundary><App /></ErrorBoundary>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 )
 
@@ -57,21 +63,28 @@ function showUpdateBanner() {
   if (document.getElementById('app-update-banner')) return
   const d = document.createElement('div')
   d.id = 'app-update-banner'
-  d.style.cssText = "position:fixed;bottom:calc(env(safe-area-inset-bottom) + 16px);left:50%;transform:translateX(-50%);z-index:99998;background:rgba(15,23,42,0.92);color:#fff;padding:10px 18px;border-radius:99px;font-size:13px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);font-family:-apple-system,sans-serif"
-  d.innerHTML = '<span>发现新版本</span><span id="app-update-btn" style="color:#7db8ff;font-weight:700;cursor:pointer">立即刷新</span>'
+  d.style.cssText =
+    'position:fixed;bottom:calc(env(safe-area-inset-bottom) + 16px);left:50%;transform:translateX(-50%);z-index:99998;background:rgba(15,23,42,0.92);color:#fff;padding:10px 18px;border-radius:99px;font-size:13px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);font-family:-apple-system,sans-serif'
+  d.innerHTML =
+    '<span>发现新版本</span><span id="app-update-btn" style="color:#7db8ff;font-weight:700;cursor:pointer">立即刷新</span>'
   document.body.appendChild(d)
-  document.getElementById('app-update-btn').onclick = () => { location.reload() }
+  document.getElementById('app-update-btn').onclick = () => {
+    location.reload()
+  }
 }
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then(reg => {
-      reg.addEventListener('updatefound', () => {
-        const nw = reg.installing
-        if (!nw) return
-        nw.addEventListener('statechange', () => {
-          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner()
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then(reg => {
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing
+          if (!nw) return
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner()
+          })
         })
       })
-    }).catch(() => {})
+      .catch(() => {})
   })
 }

@@ -29,7 +29,13 @@ instance.interceptors.request.use((config: any) => {
     }
   }
   // 注入认证 token
-  const token = (() => { try { return localStorage.getItem('c_token') } catch { return null } })()
+  const token = (() => {
+    try {
+      return localStorage.getItem('c_token')
+    } catch {
+      return null
+    }
+  })()
   if (token) {
     config.headers = config.headers || {}
     config.headers.Authorization = 'Bearer ' + token
@@ -46,14 +52,17 @@ const INFLIGHT_TTL = 15000
 
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
 instance.interceptors.response.use(
-  (response) => {
+  response => {
     const { method, url, params } = response.config
     const key = cacheKey(method || 'get', url || '', params)
     if ((method || 'get').toLowerCase() === 'get') {
       cache.set(key, { data: response.data, ts: Date.now() })
     }
     inflight.delete(key)
-    console.debug(`[API] ${(method||'get').toUpperCase()} ${url} → ${response.status}`, params && Object.keys(params).length ? params : '')
+    console.debug(
+      `[API] ${(method || 'get').toUpperCase()} ${url} → ${response.status}`,
+      params && Object.keys(params).length ? params : '',
+    )
 
     // 自动解包统一响应格式 {ok, data, error}
     if (response.data && typeof response.data === 'object' && 'ok' in response.data) {
@@ -70,25 +79,34 @@ instance.interceptors.response.use(
 
     return response
   },
-  (error) => {
+  error => {
     const cfg = (error.config || {}) as any
     const key = cacheKey(cfg.method || 'get', cfg.url || '', cfg.params)
     inflight.delete(key)
-    console.debug(`[API] ${(cfg.method||'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
+    console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
     const status = (error.response || {}).status
     if (!status || status >= 500) {
-      reportError('api_http_error', ((error.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
-        status ? ('HTTP ' + status + ' ' + JSON.stringify(error.response?.data || '').slice(0, 400)) : 'network-error', status && status >= 500 ? 'error' : 'warning')
+      reportError(
+        'api_http_error',
+        ((error.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
+        status
+          ? 'HTTP ' + status + ' ' + JSON.stringify(error.response?.data || '').slice(0, 400)
+          : 'network-error',
+        status && status >= 500 ? 'error' : 'warning',
+      )
     }
     return Promise.reject(error)
-  }
+  },
 )
 
 // 导出带缓存的 get
-const apiGet = async <T = any>(url: string, config: Record<string, any> = {}): Promise<{ data: T; status: number; statusText: string; headers: any; config: any }> => {
+const apiGet = async <T = any>(
+  url: string,
+  config: Record<string, any> = {},
+): Promise<{ data: T; status: number; statusText: string; headers: any; config: any }> => {
   const key = cacheKey('get', url, config.params)
-  
+
   // 1) 缓存命中
   const hit = cache.get(key)
   if (hit && Date.now() - hit.ts < CACHE_TTL) {
@@ -99,7 +117,7 @@ const apiGet = async <T = any>(url: string, config: Record<string, any> = {}): P
     }
     return { data: _d, status: 200, statusText: 'OK', headers: {}, config }
   }
-  
+
   // 2) 在途去重(挂起兜底: 超 INFLIGHT_TTL 的旧在途不再复用, 防慢请求卡死后续刷新)
   if (inflight.has(key)) {
     const p: any = inflight.get(key)
@@ -109,7 +127,7 @@ const apiGet = async <T = any>(url: string, config: Record<string, any> = {}): P
       return p
     }
   }
-  
+
   // 3) 发起新请求
   const promise: any = instance.get(url, config).then(r => ({
     data: r.data,
@@ -132,14 +150,14 @@ function invalidateCache() {
 export const api = {
   get: apiGet,
   post: async (url, data, config) => {
-    const merged = {timeout: 30000, ...config}
+    const merged = { timeout: 30000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
   },
   // 批量/重写操作：宽松超时（PA 单 worker 排队时单请求可能 >30s）
   postHeavy: async (url, data, config) => {
-    const merged = {timeout: 90000, ...config}
+    const merged = { timeout: 90000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
@@ -158,13 +176,18 @@ export const api = {
 
 // 清除缓存
 export function clearCache(pattern) {
-  if (!pattern) { cache.clear(); return }
+  if (!pattern) {
+    cache.clear()
+    return
+  }
   for (const key of cache.keys()) {
     if (key.includes(pattern)) cache.delete(key)
   }
 }
 
-export function clearInflight() { inflight.clear() }
+export function clearInflight() {
+  inflight.clear()
+}
 
 // 缓存统计
 export function getCacheStats() {

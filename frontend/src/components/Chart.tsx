@@ -20,7 +20,7 @@ export default function Chart({ option, height = 260 }: ChartProps) {
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     setTheme(mq.matches ? 'dark' : 'light')
-    const handler = (e) => setTheme(e.matches ? 'dark' : 'light')
+    const handler = e => setTheme(e.matches ? 'dark' : 'light')
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [])
@@ -30,7 +30,10 @@ export default function Chart({ option, height = 260 }: ChartProps) {
     const timer = setTimeout(() => {
       if (!ref.current) return
       try {
-        if (inst.current) { inst.current.dispose(); inst.current = null }
+        if (inst.current) {
+          inst.current.dispose()
+          inst.current = null
+        }
         const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' })
         const cs = getComputedStyle(document.documentElement)
         const textColor = cs.getPropertyValue('--text').trim() || '#0f172a'
@@ -39,14 +42,35 @@ export default function Chart({ option, height = 260 }: ChartProps) {
           backgroundColor: 'transparent',
           ...option,
           textStyle: { color: textColor, ...option.textStyle },
-          title: { ...option.title, textStyle: { color: textColor, ...(option.title?.textStyle || {}) } },
-          ...(option.legend ? { legend: { ...option.legend, textStyle: { color: mutedColor, ...(option.legend.textStyle || {}) } } } : {}),
-          ...(option.series ? {
-            series: (Array.isArray(option.series) ? option.series : [option.series]).filter(Boolean).map(s => ({
-              ...s,
-              label: s.label ? { ...s.label, color: textColor, textBorderColor: 'transparent', ...(s.label.color ? {color: s.label.color} : {}) } : s.label,
-            }))
-          } : {}),
+          title: {
+            ...option.title,
+            textStyle: { color: textColor, ...(option.title?.textStyle || {}) },
+          },
+          ...(option.legend
+            ? {
+                legend: {
+                  ...option.legend,
+                  textStyle: { color: mutedColor, ...(option.legend.textStyle || {}) },
+                },
+              }
+            : {}),
+          ...(option.series
+            ? {
+                series: (Array.isArray(option.series) ? option.series : [option.series])
+                  .filter(Boolean)
+                  .map(s => ({
+                    ...s,
+                    label: s.label
+                      ? {
+                          ...s.label,
+                          color: textColor,
+                          textBorderColor: 'transparent',
+                          ...(s.label.color ? { color: s.label.color } : {}),
+                        }
+                      : s.label,
+                  })),
+              }
+            : {}),
           tooltip: {
             ...option.tooltip,
             backgroundColor: theme === 'dark' ? 'rgba(30,41,59,0.95)' : 'rgba(255,255,255,0.95)',
@@ -59,8 +83,15 @@ export default function Chart({ option, height = 260 }: ChartProps) {
         inst.current = chart
         const resize = () => chart.resize()
         window.addEventListener('resize', resize)
-        return () => { window.removeEventListener('resize', resize); try { chart.dispose() } catch(e) {} }
-      } catch(e) { console.error('Chart error:', e) }
+        return () => {
+          window.removeEventListener('resize', resize)
+          try {
+            chart.dispose()
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.error('Chart error:', e)
+      }
     }, 100)
     return () => clearTimeout(timer)
   }, [option, theme])

@@ -15,11 +15,14 @@ export function reportError(type: string, message: string, details?: string, lev
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        log_type: type, level,
+        log_type: type,
+        level,
         message: String(message || '').slice(0, 200),
         details: String(details || '').slice(0, 800),
-        url: (typeof location !== 'undefined' ? location.href : ''),
+        url: typeof location !== 'undefined' ? location.href : '',
       }),
     }).catch(() => {})
-  } catch (e) { /* 上报失败静默 */ }
+  } catch (e) {
+    /* 上报失败静默 */
+  }
 }

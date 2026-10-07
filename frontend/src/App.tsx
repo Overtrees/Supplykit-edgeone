@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react"
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
@@ -31,32 +31,77 @@ import HammerInventory from './components/hammer/HammerInventory'
 import HammerOrders from './components/hammer/HammerOrders'
 import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
-import { t } from "./locale"
+import { t } from './locale'
 
 export const NAV = [
-  { id:'dash',label:t('nav.dash')},{id:'products',label:t('nav.products')},{id:'suppliers',label:t('nav.suppliers')},
-  { id:'orders',label:'订单明细'},{id:'inv',label:t('nav.inv')},{id:'insights',label:t('nav.insights')},
-  { id:'cleansing',label:'数据清洗及导入'},{id:'rules',label:t('nav.rules')},
-  { id:'quality',label:t('nav.quality')},
-  {id:'settings',label:t('nav.settings')},
+  { id: 'dash', label: t('nav.dash') },
+  { id: 'products', label: t('nav.products') },
+  { id: 'suppliers', label: t('nav.suppliers') },
+  { id: 'orders', label: '订单明细' },
+  { id: 'inv', label: t('nav.inv') },
+  { id: 'insights', label: t('nav.insights') },
+  { id: 'cleansing', label: '数据清洗及导入' },
+  { id: 'rules', label: t('nav.rules') },
+  { id: 'quality', label: t('nav.quality') },
+  { id: 'settings', label: t('nav.settings') },
 ]
-
 
 export default function App() {
   const [page, setPage] = useState('dash')
-  const navigateTo = (p: string) => { setPage(p); clearCache(); clearInflight(); const _s = useAppStore.getState(); if (_s.prodBatch || _s.prodSelIds?.length) { _s.setProdBatch(false); _s.setProdBatchSel([]) }; if (p === 'dash') { useAppStore.getState().bumpPageVersion() }
+  const navigateTo = (p: string) => {
+    setPage(p)
+    clearCache()
+    clearInflight()
+    const _s = useAppStore.getState()
+    if (_s.prodBatch || _s.prodSelIds?.length) {
+      _s.setProdBatch(false)
+      _s.setProdBatchSel([])
+    }
+    if (p === 'dash') {
+      useAppStore.getState().bumpPageVersion()
+    }
     // 离开进销存页清除跳转高亮(一次性定位语义) —— 重进页面不再触发定位检查/残留兜底提示
-    if (p !== 'inv') { setHighlightSku(''); setHighlightWarehouse('') }
+    if (p !== 'inv') {
+      setHighlightSku('')
+      setHighlightWarehouse('')
+    }
     // 跳转定位用的搜索词(loc_search 标记)在离开进销存页时清理 —— 避免污染产品/供应商等共享搜索的页面
-    try { if (p !== 'inv' && sessionStorage.getItem('loc_search')) { sessionStorage.removeItem('loc_search'); useAppStore.getState().setHammerSearch('') } } catch(e) {} }
-  ;(window as any).__setPage = (p: string) => { navigateTo(p); closeHammerMenu() }
+    try {
+      if (p !== 'inv' && sessionStorage.getItem('loc_search')) {
+        sessionStorage.removeItem('loc_search')
+        useAppStore.getState().setHammerSearch('')
+      }
+    } catch (e) {}
+  }
+  ;(window as any).__setPage = (p: string) => {
+    navigateTo(p)
+    closeHammerMenu()
+  }
   const [highlightSku, setHighlightSku] = useState('')
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
-  const {inventory, qualityLogs, startPolling, stopAll, channel, setChannel, hammerData, setHammerPanel} = useAppStore()
-  const toast = useToast()  // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
+  const {
+    inventory,
+    qualityLogs,
+    startPolling,
+    stopAll,
+    channel,
+    setChannel,
+    hammerData,
+    setHammerPanel,
+  } = useAppStore()
+  const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
-  const refreshAll = () => { clearCache(); clearInflight(); useAppStore.getState().loadAll(1, {refresh: true}).catch(() => {}); window.dispatchEvent(new Event('rules-changed')); window.dispatchEvent(new Event('insights-refresh')) }
+  const refreshAll = () => {
+    clearCache()
+    clearInflight()
+    useAppStore
+      .getState()
+      .loadAll(1, { refresh: true })
+      .catch(() => {})
+    window.dispatchEvent(new Event('rules-changed'))
+    window.dispatchEvent(new Event('insights-refresh'))
+  }
   // 全局后台任务轮询（跨页面、挂后台均有效）
   // 每 3 秒检查 localStorage 任务标记变化，设置页/清洗页提交任务后自动感知启动轮询
   const [taskVersion, setTaskVersion] = useState(0)
@@ -64,13 +109,16 @@ export default function App() {
   // 全局异常统一收口(2026-09-15): JS 错误/未处理 Promise 拒绝 → 上报 quality_logs(source=frontend, 开发者层)
   useEffect(() => {
     const onErr = (e: ErrorEvent) => {
-      if (e.message) reportError('window_error', e.message, (e.filename || '') + ':' + (e.lineno || ''))
+      if (e.message)
+        reportError('window_error', e.message, (e.filename || '') + ':' + (e.lineno || ''))
     }
     const onRej = (e: PromiseRejectionEvent) => {
       const r = e.reason
-      reportError('unhandled_rejection',
+      reportError(
+        'unhandled_rejection',
         (r && (r.message || String(r))) || 'Promise rejected',
-        r && r.stack ? String(r.stack).slice(0, 800) : '')
+        r && r.stack ? String(r.stack).slice(0, 800) : '',
+      )
     }
     window.addEventListener('error', onErr)
     window.addEventListener('unhandledrejection', onRej)
@@ -81,12 +129,24 @@ export default function App() {
   }, [])
   useEffect(() => {
     const check = setInterval(() => {
-      const seed = (() => { try { return localStorage.getItem('c_seed_task') } catch { return null } })()
-      const cleansing = (() => { try { return JSON.parse(localStorage.getItem('c_cleansing_task') || 'null') } catch { return null } })()
+      const seed = (() => {
+        try {
+          return localStorage.getItem('c_seed_task')
+        } catch {
+          return null
+        }
+      })()
+      const cleansing = (() => {
+        try {
+          return JSON.parse(localStorage.getItem('c_cleansing_task') || 'null')
+        } catch {
+          return null
+        }
+      })()
       const sig = (seed || '') + '|' + (cleansing ? cleansing.task_id : '')
       if (sig !== lastTaskSig.current) {
         lastTaskSig.current = sig
-        setTaskVersion(v => v + 1)  // 任务变化时重启轮询
+        setTaskVersion(v => v + 1) // 任务变化时重启轮询
       }
     }, 5000)
     return () => clearInterval(check)
@@ -94,15 +154,36 @@ export default function App() {
   useEffect(() => {
     const polls = []
     // 种子填充任务
-    const seedTask = (() => { try { return localStorage.getItem('c_seed_task') } catch { return null } })()
+    const seedTask = (() => {
+      try {
+        return localStorage.getItem('c_seed_task')
+      } catch {
+        return null
+      }
+    })()
     if (seedTask) {
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
+          const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {
+            headers: {
+              Authorization:
+                'Bearer ' +
+                (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+            },
+          })
           const d = await r.json()
-          if (document.visibilityState === 'hidden') return  // 挂后台暂停轮询, 回前台立即补查
+          if (document.visibilityState === 'hidden') return // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
-            clearInterval(poll); try { localStorage.removeItem('c_seed_task') } catch {}
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_seed_task')
+            } catch {}
             toast.success('种子数据填充完成')
             window.dispatchEvent(new Event('seed-done'))
             refreshAll()
@@ -110,8 +191,14 @@ export default function App() {
             // not_found 容错：任务可能刚提交数据库写入有延迟，重试 3 次才清理
             const missCount = (window.__seedMissCount || 0) + 1
             window.__seedMissCount = missCount
-            if (d.data?.status === 'not_found' && missCount < 3) { return }
-            clearInterval(poll); try { localStorage.removeItem('c_seed_task') } catch {}; window.__seedMissCount = 0
+            if (d.data?.status === 'not_found' && missCount < 3) {
+              return
+            }
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_seed_task')
+            } catch {}
+            window.__seedMissCount = 0
             if (d.data?.status === 'error') toast.error('种子数据填充失败')
           }
         } catch {}
@@ -119,60 +206,136 @@ export default function App() {
       polls.push(poll)
     }
     // 清洗导入任务
-    const cleansingTask = (() => { try { return JSON.parse(localStorage.getItem('c_cleansing_task') || 'null') } catch { return null } })()
+    const cleansingTask = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('c_cleansing_task') || 'null')
+      } catch {
+        return null
+      }
+    })()
     if (cleansingTask && cleansingTask.task_id) {
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
+          const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {
+            headers: {
+              Authorization:
+                'Bearer ' +
+                (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+            },
+          })
           const d = await r.json()
           if (document.visibilityState === 'hidden') return
           if (d.status === 'done') {
-            clearInterval(poll); try { localStorage.removeItem('c_cleansing_task') } catch {}
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_cleansing_task')
+            } catch {}
             toast.success('数据清洗完成')
             refreshAll()
           } else if (d.status === 'error') {
-            clearInterval(poll); try { localStorage.removeItem('c_cleansing_task') } catch {}
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_cleansing_task')
+            } catch {}
             toast.error('数据清洗失败')
           } else if (d.status === 'not_found') {
             // 容错：刚提交的任务可能还没入库，重试 3 次
             const missCount = (window.__cleanMissCount || 0) + 1
             window.__cleanMissCount = missCount
             if (missCount < 3) return
-            clearInterval(poll); try { localStorage.removeItem('c_cleansing_task') } catch {}; window.__cleanMissCount = 0
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_cleansing_task')
+            } catch {}
+            window.__cleanMissCount = 0
           }
         } catch {}
       }, 5000)
       polls.push(poll)
     }
     // 重置任务轮询
-    const resetTask = (() => { try { return localStorage.getItem('c_reset_task') } catch { return null } })()
+    const resetTask = (() => {
+      try {
+        return localStorage.getItem('c_reset_task')
+      } catch {
+        return null
+      }
+    })()
     if (resetTask) {
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
+          const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {
+            headers: {
+              Authorization:
+                'Bearer ' +
+                (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+            },
+          })
           const d = await r.json()
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
-            clearInterval(poll); try { localStorage.removeItem('c_reset_task') } catch {}
-            if (d.data?.status === 'done') { toast.success('数据重置完成'); refreshAll() }
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_reset_task')
+            } catch {}
+            if (d.data?.status === 'done') {
+              toast.success('数据重置完成')
+              refreshAll()
+            }
           }
         } catch {}
       }, 5000)
       polls.push(poll)
     }
     // 导出任务轮询
-    const exportTask = (() => { try { return JSON.parse(localStorage.getItem('c_export_task') || 'null') } catch { return null } })()
+    const exportTask = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('c_export_task') || 'null')
+      } catch {
+        return null
+      }
+    })()
     if (exportTask && exportTask.task_id) {
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
+          const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {
+            headers: {
+              Authorization:
+                'Bearer ' +
+                (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+            },
+          })
           const d = await r.json()
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done') {
-            clearInterval(poll); try { localStorage.removeItem('c_export_task') } catch {}
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_export_task')
+            } catch {}
             toast.success('导出完成，可在质量日志查看下载')
           } else if (d.data?.status === 'error') {
-            clearInterval(poll); try { localStorage.removeItem('c_export_task') } catch {}
+            clearInterval(poll)
+            try {
+              localStorage.removeItem('c_export_task')
+            } catch {}
             toast.error('导出失败')
           }
         } catch {}
@@ -180,47 +343,108 @@ export default function App() {
       polls.push(poll)
     }
     // 页面从后台回到前台时立即检查任务状态（不等下一次轮询）
-    const onVis = () => { if (document.visibilityState === 'visible') setTaskVersion(v => v + 1) }
+    const onVis = () => {
+      if (document.visibilityState === 'visible') setTaskVersion(v => v + 1)
+    }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
-    return () => { polls.forEach(p => clearInterval(p)); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis) }
+    return () => {
+      polls.forEach(p => clearInterval(p))
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onVis)
+    }
   }, [taskVersion])
   const [apiStatus, setApiStatus] = useState('checking')
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState([])
   const [histLoading, setHistLoading] = useState(false)
-  const [showWelcome, setShowWelcome] = useState(() => { try { return !localStorage.getItem('c_welcome_seen') } catch { return false } })
-  const [loggedIn, setLoggedIn] = useState(() => { try { return !!localStorage.getItem('c_token') } catch { return false } })
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return !localStorage.getItem('c_welcome_seen')
+    } catch {
+      return false
+    }
+  })
+  const [loggedIn, setLoggedIn] = useState(() => {
+    try {
+      return !!localStorage.getItem('c_token')
+    } catch {
+      return false
+    }
+  })
   // 启动时验证 token 有效性（失效则清除并显示登录页）
   useEffect(() => {
     if (!loggedIn) return
-    const token = (() => { try { return localStorage.getItem('c_token') } catch { return null } })()
-    if (!token) { setLoggedIn(false); return }
-    fetch(API + '/api/auth/check', { headers: { 'Authorization': 'Bearer ' + token } })
-      .then(r => { if (r.status === 401) { try { localStorage.removeItem('c_token') } catch {}; setLoggedIn(false) } })
+    const token = (() => {
+      try {
+        return localStorage.getItem('c_token')
+      } catch {
+        return null
+      }
+    })()
+    if (!token) {
+      setLoggedIn(false)
+      return
+    }
+    fetch(API + '/api/auth/check', { headers: { Authorization: 'Bearer ' + token } })
+      .then(r => {
+        if (r.status === 401) {
+          try {
+            localStorage.removeItem('c_token')
+          } catch {}
+          setLoggedIn(false)
+        }
+      })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  const loadHistory = useCallback(async (ch) => {
-    setShowHistory(true)
-    setHistLoading(true)
+  const loadHistory = useCallback(
+    async ch => {
+      setShowHistory(true)
+      setHistLoading(true)
+      try {
+        const API = import.meta.env.VITE_API_BASE_URL || ''
+        const r = await fetch(
+          API + '/api/replenishment-config/history?channel=' + (ch || channel) + '&limit=50',
+          {
+            headers: {
+              Authorization:
+                'Bearer ' +
+                (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+            },
+          },
+        )
+        const d = await r.json()
+        setHistory(d.data || [])
+      } catch (e) {
+        setHistory([])
+      }
+      setHistLoading(false)
+    },
+    [channel],
+  )
+  const checkApi = useCallback(async () => {
     try {
-      const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(API + '/api/replenishment-config/history?channel=' + (ch||channel) + '&limit=50', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()}})
-      const d = await r.json()
-      setHistory(d.data || [])
-    } catch(e) { setHistory([]) }
-    setHistLoading(false)
-  }, [channel])
-  const checkApi = useCallback(async() => {
-    try {
-      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 5000)
-      const r = await fetch(API + '/api/insights/ping', {signal: ctrl.signal})
+      const ctrl = new AbortController()
+      setTimeout(() => ctrl.abort(), 5000)
+      const r = await fetch(API + '/api/insights/ping', { signal: ctrl.signal })
       const d = await r.json()
       setApiStatus(d.ok ? 'ok' : 'slow')
-    } catch { setApiStatus('error') }
+    } catch {
+      setApiStatus('error')
+    }
   }, [])
-  useEffect(() => { checkApi(); const t = setInterval(checkApi, 30000); return () => clearInterval(t) }, [checkApi])
+  useEffect(() => {
+    checkApi()
+    const t = setInterval(checkApi, 30000)
+    return () => clearInterval(t)
+  }, [checkApi])
 
   // 数据版本轮询：后端_ cache_version 变化时自动刷新
   const [, setDbVersion] = useState(0)
@@ -234,7 +458,10 @@ export default function App() {
         if (versionRef.current !== 0 && versionRef.current !== v) {
           // 版本变化，清除前端缓存
           clearCache()
-          useAppStore.getState().loadAll().catch(() => {})
+          useAppStore
+            .getState()
+            .loadAll()
+            .catch(() => {})
         }
         versionRef.current = v
         setDbVersion(v)
@@ -301,8 +528,13 @@ export default function App() {
 
   useEffect(() => {
     if (!showHammerMenu) return
-    const handler = (e) => {
-      if (hammerMenuRef.current && !hammerMenuRef.current.contains(e.target) && !e.target.closest('.hammer-icon-btn') && !e.target.closest('.history-sheet')) {
+    const handler = e => {
+      if (
+        hammerMenuRef.current &&
+        !hammerMenuRef.current.contains(e.target) &&
+        !e.target.closest('.hammer-icon-btn') &&
+        !e.target.closest('.history-sheet')
+      ) {
         closeHammerMenu()
       }
     }
@@ -317,19 +549,32 @@ export default function App() {
     return () => window.removeEventListener('scroll', close)
   }, [showMenu, closeEditorMenu])
 
-  const navAndClose = useCallback((id, sku) => {
-    closeEditorMenu()
-    if (sku) setHighlightSku(sku)
-    navigateTo(id)
-  }, [closeEditorMenu])
+  const navAndClose = useCallback(
+    (id, sku) => {
+      closeEditorMenu()
+      if (sku) setHighlightSku(sku)
+      navigateTo(id)
+    },
+    [closeEditorMenu],
+  )
 
   useKeyboard({
     'meta+b': () => toggleEditorMenu(),
-    'esc': () => { if (showMenu) closeEditorMenu() },
+    esc: () => {
+      if (showMenu) closeEditorMenu()
+    },
   })
-  useEffect(() => { startPolling(); return () => stopAll() }, [])
+  useEffect(() => {
+    startPolling()
+    return () => stopAll()
+  }, [])
   // channel 切换时自动加载数据（不再依赖 page——切页由各页面挂载自拉, 避免每次切页全量 loadAll 含慢接口）
-  useEffect(() => { useAppStore.getState().loadAll().catch(() => {}) }, [channel])
+  useEffect(() => {
+    useAppStore
+      .getState()
+      .loadAll()
+      .catch(() => {})
+  }, [channel])
 
   // 同步 html/body 背景色 + browser chrome 色
   useEffect(() => {
@@ -359,9 +604,11 @@ export default function App() {
       // 进销存按 SKU 搜索定位: 目标行可能在分页深处(100条/页), 搜索后必在当前结果, 高亮+滚动才可达
       useAppStore.getState().setHammerSearch(sku)
       // 标记定位搜索(离开进销存页时自动清理, 不污染其他共享搜索的页面)
-      try { sessionStorage.setItem('loc_search', sku) } catch(e) {}
+      try {
+        sessionStorage.setItem('loc_search', sku)
+      } catch (e) {}
     }
-    if (wh !== undefined) setHighlightWarehouse(wh || '')  // ''=聚合高亮(bc 行跳 C 仓全仓行), 空则清残留
+    if (wh !== undefined) setHighlightWarehouse(wh || '') // ''=聚合高亮(bc 行跳 C 仓全仓行), 空则清残留
     // 从告警跳进销存时同步切到对应仓库维度(own/platform/platform_b), 保证高亮可见
     if (whType === 'own' || whType === 'platform' || whType === 'platform_b') {
       useAppStore.getState().setHammerWhType(whType)
@@ -369,209 +616,529 @@ export default function App() {
     navigateTo(newPage)
   }, [])
 
-  const lowStock = (inventory||[]).filter(x => Number(x.available_qty) < Number(x.safety_qty)).length
-  const errCount = (qualityLogs||[]).length
+  const lowStock = (inventory || []).filter(
+    x => Number(x.available_qty) < Number(x.safety_qty),
+  ).length
+  const errCount = (qualityLogs || []).length
 
-  const renderPage = (pageId) => {
-    const wrap = (el) => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
+  const renderPage = pageId => {
+    const wrap = el => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
-      case 'dash': return wrap(<DashboardPage key={pageId} onAlert={(s,wt,wh)=>{navigate('inv',s,wt,wh)}} onGoInsights={(tab, sku)=>{ useAppStore.getState().setHammerInsightsTab(tab); if (sku) { const _m = useAppStore.getState().hammerReplenMode; const _k = tab === 'purchase' ? 'purchase' : tab === 'slow' ? 'slow' : _m; useAppStore.getState().setHammerData('insights_search_' + _k, sku) } navigateTo('insights') }} />)
-      case 'products': return wrap(<ProductPage key={pageId} />)
-      case 'suppliers': return wrap(<SupplierPage key={pageId} />)
-      case 'orders': return wrap(<OrdersPage key={pageId} />)
-      case 'inv': return wrap(<InventoryPage key={pageId} highlightSku={highlightSku || ''} highlightWarehouse={highlightWarehouse || ''} />)
-      case 'insights': return wrap(<InsightsPage key={pageId} />)
-      case 'cleansing': return wrap(<CleansingPage key={pageId} />)
-      case 'rules': return wrap(<RulesPage key={pageId} />)
-      case 'quality': return wrap(<QualityPage key={pageId} />)
-      case 'tasks': return wrap(<TaskPage key={pageId} />)
-      case 'settings': return wrap(<SettingsPage key={pageId} />)
-      case 'devmode': return wrap(<DevModePage key={pageId} />)
-      case 'recycle': return wrap(<RecyclePage key={pageId} />)
-      default: return null
+      case 'dash':
+        return wrap(
+          <DashboardPage
+            key={pageId}
+            onAlert={(s, wt, wh) => {
+              navigate('inv', s, wt, wh)
+            }}
+            onGoInsights={(tab, sku) => {
+              useAppStore.getState().setHammerInsightsTab(tab)
+              if (sku) {
+                const _m = useAppStore.getState().hammerReplenMode
+                const _k = tab === 'purchase' ? 'purchase' : tab === 'slow' ? 'slow' : _m
+                useAppStore.getState().setHammerData('insights_search_' + _k, sku)
+              }
+              navigateTo('insights')
+            }}
+          />,
+        )
+      case 'products':
+        return wrap(<ProductPage key={pageId} />)
+      case 'suppliers':
+        return wrap(<SupplierPage key={pageId} />)
+      case 'orders':
+        return wrap(<OrdersPage key={pageId} />)
+      case 'inv':
+        return wrap(
+          <InventoryPage
+            key={pageId}
+            highlightSku={highlightSku || ''}
+            highlightWarehouse={highlightWarehouse || ''}
+          />,
+        )
+      case 'insights':
+        return wrap(<InsightsPage key={pageId} />)
+      case 'cleansing':
+        return wrap(<CleansingPage key={pageId} />)
+      case 'rules':
+        return wrap(<RulesPage key={pageId} />)
+      case 'quality':
+        return wrap(<QualityPage key={pageId} />)
+      case 'tasks':
+        return wrap(<TaskPage key={pageId} />)
+      case 'settings':
+        return wrap(<SettingsPage key={pageId} />)
+      case 'devmode':
+        return wrap(<DevModePage key={pageId} />)
+      case 'recycle':
+        return wrap(<RecyclePage key={pageId} />)
+      default:
+        return null
     }
   }
 
   return (
     <>
-      {!loggedIn ? <LoginPage onLogin={() => { try { localStorage.removeItem('c_welcome_seen') } catch {}; setShowWelcome(true); setLoggedIn(true); clearCache(); clearInflight(); useAppStore.getState().loadAll().catch(() => {}) }} />
-      : <ToastProvider>
-      <ToastAutoClear page={page} />
-      {/* 主内容 — 侧边栏打开时显示菜单，关闭时显示页面 */}
-      <header style={{display:showWelcome?'none':''}}>
-        <div className="header-inner">
-          {page === 'dash' ? (
-            /* 看板页：左侧渠道筛选+锤子按钮，右侧菜单按钮 */
+      {!loggedIn ? (
+        <LoginPage
+          onLogin={() => {
+            try {
+              localStorage.removeItem('c_welcome_seen')
+            } catch {}
+            setShowWelcome(true)
+            setLoggedIn(true)
+            clearCache()
+            clearInflight()
+            useAppStore
+              .getState()
+              .loadAll()
+              .catch(() => {})
+          }}
+        />
+      ) : (
+        <ToastProvider>
+          <ToastAutoClear page={page} />
+          {/* 主内容 — 侧边栏打开时显示菜单，关闭时显示页面 */}
+          <header style={{ display: showWelcome ? 'none' : '' }}>
+            <div className="header-inner">
+              {page === 'dash' ? (
+                /* 看板页：左侧渠道筛选+锤子按钮，右侧菜单按钮 */
+                <>
+                  <div className="header-left">
+                    <span className="header-status">
+                      <select
+                        value={channel}
+                        onChange={e => setChannel(e.target.value)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          color: 'inherit',
+                          fontSize: 'inherit',
+                          fontWeight: 'inherit',
+                          cursor: 'pointer',
+                          padding: 0,
+                          margin: 0,
+                          appearance: 'none',
+                          WebkitAppearance: 'none',
+                          MozAppearance: 'none',
+                        }}
+                      >
+                        <option value="jd">京东渠道</option>
+                        <option value="other">其他渠道</option>
+                      </select>
+                    </span>
+                    <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z" />
+                        <path d="M12 12h9" />
+                        <path d="m22 3-3 3" />
+                        <path d="m19 3-3 3" />
+                        <path d="M12 3v3" />
+                        <path d="M12 18v3" />
+                      </svg>
+                    </button>
+                  </div>
+                  <button className="menu-btn" onClick={toggleEditorMenu}>
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                      <rect x="2" y="4" width="16" height="1.5" rx=".75" fill="currentColor" />
+                      <rect x="2" y="9.25" width="16" height="1.5" rx=".75" fill="currentColor" />
+                      <rect x="2" y="14.5" width="16" height="1.5" rx=".75" fill="currentColor" />
+                    </svg>
+                  </button>
+                </>
+              ) : (
+                /* 其他页：左侧返回按钮，右侧锤子按钮 + 渠道筛选 */
+                <>
+                  <div className="header-left">
+                    <button
+                      className="back-btn"
+                      onClick={() =>
+                        navigateTo(page === 'devmode' || page === 'recycle' ? 'settings' : 'dash')
+                      }
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="19 12 5 12" />
+                        <polyline points="11 18 5 12 11 6" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z" />
+                        <path d="M12 12h9" />
+                        <path d="m22 3-3 3" />
+                        <path d="m19 3-3 3" />
+                        <path d="M12 3v3" />
+                        <path d="M12 18v3" />
+                      </svg>
+                    </button>
+                    <span className="header-status">
+                      <select
+                        value={channel}
+                        onChange={e => setChannel(e.target.value)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          color: 'inherit',
+                          fontSize: 'inherit',
+                          fontWeight: 'inherit',
+                          cursor: 'pointer',
+                          padding: 0,
+                          margin: 0,
+                          appearance: 'none',
+                          WebkitAppearance: 'none',
+                          MozAppearance: 'none',
+                        }}
+                      >
+                        <option value="jd">京东渠道</option>
+                        <option value="other">其他渠道</option>
+                      </select>
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </header>
+          {showHammerMenu && (
             <>
-              <div className="header-left">
-                <span className="header-status">
-                  <select value={channel} onChange={e=>setChannel(e.target.value)} style={{background:'transparent',border:'none',outline:'none',color:'inherit',fontSize:'inherit',fontWeight:'inherit',cursor:'pointer',padding:0,margin:0,appearance:'none',WebkitAppearance:'none',MozAppearance:'none'}}>
-                    <option value='jd'>京东渠道</option>
-                    <option value='other'>其他渠道</option>
-                  </select>
-                </span>
-                <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z"/>
-                    <path d="M12 12h9"/>
-                    <path d="m22 3-3 3"/>
-                    <path d="m19 3-3 3"/>
-                    <path d="M12 3v3"/>
-                    <path d="M12 18v3"/>
-                  </svg>
-                </button>
-              </div>
-              <button className="menu-btn" onClick={toggleEditorMenu}>
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="1.5" rx=".75" fill="currentColor"/><rect x="2" y="9.25" width="16" height="1.5" rx=".75" fill="currentColor"/><rect x="2" y="14.5" width="16" height="1.5" rx=".75" fill="currentColor"/></svg>
-              </button>
-            </>
-          ) : (
-            /* 其他页：左侧返回按钮，右侧锤子按钮 + 渠道筛选 */
-            <>
-              <div className="header-left">
-                <button className="back-btn" onClick={() => navigateTo(page === 'devmode' || page === 'recycle' ? 'settings' : 'dash')}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="19 12 5 12"/><polyline points="11 18 5 12 11 6"/></svg>
-                </button>
-              </div>
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z"/>
-                    <path d="M12 12h9"/>
-                    <path d="m22 3-3 3"/>
-                    <path d="m19 3-3 3"/>
-                    <path d="M12 3v3"/>
-                    <path d="M12 18v3"/>
-                  </svg>
-                </button>
-                <span className="header-status">
-                  <select value={channel} onChange={e=>setChannel(e.target.value)} style={{background:'transparent',border:'none',outline:'none',color:'inherit',fontSize:'inherit',fontWeight:'inherit',cursor:'pointer',padding:0,margin:0,appearance:'none',WebkitAppearance:'none',MozAppearance:'none'}}>
-                    <option value='jd'>京东渠道</option>
-                    <option value='other'>其他渠道</option>
-                  </select>
-                </span>
+              <div
+                onPointerDown={closeHammerMenu}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 3001,
+                  background: 'transparent',
+                  transition: 'background 220ms ease',
+                }}
+              />
+              <div
+                ref={hammerMenuRef}
+                onPointerDown={e => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  zIndex: 3002,
+                  right: 16,
+                  top: 'calc(env(safe-area-inset-top, 0px) + 7px + 46px + 6px)',
+                  width: 240,
+                  background: 'var(--glass-bg)',
+                  backdropFilter:
+                    'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
+                  WebkitBackdropFilter:
+                    'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
+                  border: '0.5px solid var(--glass-border)',
+                  boxShadow: '0 2px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25)',
+                  borderRadius: 26,
+                  overflow: 'hidden auto',
+                  maxHeight: 'calc(100vh - 120px)',
+                  opacity: hammerMenuClosing ? 0 : 1,
+                  transform: hammerMenuClosing
+                    ? 'translateY(-10px) scale(0.92)'
+                    : 'translateY(0) scale(1)',
+                  transformOrigin: '85% -18px',
+                  transition: 'opacity 180ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1)',
+                  willChange: 'opacity, transform',
+                  padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+                }}
+              >
+                {page === 'dash' ? (
+                  <HammerDashboard channel={channel} />
+                ) : page === 'products' ? (
+                  <HammerProducts channel={channel} />
+                ) : page === 'suppliers' ? (
+                  <HammerSuppliers channel={channel} />
+                ) : page === 'orders' ? (
+                  <HammerOrders channel={channel} />
+                ) : page === 'inv' ? (
+                  <HammerInventory channel={channel} />
+                ) : page === 'insights' ? (
+                  <HammerInsights channel={channel} />
+                ) : page === 'cleansing' ? (
+                  <HammerCleansing channel={channel} />
+                ) : page === 'rules' ? (
+                  <HammerRules channel={channel} onShowHistory={loadHistory} />
+                ) : page === 'recycle' ? (
+                  <HammerRecycle />
+                ) : (
+                  <div
+                    style={{
+                      color: 'var(--muted)',
+                      fontSize: 'var(--font-13)',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 'var(--font-xs)',
+                        color: 'var(--muted2)',
+                        marginBottom: 4,
+                      }}
+                    >
+                      {channel === 'jd' ? '京东' : '其他'} · {page}
+                    </div>
+                    <div
+                      style={{ fontSize: 'var(--font-13)', color: 'var(--text)', marginBottom: 4 }}
+                    >
+                      {hammerData[channel]?.[page]
+                        ? `${hammerData[channel]?.[page]?.length ?? 0} 条记录`
+                        : '暂无数据'}
+                    </div>
+                    <div
+                      style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginTop: 8 }}
+                    >
+                      功能待添加
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}
-        </div>
-      </header>
-      {showHammerMenu && (
-        <>
-          <div
-            onPointerDown={closeHammerMenu}
-            style={{
-              position: 'fixed', inset: 0, zIndex: 3001,
-              background: 'transparent',
-              transition: 'background 220ms ease'
-            }}
+          <Sidebar
+            page={page}
+            onClose={closeEditorMenu}
+            onNavigate={navAndClose}
+            lowStock={lowStock}
+            errCount={errCount}
+            apiStatus={apiStatus}
+            open={showMenu}
+            menuClosing={menuClosing}
+            onBackdrop={closeEditorMenu}
           />
-          <div
-            ref={hammerMenuRef}
-            onPointerDown={e => e.stopPropagation()}
-            style={{
-              position: 'fixed', zIndex: 3002,
-              right: 16,
-              top: 'calc(env(safe-area-inset-top, 0px) + 7px + 46px + 6px)',
-              width: 240,
-              background: 'var(--glass-bg)',
-              backdropFilter: 'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
-              WebkitBackdropFilter: 'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
-              border: '0.5px solid var(--glass-border)',
-              boxShadow: '0 2px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25)',
-              borderRadius: 26,
-              overflow: 'hidden auto',
-              maxHeight: 'calc(100vh - 120px)',
-              opacity: hammerMenuClosing ? 0 : 1,
-              transform: hammerMenuClosing ? 'translateY(-10px) scale(0.92)' : 'translateY(0) scale(1)',
-              transformOrigin: '85% -18px',
-              transition: 'opacity 180ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1)',
-              willChange: 'opacity, transform',
-              padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))'
-            }}
-          >
-            {page === 'dash' ? <HammerDashboard channel={channel} /> :
-            page === 'products' ? <HammerProducts channel={channel} /> :
-             page === 'suppliers' ? <HammerSuppliers channel={channel} /> :
-             page === 'orders' ? <HammerOrders channel={channel} /> :
-             page === 'inv' ? <HammerInventory channel={channel} /> :
-             page === 'insights' ? <HammerInsights channel={channel} /> :
-             page === 'cleansing' ? <HammerCleansing channel={channel} /> :
-             page === 'rules' ? <HammerRules channel={channel} onShowHistory={loadHistory} /> :
-             page === 'recycle' ? <HammerRecycle /> : (
-            <div style={{color:'var(--muted)',fontSize:'var(--font-13)',textAlign:'center'}}>
-              <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginBottom:4}}>
-                {channel === 'jd' ? '京东' : '其他'} · {page}
-              </div>
-              <div style={{fontSize:'var(--font-13)',color:'var(--text)',marginBottom:4}}>
-                {hammerData[channel]?.[page] ? `${(hammerData[channel]?.[page]?.length ?? 0)} 条记录` : '暂无数据'}
-              </div>
-              <div style={{fontSize:'var(--font-xs)',color:'var(--muted2)',marginTop:8}}>
-                功能待添加
+          {/* 欢迎页 — 首次使用 */}
+          {showWelcome && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: '100svh',
+                padding:
+                  'calc(env(safe-area-inset-top, 0px) + 40px) 24px calc(24px + env(safe-area-inset-bottom, 20px))',
+                overflowY: 'auto',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  maxWidth: 360,
+                  margin: '0 auto',
+                  width: '100%',
+                }}
+              >
+                <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                  <div
+                    style={{
+                      fontSize: 32,
+                      fontWeight: 800,
+                      color: 'var(--text)',
+                      marginBottom: 8,
+                      letterSpacing: '-0.5px',
+                    }}
+                  >
+                    {t('welcome.title')}
+                  </div>
+                  <div
+                    style={{ fontSize: 'var(--font-15)', color: 'var(--muted2)', lineHeight: 1.5 }}
+                  >
+                    电商供应链数据清洗
+                    <br />
+                    与补货决策看板
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: 14,
+                    marginBottom: 32,
+                  }}
+                >
+                  {[
+                    {
+                      svg: 'M3 12h4l2-9 4 18 2-9h4',
+                      title: '看数据',
+                      desc: '多维看板总览',
+                      page: 'dash',
+                    },
+                    {
+                      svg: 'M9 18h6M10 22h4M15.09 14c.6-.77 1.05-1.6 1.32-2.5A5.4 5.4 0 0 0 12 6a5.4 5.4 0 0 0-4.41 5.5c.27.9.72 1.73 1.32 2.5M9 18c0-1.5.5-2.9 1.5-4h3c1 1.1 1.5 2.5 1.5 4',
+                      title: '看补货',
+                      desc: '补货/采购建议',
+                      page: 'insights',
+                    },
+                    {
+                      svg: 'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',
+                      title: '导数据',
+                      desc: '数据清洗导入',
+                      page: 'cleansing',
+                    },
+                    {
+                      svg: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',
+                      title: '设规则',
+                      desc: '规则引擎配置',
+                      page: 'rules',
+                    },
+                  ].map(function (card) {
+                    return (
+                      <div
+                        key={card.page}
+                        className="clickable"
+                        style={{
+                          background: 'var(--card)',
+                          borderRadius: 'var(--radius-card-sm)',
+                          padding: 16,
+                          textAlign: 'center',
+                          cursor: 'default',
+                          border: '0.5px solid var(--border)',
+                          boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+                        }}
+                      >
+                        <div style={{ marginBottom: 8 }}>
+                          <svg
+                            width="30"
+                            height="30"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="var(--primary)"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d={card.svg} />
+                          </svg>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 'var(--font-15)',
+                            fontWeight: 600,
+                            color: 'var(--text)',
+                            marginBottom: 3,
+                          }}
+                        >
+                          {card.title}
+                        </div>
+                        <div style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
+                          {card.desc}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <button
+                  onClick={async function () {
+                    try {
+                      localStorage.setItem('c_welcome_seen', '1')
+                    } catch {}
+                    setShowWelcome(false)
+                    try {
+                      const r = await fetch(API + '/api/seed/fill', {
+                        headers: {
+                          Authorization:
+                            'Bearer ' +
+                            (() => {
+                              try {
+                                return localStorage.getItem('c_token')
+                              } catch {
+                                return ''
+                              }
+                            })(),
+                        },
+                        method: 'POST',
+                      })
+                      const d = await r.json()
+                      if (d.ok) {
+                        if (d.data?.requires_reset) {
+                          toast.error('已有数据，请在设置页先「一键重置」')
+                          return
+                        }
+                        const taskId = d.data?.task_id
+                        if (taskId) {
+                          try {
+                            localStorage.setItem('c_seed_task', taskId)
+                          } catch {}
+                          toast.success('种子数据填充中，可前往任务管理查看进度')
+                        }
+                      } else toast.error('填充失败: ' + (d.error || ''))
+                    } catch (e) {}
+                  }}
+                  className="btn btn-primary"
+                  style={{
+                    width: '100%',
+                    padding: '14px',
+                    fontSize: 'var(--font-lg)',
+                    fontWeight: 600,
+                    marginBottom: 10,
+                  }}
+                >
+                  {t('welcome.start')}
+                </button>
+                <button
+                  onClick={function () {
+                    localStorage.setItem('c_welcome_seen', '1')
+                    setShowWelcome(false)
+                  }}
+                  className="btn btn-ghost clickable"
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    fontSize: 'var(--font-md)',
+                    color: 'var(--muted2)',
+                  }}
+                >
+                  {t('welcome.skip')}
+                </button>
               </div>
             </div>
           )}
-          </div>
-        </>
-      )}
-      <Sidebar page={page} onClose={closeEditorMenu} onNavigate={navAndClose} lowStock={lowStock} errCount={errCount} apiStatus={apiStatus} open={showMenu} menuClosing={menuClosing} onBackdrop={closeEditorMenu} />
-      {/* 欢迎页 — 首次使用 */}
-      {showWelcome && (
-        <div style={{display:'flex',flexDirection:'column',minHeight:'100svh',padding:'calc(env(safe-area-inset-top, 0px) + 40px) 24px calc(24px + env(safe-area-inset-bottom, 20px))',overflowY:'auto',boxSizing:'border-box'}}>
-          <div style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'center',maxWidth:360,margin:'0 auto',width:'100%'}}>
-          <div style={{textAlign:'center',marginBottom:32}}>
-            <div style={{fontSize:32,fontWeight:800,color:'var(--text)',marginBottom:8,letterSpacing:'-0.5px'}}>{t("welcome.title")}</div>
-            <div style={{fontSize:'var(--font-15)',color:'var(--muted2)',lineHeight:1.5}}>电商供应链数据清洗<br/>与补货决策看板</div>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:32}}>
-            {[
-              {svg:'M3 12h4l2-9 4 18 2-9h4',title:'看数据',desc:'多维看板总览',page:'dash'},
-              {svg:'M9 18h6M10 22h4M15.09 14c.6-.77 1.05-1.6 1.32-2.5A5.4 5.4 0 0 0 12 6a5.4 5.4 0 0 0-4.41 5.5c.27.9.72 1.73 1.32 2.5M9 18c0-1.5.5-2.9 1.5-4h3c1 1.1 1.5 2.5 1.5 4',title:'看补货',desc:'补货/采购建议',page:'insights'},
-              {svg:'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',title:'导数据',desc:'数据清洗导入',page:'cleansing'},
-              {svg:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',title:'设规则',desc:'规则引擎配置',page:'rules'},
-            ].map(function(card) {
-              return <div key={card.page} className="clickable" style={{background:'var(--card)',borderRadius:'var(--radius-card-sm)',padding:16,textAlign:'center',cursor:'default',border:'0.5px solid var(--border)',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
-                <div style={{marginBottom:8}}><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={card.svg}/></svg></div>
-                <div style={{fontSize:'var(--font-15)',fontWeight:600,color:'var(--text)',marginBottom:3}}>{card.title}</div>
-                <div style={{fontSize:'var(--font-sm)',color:'var(--muted2)'}}>{card.desc}</div>
-              </div>
-            })}
-          </div>
-          <button onClick={async function(){
-            try { localStorage.setItem('c_welcome_seen','1') } catch {}
-            setShowWelcome(false)
-            try {
-              const r = await fetch(API + '/api/seed/fill', {headers:{'Authorization':'Bearer '+(()=>{try{return localStorage.getItem('c_token')}catch{return ''}})()},method:'POST'})
-              const d = await r.json()
-              if (d.ok) {
-                if (d.data?.requires_reset) {
-                  toast.error('已有数据，请在设置页先「一键重置」')
-                  return
-                }
-                const taskId = d.data?.task_id
-                if (taskId) {
-                  try { localStorage.setItem('c_seed_task', taskId) } catch {}
-                  toast.success('种子数据填充中，可前往任务管理查看进度')
-                }
-              } else toast.error('填充失败: ' + (d.error || ''))
-            } catch(e) {}
-          }} className="btn btn-primary" style={{width:'100%',padding:'14px',fontSize:'var(--font-lg)',fontWeight:600,marginBottom:10}}>{t("welcome.start")}</button>
-          <button onClick={function(){localStorage.setItem('c_welcome_seen','1');setShowWelcome(false)}}
-            className="btn btn-ghost clickable" style={{width:'100%',padding:'10px',fontSize:'var(--font-md)',color:'var(--muted2)'}}>{t("welcome.skip")}</button>
-          </div>
-        </div>
-      )}
-      <main className="container" style={{display:showWelcome?'none':'',animation:'fadeIn 0.2s ease'}} key={page}>
-        {renderPage(page)}
-      </main>
+          <main
+            className="container"
+            style={{ display: showWelcome ? 'none' : '', animation: 'fadeIn 0.2s ease' }}
+            key={page}
+          >
+            {renderPage(page)}
+          </main>
 
-      {/* 变更历史底部弹窗 */}
-      <HistorySheet
-        show={showHistory}
-        loading={histLoading}
-        data={history}
-        onClose={() => setShowHistory(false)}
-      />
-    </ToastProvider>}
+          {/* 变更历史底部弹窗 */}
+          <HistorySheet
+            show={showHistory}
+            loading={histLoading}
+            data={history}
+            onClose={() => setShowHistory(false)}
+          />
+        </ToastProvider>
+      )}
     </>
   )
 }

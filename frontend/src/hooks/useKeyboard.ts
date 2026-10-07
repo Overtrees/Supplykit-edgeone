@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 export default function useKeyboard(handlers) {
   useEffect(() => {
-    const handler = (e) => {
+    const handler = e => {
       for (const [key, fn] of Object.entries(handlers)) {
         const parts = key.split('+')
         const match = parts.every(p => {
@@ -15,7 +15,11 @@ export default function useKeyboard(handlers) {
           if (p === 'right') return e.key === 'ArrowRight'
           return e.key.toLowerCase() === p.toLowerCase()
         })
-        if (match) { e.preventDefault(); fn(e); return }
+        if (match) {
+          e.preventDefault()
+          fn(e)
+          return
+        }
       }
     }
     window.addEventListener('keydown', handler)

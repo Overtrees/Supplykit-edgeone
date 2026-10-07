@@ -51,6 +51,8 @@ jobs:
           done
       - name: local_test 回归
         run: cd cloud-functions/api && python3 local_test.py
+      - name: 工程审计(SQL 双包裹/缓存 key/DATE_FORMAT %%)
+        run: cd cloud-functions/api && python3 test_audit.py
 
   notify:
     name: 失败通知
