@@ -1,9 +1,9 @@
 """原生补货路由(方案 B): BBCC 两步法 + 传统逐仓(契约与旧 backend 一致)"""
 import time as _time
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from db import query, one
-from routes.common import ok, traced, try_err
+from routes.common import ok, fail, traced, try_err
 from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
 
 router = APIRouter(tags=["insights"])
@@ -35,6 +35,48 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
         return ok({"items": _all[(page - 1) * page_size: page * page_size],
                    "total": len(_all), "page": page, "page_size": page_size})
     return ok(_all)
+
+
+# ── 临时诊断(2026-10-07 排查补货日销全 0, 定位后移除) ──────────────────────────
+@router.get("/insights/replenishment-diag")
+@traced
+async def replenishment_diag(request: Request, channel: str = "jd", mode: str = "bbcc"):
+    """admin 专用: 输出补货日销管道各环节内部量(by_sku/by_sku_wh/c_whs/daily_c/multi)"""
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    from routes.common import verify_token
+    if verify_token(token) != "admin":
+        return fail("仅 admin 可用", 403)
+    out = {}
+    try:
+        by_sku, by_sku_wh = load_daily_sales_grouped(60, channel)
+        out["by_sku_len"] = len(by_sku)
+        out["by_sku_wh_len"] = len(by_sku_wh)
+        out["by_sku_wh_sample"] = list(by_sku_wh.keys())[:5]
+        out["by_sku_sample_days"] = {k: len(v) for k, v in list(by_sku.items())[:3]}
+        c_whs = {r.get("warehouse") for r in query(
+            "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
+            [channel])}
+        out["c_whs"] = sorted(c_whs)
+        daily_c = {}
+        for wk, wd in by_sku_wh.items():
+            base, wh = wk.rsplit("|", 1)
+            if wh in c_whs:
+                m = daily_c.setdefault(base, {})
+                for d, q in wd.items():
+                    m[d] = m.get(d, 0) + q
+        out["daily_c_len"] = len(daily_c)
+        out["daily_c_sample"] = {k: len(v) for k, v in list(daily_c.items())[:3]}
+        multi = calc_sales_multi(daily_c, windows=[7, 14, 28])
+        out["s28_len"] = len(multi[28])
+        out["s28_sample"] = {k: round(v, 2) for k, v in list(multi[28].items())[:3]}
+        # 对照: 全仓口径(与采购一致)
+        multi_all = calc_sales_multi(by_sku, windows=[7, 14, 28])
+        out["all_s28_len"] = len(multi_all[28])
+        out["all_s28_sample"] = {k: round(v, 2) for k, v in list(multi_all[28].items())[:3]}
+    except Exception as e:
+        out["error"] = str(e)[:300]
+    return ok(out)
 
 
 def _build_repl(channel, mode):
