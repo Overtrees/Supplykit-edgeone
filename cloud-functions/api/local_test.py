@@ -577,5 +577,12 @@ _d8 = _mk_daily([(k, 1) for k in range(28, 60)] + [(3, 100)])
 _m8 = calc_sales_multi({'S': smooth_promo_spikes(_d8)}, windows=[7, 28], sparse='shrink')
 check("削峰: 促销后 s7≈0.095(不推高趋势加权)", abs(_m8[7]['S'] - 2 / 7 / 3) < 0.001, "got %s" % _m8[7]['S'])
 
+# ── 传统逐仓需求门控(2026-10-07: 日销≈0 但安全线撑出补货量 → 无需求不补) ──
+from routes.replenishment import _trad_suggested, _MIN_DS
+check("门控: 日销0.02<safety高 → 0(不按安全线补)", _trad_suggested(0.02, 3, 196, 2, 0) == 0)
+check("门控: 日销0.09<门槛 → 0", _trad_suggested(0.09, 3, 196, 2, 0) == 0)
+check("门控: 日销5正常 → 按公式补(safety缺口+lead需求)", _trad_suggested(5, 3, 196, 2, 0) == 209)
+check("门控: 日销0.1=门槛 → 按公式补(边界)", _trad_suggested(_MIN_DS, 3, 196, 2, 0) == 194)
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -14,6 +14,9 @@ _register_cache(lambda: _repl_cache.clear())
 
 _repl_cache = {}
 _REPL_TTL = 300
+# 需求门控阈值: 日销低于此值(近28天不足 2.8 件)视为无实际需求——无需求时库存不会被消耗,
+# 安全线缺口不触发补货(安全线是需求波动的缓冲; 参考 bbcc 无需求不补的驱动语义)
+_MIN_DS = 0.1
 
 
 @router.get("/insights/replenishment")
@@ -35,6 +38,17 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
         return ok({"items": _all[(page - 1) * page_size: page * page_size],
                    "total": len(_all), "page": page, "page_size": page_size})
     return ok(_all)
+
+
+def _trad_suggested(ds, lead, safety, avail, transit):
+    """传统逐仓补货量(纯函数, 可单测): 标准公式 ds×lead + safety − avail − transit
+
+    需求门控: 日销 < _MIN_DS 视为无实际需求 → 0(安全线缺口不触发补货——
+    安全线是需求波动的缓冲, 无需求时库存不会被消耗; 参考 bbcc 需求驱动语义)
+    """
+    if ds < _MIN_DS:
+        return 0
+    return max(round(ds * lead + safety - avail - transit), 0)
 
 
 def _build_repl(channel, mode):
@@ -232,7 +246,7 @@ def _build_repl(channel, mode):
             avail = int(r.get("available_qty") or 0)
             transit = int(r.get("in_transit_qty") or 0)
             safety = int(r.get("safety_qty") or 0)
-            suggested = max(round(ds * lead + safety - avail - transit), 0) if ds > 0 else 0
+            suggested = _trad_suggested(ds, lead, safety, avail, transit)
             prod = products.get(sku, {})
             box = int(prod.get("box_qty") or 1)
             box_qty = ((suggested + box - 1) // box * box) if suggested > 0 else 0
