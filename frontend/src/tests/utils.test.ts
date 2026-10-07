@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { insDefVis, insDefVisTrad, INV_WH_LABEL, ORDER_STATUSES } from '../components/hammer/configs'
+import {
+  insDefVis,
+  insDefVisTrad,
+  INV_WH_LABEL,
+  ORDER_STATUSES,
+} from '../components/hammer/configs'
 import { INS_BBCC_COLS, INS_TRAD_COLS } from '../components/hammer/configs'
 
 describe('工具函数', () => {

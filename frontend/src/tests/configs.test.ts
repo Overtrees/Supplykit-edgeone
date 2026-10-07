@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { PRODUCT_COLS, SUPPLIER_COLS, ORDER_COLS, INV_COLS, INS_BBCC_COLS, INS_TRAD_COLS, INS_PURCHASE_COLS, INS_SLOW_COLS } from '../components/hammer/configs'
+import {
+  PRODUCT_COLS,
+  SUPPLIER_COLS,
+  ORDER_COLS,
+  INV_COLS,
+  INS_BBCC_COLS,
+  INS_TRAD_COLS,
+  INS_PURCHASE_COLS,
+  INS_SLOW_COLS,
+} from '../components/hammer/configs'
 
 describe('列配置', () => {
   it('商品页列定义完整', () => {
@@ -12,7 +21,7 @@ describe('列配置', () => {
 
   it('供应商页列定义完整', () => {
     expect(SUPPLIER_COLS.length).toBe(5)
-    expect(SUPPLIER_COLS.map(c => c.id)).toEqual(['code','name','contact','phone','score'])
+    expect(SUPPLIER_COLS.map(c => c.id)).toEqual(['code', 'name', 'contact', 'phone', 'score'])
   })
 
   it('订单页列定义完整', () => {

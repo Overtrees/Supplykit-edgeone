@@ -15,16 +15,26 @@ describe('Toast 组件', () => {
   })
 
   it('显示成功消息', async () => {
-    render(<ToastProvider><TestButton /></ToastProvider>)
+    render(
+      <ToastProvider>
+        <TestButton />
+      </ToastProvider>,
+    )
     await userEvent.click(screen.getByText('显示Toast'))
     expect(screen.getByText('测试消息')).toBeInTheDocument()
   })
 
   it('3秒后自动消失', async () => {
-    render(<ToastProvider><TestButton /></ToastProvider>)
+    render(
+      <ToastProvider>
+        <TestButton />
+      </ToastProvider>,
+    )
     await userEvent.click(screen.getByText('显示Toast'))
     expect(screen.getByText('测试消息')).toBeInTheDocument()
-    act(() => { vi.advanceTimersByTime(3000) })
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
     expect(screen.queryByText('测试消息')).not.toBeInTheDocument()
   })
 
@@ -32,9 +42,26 @@ describe('Toast 组件', () => {
     const handler = vi.fn()
     function TestUndo() {
       const toast = useToast()
-      return <button onClick={() => toast.add({type:'success', title:'已删除', duration:5000, action: {label:'撤销', handler}})}>删除</button>
+      return (
+        <button
+          onClick={() =>
+            toast.add({
+              type: 'success',
+              title: '已删除',
+              duration: 5000,
+              action: { label: '撤销', handler },
+            })
+          }
+        >
+          删除
+        </button>
+      )
     }
-    render(<ToastProvider><TestUndo /></ToastProvider>)
+    render(
+      <ToastProvider>
+        <TestUndo />
+      </ToastProvider>,
+    )
     await userEvent.click(screen.getByText('删除'))
     expect(screen.getByText('已删除')).toBeInTheDocument()
     expect(screen.getByText('撤销')).toBeInTheDocument()
