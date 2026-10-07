@@ -28,12 +28,7 @@ export default function DevModePage() {
   const [lastCheck, setLastCheck] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [mon, setMon] = useState<any>(null)
-  const [logs, setLogs] = useState<any[]>([])
-  const [logTotal, setLogTotal] = useState(0)
   const [showLogs, setShowLogs] = useState(false)
-  const [logPage, setLogPage] = useState(1)
-  const [moreLoading, setMoreLoading] = useState(false)
-  const [ld, setLd] = useState(true)
   // 种子数据(从设置页移入): 填充/重置为数据操作工具, 归开发者维度
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   const [seeding, setSeeding] = useState(() => { try { return !!localStorage.getItem('c_seed_task') } catch { return false } })
@@ -63,23 +58,9 @@ export default function DevModePage() {
     setRefreshing(false)
   }
 
-  const loadLogs = (p: number) => {
-    if (p === 1) setLd(true); else setMoreLoading(true)
-    api.get('/api/quality-logs?page=' + p + '&page_size=100&scope=dev')
-      .then((r: any) => {
-        const d = r.data || {}
-        const items = Array.isArray(d) ? d : (d.items || [])
-        setLogs(prev => p === 1 ? items : [...prev, ...items])
-        setLogTotal(Array.isArray(d) ? items.length : (d.total || items.length))
-        setLogPage(p); setLd(false); setMoreLoading(false)
-      })
-      .catch(() => { setLd(false); setMoreLoading(false) })
-  }
-
   useEffect(() => {
     checkConnection()
     api.get('/api/monitor').then((r: any) => setMon(r.data)).catch(() => {})
-    loadLogs(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -168,7 +149,7 @@ export default function DevModePage() {
 
       {/* 日志分析入口 */}
       <Group title="日志分析">
-        <LastRow label="开发者异常日志" sub={`共 ${logTotal} 条`} onClick={() => { setShowLogs(true); if (logPage === 1) loadLogs(1) }} />
+        <LastRow label="日志分析" sub="按日日志文件 · 点击预览当日明细" onClick={() => setShowLogs(true)} />
       </Group>
 
       {/* 种子数据(从设置页移入): 开发/运维数据工具 */}
@@ -182,30 +163,7 @@ export default function DevModePage() {
         <div onClick={() => setShowLogs(false)} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
         <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
           <div onClick={e => e.stopPropagation()} className="material-regular" style={{ width: '100%', maxWidth: 600, borderRadius: 'var(--radius-lg)', padding: '18px 14px calc(14px + env(safe-area-inset-bottom))', boxShadow: 'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)', pointerEvents: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
-            <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 12, textAlign: 'center', color: 'var(--text)' }}>日志分析 · 开发者维度</div>
-            {ld ? (
-              <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted2)' }}>加载中...</div>
-            ) : logs.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted2)' }}>暂无开发者日志</div>
-            ) : (
-              logs.map((x: any, i: number) => (
-                <div key={x.id || i} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className={'pill ' + (x.level === 'error' ? 'danger' : x.level === 'warning' ? 'warning' : 'info')} style={{ fontSize: 'var(--font-9)', padding: '1px 6px', minHeight: 'auto', lineHeight: '16px', flexShrink: 0 }}>{LEVEL_LABEL[x.level] || x.level}</span>
-                    <span style={{ fontSize: 'var(--font-xs)', fontWeight: 600, flexShrink: 0 }}>{DEV_LABEL[x.log_type] || x.log_type}</span>
-                    <span className="mono" style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)', marginLeft: 'auto', flexShrink: 0 }}>{String(x.created_at || '').slice(5, 16)}</span>
-                  </div>
-                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={(x.message || '') + (x.details ? '\n' + String(x.details).slice(0, 300) : '')}>{x.message || '-'}</div>
-                  {x.details && <div style={{ fontSize: 9, color: 'var(--muted2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(x.details).slice(0, 120)}</div>}
-                </div>
-              ))
-            )}
-            {logs.length < logTotal && (
-              <button onClick={() => loadLogs(logPage + 1)} disabled={moreLoading} style={{ width: '100%', padding: '10px 0', border: 'none', background: 'transparent', color: 'var(--primary)', fontSize: 'var(--font-sm)', cursor: 'pointer' }}>
-                {moreLoading ? '加载中...' : `加载更多 (${logs.length}/${logTotal})`}
-              </button>
-            )}
-            <div style={{ fontSize: 'var(--font-16)', fontWeight: 700, margin: '14px 0 6px', textAlign: 'center', color: 'var(--text)' }}>历史文件 · 开发者维度</div>
+            <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 12, textAlign: 'center', color: 'var(--text)' }}>日志分析</div>
             <LogFileList scope="dev" />
           </div>
         </div>

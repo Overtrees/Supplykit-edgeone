@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 
 /** 日志文件列表(iPhone 日志分析式): 按天平铺 log_archives 归档, 点击行 → 底部弹窗预览当日 md, 系统分享 API 导出
@@ -60,16 +61,13 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             <span className="pill info" style={{ fontSize: 'var(--font-10)', padding: '1px 8px', minHeight: 'auto', lineHeight: '18px', flexShrink: 0 }}>
               {f.count || 0} 条
             </span>
-            <span style={{ marginLeft: 'auto', fontSize: 'var(--font-10)', color: 'var(--muted2)', flexShrink: 0 }}>
-              {f.updated_at ? String(f.updated_at).slice(5, 16).replace('T', ' ') : '--'}
-            </span>
-            <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}>›</span>
+            <span style={{ marginLeft: 'auto', color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}>›</span>
           </div>
         ))
       )}
 
-      {/* 预览底部弹窗(标准 sheet) */}
-      {preview && (
+      {/* 预览底部弹窗(标准 sheet, createPortal 脱离弹窗容器——嵌套弹窗被 overflow 裁剪会点击无反应) */}
+      {preview && createPortal(
         <>
           <div onClick={() => setPreview(null)} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
@@ -89,7 +87,8 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
               )}
             </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   )
