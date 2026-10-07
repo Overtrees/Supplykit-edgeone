@@ -746,3 +746,31 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **custom 日期持久化 + 参数一致**: 自定义周期 start/end 必须持久化 localStorage(刷新恢复)+ **所有 summary 请求统一带 custom 参数**(loadAll/主 load/重试/静默刷新——两套请求参数不一致→响应交替覆盖→视图跳变)
 - **健康柱分段敏感度(折中定稿)**: `base = 5 + v/100*13`(绝对基础, 分数语义) + `span>5` 时叠加 `(v-min)/span*7`(相对补偿, 大波动肉眼可见)——5 分内如实/超 5 分显著; 柱色=绝对档位(绿/橙/红)——绝对比例(0.18px/分不可辨)与纯相对拉伸(恒定时 4px 矮条)两版弱点互补
 - **订单保留期决策**: archive 90→365 天——容量实证(information_schema 85MB/5GB 上限 1.7%, 365 天约 330MB-1.35GB 最坏 27%); RU 控制(agg/快照维护窗口保持 90 天不随保留期延长); 超期归档 daily_stats(SKU 日级汇总兜底)
+
+### 15.32 三条 SQL 防线 + 工程审计自动化(2026-10-07)
+- **双包裹 SQL bug 机制(品牌 GMV 负数根因)**: `SUM(IF(o.order_status IN (%s), ...))` % `_status_cond()` —— `_status_cond()` 返回**完整** `col IN (...)` → 展开成 `IN (IN (...))`(布尔值列表) → TiDB 只匹配非支付状态(待确认+已退货) → GMV 用非支付金额 → 净额可为负。**铁律: `_status_cond()` 只能作 `IF(%s,)` 条件, 禁止嵌 `IN (%s)`**——test_audit 静态扫描防复发
+- **缓存 key 维度完整性铁律**: key 必须包含**函数签名全部影响结果的参数**(purchase/repl 曾缺 days → days 参数变化命中同 key 旧窗口缓存, other 采购建议被空结果污染 0 条 300s)。test_audit 断言 6 个 key( dash_summary/aux/stock_risk/accel/purchase/repl )的 %s 数与维度参数一致
+- **DATE_FORMAT `%%` 转义审计**: 参数化 SQL 的 DATE_FORMAT/STR_TO_DATE 格式串必须 `%%`(M3 TypeError 防复发)——test_audit D 段扫描全项目 + index.py 迁移 SQL 断言
+- **工程审计自动化三层**: ①`test_audit.py`(独立审计: SQL 双包裹/缓存 key/DATE_FORMAT/except pass 基线) ②`local_test.py` 内嵌审计断言 + MOQ 单测(105 项, 部署前置) ③`smoke_test.py` 部署后线上验证(16 项: 品牌 PAID 口径±2%/关键接口/无净负/迁移生效)
+- **排查教训**: 本地 diag 手写"等价 SQL"自证会误判(双包裹 bug 被"正确单层 IN"掩盖 4.5M)——**必须用代码真实拼接的 SQL 执行验证**; 同 key 缓存污染判定 = 换参数强制重算对比
+
+### 15.33 except pass 治理 + try_err 完整规范(2026-10-07)
+- **116 处 `except Exception: pass` → `try_err(模块, '静默降级', e)`**(common.try_err 统一落点, 写 quality_logs quiet_error 失败自吞)——覆盖 routes/*+index+core/rules+auth/cleansing/cron/seed_fill
+- **try_err 规范**: ①details 缺省带 traceback(limit 3)定位隐藏异常 ②**同 source 10s 窗口限频+计数合并**(窗口首条写库留痕 + 窗口结束补写 `×N 次` 计数条——防风暴刷屏且不丢异常规模, 每实例独立) ③**自身 except 必须 pass**(写日志失败防递归——治理脚本曾误替换成 try_err 自调用)
+- **治理脚本教训**: 先替换后检查 `"try_err" not in s` 恒 False → 13 文件缺 try_err import(运行时 NameError 隐患)——**替换类脚本必须先注入 import 再替换, 且逐文件核对 import 链**
+- **治理暴露真实 bug(M3 TypeError)**: Python `%` 格式化把 `%%Y`→`%Y` 后, pymysql 参数化(`params or ()` 空元组也触发格式化)把 `%Y` 当占位符 → **迁移从未成功**——修复: f-string 拼表名 + DATE_FORMAT 保留 `%%` 交 pymysql 转义 + execute 传空列表 `[]` 触发转义
+- **启动迁移执行日志**: M1/M2/M3 成功留痕 quality_logs(migration 类型含影响行数)——M3 曾静默失败 2 个月无痕; quality-logs 接口 scope=user 白名单不含 migration(查迁移日志需全量不带 scope)
+
+### 15.34 日志文件列表化架构(iPhone 日志分析式, 2026-10-07)
+- **log_archives 表(date+scope 主键)**: 云端 SCF 无文件系统 → **用表模拟文件系统**(markdown 全文 + count + updated_at); 每日维护归档昨天(user/dev/all) + 清理 90 天前(保留周期 3 个月: 单日 md≤30KB, 90天×2scope≈5MB); **懒生成**: 读归档无记录 → 实时聚合(_export_md) → 写归档 → 返回(任何日期点开即有文件, 明细清理后文件仍在)
+- **接口**: /quality-logs/files(归档表 + 明细实时日期合并, archived 标记) / quality-logs/file(预览+懒生成归档) / export(下载, 重构抽 _export_md 共用)
+- **前端 LogFileList 公共组件**: 按天平铺(日期/N条)/点击行 → 底部弹窗预览 md/系统分享 `navigator.share({files})`(桌面 fallback 下载); 文件行**无更新时间列**(归档写入时间如 10-06 显示 10-07 易误读——只日期+条数)
+- **嵌套弹窗裁剪根因 + portal 铁律**: 预览 sheet(fixed bottom)渲染在弹窗(overflowY:auto 容器)内 → **被容器 overflow 裁剪(渲染但看不到/点不到)**——底部弹窗一律 `createPortal(document.body)`(与 15.30 fixed 铁律一致)
+- **file_edit 大段替换教训**: 替换路由文件大段代码时**装饰器行易被吞**(list_quality_logs 的 @router 被吞 → 接口 404 → 前端 catch 静默显示"0 条"而非报错)——**排查先查接口原始返回(Not Found), 替换后核对 @router 数量**
+
+### 15.35 CI/Preflight 配置要点(2026-10-07)
+- **workflow YAML 有效性**: MSG 多行字符串后 4 行缩进 0(block 提前结束) + name 含 `Secrets: WEBHOOK_URL`(冒号+空格=YAML mapping) → **GitHub 端 job 从未创建**(run 触发但 jobs/check-runs/logs 全空, 提交记录无 CI 状态)——**YAML 用 pyyaml 全量解析验证 + GitHub API state=active 确认**
+- **workflow 文件变更不触发自身**: 修改 .github/workflows/*.yml 的 push 不触发该 workflow——用**空 commit(git commit --allow-empty)**强制触发验证
+- **package-lock.json 必须 git 跟踪**: .gitignore 排除 → CI npm ci EUSAGE(CI 无 lock)——依赖锁定标准实践
+- **隔离测试方法**: 最简 workflow(单 job echo)绿 → 框架 OK 定位到 job 定义层; logs API 404 = run 无 job(非权限——token 完整 /user 200)
+- **Preflight 结构(可靠版)**: frontend(npm ci + lint + prettier --check + tsc) + backend(pip -r requirements + local_test + test_audit) + notify(`if: failure()` 内置函数——避免复杂 if 表达式解析风险; 需加 needs 才感知前序)

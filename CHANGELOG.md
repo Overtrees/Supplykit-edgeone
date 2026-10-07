@@ -1,3 +1,54 @@
+## 2026-10-07: 品牌负数双包裹 SQL 根治 + except pass 116 处治理(M3 迁移 TypeError 暴露根治) + 日志文件列表化(iPhone 式) + 工程审计三层防线 + CI 修复 + Makers Skills
+> **主线**: feat/edgeone, commits 54342dfd→19dbac99(品牌双包裹 → 供应商渠道 → 缓存 key → 审计/smoke/CI → except pass 治理 → M3 根治 → 日志文件列表化 → 交互定稿 → Makers Skills → preflight 修复)。
+> **验证**: local_test 98→105(审计/MOQ/try_err 链路) + test_audit 11 项 + smoke_test 16 项(线上) + 全页面接口 vs DB 交叉(13 页) + prettier/lint/tsc 全绿 + Preflight CI(后端绿, 前端修复中)。
+
+### 品牌维度 GMV 负数根因终破(双包裹 SQL bug, 非部署/缓存/seed)
+- **根因(用户"根因还是代码本身"判断正确)**: 品牌段(顶层 brands + `_brands_range` 的 g/sb 共 4 处)写 `SUM(IF(o.order_status IN (%s), ...))` % `_status_cond()` —— `_status_cond()` 返回完整 `col IN ('待发货',...)` → 展开成 `IN (IN (...))` 双重包裹(布尔值列表) → TiDB 只匹配非支付状态(待确认+已退货) → 品牌 GMV 用非支付金额 → 净 = 非PAID − 申请退款 → 禾零/椒香等品牌为负(总 gmv 维度显示 g 恒正无负)
+- **证据链(diag 实证 0.01 级)**: 接口醇味 629117.22 = 双包裹 SQL 精确; 单层 IN = 4497143(正确); month 椒香 2773.1/net -1687.14 = 非PAID 精确; summary.gmv 34,779,969 = PAID 正确(同一 `_status_cond` 全局对, 仅品牌段双包裹错)
+- **修复(54342dfd)**: 4 处 `IN (%s)` → `IF(%s,)`(与 summary 直查同构) → 线上生效: 顶层醇味 4,497,143 / month 净负 0 / 禾零 28,641·椒香 24,025 转正
+- **教训**: 本地 diag 手写"正确单层 IN"得 4.5M 误判代码正确——**排查必须用代码真实拼接的 SQL 执行, 不能手写等价 SQL 自证**; `_status_cond()` 只能用于 `IF(%s,)`, 不能嵌 `IN (%s)`
+
+### 供应商渠道隔离 + 采购/补货缓存 key 修复
+- **suppliers 渠道混入(d7557fb9)**: list 接口 `where="1=1"`(channel 参数收了未用) → `where="channel=%s"` → 线上 jd/other 各 10 条隔离(品牌逗号串拆行 18 行=设计)
+- **purchase 缓存 key 缺 days(f931c662)**: key 曾 `"purchase|%s|%s"` 不含 days → days 参数变化命中同 key 旧窗口缓存, **other 采购建议曾被空结果污染(0 条 300s)** → key 补 days 后 other days=28 独立缓存稳定 287 条
+- **repl 缓存 key 同病**: 补全 `"repl|%s|%s|%s|%s"%(channel,mode,days,source)`
+- **排查方法**: 同 key 缓存污染判定 = 换 days 参数强制重算对比 + 缓存 key 全量审计(summary/aux/stock_risk/accel 均含全参数)
+
+### except pass 116 处批量治理(静默吞异常 → try_err 自记日志)
+- **治理(216b1f09)**: `except Exception: pass` → `try_err(模块, '静默降级', e)`(common.try_err 2026-09-11 纪律工具统一落点, 写 quality_logs quiet_error 失败自吞), 覆盖 routes/*+index+core/rules+analysis_cache/auth/cleansing/cron/seed_fill
+- **治理立刻暴露真实 bug(M3 迁移 TypeError)**: index.py M3 出入库时间随机化 `% (_tbl,_col,...)` Python 格式化把 `%%Y`→`%Y` 后 pymysql 参数化(空元组也触发)把 `%Y` 当占位符 → **M3 从未成功执行(出入库时间从未随机化)** → 修复(410dbd2e): f-string 拼表名 + DATE_FORMAT 保留 %% 交 pymysql 转义 → 线上入非0点 4000/出 3014(之前 0)
+- **try_err 加固(6fd72ed2→970e4b80)**: details 缺省带 traceback(limit 3)定位隐藏异常; 自身 except 恢复 pass 防写库失败无限递归(治理脚本误替换); **限频改计数合并**(同 source 10s 窗口首条写库 + 结束补 `×N 次` 计数条——防风暴刷屏且不丢异常规模)
+- **迁移执行日志(970e4b80)**: M1/M2/M3 成功留痕 quality_logs(migration 类型含影响行数)——M3 曾失败 2 个月无痕; 线上双实例各写一条(幂等 0 行)
+- **坑(治理脚本)**: 先替换后检查 `"try_err" not in s` 恒 False → 13 文件缺 try_err import(运行时 NameError 隐患) —— 已全部补齐 + local_test 加 try_err 链路验证
+
+### 工程审计三层防线(防事故复发)
+- **test_audit.py(6d10f682)**: A) SQL 双包裹防线(`_status_cond` 禁止嵌 `IN %s`) B) 缓存 key 维度完整性(6 个 key 断言 %s 数与维度参数) C) except pass 静默吞异常基线 D) DATE_FORMAT/STR_TO_DATE `%%` 转义防线(M3 防复发——参数化 SQL 单 % 被 pymysql 当占位符) —— 11 项全过
+- **local_test.py 内嵌审计断言 + MOQ 单测**: 双包裹扫描 + 缓存 key 检查 + 采购 MOQ 聚合放大测试(同供应商两 SKU 合计 84<起订 100 → 放大 ≥100 + note 含起订; 路由模块 query 名字绑定需直改 `routes.purchase.query`) —— 回归 98→105
+- **smoke_test.py(部署后线上验证 16 项)**: 品牌总值 PAID 口径 vs SQL 直查(±2%, 实测 1.001) + 10 关键接口非空 + month 品牌/店铺无净负 + 采购建议非空 + M3 出入库非0点>0 + M1 barcode 空码=0
+
+### 日志聚合导出 + 文件列表化(iPhone 日志分析式)
+- **log_archives 表(date+scope 主键)**: 每日维护归档昨天(user/dev/all) + 清理 90 天前(保留周期 3 个月: 单日 md≤30KB, 90天×2scope≈5MB TiDB 可承受); 明细膨胀治理不影响归档文件
+- **接口**: /quality-logs/files(归档+明细实时日期合并) + /quality-logs/file(读归档, 无则懒生成写入) + export 重构抽 _export_md 共用
+- **前端 LogFileList 公共组件**: 按天平铺(日期/N条)/点击行 → 底部弹窗预览 md(级别分段+堆栈)/系统分享 navigator.share 文件(桌面 fallback 下载); 质量页纯文件形式(user) + 开发者弹窗"日志分析"标题下平铺(dev); 预览 sheet createPortal(document.body)(嵌套弹窗被 overflow 裁剪 → 点击无反应根因)
+- **坑**: 加 export 时 file_edit 吞掉 list_quality_logs 的 @router 装饰器 → /api/quality-logs 404 前端静默"0 条"(29f40b21 恢复); misc.py 缺 execute import(file 归档 NameError 被吞); files 接口 `% _in` 格式化卷入 created_at %s(TypeError)
+
+### 质量/开发者日志交互定稿 + 前端提示简化
+- **质量页**: 纯文件列表(标题 + LogFileList user 平铺, 卡片内滚动 calc(100vh-150px)); 明细不铺页面(点日期文件底部弹窗预览); 文件行无更新时间列(归档时间如 10-06 显示 10-07 写入时间易误读)
+- **开发者日志弹窗**: 统一标题"日志分析"(去"· 开发者维度"后缀/去"历史文件"子标题组) + 标题下直接 LogFileList dev 平铺; 移除明细条流
+- **前端异常提示简化**: 各页"加载失败，可能是网络异常或服务暂不可用"长文案 → 短句"加载失败"(ErrorRetry 默认 desc 承担通用说明, 详情只进日志); 移除冗余"导出当日"按钮(系统分享替代)
+
+### Makers Skills 安装 + 全页面数据验证
+- **Makers Skills(makers.edgeone.link/agent-setup/prompt.md 指令)**: npx skills add TencentEdgeOne/edgeone-makers-tools → ~/.agents/skills + /var/minis/skills/(新对话命中), 10 个子 skill(agents/deploy/cloud-functions/storage/middleware/edge-functions/cli/migration/recipes/env-adaption); edgeone CLI 首次部署时再装
+- **全页面数据验证(13 页接口 vs DB 交叉 + 浏览器逐页渲染)**: 看板 gmv 34.5M≈SQL 34.48M/告警 2766=SQL/品牌店铺 period 净负 0; 商品 1000; 供应商 10 条渠道隔离; 订单 126,751; 库存 7000; 建议页(单独深测)补货 1000/采购 jd 491·other 287/滞销 8719; 规则 4; 质量日志按日; 任务 2; 回收站 2 删除规则; dev 日志最早 09-24(异常才记, 稀疏正常)
+
+### CI 修复(Preflight workflow 从未有效解析——提交记录无 CI 状态根因)
+- **根因 1(workflow YAML 从未有效)**: preflight.yml MSG 段缩进 0(block 提前结束) + notify name 含 `Secrets: WEBHOOK_URL`(冒号+空格) → GitHub 端 job 从未创建(run 触发但 jobs/check-runs/logs 全空) → **提交记录从无 CI 状态标识**
+- **修复**: 重写 preflight 为可靠结构(去 concurrency/复杂 if 表达式, `if: failure()` 内置函数) + 全量 YAML 验证(pyyaml + GitHub state active)
+- **根因 2(package-lock.json 未跟踪)**: frontend/.gitignore 排除 lock → CI npm ci EUSAGE → 纳入 git 跟踪(依赖锁定标准)
+- **根因 3(prettier 漏 5 文件)**: styles.css + tests/*(format glob 漏匹配) → 补格式化全量 check 绿
+- **当前**: 前端 tsc 仍红(useAppStore TS2339 unknown 类型 + tests 缺 @testing-library/user-event 声明)——修复中
+- **隔离测试方法**: 最简 workflow(单 job echo) 绿 → 框架 OK, 定位到 job 定义层; logs API 404 = run 无 job(非权限——token 完整权限 /user 200)
+
 ## 2026-10-06: 看板提速物化表(10s→0.77s) + 异常日志统一收口 + 回收站重构 + 开发者模式 + 数据仿真全链路 + custom 日期强实时联动
 > **主线**: feat/edgeone, commits 13091f83→764cd9bc(物化表/强实时/日志收口/dev模式/回收站/67码时间/Aggregate 降级/custom 联动/中卡统一)。
 > **验证**: local_test 98/98 + tsc 0 + eslint 0 + 线上实测(summary 0.77s→2s 强实时、custom 持久化、定时任务/健康趋势链路)。
