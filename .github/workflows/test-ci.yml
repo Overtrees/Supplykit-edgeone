@@ -1,0 +1,9 @@
+name: Test CI 最简验证
+on: [push]
+jobs:
+  probe:
+    name: 最简 job 探针
+    runs-on: ubuntu-latest
+    steps:
+      - name: hello
+        run: echo "ci framework works"
