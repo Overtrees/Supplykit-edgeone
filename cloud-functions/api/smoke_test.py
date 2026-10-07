@@ -121,5 +121,17 @@ try:
 except Exception as e:
     check("采购建议 jd 非空", False, str(e)[:80])
 
+# 5. 启动迁移生效验证(M1 barcode 补齐 / M3 出入库时间随机化 —— 曾静默失败)
+try:
+    rows = sql(tok, "SELECT (SELECT COUNT(*) FROM inbound_records WHERE RIGHT(inbound_date,8) != '00:00:00') AS in_r, "
+                    "(SELECT COUNT(*) FROM outbound_records WHERE RIGHT(outbound_date,8) != '00:00:00') AS out_r, "
+                    "(SELECT COUNT(*) FROM orders WHERE barcode IS NULL OR barcode = '') AS no_bc")
+    r5 = rows[0] if isinstance(rows, list) and rows else {}
+    check("M3 出入库时间随机化(非0点>0)", int(r5.get("in_r") or 0) > 0 and int(r5.get("out_r") or 0) > 0,
+          "in=%s out=%s" % (r5.get("in_r"), r5.get("out_r")))
+    check("M1 订单 barcode 补齐(空码=0)", int(r5.get("no_bc") or 0) == 0, "空码=%s" % r5.get("no_bc"))
+except Exception as e:
+    check("启动迁移生效验证", False, str(e)[:80])
+
 print("\nsmoke test: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

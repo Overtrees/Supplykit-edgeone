@@ -472,6 +472,14 @@ for _f2 in sorted(_os.listdir(_ROUTES_DIR)):
                     _keymsg = "%s: %s 缺 %s" % (_pfx, _tmpl, _missing)
 check("审计: 缓存 key 含全部维度参数(purchase/repl 含 days/source)", _keyok, _keymsg)
 
+# ── 工程审计: DATE_FORMAT %% 转义(2026-10-07 M3 迁移 TypeError 防复发——参数化 SQL 单 % 被 pymysql 当占位符) ──
+_IDX_SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.py"), encoding="utf-8").read()
+_mig_ok2 = True
+for _m3 in _re.finditer(r"DATE_FORMAT\([^,]+,\s*'([^']*)'", _IDX_SRC):
+    if "%%" not in _m3.group(1):
+        _mig_ok2 = False
+check("审计: index.py 迁移 DATE_FORMAT 全部 %% 转义", _mig_ok2)
+
 # ── 核心算法单测: 采购 MOQ 聚合放大(同供应商合计<起订量按占比放大) ──
 import db as _db3
 _old_q3 = _db3.query

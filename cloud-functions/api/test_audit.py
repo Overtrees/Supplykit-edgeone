@@ -122,5 +122,28 @@ print("  except pass 共 %d 处(建议逐处改为自记日志+降级):" % len(s
 for s in sorted(silent):
     print("    " + s)
 
+print("=" * 60)
+print("D. DATE_FORMAT/STR_TO_DATE %% 转义审计(pymysql 参数化防 M3 复发)")
+# 补扫 index.py(迁移 SQL 在入口文件, 非 routes/)
+if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.py")):
+    srcs["index.py"] = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.py"), encoding="utf-8").read()
+single_pct = []
+for f, s in srcs.items():
+    for m in re.finditer(r'(?:DATE_FORMAT|STR_TO_DATE|DATE_ADD|DATE_SUB)\([^,]+,\s*\'([^\']*)\'', s):
+        fmt = m.group(1)
+        if '%' in fmt and '%%' not in fmt:
+            ln = s[:m.start()].count('\n') + 1
+            single_pct.append("%s:%d %s" % (f, ln, fmt))
+check("无 DATE_FORMAT 单 % 格式串(参数化 SQL 须 %%)", not single_pct, "; ".join(single_pct[:5]))
+for u in single_pct[:10]:
+    print("  单%处(人工核对, 无参数查询 %Y 合法):", u)
+# index.py 迁移 SQL(M2/M3)必须 %% 转义 —— M3 曾因 %Y 被 pymysql 当占位符从未执行
+_idx = srcs.get("index.py", "")
+_mig_ok = True
+for m in re.finditer(r'DATE_FORMAT\([^,]+,\s*\'([^\']*)\'', _idx):
+    if "%%" not in m.group(1):
+        _mig_ok = False
+check("index.py 迁移 SQL DATE_FORMAT 全部 %% 转义(M3 防复发)", _mig_ok)
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

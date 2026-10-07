@@ -21,12 +21,21 @@ def fail(msg, status=400):
     return {"ok": False, "error": msg}
 
 
+_TE_LAST = {}
+_TE_WINDOW = 10.0
+
+
 def try_err(src, what, exc=None, details=""):
     """静默吞异常纪律(2026-09-11 体检): except 分支统一自记 quality_logs 留痕(不阻断降级流程)
     用法: except Exception as e: try_err("dashboard", "season_factor 降级", e)
     —— 防 _log 式静默 bug(曾因 except pass 吞 TypeError 致全 cron 日志从未写入)
-    —— 2026-10-07: details 缺省时带 traceback 堆栈(limit 3)便于定位; 自身 except 必须 pass(防写库失败递归)"""
+    —— 2026-10-07: details 缺省带 traceback 堆栈(limit 3); 同 source 10s 窗口限频(防异常风暴刷屏); 自身 except 必须 pass(防写库失败递归)"""
     try:
+        import time as _t
+        _now = _t.time()
+        if _now - _TE_LAST.get(src, 0) < _TE_WINDOW:
+            return  # 限频: 同 source 10s 窗口仅 1 条(留痕目的达到, 防刷屏)
+        _TE_LAST[src] = _now
         from db import execute as _e
         _msg = what
         if exc is not None:
