@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { t } from "../locale"
+import LogFileList from '../components/LogFileList'
 
 const TYPE_LABEL = {
   duplicate_order: '重复订单号',
@@ -21,7 +22,7 @@ export default function QualityPage() {
   const [, setPage] = useState(1)
   const [ld, setLd] = useState(true)
   const [moreLoading, setMoreLoading] = useState(false)
-  const [exporting, setExporting] = useState(false)
+  const [showFiles, setShowFiles] = useState(false)
   const pageRef = useRef(1)
   const reqSeq = useRef(0)
 
@@ -78,34 +79,26 @@ export default function QualityPage() {
     )
   }
 
-  const exportLogs = async () => {
-    if (exporting) return
-    setExporting(true)
-    try {
-      const today = new Date().toISOString().slice(0, 10)  // UTC 当天(与库内 created_at 一致)
-      const r = await api.get('/api/quality-logs/export?date=' + today + '&scope=user')
-      const md = (r.data && (r.data as any).markdown) || '# 无日志\n'
-      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'quality-logs-' + today + '.md'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
-    } catch (e) { console.warn('导出失败', e) }
-    setExporting(false)
-  }
 
   return <div className="card">
     <div className="section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>{t("nav.quality")}
             <span style={{display:'inline-flex',gap:2,background:'var(--bg)',borderRadius:'var(--radius-full)',padding:2}}>
-              <button className="btn btn-ghost" style={{fontSize:'var(--font-sm)',padding:'5px 12px',cursor:'pointer',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)'}} onClick={exportLogs} disabled={exporting}>
-                {exporting ? '导出中...' : '导出当日'}
+              <button className="btn btn-ghost" style={{fontSize:'var(--font-sm)',padding:'5px 12px',cursor:'pointer',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)'}} onClick={() => setShowFiles(true)}>
+                日志文件
               </button>
             </span>
           </div>
+    {showFiles && (
+      <>
+        <div onClick={() => setShowFiles(false)} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
+          <div onClick={e => e.stopPropagation()} className="material-regular" style={{ width: '100%', maxWidth: 600, borderRadius: 'var(--radius-lg)', padding: '18px 14px calc(14px + env(safe-area-inset-bottom))', boxShadow: 'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)', pointerEvents: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+            <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 12, textAlign: 'center', color: 'var(--text)' }}>日志文件 · 用户维度</div>
+            <LogFileList scope="user" />
+          </div>
+        </div>
+      </>
+    )}
     {list.length === 0 ? (
       <div className="small muted" style={{padding:24,textAlign:'center'}}>{t("quality.empty")}</div>
     ) : (

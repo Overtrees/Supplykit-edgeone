@@ -329,7 +329,7 @@ export default function InsightsPage() {
           ) : !Array.isArray(replen) || replen.length === 0 ? (
             <div style={{ padding: 12, textAlign: 'center' }}>
               {replenError ? (
-                <ErrorRetry error={'加载失败：' + replenError} onRetry={() => loadReplen(replenMode, globalChannel)} />
+                <ErrorRetry error={'加载失败'} onRetry={() => loadReplen(replenMode, globalChannel)} />
               ) : (
                 <div className="muted">{t("insights.no_replenish")}</div>
               )}

@@ -173,9 +173,9 @@ export default function RulesPage() {
       const _m = {}
       ;(newData || []).forEach(r => { if (r && r.id) _m[r.id] = r.is_active ? 1 : 0 })
       useAppStore.setState({ batchStateMap: _m })
-      setRulesErr(Array.isArray(rawData) ? '' : (r.status !== 200 ? '加载失败，可能是网络异常或服务暂不可用' : '返回数据格式异常'))
+      setRulesErr(Array.isArray(rawData) ? '' : (r.status !== 200 ? '加载失败' : '返回数据格式异常'))
       addDebug('setRules 完成', {条数: newData.length})
-    } catch(e) { addDebug('load 异常', {error: e.message}); setRulesErr('加载失败，可能是网络异常或服务暂不可用') } 
+    } catch(e) { addDebug('load 异常', {error: e.message}); setRulesErr('加载失败') } 
   }
   useEffect(() => {
     const h = () => load(globalChannel)

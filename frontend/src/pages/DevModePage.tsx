@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { clearCache, clearInflight } from '../api/client'
 import { Group, Row, LastRow } from '../components/ListGroup'
+import LogFileList from '../components/LogFileList'
 
 const VERSION = (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) ? __APP_VERSION__ : '2.0.0'
 const BUILD = (typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__) ? __BUILD_DATE__ : ''
@@ -204,6 +205,8 @@ export default function DevModePage() {
                 {moreLoading ? '加载中...' : `加载更多 (${logs.length}/${logTotal})`}
               </button>
             )}
+            <div style={{ fontSize: 'var(--font-16)', fontWeight: 700, margin: '14px 0 6px', textAlign: 'center', color: 'var(--text)' }}>历史文件 · 开发者维度</div>
+            <LogFileList scope="dev" />
           </div>
         </div>
       </>}

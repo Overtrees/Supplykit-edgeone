@@ -170,6 +170,10 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
             # 一次性数据迁移登记表(2026-09-15: barcode 补齐 / 时间仿真随机化 —— INSERT IGNORE 抢注幂等)
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            _exec("CREATE TABLE IF NOT EXISTS log_archives ("
+                  "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
+                  "markdown MEDIUMTEXT, `count` INT DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                  "PRIMARY KEY(`date`, `scope`))")
             # 看板提速物化表(2026-09-15): 日级订单汇总(历史区间 summary 读此替代 19 万行直查)
             _exec("CREATE TABLE IF NOT EXISTS orders_day_agg ("
                   "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "

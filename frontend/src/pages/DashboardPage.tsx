@@ -148,7 +148,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
         const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
         const dash = dashOk ? s.value.data : null
-        setDashErr((s.status === 'rejected' || !dashOk) ? '加载失败，可能是网络异常或数据正在处理中' : '')
+        setDashErr((s.status === 'rejected' || !dashOk) ? '加载失败，数据可能正在处理中' : '')
         const aux = (ax && ax.status === 'fulfilled') ? (ax.value.data || {}) : {}
         const alerts = aux.alerts || []
         const stockRisk = useAppStore.getState().stockRisk || {}

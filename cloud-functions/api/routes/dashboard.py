@@ -65,6 +65,21 @@ def _daily_maintenance():
                     execute("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")])
         except Exception as _e:
                 try_err('dashboard', '静默降级', _e)
+        # ④ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
+        try:
+            from datetime import timedelta as _td2
+            _yest = (datetime.now(timezone.utc) - _td2(days=1)).strftime("%Y-%m-%d")
+            from routes.misc import _export_md as _em
+            for _sc in ("user", "dev", "all"):
+                _d3, _cnt3, _md3 = _em(_yest, _sc, "")
+                execute("INSERT INTO log_archives(`date`, `scope`, markdown, `count`, updated_at) "
+                        "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE "
+                        "markdown=VALUES(markdown), `count`=VALUES(`count`), updated_at=NOW(6)",
+                        [_d3, _sc, _md3, _cnt3])
+            _cut = (datetime.now(timezone.utc) - _td2(days=90)).strftime("%Y-%m-%d")
+            execute("DELETE FROM log_archives WHERE `date` < %s", [_cut])
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)
     except Exception as _me:
         try:
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "

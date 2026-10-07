@@ -75,7 +75,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         const e = items[0].month_end?.slice(5) || ''
         setMonthRange(`${s}至${e}`)
       }
-    } catch(e) { if (seq === reqSeq.current) { setInventory([]); setLoadErr('加载失败，可能是网络异常或服务暂不可用') } }
+    } catch(e) { if (seq === reqSeq.current) { setInventory([]); setLoadErr('加载失败') } }
     if (seq === reqSeq.current) { setLoading(false); setLoadingMore(false) }
   }
   useEffect(() => { clearCache('with-sales'); setInvPage(1); loadInv(1) }, [whType, globalChannel, s, highlightSku])

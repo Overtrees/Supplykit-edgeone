@@ -14,14 +14,21 @@ router = APIRouter(tags=["misc"])
 def export_quality_logs(date: str = "", scope: str = "", level: str = ""):
     """质量日志整日导出(Markdown, iPhone 日志分析式): 按天聚合全部日志成 md 文本, 便于留存/分享/离线分析
     级别分段 + 异常计数汇总 + 堆栈代码块; date 为空取今天(UTC); scope=user/dev/空 过滤类型; level 可选过滤"""
+    _d, _count, _md = _export_md(date, scope, level)
+    return ok({"date": _d, "count": _count, "scope": scope, "markdown": _md})
+
+
+def _export_md(date="", scope="", level=""):
+    """md 生成体(export/file 共用): 返回 (日期, 条数, markdown 文本)"""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     _SCOPE_TYPES = {
         "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
                  "format_error", "field_warning", "field_error", "mapping_info"),
         "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
                 "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
     }
-    _d = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    _next = (datetime.strptime(_d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    _next = (_dt.strptime(_d, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
     where = " WHERE created_at >= %s AND created_at < %s"
     params = [_d + " 00:00:00", _next + " 00:00:00"]
     if scope in _SCOPE_TYPES:
@@ -57,7 +64,39 @@ def export_quality_logs(date: str = "", scope: str = "", level: str = ""):
                 lines.append("  " + str(_r.get("details")).replace("\n", "\n  ")[:400])
                 lines.append("  ```")
         lines.append("")
-    return ok({"date": _d, "count": len(rows), "scope": scope, "markdown": "\n".join(lines)})
+    return _d, len(rows), "\n".join(lines)
+
+
+@router.get("/quality-logs/file")
+@traced
+def get_log_file(date: str = "", scope: str = ""):
+    """日志文件(iPhone 式): 读 log_archives 归档(历史保留) → 无归档则实时生成并归档(懒生成, 任何日期点开即有)
+    返回 {date, scope, count, markdown, archived}"""
+    from datetime import datetime as _dt, timezone as _tz
+    _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    _arch = one("SELECT markdown, `count` FROM log_archives WHERE `date`=%s AND `scope`=%s", [_d, scope or "all"])
+    if _arch and _arch.get("markdown"):
+        return ok({"date": _d, "scope": scope or "all", "count": _arch.get("count") or 0,
+                   "markdown": _arch["markdown"], "archived": True})
+    _d2, _cnt, _md = _export_md(_d, scope, "")
+    try:
+        execute("INSERT INTO log_archives(`date`, `scope`, markdown, `count`, updated_at) "
+                "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE markdown=VALUES(markdown), "
+                "`count`=VALUES(`count`), updated_at=NOW(6)",
+                [_d2, scope or "all", _md, _cnt])
+    except Exception:
+        pass  # 归档写入失败不阻塞(仍返回实时内容)
+    return ok({"date": _d2, "scope": scope or "all", "count": _cnt, "markdown": _md, "archived": False})
+
+
+@router.get("/quality-logs/files")
+@traced
+def list_log_files(days: int = 30, scope: str = ""):
+    """日志文件列表(平铺): log_archives 近 N 天(date+scope), 每行 日期/条数/更新时间(按 scope 过滤; scope 空返回全部)"""
+    _sc = scope or "all"
+    rows = query("SELECT `date`, `count`, updated_at FROM log_archives WHERE scope=%s "
+                 "ORDER BY `date` DESC LIMIT %s", [_sc, days])
+    return ok({"items": rows, "scope": _sc, "days": days})
     """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
     scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
     # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)

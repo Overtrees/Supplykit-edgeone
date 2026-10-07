@@ -19,7 +19,7 @@ const[visCols,setVisCols]=useState(()=>getVis(COL_KEY())||COLS.map(c=>c.id))
 const { channelVersion, hammerCols, hammerSearch } = useAppStore()
 const loadSuppliers = () => {
     setLd(true)
-    api.get('/api/suppliers?channel=' + (useAppStore.getState().channel || 'jd')).then(r=>{const d=r.data?.items||r.data||[];setList(d);setLoadErr('');setLd(false)}).catch(()=>{setLd(false);setList([]);setLoadErr('加载失败，可能是网络异常或服务暂不可用')})
+    api.get('/api/suppliers?channel=' + (useAppStore.getState().channel || 'jd')).then(r=>{const d=r.data?.items||r.data||[];setList(d);setLoadErr('');setLd(false)}).catch(()=>{setLd(false);setList([]);setLoadErr('加载失败')})
   }
   useEffect(()=>{ loadSuppliers() },[channelVersion])
 useEffect(() => { if (hammerCols?.suppliers) setVisCols(hammerCols.suppliers) }, [hammerCols])
