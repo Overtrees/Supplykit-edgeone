@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api/client'
 
-/** 日志文件列表(iPhone 日志分析式): 按天平铺 log_archives 归档, 点击预览 md, 系统分享 API 导出
- * 用于: 质量日志页(scope=user) + 开发者模式日志弹窗(scope=dev) */
+/** 日志文件列表(iPhone 日志分析式): 按天平铺 log_archives 归档, 点击行 → 底部弹窗预览当日 md, 系统分享 API 导出
+ * 用于: 质量日志页直接平铺(scope=user) + 开发者模式日志弹窗(scope=dev) */
 export default function LogFileList({ scope = 'user' }: { scope?: string }) {
   const [files, setFiles] = useState<any[]>([])
   const [ld, setLd] = useState(true)
-  const [preview, setPreview] = useState<any>(null) // {date, markdown, count}
+  const [preview, setPreview] = useState<any>(null) // {date, markdown, count, loading} — 底部弹窗
   const [sharing, setSharing] = useState(false)
 
   const load = () => {
@@ -71,7 +71,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
         ))
       )}
 
-      {/* 预览弹窗(标准 sheet) */}
+      {/* 预览底部弹窗(标准 sheet) */}
       {preview && (
         <>
           <div onClick={() => setPreview(null)} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />

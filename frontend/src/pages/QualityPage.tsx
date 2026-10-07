@@ -22,7 +22,6 @@ export default function QualityPage() {
   const [, setPage] = useState(1)
   const [ld, setLd] = useState(true)
   const [moreLoading, setMoreLoading] = useState(false)
-  const [showFiles, setShowFiles] = useState(false)
   const pageRef = useRef(1)
   const reqSeq = useRef(0)
 
@@ -82,23 +81,9 @@ export default function QualityPage() {
 
   return <div className="card">
     <div className="section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>{t("nav.quality")}
-            <span style={{display:'inline-flex',gap:2,background:'var(--bg)',borderRadius:'var(--radius-full)',padding:2}}>
-              <button className="btn btn-ghost" style={{fontSize:'var(--font-sm)',padding:'5px 12px',cursor:'pointer',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)'}} onClick={() => setShowFiles(true)}>
-                日志文件
-              </button>
-            </span>
+            <span className="small muted" style={{fontSize:'var(--font-xs)'}}>日志文件 · 点击日期预览当日明细</span>
           </div>
-    {showFiles && (
-      <>
-        <div onClick={() => setShowFiles(false)} style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }} />
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 14px)', zIndex: 9999, display: 'flex', justifyContent: 'center', padding: '0 14px', pointerEvents: 'none' }}>
-          <div onClick={e => e.stopPropagation()} className="material-regular" style={{ width: '100%', maxWidth: 600, borderRadius: 'var(--radius-lg)', padding: '18px 14px calc(14px + env(safe-area-inset-bottom))', boxShadow: 'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)', pointerEvents: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
-            <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 12, textAlign: 'center', color: 'var(--text)' }}>日志文件 · 用户维度</div>
-            <LogFileList scope="user" />
-          </div>
-        </div>
-      </>
-    )}
+    <LogFileList scope="user" />
     {list.length === 0 ? (
       <div className="small muted" style={{padding:24,textAlign:'center'}}>{t("quality.empty")}</div>
     ) : (

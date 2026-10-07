@@ -129,6 +129,11 @@ def list_log_files(days: int = 30, scope: str = ""):
                           "updated_at": str(_a2.get("updated_at") or "")[:19], "archived": True})
     items.sort(key=lambda x: x["date"], reverse=True)
     return ok({"items": items[:days], "scope": _sc, "days": days})
+
+
+@router.get("/quality-logs")
+@traced
+def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_size: int = 0, scope: str = ""):
     """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
     scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
     # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)
