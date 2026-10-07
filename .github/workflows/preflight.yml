@@ -57,10 +57,10 @@ jobs:
   notify:
     name: 失败通知
     needs: [frontend, backend]
-    if: ${{ always() && (needs.frontend.result == 'failure' || needs.backend.result == 'failure') }}
+    if: '${{ always() && (needs.frontend.result == "failure" || needs.backend.result == "failure") }}'
     runs-on: ubuntu-latest
     steps:
-      - name: 发送 webhook 通知(需 GitHub Secrets: WEBHOOK_URL)
+      - name: '发送 webhook 通知(需 GitHub Secrets: WEBHOOK_URL)'
         env:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
           FRONT_RESULT: ${{ needs.frontend.result }}
@@ -71,11 +71,11 @@ jobs:
             exit 0
           fi
           MSG="【SupplyKit Preflight 失败】${{ github.ref_name }} @ ${{ github.sha }}
-分支: ${{ github.ref }}
-前端(lint/tsc): $FRONT_RESULT
-后端(local_test): $BACK_RESULT
-提交者: ${{ github.actor }}
-查看: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          分支: ${{ github.ref }}
+          前端(lint/tsc): $FRONT_RESULT
+          后端(local_test): $BACK_RESULT
+          提交者: ${{ github.actor }}
+          查看: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           jq -n --arg c "$MSG" '{msgtype:"text", text:{content:$c}}' \
             | curl -s -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" -d @- \
             || echo "通知发送失败(不影响结果)"
