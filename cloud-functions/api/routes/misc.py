@@ -1,4 +1,5 @@
 """原生辅助路由(方案 B): quality-logs / monitor"""
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 from fastapi import Request
 
@@ -8,9 +9,55 @@ from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["misc"])
 
 
-@router.get("/quality-logs")
+@router.get("/quality-logs/export")
 @traced
-def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_size: int = 0, scope: str = ""):
+def export_quality_logs(date: str = "", scope: str = "", level: str = ""):
+    """质量日志整日导出(Markdown, iPhone 日志分析式): 按天聚合全部日志成 md 文本, 便于留存/分享/离线分析
+    级别分段 + 异常计数汇总 + 堆栈代码块; date 为空取今天(UTC); scope=user/dev/空 过滤类型; level 可选过滤"""
+    _SCOPE_TYPES = {
+        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
+                 "format_error", "field_warning", "field_error", "mapping_info"),
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
+    }
+    _d = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _next = (datetime.strptime(_d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    where = " WHERE created_at >= %s AND created_at < %s"
+    params = [_d + " 00:00:00", _next + " 00:00:00"]
+    if scope in _SCOPE_TYPES:
+        where += " AND log_type IN (%s)" % ",".join(["%s"] * len(_SCOPE_TYPES[scope]))
+        params += list(_SCOPE_TYPES[scope])
+    if level:
+        where += " AND level=%s"
+        params.append(level)
+    rows = query("SELECT log_type, level, message, details, source, created_at FROM quality_logs"
+                 + where + " ORDER BY id", params)
+
+    from collections import Counter
+    by_level = Counter((r.get("level") or "info") for r in rows)
+    by_type = Counter((r.get("log_type") or "") for r in rows)
+    lines = ["# 质量日志 · %s" % _d, ""]
+    lines.append("> 共 %d 条 · 异常 %d / 警告 %d / 提示 %d"
+                 % (len(rows), by_level.get("error", 0), by_level.get("warning", 0), by_level.get("info", 0)))
+    lines.append("> 类型分布: " + " ".join("%s×%d" % (k, v) for k, v in by_type.most_common(8)))
+    lines.append("")
+    _LV = {"error": "异常", "warning": "警告", "info": "提示"}
+    for _lvl in ("error", "warning", "info"):
+        _seg = [r for r in rows if (r.get("level") or "info") == _lvl]
+        if not _seg:
+            continue
+        lines.append("## %s (%d)" % (_LV.get(_lvl, _lvl), len(_seg)))
+        for _r in _seg:
+            _t = str(_r.get("created_at") or "")[:19].replace("T", " ")
+            _ty = _r.get("log_type") or ""
+            _src = _r.get("source") or ""
+            lines.append("- `%s` **[%s]** `%s` (src=%s) — %s" % (_t, _lvl, _ty, _src, (_r.get("message") or "")[:200]))
+            if _r.get("details"):
+                lines.append("  ```")
+                lines.append("  " + str(_r.get("details")).replace("\n", "\n  ")[:400])
+                lines.append("  ```")
+        lines.append("")
+    return ok({"date": _d, "count": len(rows), "scope": scope, "markdown": "\n".join(lines)})
     """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
     scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
     # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)

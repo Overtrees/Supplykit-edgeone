@@ -21,37 +21,54 @@ def fail(msg, status=400):
     return {"ok": False, "error": msg}
 
 
-_TE_LAST = {}
+_TE_STATE = {}
 _TE_WINDOW = 10.0
 
 
 def try_err(src, what, exc=None, details=""):
     """静默吞异常纪律(2026-09-11 体检): except 分支统一自记 quality_logs 留痕(不阻断降级流程)
-    用法: except Exception as e: try_err("dashboard", "season_factor 降级", e)
-    —— 防 _log 式静默 bug(曾因 except pass 吞 TypeError 致全 cron 日志从未写入)
-    —— 2026-10-07: details 缺省带 traceback 堆栈(limit 3); 同 source 10s 窗口限频(防异常风暴刷屏); 自身 except 必须 pass(防写库失败递归)"""
+    —— 2026-10-07: details 缺省带 traceback 堆栈(limit 3); 同 source 10s 窗口限频+计数合并:
+      窗口内首条写库(留痕), 窗口结束补写计数条(×N 次)——防风暴刷屏且不丢异常规模; 自身 except 必须 pass(防递归)"""
+    def _write(_w, _c, _e, _d):
+        try:
+            from db import execute as _e2
+            _msg = _w
+            if _e is not None:
+                _msg += ": %s: %s" % (type(_e).__name__, str(_e)[:200])
+            if _c > 1:
+                _msg += " · 同源10s内 ×%d 次" % _c
+            _det = _d or ""
+            if not _det:
+                try:
+                    import traceback as _tb
+                    _det = _tb.format_exc(limit=3)[:300]
+                except Exception:
+                    _det = ""
+            _e2("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                "VALUES('quiet_error','warning',%s,%s,%s)",
+                (_msg[:200], _det[:300], src))
+        except Exception:
+            pass  # 写日志失败自吞(防递归)——设计保留
+
     try:
         import time as _t
         _now = _t.time()
-        if _now - _TE_LAST.get(src, 0) < _TE_WINDOW:
-            return  # 限频: 同 source 10s 窗口仅 1 条(留痕目的达到, 防刷屏)
-        _TE_LAST[src] = _now
-        from db import execute as _e
-        _msg = what
-        if exc is not None:
-            _msg += ": %s: %s" % (type(exc).__name__, str(exc)[:200])
-        _det = details
-        if not _det:
-            try:
-                import traceback as _tb
-                _det = _tb.format_exc(limit=3)[:300]
-            except Exception:
-                _det = ""
-        _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
-           "VALUES('quiet_error','warning',%s,%s,%s)",
-           (_msg[:200], _det[:300], src))
+        _st = _TE_STATE.setdefault(src, {"ts": 0.0, "count": 0, "what": "", "exc": None, "det": ""})
+        if _now - _st["ts"] >= _TE_WINDOW and _st["count"] > 0:
+            # 上窗口未补计数 → 先补写计数条(风暴规模留痕)
+            _write(_st["what"], _st["count"] + 1, _st["exc"], _st["det"])
+            _st["count"] = 0
+        if _now - _st["ts"] < _TE_WINDOW:
+            # 窗口内: 合并计数(首条信息保留, 不逐条写)
+            _st["count"] += 1
+            if not _st["what"]:
+                _st["what"], _st["exc"], _st["det"] = what, exc, details or ""
+            return
+        # 窗口首条: 写库留痕
+        _write(what, 1, exc, details)
+        _st.update(ts=_now, count=0, what="", exc=None, det="")
     except Exception:
-        pass  # 写日志失败自吞(防递归)——设计保留
+        pass  # 自身异常自吞(防递归)
 
 
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────

@@ -21,6 +21,7 @@ export default function QualityPage() {
   const [, setPage] = useState(1)
   const [ld, setLd] = useState(true)
   const [moreLoading, setMoreLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const pageRef = useRef(1)
   const reqSeq = useRef(0)
 
@@ -77,9 +78,32 @@ export default function QualityPage() {
     )
   }
 
+  const exportLogs = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const today = new Date().toISOString().slice(0, 10)  // UTC 当天(与库内 created_at 一致)
+      const r = await api.get('/api/quality-logs/export?date=' + today + '&scope=user')
+      const md = (r.data && (r.data as any).markdown) || '# 无日志\n'
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'quality-logs-' + today + '.md'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { console.warn('导出失败', e) }
+    setExporting(false)
+  }
+
   return <div className="card">
     <div className="section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>{t("nav.quality")}
             <span style={{display:'inline-flex',gap:2,background:'var(--bg)',borderRadius:'var(--radius-full)',padding:2}}>
+              <button className="btn btn-ghost" style={{fontSize:'var(--font-sm)',padding:'5px 12px',cursor:'pointer',borderRadius:'var(--radius-full)',border:'1px solid var(--border)',background:'var(--card)',color:'var(--primary)'}} onClick={exportLogs} disabled={exporting}>
+                {exporting ? '导出中...' : '导出当日'}
+              </button>
             </span>
           </div>
     {list.length === 0 ? (
