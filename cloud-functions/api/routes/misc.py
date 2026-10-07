@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter
 from fastapi import Request
 
-from db import query, one
+from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["misc"])
@@ -84,8 +84,8 @@ def get_log_file(date: str = "", scope: str = ""):
                 "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE markdown=VALUES(markdown), "
                 "`count`=VALUES(`count`), updated_at=NOW(6)",
                 [_d2, scope or "all", _md, _cnt])
-    except Exception:
-        pass  # 归档写入失败不阻塞(仍返回实时内容)
+    except Exception as _e:
+        try_err('misc', '日志归档写入失败', _e)  # 归档失败不阻塞返回实时内容, 留痕
     return ok({"date": _d2, "scope": scope or "all", "count": _cnt, "markdown": _md, "archived": False})
 
 
