@@ -90,7 +90,7 @@ _PURCHASE_TTL = 300
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
                          search: str = "", need_only: int = 0):
     """采购建议(300s 共享表缓存——TiDB 表跨实例一致, 搜索/need_only 在缓存后过滤——降 RU): 系统总库存+供应商级参数+目标周转+采购告警"""
-    _key = "purchase|%s|%s" % (channel, mode)
+    _key = "purchase|%s|%s|%s" % (channel, mode, days)
     _all = _cache_get(_key, _PURCHASE_TTL, lambda: _build_purchase(channel, mode, days))
     if need_only:
         _all = [r for r in _all if (r.get("actual_purchase") or 0) > 0]
