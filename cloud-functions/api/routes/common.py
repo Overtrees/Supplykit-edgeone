@@ -24,17 +24,25 @@ def fail(msg, status=400):
 def try_err(src, what, exc=None, details=""):
     """静默吞异常纪律(2026-09-11 体检): except 分支统一自记 quality_logs 留痕(不阻断降级流程)
     用法: except Exception as e: try_err("dashboard", "season_factor 降级", e)
-    —— 防 _log 式静默 bug(曾因 except pass 吞 TypeError 致全 cron 日志从未写入)"""
+    —— 防 _log 式静默 bug(曾因 except pass 吞 TypeError 致全 cron 日志从未写入)
+    —— 2026-10-07: details 缺省时带 traceback 堆栈(limit 3)便于定位; 自身 except 必须 pass(防写库失败递归)"""
     try:
         from db import execute as _e
         _msg = what
         if exc is not None:
             _msg += ": %s: %s" % (type(exc).__name__, str(exc)[:200])
+        _det = details
+        if not _det:
+            try:
+                import traceback as _tb
+                _det = _tb.format_exc(limit=3)[:300]
+            except Exception:
+                _det = ""
         _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
            "VALUES('quiet_error','warning',%s,%s,%s)",
-           (_msg[:200], details[:300], src))
-    except Exception as _e:
-            try_err('common', '静默降级', _e)
+           (_msg[:200], _det[:300], src))
+    except Exception:
+        pass  # 写日志失败自吞(防递归)——设计保留
 
 
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────
