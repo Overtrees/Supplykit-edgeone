@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute, execute_id
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["rules"])
 
@@ -45,8 +45,8 @@ async def create_rule(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     name = d.get("name") or ""
     if not name:
         return fail("缺少 name")
@@ -71,8 +71,8 @@ async def update_rule(rid: int, request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     sets = []
     params = []
     for f in ("name", "event", "alert_type", "alert_title", "alert_desc", "severity", "mode", "channel"):
@@ -97,8 +97,8 @@ async def update_rule(rid: int, request: Request):
     if _rl:
         try:
             _old_ae = str((json.loads(_rl.get("params") or "{}") or {}).get("alert_enabled"))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('rules', '静默降级', _e)
         if isinstance(d.get("params"), dict):
             _new_ae = str(d["params"].get("alert_enabled"))
     _ch = d.get("channel") or (_rl.get("channel") if _rl else None) or "jd"
@@ -114,8 +114,8 @@ async def update_rule(rid: int, request: Request):
             try:
                 from core.rules import evaluate_stock_skus
                 evaluate_stock_skus(_ch, limit=100000)
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('rules', '静默降级', _e)
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 规则编辑 → 缓存即时失效
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
@@ -155,17 +155,17 @@ def _schedule_rule_eval():
                     break  # 其他实例/线程在评估中, 标记已消费
                 try:
                     run_daily_rules()
-                except Exception:
-                    pass
+                except Exception as _e:
+                        try_err('rules', '静默降级', _e)
                 # 评估期间又有新变更 → 尾追再评估一轮; 无则退出
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('rules', '静默降级', _e)
 
     try:
         import threading
         threading.Thread(target=_worker, daemon=True).start()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
 
 
 def _close_alerts_for_rules(ids):
@@ -180,8 +180,8 @@ def _close_alerts_for_rules(ids):
         for at, ch in pairs:
             execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
                     "AND status='active' AND source IN ('rules_engine','event_bus')", [at, ch])
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
 
 
 @router.delete("/rules/{rid}")
@@ -222,8 +222,8 @@ async def rules_batch(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     action = d.get("action", "")
     ids = d.get("ids") or []
     if not ids:
@@ -236,8 +236,8 @@ async def rules_batch(request: Request):
             from core.rules import evaluate_stock_skus
             for _ch in ("jd", "other"):
                 evaluate_stock_skus(_ch, limit=100000)
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('rules', '静默降级', _e)
     elif action == "inactive":
         # 停用联动关闭该类告警(PA 行为)
         _close_alerts_for_rules(ids)
@@ -267,8 +267,8 @@ async def rules_evaluate(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     channels = d.get("channels") or ["jd", "other"]
     out = {}
     for ch in channels:
@@ -295,8 +295,8 @@ async def test_rule(rid: int, request: Request):
     body = {}
     try:
         body = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     inv = body.get("inv") or {}
     order = body.get("order") or {}
     # 规则参数: body.params 覆盖规则 params(测试弹窗可调, 模拟 params.* 引用)
@@ -344,8 +344,8 @@ async def test_rule(rid: int, request: Request):
         else:
             detail["right_value"] = right_raw
         detail["warehouse"] = cond.get("warehouse", "")
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('rules', '静默降级', _e)
     return ok({"triggered": triggered,
                "alert_title": row.get("alert_title", ""),
                "alert_desc": row.get("alert_desc", ""),

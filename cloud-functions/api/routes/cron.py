@@ -18,7 +18,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["cron"])
 
@@ -47,8 +47,8 @@ def _log(level, message, source="cron"):
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                     "VALUES('maint','error',%s,%s,'cron')",
                     ("_log 写入失败", str(_e)[:300]))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cron', '静默降级', _e)
 
 
 def _build_snapshot(rebuild_days=90):
@@ -116,8 +116,8 @@ async def cron_archive(request: Request):
                  o.get("sku", ""), str(o.get("order_status") or "")[:10],
                  float(o.get("total_amount") or 0), int(o.get("quantity") or 0)))
             ok_n += 1
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cron', '静默降级', _e)
     if ok_n != len(old):
         _log("error", "归档中止: daily_stats 写入 %d/%d, 不删除 orders(防数据丢失)" % (ok_n, len(old)))
         return ok({"archived": 0, "stats_rows": ok_n, "aborted": True})
@@ -168,8 +168,8 @@ def run_daily_rules() -> dict:
                        "AND source IN ('rules_engine','event_bus') "
                        "AND (warehouse IS NULL OR warehouse='')")
         cleaned += int(_old or 0)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('cron', '静默降级', _e)
     # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存行
     #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
     from core.rules import evaluate_stock_skus
@@ -205,16 +205,16 @@ def run_daily_rules() -> dict:
                       int((_hs2.get("own") or {}).get("score") or -1),
                       int((_hs2.get("platform") or {}).get("score") or -1),
                       int((_hs2.get("bc") or {}).get("score") or -1)])
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('cron', '静默降级', _e)
             _msg = "[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d | 健康: %s分(own%s/platform%s/bc%s)" % (
                 _ch, _t, _r, _o, max(_t - _r - _o, 0),
                 _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0,
                 _hs, _ho, _hp, _hb)
             execute("INSERT INTO quality_logs(log_type, level, message, source) "
                     "VALUES('risk_summary','info',%s,'cron')", (_msg,))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('cron', '静默降级', _e)
     return {"orphan_cleaned": cleaned, "rules_triggered": triggered}
 
 

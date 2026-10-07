@@ -33,8 +33,8 @@ def try_err(src, what, exc=None, details=""):
         _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
            "VALUES('quiet_error','warning',%s,%s,%s)",
            (_msg[:200], details[:300], src))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('common', '静默降级', _e)
 
 
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────
@@ -115,8 +115,8 @@ def traced(handler):
                "VALUES(%s,%s,%s,%s,%s)",
                ("api_error", "error", ("%s: %s" % (type(e).__name__, str(e)[:300])),
                 _tb.format_exc(limit=15)[-1800:], "api"))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('common', '静默降级', _e)
         return {"ok": False, "error": "handler-error",
                 "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
                 "tb": _tb.format_exc(limit=15)[-2000:]}

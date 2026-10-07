@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["suppliers"])
 
@@ -30,8 +30,8 @@ async def create_supplier(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     code = d.get("supplier_code") or ""
     if not code:
         return fail("缺少 supplier_code")
@@ -51,8 +51,8 @@ async def update_supplier(sid: int, request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     fields = ["supplier_name", "contact_person", "contact_phone", "status", "brand", "score"]
     sets = []
     params = []
@@ -100,8 +100,8 @@ def _log_cfg_history(channel, key, old_val, new_val, mode=""):
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                     "VALUES('config_history', 'error', %s, %s, 'config')",
                     ("history 写入失败", str(_e)[:300]))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('suppliers', '静默降级', _e)
 
 
 @router.put("/replenishment-config")
@@ -112,8 +112,8 @@ async def update_config(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     mode = request.query_params.get("mode", "")
     channel = request.query_params.get("channel", "jd") or d.get("channel", "jd")
     data = d.get("data") or d
@@ -158,8 +158,8 @@ async def put_slow_cats(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     channel = d.get("channel", "jd")
     items = d.get("items") or []
     old = one("SELECT value FROM replenishment_config WHERE `key`='slow_cats' AND channel=%s", [channel])
@@ -203,8 +203,8 @@ def _status_map_items(channel):
         stored = json.loads((row or {}).get("value") or "[]")
         if isinstance(stored, list) and stored:
             return {x.get("name"): x.get("group") for x in stored if x.get("name")}
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     return {x.get("name"): x.get("group") for x in _DEFAULT_STATUS_MAP if x.get("name")}
 
 
@@ -240,16 +240,16 @@ def _column_map_items(channel, col):
             items = m.get(col)
             if isinstance(items, list) and items:
                 return {x.get("name"): x.get("group") for x in items if x.get("name")}
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     if col == "order_status":
         row2 = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
         try:
             st = json.loads((row2 or {}).get("value") or "[]")
             if isinstance(st, list) and st:
                 return {x.get("name"): x.get("group") for x in st if x.get("name")}
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('suppliers', '静默降级', _e)
     d = _DEFAULT_COLUMN_MAP.get(col)
     return {x.get("name"): x.get("group") for x in (d or []) if x.get("name")}
 
@@ -272,8 +272,8 @@ def get_column_value_map(channel: str = "jd"):
         stored = json.loads((row or {}).get("value") or "{}")
         if isinstance(stored, dict) and stored:
             return ok(stored)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     return ok({k: [dict(x) for x in v] for k, v in _DEFAULT_COLUMN_MAP.items()})
 
 
@@ -283,8 +283,8 @@ async def put_column_value_map(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     channel = d.get("channel", "jd")
     data = d.get("data") or d.get("items") or {}
     old = one("SELECT value FROM replenishment_config WHERE `key`='column_value_map' AND channel=%s", [channel])
@@ -306,8 +306,8 @@ def get_status_map(channel: str = "jd"):
         stored = json.loads((row or {}).get("value") or "[]")
         if isinstance(stored, list) and stored:
             return ok(stored)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     return ok([dict(x) for x in _DEFAULT_STATUS_MAP])
 
 
@@ -320,8 +320,8 @@ def get_custom_columns():
         stored = json.loads((row or {}).get("value") or "{}")
         if isinstance(stored, dict):
             return ok(stored)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     return ok({})
 
 
@@ -331,8 +331,8 @@ async def put_custom_columns(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     data = d.get("items") or d.get("data") or {}
     old = one("SELECT value FROM replenishment_config WHERE `key`='custom_columns' AND channel=''")
     _log_cfg_history("", "custom_columns", (old or {}).get("value", ""),
@@ -351,8 +351,8 @@ async def put_status_map(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     channel = d.get("channel", "jd")
     items = d.get("items") or []
     old = one("SELECT value FROM replenishment_config WHERE `key`='order_status_map' AND channel=%s", [channel])
@@ -375,8 +375,8 @@ def get_seasons(channel: str = "jd", mode: str = "bbcc"):
         stored = json.loads((row or {}).get("value") or "[]")
         if isinstance(stored, list) and stored:
             return ok(stored)  # 自定义优先: 用户保存的列表为权威
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     # 无自定义存储 → 内置默认兜底
     return ok([dict(s) for s in _DEFAULT_SEASONS])
 
@@ -387,8 +387,8 @@ async def put_seasons(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('suppliers', '静默降级', _e)
     channel = d.get("channel", "jd")
     mode = d.get("mode", "bbcc")
     items = d.get("items") or []

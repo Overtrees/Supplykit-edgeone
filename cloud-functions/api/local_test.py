@@ -512,5 +512,13 @@ check("MOQ: note 含起订说明", _has_note)
 _rp.query = _old_pq
 _db3.query = _old_q3
 
+# ── except pass 治理链路验证: try_err 调用无 NameError(mock execute 环境) ──
+from routes.common import try_err as _te
+try:
+    _te("local_test", "try_err 链路验证", None)
+    check("try_err 调用链正常(except pass 治理落点)", True)
+except Exception as _te_e:
+    check("try_err 调用链正常(except pass 治理落点)", False, str(_te_e)[:120])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

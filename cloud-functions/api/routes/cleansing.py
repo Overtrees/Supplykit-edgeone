@@ -20,7 +20,7 @@ from fastapi import File
 from fastapi import Form
 
 from db import query, one, execute, executemany
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["cleansing"])
 
@@ -204,8 +204,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                 for c in cleaned:
                     if c.get("order_status"):
                         c["order_status"] = _ncol(channel, "order_status", str(c["order_status"]))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('cleansing', '静默降级', _e)
         success, failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
         elapsed = round(time.time() - started, 1)
         # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
@@ -234,8 +234,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                         _wht[(_sku, _wh, _wt)] = _wt
                 if deltas:
                     adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
         evaluated = 0
         try:
@@ -294,8 +294,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     "VALUES('cleansing_eval','error',%s,%s,'cleansing')",
                     ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),
                      _tb6.format_exc(limit=20)[-1800:]))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('cleansing', '静默降级', _e)
         from routes.analysis_cache import invalidate_all
         invalidate_all()
         try:
@@ -305,8 +305,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                                                        "failed": failed, "elapsed": elapsed,
                                                        "rules_evaluated": evaluated,
                                                        "inventory_adjusted": adjusted}}, ensure_ascii=False), channel))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         try:
             if failed > 0 and err_details:
                 from db import execute as _e2
@@ -315,8 +315,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
                     ("cleansing_error", "warning", ("清洗失败 %d 条" % failed),
                      ";".join("%s: %s" % (d.get("sku"), d.get("reason")) for d in err_details[:20]),
                      "cleansing"))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         _msg = "成功 %d 条, 跳过 %d 条" % (success, failed)
         # 前置提示(严谨性): 订单状态口径 + 混渠道(轻量提示, 不做系统联动)
         try:
@@ -331,8 +331,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
             if len(_chs) > 1:
                 _msg += " · 文件含 %d 种渠道(%s), 已按行渠道落库, 建议单渠道导入" % \
                         (len(_chs), ",".join(sorted(_chs)))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
                 "error": "", "message": _msg,
                 "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted,
@@ -342,8 +342,8 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
             execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                     "VALUES(%s,'cleansing','error','{}',%s,%s)",
                     (task_id, json.dumps({"error": str(e)[:400]}, ensure_ascii=False), channel))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         return {"ok": False, "error": "清洗失败: %s" % str(e)[:200]}
 
 
@@ -358,8 +358,8 @@ def cleansing_task(task_id: str):
     result = {}
     try:
         result = json.loads(row.get("result") or "{}")
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
     out = {"status": status}
     if status == "done":
         out["result"] = result.get("result") or result
@@ -390,8 +390,8 @@ async def cleansing_templates_save(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
     name = d.get("name") or ""
     doc_type = d.get("doc_type") or "order"
     if not name:
@@ -444,8 +444,8 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
                 ctxs.append({"sku": sku, "channel": channel, "inv": inv})
         if ctxs:
             evaluate_many("inventory.changed", ctxs, channel, load_rules_for("inventory.changed", channel))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
     return n, skus
 
 
@@ -472,8 +472,8 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                         _k = str(r.get("sku") or "").strip()
                         if not (r.get("barcode") or "").strip() and _bmap.get(_k):
                             r["barcode"] = _bmap[_k]
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         return _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
                              "quantity", "unit_price", "total_amount", "order_status",
@@ -515,8 +515,8 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             _br = [c for c in cleaned if (c.get("prod_date") or "") or (c.get("exp_date") or "")]
             if _br:
                 _sync_batches(channel, _br, conflict_mode)
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         return s, f, ed
     if target == "outbound":
         return _write_batch("outbound_records",
@@ -638,15 +638,15 @@ def _sync_batches(channel, rows, conflict_mode="overwrite"):
                             "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)",
                             [it["sku"], it["warehouse"], it["warehouse_type"], it["channel"],
                              it["prod_date"], it["exp_date"], it["qty"]])
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('cleansing', '静默降级', _e)
         return len(ins)
     for sku, wh, wt in touched:
         try:
             execute("DELETE FROM batches WHERE sku=%s AND warehouse=%s AND channel=%s",
                     [sku, wh, channel])
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
     for i in range(0, len(ins), 200):
         chunk = ins[i:i + 200]
         cols = list(chunk[0].keys())
@@ -654,6 +654,6 @@ def _sync_batches(channel, rows, conflict_mode="overwrite"):
             _em("INSERT INTO batches(%s) VALUES(%s)" % (
                 ", ".join("`%s`" % x for x in cols), ", ".join(["%s"] * len(cols))),
                 [tuple(r[c] for c in cols) for r in chunk])
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
     return len(ins)

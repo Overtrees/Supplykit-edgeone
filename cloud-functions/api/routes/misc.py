@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["misc"])
 
@@ -44,8 +44,8 @@ async def frontend_log(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('misc', '静默降级', _e)
     msg = (d.get("message") or "").strip()[:200]
     if not msg:
         return ok({})
@@ -57,8 +57,8 @@ async def frontend_log(request: Request):
                 "VALUES(%s,%s,%s,%s,'frontend')",
                 (lt, d.get("level") or "error",
                  msg + (" @" + _url[-80:] if _url else ""), det))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('misc', '静默降级', _e)
     return ok({})
 
 
@@ -103,8 +103,8 @@ async def db_diag(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('misc', '静默降级', _e)
     sql = (d.get("sql") or "").strip()
     if not sql or len(sql) > 2000:
         return fail("sql 缺失或超长")

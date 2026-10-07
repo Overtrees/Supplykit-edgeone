@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import one, execute, table
-from routes.common import fail, create_token, verify_token, hash_password, check_password, traced
+from routes.common import fail, create_token, verify_token, hash_password, check_password, traced, try_err
 
 router = APIRouter(tags=["auth"])
 
@@ -15,8 +15,8 @@ async def setup(request: Request):
     data = {}
     try:
         data = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('auth', '静默降级', _e)
     username = data.get("username") or request.query_params.get("username", "")
     password = data.get("password") or request.query_params.get("password", "")
     if not username or not password:
@@ -38,8 +38,8 @@ async def login(request: Request):
     data = {}
     try:
         data = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('auth', '静默降级', _e)
     username = data.get("username") or request.query_params.get("username", "")
     password = data.get("password") or request.query_params.get("password", "")
     if not username or not password:

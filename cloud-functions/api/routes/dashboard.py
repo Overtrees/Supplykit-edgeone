@@ -53,8 +53,8 @@ def _daily_maintenance():
             _amax = str(_am.get("m") or "")[:10]
             if not _amax or _amax < _yest:
                 _rebuild_day_agg(90)
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)
         # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
         #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
         try:
@@ -63,15 +63,15 @@ def _daily_maintenance():
                 _k = one("SELECT id FROM quality_logs ORDER BY id DESC LIMIT 300") or {}
                 if _k.get("id"):
                     execute("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")])
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)
     except Exception as _me:
         try:
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                     "VALUES('maint','error',%s,%s,'dash')",
                     ("daily_maintenance 失败", str(_me)[:200]))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)
 
 
 def _daily_rules_guard():
@@ -99,13 +99,13 @@ def _daily_rules_guard():
                     execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                             "VALUES('maint','error',%s,%s,'dash')",
                             ("daily_rules 应用层兜底失败", str(_e)[:200]))
-                except Exception:
-                    pass
+                except Exception as _e:
+                        try_err('dashboard', '静默降级', _e)
 
         import threading
         threading.Thread(target=_run, daemon=True).start()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('dashboard', '静默降级', _e)
 
 
 def _sync_health_snapshot(channel, health):
@@ -130,8 +130,8 @@ def _sync_health_snapshot(channel, health):
                  int((health.get("own") or {}).get("score") or -1),
                  int((health.get("platform") or {}).get("score") or -1),
                  int((health.get("bc") or {}).get("score") or -1)])
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('dashboard', '静默降级', _e)
 
 
 @router.get("/dashboard/health-trend")
@@ -185,8 +185,8 @@ def _rebuild_day_agg(days=90, channel=None):
                 "ON DUPLICATE KEY UPDATE gmv=VALUES(gmv), subsidy=VALUES(subsidy), cnt=VALUES(cnt)"
                 % (_status_cond(), _status_cond(), _chw))
         execute(_sql, [_start] + _chp)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('dashboard', '静默降级', _e)
 
 
 def _build_summary_agg(channel, days60, now):
@@ -236,8 +236,8 @@ def _build_summary(channel, start_date, end_date):
     if _agg_ok:
         try:
             return _build_summary_agg(channel, days60, now)  # agg 路径(强实时); 异常整体降级下方直查
-        except Exception:
-            pass  # agg 路径失败 → 降级直查 60 天(不阻塞)
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)  # agg 路径失败 → 降级直查 60 天(不阻塞)
     rows = query(
         "SELECT DATE(ordered_at) AS d, order_status, store, "
         "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
@@ -419,8 +419,8 @@ def _assemble(rows, channel, start_date, end_date):
             brands_map[_b] = {"g": round(float(_r.get("g") or 0), 2),
                               "rf": round(float(_r.get("rf") or 0), 2),
                               "sb": round(float(_r.get("sb") or 0), 2)}
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('dashboard', '静默降级', _e)
     brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
               "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
               for k, v in sorted(brands_map.items(), key=lambda x: -x[1]["g"])]
@@ -663,8 +663,8 @@ def _rule_params(alert_type, channel=None):
         if row and row.get("params"):
             d = _json.loads(row["params"])
             return d if isinstance(d, dict) else {}
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('dashboard', '静默降级', _e)
     return {}
 
 
@@ -773,8 +773,8 @@ def _stock_risk(channel, full: int = 0):
         try:
             sc = float(r.get("score") or 0)
             otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), otif_min) if sc > 0 else 1.0
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('dashboard', '静默降级', _e)
     # P1: 需求调整因子 —— 活动系数(season_config, 补货/采购已用) + 当天小时流速加速(加速判定)
     try:
         from routes.replenishment import _season_factor

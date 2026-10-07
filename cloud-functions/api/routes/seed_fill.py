@@ -5,6 +5,7 @@
 金额 GMV 明细口径、8 仓库存(18% 低库存)、批次效期(4% 问题批次)、
 当月出入库记录、库存月汇总、补货参数+内置规则、规则引擎告警、日销快照
 """
+from routes.common import try_err
 import json
 import random
 
@@ -415,8 +416,8 @@ def _sync_inv_month():
                         "AND channel=%%s AND warehouse_type='own'" % target_col,
                         (int(r.get('q') or 0), str(r.get('sku')), str(r.get('warehouse') or ''),
                          str(r.get('channel') or 'jd')))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('seed_fill', '静默降级', _e)
     # 期初 = 可用 - 入库 + 出库; 为负则调低入库使期初 >= 0
     execute("UPDATE inventory SET beginning_stock = available_qty - month_inbound + month_outbound "
             "WHERE channel IN ('jd','other') AND warehouse_type='own'")

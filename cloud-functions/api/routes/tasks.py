@@ -19,7 +19,7 @@ from fastapi import Request
 from fastapi.responses import Response
 
 from db import query, one, execute
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["tasks"])
 
@@ -77,8 +77,8 @@ def seed_fill_status(task_id: str = ""):
                           [task_id])
         if not _locked:
             return {"data": {"status": "running"}}  # 已有请求在续跑, 跳过本次(防并发)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('tasks', '静默降级', _e)
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json
@@ -107,8 +107,8 @@ def seed_fill_status(task_id: str = ""):
         try:
             execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
                     (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('tasks', '静默降级', _e)
         return {"data": {"status": "error", "error": str(e)[:200]}}
 
 
@@ -121,8 +121,8 @@ async def seed_fill(request: Request):
     try:
         d = await request.json()
         channel = d.get("channel", "jd")
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('tasks', '静默降级', _e)
     cnt = one("SELECT COUNT(*) AS c FROM orders") or {}
     pct = one("SELECT COUNT(*) AS c FROM products") or {}
     alt = one("SELECT (SELECT COUNT(*) FROM alerts)+(SELECT COUNT(*) FROM inventory) AS c") or {}
@@ -148,8 +148,8 @@ async def seed_fill(request: Request):
         try:
             execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
                     (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('tasks', '静默降级', _e)
         return fail("种子填充启动失败: %s" % str(e)[:200])
 
 
@@ -162,8 +162,8 @@ async def seed_reset(request: Request):
     try:
         d = await request.json()
         channel = d.get("channel", "jd")
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('tasks', '静默降级', _e)
     task_id = _new_task_id("reset")
     try:
         for t in _TABLES_RESET:
@@ -235,8 +235,8 @@ async def create_export(request: Request):
         import base64 as _b64
         try:
             execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('tasks', '静默降级', _e)
         try:
             execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
                     "ON DUPLICATE KEY UPDATE content=VALUES(content)",

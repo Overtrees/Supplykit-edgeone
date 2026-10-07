@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from db import query
-from routes.common import ok, traced
+from routes.common import ok, traced, try_err
 
 router = APIRouter(tags=["alerts"])
 

@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from db import query, one, execute
-from routes.common import ok, traced
+from routes.common import ok, traced, try_err
 
 router = APIRouter(tags=["orders"])
 

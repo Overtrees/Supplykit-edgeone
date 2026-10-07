@@ -17,8 +17,8 @@ def _resolve_single(expr, ctx):
     try:
         if expr.replace(".", "", 1).isdigit():
             return float(expr)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('core_rules', '静默降级', _e)
     val = ctx
     for p in expr.split("."):
         if isinstance(val, dict):
@@ -184,8 +184,8 @@ def _action_create_alert(ctx):
                 (rule.get("alert_type", ""), title, desc, rule.get("severity", "warning"),
                  sku, int(rule.get("id") or 0),
                  (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('core_rules', '静默降级', _e)
 
 
 def evaluate(event, context):
@@ -376,8 +376,8 @@ def evaluate_stock_skus(channel, limit=100000):
                     _sc = float(_r3.get("score") or 0)
                     _otif_map[_r3.get("supplier_code")] = max(min(_sc / 5.0, 1.0),
                                                               float(_rp.get("otif_min", 0.6))) if _sc > 0 else 1.0
-                except Exception:
-                    pass
+                except Exception as _e:
+                        try_err('core_rules', '静默降级', _e)
         except Exception as _e:
             try_err("rules", "评估加载 OTIF 降级", _e)
         try:
@@ -465,8 +465,8 @@ def evaluate_stock_skus(channel, limit=100000):
                 base["health_score"] = _health if _health is not None else 999.0
                 base["lit_trad"] = _lit_trad
                 base["lit_bbcc"] = _lit_bbcc
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('core_rules', '静默降级', _e)
         inv_ctxs.append(base)
         daily_ctxs.append(base)
     r1, hits1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules, return_hits=True)
@@ -489,8 +489,8 @@ def evaluate_stock_skus(channel, limit=100000):
                     if _b:
                         execute("UPDATE alerts SET status='inactive' WHERE id IN (%s)"
                                 % ",".join(["%s"] * len(_b)), _b)
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('core_rules', '静默降级', _e)
     # P2 动作审计: 规则 params.log=1 → 触发摘要写 quality_logs(追踪规则触发历史, 非仅当前 active 告警)
     try:
         for _rl in list(_daily_rules) + list(_inv_rules):
@@ -500,7 +500,7 @@ def evaluate_stock_skus(channel, limit=100000):
                     execute("INSERT INTO quality_logs(log_type, level, message, source) "
                             "VALUES('rule_action','info',%s,'rules')",
                             ("规则[%s] 触发 %d 个 SKU×仓" % (_rl.get("name") or _rl.get("id"), _n)))
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('core_rules', '静默降级', _e)
     # 返回触发规则名(不泄漏查询细节)
     return out

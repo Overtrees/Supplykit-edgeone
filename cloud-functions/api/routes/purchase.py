@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute, executemany
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["purchase"])
 
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
@@ -64,8 +64,8 @@ async def update_purchase_order(pid: int, request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('purchase', '静默降级', _e)
     sets, params = [], []
     for f in ("arrival_date", "actual_qty", "status"):
         if f in d and d[f] is not None:
@@ -121,8 +121,8 @@ def _build_purchase(channel, mode, days=28):
         for s in (sv or []):
             if isinstance(s, dict) and s.get("enabled") and float(s.get("factor", 1.0)) > active_factor:
                 active_factor = float(s["factor"])
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('purchase', '静默降级', _e)
 
     products = {}
     for p in query("SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
@@ -289,8 +289,8 @@ def _build_purchase(channel, mode, days=28):
             execute("UPDATE alerts SET status='closed' WHERE alert_type='purchase_need' "
                     "AND related_sku IN (%s) AND status='active' AND channel=%s"
                     % (ph, channel), upd + [channel])
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('purchase', '静默降级', _e)
 
     result.sort(key=lambda x: x["days_to_empty"])
     return result
@@ -327,8 +327,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                 # 空数组视为"未自定义"→ 返回内置默认(避免丢个护家清等品类配置, 全按食品线误判)
                 if isinstance(d, list) and d:
                     return d
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('purchase', '静默降级', _e)
         return default
 
     cat_cfg = _cfg_list("slow_cats", [
@@ -374,8 +374,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                    "WHERE channel=%s AND arrival_date IS NOT NULL AND arrival_date!=''", [channel]):
         try:
             b_arrival[str(r.get("sku"))] = datetime.strptime(str(r.get("arrival_date"))[:10], "%Y-%m-%d")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('purchase', '静默降级', _e)
     # 已处置(30 天内)
     disposed = {}
     cutoff30 = (now - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -431,8 +431,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                     level = "black"
                     reason.append("距保质期%d天(<%d月临期线)" % (dd, shelf_m) if dd >= 0
                                   else "已过期%d天" % (-dd))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('purchase', '静默降级', _e)
         # ② B仓超免费期(仓储费成本)
         if wht == "platform_b" and channel == "jd":
             days_stored = max((now - b_arrival[sku]).days, 0) if sku in b_arrival else 0
@@ -502,8 +502,8 @@ async def disposals_batch(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('purchase', '静默降级', _e)
     channel = d.get("channel", "jd")
     action = d.get("action", "mark")
     note = d.get("note", "")

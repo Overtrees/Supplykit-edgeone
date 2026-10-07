@@ -10,6 +10,7 @@
   - invalidate_all(): DELETE 全表 → 所有实例立即失效(全局一致, 不再依赖实例内存)
   - 单 key 并发重建: 多实例同时 miss → 各自 REPLACE, TiDB 行锁幂等, 最终一致
 """
+from routes.common import try_err
 import json
 
 _registry = {}
@@ -64,8 +65,8 @@ def cache_get(key, ttl, builder):
             _e3("INSERT INTO quality_logs(log_type, level, message, source) "
                 "VALUES('cache_error','error',%s,'api')",
                 ("cache_get 降级直算[%s]: %s" % (str(key)[:80], str(e)[:150]),))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('analysis_cache', '静默降级', _e)
         return builder()
 
 
@@ -77,13 +78,13 @@ def invalidate_all():
         for fn in list(_registry.values()):
             try:
                 fn()
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('analysis_cache', '静默降级', _e)
     except Exception as e:
         # 失效失败可见性(四维-实时性): 缓存未清则 TTL 内读旧值, 记 quality_logs 供审计
         try:
             from db import execute as _e2
             _e2("INSERT INTO quality_logs(log_type, level, message, source) "
                 "VALUES('cache_invalidate','error',%s,'api')", (str(e)[:200],))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('analysis_cache', '静默降级', _e)

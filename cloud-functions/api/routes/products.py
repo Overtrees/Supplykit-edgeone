@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute
-from routes.common import ok, fail, traced
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["products"])
 
@@ -45,8 +45,8 @@ def list_products(channel: str = "jd", page: int = 1, page_size: int = 30,
                 try:
                     _bmap[str(b.get("sku"))] = max((_dt.strptime(_ed, "%Y-%m-%d")
                                                     - _dt.strptime(_pd, "%Y-%m-%d")).days, 0)
-                except Exception:
-                    pass
+                except Exception as _e:
+                        try_err('products', '静默降级', _e)
         for r in rows:
             r["batch_days"] = _bmap.get(str(r.get("sku") or ""), 0)
 
@@ -66,8 +66,8 @@ async def products_batch(request: Request):
     d = {}
     try:
         d = await request.json()
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('products', '静默降级', _e)
     action = d.get("action", "")
     ids = d.get("ids") or []
     if not ids:

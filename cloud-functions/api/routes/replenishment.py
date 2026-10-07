@@ -3,7 +3,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one
-from routes.common import ok, traced
+from routes.common import ok, traced, try_err
 from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
 
 router = APIRouter(tags=["insights"])

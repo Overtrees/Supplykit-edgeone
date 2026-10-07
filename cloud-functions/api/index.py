@@ -32,7 +32,7 @@ from routes.tasks import router as tasks_router
 from routes.cleansing import router as cleansing_router
 from routes.purchase import router as purchase_router
 from routes.cron import router as cron_router
-from routes.common import verify_token
+from routes.common import verify_token, try_err
 
 app = FastAPI()
 
@@ -58,8 +58,8 @@ async def slow_log_middleware(request: Request, next):
             _e("INSERT INTO quality_logs(log_type, level, message, source) "
                "VALUES(%s,%s,%s,%s)", ("slow_request","warning",
                ("%s %s %.1fs" % (request.method, request.url.path, _el)), "api"))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
     return _resp
 
 
@@ -95,8 +95,8 @@ def health():
     try:
         r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot")
         out["snapshot_max"] = (r or {}).get("m") or ""
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('index', '静默降级', _e)
     # 数据版本指纹: 关键表 MAX(id)/MAX(date) 拼接, 任何数据变更即变化
     # (前端每 15s 轮询 /health 取 version, 变化时 clearCache+loadAll 绕过 30s 前端缓存)
     try:
@@ -149,13 +149,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
         for _iname, _tbl, _cols in _INDEXES:
             try:
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('index', '静默降级', _e)
         for _iname, _tbl in _DROP_INDEXES:
             try:
                 _exec("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname, _tbl))
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('index', '静默降级', _e)
         # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)
         try:
             _exec("CREATE TABLE IF NOT EXISTS maintenance_log (`date` DATE NOT NULL, task VARCHAR(32) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(`date`, task))")
@@ -175,8 +175,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "
                   "store VARCHAR(60) NOT NULL, gmv DECIMAL(14,2) DEFAULT 0, subsidy DECIMAL(14,2) DEFAULT 0, cnt INT DEFAULT 0, "
                   "PRIMARY KEY(`date`, channel, order_status, store))")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # ── 启动数据迁移(2026-09-15: barcode 补齐 / 时间仿真随机化)
         # 设计: 不抢注, 靠 WHERE 条件幂等(空值/0点) + 分批(5万) → 每次启动续跑, 中断下次续跑, 完成自然零行
         # 注意: SQL 内 DATE_FORMAT 的 % 必须 %% 转义(pymysql 参数化时 % 被当占位符 → 曾致迁移假成功)
@@ -190,8 +190,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                         if _exec("INSERT IGNORE INTO migration_log(name) VALUES('day_agg_init')"):
                             from routes.dashboard import _rebuild_day_agg
                             _rebuild_day_agg(90)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                            try_err('index', '静默降级', _e)
                     # M1: 订单 69 码补齐(products 全有 barcode, sku 全关联; 分批按 id, WHERE 空值幂等)
                     try:
                         _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
@@ -200,8 +200,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                             _exec("UPDATE orders o JOIN products p ON o.sku=p.sku SET o.barcode=p.barcode "
                                   "WHERE o.id BETWEEN %s AND %s AND (o.barcode IS NULL OR o.barcode='') "
                                   "AND p.barcode IS NOT NULL AND p.barcode != ''", [_lo, _lo + 49999])
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                            try_err('index', '静默降级', _e)
                     # M2: 订单时间仿真随机化(WHERE 0点幂等, 分批)
                     try:
                         _mx2 = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
@@ -213,21 +213,21 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                                   "paid_at = CONCAT(DATE_FORMAT(paid_at,'%%Y-%%m-%%d'),' ',"
                                   "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
                                   "WHERE id BETWEEN %s AND %s AND RIGHT(ordered_at,8)='00:00:00'", [_lo, _lo + 49999])
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                            try_err('index', '静默降级', _e)
                     # M3: 出入库时间仿真随机化(同理)
                     try:
                         for _tbl, _col in (('inbound_records', 'inbound_date'), ('outbound_records', 'outbound_date')):
                             _exec("UPDATE `%s` SET `%s` = CONCAT(DATE_FORMAT(`%s`,'%%Y-%%m-%%d'),' ',"
                                   "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
                                   "WHERE RIGHT(`%s`,8)='00:00:00'" % (_tbl, _col, _col, _col))
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as _e:
+                            try_err('index', '静默降级', _e)
+                except Exception as _e:
+                        try_err('index', '静默降级', _e)
             _thM.Thread(target=_run_migrations, daemon=True).start()
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 启动补列(幂等): 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B 2026-09-10)
         try:
             from db import query as _qryX
@@ -237,10 +237,10 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                     _hx = {str(r.get("Field") or "") for r in _qryX("SHOW COLUMNS FROM `%s`" % _t)}
                     if "ext_json" not in _hx:
                         _exec("ALTER TABLE `%s` ADD COLUMN ext_json TEXT" % _t)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as _e:
+                        try_err('index', '静默降级', _e)
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 启动补列(幂等): 入库/出库记录带商品属性列(69码/平台/品牌/店铺/分类/单价/箱规/单位/重量/体积/状态)
         # —— 出入库明细展示与导出需要商品属性, 原 schema 仅 10 列(用户需求 2026-09-10)
         try:
@@ -264,26 +264,26 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                     if _col not in _have:
                         try:
                             _exec("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _col, _ddl))
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except Exception as _e:
+                                try_err('index', '静默降级', _e)
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 启动补列(幂等): alerts.warehouse —— 告警逐仓化(规则引擎去重+seed 生成+展示均按 SKU×仓)
         try:
             from db import query as _qry
             _cols = {str(r.get("Field") or "") for r in _qry("SHOW COLUMNS FROM alerts")}
             if "warehouse" not in _cols:
                 _exec("ALTER TABLE alerts ADD COLUMN warehouse VARCHAR(64) DEFAULT ''")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 启动补列(幂等): rules.params —— 规则携带业务计算参数(断货/健康看板逻辑融合进规则配置)
         try:
             from db import query as _qry2
             _rcols = {str(r.get("Field") or "") for r in _qry2("SHOW COLUMNS FROM rules")}
             if "params" not in _rcols:
                 _exec("ALTER TABLE rules ADD COLUMN params TEXT")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 内置"濒临断货预警"/"库存健康监控"规则 = 计算参数载体(软删恢复 + alert_enabled=0 不告警;
         # 断货卡/健康卡同源读取 params)。永久删除不补(尊重用户删除); 用户自改 params 保留合并
         try:
@@ -304,13 +304,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                         _p2 = {}
                         try:
                             _p2 = _json2.loads(_row.get("params") or "{}")
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                                try_err('index', '静默降级', _e)
                         _p2 = {**(_p2 if isinstance(_p2, dict) else {}), "alert_enabled": 0}
                         _exec6("UPDATE rules SET deleted_at='', is_active=1, params=%s WHERE id=%s",
                                (_json2.dumps(_p2, ensure_ascii=False), _row.get("id")))
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 内置"滞销识别"规则退役(幂等, 存量库): 滞销由处置建议页(品类多因素分级)单一承载,
         # 规则版(仅 days>30)粗糙且与处置页重复 → 退役后孤儿清理自动关存量 slow_moving 告警
         try:
@@ -318,8 +318,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec3("UPDATE rules SET is_active=0, deleted_at=NOW() "
                    "WHERE name='滞销识别' AND alert_type='slow_moving' AND is_active=1 "
                    "AND (deleted_at IS NULL OR deleted_at='')")
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
         # 内置"紧急补货"规则退役(幂等, 存量库): 看板补货告警卡改读补货建议接口(动态缺口),
         # 静态 30%*安全线 阈值告警与低库存 100% 重叠且口径与补货建议脱节 → 退役后每日孤儿清理
         # 自动关闭存量 replenish 告警(用户自定义 replenish 规则不受影响)
@@ -328,7 +328,7 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec2("UPDATE rules SET is_active=0, deleted_at=NOW() "
                    "WHERE name='紧急补货' AND alert_type='replenish' AND is_active=1 "
                    "AND (deleted_at IS NULL OR deleted_at='')")
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as _e:
+                try_err('index', '静默降级', _e)
+    except Exception as _e:
+            try_err('index', '静默降级', _e)

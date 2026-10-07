@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from db import query, one
-from routes.common import ok, traced
+from routes.common import ok, traced, try_err
 from biz.sales import load_daily_sales, calc_sales_multi
 
 router = APIRouter(tags=["insights"])
@@ -18,8 +18,8 @@ def ping():
     try:
         from db import one
         one("SELECT 1")
-    except Exception:
-        pass
+    except Exception as _e:
+            try_err('insights', '静默降级', _e)
     return {"ok": True}
 
 
@@ -109,8 +109,8 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                 _tr = one("SELECT value FROM replenishment_config WHERE `key`='transit_days' AND channel=%s", [channel])
                 if _tr and _tr.get("value"):
                     _transit = int(_tr["value"])
-            except Exception:
-                pass
+            except Exception as _e:
+                    try_err('insights', '静默降级', _e)
             from datetime import datetime as _bdt
             _now = datetime.now(timezone.utc).replace(tzinfo=None)
             for _b in _brows:
@@ -135,12 +135,12 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                             _st = "warn"
                         else:
                             _st = "ok"
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                            try_err('insights', '静默降级', _e)
                 batch_map[_sku] = {"pd": _pd, "ed": _ed, "st": _st, "pct": _pct,
                                    "days": _td if _td > 0 else 0, "cnt": int(_b.get("cnt") or 0)}
-        except Exception:
-            pass
+        except Exception as _e:
+                try_err('insights', '静默降级', _e)
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
     month_in, month_out = {}, {}
     if skus:
