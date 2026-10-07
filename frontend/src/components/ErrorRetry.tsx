@@ -10,7 +10,7 @@ export default function ErrorRetry({
   error = '加载失败',
   desc = '可能是网络异常或服务暂不可用，请重试',
   onRetry,
-  onReload,
+  onReload = null,
 }) {
   return (
     <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted2)' }}>

@@ -81,7 +81,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   }, [hammerCols, whType])
 
   const s = hammerSearch || ''
-  const loadInv = async p => {
+  const loadInv = async (p?) => {
     const seq = ++reqSeq.current
     if (p === 1) setLoading(true)
     else setLoadingMore(true)
@@ -627,7 +627,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   batchData[bk].forEach(function (b, bi) {
                     let pct = 0
                     if (b.exp_date && b.prod_date) {
-                      const dp = Math.abs((new Date(b.exp_date) - new Date(b.prod_date)) / 86400000)
+                      const dp = Math.abs(
+                        (new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
+                          86400000,
+                      )
                       pct =
                         dp > 0
                           ? Math.max(
@@ -635,7 +638,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                               Math.min(
                                 100,
                                 Math.round(
-                                  ((new Date() - new Date(b.prod_date)) / 86400000 / dp) * 100,
+                                  ((new Date().getTime() - new Date(b.prod_date).getTime()) /
+                                    86400000 /
+                                    dp) *
+                                    100,
                                 ),
                               ),
                             )
@@ -672,7 +678,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       else if (col.id === 'batch_days') {
                         let td = 0
                         if (b.exp_date && b.prod_date)
-                          td = Math.round((new Date(b.exp_date) - new Date(b.prod_date)) / 86400000)
+                          td = Math.round(
+                            (new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
+                              86400000,
+                          )
                         el = React.createElement(
                           'td',
                           { key: col.id, style: { fontSize: 'var(--font-xs)' } },
@@ -682,9 +691,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         let es = ''
                         if (b.exp_date && b.prod_date) {
                           const cv = Math.round(
-                            ((new Date() - new Date(b.prod_date)) /
+                            ((new Date().getTime() - new Date(b.prod_date).getTime()) /
                               86400000 /
-                              ((new Date(b.exp_date) - new Date(b.prod_date)) / 86400000)) *
+                              ((new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
+                                86400000)) *
                               100,
                           )
                           es =
@@ -721,11 +731,15 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         let ot_st = '-'
                         if (b.exp_date && b.prod_date) {
                           const td = Math.round(
-                            (new Date(b.exp_date) - new Date(b.prod_date)) / 86400000,
+                            (new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
+                              86400000,
                           )
                           if (td > 0) {
                             const cv = Math.round(
-                              ((new Date() - new Date(b.prod_date)) / 86400000 / td) * 100,
+                              ((new Date().getTime() - new Date(b.prod_date).getTime()) /
+                                86400000 /
+                                td) *
+                                100,
                             )
                             ot_st = cv >= 100 ? '⚫已过期' : cv > 33 ? '✗ 已超1/3' : '正常'
                           }

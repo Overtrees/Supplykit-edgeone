@@ -67,7 +67,7 @@ instance.interceptors.response.use(
     // 自动解包统一响应格式 {ok, data, error}
     if (response.data && typeof response.data === 'object' && 'ok' in response.data) {
       if (!response.data.ok) {
-        const err = new Error(response.data.error || '请求失败')
+        const err: Error & { status?: number } = new Error(response.data.error || '请求失败')
         err.status = response.status
         return Promise.reject(err)
       }
@@ -149,25 +149,25 @@ function invalidateCache() {
 // 导出 api 对象，保持与原接口兼容
 export const api = {
   get: apiGet,
-  post: async (url, data, config) => {
+  post: async (url, data?, config = {}) => {
     const merged = { timeout: 30000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
   },
   // 批量/重写操作：宽松超时（PA 单 worker 排队时单请求可能 >30s）
-  postHeavy: async (url, data, config) => {
+  postHeavy: async (url, data?, config = {}) => {
     const merged = { timeout: 90000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
   },
-  put: async (url, data, config) => {
+  put: async (url, data, config = {}) => {
     const r = await instance.put(url, data, config)
     invalidateCache()
     return r
   },
-  delete: async (url, config) => {
+  delete: async (url, config = {}) => {
     const r = await instance.delete(url, config)
     invalidateCache()
     return r
@@ -175,7 +175,7 @@ export const api = {
 }
 
 // 清除缓存
-export function clearCache(pattern) {
+export function clearCache(pattern?) {
   if (!pattern) {
     cache.clear()
     return

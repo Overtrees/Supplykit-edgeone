@@ -19,6 +19,7 @@ interface OrderItem {
 
 import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
+import type { StockRiskShim } from '../api/types'
 
 const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 60000)
 const WS_URL = import.meta.env.VITE_WS_URL || ''
@@ -39,7 +40,7 @@ const safeGetJSON = (key, def = null) => {
   }
 }
 
-export const useAppStore = create((set, get) => ({
+const initAppStore = (set, get) => ({
   channel: safeGet('c_channel') || 'jd',
   channelVersion: 0,
   pageVersion: 0,
@@ -50,9 +51,15 @@ export const useAppStore = create((set, get) => ({
   inventory: [],
   qualityLogs: [],
   alerts: [],
-  stockRisk: [],
+  stockRisk: [] as unknown[] | StockRiskShim,
   bcOutOfStock: [],
-  alertCounts: null,
+  _stockOverview: null,
+  alertCounts: null as {
+    by_type?: Record<string, number>
+    by_severity?: Record<string, number>
+    ls_warehouse?: Record<string, number>
+    rp_warehouse?: Record<string, number>
+  } | null,
   loading: false, // 统一 loading 状态
   wsStatus: 'idle',
   importLogs: [],
@@ -164,7 +171,7 @@ export const useAppStore = create((set, get) => ({
     } catch {}
     set({ hammerReplenMode: m, hammerRulesMode: m })
   },
-  hammerCols: {},
+  hammerCols: {} as Record<string, string[]>,
   setHammerCols: (pageKey, cols) =>
     set(s => ({ hammerCols: { ...s.hammerCols, [pageKey]: cols } })),
   prodBatch: false,
@@ -213,7 +220,7 @@ export const useAppStore = create((set, get) => ({
   },
   bumpPageVersion: () => set(s => ({ pageVersion: s.pageVersion + 1 })),
 
-  async loadAll(page, opts) {
+  async loadAll(page?, opts?) {
     set({ loading: true, orderLoading: true })
     const ch = get().channel
     const s = get().hammerSearch || ''
@@ -305,11 +312,11 @@ export const useAppStore = create((set, get) => ({
       }
       ws.onclose = () => {
         set({ wsStatus: 'polling', ws: null })
-        setTimeout(() => connectWebSocket(), 10000)
+        setTimeout(() => get().connectWebSocket(), 10000)
       }
       ws.onerror = () => {
         set({ wsStatus: 'polling', ws: null })
-        setTimeout(() => connectWebSocket(), 10000)
+        setTimeout(() => get().connectWebSocket(), 10000)
       }
     } catch (e) {
       set({ wsStatus: 'polling', ws: null })
@@ -320,7 +327,7 @@ export const useAppStore = create((set, get) => ({
     set(state => ({ importLogs: [item, ...state.importLogs].slice(0, 20) }))
   },
 
-  setOrderPage(p, search, status) {
+  setOrderPage(p, search?, status?) {
     const s = search ?? get().orderSearch
     const st = status ?? get().orderStatus
     set({ orderPage: p, orderSearch: s, orderStatus: st, orderLoading: true })
@@ -362,4 +369,6 @@ export const useAppStore = create((set, get) => ({
     }
     set({ poller: null, ws: null })
   },
-}))
+})
+
+export const useAppStore = create(initAppStore)

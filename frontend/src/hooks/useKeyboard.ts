@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-export default function useKeyboard(handlers) {
+export default function useKeyboard(handlers: Record<string, (e: KeyboardEvent) => void>) {
   useEffect(() => {
     const handler = e => {
       for (const [key, fn] of Object.entries(handlers)) {

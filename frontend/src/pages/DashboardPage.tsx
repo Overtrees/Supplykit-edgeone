@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
+import type { InventoryRow, StockRiskShim } from '../api/types'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
 import Chart from '../components/Chart'
@@ -17,10 +18,10 @@ const fmtWh = w => {
 }
 
 // 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
-const alertAge = c => {
+const alertAge = (c: string | null | undefined) => {
   if (!c) return ''
   try {
-    const d = Math.floor((Date.now() - new Date(String(c).replace(' ', 'T'))) / 86400000)
+    const d = Math.floor((Date.now() - new Date(String(c).replace(' ', 'T')).getTime()) / 86400000)
     return d >= 1 ? ' · 持续' + d + '天' : ''
   } catch (e) {
     return ''
@@ -264,7 +265,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }, [channel, _replMode])
   const procTotal = procList.length
   // 其他告警(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义) —— 可点开明细, 不再只有计数
-  const otherTotal = Object.entries((alertCounts && alertCounts.by_type) || {})
+  const byType: Record<string, number> = (alertCounts && alertCounts.by_type) || {}
+  const otherTotal = Object.entries(byType)
     .filter(([k]) => !['low_stock', 'replenish', 'purchase_need'].includes(k))
     .reduce((sum, [, v]) => sum + (v || 0), 0)
   useEffect(() => {
@@ -299,7 +301,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           setDashErr(s.status === 'rejected' || !dashOk ? '加载失败，数据可能正在处理中' : '')
           const aux = ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}
           const alerts = aux.alerts || []
-          const stockRisk = useAppStore.getState().stockRisk || {}
+          // stockRisk 双形态(数组|对象) → 归一化后统一消费; 对象形态缺省键消费前补齐
+          const stockRisk: unknown[] | StockRiskShim =
+            useAppStore.getState().stockRisk || ({} as StockRiskShim)
           const ov = aux.stockOverview || {}
           useAppStore.setState({
             dashboard: dash,
@@ -643,11 +647,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
   // 列表每组各取 200 条，总数可能远大于此，filter 计数会系统性漏报
-  const _acSev = (alertCounts || {}).by_severity || {}
+  const _acSev: Record<string, number> = (alertCounts && alertCounts.by_severity) || {}
   const criticalAlerts =
     _acSev.error != null ? _acSev.error : alertsList.filter(x => x.severity === 'error').length
   // 拆分类: 低库存(纯low_stock)与滞销(slow_moving)独立计数(曾合并为non_replenish导致"低库存N"含滞销误导)
-  const _acByType2 = (alertCounts && alertCounts.by_type) || {}
+  const _acByType2: Record<string, number> = (alertCounts && alertCounts.by_type) || {}
   const lowStockTotal =
     _acByType2.low_stock != null
       ? _acByType2.low_stock
@@ -662,8 +666,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       : { today: 1, week: 7, month: 30 }[periodTab] || 30
   // 濒临断货: 兼容旧数组/新{items,total,critical,warning}结构——卡上大数字/紧急警告用全量计数(完整性)
   // 补货模式联动: bbcc→BC 合计维度(对齐库存卡 bc tab: B+C 按 SKU 合计); traditional→C 仓维度
-  const _sr0 = Array.isArray(stockRisk)
-    ? { items: stockRisk, total: stockRisk.length }
+  // stockRisk 归一化兼容层: 后端可能返回 数组(旧, 仅 items/total) / 对象(新, bc/c/own 维度)
+  // 数组形态只有 items/total, 对象形态含三级分类字段 → 用统一接口描述, 缺省键消费前补齐
+  const _sr0: StockRiskShim = Array.isArray(stockRisk)
+    ? { items: stockRisk as InventoryRow[], total: stockRisk.length }
     : stockRisk || {
         items: [],
         total: 0,

@@ -2,7 +2,7 @@ import React, { useState, createContext, useContext, useEffect, useRef } from 'r
 
 interface ToastItem {
   id: number
-  type: 'success' | 'error'
+  type: 'success' | 'error' | 'warning' | 'info'
   title: string
   duration?: number
   action?: { label: string; handler: () => void }
@@ -12,6 +12,8 @@ interface ToastContextValue {
   add: (t: Omit<ToastItem, 'id'>) => void
   success: (msg: string) => void
   error: (msg: string) => void
+  warning: (msg: string) => void
+  info: (msg: string) => void
   clear: () => void
 }
 
@@ -21,6 +23,8 @@ const ToastContext = createContext<ToastContextValue>({
   add: _noop,
   success: _noop,
   error: _noop,
+  warning: _noop,
+  info: _noop,
   clear: _noop,
 })
 
@@ -37,10 +41,24 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }
   const success = (msg: string) => add({ type: 'success', title: msg })
   const error = (msg: string) => add({ type: 'error', title: msg })
+  const warning = (msg: string) => add({ type: 'warning', title: msg })
+  const info = (msg: string) => add({ type: 'info', title: msg })
   const clear = () => setToasts([])
 
+  // 各类型配色（与全局语义色对齐: success 绿 / error 红 / warning 琥珀 / info 蓝）
+  const TONE = {
+    success: { bg: 'rgba(5,150,105,0.12)', bd: 'rgba(5,150,105,0.25)', fg: 'var(--success)' },
+    error: { bg: 'rgba(225,29,72,0.12)', bd: 'rgba(225,29,72,0.25)', fg: 'var(--danger)' },
+    warning: {
+      bg: 'rgba(217,119,6,0.12)',
+      bd: 'rgba(217,119,6,0.3)',
+      fg: 'var(--warning, #d97706)',
+    },
+    info: { bg: 'rgba(14,165,233,0.12)', bd: 'rgba(14,165,233,0.3)', fg: 'var(--primary)' },
+  }
+
   return (
-    <ToastContext.Provider value={{ add, success, error, clear }}>
+    <ToastContext.Provider value={{ add, success, error, warning, info, clear }}>
       {children}
       <div
         style={{
@@ -63,11 +81,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               gap: 8,
               padding: '10px 16px',
               borderRadius: 32,
-              background: t.type === 'error' ? 'rgba(225,29,72,0.12)' : 'rgba(5,150,105,0.12)',
-              border:
-                '1px solid ' +
-                (t.type === 'error' ? 'rgba(225,29,72,0.25)' : 'rgba(5,150,105,0.25)'),
-              color: t.type === 'error' ? 'var(--danger)' : 'var(--success)',
+              background: (TONE[t.type] || TONE.success).bg,
+              border: '1px solid ' + (TONE[t.type] || TONE.success).bd,
+              color: (TONE[t.type] || TONE.success).fg,
               fontSize: 14,
               fontWeight: 500,
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',

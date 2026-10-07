@@ -42,7 +42,7 @@ export default function SupplierPage() {
   const [list, setList] = useState([])
   const [ld, setLd] = useState(true)
   const [loadErr, setLoadErr] = useState('')
-  const [visCols, setVisCols] = useState(() => getVis(COL_KEY()) || COLS.map(c => c.id))
+  const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
   const { channelVersion, hammerCols, hammerSearch } = useAppStore()
   const loadSuppliers = () => {
     setLd(true)

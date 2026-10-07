@@ -469,14 +469,18 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                 draggable
                 onDragStart={e => {
                   e.dataTransfer.setData('text/plain', col.id)
-                  e.target.style.opacity = '0.4'
-                  e.currentTarget.parentNode._dragId = col.id
+                  ;(e.target as HTMLElement).style.opacity = '0.4'
+                  ;(
+                    e.currentTarget.parentNode as HTMLElement & { _dragId?: string | null }
+                  )._dragId = col.id
                 }}
-                onDragEnd={e => (e.target.style.opacity = '1')}
+                onDragEnd={e => ((e.target as HTMLElement).style.opacity = '1')}
                 onDragOver={e => {
                   e.preventDefault()
                   e.currentTarget.style.borderTop = '2px solid var(--primary)'
-                  const from = e.currentTarget.parentNode._dragId
+                  const from = (
+                    e.currentTarget.parentNode as HTMLElement & { _dragId?: string | null }
+                  )._dragId
                   if (from && from !== col.id) {
                     const nxt = visCols.filter(c => c !== from)
                     const toIdx = nxt.indexOf(col.id)
@@ -494,7 +498,9 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                   const toIdx = nxt.indexOf(col.id)
                   nxt.splice(toIdx, 0, from)
                   saveCols(nxt)
-                  e.currentTarget.parentNode._dragId = null
+                  ;(
+                    e.currentTarget.parentNode as HTMLElement & { _dragId?: string | null }
+                  )._dragId = null
                 }}
                 className="col-drag visible"
               >

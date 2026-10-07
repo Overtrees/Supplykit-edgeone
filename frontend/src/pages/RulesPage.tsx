@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
+import ErrorRetry from '../components/ErrorRetry'
 import { useAppStore } from '../store/useAppStore'
 import {
   IconPackage,
@@ -62,7 +63,7 @@ const renderTmpl = text => {
     return <span key={i}>{p}</span>
   })
 }
-const IS = {
+const IS: React.CSSProperties = {
   width: '100%',
   padding: '8px 12px',
   fontSize: 'var(--font-lg)',
@@ -228,7 +229,20 @@ export default function RulesPage() {
   const [seasonsSaving, setSeasonsSaving] = useState(false)
   // 规则测试（可视化调试）：testRule 当前测试的规则 / testInv 模拟库存 / testResult 测试结果
   const [testRule, setTestRule] = useState(null)
-  const [testInv, setTestInv] = useState({
+  // 库存试算输入(可编辑回填): 数值字段编辑期变字符串, 后端回填 adj_dos/buffer/health_score
+  interface TestInv {
+    available_qty?: number | string
+    safety_qty?: number | string
+    in_transit_qty?: number | string
+    warehouse_type?: string
+    days_since_last?: number | string
+    order_quantity?: number | string
+    adj_dos?: number | string
+    buffer?: number | string
+    health_score?: number | string
+    [k: string]: unknown
+  }
+  const [testInv, setTestInv] = useState<TestInv>({
     available_qty: 0,
     safety_qty: 0,
     in_transit_qty: 0,
@@ -291,12 +305,19 @@ export default function RulesPage() {
   const [rules, setRules] = useState([])
   const [rulesErr, setRulesErr] = useState('')
   const [debugLog, setDebugLog] = useState([])
-  const addDebug = (msg, data) => {
+  const addDebug = (msg, data?) => {
     const t = new Date().toLocaleTimeString()
     setDebugLog(p => [{ t, msg, data }, ...p].slice(0, 50))
   }
   const [editing, setEditing] = useState(null)
-  const [cfg, setCfg] = useState({})
+  // 补货配置(后端动态键): 已知字段精确枚举, 动态键走 unknown 索引(边界用 String/Number 收敛)
+  interface ReplenConfig {
+    replenishment_mode?: string
+    transit_days?: string
+    slow_fund_threshold?: string
+    [k: string]: unknown
+  }
+  const [cfg, setCfg] = useState<ReplenConfig>({})
   const [seasons, setSeasons] = useState([])
   // 滞销品类配置（自定义条目，仿活动系数）
   const [slowCats, setSlowCats] = useState([])
@@ -327,6 +348,7 @@ export default function RulesPage() {
     alert_desc: '',
     severity: 'warning',
     condition_json: '{}',
+    mode: '',
   }
   // 业务计算参数(融合进规则: 断货/健康类规则携带看板计算参数, 保存进 rules.params)
   const defaultParams = at =>
@@ -406,7 +428,18 @@ export default function RulesPage() {
     },
   }
   const [f, setF] = useState(defaultF)
-  const [cond, setCond] = useState({
+  // 条件编辑器状态(子条件 or 数组同构)
+  interface CondState {
+    left?: string
+    op?: string
+    right?: string
+    rightType?: string
+    pctValue?: number | string
+    warehouse?: string
+    or?: CondState[]
+    [k: string]: unknown
+  }
+  const [cond, setCond] = useState<CondState>({
     left: 'inv.available_qty',
     op: '<',
     right: 'inv.safety_qty',
@@ -414,7 +447,7 @@ export default function RulesPage() {
     pctValue: 100,
     warehouse: '',
   })
-  const [rParams, setRParams] = useState({})
+  const [rParams, setRParams] = useState<Record<string, string>>({})
   const {
     channel: globalChannel,
     setChannel: setGlobalChannel,
@@ -489,7 +522,7 @@ export default function RulesPage() {
     window.addEventListener('rules-changed', h)
     return () => window.removeEventListener('rules-changed', h)
   }, [globalChannel])
-  const loadCfg = async (mode, ch) => {
+  const loadCfg = async (mode, ch?) => {
     try {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
@@ -513,7 +546,7 @@ export default function RulesPage() {
       return {}
     }
   }
-  const loadSeasons = async (mode, ch) => {
+  const loadSeasons = async (mode, ch?) => {
     try {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
@@ -537,7 +570,7 @@ export default function RulesPage() {
       }
     } catch (e) {}
   }
-  const loadAll = async ch => {
+  const loadAll = async (ch?) => {
     setLoading(true)
     const c = ch || globalChannel
     const savedMode = (() => {
@@ -663,10 +696,11 @@ export default function RulesPage() {
     setSaveLoading(true)
     addDebug('save 开始', { isNew: !editing || !editing.id })
     try {
-      let rv = cond.right
-      if (cond.rightType === 'number') rv = parseFloat(cond.right) || 0
-      else if (cond.rightType === 'field') rv = cond.right
-      else if (cond.rightType === 'pct') rv = `max(1,${cond.right}*${(cond.pctValue || 100) / 100})`
+      let rv: string | number = cond.right || ''
+      if (cond.rightType === 'number') rv = parseFloat(cond.right || '') || 0
+      else if (cond.rightType === 'field') rv = cond.right || ''
+      else if (cond.rightType === 'pct')
+        rv = `max(1,${cond.right}*${(Number(cond.pctValue) || 100) / 100})`
       const cj = JSON.stringify({
         left: cond.left,
         op: cond.op,
@@ -1883,7 +1917,7 @@ export default function RulesPage() {
                     <label key={k} style={{ fontSize: 'var(--font-13)' }}>
                       {l}
                       <input
-                        value={cfg[k] || ''}
+                        value={String(cfg[k] || '')}
                         onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
                         style={IS}
                       />
@@ -1922,7 +1956,7 @@ export default function RulesPage() {
                     <label key={k} style={{ fontSize: 'var(--font-13)' }}>
                       {l}
                       <input
-                        value={cfg[k] || ''}
+                        value={String(cfg[k] || '')}
                         onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
                         style={IS}
                       />
@@ -1943,7 +1977,7 @@ export default function RulesPage() {
                   <label key={k} style={{ fontSize: 'var(--font-13)' }}>
                     {l}
                     <input
-                      value={cfg[k] || ''}
+                      value={String(cfg[k] || '')}
                       onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
                       style={IS}
                     />
@@ -2031,7 +2065,7 @@ export default function RulesPage() {
                       <span className="small muted">（{selectedSupplier}）</span>
                     )}
                     <input
-                      value={cfg[actualKey] || ''}
+                      value={String(cfg[actualKey] || '')}
                       onChange={e => setCfg(p => ({ ...p, [actualKey]: e.target.value }))}
                       className="hammer-input"
                     />

@@ -173,6 +173,7 @@ function renderNote(text) {
 }
 
 const defVis = cols => {
+  const { hammerInsightsTab, channel: globalChannel } = useAppStore.getState()
   try {
     const s = localStorage.getItem(
       'c_cols_insights_' + (hammerInsightsTab || 'replen') + '_' + (globalChannel || 'jd'),
@@ -185,6 +186,7 @@ const defVis = cols => {
   return cols.map(c => c.id)
 }
 const defVisTrad = cols => {
+  const { channel: globalChannel } = useAppStore.getState()
   try {
     const s = localStorage.getItem('c_cols_insights_traditional_' + (globalChannel || 'jd'))
     if (s) {
@@ -502,7 +504,7 @@ export default function InsightsPage() {
   // 业务含义：京东 B 仓入库批次标记。点击「下单」= 给该 SKU 打上 B 仓入库批次
   // 标记，再填写「到 B 仓日期」，用于监控在库天数（避免超储被京东收取仓储费）。
   // 仅 BBCC 模式展示（replenMode==='bbcc' 控制），按渠道隔离持久化。
-  const toggleOrdered = async (sku, store, product_name, suggested_qty) => {
+  const toggleOrdered = async (sku, store, product_name?, suggested_qty?) => {
     const key = sku + '|' + store
     const isOrdered = orderedKeys.includes(key)
     // 乐观更新：立即更新本地状态，不等 API 返回
@@ -1199,7 +1201,10 @@ export default function InsightsPage() {
               <div style={{ fontSize: 'var(--font-sm)', marginTop: 8 }}>
                 {orderedItems.map((po, i) => {
                   const daysSinceArrival = po.arrival_date
-                    ? Math.floor((new Date() - new Date(po.arrival_date)) / (1000 * 60 * 60 * 24))
+                    ? Math.floor(
+                        (new Date().getTime() - new Date(po.arrival_date).getTime()) /
+                          (1000 * 60 * 60 * 24),
+                      )
                     : null
                   const stayColor =
                     daysSinceArrival != null
@@ -1789,7 +1794,7 @@ export default function InsightsPage() {
               <div
                 style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
                 onScroll={function (e) {
-                  const el = e.target
+                  const el = e.target as HTMLElement
                   // IntersectionObserver 仅在交叉状态变化时回调——持续在视口不重复触发导致卡加载
                   // 改用滚动监听: 每次滚动检测接近底部即加载下一页
                   if (

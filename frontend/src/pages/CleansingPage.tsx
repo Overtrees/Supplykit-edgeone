@@ -399,7 +399,13 @@ export default function CleansingPage() {
     setS(n)
     useAppStore.getState().setHammerCleansingStep(n)
   }
-  const [mp, setMp] = useState({})
+  // 列映射条目(导入清洗): target/t 为映射目标字段, 动态列配置走 unknown
+  interface ColMapItem {
+    target?: string
+    t?: string
+    [k: string]: unknown
+  }
+  const [mp, setMp] = useState<Record<string, ColMapItem>>({})
   // 映射页当前映射同步(模板管理弹窗保存用) + 模板应用/自定义字段变更事件
   useEffect(() => {
     ;(window as any).__curMp = mp
@@ -501,7 +507,9 @@ export default function CleansingPage() {
           '已自动识别 ' + Object.keys(a).length + ' 列（未识别的列请在下方手工选择目标字段）',
         )
       else
-        toast('未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）')
+        toast.warning(
+          '未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）',
+        )
     } catch (e) {
       toast.error('请求异常: ' + e.message)
     }

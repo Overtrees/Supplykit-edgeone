@@ -37,6 +37,7 @@
     "@rollup/rollup-linux-x64-gnu": "^4.61.1",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.6.7",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-react": "^4.3.1",

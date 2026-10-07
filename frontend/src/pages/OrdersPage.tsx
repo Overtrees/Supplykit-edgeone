@@ -89,7 +89,7 @@ export default function OrdersPage() {
     },
     [],
   )
-  const [visCols, setVisCols] = useState(() => getVis(COL_KEY()) || COLS.map(c => c.id))
+  const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
   useEffect(() => {
     if (hammerCols?.orders) setVisCols(hammerCols.orders)
   }, [hammerCols])
@@ -427,7 +427,7 @@ export default function OrdersPage() {
               defaultValue={orderPage}
               onKeyDown={e => {
                 if (e.key === 'Enter') {
-                  const v = parseInt(e.target.value)
+                  const v = parseInt((e.target as HTMLInputElement).value)
                   if (v >= 1 && v <= totalPages) setOrderPage(v)
                 }
               }}

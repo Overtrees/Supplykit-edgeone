@@ -73,7 +73,7 @@ export default function App() {
       }
     } catch (e) {}
   }
-  ;(window as any).__setPage = (p: string) => {
+  window.__setPage = (p: string) => {
     navigateTo(p)
     closeHammerMenu()
   }
@@ -550,7 +550,7 @@ export default function App() {
   }, [showMenu, closeEditorMenu])
 
   const navAndClose = useCallback(
-    (id, sku) => {
+    (id, sku?) => {
       closeEditorMenu()
       if (sku) setHighlightSku(sku)
       navigateTo(id)

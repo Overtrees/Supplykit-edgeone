@@ -52,7 +52,7 @@ export default function ProductPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const reqSeq = useRef(0)
   const [loadErr, setLoadErr] = useState('')
-  const [visCols, setVisCols] = useState(() => getVis(COL_KEY()) || COLS.map(c => c.id))
+  const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
   const toast = useToast()
   const {
     channel: globalChannel,

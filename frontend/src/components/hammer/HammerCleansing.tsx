@@ -1,7 +1,6 @@
 import { IconTag, IconWarning } from '../../components/Icons'
 import React, { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
-import { IconTag } from '../../components/Icons'
 import TemplateManageDialog from '../../components/TemplateManageDialog'
 interface HammerCleansingProps {
   channel: string
