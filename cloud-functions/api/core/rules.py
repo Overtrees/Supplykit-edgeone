@@ -437,17 +437,8 @@ def evaluate_stock_skus(channel, limit=100000):
         except Exception as _e:
             try_err("rules", "评估加载 OTIF 降级", _e)
         try:
-            from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
-            _by_sku, _ = load_daily_sales_grouped(28, channel)
-            _multi = calc_sales_multi(_by_sku, windows=[7, 14, 28])
-            _fused = {s: rolling_predict(_multi[7].get(s, 0), _multi[14].get(s, 0),
-                                         _multi[28].get(s, 0)) for s in _by_sku}
-            for _s, _d in _by_sku.items():
-                if len(_d) >= 7:
-                    _vl = list(_d.values())
-                    _m = sum(_vl) / len(_vl)
-                    _v = sum((x - _m) ** 2 for x in _vl) / len(_vl)
-                    _sigma[_s] = _v ** 0.5
+            from biz.sales import get_sales_digest
+            _by_sku, _fused, _sigma = get_sales_digest(channel)  # 共享日销(进程内缓存, 与看板同源)
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)
         try:

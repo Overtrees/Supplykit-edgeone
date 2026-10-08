@@ -142,6 +142,36 @@ def calc_sales_multi(daily_by_sku, windows=None, sparse="plain"):
     return results
 
 
+_SALES_DIGEST_CACHE = {}
+_SALES_DIGEST_TTL = 30
+
+
+def get_sales_digest(channel, days=28):
+    """三窗口日销汇总(进程内 30s 缓存): (by_sku, fused_map, sigma_map)
+
+    看板健康指数/低库存卡/规则引擎共享——避免每请求重复查快照+计算;
+    与看板 summary/aux 缓存同频(30s/60s), 实时性不劣化; 数据变更后最迟 30s 反映
+    """
+    import time as _t
+    _now = _t.time()
+    _key = (channel, days)
+    _hit = _SALES_DIGEST_CACHE.get(_key)
+    if _hit and _now - _hit[0] < _SALES_DIGEST_TTL:
+        return _hit[1]
+    by_sku, _ = load_daily_sales_grouped(days, channel)
+    _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
+    fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
+    sigma = {}
+    for _s, _d in by_sku.items():
+        if len(_d) >= 7:
+            _vl = list(_d.values())
+            _mm = sum(_vl) / len(_vl)
+            _vv = sum((x - _mm) ** 2 for x in _vl) / len(_vl)
+            sigma[_s] = _vv ** 0.5
+    _SALES_DIGEST_CACHE[_key] = (_now, (by_sku, fused, sigma))
+    return by_sku, fused, sigma
+
+
 def rolling_predict(s7, s14, s28):
     """三窗口趋势加权融合——与旧版一致"""
     a7 = 1 if s7 > s14 * 1.15 else (-1 if s7 < s14 * 0.85 else 0)

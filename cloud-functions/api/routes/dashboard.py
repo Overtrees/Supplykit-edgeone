@@ -564,13 +564,11 @@ def _health_index(channel, mode="bbcc"):
     ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out"""
     rows = query("SELECT sku, warehouse_type, available_qty FROM inventory "
                  "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
-    # 日销(与补货/断货同款: fused 三窗口)
+    # 日销(共享 get_sales_digest, 与规则引擎/低库存卡同源)
     ds_map = {}
     try:
-        from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
-        by_sku, _ = load_daily_sales_grouped(28, channel)
-        _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
-        ds_map = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
+        from biz.sales import get_sales_digest
+        _, ds_map, _ = get_sales_digest(channel)
     except Exception as _e:
             try_err('dash', '健康指数日销降级', _e)
     # 动态安全线周期(与补货/采购备注同口径)
@@ -733,10 +731,8 @@ def _build_aux(channel, mode):
     # 低库存(动态安全线判定, 替代静态 safety_qty): avail < ds×周期; 维度过滤跟随模式(bbcc→BC+own / trad→C+own)
     low = {"c": 0}
     try:
-        from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
-        _by, _ = load_daily_sales_grouped(28, channel)
-        _m3 = calc_sales_multi(_by, windows=[7, 14, 28])
-        _dsm = {s: rolling_predict(_m3[7].get(s, 0), _m3[14].get(s, 0), _m3[28].get(s, 0)) for s in _by}
+        from biz.sales import get_sales_digest
+        _, _dsm, _ = get_sales_digest(channel)
         _cfg2 = {r.get("key"): r.get("value") for r in
                  query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
         def _mc2(key, m2, default):

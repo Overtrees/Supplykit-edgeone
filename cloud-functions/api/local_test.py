@@ -627,5 +627,26 @@ check("字段校验: 拼写错误拦截", len(validate_condition({"left": "inv.a
 check("字段校验: max 内字段校验", validate_condition({"left": "inv.available_qty", "op": "<", "right": "max(100, order.quantity)"}) == [])
 check("字段校验: params 通配", validate_condition({"left": "params.lit", "op": "<", "right": "10"}) == [])
 
+# ── 日销 digest 共享缓存(2026-10-08 性能优化: 准确性=与直算数学等价 / 完整性=全量 / 可靠性=幂等) ──
+from biz.sales import get_sales_digest, load_daily_sales_grouped, calc_sales_multi, rolling_predict
+_d0 = get_sales_digest("jd")
+_d1 = get_sales_digest("jd")
+check("digest: 缓存命中幂等(同一对象)", _d0 is _d1)
+# 等价性: 缓存结果 vs 直接计算(同一 mock 数据下)
+_b0, _f0, _s0 = _d0
+_bd, _ = load_daily_sales_grouped(28, "jd")
+_md = calc_sales_multi(_bd, windows=[7, 14, 28])
+_fd = {s: rolling_predict(_md[7].get(s, 0), _md[14].get(s, 0), _md[28].get(s, 0)) for s in _bd}
+_sd = {}
+for _s, _d in _bd.items():
+    if len(_d) >= 7:
+        _vl = list(_d.values())
+        _mm = sum(_vl) / len(_vl)
+        _vv = sum((x - _mm) ** 2 for x in _vl) / len(_vl)
+        _sd[_s] = _vv ** 0.5
+check("digest: fused 与直算等价", set(_f0.keys()) == set(_fd.keys()) and all(abs(_f0[k] - _fd[k]) < 1e-9 for k in _f0))
+check("digest: sigma 与直算等价", set(_s0.keys()) == set(_sd.keys()) and all(abs(_s0[k] - _sd[k]) < 1e-9 for k in _s0))
+check("digest: by_sku 全量(完整性)", len(_b0) == len(_bd))
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
