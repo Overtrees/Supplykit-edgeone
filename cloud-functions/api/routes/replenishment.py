@@ -67,12 +67,12 @@ def _trad_suggested(ds, lead, safety_days, avail, transit):
 
 
 def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnover=None, tw90=90,
-               uneconomical=False):
-    """传统逐仓备注(纯函数): 对齐 bbcc 语境——无销量积压/低需求说明/周转红线/补货前置濒临
+               uneconomical=False, safety_hint=None):
+    """传统逐仓备注(纯函数): 对齐 bbcc 语境——无销量积压/低需求说明/周转红线/补货前置濒临/动态安全线预警
 
     ds<=0: 无销量语境(积压/⚪); ds>0 补货: 趋势+需补量; ds>0 不补但低于安全线: 说明暂不补原因;
     周转红线: 补货时看补后综转(after_turnover 含 box_qty), 不补时看当前综转——>tw90 超/接近;
-    uneconomical: 缺口<1件凑整箱不经济 → 提示暂不补
+    uneconomical: 缺口<1件凑整箱不经济 → 提示暂不补; safety_hint: 动态安全线预警文本(调用方算好)
     """
     parts = []
     if ds > 0:
@@ -88,8 +88,9 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
         parts.append("需补%s件(缺口%s)" % (box_qty, suggested))
     elif uneconomical:
         parts.append("⚠️ 缺口不足1件，凑整箱不经济，暂不补")
-    elif avail < safety:
-        parts.append("⚠️ 库存低于安全线，但需求低暂不补")
+    # 动态安全线预警(逐仓: 该仓可售 vs 传统周期, 只提示不参与计算) —— 替代旧"低于安全线暂不补"话术
+    if safety_hint:
+        parts.append(safety_hint)
     # 周转红线(对齐 bbcc: 补货时=补后综转, 不补时=当前综转)
     if after_turnover is not None and ds > 0:
         if after_turnover > tw90:
@@ -164,6 +165,10 @@ def _build_repl(channel, mode):
                 a["safety"] += saf
         for sku, st in agg.items():
             avail, c_transit, transit, safety = st["avail"], st["c_transit"], st["transit"], st["safety"]
+            # 动态安全线周期(一盘货): C周期=b_to_c_days+c_safety_days, B周期=ship_to_b_days+safety_multiplier, 全周期=C+B
+            _c_period = int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))
+            _b_period = int(cfg.get("ship_to_b_days", "0")) + int(float(cfg.get("safety_multiplier") or 0))
+            _full_period = _c_period + _b_period
             ds7 = round(s7.get(sku, 0), 1)
             ds14 = round(s14.get(sku, 0), 1)
             ds28 = round(s28.get(sku, 0), 1)
@@ -257,6 +262,21 @@ def _build_repl(channel, mode):
                     parts.append("🔴 近30天无销量，C仓库存积压")
                 else:
                     parts.append("⚪ 近30天无销量")
+            # 动态安全线预警(一盘货 BC 合计 vs 全周期; 只提示不参与计算)
+            elif _full_period > 0:
+                _bc_total = avail + c_transit + b_available + b_in_transit
+                _days_left = _bc_total / ds if ds > 0 else 999
+                if _days_left <= _full_period:
+                    parts.append("🔴 一盘货低于动态安全线：可撑%s天<周期%s天，存在断货风险，建议尽快补货到B仓"
+                                 % (round(_days_left), _full_period))
+                elif _days_left <= _full_period + 2:
+                    parts.append("⚠️ 接近动态安全线：约剩%s天（周期%s天），建议关注补货"
+                                 % (round(_days_left), _full_period))
+                # 辅助信息: C 缺口(京东分批调拨中) + B 仓水位(商家抓手)
+                if avail + c_transit < ds * _c_period:
+                    parts.append("C仓缺口%s件（京东分批调拨中）" % max(round(ds * _c_period - avail - c_transit), 0))
+                if b_available > 0:
+                    parts.append("B仓水位%s件" % b_available)
             if not parts:
                 parts.append("库存充足")
             # P1: 濒临断货反哺 —— 建议补>0 即 Adj-DOS≤补货周期(缺口), note 前置 🔴 已濒临
@@ -317,6 +337,16 @@ def _build_repl(channel, mode):
             raw = ds * (lead + safety_days) - avail - transit
             suggested = _trad_suggested(ds, lead, safety_days, avail, transit)
             uneconomical = ds >= _MIN_DS and 0 < raw < 1
+            _trad_period = lead + int(safety_days)
+            # 动态安全线预警(逐仓: 该仓可售 avail+transit vs 传统周期, 只提示不参与计算)
+            _hint = None
+            if ds > 0 and _trad_period > 0:
+                _dl = (avail + transit) / ds
+                if _dl <= _trad_period:
+                    _hint = "🔴 库存低于动态安全线：可撑%s天<周期%s天，存在断货风险，建议尽快补货" % (
+                        round(_dl), _trad_period)
+                elif _dl <= _trad_period + 2:
+                    _hint = "⚠️ 接近动态安全线：约剩%s天（周期%s天），建议关注补货" % (round(_dl), _trad_period)
             prod = products.get(sku, {})
             box = int(prod.get("box_qty") or 1)
             box_qty = ((suggested + box - 1) // box * box) if suggested > 0 else 0
@@ -333,7 +363,7 @@ def _build_repl(channel, mode):
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
                 "note": _trad_note(ds, w7, w14, w28, avail, effective_safety, box_qty, suggested,
-                                   after_turnover, tw90, uneconomical),
+                                   after_turnover, tw90, uneconomical, _hint),
             })
 
     # 排序: 需补货优先, 缺口大优先

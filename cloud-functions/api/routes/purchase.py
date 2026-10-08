@@ -213,14 +213,25 @@ def _build_purchase(channel, mode, days=28):
         after_turnover = round(after_stock / ds, 1) if ds > 0 else 999
         c_consume = round(ds * _lead)
         note = ""
+        # 动态安全线预警(采购周期, 供应商级参数优先; 可售=系统仓+自有仓; 只提示不参与计算)
+        _purchase_period = int(_lead) + int(_safe_days)
+        if _purchase_period > 0:
+            _avl_all = sys_total + st["own_avail"] + st["own_transit"]
+            _dl = _avl_all / ds
+            if _dl <= _purchase_period:
+                note = "🔴 库存低于动态安全线：可撑%s天<采购周期%s天，存在断货风险，建议尽快采购" % (
+                    round(_dl), _purchase_period)
+            elif _dl <= _purchase_period + 2:
+                note = "⚠️ 接近动态安全线：约剩%s天（采购周期%s天），建议关注采购" % (round(_dl), _purchase_period)
         if purchase_qty > 0:
-            note = "🔴 需采购: " + ("消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty))
+            _buy_note = "🔴 需采购: " + ("消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty))
             if box_qty > 1:
-                note += " · 箱规%d件, 实购%d件(%d箱)" % (box_qty, actual_purchase, actual_purchase // box_qty)
+                _buy_note += " · 箱规%d件, 实购%d件(%d箱)" % (box_qty, actual_purchase, actual_purchase // box_qty)
             if target_turn > 0:
-                note += " · 补后周转%d天%s" % (after_turnover,
-                                            " > 目标%d天" % target_turn if after_turnover > target_turn
-                                            else " < 目标%d天" % target_turn)
+                _buy_note += " · 补后周转%d天%s" % (after_turnover,
+                                                " > 目标%d天" % target_turn if after_turnover > target_turn
+                                                else " < 目标%d天" % target_turn)
+            note = note + " · " + _buy_note if note else _buy_note
         result.append({
             "sku": sku, "barcode": prod.get("barcode", ""),
             "product_name": prod.get("product_name") or sku, "brand": prod.get("brand", ""),
