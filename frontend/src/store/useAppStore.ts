@@ -261,14 +261,12 @@ const initAppStore = (set, get) => ({
         orderPage: orders.data?.page || p,
         qualityLogs: qualityLogs.data || [],
         alerts: alerts.data || [],
-        stockRisk: [],  // 断货卡后置补齐: 先清空(不显示旧值误导), 成功后填充
+        stockRisk: [], // 断货卡后置补齐: 先清空(不显示旧值误导), 成功后填充
         dataLoaded: true,
         loading: false,
         orderLoading: false,
         orderLoadErr:
-          results[1] && results[1].status === 'rejected'
-            ? '加载失败'
-            : '',
+          results[1] && results[1].status === 'rejected' ? errText(results[1].reason) : '',
       })
       // 后置: stock-risk 断货卡(重接口, 不阻塞首屏; 失败保留空态不误导)
       const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
