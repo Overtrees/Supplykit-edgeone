@@ -261,7 +261,7 @@ const initAppStore = (set, get) => ({
         orderPage: orders.data?.page || p,
         qualityLogs: qualityLogs.data || [],
         alerts: alerts.data || [],
-        stockRisk: [], // 断货卡后置补齐: 先清空(不显示旧值误导), 成功后填充
+        stockRisk: get().stockRisk && get().stockRisk.length ? get().stockRisk : [], // 断货卡后置: 首次清空不误导; 刷新保留旧值不闪空
         dataLoaded: true,
         loading: false,
         orderLoading: false,

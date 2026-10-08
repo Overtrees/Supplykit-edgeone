@@ -2702,7 +2702,10 @@ export default function RulesPage() {
                       </label>
                       <label style={{ fontSize: 'var(--font-sm)' }}>
                         安全线
-                        <span className="small muted" style={{ marginLeft: 6, fontSize: 'var(--font-xs)' }}>
+                        <span
+                          className="small muted"
+                          style={{ marginLeft: 6, fontSize: 'var(--font-xs)' }}
+                        >
                           运行时动态注入=日销×补货周期（模拟测试用下方数值）
                         </span>
                         <input
