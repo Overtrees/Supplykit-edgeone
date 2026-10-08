@@ -247,8 +247,13 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
     days60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
     # 物化表优先(历史区间读 orders_day_agg 万级, 当天实时直查 orders): agg 不可用降级直查
     try:
-        _aggc = one("SELECT COUNT(*) AS c FROM orders_day_agg WHERE channel=%s", [channel]) or {}
+        _aggc = one("SELECT COUNT(*) AS c, COALESCE(MAX(`date`),'') AS m FROM orders_day_agg WHERE channel=%s", [channel]) or {}
         _agg_ok = int(_aggc.get("c") or 0) > 0
+        # 陈旧检测: agg 最新日期落后 3 天以上(如重置后旧残留) → 降级直查, 不误用旧数据
+        _aggmx = str(_aggc.get("m") or "")[:10]
+        _agg_cut = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+        if _agg_ok and _aggmx < _agg_cut:
+            _agg_ok = False
     except Exception:
         _agg_ok = False
     if _agg_ok:
@@ -378,7 +383,49 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
     }
 
     health = _health_index(channel, mode)
-    low_stock = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty < safety_qty", [channel]) or {}
+    # 低库存计数(动态安全线, 替代静态 SQL——seed safety_qty=0 后静态判定恒 0)
+    low_stock = {"c": 0}
+    try:
+        _ls_rows = query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                         "WHERE channel=%s AND available_qty>0", [channel])
+        _ls_ds = {}
+        try:
+            from biz.sales import load_daily_sales_grouped as _ldsg, calc_sales_multi as _csm, rolling_predict as _rp2
+            _by2, _ = _ldsg(28, channel)
+            _m2 = _csm(_by2, windows=[7, 14, 28])
+            _ls_ds = {s: _rp2(_m2[7].get(s, 0), _m2[14].get(s, 0), _m2[28].get(s, 0)) for s in _by2}
+        except Exception:
+            pass
+        _cfg_ls = {}
+        try:
+            _cfg_ls = {r.get("key"): r.get("value") for r in
+                       query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+        except Exception:
+            pass
+        def _mcl(key, m2, default):
+            v = _cfg_ls.get("mode_%s_%s" % (m2, key))
+            if v is None:
+                v = _cfg_ls.get(key)
+            try:
+                return int(float(v or default))
+            except Exception:
+                return default
+        _pbbcc = (_mcl("b_to_c_days", "bbcc", 3) + _mcl("c_safety_days", "bbcc", 0)
+                  + _mcl("ship_to_b_days", "bbcc", 0) + _mcl("safety_multiplier", "bbcc", 0))
+        _ptrad = _mcl("lead_time_days", "traditional", 10) + _mcl("safety_multiplier", "traditional", 0)
+        _ppur = _mcl("purchase_lead_days", "bbcc", 14) + _mcl("purchase_safety_days", "bbcc", 3)
+        _per_ls = _pbbcc if mode == "bbcc" else _ptrad
+        _ls_cnt = 0
+        for _r5 in _ls_rows:
+            _wt5 = str(_r5.get("warehouse_type") or "")
+            _per5 = _ppur if _wt5 == "own" else _per_ls
+            _d5 = _ls_ds.get(str(_r5.get("sku") or ""), 0)
+            _dyn5 = round(_d5 * _per5, 1) if _d5 > 0 and _per5 > 0 else 0.0
+            if _dyn5 > 0 and int(_r5.get("available_qty") or 0) < _dyn5:
+                _ls_cnt += 1
+        low_stock = {"c": _ls_cnt}
+    except Exception as _e:
+            try_err('dashboard', '低库存计数动态降级', _e)
     alert_count = one("SELECT COUNT(*) AS c FROM alerts WHERE channel=%s AND status='active'", [channel]) or {}
     product_count = one("SELECT COUNT(*) AS c FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]) or {}
     supplier_count = one("SELECT COUNT(*) AS c FROM suppliers") or {}
