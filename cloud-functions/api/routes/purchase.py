@@ -241,7 +241,7 @@ def _build_purchase(channel, mode, days=28):
             "own_available": st["own_avail"], "own_transit": st["own_transit"],
             "b_transit": st["b_transit"], "plat_available": st["plat_avail"],
             "plat_transit": st["plat_transit"], "b_available": st["b_avail"],
-            "safety_qty": eff_safety, "daily_sales": ds,
+            "safety_qty": round(ds * _purchase_period, 1), "daily_sales": ds,
             "daily_sales_14": round(s14m.get(sku, 0), 1), "daily_sales_28": round(s28m.get(sku, 0), 1),
             "daily_sales_60": round(fused.get(sku, 0), 1),
             "supplier_code": _sup,
