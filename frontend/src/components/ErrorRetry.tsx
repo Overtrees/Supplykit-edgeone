@@ -6,8 +6,16 @@ import { t } from '../locale'
  * 错误文案统一判断(供 ErrorRetry 与各状态共用):
  * 网络层失败(axios 无 response: 断网/超时) → "网络波动"; 服务端/业务错误(有 response) → "加载失败"
  */
-export function errText(e?: any): string {
+export function errText(e?: { response?: unknown } | null): string {
   return e && e.response ? '加载失败' : '网络波动'
+}
+
+interface ErrorRetryProps {
+  error?: string
+  desc?: string | null
+  err?: { response?: unknown } | null
+  onRetry?: () => void
+  onReload?: (() => void) | null
 }
 
 /**
@@ -15,7 +23,13 @@ export function errText(e?: any): string {
  * 失败时显示错误 + 重试按钮，避免误导用户以为是"没数据"
  * err 传入时 desc 自动按错误类型选择(网络波动/加载失败)——一个组件承担两种职责
  */
-export default function ErrorRetry({ error = '加载失败', desc, err, onRetry, onReload = null }) {
+export default function ErrorRetry({
+  error = '加载失败',
+  desc = null,
+  err = null,
+  onRetry,
+  onReload = null,
+}: ErrorRetryProps) {
   const finalDesc = desc ?? (err ? errText(err) : '网络异常或服务不可用')
   return (
     <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted2)' }}>

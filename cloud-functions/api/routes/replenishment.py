@@ -44,7 +44,7 @@ def safety_line(ds, lead):
     """动态安全线(可售天数 ≥ 补货周期): ds × lead
 
     引用补货参数按模式区分: bbcc lead=b_to_c_days+c_safety_days / 传统 lead=lead_time_days;
-    无日销(ds<=0) → 0(调用方回退静态 safety_qty 兜底) —— 替代 seed 随机/导入的静态安全线
+    无日销(ds<=0) → 0(静态 safety_qty 已退役, 全链路动态口径)
     """
     if ds <= 0:
         return 0.0
@@ -282,7 +282,8 @@ def _build_repl(channel, mode):
                 "sku": sku, "barcode": prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "category": prod.get("category", ""),
-                "available_qty": avail, "safety_qty": effective_safety, "in_transit_qty": transit,
+                "available_qty": avail, "safety_qty": round(ds * _full_period, 1) if ds > 0 else 0,
+                "in_transit_qty": transit,
                 "c_transit": c_transit, "b_transit": b_in_transit,
                 "b_stock": b_available, "c_stock": avail, "b_gap": b_gap,
                 "daily_sales": ds, "daily_sales_7": ds7,
@@ -348,7 +349,8 @@ def _build_repl(channel, mode):
                 "sku": sku, "barcode": prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "warehouse": wh, "category": prod.get("category", ""),
-                "available_qty": avail, "safety_qty": effective_safety, "in_transit_qty": transit,
+                "available_qty": avail, "safety_qty": round(ds * _trad_period, 1) if ds > 0 else 0,
+                "in_transit_qty": transit,
                 "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
