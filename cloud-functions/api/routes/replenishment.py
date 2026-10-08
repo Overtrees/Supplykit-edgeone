@@ -40,22 +40,39 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
     return ok(_all)
 
 
-def _trad_suggested(ds, lead, safety, avail, transit):
-    """传统逐仓补货量(纯函数, 可单测): 标准公式 ds×lead + safety − avail − transit
+def safety_line(ds, lead):
+    """动态安全线(可售天数 ≥ 补货周期): ds × lead
 
-    需求门控: 日销 < _MIN_DS 视为无实际需求 → 0(安全线缺口不触发补货——
-    安全线是需求波动的缓冲, 无需求时库存不会被消耗; 参考 bbcc 需求驱动语义)
+    引用补货参数按模式区分: bbcc lead=b_to_c_days+c_safety_days / 传统 lead=lead_time_days;
+    无日销(ds<=0) → 0(调用方回退静态 safety_qty 兜底) —— 替代 seed 随机/导入的静态安全线
+    """
+    if ds <= 0:
+        return 0.0
+    return round(ds * lead, 1)
+
+
+def _trad_suggested(ds, lead, safety_days, avail, transit):
+    """传统逐仓补货量(纯函数, 可单测): 安全天数×日销 与 bbcc 同构
+
+    suggested = ds×(lead + safety_days) − avail − transit
+    需求门控: 日销 < _MIN_DS 视为无实际需求 → 0;
+    取整防放大: 缺口 < 1 件 → 0(0.56 被 round 成 1 再凑整箱 24 件荒谬)
     """
     if ds < _MIN_DS:
         return 0
-    return max(round(ds * lead + safety - avail - transit), 0)
+    raw = ds * (lead + safety_days) - avail - transit
+    if raw < 1:
+        return 0
+    return round(raw)
 
 
-def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnover=None, tw90=90):
+def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnover=None, tw90=90,
+               uneconomical=False):
     """传统逐仓备注(纯函数): 对齐 bbcc 语境——无销量积压/低需求说明/周转红线/补货前置濒临
 
     ds<=0: 无销量语境(积压/⚪); ds>0 补货: 趋势+需补量; ds>0 不补但低于安全线: 说明暂不补原因;
-    周转红线: 补货时看补后综转(after_turnover 含 box_qty), 不补时看当前综转——>tw90 超/接近
+    周转红线: 补货时看补后综转(after_turnover 含 box_qty), 不补时看当前综转——>tw90 超/接近;
+    uneconomical: 缺口<1件凑整箱不经济 → 提示暂不补
     """
     parts = []
     if ds > 0:
@@ -69,6 +86,8 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
             parts.append("⚪ 近30天无销量")
     elif box_qty > 0:
         parts.append("需补%s件(缺口%s)" % (box_qty, suggested))
+    elif uneconomical:
+        parts.append("⚠️ 缺口不足1件，凑整箱不经济，暂不补")
     elif avail < safety:
         parts.append("⚠️ 库存低于安全线，但需求低暂不补")
     # 周转红线(对齐 bbcc: 补货时=补后综转, 不补时=当前综转)
@@ -151,11 +170,13 @@ def _build_repl(channel, mode):
             # 活性门控: 近 7/14 天有销售=近期活跃(×1); 仅 28 天历史销售=弱化(×0.5); 全零=0
             _act = 1.0 if (s7.get(sku, 0) > 0 or s14.get(sku, 0) > 0) else (0.5 if s28.get(sku, 0) > 0 else 0.0)
             ds = round(fused.get(sku, 0) * season * _act, 1)
+            # 需求门控(与 traditional 对齐): 日销 < 门槛 视为无实际需求, 缺口不触发补货
+            has_demand = ds >= _MIN_DS
             # 安全天数(库存行 safety_days 优先, 回退配置)
             safety_days = float(cfg.get("safety_multiplier") or 0)
-            effective_safety = round(ds * safety_days, 1) if ds > 0 else 0
+            effective_safety = round(ds * safety_days, 1) if has_demand else 0
             # C 缺口 = 日销×lead − C可用 − B→C调拨在途(保留1位小数)
-            c_gap = max(round(ds * lead - avail - c_transit, 1), 0) if ds > 0 else 0
+            c_gap = max(round(ds * lead - avail - c_transit, 1), 0) if has_demand else 0
             b_available = b_stock.get(sku, 0)
             b_in_transit = b_transit.get(sku, 0)
             b_cover = b_available + b_in_transit
@@ -166,7 +187,12 @@ def _build_repl(channel, mode):
             prod = products.get(sku, {})
             box = int(prod.get("box_qty") or 1)
             suggested = c_gap
-            b_box = (b_replenish + box - 1) // box * box if b_replenish > 0 else 0
+            b_box = (b_replenish + box - 1) // box * box if b_replenish >= 1 else 0
+            # 取整防放大: C/B 缺口 <1 件时凑整箱不经济(0.56→1件→整箱荒谬), 不补+提示
+            uneconomical = (0 < suggested < 1) or (0 < b_replenish < 1)
+            if uneconomical:
+                suggested = 0
+                b_box = 0
             after_stock = avail + transit + suggested
             after_turnover = round(after_stock / ds, 1) if ds > 0 else 999
             days_to_empty = round(avail / ds, 1) if ds > 0 else 999
@@ -195,7 +221,7 @@ def _build_repl(channel, mode):
             parts = []
             if ds > 0:
                 parts.append(trend_text)
-            if c_gap > 0:
+            if c_gap > 0 and not uneconomical:
                 if b_gap <= 0:
                     parts.append("C建议补%s件(缺口%s,B仓可覆盖)" % (suggested, c_gap))
                 else:
@@ -205,6 +231,8 @@ def _build_repl(channel, mode):
                     parts.append("B仓仅%s件需从自有仓调(供应商到B在途%s)" % (b_available, b_in_transit))
                 elif b_gap > 0:
                     parts.append("B仓仅%s件需从自有仓调" % b_available)
+            if uneconomical:
+                parts.append("⚠️ 缺口不足1件，凑整箱不经济，暂不补")
             if b_gap > 0:
                 c_cover = round((avail + transit) / ds, 1) if ds > 0 else 0
                 b_idle = max(round(c_cover - b_ship_days, 1), 0)
@@ -267,6 +295,9 @@ def _build_repl(channel, mode):
         _wm = calc_sales_multi(_wh_sm, windows=[7, 14, 28],
                                sparse="shrink")
         tw90 = int(cfg.get("turnover_warning_90") or 90)
+        # 安全天数口径(与 bbcc 同构): mode_traditional_safety_multiplier → cfg["safety_multiplier"]
+        # 静态 inventory.safety_qty 不再参与补货量(早期遗留, 仅看板断货卡/低库存规则作兜底)
+        safety_days = float(cfg.get("safety_multiplier") or 0)
         for r in inv:
             if r.get("warehouse_type") != "platform":
                 continue
@@ -281,8 +312,11 @@ def _build_repl(channel, mode):
             ds = rolling_predict(w7, w14, w28) * season * _act
             avail = int(r.get("available_qty") or 0)
             transit = int(r.get("in_transit_qty") or 0)
-            safety = int(r.get("safety_qty") or 0)
-            suggested = _trad_suggested(ds, lead, safety, avail, transit)
+            static_safety = int(r.get("safety_qty") or 0)
+            effective_safety = round(ds * safety_days, 1) if ds > 0 else 0
+            raw = ds * (lead + safety_days) - avail - transit
+            suggested = _trad_suggested(ds, lead, safety_days, avail, transit)
+            uneconomical = ds >= _MIN_DS and 0 < raw < 1
             prod = products.get(sku, {})
             box = int(prod.get("box_qty") or 1)
             box_qty = ((suggested + box - 1) // box * box) if suggested > 0 else 0
@@ -291,14 +325,15 @@ def _build_repl(channel, mode):
                 "sku": sku, "barcode": prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "warehouse": wh, "category": prod.get("category", ""),
-                "available_qty": avail, "safety_qty": safety, "in_transit_qty": transit,
+                "available_qty": avail, "safety_qty": static_safety, "in_transit_qty": transit,
+                "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
                 "daily_sales_60": round(fused.get(sku, 0), 1),
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
-                "note": _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested,
-                                   after_turnover, tw90),
+                "note": _trad_note(ds, w7, w14, w28, avail, effective_safety, box_qty, suggested,
+                                   after_turnover, tw90, uneconomical),
             })
 
     # 排序: 需补货优先, 缺口大优先
@@ -308,16 +343,23 @@ def _build_repl(channel, mode):
 
 
 def _config(channel, mode):
+    """补货参数加载: mode 前缀键优先, 通用旧键兜底(按模式隔离, 防跨模式污染)
+
+    先收 mode_{mode}_ 前缀键, 再读通用键(跳过所有 mode_ 前缀), 最后 mode 键覆盖——
+    mode_traditional_safety_multiplier 不会被通用旧键 safety_multiplier 覆盖(SELECT 无序)
+    """
     rows = query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])
     cfg = {}
+    pref = {}
     prefix = "mode_%s_" % mode
     for r in rows:
         k = r.get("key") or ""
         v = r.get("value") or ""
         if k.startswith(prefix):
-            cfg[k[len(prefix):]] = v
+            pref[k[len(prefix):]] = v
         elif not k.startswith("mode_"):
             cfg[k] = v
+    cfg.update(pref)  # mode 前缀键优先于通用旧键
     return cfg
 
 

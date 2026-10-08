@@ -577,12 +577,16 @@ _d8 = _mk_daily([(k, 1) for k in range(28, 60)] + [(3, 100)])
 _m8 = calc_sales_multi({'S': smooth_promo_spikes(_d8)}, windows=[7, 28], sparse='shrink')
 check("削峰: 促销后 s7≈0.095(不推高趋势加权)", abs(_m8[7]['S'] - 2 / 7 / 3) < 0.001, "got %s" % _m8[7]['S'])
 
-# ── 传统逐仓需求门控(2026-10-07: 日销≈0 但安全线撑出补货量 → 无需求不补) ──
+# ── 传统逐仓需求门控(2026-10-07: 安全天数口径+日销门控——静态安全线不再撑补货量) ──
 from routes.replenishment import _trad_suggested, _MIN_DS
-check("门控: 日销0.02<safety高 → 0(不按安全线补)", _trad_suggested(0.02, 3, 196, 2, 0) == 0)
-check("门控: 日销0.09<门槛 → 0", _trad_suggested(0.09, 3, 196, 2, 0) == 0)
-check("门控: 日销5正常 → 按公式补(safety缺口+lead需求)", _trad_suggested(5, 3, 196, 2, 0) == 209)
-check("门控: 日销0.1=门槛 → 按公式补(边界)", _trad_suggested(_MIN_DS, 3, 196, 2, 0) == 194)
+check("门控: 日销0.02 → 0(无需求不补)", _trad_suggested(0.02, 3, 3, 2, 0) == 0)
+check("门控: 日销0.09<门槛 → 0", _trad_suggested(0.09, 3, 3, 2, 0) == 0)
+check("门控: 日销5×安全天数3 → 5×(3+3)−2=28", _trad_suggested(5, 3, 3, 2, 0) == 28)
+check("门控: 日销1 → 1×6−2=4", _trad_suggested(1, 3, 3, 2, 0) == 4)
+check("门控: 安全天数0 → 仅lead覆盖", _trad_suggested(5, 3, 0, 2, 0) == 13)
+check("门控: 缺口0.9件<1 → 0(防凑整箱)", _trad_suggested(0.15, 3, 3, 0, 0) == 0)
+check("门控: 缺口0.6件<1 → 0", _trad_suggested(0.2, 3, 0, 0, 0) == 0)
+check("门控: 缺口1.2件≥1 → round=1", _trad_suggested(0.2, 3, 3, 0, 0) == 1)
 
 # ── 传统逐仓备注语境(2026-10-07: 对齐 bbcc——无销量/低需求说明) ──
 from routes.replenishment import _trad_note
@@ -595,6 +599,21 @@ check("备注: 正常不补+库存充足 → 仅趋势", _trad_note(5, 5.1, 4.5,
 check("备注: 补后综转超90天 → 🔴红线前置", "🔴 补后综转120天超90天" in _trad_note(1, 1.1, 1, 1, 30, 196, 96, 90, after_turnover=120, tw90=90))
 check("备注: 当前综转接近90天 → ⚠️", "⚠️ 当前综转80天接近90天" in _trad_note(1, 1.1, 1, 1, 30, 196, 0, 0, after_turnover=80, tw90=90))
 check("备注: 无销量不显示周转(无意义)", "综转" not in _trad_note(0, 0, 0, 0, 100, 196, 0, 0, after_turnover=999, tw90=90))
+
+# ── 配置键引用完整性审计(2026-10-07: mode_traditional_safety_multiplier 配了但代码没用——静态安全线遗留) ──
+# 扫描 replenishment.py 中 _config 读取的键名, 确保每个 cfg.get 键都有配置写入方(seed/清洗写入的键集)
+_REPL_SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes", "replenishment.py"),
+                 encoding="utf-8").read()
+# seed_fill 写入的配置键(常量字符串) + replenishment.py cfg.get 键 → 交叉核对
+_cfg_keys_in_code = set(_re.findall(r'cfg\.get\("([a-z_0-9]+)"', _REPL_SRC))
+# replenishment_config 写入方: seed_fill/清洗/config 保存接口涉及的键
+_cfg_written = {"b_to_c_days", "c_safety_days", "lead_time_days", "safety_multiplier",
+                "ship_to_b_days", "b_free_days", "turnover_warning_90", "turnover_warning_15",
+                "max_turnover_days", "moq", "purchase_lead_days", "purchase_safety_days",
+                "target_turnover", "active_factor"}
+_missing_cfg = _cfg_keys_in_code - _cfg_written
+check("审计: replenishment cfg.get 键均有写入方(防配置静默失效)", not _missing_cfg,
+      "缺写入方: %s" % ",".join(sorted(_missing_cfg)))
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

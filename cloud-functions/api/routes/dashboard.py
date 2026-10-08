@@ -792,7 +792,7 @@ def _stock_risk(channel, full: int = 0):
                 try_err('dashboard', '静默降级', _e)
     # P1: 需求调整因子 —— 活动系数(season_config, 补货/采购已用) + 当天小时流速加速(加速判定)
     try:
-        from routes.replenishment import _season_factor
+        from routes.replenishment import _season_factor, safety_line
         factor_trad = _season_factor(channel, "traditional")
         factor_bbcc = _season_factor(channel, "bbcc")
     except Exception as _e:
@@ -884,7 +884,7 @@ def _stock_risk(channel, full: int = 0):
         a_rate = accel.get(sku, 1.0)
         ds_eff = ds * factor_trad * a_rate
         adj_dos = (avail + tty * _otif(sku) + ctt) / ds_eff
-        buffer = avail / max(max(safety, _ss_dyn(sku, lit_trad)), 1)
+        buffer = avail / max(max(safety_line(ds, lit_trad), _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
             c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
@@ -903,7 +903,7 @@ def _stock_risk(channel, full: int = 0):
         if avail <= 0 and not include_avail_zero:
             continue
         adj_dos = (avail + st["transit"] * _otif(sku) + st["ct"]) / (ds * factor_bbcc * accel.get(sku, 1.0))
-        buffer = avail / max(max(safety, _ss_dyn(sku, lit_bbcc)), 1)
+        buffer = avail / max(max(safety_line(ds, lit_bbcc), _ss_dyn(sku, lit_bbcc)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_bbcc)
         if inc:
             bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
@@ -927,7 +927,7 @@ def _stock_risk(channel, full: int = 0):
         if avail <= 0 and not include_avail_zero:
             continue
         adj_dos = (avail + tty * _otif(sku)) / (ds * factor_trad * accel.get(sku, 1.0))
-        buffer = avail / max(max(safety, _ss_dyn(sku, lit_trad)), 1)
+        buffer = avail / max(max(safety_line(ds, lit_trad), _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
             own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
