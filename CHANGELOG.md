@@ -1,3 +1,25 @@
+## 2026-10-08: 动态安全线体系全链路(补货/采购/看板/规则/进销存) + 静态 safety_qty 退役 + cron 双跑修复 + 重置填充验证
+> **主线**: feat/edgeone, commits f37d0d77→e252e117(备注提示 → 全链路接入 → 静态退役 → 双跑修复)。
+> **验证**: local_test 133/133 + test_audit 11 全过 + 重置填充后全链路线上验证(补货 970 活跃/传统 779 提示/采购 140 提示/健康 78/低库存 1780/进销存 own=ds×17)。
+
+### 动态安全线 = ds × 周期(前置+安全天数), 只提示不参与计算
+- **周期构成**: bbcc C 环节=b_to_c_days+c_safety_days / B 介入=+ship_to_b_days+safety_multiplier(全周期) / 传统=lead_time_days+safety_multiplier / 采购=purchase_lead_days+purchase_safety_days(**供应商级键优先**, purchase_lead_days_SUP-xxx)
+- **主预警对象=BC 合计(一盘货)**: 分批调拨是京东执行层不影响口径; 分级: 可售≤周期→`🔴 低于动态安全线: 可撑X天<周期Y天, 存在断货风险, 建议尽快补货到B仓` / (周期,周期+2]→`⚠️ 接近动态安全线`; 无缺口不提示; C缺口(京东分批调拨中)+B仓水位辅助
+- **消费方**: 补货 bbcc/traditional 备注提示 + 采购备注(与'需采购'明细拼接) + 健康指数(summary 加 mode, Python 动态四档: platform 补货周期/own 采购周期) + 低库存卡(aux avail<ds×周期) + 规则引擎(低库存规则强制计算路径, safety_qty 注入动态, ds≤0→0 无销量不告警) + 进销存(own=采购周期, platform=补货周期)
+- **日销来源与建议同款**(fused×season×活性 / rolling_predict / fused×active_factor), 不另算
+
+### 静态 safety_qty 退役(冗余 + seed 随机无业务意义)
+- seed 不再 random.randint(30,200) → 0; 补货/采购响应 safety_qty → effective_safety(动态); 消费方全切动态; 字段保留列但不再消费
+
+### cron 双跑修复(用户: 定时任务已修复可依赖, 兜底不得同时触发)
+- cron_daily_rules/freshness 加 maintenance_log 抢占(与应用层兜底同 key 互斥, 一天一次); _daily_maintenance 快照自愈拆独立 'snapshot' key(与 cron_freshness 互斥)
+
+### 排查教训: 10-08 全体系日销 0 = 数据时效非 bug
+- 快照 09-10 截止(种子 09-10 运行), 10-08 起 28 天窗口自然清空——诊断端点(daily_c 完整 970)+本地复现(28 天窗口非零日空)实锤; 排查先核对数据窗口 vs 当前日期
+
+### 重置填充验证(seed reset+fill, safety_qty=0)
+- 补货 bbcc 970/1000 活跃+140 动态安全线提示; traditional 779 提示(话术: 可撑1天<周期9天); 采购 140 提示(周期17=14+3); 健康 78(warning); 低库存 1780; 进销存 own safety=172.4=ds10.1×17 ✓
+
 ## 2026-10-07(下半场): 补货日销全 0 根因终破(3σ 稀疏误杀) + 三机制日销算法 + 传统逐仓需求门控 + CI tsc 门禁全绿 + purchase 告警关闭 SQL 双修 + 回收页分割线
 > **主线**: feat/edgeone, commits fdc81c16→0423b29b(CI tsc 全绿 → 补货日销三机制 → purchase TypeError → 传统需求门控)。
 > **验证**: local_test 105→118(日销/削峰/门控 13 项新断言) + Preflight CI 全绿 + 线上 diag 实证(快照 970 SKU 数据完好) + 部署后接口验证(补货 0→11 非0 / traditional 163→0 / TypeError 零新增) + 浏览器 DOM 断言(回收页末行 borderBottom:none)。
