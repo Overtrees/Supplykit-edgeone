@@ -78,9 +78,14 @@ async def cron_snapshot(request: Request):
 @router.api_route("/cron/freshness", methods=["GET","POST"])
 @traced
 async def cron_freshness(request: Request):
-    """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建"""
+    """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建
+    maintenance_log(date+'snapshot') 抢占 —— 与应用层自愈互斥, 一天只重建一次"""
     if not _authed(request):
         return fail("未授权", 401)
+    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'snapshot')", [_today])
+    if not _got:
+        return ok({"skipped": True, "reason": "今天已自愈(应用层兜底或另一实例)"})
     r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot") or {}
     m = str(r.get("m") or "")
     stale_limit = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
@@ -221,9 +226,14 @@ def run_daily_rules() -> dict:
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
 async def cron_daily_rules(request: Request):
-    """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()"""
+    """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
+    maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行)"""
     if not _authed(request):
         return fail("未授权", 401)
+    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
+    if not _got:
+        return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
     return ok(run_daily_rules())
 
 

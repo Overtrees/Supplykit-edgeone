@@ -301,7 +301,7 @@ def _rule_params_loaded(rule):
         return {}
 
 
-_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.")
+_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty")
 
 
 def evaluate_stock_skus(channel, limit=100000):
@@ -362,6 +362,11 @@ def evaluate_stock_skus(channel, limit=100000):
                     return default
             _lit_trad = _mcv("lead_time_days", "traditional", 10)
             _lit_bbcc = _mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
+            # 动态安全线周期(与补货/采购备注同口径): bbcc 全周期=C+B / 传统=lead+安全 / 采购=前置+安全
+            _bbcc_period = (_mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
+                            + _mcv("ship_to_b_days", "bbcc", 0) + _mcv("safety_multiplier", "bbcc", 0))
+            _trad_period = _mcv("lead_time_days", "traditional", 10) + _mcv("safety_multiplier", "traditional", 0)
+            _purchase_period = _mcv("purchase_lead_days", "bbcc", 14) + _mcv("purchase_safety_days", "bbcc", 3)
         except Exception as _e:
             try_err("rules", "评估加载补货周期配置降级", _e)
         try:
@@ -455,7 +460,18 @@ def evaluate_stock_skus(channel, limit=100000):
                 _ss_z = float(_rp.get("ss_z", 1.65))
                 _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
                 _adj = (_st["avail"] + _st["transit"] * _otif) / _ds if _ds > 0 else 999.0
-                _buf = _st["avail"] / max(max(_st["safety"], _ss), 1)
+                # 动态安全线(替代静态 safety_qty): 按行维度周期——platform=补货周期(jd→bbcc全周期/other→传统),
+                # own=采购周期; ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
+                _wt = str(r.get("warehouse_type") or "")
+                if _wt == "own":
+                    _period = _purchase_period
+                elif str(channel) == "jd":
+                    _period = _bbcc_period
+                else:
+                    _period = _trad_period
+                _dyn_safety = round(_ds * _period, 1) if _ds > 0 and _period > 0 else 0.0
+                _buf = _st["avail"] / max(max(_dyn_safety, _ss), 1)
+                base["inv"]["safety_qty"] = _dyn_safety
                 base["inv"]["adj_dos"] = round(_adj, 2)
                 base["inv"]["buffer"] = round(_buf, 2)
                 base["inv"]["otif"] = _otif

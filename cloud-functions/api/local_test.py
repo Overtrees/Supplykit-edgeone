@@ -448,7 +448,7 @@ check("审计: 无 IN (%s) 与 _status_cond 同段(双包裹)", not _bad2, "; ".
 
 # ── 工程审计: 缓存 key 维度参数完整性(2026-10-07 purchase/repl 缺 days 污染) ──
 _expect_keys = [
-    ("dash_summary|", ["channel", "start_date", "end_date"]),
+    ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
     ("stock_risk|", ["channel", "full"]),
     ("accel|", ["channel", "ratio", "min_qty"]),

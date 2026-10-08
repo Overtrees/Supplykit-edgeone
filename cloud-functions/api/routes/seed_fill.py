@@ -274,7 +274,7 @@ def _seed_inventory(skus_data):
                 inv.append({'sku': sk['sku'], 'product_name': sk['name'], 'warehouse': wh_name,
                             'warehouse_type': wt, 'available_qty': q,
                             'in_transit_qty': 0 if low else random.randint(0, 200),
-                            'safety_qty': random.randint(30, 200),
+                            'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
                             'channel': ch, 'barcode': sk['barcode']})
     for i in range(0, len(inv), 500):
         cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty',

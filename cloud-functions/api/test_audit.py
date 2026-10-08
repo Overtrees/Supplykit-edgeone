@@ -73,7 +73,7 @@ print("=" * 60)
 print("B. 缓存 key 完整性审计(维度参数全覆盖)")
 # 每个 _cache_get 调用的 key 模板 → 应包含的维度参数(影响结果的函数参数)
 EXPECT = [
-    ("dash_summary|", ["channel", "start_date", "end_date"]),
+    ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
     ("stock_risk|", ["channel", "full"]),
     ("accel|", ["channel", "ratio", "min_qty"]),

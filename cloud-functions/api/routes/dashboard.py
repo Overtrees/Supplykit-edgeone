@@ -34,18 +34,21 @@ def _daily_maintenance():
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
         if not _got:
             return  # 今天已维护(本实例或其他实例)
-        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot") or {}
-        _m = str(_r.get("m") or "")[:10]
-        _yest = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-        if (not _m) or _m < _yest:
-            execute(
-                "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
-                "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
-                "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
-                "AND ordered_at >= %s "
-                "GROUP BY DATE(ordered_at), channel, sku, warehouse "
-                "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
-                [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
+        # 快照新鲜度自愈(独立 'snapshot' key 与 cron_freshness 互斥——一天只重建一次)
+        _got_snap = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'snapshot')", [_today])
+        if _got_snap:
+            _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot") or {}
+            _m = str(_r.get("m") or "")[:10]
+            _yest = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            if (not _m) or _m < _yest:
+                execute(
+                    "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
+                    "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+                    "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
+                    "AND ordered_at >= %s "
+                    "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+                    "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
+                    [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
         # ② orders_day_agg 物化表增量(看板提速): 重建近 3 天(覆盖当天导入/删除) + MAX 落后则全量重建
         try:
             _rebuild_day_agg(3)
@@ -172,14 +175,14 @@ def health_trend(channel: str = "jd", days: int = 14):
 
 @router.get("/dashboard/summary")
 @traced
-def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = ""):
+def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc"):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
     附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
     _daily_maintenance()
     _daily_rules_guard()
-    _key = "dash_summary|%s|%s|%s" % (channel, start_date, end_date)
+    _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
     _result = _cache_get(_key, _SUMMARY_TTL,
-                         lambda: _build_summary(channel, start_date, end_date))
+                         lambda: _build_summary(channel, start_date, end_date, mode))
     _sync_health_snapshot(channel, (_result or {}).get("health_index") if isinstance(_result, dict) else None)
     return ok(_result)
 
@@ -222,10 +225,10 @@ def _build_summary_agg(channel, days60, now):
             (channel, d1 + " 00:00:00"))
     except Exception:
         recent = []  # 近 2 天直查失败: 仅 agg(前天及以前), 不阻塞
-    return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+    return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
 
 
-def _build_summary(channel, start_date, end_date):
+def _build_summary(channel, start_date, end_date, mode="bbcc"):
     """summary 计算体(共享缓存 builder; 原函数体迁移)"""
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
@@ -239,7 +242,7 @@ def _build_summary(channel, start_date, end_date):
             "AND ordered_at >= %%s AND ordered_at < %%s "
             "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
-        return _assemble(rows, channel, start_date, end_date)
+        return _assemble(rows, channel, start_date, end_date, mode)
 
     days60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
     # 物化表优先(历史区间读 orders_day_agg 万级, 当天实时直查 orders): agg 不可用降级直查
@@ -260,10 +263,10 @@ def _build_summary(channel, start_date, end_date):
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
         (channel, days60 + " 00:00:00"))
-    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today)
+    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
 
 
-def _assemble(rows, channel, start_date, end_date):
+def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
     # 行形态归一(兼容 DictCursor list[dict] 与非 DictCursor tuple rows——列序=SELECT 顺序)
     _cols = ("d", "order_status", "store", "g", "sub", "cnt")
     _norm = []
@@ -374,7 +377,7 @@ def _assemble(rows, channel, start_date, end_date):
                   "payout": round(mg - _refund(d30, today_s) - _sub(d30, today_s), 2)},
     }
 
-    health = _health_index(channel)
+    health = _health_index(channel, mode)
     low_stock = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty < safety_qty", [channel]) or {}
     alert_count = one("SELECT COUNT(*) AS c FROM alerts WHERE channel=%s AND status='active'", [channel]) or {}
     product_count = one("SELECT COUNT(*) AS c FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]) or {}
@@ -509,23 +512,74 @@ def _assemble(rows, channel, start_date, end_date):
             "brands": brands, "period_stores": period_stores, "period_brands": period_brands}
 
 
-def _health_index(channel):
-    hw = {}
-    rows = query(
-        "SELECT warehouse_type, "
-        "SUM(IF(available_qty >= safety_qty, 1, 0)) AS healthy, "
-        "SUM(IF(available_qty > 0 AND available_qty < safety_qty, 1, 0)) AS warning, "
-        "SUM(IF(available_qty = 0, 1, 0)) AS out_of_stock, COUNT(*) AS total "
-        "FROM inventory WHERE channel=%s GROUP BY warehouse_type", [channel])
+def _health_index(channel, mode="bbcc"):
+    """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
+    ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out"""
+    rows = query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                 "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+    # 日销(与补货/断货同款: fused 三窗口)
+    ds_map = {}
+    try:
+        from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+        by_sku, _ = load_daily_sales_grouped(28, channel)
+        _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
+        ds_map = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
+    except Exception as _e:
+            try_err('dash', '健康指数日销降级', _e)
+    # 动态安全线周期(与补货/采购备注同口径)
+    _cfg = {}
+    try:
+        _cfg = {r.get("key"): r.get("value") for r in
+                query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+    except Exception as _e:
+            try_err('dash', '健康指数配置加载降级', _e)
+
+    def _mc(key, mode2, default):
+        v = _cfg.get("mode_%s_%s" % (mode2, key))
+        if v is None:
+            v = _cfg.get(key)
+        try:
+            return int(float(v or default))
+        except Exception:
+            return default
+    _hp_bbcc = (_mc("b_to_c_days", mode, 3) + _mc("c_safety_days", mode, 0)
+                + _mc("ship_to_b_days", mode, 0) + _mc("safety_multiplier", mode, 0))
+    _hp_trad = _mc("lead_time_days", mode, 10) + _mc("safety_multiplier", mode, 0)
+    _hp_pur = _mc("purchase_lead_days", mode, 14) + _mc("purchase_safety_days", mode, 3)
+    _period = _hp_bbcc if mode == "bbcc" else _hp_trad
+
+    _z = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
+    hw = {"own": dict(_z), "platform": dict(_z), "platform_b": dict(_z)}
+    bc_agg = {}
     for r in rows:
-        hw[r.get("warehouse_type") or ""] = r
-    bc = one(
-        "SELECT SUM(IF(avail >= safety, 1, 0)) AS healthy, "
-        "SUM(IF(avail > 0 AND avail < safety, 1, 0)) AS warning, "
-        "SUM(IF(avail = 0, 1, 0)) AS out_of_stock, COUNT(*) AS total "
-        "FROM (SELECT sku, SUM(available_qty) AS avail, SUM(safety_qty) AS safety "
-        "FROM inventory WHERE channel=%s AND warehouse_type IN ('platform','platform_b') GROUP BY sku) t",
-        [channel]) or {}
+        wt = str(r.get("warehouse_type") or "")
+        avail = int(r.get("available_qty") or 0)
+        sku = str(r.get("sku") or "")
+        _ds = ds_map.get(sku, 0)
+        _per = _hp_pur if wt == "own" else _period
+        _dyn = round(_ds * _per, 1) if _ds > 0 and _per > 0 else 0.0
+        st = hw.get(wt)
+        if st is None:
+            continue
+        st["total"] += 1
+        if avail <= 0:
+            st["out_of_stock"] += 1
+        elif _dyn <= 0 or avail >= _dyn:
+            st["healthy"] += 1
+        else:
+            st["warning"] += 1
+        if wt in ("platform", "platform_b"):
+            b = bc_agg.setdefault(sku, {"avail": 0, "dyn": 0.0})
+            b["avail"] += avail
+            b["dyn"] = max(b["dyn"], _dyn)
+    bc = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": len(bc_agg)}
+    for b in bc_agg.values():
+        if b["avail"] <= 0:
+            bc["out_of_stock"] += 1
+        elif b["dyn"] <= 0 or b["avail"] >= b["dyn"]:
+            bc["healthy"] += 1
+        else:
+            bc["warning"] += 1
 
     # 健康分档参数: 内置'库存健康监控'规则 params 配置(默认 85/60 与硬编码一致)
     _hrp = _rule_params("health", channel)
@@ -547,13 +601,12 @@ def _health_index(channel):
                 "out_of_stock": int(r.get("out_of_stock") or 0), "total": total,
                 "level": "good" if score >= _hg else ("warning" if score >= _hw else "danger")}
 
-    z = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
-    all_rows = {"healthy": sum(int(hw.get(k, z).get("healthy") or 0) for k in hw),
-                "warning": sum(int(hw.get(k, z).get("warning") or 0) for k in hw),
-                "out_of_stock": sum(int(hw.get(k, z).get("out_of_stock") or 0) for k in hw),
-                "total": sum(int(hw.get(k, z).get("total") or 0) for k in hw)}
-    return {"own": _score(hw.get("own", z)), "platform": _score(hw.get("platform", z)),
-            "platform_b": _score(hw.get("platform_b", z)), "bc": _score(bc),
+    all_rows = {"healthy": sum(int(hw.get(k, _z).get("healthy") or 0) for k in hw),
+                "warning": sum(int(hw.get(k, _z).get("warning") or 0) for k in hw),
+                "out_of_stock": sum(int(hw.get(k, _z).get("out_of_stock") or 0) for k in hw),
+                "total": sum(int(hw.get(k, _z).get("total") or 0) for k in hw)}
+    return {"own": _score(hw.get("own", _z)), "platform": _score(hw.get("platform", _z)),
+            "platform_b": _score(hw.get("platform_b", _z)), "bc": _score(bc),
             "score": _score(all_rows)["score"], "level": _score(all_rows)["level"]}
 
 
@@ -630,7 +683,41 @@ def _build_aux(channel, mode):
                          "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)}
     # stockOverview(缺货/低库存)
     out = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0", [channel]) or {}
-    low = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty>0 AND available_qty<safety_qty", [channel]) or {}
+    # 低库存(动态安全线判定, 替代静态 safety_qty): avail < ds×周期; 维度过滤跟随模式(bbcc→BC+own / trad→C+own)
+    low = {"c": 0}
+    try:
+        from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+        _by, _ = load_daily_sales_grouped(28, channel)
+        _m3 = calc_sales_multi(_by, windows=[7, 14, 28])
+        _dsm = {s: rolling_predict(_m3[7].get(s, 0), _m3[14].get(s, 0), _m3[28].get(s, 0)) for s in _by}
+        _cfg2 = {r.get("key"): r.get("value") for r in
+                 query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+        def _mc2(key, m2, default):
+            v = _cfg2.get("mode_%s_%s" % (m2, key))
+            if v is None:
+                v = _cfg2.get(key)
+            try:
+                return int(float(v or default))
+            except Exception:
+                return default
+        _per_bbcc = (_mc2("b_to_c_days", "bbcc", 3) + _mc2("c_safety_days", "bbcc", 0)
+                     + _mc2("ship_to_b_days", "bbcc", 0) + _mc2("safety_multiplier", "bbcc", 0))
+        _per_trad = _mc2("lead_time_days", "traditional", 10) + _mc2("safety_multiplier", "traditional", 0)
+        _per_pur = _mc2("purchase_lead_days", "bbcc", 14) + _mc2("purchase_safety_days", "bbcc", 3)
+        _period = _per_bbcc if mode == "bbcc" else _per_trad
+        _rows2 = query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                       "WHERE channel=%s AND available_qty>0 AND warehouse_type IN " + _wh_in, [channel])
+        _cnt = 0
+        for _r2 in _rows2:
+            _wt2 = str(_r2.get("warehouse_type") or "")
+            _p2 = _per_pur if _wt2 == "own" else _period
+            _d2 = _dsm.get(str(_r2.get("sku") or ""), 0)
+            _dyn2 = round(_d2 * _p2, 1) if _d2 > 0 and _p2 > 0 else 0.0
+            if _dyn2 > 0 and int(_r2.get("available_qty") or 0) < _dyn2:
+                _cnt += 1
+        low = {"c": _cnt}
+    except Exception as _e:
+            try_err('dash', '低库存动态判定降级', _e)
     so_items = query("SELECT sku, product_name, warehouse, warehouse_type, available_qty, safety_qty "
                      "FROM inventory WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
     # bc 合计缺货 SKU

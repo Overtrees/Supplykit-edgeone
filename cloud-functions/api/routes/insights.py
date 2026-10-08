@@ -156,6 +156,26 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                         [channel, month_start] + skus):
             month_out[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
+    # 动态安全线周期(own→采购周期 / platform→补货周期按渠道默认模式)
+    _cfg3 = {}
+    try:
+        _cfg3 = {r3.get("key"): r3.get("value") for r3 in
+                 query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+    except Exception as _e:
+            try_err('insights', '进销存周期配置降级', _e)
+
+    def _mc3(key, m2, default):
+        v = _cfg3.get("mode_%s_%s" % (m2, key))
+        if v is None:
+            v = _cfg3.get(key)
+        try:
+            return int(float(v or default))
+        except Exception:
+            return default
+    _bbcc_period = (_mc3("b_to_c_days", "bbcc", 3) + _mc3("c_safety_days", "bbcc", 0)
+                    + _mc3("ship_to_b_days", "bbcc", 0) + _mc3("safety_multiplier", "bbcc", 0))
+    _trad_period = _mc3("lead_time_days", "traditional", 10) + _mc3("safety_multiplier", "traditional", 0)
+    _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
     for r in rows:
         sku = r.get("sku")
         ds = multi[28].get(sku, 0) or multi[7].get(sku, 0)
@@ -167,11 +187,14 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
         month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
         _bm = batch_map.get(sku) or {}
+        _wt3 = str(r.get("warehouse_type") or "")
+        _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if channel == "jd" else _trad_period)
+        _dyn_safety = round(ds * _per3, 1) if ds > 0 and _per3 > 0 else 0
         items.append({
             "sku": sku, "product_name": r.get("product_name") or sku,
             "warehouse": r.get("warehouse", ""), "warehouse_type": r.get("warehouse_type", ""),
             "available_qty": avail, "in_transit_qty": transit, "c_transit": int(r.get("c_transit") or 0),
-            "safety_qty": int(r.get("safety_qty") or 0),
+            "safety_qty": _dyn_safety,
             "daily_sales": round(ds, 1),
             "turnover_days": round((avail + transit) / ds, 1) if ds > 0 else None,
             "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,

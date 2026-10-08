@@ -232,7 +232,9 @@ const initAppStore = (set, get) => ({
     // opts.refresh=true: dashboard 请求带 refresh=1（填充/导入完成后强制同步重建，不用旧值）
     let dashUrl = '/api/dashboard/summary'
     if (ds === 'custom' && cds && cde) dashUrl += '?start_date=' + cds + '&end_date=' + cde
-    if (opts && opts.refresh) dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'refresh=1'
+    // 动态安全线按补货模式区分周期(健康指数判定)
+    dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'mode=' + get().hammerReplenMode
+    if (opts && opts.refresh) dashUrl += '&refresh=1'
     try {
       const results = await Promise.allSettled([
         api.get(dashUrl),

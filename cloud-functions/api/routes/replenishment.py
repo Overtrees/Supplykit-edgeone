@@ -287,7 +287,7 @@ def _build_repl(channel, mode):
                 "sku": sku, "barcode": prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "category": prod.get("category", ""),
-                "available_qty": avail, "safety_qty": safety, "in_transit_qty": transit,
+                "available_qty": avail, "safety_qty": effective_safety, "in_transit_qty": transit,
                 "c_transit": c_transit, "b_transit": b_in_transit,
                 "b_stock": b_available, "c_stock": avail, "b_gap": b_gap,
                 "daily_sales": ds, "daily_sales_7": ds7,
@@ -332,7 +332,6 @@ def _build_repl(channel, mode):
             ds = rolling_predict(w7, w14, w28) * season * _act
             avail = int(r.get("available_qty") or 0)
             transit = int(r.get("in_transit_qty") or 0)
-            static_safety = int(r.get("safety_qty") or 0)
             effective_safety = round(ds * safety_days, 1) if ds > 0 else 0
             raw = ds * (lead + safety_days) - avail - transit
             suggested = _trad_suggested(ds, lead, safety_days, avail, transit)
@@ -355,7 +354,7 @@ def _build_repl(channel, mode):
                 "sku": sku, "barcode": prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "warehouse": wh, "category": prod.get("category", ""),
-                "available_qty": avail, "safety_qty": static_safety, "in_transit_qty": transit,
+                "available_qty": avail, "safety_qty": effective_safety, "in_transit_qty": transit,
                 "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
