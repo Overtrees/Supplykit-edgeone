@@ -230,8 +230,9 @@ def _build_repl(channel, mode):
                 if b_gap <= 0:
                     parts.append("C建议补%s件" % suggested)
                 else:
-                    parts.append("B建议补%s件(C缺口%s,调拨消耗%s,箱规%s)"
-                                 % (b_box, b_gap, round(ds * b_ship_days + effective_safety, 1), box))
+                    # 缺口标注准确: C缺口(c_gap) 被 B 仓覆盖后剩 B缺口(b_gap)——决定 B 补货量
+                    parts.append("B建议补%s件(C缺口%s→B缺口%s,调拨消耗%s,箱规%s)"
+                                 % (b_box, c_gap, b_gap, round(ds * b_ship_days + effective_safety, 1), box))
                 if b_gap > 0 and b_available <= 0:
                     parts.append("B仓已空")
                 elif b_gap > 0:
