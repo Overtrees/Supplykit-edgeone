@@ -51,6 +51,41 @@ def _trad_suggested(ds, lead, safety, avail, transit):
     return max(round(ds * lead + safety - avail - transit), 0)
 
 
+def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnover=None, tw90=90):
+    """传统逐仓备注(纯函数): 对齐 bbcc 语境——无销量积压/低需求说明/周转红线/补货前置濒临
+
+    ds<=0: 无销量语境(积压/⚪); ds>0 补货: 趋势+需补量; ds>0 不补但低于安全线: 说明暂不补原因;
+    周转红线: 补货时看补后综转(after_turnover 含 box_qty), 不补时看当前综转——>tw90 超/接近
+    """
+    parts = []
+    if ds > 0:
+        t7 = "📈" if w7 > w14 * 1.15 else ("📉" if w7 < w14 * 0.85 else "➡️")
+        t14 = "📈" if w14 > w28 * 1.15 else ("📉" if w14 < w28 * 0.85 else "➡️")
+        parts.append("近7%s 近14%s" % (t7, t14))
+    if ds <= 0:
+        if avail > 0:
+            parts.append("🔴 近30天无销量，库存积压")
+        else:
+            parts.append("⚪ 近30天无销量")
+    elif box_qty > 0:
+        parts.append("需补%s件(缺口%s)" % (box_qty, suggested))
+    elif avail < safety:
+        parts.append("⚠️ 库存低于安全线，但需求低暂不补")
+    # 周转红线(对齐 bbcc: 补货时=补后综转, 不补时=当前综转)
+    if after_turnover is not None and ds > 0:
+        if after_turnover > tw90:
+            parts.append("🔴 %s%s天超%s天" % ("补后综转" if box_qty > 0 else "当前综转",
+                                               after_turnover, tw90))
+        elif after_turnover > tw90 - 15:
+            parts.append("⚠️ %s%s天接近%s天" % ("补后综转" if box_qty > 0 else "当前综转",
+                                                 after_turnover, tw90))
+    if box_qty > 0:
+        parts.insert(0, "🔴 已濒临")
+    if not parts:
+        parts.append("库存充足")
+    return " · ".join(parts)
+
+
 def _build_repl(channel, mode):
     """补货建议计算体(共享缓存 builder, 返回全量列表)"""
     cfg = _config(channel, mode)
@@ -231,6 +266,7 @@ def _build_repl(channel, mode):
         _wh_sm = {k: smooth_promo_spikes(v) for k, v in wh_sales.items() if v}
         _wm = calc_sales_multi(_wh_sm, windows=[7, 14, 28],
                                sparse="shrink")
+        tw90 = int(cfg.get("turnover_warning_90") or 90)
         for r in inv:
             if r.get("warehouse_type") != "platform":
                 continue
@@ -261,7 +297,8 @@ def _build_repl(channel, mode):
                 "daily_sales_60": round(fused.get(sku, 0), 1),
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
-                "note": ("🔴 已濒临 · 需补货" if box_qty > 0 else "库存充足"),
+                "note": _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested,
+                                   after_turnover, tw90),
             })
 
     # 排序: 需补货优先, 缺口大优先
