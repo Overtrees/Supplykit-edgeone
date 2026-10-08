@@ -106,43 +106,6 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
     return " · ".join(parts)
 
 
-# ── 临时诊断2(2026-10-08 补货日销再次全 0, 定位后移除) ─────────────────────
-@router.get("/insights/replenishment-diag")
-@traced
-async def replenishment_diag2(request: Request, channel: str = "jd", mode: str = "bbcc"):
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
-    from routes.common import verify_token
-    if verify_token(token) != "admin":
-        return fail("仅 admin 可用", 403)
-    out = {}
-    try:
-        from biz.sales import load_daily_sales_grouped, calc_sales_multi
-        by_sku, by_sku_wh = load_daily_sales_grouped(60, channel)
-        out["by_sku_len"] = len(by_sku)
-        out["by_sku_wh_len"] = len(by_sku_wh)
-        out["by_sku_sample"] = {k: len(v) for k, v in list(by_sku.items())[:3]}
-        c_whs = {r.get("warehouse") for r in query(
-            "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
-            [channel])}
-        daily_c = {}
-        for wk, wd in by_sku_wh.items():
-            base, wh = wk.rsplit("|", 1)
-            if wh in c_whs:
-                m = daily_c.setdefault(base, {})
-                for d, q in wd.items():
-                    m[d] = m.get(d, 0) + q
-        out["c_whs"] = sorted(c_whs)
-        out["daily_c_len"] = len(daily_c)
-        out["daily_c_0032"] = daily_c.get("SKU-0032-J")
-        multi = calc_sales_multi(daily_c, windows=[7, 14, 28], sparse="shrink")
-        out["s28_len"] = len(multi[28])
-        out["s28_0032"] = multi[28].get("SKU-0032-J")
-    except Exception as e:
-        out["error"] = str(e)[:300]
-    return ok(out)
-
-
 def _build_repl(channel, mode):
     """补货建议计算体(共享缓存 builder, 返回全量列表)"""
     cfg = _config(channel, mode)
