@@ -96,6 +96,13 @@ def seed_fill_status(task_id: str = ""):
                     (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
             from routes.analysis_cache import invalidate_all
             invalidate_all()  # seed 完成 → 分析缓存即时失效
+            # 重置后 agg 物化表需重建(防首屏走直查慢): 后台线程重建 90 天, 完成前 summary 陈旧检测降级直查
+            try:
+                import threading as _th2
+                from routes.dashboard import _rebuild_day_agg as _rda
+                _th2.Thread(target=_rda, args=(90,), daemon=True).start()
+            except Exception as _e:
+                    try_err('tasks', '静默降级', _e)
             return {"data": {"status": "done"}}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (new_params, task_id))
@@ -151,6 +158,32 @@ async def seed_fill(request: Request):
         except Exception as _e:
                 try_err('tasks', '静默降级', _e)
         return fail("种子填充启动失败: %s" % str(e)[:200])
+
+
+# ── 数据维护(admin) ────────────────────────────────────────────────────────
+@router.post("/tasks/maintain")
+@traced
+async def tasks_maintain(request: Request):
+    """数据维护入口(admin): action=rebuild_agg → 后台重建 orders_day_agg 90 天(重置后/陈旧修复)"""
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    from routes.common import verify_token
+    if verify_token(token) != "admin":
+        return fail("仅 admin 可用", 403)
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+            try_err('tasks', '静默降级', _e)
+    action = d.get("action") or "rebuild_agg"
+    if action == "rebuild_agg":
+        import threading as _th3
+        from routes.dashboard import _rebuild_day_agg as _rda3
+        _th3.Thread(target=_rda3, args=(90,), daemon=True).start()
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()
+        return ok({"started": True, "action": "rebuild_agg"})
+    return fail("未知 action: %s" % action)
 
 
 # ── 数据重置 ──────────────────────────────────────────────────────────────
