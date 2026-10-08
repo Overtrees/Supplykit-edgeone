@@ -225,15 +225,17 @@ def run_daily_rules() -> dict:
 
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
-async def cron_daily_rules(request: Request):
+async def cron_daily_rules(request: Request, force: int = 0):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
-    maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行)"""
+    maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行);
+    force=1: 运维强制重跑(重置后/数据重建场景, 绕过当天抢占)"""
     if not _authed(request):
         return fail("未授权", 401)
-    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
-    if not _got:
-        return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
+    if not force:
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
+        if not _got:
+            return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
     return ok(run_daily_rules())
 
 
