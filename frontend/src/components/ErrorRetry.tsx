@@ -8,7 +8,7 @@ import { t } from '../locale'
  */
 export default function ErrorRetry({
   error = '加载失败',
-  desc = '可能是网络异常或服务暂不可用，请重试',
+  desc = '网络异常或服务不可用',
   onRetry,
   onReload = null,
 }) {
