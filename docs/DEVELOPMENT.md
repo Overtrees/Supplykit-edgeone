@@ -799,3 +799,17 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **ASI 坑**: 替换 `e.target.style`→`(e.target as HTMLElement).style` 后语句以 ( 开头 → 上一行被续调用("Type 'void' has no call signatures" 级联)——语句起始括号表达式必须 `;` 前缀
 - **tsc 语法错误跳过语义检查**: parse error 时看似 3 个错, 修完才暴露 104 个真错误——验证必须等完整 exit
 - **any 红线**: 精确 interface + [k:string]:unknown 索引签名 + String()/Number() 边界收敛(API 动态数据用 Record<string,unknown>, 不造假严格)
+
+### 15.39 首屏性能优化方法论(2026-10-08)
+- **瓶颈定位**: 重置后 agg 残留旧数据 → summary 陈旧检测降级直查(60 天 12 万订单 GROUP BY 慢); 5 接口并发重算竞争 TiDB RU; 单接口 8-9s
+- **优化链**: ①agg 物化重建入口(fill 钩子+admin maintain rebuild_agg) ②digest 共享缓存(进程内 30s, 三消费方收敛) ③warmup 预热(长 TTL 缓存) ④前端 loadAll 拆批(轻先行/重后置) ⑤旧值策略(首次清空/刷新保留)
+- **四维保障铁律**: 缓存等价断言(与直算一致)/30s 与看板同频(实时不劣化)/全量 SKU(完整)/幂等+try_err 降级(可靠); 拆批数据最终一致
+- **坑**: analysis_cache.register 已废弃(表缓存版本号失效)——进程内缓存用短 TTL 与看板同频, 不挂 register 钩子; diag SQL 含 % 被参数化(用 LEFT/全表拉取避开); key 保留字需反引号
+
+### 15.40 动态安全线口径统一(safety_qty = ds×周期, 2026-10-08)
+- 排查: 补货/采购响应 safety_qty 曾只显示 effective_safety(安全天数部分) vs 备注预警用全周期 → 口径分裂
+- 统一: safety_qty = ds×对应周期(传统 前置+安全 / bbcc C+B 全周期 / 采购 采购周期, 供应商级优先)——与备注"只够卖X天<周期Y天"同口径
+- 备注缺口链准确: B建议补N件(C缺口X→B缺口Y)——b_gap = c_gap − B仓覆盖
+
+### 15.41 错误文案统一(errText, 2026-10-08)
+- 网络层失败(axios 无 response)→"网络波动"; 服务端/业务(有 response)→"加载失败"; ErrorRetry 与 store 共用; props 精确 interface(any 红线)

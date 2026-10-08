@@ -1,3 +1,38 @@
+## 2026-10-08(下半场): 备注话术定稿 + 首屏性能优化(agg重建/warmup/拆批/digest共享) + 规则引擎优化(字段校验) + safety_qty 口径统一(ds×周期) + 错误文案组件 + CI 修复
+> **主线**: feat/edgeone, commits 72b9d410→f8c1af13(规则校验 → digest 性能 → 话术定稿 → 首屏优化 → 口径统一)。
+> **验证**: local_test 141/141 + test_audit 11 全过 + 线上首屏 10s→2-3s + 三场景 safety_qty 口径一致。
+
+### 备注话术定稿(用户逐轮拍板, 通俗化+准确)
+- **bbcc**: `🔴 已濒临 · 近7📉 近14➡️ 7天走弱 · B建议补216.0件(C缺口84.4→B缺口83.4,调拨消耗110.4,箱规24) · B仓已空 · 现BC合计低于动态安全线：可撑1天<周期12天，需尽快补到B仓`(缺口链准确: C缺口→B覆盖→B缺口)
+- **采购**: `🔴 库存告急：只够卖1天（采购需8天），将断货 · 需采购103件（箱规6件，实购108件） · 补后周转8天<目标15天`(去算式明细)
+- **传统**: 需补N件 + 库存告急：只够卖X天（补货需Y天）
+
+### 首屏性能优化(四维保障: 准确/实时/完整/可靠)
+- **agg 物化重建入口**: fill 完成钩子后台重建 90 天 + admin /tasks/maintain?action=rebuild_agg(重置后/陈旧运维); summary agg 路径加陈旧检测(MAX 落后 3 天降级直查, 防旧残留误读)
+- **日销 digest 共享缓存**(biz/sales.get_sales_digest, 进程内 30s): 规则引擎/健康指数/低库存卡三处重复 load+calc 收敛一次; 等价断言(fused/sigma 与直算一致)/30s 与看板缓存同频/全量 SKU/幂等+降级
+- **warmup 预热**: maintain warmup 后台顺序调 summary/aux/stock-risk/repl/purchase 填共享表缓存(部署/重置后一次调用)
+- **前端 loadAll 拆批**: summary+轻接口先行(骨架屏 2s), stock-risk 后置补齐——避免 5 接口并发重算竞争 TiDB RU; 首次清空(不误导)/刷新保留旧值(不闪空)
+- **实测**: 首屏 10s→2-3s(第一批 2s+断货卡 1s)
+
+### 规则引擎优化
+- validate_condition 条件字段校验(创建/更新拦截拼写错误如 inv.availabl_qty, 白名单+params通配+max递归, 防静默 0 恒真/恒假)
+- 快速路径静态 safety_qty 注入 0(死代码); 模板 {safety} float(55.2 不截断); 测试面板加"运行时安全线动态注入"提示
+- 规则评估口径确认: 低库存规则按行维度动态安全线(own=采购周期 / platform=渠道补货周期 jd→bbcc全周期/other→传统), 不需编辑页选仓
+
+### safety_qty 口径统一(ds×周期, 与备注同口径)
+- 排查发现: 补货响应 safety_qty 曾误显示 effective_safety(仅安全天数 16.9=5.6×3) vs 备注用全周期 → 统一 ds×周期(传统 3+3=6 / bbcc 全周期 12 / 采购 8); 静态兜底注释清理
+- 采购周期实为 8(供应商级参数优先, 与"采购需8天"备注一致)
+
+### 错误文案统一组件
+- errText(err): 网络层无 response(断网/超时)→"网络波动" / 服务端有 response→"加载失败"; ErrorRetry 支持 err 自动 desc; store orderLoadErr 同判断; props 精确 interface(无 any)
+- 文案短化: "加载失败，可能是网络异常或服务暂不可用"→"加载失败"
+
+### CI 修复
+- prettier: RulesPage 测试面板提示未格式化(CI 失败); ErrorRetry desc 去默认致 props 必填(TSC2739 全站 6 处)——补 desc/err 默认 null + ErrorRetryProps interface
+
+### 其他
+- 断货卡闪空: loadAll 拆批首次清空/刷新保留; 大数据场景评估(10万 SKU 需索引/活跃SKU过滤/日销物化, 列为路线图); makers skill 无专门性能调优指引
+
 ## 2026-10-08: 动态安全线体系全链路(补货/采购/看板/规则/进销存) + 静态 safety_qty 退役 + cron 双跑修复 + 重置填充验证
 > **主线**: feat/edgeone, commits f37d0d77→e252e117(备注提示 → 全链路接入 → 静态退役 → 双跑修复)。
 > **验证**: local_test 133/133 + test_audit 11 全过 + 重置填充后全链路线上验证(补货 970 活跃/传统 779 提示/采购 140 提示/健康 78/低库存 1780/进销存 own=ds×17)。
