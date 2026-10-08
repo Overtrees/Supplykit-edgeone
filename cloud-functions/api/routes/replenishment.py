@@ -85,7 +85,7 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
         else:
             parts.append("⚪ 近30天无销量")
     elif box_qty > 0:
-        parts.append("补%s件(缺%s)" % (box_qty, suggested))
+        parts.append("需补%s件" % box_qty)
     elif uneconomical:
         parts.append("⚠️ 缺口不足1件，凑整箱不经济，暂不补")
     # 动态安全线预警(逐仓: 该仓可售 vs 传统周期, 只提示不参与计算) —— 替代旧"低于安全线暂不补"话术
@@ -208,22 +208,36 @@ def _build_repl(channel, mode):
             # note: 趋势 + 建议 + 仓储费/周转风险(与 PA 同构)
             t7 = "📈" if ds7 > ds14 * 1.15 else ("📉" if ds7 < ds14 * 0.85 else "➡️")
             t14 = "📈" if ds14 > ds28 * 1.15 else ("📉" if ds14 < ds28 * 0.85 else "➡️")
-            # 趋势(emoji 已表达方向, 仅保留关键补充)
             trend_text = "近7%s 近14%s" % (t7, t14)
             if ds > 0 and ds < 5 and combined_turnover_current is not None and combined_turnover_current > 90:
-                trend_text += " 销量极低积压"
+                trend_text += " 销量极低，库存积压"
+            elif ds7 == 0 and ds14 == 0 and ds28 > 0:
+                trend_text += " 持续下行（近14天无销量）"
+            elif ds7 > ds14 * 1.15 and ds14 > ds28 * 1.1:
+                trend_text += " 持续上行"
+            elif ds7 < ds14 * 0.85 and ds14 < ds28 * 0.9:
+                trend_text += " 持续下行"
+            elif ds7 > ds14 * 1.15:
+                trend_text += " 7天抬头"
+            elif ds7 < ds14 * 0.85:
+                trend_text += " 7天走弱"
+            else:
+                trend_text += " 平稳"
             parts = []
             if ds > 0:
                 parts.append(trend_text)
             if c_gap > 0 and not uneconomical:
                 if b_gap <= 0:
-                    parts.append("补C%s件(缺%s)" % (suggested, c_gap))
+                    parts.append("C建议补%s件" % suggested)
                 else:
-                    parts.append("补C%s/B%s件(缺%s)" % (suggested, b_box, b_gap))
-                if b_gap > 0:
-                    parts.append("B仅%s件" % b_available)
+                    parts.append("B建议补%s件(C缺口%s,调拨消耗%s,箱规%s)"
+                                 % (b_box, b_gap, round(ds * b_ship_days + effective_safety, 1), box))
+                if b_gap > 0 and b_available <= 0:
+                    parts.append("B仓已空")
+                elif b_gap > 0:
+                    parts.append("B仓仅%s件需从自有仓调" % b_available)
             if uneconomical:
-                parts.append("⚠️ 缺口不足1件，凑整箱不经济")
+                parts.append("⚠️ 缺口不足1件，凑整箱不划算，暂不补")
             if b_gap > 0:
                 c_cover = round((avail + transit) / ds, 1) if ds > 0 else 0
                 b_idle = max(round(c_cover - b_ship_days, 1), 0)
@@ -243,9 +257,9 @@ def _build_repl(channel, mode):
                 parts.append("⚠️ %s%s天接近%s天" % ("补后综转" if has_replen else "当前综转", turn_check, tw90))
             if ds <= 0:
                 if b_available > 0:
-                    parts.append("🔴 近30天无销量，B仓库存积压")
+                    parts.append("近30天无销量，B仓库存积压")
                 elif avail > 0:
-                    parts.append("🔴 近30天无销量，C仓库存积压")
+                    parts.append("近30天无销量，C仓库存积压")
                 else:
                     parts.append("⚪ 近30天无销量")
             # 动态安全线预警(一盘货 BC 合计 vs 全周期; 只提示不参与计算)
@@ -253,14 +267,10 @@ def _build_repl(channel, mode):
                 _bc_total = avail + c_transit + b_available + b_in_transit
                 _days_left = _bc_total / ds if ds > 0 else 999
                 if _days_left <= _full_period:
-                    parts.append("🔴 一盘货仅撑%s天<周期%s天，将断货，尽快补B仓" % (round(_days_left), _full_period))
+                    parts.append("现BC合计低于动态安全线：可撑%s天<周期%s天，需尽快补到B仓"
+                                 % (round(_days_left), _full_period))
                 elif _days_left <= _full_period + 2:
-                    parts.append("⚠️ 剩%s天接近周期%s天" % (round(_days_left), _full_period))
-                # 辅助: C 缺口 + B 水位(商家抓手)
-                if avail + c_transit < ds * _c_period:
-                    parts.append("C缺%s件" % max(round(ds * _c_period - avail - c_transit), 0))
-                if b_available > 0:
-                    parts.append("B水位%s件" % b_available)
+                    parts.append("⚠️ 接近动态安全线：约剩%s天（周期%s天）" % (round(_days_left), _full_period))
             if not parts:
                 parts.append("库存充足")
             # P1: 濒临断货反哺 —— 建议补>0 即 Adj-DOS≤补货周期(缺口), note 前置 🔴 已濒临
@@ -326,9 +336,9 @@ def _build_repl(channel, mode):
             if ds > 0 and _trad_period > 0:
                 _dl = (avail + transit) / ds
                 if _dl <= _trad_period:
-                    _hint = "🔴 仅撑%s天<周期%s天，将断货，尽快补货" % (round(_dl), _trad_period)
+                    _hint = "🔴 库存告急：只够卖%s天（补货需%s天），将断货，尽快补货" % (round(_dl), _trad_period)
                 elif _dl <= _trad_period + 2:
-                    _hint = "⚠️ 剩%s天接近周期%s天" % (round(_dl), _trad_period)
+                    _hint = "⚠️ 约剩%s天（补货周期%s天），建议备货" % (round(_dl), _trad_period)
             prod = products.get(sku, {})
             box = int(prod.get("box_qty") or 1)
             box_qty = ((suggested + box - 1) // box * box) if suggested > 0 else 0

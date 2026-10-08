@@ -240,7 +240,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 _rp2["lit"] = ctx.get("lit_bbcc" if _m == "bbcc" else "lit_trad")
             ctx2 = {**ctx, "rule": rule,
                     "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
-                    "safety": int((ctx.get("inv") or {}).get("safety_qty") or 0),
+                    "safety": float((ctx.get("inv") or {}).get("safety_qty") or 0),
                     "product_name": (ctx.get("inv") or {}).get("product_name", ""),
                     "params": _rp2}
             if not _check_condition(cond, ctx2):
@@ -443,7 +443,8 @@ def evaluate_stock_skus(channel, limit=100000):
         base = {
             "sku": sku, "channel": channel,
             "inv": {"available_qty": int(r.get("available_qty") or 0),
-                    "safety_qty": int(r.get("safety_qty") or 0),
+                    # 快速路径(无计算变量引用规则)无 safety_qty 消费者 → 0; 动态值在 _need_calc 分支注入
+                    "safety_qty": 0,
                     "in_transit_qty": int(r.get("in_transit_qty") or 0),
                     "warehouse_type": r.get("warehouse_type", ""),
                     "warehouse": r.get("warehouse", ""),
