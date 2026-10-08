@@ -223,13 +223,14 @@ def _build_purchase(channel, mode, days=28):
             elif _dl <= _purchase_period + 2:
                 note = "⚠️ 约剩%s天（采购周期%s天），建议备货" % (round(_dl), _purchase_period)
         if purchase_qty > 0:
-            _buy_note = "🔴 需采购: " + ("消耗%d+安全%d -库存%d =%d" % (c_consume, eff_safety, int(sys_total), purchase_qty))
+            # 通俗格式(对齐 bbcc 风格): 需采购N件(箱规,实购) · 补后周转
+            _buy_note = "需采购%d件" % purchase_qty
             if box_qty > 1:
-                _buy_note += " · 箱规%d件, 实购%d件(%d箱)" % (box_qty, actual_purchase, actual_purchase // box_qty)
+                _buy_note += "（箱规%d件，实购%d件）" % (box_qty, actual_purchase)
             if target_turn > 0:
                 _buy_note += " · 补后周转%d天%s" % (after_turnover,
-                                                " > 目标%d天" % target_turn if after_turnover > target_turn
-                                                else " < 目标%d天" % target_turn)
+                                                ">目标%d天" % target_turn if after_turnover > target_turn
+                                                else "<目标%d天" % target_turn)
             note = note + " · " + _buy_note if note else _buy_note
         result.append({
             "sku": sku, "barcode": prod.get("barcode", ""),
