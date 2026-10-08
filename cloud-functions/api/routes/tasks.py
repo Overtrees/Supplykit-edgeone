@@ -176,6 +176,8 @@ async def tasks_maintain(request: Request):
     except Exception as _e:
             try_err('tasks', '静默降级', _e)
     action = d.get("action") or "rebuild_agg"
+    channel = d.get("channel") or "jd"
+    mode = d.get("mode") or "bbcc"
     if action == "rebuild_agg":
         import threading as _th3
         from routes.dashboard import _rebuild_day_agg as _rda3
@@ -183,6 +185,23 @@ async def tasks_maintain(request: Request):
         from routes.analysis_cache import invalidate_all
         invalidate_all()
         return ok({"started": True, "action": "rebuild_agg"})
+    if action == "warmup":
+        # 预热各缓存(后台顺序调用 builder, 填 300s 共享表缓存)——部署/重置后调用一次, 首屏不撞重算
+        def _w():
+            try:
+                from routes.dashboard import dashboard_summary, dashboard_aux, stock_risk
+                from routes.replenishment import get_replenishment_suggestions
+                from routes.purchase import purchase_suggestions
+                dashboard_summary(channel, "", "", mode)
+                dashboard_aux(channel, mode)
+                stock_risk(channel)
+                get_replenishment_suggestions(days=28, source="", mode=mode, channel=channel)
+                purchase_suggestions(days=28, mode=mode, channel=channel)
+            except Exception as _e:
+                    try_err('tasks', '预热降级', _e)
+        import threading as _th4
+        _th4.Thread(target=_w, daemon=True).start()
+        return ok({"started": True, "action": "warmup"})
     return fail("未知 action: %s" % action)
 
 
