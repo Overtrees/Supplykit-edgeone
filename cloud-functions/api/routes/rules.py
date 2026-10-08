@@ -51,6 +51,11 @@ async def create_rule(request: Request):
     if not name:
         return fail("缺少 name")
     cond = d.get("condition") or d.get("condition_json") or {}
+    # 条件字段校验(防静默 0 恒真/恒假)
+    from core.rules import validate_condition
+    _v_err = validate_condition(cond)
+    if _v_err:
+        return fail("条件字段无效: " + "; ".join(_v_err[:5]))
     _params = d.get("params")
     _pjson = json.dumps(_params, ensure_ascii=False) if isinstance(_params, dict) else None
     _rid = execute_id("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, alert_desc, severity, is_active, channel, mode, params) "
@@ -83,6 +88,10 @@ async def update_rule(rid: int, request: Request):
         sets.append("is_active = %s")
         params.append(1 if d["is_active"] else 0)
     if "condition" in d:
+        from core.rules import validate_condition
+        _v_err = validate_condition(d["condition"])
+        if _v_err:
+            return fail("条件字段无效: " + "; ".join(_v_err[:5]))
         sets.append("condition_json = %s")
         params.append(json.dumps(d["condition"], ensure_ascii=False))
     if "params" in d:

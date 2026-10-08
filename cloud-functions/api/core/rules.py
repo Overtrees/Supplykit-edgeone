@@ -301,6 +301,57 @@ def _rule_params_loaded(rule):
         return {}
 
 
+# ── 条件字段白名单(规则保存校验用, 防静默 0 致恒真/恒假) ──
+_VALID_FIELDS = {
+    "inv.available_qty", "inv.safety_qty", "inv.in_transit_qty", "inv.warehouse_type",
+    "inv.warehouse", "inv.product_name", "inv.adj_dos", "inv.buffer", "inv.otif",
+    "inv.ss_dyn", "inv.accel_rate", "inv.days_since_last",
+    "order.quantity", "order.total_amount", "order.order_status", "order.product_name",
+    "sku", "product_name", "days_since_last", "stock", "avail", "safety",
+    "lit_trad", "lit_bbcc", "health", "health_score",
+}
+
+
+def validate_condition(cond):
+    """校验规则条件引用的字段有效性(创建/更新规则时调用)
+
+    防笔误字段(如 inv.saftey_qty)静默解析为 0 → 条件恒真/恒假难排查;
+    返回错误列表, 空 = 通过; params.* 为动态键通配
+    """
+    import re
+    errors = []
+
+    def _check_ref(s, side):
+        for m in re.finditer(r"[a-z_]+\.[a-z_]+", s):
+            ref = m.group(0)
+            if ref.startswith("params."):
+                continue
+            if ref not in _VALID_FIELDS:
+                errors.append("%s 字段无效: %s" % (side, ref))
+
+    def _walk(c):
+        if not isinstance(c, dict):
+            return
+        for k in ("left", "right"):
+            v = c.get(k)
+            if isinstance(v, str):
+                s = v.strip()
+                if s.startswith("max("):
+                    for p in s[4:-1].split(","):
+                        _check_ref(p.strip(), k)
+                else:
+                    _check_ref(s, k)
+        sub = c.get("and")
+        if isinstance(sub, dict):
+            _walk(sub)
+        for sub in (c.get("or") or []):
+            if isinstance(sub, dict):
+                _walk(sub)
+
+    _walk(cond)
+    return errors
+
+
 _CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty")
 
 

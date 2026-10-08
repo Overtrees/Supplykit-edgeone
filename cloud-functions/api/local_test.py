@@ -620,5 +620,12 @@ _missing_cfg = _cfg_keys_in_code - _cfg_written
 check("审计: replenishment cfg.get 键均有写入方(防配置静默失效)", not _missing_cfg,
       "缺写入方: %s" % ",".join(sorted(_missing_cfg)))
 
+# ── 规则条件字段校验(2026-10-08: 防静默 0 恒真/恒假) ──
+from core.rules import validate_condition
+check("字段校验: 有效条件通过", validate_condition({"left": "inv.available_qty", "op": "<", "right": "inv.safety_qty"}) == [])
+check("字段校验: 拼写错误拦截", len(validate_condition({"left": "inv.availabl_qty", "op": "<", "right": "inv.safety_qty"})) > 0)
+check("字段校验: max 内字段校验", validate_condition({"left": "inv.available_qty", "op": "<", "right": "max(100, order.quantity)"}) == [])
+check("字段校验: params 通配", validate_condition({"left": "params.lit", "op": "<", "right": "10"}) == [])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
