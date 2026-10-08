@@ -219,7 +219,7 @@ def _build_purchase(channel, mode, days=28):
             _avl_all = sys_total + st["own_avail"] + st["own_transit"]
             _dl = _avl_all / ds
             if _dl <= _purchase_period:
-                note = "🔴 库存告急：只够卖%s天（采购需%s天），将断货，尽快采购" % (round(_dl), _purchase_period)
+                note = "🔴 库存告急：只够卖%s天（采购需%s天），将断货" % (round(_dl), _purchase_period)
             elif _dl <= _purchase_period + 2:
                 note = "⚠️ 约剩%s天（采购周期%s天），建议备货" % (round(_dl), _purchase_period)
         if purchase_qty > 0:
