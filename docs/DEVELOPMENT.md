@@ -781,6 +781,8 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **smooth_promo_spikes(削峰)**: 近窗口单日峰值>5×历史基线(28-60天)→截断 2×基线; 无历史基线(新品)不削
 - **活性门控**: 近 7/14 有销售×1 / 仅 28 天历史×0.5 / 全零 0
 - **铁律**: 两分支语义不混——traditional 保持标准公式(ds×lead+safety−avail−transit, 静态 safety_qty), 只加需求门控 `_trad_suggested` 纯函数(ds<0.1 → 0, 安全线缺口不触发无需求补货); bbcc 保持 c_gap=ds×lead−avail−c_transit 结构
+- **safety_qty 来源(静态)**: seed random.randint(30,200) / 清洗导入映射列 / 默认 0; 看板 SS_dyn 动态但仅断货卡
+- **传统备注 _trad_note 纯函数(b8f67d8b)**: 对齐 bbcc 语境——0日销→无销量积压/⚪无销量; 需求低+低于安全线→说明暂不补原因; 周转红线(补后/当前综转>90→🔴/接近→⚠️); 优先级: 🔴已濒临前置→趋势→需补量→综转→无销量
 - **口径确认**: 日销=仅已完成(销量池, 待发货走扣减池); GMV=PAID 4 状态——两口径分离
 - **0.0x 显示**: round 1 位显示 0.0 非 bug——稀疏→建议 0→不送是人为决策(箱规+物流)
 
