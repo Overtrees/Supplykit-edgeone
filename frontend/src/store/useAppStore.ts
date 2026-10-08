@@ -236,6 +236,8 @@ const initAppStore = (set, get) => ({
     dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'mode=' + get().hammerReplenMode
     if (opts && opts.refresh) dashUrl += '&refresh=1'
     try {
+      // 首屏优先: 轻接口+summary 先行(骨架屏 1-3s 出数据), stock-risk(断货卡重接口)后置补齐——
+      // 避免 5 接口并发重算竞争 TiDB RU(首屏 10s→3s 感知, 数据最终一致)
       const results = await Promise.allSettled([
         api.get(dashUrl),
         api.get(
@@ -248,9 +250,8 @@ const initAppStore = (set, get) => ({
         ),
         api.get('/api/quality-logs'),
         api.get('/api/alerts'),
-        api.get('/api/dashboard/stock-risk'),
       ])
-      const [dashboard, orders, qualityLogs, alerts, stockRisk] = results.map(r =>
+      const [dashboard, orders, qualityLogs, alerts] = results.map(r =>
         r.status === 'fulfilled' ? r.value : { data: null },
       )
       set({
@@ -260,7 +261,6 @@ const initAppStore = (set, get) => ({
         orderPage: orders.data?.page || p,
         qualityLogs: qualityLogs.data || [],
         alerts: alerts.data || [],
-        stockRisk: stockRisk.data || [],
         dataLoaded: true,
         loading: false,
         orderLoading: false,
@@ -269,6 +269,10 @@ const initAppStore = (set, get) => ({
             ? '加载失败，可能是网络异常或服务暂不可用'
             : '',
       })
+      // 后置: stock-risk 断货卡(重接口, 不阻塞首屏; 失败保留旧值)
+      const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
+      const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
+      if (srData) set({ stockRisk: srData })
     } catch (e) {
       console.error('loadAll failed:', e)
       set({ loading: false, orderLoading: false })
