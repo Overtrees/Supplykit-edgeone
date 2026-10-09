@@ -448,6 +448,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // GMV 卡维度字段映射(总/净/回款 → 趋势字段名+显示名)
   const gmvKey = gmvView === 'net' ? 'net_gmv' : gmvView === 'payout' ? 'payout' : 'GMV'
   const gmvName = gmvView === 'net' ? '净GMV' : gmvView === 'payout' ? '回款' : 'GMV'
+  // 维度色(切换感知: 总=蓝/净=绿/回款=紫, 现有微趋势条/折线改色)
+  const gmvColor =
+    gmvView === 'net' ? 'var(--success)' : gmvView === 'payout' ? '#8b5cf6' : 'var(--primary)'
   const periodMeta = dashboard?.periods?.[periodTab] || {}
   // 店铺/品牌 GMV 数据量(横向滚动+自动采样判定, 渲染层可用)
   const storeDataLen =
@@ -488,7 +491,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           smooth: true,
           areaStyle: { opacity: 0.15 },
           data: periodTrend.map(i => i[gmvKey]) || [],
-          color: 'var(--primary)',
+          color: gmvColor,
           name: gmvName,
         },
         {
@@ -973,7 +976,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       flex: 1,
                       height: h,
                       borderRadius: '2px 2px 0 0',
-                      background: 'var(--primary)',
+                      background: gmvColor,
                       opacity: 0.3 + 0.7 * (v / max),
                     }}
                   />
