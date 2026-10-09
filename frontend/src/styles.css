@@ -547,6 +547,9 @@ input[type='file'] {
     transform: rotate(360deg);
   }
 }
+.fade-in {
+  animation: fadeIn 0.25s ease;
+}
 @keyframes fadeIn {
   from {
     opacity: 0;

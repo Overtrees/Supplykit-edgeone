@@ -445,6 +445,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     return () => clearInterval(timer)
   }, [channel])
   const periodTrend = dashboard?.periods?.[periodTab + '_trend'] || dashboard?.trend || []
+  // GMV 卡维度字段映射(总/净/回款 → 趋势字段名+显示名)
+  const gmvKey = gmvView === 'net' ? 'net_gmv' : gmvView === 'payout' ? 'payout' : 'GMV'
+  const gmvName = gmvView === 'net' ? '净GMV' : gmvView === 'payout' ? '回款' : 'GMV'
   const periodMeta = dashboard?.periods?.[periodTab] || {}
   // 店铺/品牌 GMV 数据量(横向滚动+自动采样判定, 渲染层可用)
   const storeDataLen =
@@ -484,9 +487,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           type: 'line',
           smooth: true,
           areaStyle: { opacity: 0.15 },
-          data: periodTrend.map(i => i['GMV']) || [],
+          data: periodTrend.map(i => i[gmvKey]) || [],
           color: 'var(--primary)',
-          name: 'GMV',
+          name: gmvName,
         },
         {
           type: 'bar',
@@ -497,7 +500,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         },
       ],
       legend: {
-        data: ['GMV', '订单数'],
+        data: [gmvName, '订单数'],
         bottom: 6,
         left: 'center',
         icon: 'circle',
@@ -506,7 +509,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         textStyle: { fontSize: 9 },
       },
     }),
-    [periodTrend],
+    [periodTrend, gmvView],
   )
 
   const storeOption = useMemo(() => {
@@ -946,9 +949,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               </span>
             </div>
           </div>
-          {/* 微趋势线 */}
+          {/* 微趋势线(维度切换淡入) */}
           {periodTrend.length >= 3 && (
             <div
+              key={gmvView}
+              className="fade-in"
               style={{
                 height: 22,
                 marginTop: 8,
@@ -958,8 +963,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               }}
             >
               {periodTrend.map((i, idx) => {
-                const v = Number(i['GMV']) || 0
-                const max = Math.max(...periodTrend.map(x => Number(x['GMV']) || 0), 1)
+                const v = Number(i[gmvKey]) || 0
+                const max = Math.max(...periodTrend.map(x => Number(x[gmvKey]) || 0), 1)
                 const h = Math.max((v / max) * 18, 2)
                 return (
                   <div
@@ -1768,7 +1773,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             }}
           >
             <div style={{ width: storeDataLen > 8 ? Math.max(storeDataLen * 30, 340) : '100%' }}>
-              <Chart option={storeOption} height={200} />
+              <div className="fade-in" key={gmvView + _storeDim}>
+                <Chart option={storeOption} height={200} />
+              </div>
             </div>
           </div>
         </div>

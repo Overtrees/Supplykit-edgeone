@@ -312,7 +312,16 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
             t["GMV"] += g
         funnel[st] = funnel.get(st, 0) + cnt
 
-    trend_data = [{"日期": k, "GMV": v["GMV"], "订单数": v["订单数"]} for k, v in sorted(trend.items())]
+    trend_data = []
+    for _k, _v in sorted(trend.items()):
+        _d = str(_k)[:10]
+        _rf = sum(_g for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items()
+                  if _d2 == _d and _st == "申请退款")
+        _sb_all = sum(_sb for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items()
+                      if _d2 == _d and _st in _PAID)
+        trend_data.append({"日期": _k, "GMV": _v["GMV"], "订单数": _v["订单数"],
+                           "net_gmv": round(float(_v["GMV"]) - _rf, 2),
+                           "payout": round(float(_v["GMV"]) - _rf - _sb_all, 2)})
     stores = [{"name": k, "gmv": round(v, 2),
                "refund_amount": round(store_refund.get(k, 0), 2),
                "subsidy_amount": round(store_subsidy.get(k, 0), 2),
@@ -440,7 +449,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
     }
     # 周期趋势(前端 gmv 小卡图表按今日/本周/本月联动)
     def _trend_range(d0, d1):
-        return [{"日期": x.get("日期"), "GMV": x.get("GMV"), "订单数": x.get("订单数")}
+        return [{"日期": x.get("日期"), "GMV": x.get("GMV"), "订单数": x.get("订单数"),
+                 "net_gmv": x.get("net_gmv"), "payout": x.get("payout")}
                 for x in trend_data if d0 <= str(x.get("日期") or "")[:10] <= d1]
 
     # 周期店铺(前端店铺 GMV 卡周期联动)
