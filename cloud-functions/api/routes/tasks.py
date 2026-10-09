@@ -359,13 +359,13 @@ def export_status(task_id: str = "", page_size: int = 10000):
         if done:
             # 分片不合并(2026-10-09: TiDB 单行 entry 上限 6MB——20MB CSV 单行存不下):
             # result 记分片列表, 下载时按 task 读分片合并返回
-            filename = "exports_%s_%s_%s.%s" % (exp_type, channel, now_stamp(),
-                                                "csv" if parts[0].endswith(".csv") else "xlsx")
-            _r = {"filename": filename, "type": exp_type, "parts": parts,
+            realname = "exports_%s_%s_%s.%s" % (exp_type, channel, now_stamp(),
+                                                  "csv" if parts[0].endswith(".csv") else "xlsx")
+            _r = {"filename": task_id, "name": realname, "type": exp_type, "parts": parts,
                   "rows": total if exp_type == "orders" else len(rows)}
             execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({"result": _r}, ensure_ascii=False), task_id))
-            return {"ok": True, "task_id": task_id, "status": "done", "filename": filename}
+            return {"ok": True, "task_id": task_id, "status": "done", "filename": task_id}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "page": page + 1, "parts": parts}, ensure_ascii=False), task_id))
         return {"ok": True, "task_id": task_id, "status": "running", "page": page + 1}
@@ -407,7 +407,7 @@ def export_download(filename: str):
                         merged += (c[7:] if c.startswith("base64:") else c.encode("utf-8-sig"))
                     elif c is not None:
                         merged += bytes(c)
-                filename = res.get("filename") or filename
+                filename = res.get("name") or filename  # 下载文件名用正式名(分片模式 filename=task_id)
                 row = {"content": merged}
         except Exception as _e:
                 try_err('tasks', '分片下载降级', _e)
