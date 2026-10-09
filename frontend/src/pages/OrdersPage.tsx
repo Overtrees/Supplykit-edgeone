@@ -70,6 +70,10 @@ export default function OrdersPage() {
     orderTotal,
     setHammerSearch,
     orderLoadErr,
+    orderBatch,
+    orderSelIds,
+    setOrderSelIds,
+    setOrderBatch,
   } = useAppStore()
   useEffect(() => {
     const hSelAll = () => {
@@ -94,8 +98,7 @@ export default function OrdersPage() {
     useAppStore.getState().loadAll()
   }, [hammerSearch, orderStatus])
   const [confirmDel, setConfirmDel] = useState(null)
-  // 批量模式(复用商品页 prodBatch 同款体系: store orderBatch/orderSelIds)
-  const { orderBatch, orderSelIds, setOrderSelIds, setOrderBatch } = useAppStore()
+
   // 删除撤销定时器集合：卸载时统一清理，防止软删订单残留
   const timersRef = useRef([])
   useEffect(
