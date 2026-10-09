@@ -1211,6 +1211,30 @@ input[type='file'] {
   gap: 12px;
 }
 
+/* 手机横屏(≤932px): 4 卡一行正方形内信息密度压缩——字体/间距按容器 cqi 自动缩小,
+   保障多信息小卡(待处理/健康/断货)完整显示不截断; 竖屏/大屏/iOS 不变 */
+@media (orientation: landscape) and (max-width: 932px) {
+  .stat-card {
+    padding: 10px 12px !important;
+  }
+  .stat-card > div {
+    margin-top: 2px !important;
+    margin-bottom: 2px !important;
+  }
+  .stat-card .card-value {
+    font-size: clamp(12px, 6.5cqi, 19px) !important;
+    line-height: 1.1 !important;
+  }
+  .stat-card .card-sub {
+    font-size: clamp(9px, 2.4cqi, 12px) !important;
+  }
+  /* 明细行(font-9/10 等)窄卡最小化 */
+  .stat-card [class*='font-9'],
+  .stat-card [class*='font-10'] {
+    font-size: clamp(8px, 2.2cqi, 10px) !important;
+  }
+}
+
 /* 中卡（图表卡）— 手机横屏2列，宽屏自适应 */
 .mid-chart-grid {
   display: grid;

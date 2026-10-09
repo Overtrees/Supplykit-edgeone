@@ -370,6 +370,10 @@ def export_status(task_id: str = "", page_size: int = 10000):
                 execute("DELETE FROM export_files WHERE filename=%s", [p])
             import base64 as _b64
             try:
+                execute("ALTER TABLE export_files MODIFY COLUMN content LONGBLOB")
+            except Exception:
+                pass
+            try:
                 execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
                         "ON DUPLICATE KEY UPDATE content=VALUES(content)", (filename, merged, channel))
             except Exception:
