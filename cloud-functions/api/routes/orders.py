@@ -1,8 +1,8 @@
 """原生 orders 路由(方案 B): 分页+搜索+状态筛选+单条软删/恢复/永久删除(契约与旧 backend 一致)"""
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from db import query, one, execute
-from routes.common import ok, traced, try_err
+from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["orders"])
 
@@ -43,6 +43,31 @@ def soft_delete_order(oid: int):
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     return ok({})
+
+
+@router.post("/orders/batch")
+@traced
+async def orders_batch(request: Request):
+    """批量操作: {action: delete|restore|permanent-delete, ids: []}"""
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+            try_err('orders', '静默降级', _e)
+    action = d.get("action") or ""
+    ids = [x for x in (d.get("ids") or []) if str(x).isdigit()]
+    if action not in ("delete", "restore", "permanent-delete") or not ids:
+        return fail("参数无效: 需 action 与 ids")
+    _ph = ",".join(["%s"] * len(ids))
+    if action == "delete":
+        execute("UPDATE orders SET deleted_at=NOW() WHERE id IN (%s)" % _ph, ids)
+    elif action == "restore":
+        execute("UPDATE orders SET deleted_at='' WHERE id IN (%s)" % _ph, ids)
+    else:
+        execute("DELETE FROM orders WHERE id IN (%s)" % _ph, ids)
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok({"updated": len(ids)})
 
 
 @router.post("/orders/{oid}/restore")

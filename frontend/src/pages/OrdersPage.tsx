@@ -72,6 +72,33 @@ export default function OrdersPage() {
     orderLoadErr,
   } = useAppStore()
   useEffect(() => {
+    const hSelAll = () => orderSelToggleAll()
+    const hBatchDel = () => {
+      if (orderSel.size === 0) {
+        alert('请先勾选要删除的订单')
+        return
+      }
+      if (window.confirm('软删除 ' + orderSel.size + ' 条订单？可在回收站恢复'))
+        doBatchOrder('delete', orderSel)
+    }
+    const hBatchPurge = () => {
+      if (orderSel.size === 0) {
+        alert('请先勾选要永久删除的订单')
+        return
+      }
+      if (window.confirm('永久删除 ' + orderSel.size + ' 条订单？此操作不可撤销'))
+        doBatchOrder('permanent-delete', orderSel)
+    }
+    window.addEventListener('orders-toggle-all', hSelAll)
+    window.addEventListener('orders-batch-delete', hBatchDel)
+    window.addEventListener('orders-batch-purge', hBatchPurge)
+    return () => {
+      window.removeEventListener('orders-toggle-all', hSelAll)
+      window.removeEventListener('orders-batch-delete', hBatchDel)
+      window.removeEventListener('orders-batch-purge', hBatchPurge)
+    }
+  })
+  useEffect(() => {
     clearCache('orders')
     useAppStore.getState().loadAll(1)
     setHammerSearch('')
@@ -80,6 +107,19 @@ export default function OrdersPage() {
     useAppStore.getState().loadAll()
   }, [hammerSearch, orderStatus])
   const [confirmDel, setConfirmDel] = useState(null)
+  // 批量选择集(锤子菜单批量操作, 对齐 RecyclePage 模式)
+  const [orderSel, setOrderSel] = useState<Set<number>>(new Set())
+  const toggleOrderSel = (id: number) => {
+    setOrderSel(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
+  }
+  const orderSelToggleAll = () => {
+    setOrderSel(prev => (prev.size === orders.length ? new Set() : new Set(orders.map(x => x.id))))
+  }
   // 删除撤销定时器集合：卸载时统一清理，防止软删订单残留
   const timersRef = useRef([])
   useEffect(
@@ -102,73 +142,8 @@ export default function OrdersPage() {
     if (!confirmDel) return
     const id = confirmDel
     setConfirmDel(null)
-    try {
-      const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(`${API}/api/orders/${id}`, {
-        method: 'DELETE',
-        headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-        },
-      })
-      if (r.ok) {
-        useAppStore.getState().loadAll()
-        const timer = setTimeout(async function () {
-          await fetch(`${API}/api/orders/${id}/permanent-delete`, {
-            method: 'POST',
-            headers: {
-              Authorization:
-                'Bearer ' +
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
-            },
-          })
-        }, 5000)
-        // 组件卸载/页面切换时清理定时器，防止软删订单残留（服务端 30 天回收站兜底）
-        timersRef.current.push(timer)
-        toast.add({
-          type: 'success',
-          title: t('undo.deleted'),
-          duration: 5000,
-          action: {
-            label: t('undo.undo'),
-            handler: async function () {
-              clearTimeout(timer)
-              timersRef.current = timersRef.current.filter(x => x !== timer)
-              await fetch(`${API}/api/orders/${id}/restore`, {
-                method: 'POST',
-                headers: {
-                  Authorization:
-                    'Bearer ' +
-                    (() => {
-                      try {
-                        return localStorage.getItem('c_token')
-                      } catch {
-                        return ''
-                      }
-                    })(),
-                },
-              })
-              useAppStore.getState().loadAll()
-            },
-          },
-        })
-      } else toast.error('删除失败')
-    } catch (e) {
-      toast.error('删除失败: ' + e.message)
-    }
+    // 合并到批量链路: 软删(deleted_at, 回收站可恢复, 30 天清理 cron 兜底)
+    await doBatchOrder('delete', new Set([id]))
   }
 
   return (
@@ -243,7 +218,23 @@ export default function OrdersPage() {
               <tbody>
                 {orders.map(x => {
                   return (
-                    <tr key={x.id}>
+                    <tr
+                      key={x.id}
+                      style={{
+                        background: orderSel.has(x.id) ? 'rgba(29,78,216,0.06)' : '',
+                      }}
+                    >
+                      <td
+                        style={{ width: 32, textAlign: 'center' }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={orderSel.has(x.id)}
+                          onChange={() => toggleOrderSel(x.id)}
+                          style={{ cursor: 'pointer', width: 16, height: 16 }}
+                        />
+                      </td>
                       {visCols.map(id => {
                         const col = COLS.find(c => c.id === id)
                         if (!col) return null

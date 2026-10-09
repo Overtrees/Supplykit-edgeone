@@ -112,6 +112,28 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
               {exporting ? t('common.exporting') : t('common.export')}
             </button>
           </div>
+          <div className="hammer-row">
+            <button
+              onClick={() => window.dispatchEvent(new Event('orders-toggle-all'))}
+              className="btn-ghost hammer-btn"
+            >
+              全选
+            </button>
+            <button
+              onClick={() => window.dispatchEvent(new Event('orders-batch-delete'))}
+              className="btn-ghost hammer-btn"
+              style={{ color: 'var(--danger)' }}
+            >
+              批量删除
+            </button>
+            <button
+              onClick={() => window.dispatchEvent(new Event('orders-batch-purge'))}
+              className="btn-ghost hammer-btn"
+              style={{ color: 'var(--danger)' }}
+            >
+              永久删除
+            </button>
+          </div>
         </div>
       </div>
       {hammerPanel === 'columns' && (
