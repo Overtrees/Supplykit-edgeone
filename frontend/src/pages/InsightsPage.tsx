@@ -1658,7 +1658,7 @@ export default function InsightsPage() {
                             )
                           if (col.id === 'timing')
                             return (
-                              <td key={col.id}>
+                              <td key={col.id} style={{ textAlign: 'center' }}>
                                 <span className={`pill ${timing === '建议' ? 'warning' : 'info'}`}>
                                   {timing}
                                 </span>
@@ -1991,7 +1991,7 @@ export default function InsightsPage() {
                               )
                             if (col.id === 'level')
                               return (
-                                <td key={id}>
+                                <td key={id} style={{ textAlign: 'center' }}>
                                   <span
                                     className={`pill ${x.level === 'black' ? 'danger' : x.level === 'red' ? 'danger' : x.level === 'yellow' ? 'warning' : 'info'}`}
                                     style={{

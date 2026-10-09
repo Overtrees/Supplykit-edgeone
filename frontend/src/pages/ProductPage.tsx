@@ -341,7 +341,7 @@ export default function ProductPage() {
                       )
                     if (col.id === 'status')
                       return (
-                        <td key={col.id}>
+                        <td key={col.id} style={{ textAlign: 'center' }}>
                           <span
                             className={'pill ' + (x.status === 'active' ? 'success' : 'warning')}
                           >

@@ -353,7 +353,7 @@ td.mono {
   word-break: break-word;
 }
 .col-price {
-  text-align: right;
+  text-align: center;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -365,6 +365,7 @@ td.mono {
 .col-date {
   white-space: nowrap;
   font-size: 12px;
+  text-align: center;
 }
 tr:hover td {
   background: #f1f5f9;

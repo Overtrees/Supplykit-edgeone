@@ -304,7 +304,7 @@ export default function OrdersPage() {
                           )
                         if (col.id === 'status')
                           return (
-                            <td key={col.id}>
+                            <td key={col.id} style={{ textAlign: 'center' }}>
                               <span
                                 className={
                                   'pill ' +
