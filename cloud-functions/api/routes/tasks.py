@@ -397,6 +397,7 @@ def export_download(filename: str):
         try:
             tr = one("SELECT result FROM sync_tasks WHERE task_id=%s", [filename])
             res = json.loads(tr.get("result") or "{}") if tr else {}
+            res = res.get("result") or {}  # 双层结构 {result:{parts,name,...}}
             parts = res.get("parts") or []
             if parts:
                 merged = b""
