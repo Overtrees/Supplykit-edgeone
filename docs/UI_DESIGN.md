@@ -71,3 +71,49 @@
 4. 动画纯 opacity；安全区 env() 齐全
 5. 数字列 tabular-nums + 居中；行 hover 反馈
 6. 横竖屏内容完整（不依赖 aspect-ratio 以外的固定高度）
+
+## 七、导航与全局结构
+
+- **侧边栏**：10 个模块项（SVG 图标 + 短标签），当前页无高亮边框（激活态用文字色/字重区分）；看板页自动隐藏"看板"项
+- **Header**：页面标题 + 锤子菜单（icon-btn 48px 圆形）+ 侧边栏按钮；欢迎页全屏覆盖（首次引导 4 核心入口）
+- **页面容器**：`main.container` maxWidth 1200 / padding 含安全区 / minHeight 100svh
+
+## 八、弹窗体系（底部 sheet）
+
+- **一律 createPortal(document.body)**（防被滚动容器裁剪——嵌套弹窗教训）
+- 定位：`bottom: calc(env(safe-area-inset-bottom) + 14px)`；zIndex 4000（遮罩）/4001（面板）
+- 动效：纯 opacity（sheetIn 0.22s）+ 遮罩淡入——transform 破坏 fixed 禁止
+- 材料样式：`material-regular`（毛玻璃 + inset 高光 + radius-lg）
+- 确认弹窗（ConfirmDialog）：标题 + 描述 + 取消/确认按钮（`sheet-close`/`sheet-danger`），`confirming` 态禁用+降透明
+- 级别明细弹窗：标题含级别 + tab 切换（选中高亮：白字 + 级别色底）
+
+## 九、列表与表格
+
+- 表格：sticky 表头（背景 var(--card)）、行 hover 反馈（tr:hover td）、偶数行底色
+- 列对齐：文字列左 / 金额·数量·日期·状态列居中（`text-align: center`）/ 数字 `tabular-nums`
+- 单元格：`col-sku`（mono）/`col-name`（截断）/`col-store`/`col-price`/`col-qty`/`col-date`（样式类统一）
+- 状态 pill：`pill success/warning/danger/info`——font-10/padding 1px 8px/lineHeight 16px/minHeight auto
+- 选中态：勾选列固定最左（32px 占位 th）+ 行背景高亮（rgba primary 0.06）+ 锤子菜单批量按钮
+- 空态：EmptyState（icon + 标题 + desc + action 按钮）——所有列表页统一
+- 加载：骨架屏（skeleton-pulse）+ 数据淡入（key 随 loading 切换）；加载更多骨架条
+
+## 十、表单与交互反馈
+
+- 输入：`.hammer-input`（圆角/font-13）；segmented pill tab（选中白底高亮）
+- 按钮：btn-primary/ghost/success/danger + 加载态（spinner + disabled + 降透明）
+- Toast：4 色（success/error/warning/info）+ 可带 action（跳转）
+- 错误：ErrorRetry 三要素（标题/原因/重试）——`errText` 区分网络波动 vs 加载失败
+- 点击反馈：全局 `.clickable`（active 态）；icon-btn ≥48px 触控
+
+## 十一、主题与排版
+
+- 深色模式：CSS 变量（--text/--bg/--card/--border）+ Chart 自动跟随 prefers-color-scheme
+- 字体层级：font-9/10/13（xs）/sm/lg/md/18——信息密度优先（小卡明细 font-9）
+- 数字：`font-variant-numeric: tabular-nums` 全局 td + 大数字 clamp(cqi)
+- 图标：SVG 统一（Icons 组件，currentColor）——emoji 已迁移
+
+## 十二、响应式与安全区
+
+- 断点：手机竖屏（4 小卡 1-2 列 auto-fit）/ 手机横屏（≤932 密度压缩）/ 平板 640 / 桌面 1024+
+- 安全区：`env(safe-area-inset-top/bottom/left/right)` 全面（container/弹窗/灵动岛）
+- 横屏：小卡 4 卡一行强制（字体 cqi 压缩）；中卡 2 列；不依赖固定高度（防截断）
