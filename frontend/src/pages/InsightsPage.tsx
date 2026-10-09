@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
+import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import {
   IconTrendUp,
@@ -695,7 +696,7 @@ export default function InsightsPage() {
                   onRetry={() => loadReplen(replenMode, globalChannel)}
                 />
               ) : (
-                <div className="muted">{t('insights.no_replenish')}</div>
+                <EmptyState icon="package" title={t('insights.no_replenish')} />
               )}
             </div>
           ) : (
@@ -1182,12 +1183,20 @@ export default function InsightsPage() {
                     }
                   }}
                 >
-                  <span
-                    className="btn btn-ghost"
-                    style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
-                  >
-                    {replenLoadingMore ? '加载中...' : ''}
-                  </span>
+                  {replenLoadingMore ? (
+                    <div style={{ padding: '4px 0' }}>
+                      {[1, 2, 3].map(k => (
+                        <Skeleton key={k} height={28} style={{ marginBottom: 4 }} />
+                      ))}
+                    </div>
+                  ) : (
+                    <span
+                      className="btn btn-ghost"
+                      style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
+                    >
+                      加载更多
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -1326,9 +1335,7 @@ export default function InsightsPage() {
               ))}
             </div>
           ) : purchase.length === 0 ? (
-            <div className="muted" style={{ padding: 12, textAlign: 'center' }}>
-              {t('insights.no_purchase')}
-            </div>
+            <EmptyState icon="factory" title={t('insights.no_purchase')} />
           ) : (
             <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}>
               <table>
@@ -1790,9 +1797,7 @@ export default function InsightsPage() {
               ))}
             </div>
           ) : filteredDisp.length === 0 ? (
-            <div className="muted" style={{ padding: 12, textAlign: 'center' }}>
-              {showDisposed ? '暂无处置记录' : '暂无滞销 🎉'}
-            </div>
+            <EmptyState icon="tag" title={showDisposed ? '暂无处置记录' : '暂无滞销'} />
           ) : (
             <>
               <div

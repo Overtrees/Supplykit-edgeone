@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight } from '../api/client'
 import { useToast } from '../components/Toast'
 import ErrorRetry from '../components/ErrorRetry'
+import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import {
   IconPackage,
@@ -1877,13 +1878,12 @@ export default function RulesPage() {
               (rulesErr ? (
                 <ErrorRetry error={rulesErr} onRetry={() => load(globalChannel)} />
               ) : (
-                <div className="small muted" style={{ textAlign: 'center', padding: 40 }}>
-                  {rules.length === 0
-                    ? t('rules.empty')
-                    : hammerSearch
-                      ? '没有匹配"' + hammerSearch + '"的规则'
-                      : t('rules.empty')}
-                </div>
+                <EmptyState
+                  icon="tag"
+                  title={
+                    rules.length === 0 ? t('rules.empty') : '没有匹配"' + hammerSearch + '"的规则'
+                  }
+                />
               ))}
           </>
         )}

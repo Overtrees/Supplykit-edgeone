@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import {
@@ -163,19 +164,22 @@ export default function TaskPage() {
         {loading ? (
           <div className="skeleton" style={{ height: 40 }} />
         ) : tasks.length === 0 ? (
-          <div className="small muted" style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ padding: 24 }}>
             {loadErr ? (
               <ErrorRetry error={'加载失败'} onRetry={loadTasks} />
             ) : (
-              <>
-                <div style={{ marginBottom: 10 }}>暂无任务</div>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => window.__setPage && window.__setPage('settings')}
-                >
-                  去一键填充种子数据 →
-                </button>
-              </>
+              <EmptyState
+                icon="package"
+                title="暂无任务"
+                action={
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => window.__setPage && window.__setPage('settings')}
+                  >
+                    去一键填充种子数据 →
+                  </button>
+                }
+              />
             )}
           </div>
         ) : (

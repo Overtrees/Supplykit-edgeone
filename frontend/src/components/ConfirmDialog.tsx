@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   onConfirm?: () => void
   onCancel?: () => void
   danger?: boolean
+  confirming?: boolean
 }
 
 export default function ConfirmDialog({
@@ -21,6 +22,7 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
   danger,
+  confirming = false,
 }: ConfirmDialogProps) {
   if (!open) return null
 
@@ -103,10 +105,14 @@ export default function ConfirmDialog({
                 {cancelLabel}
               </span>
             </div>
-            {/* 确认按钮 */}
-            <div onClick={onConfirm} className="clickable sheet-danger" style={{ flex: 1 }}>
+            {/* 确认按钮(confirming 时禁用+反馈) */}
+            <div
+              onClick={confirming ? undefined : onConfirm}
+              className={'clickable sheet-danger' + (confirming ? ' disabled' : '')}
+              style={{ flex: 1, opacity: confirming ? 0.55 : 1 }}
+            >
               <span style={{ fontSize: 'var(--font-15)', fontWeight: 700, color: '#fff' }}>
-                {confirmLabel}
+                {confirming ? '处理中...' : confirmLabel}
               </span>
             </div>
           </div>

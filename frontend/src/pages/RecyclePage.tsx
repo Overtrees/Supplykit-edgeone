@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { Group, Row, ListItem } from '../components/ListGroup'
+import EmptyState from '../components/EmptyState'
 import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -171,12 +172,10 @@ export default function RecyclePage() {
   const renderList = (type: 'rules' | 'orders', items: any[]) => {
     if (items.length === 0)
       return (
-        <div
-          className="small muted"
-          style={{ padding: '20px', textAlign: 'center', fontSize: 'var(--font-13)' }}
-        >
-          {type === 'rules' ? t('recycle.empty_rules') : t('recycle.empty_orders')}
-        </div>
+        <EmptyState
+          icon="clipboard"
+          title={type === 'rules' ? t('recycle.empty_rules') : t('recycle.empty_orders')}
+        />
       )
     return (
       <>
