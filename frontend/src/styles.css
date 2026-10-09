@@ -1263,7 +1263,7 @@ input[type='file'] {
 }
 .col-price {
   max-width: 120px;
-  text-align: right;
+  text-align: center;
   font-size: clamp(11px, 2.5cqi, 14px);
   white-space: nowrap;
 }

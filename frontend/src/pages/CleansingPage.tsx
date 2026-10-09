@@ -186,7 +186,7 @@ const ORDER_FIELDS = [
   { t: 'actual_amount', l: '实付金额', tp: 'number' },
   { t: 'order_status', l: '状态', tp: 'string' },
   { t: 'ordered_at', l: '下单日期', tp: 'date' },
-  { t: 'paid_at', l: '支付日期', tp: 'date' },
+  { t: 'paid_at', l: '入库日期', tp: 'date' },
   { t: 'shipped_at', l: '发货时间', tp: 'date' },
   { t: 'platform', l: '平台', tp: 'string' },
   { t: 'channel', l: '渠道', tp: 'string' },
@@ -499,6 +499,29 @@ export default function CleansingPage() {
         if (key && TARGET_TARGETS[tt] && !TARGET_TARGETS[tt].includes(key)) key = ''
         if (key) a[c.name] = { target: key, type: 'string' }
       })
+      // 以用户已选类型为锚点展示对应字段集; 仅当当前类型 0 命中(上次类型残留/选错)时,
+      // 按识别字段切到命中最多的类型——防订单文件显示库存字段集
+      if (Object.keys(a).length === 0) {
+        const _typeHits = {}
+        for (const _t of Object.keys(TARGET_FIELDS)) _typeHits[_t] = 0
+        ;(d.columns || []).forEach(c => {
+          const _k0 = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
+          if (_k0) {
+            for (const _t of Object.keys(TARGET_FIELDS)) {
+              if (TARGET_FIELDS[_t].some(_f => _f.t === _k0)) _typeHits[_t] += 1
+            }
+          }
+        })
+        const _best = Object.entries(_typeHits).sort((x, y) => y[1] - x[1])[0]
+        if (_best && _best[1] >= 2) {
+          setTt(_best[0])
+          ;(d.columns || []).forEach(c => {
+            let key = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
+            if (key && TARGET_TARGETS[_best[0]] && !TARGET_TARGETS[_best[0]].includes(key)) key = ''
+            if (key) a[c.name] = { target: key, type: 'string' }
+          })
+        }
+      }
       setMp(a)
       goStep(1) // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
       setBs('')
