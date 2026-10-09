@@ -92,6 +92,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
+  const [riskFilter, setRiskFilter] = useState('all') // 断货明细级别过滤: all/red/orange/yellow
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
@@ -1560,18 +1561,68 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     }}
                   >
                     {riskCritical > 0 && (
-                      <span style={{ color: 'var(--danger)', fontWeight: 600 }}>
-                        ● {riskCritical} {t('dash.critical')}
+                      <span
+                        onClick={function (e) {
+                          e.stopPropagation()
+                          setRiskFilter('red')
+                          loadFullRisk()
+                          setShowAllRisk(true)
+                        }}
+                        className="clickable pill danger"
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: 'var(--font-10)',
+                          padding: '1px 8px',
+                          minHeight: 'auto',
+                          lineHeight: '16px',
+                        }}
+                        title="查看紧急明细"
+                      >
+                        ● {riskCritical} {t('dash.critical')} ›
                       </span>
                     )}
                     {riskWarning > 0 && (
-                      <span style={{ color: 'var(--warning)', fontWeight: 600 }}>
-                        ● {riskWarning} {t('dash.warning')}
+                      <span
+                        onClick={function (e) {
+                          e.stopPropagation()
+                          setRiskFilter('orange')
+                          loadFullRisk()
+                          setShowAllRisk(true)
+                        }}
+                        className="clickable pill warning"
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: 'var(--font-10)',
+                          padding: '1px 8px',
+                          minHeight: 'auto',
+                          lineHeight: '16px',
+                        }}
+                        title="查看预警明细"
+                      >
+                        ● {riskWarning} {t('dash.warning')} ›
                       </span>
                     )}
                     {_r.total > riskCritical + riskWarning && (
-                      <span style={{ color: 'var(--muted2)' }}>
-                        ● {_r.total - riskCritical - riskWarning} 观察
+                      <span
+                        onClick={function (e) {
+                          e.stopPropagation()
+                          setRiskFilter('yellow')
+                          loadFullRisk()
+                          setShowAllRisk(true)
+                        }}
+                        className="clickable pill"
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: 'var(--font-10)',
+                          padding: '1px 8px',
+                          minHeight: 'auto',
+                          lineHeight: '16px',
+                          borderColor: 'transparent',
+                          opacity: 0.85,
+                        }}
+                        title="查看观察明细"
+                      >
+                        ● {_r.total - riskCritical - riskWarning} 观察 ›
                       </span>
                     )}
                   </div>
@@ -1646,43 +1697,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   )
                 })}
               </div>
-              {_r.total > 3 && (
-                <button
-                  onClick={() => {
-                    loadFullRisk()
-                    setShowAllRisk(true)
-                  }}
-                  aria-label={`还有 ${_r.total - 3} 条`}
-                  className="clickable"
-                  style={{
-                    width: '100%',
-                    padding: '4px 0 0',
-                    border: 'none',
-                    borderRadius: 0,
-                    background: 'transparent',
-                    color: 'var(--primary)',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit',
-                    textAlign: 'left',
-                    flexShrink: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                  }}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    aria-hidden="true"
-                    style={{ display: 'block', flexShrink: 0 }}
-                  >
-                    <circle cx="5" cy="12" r="1.8" />
-                    <circle cx="12" cy="12" r="1.8" />
-                    <circle cx="19" cy="12" r="1.8" />
-                  </svg>
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -2452,15 +2466,60 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   style={{
                     fontSize: 'var(--font-18)',
                     fontWeight: 700,
-                    marginBottom: 12,
+                    marginBottom: 6,
                     textAlign: 'center',
                     color: 'var(--text)',
                   }}
                 >
-                  濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} · 共 {_r.total} 条
+                  濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} ·{' '}
+                  {riskFilter === 'red'
+                    ? '紧急'
+                    : riskFilter === 'orange'
+                      ? '预警'
+                      : riskFilter === 'yellow'
+                        ? '观察'
+                        : '全部'}{' '}
+                  {_r.total} 条
                 </div>
-                {(fullRisk && fullRisk.length ? fullRisk : _r._full || _r.items || []).map(
-                  function (x, i) {
+                {/* 级别切换 tab(三级 pill 入口联动, 弹窗内可切换) */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 6,
+                    justifyContent: 'center',
+                    marginBottom: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  {[
+                    ['all', '全部', 'var(--muted)'],
+                    ['red', `紧急 ${riskCritical}`, 'var(--danger)'],
+                    ['orange', `预警 ${riskWarning}`, 'var(--warning)'],
+                    ['yellow', `观察 ${_r.total - riskCritical - riskWarning}`, 'var(--muted2)'],
+                  ].map(([lv, lb, lc]) => (
+                    <span
+                      key={lv}
+                      onClick={() => setRiskFilter(lv)}
+                      className="clickable pill"
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: 'var(--font-10)',
+                        padding: '2px 10px',
+                        minHeight: 'auto',
+                        lineHeight: '18px',
+                        fontWeight: riskFilter === lv ? 700 : 400,
+                        color: riskFilter === lv ? '#fff' : lc,
+                        background: riskFilter === lv ? lc : 'var(--bg)',
+                        borderColor: lc,
+                      }}
+                    >
+                      {lb}
+                    </span>
+                  ))}
+                </div>
+                {(fullRisk && fullRisk.length ? fullRisk : _r._full || _r.items || [])
+                  .filter(x => riskFilter === 'all' || x.level === riskFilter)
+                  .map(function (x, i) {
                     const whLabel =
                       fmtWh(x.warehouse) ||
                       (x.type === 'C'
@@ -2566,8 +2625,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                         </span>
                       </div>
                     )
-                  },
-                )}
+                  })}
                 <div
                   onClick={function () {
                     setShowAllRisk(false)
