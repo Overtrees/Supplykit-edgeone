@@ -1116,7 +1116,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     {slowMovingTotal > 0 && (
                       <span style={{ color: 'var(--muted2)' }}>● 滞销 {slowMovingTotal}</span>
                     )}
-                    {otherTotal > 0 && <span style={{ color: 'var(--muted)' }}>|</span>}
                     {otherTotal > 0 && (
                       <span
                         onClick={function (e) {
@@ -1329,7 +1328,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'flex-end',
-                    marginBottom: 4,
                     animation: 'fadeIn 0.18s ease',
                   }}
                 >
@@ -1523,7 +1521,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'flex-end',
-                marginBottom: 4,
               }}
             >
               <div style={{ marginTop: 4 }}>
@@ -1650,41 +1647,25 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 })}
               </div>
               {_r.total > 3 && (
-                <button
+                <div
                   onClick={() => {
                     loadFullRisk()
                     setShowAllRisk(true)
                   }}
                   aria-label={`还有 ${_r.total - 3} 条`}
-                  className="clickable"
+                  className="clickable pill info"
                   style={{
-                    width: '100%',
-                    padding: '4px 0 0',
-                    border: 'none',
-                    borderRadius: 0,
-                    background: 'transparent',
-                    color: 'var(--primary)',
                     cursor: 'pointer',
-                    fontFamily: 'inherit',
-                    textAlign: 'left',
-                    flexShrink: 0,
-                    display: 'flex',
-                    alignItems: 'center',
+                    fontSize: 'var(--font-10)',
+                    padding: '1px 8px',
+                    minHeight: 'auto',
+                    lineHeight: '16px',
+                    marginTop: 6,
+                    width: 'fit-content',
                   }}
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    aria-hidden="true"
-                    style={{ display: 'block', flexShrink: 0 }}
-                  >
-                    <circle cx="5" cy="12" r="1.8" />
-                    <circle cx="12" cy="12" r="1.8" />
-                    <circle cx="19" cy="12" r="1.8" />
-                  </svg>
-                </button>
+                  更多 {_r.total - 3}
+                </div>
               )}
             </div>
           )}
@@ -1830,40 +1811,25 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             ))
           )}
           {lowStockTotal > 5 && (
-            <button
+            <div
               onClick={() => {
                 loadFullAlerts()
                 setShowAllLowStock(true)
               }}
               aria-label={`还有 ${lowStockTotal - 5} 条`}
-              className="clickable"
+              className="clickable pill info"
               style={{
-                width: '100%',
-                padding: '5px 0 2px',
-                border: 'none',
-                borderRadius: 0,
-                background: 'transparent',
-                color: 'var(--primary)',
                 cursor: 'pointer',
-                fontFamily: 'inherit',
-                textAlign: 'left',
-                flexShrink: 0,
-                display: 'flex',
-                alignItems: 'center',
+                fontSize: 'var(--font-10)',
+                padding: '1px 8px',
+                minHeight: 'auto',
+                lineHeight: '16px',
+                marginTop: 6,
+                width: 'fit-content',
               }}
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <circle cx="5" cy="12" r="1.8" />
-                <circle cx="12" cy="12" r="1.8" />
-                <circle cx="19" cy="12" r="1.8" />
-              </svg>
-            </button>
+              更多 {lowStockTotal - 5}
+            </div>
           )}
         </div>
         <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
@@ -1961,39 +1927,24 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             ))
           )}
           {procTotal > 5 && (
-            <button
+            <div
               onClick={() => {
                 setShowAllProc(true)
               }}
               aria-label={`还有 ${procTotal - 5} 条`}
-              className="clickable"
+              className="clickable pill info"
               style={{
-                width: '100%',
-                padding: '5px 0 2px',
-                border: 'none',
-                borderRadius: 0,
-                background: 'transparent',
-                color: 'var(--primary)',
                 cursor: 'pointer',
-                fontFamily: 'inherit',
-                textAlign: 'left',
-                flexShrink: 0,
-                display: 'flex',
-                alignItems: 'center',
+                fontSize: 'var(--font-10)',
+                padding: '1px 8px',
+                minHeight: 'auto',
+                lineHeight: '16px',
+                marginTop: 6,
+                width: 'fit-content',
               }}
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <circle cx="5" cy="12" r="1.8" />
-                <circle cx="12" cy="12" r="1.8" />
-                <circle cx="19" cy="12" r="1.8" />
-              </svg>
-            </button>
+              更多 {procTotal - 5}
+            </div>
           )}
         </div>
       </div>

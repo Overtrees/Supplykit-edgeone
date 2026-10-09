@@ -235,7 +235,7 @@ async def seed_reset(request: Request):
         return fail("重置失败: %s" % str(e)[:200])# ── 导出任务 ──────────────────────────────────────────────────────────────
 _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
                "id BIGINT PRIMARY KEY AUTO_INCREMENT, filename VARCHAR(128) DEFAULT '', "
-               "content MEDIUMBLOB, channel VARCHAR(20) DEFAULT 'jd', "
+               "content LONGTEXT, channel VARCHAR(20) DEFAULT 'jd', "
                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
                "UNIQUE KEY uk_filename (filename))")
 
@@ -370,7 +370,7 @@ def export_status(task_id: str = "", page_size: int = 10000):
                 execute("DELETE FROM export_files WHERE filename=%s", [p])
             import base64 as _b64
             try:
-                execute("ALTER TABLE export_files MODIFY COLUMN content LONGBLOB")
+                execute("ALTER TABLE export_files MODIFY COLUMN content LONGTEXT")
             except Exception:
                 pass
             try:
