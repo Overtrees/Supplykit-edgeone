@@ -534,7 +534,13 @@ export default function CleansingPage() {
           '未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）',
         )
     } catch (e) {
-      toast.error('请求异常: ' + e.message)
+      toast.error(
+        '请求异常: ' +
+          e.message +
+          (e.response?.data?.detail
+            ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+            : ''),
+      )
     }
     setBs('')
   }
@@ -717,7 +723,13 @@ export default function CleansingPage() {
           )
         } catch {}
       } catch (e) {
-        toast.error('请求异常: ' + e.message)
+        toast.error(
+          '请求异常: ' +
+            e.message +
+            (e.response?.data?.detail
+              ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+              : ''),
+        )
         setBs('')
       }
     } finally {
@@ -744,7 +756,13 @@ export default function CleansingPage() {
       setPv(d)
       doExecute()
     } catch (e) {
-      toast.error('请求异常: ' + e.message)
+      toast.error(
+        '请求异常: ' +
+          e.message +
+          (e.response?.data?.detail
+            ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+            : ''),
+      )
       setBs('')
     }
   }

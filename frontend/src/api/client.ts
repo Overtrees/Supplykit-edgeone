@@ -86,7 +86,8 @@ instance.interceptors.response.use(
     console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
     const status = (error.response || {}).status
-    if (!status || status >= 500) {
+    // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜
+    if (!status || status >= 400) {
       reportError(
         'api_http_error',
         ((error.message || '') + ' ' + (cfg.url || '')).slice(0, 200),

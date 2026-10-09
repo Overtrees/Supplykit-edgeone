@@ -11,7 +11,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, RequestValidationError
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -43,6 +43,20 @@ async def _unhandled(request: Request, exc: Exception):
     return JSONResponse({"ok": False, "error": "服务器内部错误",
                          "detail": str(exc)[:400],
                          "tb": _tb.format_exc(limit=10)[-1200:]}, status_code=500)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation(request: Request, exc: RequestValidationError):
+    """校验错误(422)收口: FastAPI 校验层异常不走路由 traced——显式 handler 记 quality_logs 留痕"""
+    try:
+        from db import execute as _e
+        _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
+           "VALUES(%s,%s,%s,%s,%s)",
+           ("api_error", "warning", ("422 %s %s" % (request.method, request.url.path)),
+            str(exc.errors())[:300], "api"))
+    except Exception:
+        pass
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
 
 
 @app.middleware("http")
