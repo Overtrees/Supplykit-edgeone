@@ -502,7 +502,7 @@ export default function CleansingPage() {
       // 以用户已选类型为锚点展示对应字段集; 仅当当前类型 0 命中(上次类型残留/选错)时,
       // 按识别字段切到命中最多的类型——防订单文件显示库存字段集
       if (Object.keys(a).length === 0) {
-        const _typeHits = {}
+        const _typeHits: Record<string, number> = {}
         for (const _t of Object.keys(TARGET_FIELDS)) _typeHits[_t] = 0
         ;(d.columns || []).forEach(c => {
           const _k0 = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]

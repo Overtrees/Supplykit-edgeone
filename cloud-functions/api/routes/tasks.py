@@ -243,67 +243,80 @@ _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
 @router.post("/exports")
 @traced
 async def create_export(request: Request):
-    """导出任务(POST ?type=replen|purchase_suggestions|purchase|slow&mode=bbcc|traditional&channel=)
-    返回平铺 {ok, task_id}(HammerInsights 期待 d.task_id); 生成 xlsx 二进制存 export_files"""
+    """导出任务(异步接力式: 后台线程生成, 防大批量同步超 120s; 前端 tasks 页轮询后下载)
+    POST ?type=replen|purchase_suggestions|purchase|slow&mode&channel&wh_type → 平铺 {ok, task_id}"""
     from urllib.parse import parse_qs
     qs = parse_qs(request.url.query)
     exp_type = (qs.get("type") or ["replen"])[0]
     mode = (qs.get("mode") or ["bbcc"])[0]
     channel = (qs.get("channel") or ["jd"])[0]
+    wh_type = (qs.get("wh_type") or [""])[0]
+    if _build_export_rows(exp_type, mode, channel, wh_type) is None:
+        return fail("未知导出类型: " + str(exp_type))
     task_id = _new_task_id("exp")
-    started = time.time()
-    try:
-        wh_type = (qs.get("wh_type") or [""])[0]
-        rows = _build_export_rows(exp_type, mode, channel, wh_type)
-        if rows is None:
-            return fail("未知导出类型: " + str(exp_type))
-        # orders/inventory 大批量 → CSV 轻量生成(避免 12 万行 xlsx 内存超限); 其他 → xlsx
-        if exp_type in ("orders", "inventory"):
-            buf = io.StringIO()
-            if rows:
-                writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
-                writer.writeheader()
-                writer.writerows(rows)
-            content = buf.getvalue().encode("utf-8-sig")  # 带 BOM: Excel 直接打开中文不乱码
-            filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
-        else:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font
-            buf = io.BytesIO()
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "导出"
-            if rows:
-                headers = list(rows[0].keys())
-                ws.append(headers)
-                for c in ws[1]:
-                    c.font = Font(bold=True)
-                for r in rows:
-                    ws.append([r.get(k) for k in headers])
-            wb.save(buf)
-            content = buf.getvalue()
-            filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
-        # content 列可能仍为 TEXT(ALTER 异步/失败)——二进制 base64 兜底
-        import base64 as _b64
+    # 建任务(running) → 后台线程生成(函数返回后线程继续, 无 120s 限制) → done/error
+    execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+            "VALUES(%s,'export','running',%s,'{}',%s)",
+            (task_id, json.dumps({"type": exp_type, "mode": mode,
+                                  "wh_type": wh_type}, ensure_ascii=False), channel))
+
+    def _run():
+        started = time.time()
         try:
-            execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
-        except Exception as _e:
-                try_err('tasks', '静默降级', _e)
-        try:
-            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                    (filename, content, channel))
-        except Exception:
-            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                    (filename, "base64:" + _b64.b64encode(content).decode("ascii"), channel))
-        _log_task(task_id, "export", "done", channel,
-                  {"result": {"filename": filename, "type": exp_type,
-                              "rows": len(rows), "elapsed": round(time.time() - started, 1)}})
-        return {"ok": True, "task_id": task_id}
-    except Exception as e:
-        _log_task(task_id, "export", "error", channel, {"error": str(e)[:400]})
-        return fail("导出失败: %s" % str(e)[:200])
+            rows = _build_export_rows(exp_type, mode, channel, wh_type)
+            # orders/inventory 大批量 → CSV 轻量; 其他 → xlsx
+            if exp_type in ("orders", "inventory"):
+                buf = io.StringIO()
+                if rows:
+                    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(rows)
+                content = buf.getvalue().encode("utf-8-sig")
+                filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
+            else:
+                from openpyxl import Workbook
+                from openpyxl.styles import Font
+                buf = io.BytesIO()
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "导出"
+                if rows:
+                    headers = list(rows[0].keys())
+                    ws.append(headers)
+                    for c in ws[1]:
+                        c.font = Font(bold=True)
+                    for r in rows:
+                        ws.append([r.get(k) for k in headers])
+                wb.save(buf)
+                content = buf.getvalue()
+                filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
+            import base64 as _b64
+            try:
+                execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
+            except Exception as _e:
+                    try_err('tasks', '静默降级', _e)
+            try:
+                execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                        "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                        (filename, content, channel))
+            except Exception:
+                execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                        "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                        (filename, "base64:" + _b64.b64encode(content).decode("ascii"), channel))
+            _r = {"filename": filename, "type": exp_type, "rows": len(rows),
+                  "elapsed": round(time.time() - started, 1)}
+            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() "
+                    "WHERE task_id=%s", (json.dumps({"result": _r}, ensure_ascii=False), task_id))
+        except Exception as e:
+            import traceback as _tb
+            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() "
+                    "WHERE task_id=%s",
+                    (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]},
+                                ensure_ascii=False), task_id))
+
+    import threading as _th
+    _th.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "task_id": task_id}
 
 
 @router.get("/exports/download/{filename}")
