@@ -683,13 +683,14 @@ export default function CleansingPage() {
         const poll = setInterval(async () => {
           if (finished) return
           try {
-            const sr = await api.get('/api/cleansing/task/' + d.task_id)
+            // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
+            const sr = await api.get('/api/cleansing/status?task_id=' + d.task_id)
             const sd = sr.data
             if (sd.status === 'done') {
               finished = true
               clearTimeout(threshold)
               clearInterval(poll)
-              setRes(sd.result)
+              setRes({ success: sd.success, failed: sd.failed, message: sd.message })
               goStep(3)
               setBs('')
               toast.success(
@@ -701,9 +702,11 @@ export default function CleansingPage() {
               clearInterval(poll)
               toast.error('失败: ' + sd.error)
               setBs('')
-            } else if (sd.progress !== undefined) {
+            } else if (sd.status === 'running' && sd.total) {
+              const _pg = Math.min(((sd.page || 0) * 5000 + 5000) / Math.max(sd.total, 1), 1)
+              const _pct = Math.round(_pg * 100)
               setBs(
-                `清洗中... ${sd.progress}% (${Math.round((sd.progress / 100) * totalRows)}/${totalRows}条)`,
+                `清洗中... ${_pct}% (${Math.min((sd.page || 0) * 5000 + 5000, sd.total)}/${sd.total}条)`,
               )
             }
           } catch {

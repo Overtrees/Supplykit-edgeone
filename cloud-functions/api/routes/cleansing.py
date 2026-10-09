@@ -187,167 +187,146 @@ async def cleansing_preview(file: UploadFile = File(...), mapping: str = Form("{
 async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{}"),
                             target: str = Form("order"), channel: str = Form("jd"),
                             conflict_mode: str = Form("sum")):
+    """导入(接力式: POST 存源文件+建任务 → GET /cleansing/status 续跑分窗清洗写入,
+    防大批量 120s 超时——与导出/seed 同模式; Makers 实例请求后可冻结, 不用纯后台线程)
+    返回 {ok, task_id}"""
     data, fname = _read_file_bytes(file)
     task_id = "clean_%d_%04d" % (int(time.time()), int(time.time() * 1000) % 10000)
-    started = time.time()
     try:
-        _, rows = _parse_table(data, fname)
-        mp = json.loads(mapping or "{}")
-        cleaned = _clean_rows(rows, mp)
-        if not cleaned:
-            return {"ok": True, "task_id": task_id, "success": 0, "failed": 0,
-                    "error": "", "message": "文件为空或无有效映射"}
-        # 订单状态归一化(写入前, 渠道级映射): sale→'已完成'(进销量池), blocked/未识别→保留原值(不入销量池)
+        # source 文件存 export_files(clean_ 前缀, 7 天清理覆盖)
+        import base64 as _b64
+        try:
+            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                    ("clean_" + task_id, data, channel))
+        except Exception:
+            execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
+                    "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                    ("clean_" + task_id, "base64:" + _b64.b64encode(data).decode("ascii"), channel))
+        params = {"fname": fname, "mp": mapping, "target": target, "channel": channel,
+                  "conflict_mode": conflict_mode, "offset": 0, "success": 0, "failed": 0,
+                  "total": 0}
+        execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                "VALUES(%s,'cleansing','running',%s,'{}',%s)",
+                (task_id, json.dumps(params, ensure_ascii=False), channel))
+        return {"ok": True, "task_id": task_id}
+    except Exception as e:
+        import traceback as _tb
+        try:
+            execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                    "VALUES(%s,'cleansing','error',%s,%s,%s)",
+                    (task_id, '{}',
+                     json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]},
+                                ensure_ascii=False), channel))
+        except Exception:
+            pass
+        return fail("导入启动失败: %s" % str(e)[:200])
+
+
+@router.get("/cleansing/status")
+@traced
+def cleansing_status(task_id: str = "", page_size: int = 5000):
+    """导入续跑(前端轮询触发): 每步读源文件 → 解析 → 窗口清洗写入(5000 行/步, ≤120s)
+    全部完成 → 最后步全量重清洗做库存联动+规则评估+汇总 → done"""
+    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    if not row:
+        return {"ok": False, "error": "任务不存在"}
+    status = row.get("status") or ""
+    if status in ("done", "error"):
+        _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
+        return {"ok": True, "task_id": task_id, "status": status,
+                "success": _ri.get("success"), "failed": _ri.get("failed"),
+                "message": _ri.get("message"), "error": _ri.get("error")}
+    # 抢占锁(防并发续跑, 同 seed/导出)
+    try:
+        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
+                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
+                          [task_id])
+        if not _locked:
+            return {"ok": True, "task_id": task_id, "status": "running"}
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
+    import time as _t
+    started = _t.time()
+    try:
+        params = json.loads(row.get("params") or "{}")
+        fname = params.get("fname") or "import.csv"
+        mp = json.loads(params.get("mp") or "{}")
+        target = params.get("target") or "order"
+        channel = params.get("channel") or "jd"
+        conflict_mode = params.get("conflict_mode") or "sum"
+        offset = int(params.get("offset") or 0)
+        success = int(params.get("success") or 0)
+        failed = int(params.get("failed") or 0)
+        # 读源文件
+        fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + task_id])
+        c = fr.get("content") if fr else None
+        if isinstance(c, str):
+            data = _b64.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8-sig")
+        elif c is not None:
+            data = bytes(c)
+        else:
+            raise Exception("源文件不存在")
+        headers, rows = _parse_table(data, fname)
+        total = len(rows)
+        # 分窗清洗+写入
+        window = rows[offset:offset + page_size]
+        cleaned = _clean_rows(window, mp)
         if target == "order":
             try:
                 from routes.suppliers import _norm_column_value as _ncol
-                for c in cleaned:
-                    if c.get("order_status"):
-                        c["order_status"] = _ncol(channel, "order_status", str(c["order_status"]))
+                for x in cleaned:
+                    if x.get("order_status"):
+                        x["order_status"] = _ncol(channel, "order_status", str(x["order_status"]))
             except Exception as _e:
                     try_err('cleansing', '静默降级', _e)
-        success, failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
-        elapsed = round(time.time() - started, 1)
-        # 库存联动(A3): inbound 入库+/outbound 出库-/order(采购单+、销售-) 导入后更新库存
-        adjusted = 0
-        try:
-            if target in ("inbound", "outbound", "order"):
-                from collections import defaultdict
-                deltas = defaultdict(int)
-                _wht = {}
-                for c in cleaned:
-                    _sku = c.get("sku")
-                    if not _sku:
-                        continue
-                    _qty = int(c.get("quantity") or 0)
-                    _wh = str(c.get("warehouse") or "")
-                    if target == "inbound":
-                        _d, _wt = _qty, "own"
-                    elif target == "outbound":
-                        _d, _wt = -_qty, "own"
-                    else:
-                        _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
-                        _d = _qty if _ds == "jd_po" else -_qty  # 采购单入库+, 销售订单出库-
-                        _wt = "platform"
-                    if _d:
-                        deltas[(_sku, _wh, _wt)] += _d
-                        _wht[(_sku, _wh, _wt)] = _wt
-                if deltas:
-                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
-        except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
-        # 规则引擎评估(批量): 订单导入→order.created(超卖), 库存导入→inventory.changed(低库存/紧急补货)
-        evaluated = 0
-        try:
-            from core.rules import evaluate_many, load_rules_for
+        w_success, w_failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
+        success += w_success
+        failed += w_failed
+        offset += len(window)
+        done = offset >= total
+        if done:
+            # 最后步: 全量重清洗(联动/评估/汇总用)
+            cleaned_all = _clean_rows(rows, mp)
             if target == "order":
-                seen = set()
-                skus = [c.get("sku") for c in cleaned
-                        if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
-                inv_map = {}
-                if skus:
-                    for _i in range(0, len(skus), 200):
-                        _batch = skus[_i:_i + 200]
-                        _ph = ",".join(["%s"] * len(_batch))
-                        for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
-                                       "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
-                                       [channel] + _batch):
-                            inv_map[r.get("sku")] = int(r.get("avail") or 0)
-                o_ctxs = []
-                for c in cleaned:
-                    sku = c.get("sku")
-                    if not sku:
-                        continue
-                    oq = int(c.get("quantity") or 0)
-                    o_ctxs.append({"sku": sku, "channel": channel,
-                                   "order": {"quantity": oq},
-                                   "order_qty": oq,
-                                   "available_stock": inv_map.get(sku, 0),
-                                   "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
-                if o_ctxs:
-                    evaluate_many("order.created", o_ctxs, channel,
-                                  load_rules_for("order.created", channel))
-                    evaluated = len(o_ctxs)
-            elif target in ("inventory", "platform_inv", "inventory_b"):
-                i_ctxs = []
-                for c in cleaned:
-                    sku = c.get("sku")
-                    if not sku:
-                        continue
-                    i_ctxs.append({"sku": sku, "channel": channel,
-                                   "inv": {"available_qty": int(c.get("available_qty") or 0),
-                                           "safety_qty": int(c.get("safety_qty") or 0),
-                                           "in_transit_qty": int(c.get("in_transit_qty") or 0),
-                                           "warehouse_type": c.get("warehouse_type", ""),
-                                           "warehouse": c.get("warehouse", ""),
-                                           "product_name": c.get("product_name") or sku}})
-                if i_ctxs:
-                    evaluate_many("inventory.changed", i_ctxs, channel,
-                                  load_rules_for("inventory.changed", channel))
-                    evaluated = len(i_ctxs)
-        except Exception as _ee:
-            # 评估失败可见性(四维-可靠性): 不阻断导入, 但记 quality_logs(含完整堆栈) 供审计
-            try:
-                import traceback as _tb6
-                from db import execute as _e5
-                _e5("INSERT INTO quality_logs(log_type, level, message, details, source) "
-                    "VALUES('cleansing_eval','error',%s,%s,'cleansing')",
-                    ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),
-                     _tb6.format_exc(limit=20)[-1800:]))
-            except Exception as _e:
-                    try_err('cleansing', '静默降级', _e)
-        from routes.analysis_cache import invalidate_all
-        invalidate_all()
-        try:
-            execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
-                    "VALUES(%s,'cleansing','done','{}',%s,%s)",
-                    (task_id, json.dumps({"result": {"target": target, "success": success,
-                                                       "failed": failed, "elapsed": elapsed,
-                                                       "rules_evaluated": evaluated,
-                                                       "inventory_adjusted": adjusted}}, ensure_ascii=False), channel))
-        except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
-        try:
-            if failed > 0 and err_details:
-                from db import execute as _e2
-                _e2("INSERT INTO quality_logs(log_type, level, message, details, source) "
-                    "VALUES(%s,%s,%s,%s,%s)",
-                    ("cleansing_error", "warning", ("清洗失败 %d 条" % failed),
-                     ";".join("%s: %s" % (d.get("sku"), d.get("reason")) for d in err_details[:20]),
-                     "cleansing"))
-        except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
-        _msg = "成功 %d 条, 跳过 %d 条" % (success, failed)
-        # 前置提示(严谨性): 订单状态口径 + 混渠道(轻量提示, 不做系统联动)
-        try:
-            if target == "order":
-                from collections import Counter as _C
-                _sc = _C((c.get("order_status") or "未知") for c in cleaned)
-                _ignore = {k: v for k, v in _sc.items() if k != "已完成"}
-                if _ignore:
-                    _msg += " · 注意: %s 不计入销量池(仅已完成), 已发货/待确认/退款类不参与补货采购计算" % \
-                            ("; ".join("%s×%d" % (k, v) for k, v in _ignore.items()))
-            _chs = {c.get("channel") for c in cleaned if c.get("channel")}
-            if len(_chs) > 1:
-                _msg += " · 文件含 %d 种渠道(%s), 已按行渠道落库, 建议单渠道导入" % \
-                        (len(_chs), ",".join(sorted(_chs)))
-        except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
-        return {"ok": True, "task_id": task_id, "success": success, "failed": failed,
-                "error": "", "message": _msg,
-                "target": target, "rules_evaluated": evaluated, "inventory_adjusted": adjusted,
-                "failed_details": err_details[:20]}
+                try:
+                    from routes.suppliers import _norm_column_value as _ncol2
+                    for x in cleaned_all:
+                        if x.get("order_status"):
+                            x["order_status"] = _ncol2(channel, "order_status", str(x["order_status"]))
+                except Exception as _e:
+                        try_err('cleansing', '静默降级', _e)
+            elapsed = round(_t.time() - started, 1)
+            adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
+            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps({"result": {"target": target, "success": success, "failed": failed,
+                                            "elapsed": elapsed, "rules_evaluated": evaluated,
+                                            "inventory_adjusted": adjusted, "message": _msg}},
+                                ensure_ascii=False), task_id))
+            from routes.analysis_cache import invalidate_all
+            invalidate_all()
+            return {"ok": True, "task_id": task_id, "status": "done",
+                    "success": success, "failed": failed, "message": _msg}
+        # 未完 → 更新 offset/累积, running
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
+                             "total": total}, ensure_ascii=False), task_id))
+        return {"ok": True, "task_id": task_id, "status": "running",
+                "page": offset // page_size, "total": total}
     except Exception as e:
-        try:
-            execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
-                    "VALUES(%s,'cleansing','error','{}',%s,%s)",
-                    (task_id, json.dumps({"error": str(e)[:400]}, ensure_ascii=False), channel))
-        except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
-        return {"ok": False, "error": "清洗失败: %s" % str(e)[:200]}
+        import traceback as _tb
+        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]},
+                            ensure_ascii=False), task_id))
+        try_err("cleansing", "导入续跑失败", e)
+        return {"ok": True, "task_id": task_id, "status": "error", "error": str(e)[:200]}
 
 
-# ── 任务状态查询(前端轮询 cleansing/task/{id}) ──────────────────────────
+def _b64(code):
+    import base64 as _b
+    return _b.b64encode(code).decode("ascii")
+
+
 @router.get("/cleansing/task/{task_id}")
 @traced
 def cleansing_task(task_id: str):
