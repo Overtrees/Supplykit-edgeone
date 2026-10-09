@@ -1111,33 +1111,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       alignItems: 'center',
                     }}
                   >
-                    <span style={{ color: 'var(--muted2)' }}>● 低库存 {lowStockTotal}</span>
+                    {/* 去重(2026-10-09): 低库存/采购补货计数与大卡冗余, 待处理卡只保留唯一信息:
+                        滞销(看板无独立卡) + 其他告警(点击弹窗导航); 低库存/采购补货看对应大卡 */}
                     {slowMovingTotal > 0 && (
                       <span style={{ color: 'var(--muted2)' }}>● 滞销 {slowMovingTotal}</span>
                     )}
-                    <span style={{ color: 'var(--muted2)' }}>● 采购&补货 {procTotal}</span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 'var(--font-10)',
-                      display: 'flex',
-                      gap: 8,
-                      marginTop: 4,
-                      alignItems: 'center',
-                      color: 'var(--muted)',
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <span>
-                      {_replMode === 'bbcc' ? 'BC' : 'C'}
-                      {lsWhView.main} {t('dash.own')}
-                      {lsWhView.own}
-                    </span>
-                    <span style={{ color: 'var(--border)' }}>|</span>
-                    <span>
-                      采购{procList.filter(x => x.tag === '采购').length} · 补货
-                      {procList.filter(x => x.tag === '补货').length}
-                    </span>
                     {otherTotal > 0 && <span style={{ color: 'var(--muted)' }}>|</span>}
                     {otherTotal > 0 && (
                       <span

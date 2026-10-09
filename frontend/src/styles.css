@@ -1240,7 +1240,7 @@ input[type='file'] {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 @media (orientation: landscape) and (max-width: 932px) {
   .mid-chart-grid {
