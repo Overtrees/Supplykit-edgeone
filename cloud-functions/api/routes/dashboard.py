@@ -68,7 +68,15 @@ def _daily_maintenance():
                     execute("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")])
         except Exception as _e:
                 try_err('dashboard', '静默降级', _e)
-        # ④ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
+        # ④ export_files/sync_tasks 导出任务清理(2026-10-09: 分片+文件越积越多——7 天保留)
+        try:
+            execute("DELETE FROM export_files WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
+            execute("DELETE FROM sync_tasks WHERE task_type='export' "
+                    "AND status IN ('done','error') "
+                    "AND updated_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
+        except Exception as _e:
+                try_err('dashboard', '导出文件清理降级', _e)
+        # ⑤ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
         try:
             from datetime import timedelta as _td2
             _yest = (datetime.now(timezone.utc) - _td2(days=1)).strftime("%Y-%m-%d")
