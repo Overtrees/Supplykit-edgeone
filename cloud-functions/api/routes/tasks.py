@@ -275,7 +275,8 @@ def export_status(task_id: str = "", page_size: int = 10000):
         # result 结构 {"result": {...}} 双层——filename/error 在内层
         _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
         return {"ok": True, "task_id": task_id, "status": status,
-                "filename": _ri.get("filename"), "error": _ri.get("error")}
+                "filename": _ri.get("filename"), "name": _ri.get("name"),
+                "parts": _ri.get("parts") or [], "error": _ri.get("error")}
     # 续跑一步(防并发: 原子抢占 updated_at 锁, 同 seed)
     try:
         _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "

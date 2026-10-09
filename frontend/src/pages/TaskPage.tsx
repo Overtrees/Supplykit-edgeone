@@ -132,23 +132,44 @@ export default function TaskPage() {
   const download = async (taskId, filename) => {
     setDownloading(p => ({ ...p, [taskId]: true }))
     try {
-      const dl = await fetch(API + '/api/exports/download/' + filename, {
-        headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-        },
-      })
-      const blob = await dl.blob()
+      const auth = {
+        Authorization:
+          'Bearer ' +
+          (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
+      }
+      // 分片导出(EdgeOne 响应体 6MB 限制): 逐片下载合并(单片 ≤6MB), 文件名用正式名
+      let parts: string[] = []
+      let realName = filename
+      try {
+        const st = await fetch(API + '/api/exports/status?task_id=' + filename, { headers: auth })
+        const sd = await st.json()
+        if (sd.status === 'done') {
+          parts = sd.parts || []
+          realName = sd.name || filename
+        }
+      } catch {}
+      let blob: Blob
+      if (parts.length > 0) {
+        const chunks: Blob[] = []
+        for (const p of parts) {
+          const r = await fetch(API + '/api/exports/download/' + p, { headers: auth })
+          if (!r.ok) throw new Error('分片下载失败')
+          chunks.push(await r.blob())
+        }
+        blob = new Blob(chunks, { type: 'text/csv' })
+      } else {
+        const dl = await fetch(API + '/api/exports/download/' + filename, { headers: auth })
+        blob = await dl.blob()
+      }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
-      a.download = filename
+      a.download = realName
       a.click()
       setDownloading(p => ({ ...p, [taskId]: false }))
     } catch {}
