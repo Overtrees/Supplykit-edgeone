@@ -223,6 +223,114 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         return fail("导入启动失败: %s" % str(e)[:200])
 
 
+def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed):
+    """接力导入最后一步: 库存联动 + 规则评估 + 汇总消息(与原 execute-async 同步版同逻辑)"""
+    import time as _t
+    adjusted = 0
+    evaluated = 0
+    # 库存联动(A3): inbound+ / outbound- / order(采购单+、销售-)
+    try:
+        if target in ("inbound", "outbound", "order"):
+            from collections import defaultdict
+            deltas = defaultdict(int)
+            _wht = {}
+            for c in cleaned_all:
+                _sku = c.get("sku")
+                if not _sku:
+                    continue
+                _qty = int(c.get("quantity") or 0)
+                _wh = str(c.get("warehouse") or "")
+                if target == "inbound":
+                    _d, _wt = _qty, "own"
+                elif target == "outbound":
+                    _d, _wt = -_qty, "own"
+                else:
+                    _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
+                    _d = _qty if _ds == "jd_po" else -_qty
+                    _wt = "platform"
+                if _d:
+                    deltas[(_sku, _wh, _wt)] += _d
+                    _wht[(_sku, _wh, _wt)] = _wt
+            if deltas:
+                adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
+    # 规则引擎评估(批量)
+    try:
+        from core.rules import evaluate_many, load_rules_for
+        if target == "order":
+            seen = set()
+            skus = [c.get("sku") for c in cleaned_all
+                    if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
+            inv_map = {}
+            if skus:
+                for _i in range(0, len(skus), 200):
+                    _batch = skus[_i:_i + 200]
+                    _ph = ",".join(["%s"] * len(_batch))
+                    for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+                                   "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
+                                   [channel] + _batch):
+                        inv_map[r.get("sku")] = int(r.get("avail") or 0)
+            o_ctxs = []
+            for c in cleaned_all:
+                sku = c.get("sku")
+                if not sku:
+                    continue
+                oq = int(c.get("quantity") or 0)
+                o_ctxs.append({"sku": sku, "channel": channel,
+                               "order": {"quantity": oq}, "order_qty": oq,
+                               "available_stock": inv_map.get(sku, 0),
+                               "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0,
+                                       "in_transit_qty": 0}})
+            if o_ctxs:
+                evaluate_many("order.created", o_ctxs, channel,
+                              load_rules_for("order.created", channel))
+                evaluated = len(o_ctxs)
+        elif target in ("inventory", "platform_inv", "inventory_b"):
+            i_ctxs = []
+            for c in cleaned_all:
+                sku = c.get("sku")
+                if not sku:
+                    continue
+                i_ctxs.append({"sku": sku, "channel": channel,
+                               "inv": {"available_qty": int(c.get("available_qty") or 0),
+                                       "safety_qty": int(c.get("safety_qty") or 0),
+                                       "in_transit_qty": int(c.get("in_transit_qty") or 0),
+                                       "warehouse_type": c.get("warehouse_type", ""),
+                                       "warehouse": c.get("warehouse", ""),
+                                       "product_name": c.get("product_name") or sku}})
+            if i_ctxs:
+                evaluate_many("inventory.changed", i_ctxs, channel,
+                              load_rules_for("inventory.changed", channel))
+                evaluated = len(i_ctxs)
+    except Exception as _ee:
+        try:
+            import traceback as _tb6
+            from db import execute as _e5
+            _e5("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                "VALUES('cleansing_eval','error',%s,%s,'cleansing')",
+                ("规则评估失败(%s): %s" % (target, str(_ee)[:200]),
+                 _tb6.format_exc(limit=20)[-1800:]))
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
+    # 汇总消息(顺序状态口径 + 混渠道提示)
+    _msg = "成功 %d 条, 跳过 %d 条" % (success, failed)
+    try:
+        if target == "order":
+            from collections import Counter as _C
+            _sc = _C((c.get("order_status") or "未知") for c in cleaned_all)
+            _ignore = {k: v for k, v in _sc.items() if k != "已完成"}
+            if _ignore:
+                _msg += " · 注意: %s 不计入销量池(仅已完成), 已发货/待确认/退款类不参与补货采购计算" % \
+                        ("; ".join("%s×%d" % (k, v) for k, v in _ignore.items()))
+        _chs = {c.get("channel") for c in cleaned_all if c.get("channel")}
+        if _chs and channel not in _chs:
+            _msg += " · 文件含其他渠道数据(%s), 已按当前渠道 %s 写入" % ("/".join(_chs), channel)
+    except Exception as _e:
+            try_err('cleansing', '静默降级', _e)
+    return adjusted, evaluated, _msg
+
+
 @router.get("/cleansing/status")
 @traced
 def cleansing_status(task_id: str = "", page_size: int = 5000):
