@@ -4,6 +4,7 @@ import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
 import { ORDER_COLS, ORDER_STATUSES, orderColKey, getOrderVis } from './configs'
 import { IconExport, IconCheck } from '../Icons'
+import ConfirmDialog from '../ConfirmDialog'
 import { t } from '../../locale'
 
 interface HammerOrdersProps {
@@ -35,6 +36,45 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     setHammerCols('orders', cols)
   }
 
+  const [confirmPurge, setConfirmPurge] = useState(false)
+  const runOrderBatch = async (action: string) => {
+    const s = useAppStore.getState()
+    const ids = s.orderSelIds || []
+    if (ids.length === 0) return
+    try {
+      const API = import.meta.env.VITE_API_BASE_URL || ''
+      const r = await fetch(API + '/api/orders/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization:
+            'Bearer ' +
+            (() => {
+              try {
+                return localStorage.getItem('c_token')
+              } catch {
+                return ''
+              }
+            })(),
+        },
+        body: JSON.stringify({ action, ids }),
+      })
+      const d = await r.json()
+      if (d.ok) {
+        s.setOrderSelIds([])
+        s.setOrderBatch(false)
+        setHammerPanel(null)
+        toast.success(
+          action === 'permanent-delete' ? `已永久删除 ${ids.length} 条` : `已删除 ${ids.length} 条`,
+        )
+        window.dispatchEvent(new Event('orders-changed'))
+      } else {
+        toast.error('操作失败: ' + (d.error || ''))
+      }
+    } catch (e) {
+      toast.error('操作失败: ' + e.message)
+    }
+  }
   const doExport = async () => {
     setExporting(true)
     try {
@@ -114,28 +154,108 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
           </div>
           <div className="hammer-row">
             <button
-              onClick={() => window.dispatchEvent(new Event('orders-toggle-all'))}
+              onClick={() => setHammerPanel(hammerPanel === 'batch' ? null : 'batch')}
               className="btn-ghost hammer-btn"
+              style={
+                useAppStore.getState().orderBatch
+                  ? { borderColor: 'var(--danger)', color: 'var(--danger)' }
+                  : undefined
+              }
             >
-              全选
-            </button>
-            <button
-              onClick={() => window.dispatchEvent(new Event('orders-batch-delete'))}
-              className="btn-ghost hammer-btn"
-              style={{ color: 'var(--danger)' }}
-            >
-              批量删除
-            </button>
-            <button
-              onClick={() => window.dispatchEvent(new Event('orders-batch-purge'))}
-              className="btn-ghost hammer-btn"
-              style={{ color: 'var(--danger)' }}
-            >
-              永久删除
+              批量操作
             </button>
           </div>
         </div>
+        {hammerPanel === 'batch' && (
+          <div className="hammer-panel">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 8,
+              }}
+            >
+              <span className="text-12 muted2">
+                已选{' '}
+                <b style={{ color: 'var(--text)' }}>
+                  {(useAppStore.getState().orderSelIds || []).length}
+                </b>{' '}
+                项
+              </span>
+              {useAppStore.getState().orderBatch ? (
+                <button
+                  className="hammer-clear"
+                  onClick={() => {
+                    useAppStore.getState().setOrderBatch(false)
+                    useAppStore.getState().setOrderSelIds([])
+                  }}
+                >
+                  退出批量模式
+                </button>
+              ) : (
+                <button
+                  className="hammer-clear"
+                  onClick={() => useAppStore.getState().setOrderBatch(true)}
+                >
+                  进入批量模式
+                </button>
+              )}
+            </div>
+            <div className="hm-group">
+              <button
+                className="hammer-btn btn-ghost"
+                onClick={() => {
+                  const s = useAppStore.getState()
+                  if (!s.orderBatch) s.setOrderBatch(true)
+                  window.dispatchEvent(new Event('orders-toggle-all'))
+                }}
+              >
+                全选/取消
+              </button>
+            </div>
+            <div className="hammer-btn-row" style={{ marginTop: 8 }}>
+              <button
+                className="hammer-btn btn-ghost"
+                style={{ color: 'var(--danger)' }}
+                disabled={orderSelIds.length === 0}
+                onClick={() => runOrderBatch('delete')}
+              >
+                批量删除
+              </button>
+              <button
+                className="hammer-btn btn-ghost"
+                style={{ color: 'var(--danger)', opacity: orderSelIds.length === 0 ? 0.4 : 1 }}
+                disabled={orderSelIds.length === 0}
+                onClick={() => setConfirmPurge(true)}
+              >
+                永久删除
+              </button>
+            </div>
+            <div className="muted2 text-10" style={{ marginTop: 8 }}>
+              勾选订单后在此批量操作 · 删除为软删（回收站可恢复）
+            </div>
+          </div>
+        )}
       </div>
+      {confirmPurge && (
+        <ConfirmDialog
+          open
+          title="永久删除订单"
+          desc={
+            '永久删除 ' +
+            (useAppStore.getState().orderSelIds || []).length +
+            ' 条订单？此操作不可撤销'
+          }
+          confirmLabel="永久删除"
+          danger
+          onConfirm={() => {
+            setConfirmPurge(false)
+            runOrderBatch('permanent-delete')
+          }}
+          onCancel={() => setConfirmPurge(false)}
+        />
+      )}
       {hammerPanel === 'columns' && (
         <div className="hammer-panel hammer-panel-scroll">
           <div className="cols-top-bar">

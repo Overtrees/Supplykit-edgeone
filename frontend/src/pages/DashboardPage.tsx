@@ -1014,11 +1014,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             >
               {t('dash.pending')}
             </div>
-            {criticalAlerts > 0 && (
-              <span style={{ fontSize: 'var(--font-10)', fontWeight: 600, color: 'var(--danger)' }}>
-                {t('dash.critical')} {criticalAlerts}
-              </span>
-            )}
+            {/* 右上角"紧急 N"移除(2026-10-09): severity=error 是"● 告警 N"子集——包含冗余 */}
           </div>
           {errCount + (dashboard?.summary?.active_alerts || 0) === 0 ? (
             <div
@@ -1130,16 +1126,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           loadFullAlerts()
                           setShowAllOther(true)
                         }}
-                        className="clickable pill info"
+                        className="clickable"
                         style={{
+                          color: 'var(--muted2)',
+                          fontWeight: 600,
                           cursor: 'pointer',
-                          fontSize: 'var(--font-10)',
-                          padding: '1px 8px',
-                          minHeight: 'auto',
-                          lineHeight: '16px',
                         }}
                       >
-                        其他 {otherTotal}
+                        ● {otherTotal} 其他
                       </span>
                     )}
                   </div>

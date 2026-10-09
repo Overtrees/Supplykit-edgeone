@@ -178,6 +178,14 @@ const initAppStore = (set, get) => ({
   prodBatch: false,
   setProdBatch: v => set({ prodBatch: v }),
 
+  // 订单批量模式(2026-10-09 复用商品页同款体系)
+  orderBatch: false,
+  setOrderBatch: v => set({ orderBatch: v }),
+  orderSelIds: [] as number[],
+  setOrderSelIds: ids => set({ orderSelIds: ids }),
+  orderBatchVersion: 0,
+  bumpOrderBatchVersion: () => set(s => ({ orderBatchVersion: s.orderBatchVersion + 1 })),
+
   prodSelIds: [],
   prodFilterLen: 0,
   prodBatchVersion: 0,
