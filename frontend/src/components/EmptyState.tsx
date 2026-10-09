@@ -10,7 +10,7 @@ const ICON_MAP = {
   alert: IconAlert,
 }
 
-export default function EmptyState({ icon, title = t('common.empty'), desc = '', action }) {
+export default function EmptyState({ icon, title = t('common.empty'), desc = '', action = null }) {
   const IconComp = icon ? ICON_MAP[icon] || IconEmpty : IconEmpty
   return (
     <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted2)' }}>
