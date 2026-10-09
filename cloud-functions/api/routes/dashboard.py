@@ -215,7 +215,7 @@ def _rebuild_day_agg(days=90, channel=None):
             try_err('dashboard', '静默降级', _e)
 
 
-def _build_summary_agg(channel, days60, now):
+def _build_summary_agg(channel, days60, now, mode="bbcc"):
     """agg 路径(强实时): 前天及以前读 orders_day_agg, 昨天+今天实时直查 orders(补录/新增当日立即反映)
     近 2 天直查失败降级仅 agg; 整体异常由调用方降级直查 60 天"""
     today = now.strftime("%Y-%m-%d")
@@ -266,7 +266,7 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
         _agg_ok = False
     if _agg_ok:
         try:
-            return _build_summary_agg(channel, days60, now)  # agg 路径(强实时); 异常整体降级下方直查
+            return _build_summary_agg(channel, days60, now, mode)  # agg 路径(强实时); 异常整体降级下方直查
         except Exception as _e:
                 try_err('dashboard', '静默降级', _e)  # agg 路径失败 → 降级直查 60 天(不阻塞)
     rows = query(

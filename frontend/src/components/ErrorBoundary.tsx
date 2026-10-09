@@ -15,7 +15,7 @@ interface ErrorBoundaryState {
  * 避免用户卡死在空白/异常态(回到看板会触发完整重拉, 自愈恢复)
  */
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { err: null }
+  state: ErrorBoundaryState = { err: null, retryKey: 0 }
   static getDerivedStateFromError(err: Error): ErrorBoundaryState {
     return { err }
   }
@@ -27,6 +27,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
       ((err.stack || '') + '\n' + (info.componentStack || '')).slice(0, 800),
     )
   }
+  retry = () => this.setState(s2 => ({ err: null, retryKey: s2.retryKey + 1 }))
   render() {
     if (this.state.err) {
       return (
@@ -50,7 +51,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
-              onClick={() => this.setState({ err: null })}
+              onClick={() => this.retry()}
               style={{
                 padding: '6px 14px',
                 fontSize: 12,
@@ -86,7 +87,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
         </div>
       )
     }
-    return this.props.children
+    return <div key={this.state.retryKey}>{this.props.children}</div>
   }
 }
 
