@@ -813,3 +813,13 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 
 ### 15.41 错误文案统一(errText, 2026-10-08)
 - 网络层失败(axios 无 response)→"网络波动"; 服务端/业务(有 response)→"加载失败"; ErrorRetry 与 store 共用; props 精确 interface(any 红线)
+
+### 15.42 Makers+TiDB 大批量异步规范(2026-10-09)
+- **纯后台线程不可靠**: Makers 请求后实例可能冻结(skill 无生命周期保障)——任务表接力(seed/导出/导入同模式: POST 建任务 → status 轮询续跑分步)
+- **TiDB 单行 entry 6MB + EdgeOne 响应体 6MB 双限制**: 大文件/大响应须分片(每片 ≤5MB 保险); LONGTEXT 解决列容量但单行 entry 仍限
+- **分片模式下载**: 服务端不合并(单行/响应双限)——前端逐片 fetch+Blob concat+正式名保存
+- **联动最后一步**: 接力任务最后步做全量重清洗(库存联动+规则评估+汇总)——与原同步版逻辑抽 _finalize_import 整块保留
+- **status/download result 双层**: result={result:{...}}——解析统一内层
+
+### 15.43 批量操作模式(2026-10-09 订单)
+- 后端 POST /{resource}/batch {action,ids} + invalidate_all; 前端行勾选(Set)+选中高亮+锤子菜单按钮(事件 dispatch); 单条操作合并走批量链路(软删/恢复/永久删保留)

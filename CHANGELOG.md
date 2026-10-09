@@ -1,3 +1,26 @@
+## 2026-10-09: 导入/导出接力式异步(分片存储避 TiDB/EdgeOne 6MB 双限制) + 订单批量操作 + 断货卡三级入口 + UI 调优
+> **主线**: feat/edgeone, commits bebac8ff→927e07bf(导出接力 → 分片下载 → 导入接力 → 订单批量)。
+> **验证**: 导出 12 万行接力 13 步 done + 单片下载 200/合并 120,119 行完整; 导入 5000 行接力 done success:5000 + 联动(库存 1000 SKU/规则评估 5000); CI 全绿。
+
+### 导入/导出大批量接力式异步(Makers 实例生命周期无保障 → 任务表接力, 非纯后台线程)
+- **导出**: POST /exports 建任务 → /exports/status 续跑分页(1万行/步生成 CSV 分片存 export_files) → done; 前端 tasks 页轮询+分片合并下载
+- **导入**: execute-async 存源文件+建任务 → /cleansing/status 续跑分窗清洗写入(5000行/步) → 最后步全量重清洗 _finalize_import(库存联动+规则评估+汇总) → done
+- **TiDB/EdgeOne 6MB 双限制坑**: mediumtext 16MB→LONGTEXT 4GB 但 TiDB 单行 entry 6MB(8025)→分片不合并(每片1.33MB)→EdgeOne 响应体 6MB(413 合并20MB)→前端逐片合并下载
+- **status/download 双层 result 解析坑**: result={result:{filename,name,parts}}——两处都要内层
+- **7 天保留清理**: export_files/sync_tasks 导出任务 daily_maintenance 每日删(原无清理越积越多 72条83MB)
+- **四维**: 分窗与全量等价(同_clean_rows逐行)/全量至EOF/逐批即时可见/抢占锁+失败留痕
+
+### 订单批量操作(锤子菜单)
+- 后端 POST /orders/batch(delete 软删 deleted_at/restore/permanent-delete + invalidate_all)
+- 前端: 行勾选+选中高亮+全选/批量删除/永久删除按钮(事件联动 OrdersPage); 单条删除合并到批量链路(移除 3s 自动永久删——软删+回收站恢复+30天清理兜底)
+
+### 断货卡三级入口 + UI
+- 三级预警(紧急/预警/观察)恢复纯样式●N, 各自点击进弹窗按级别明细(riskFilter+tab 切换, riskTabs 元组精确类型+InventoryRow.level)
+- 待处理卡去重(低库存/采购补货计数与大卡冗余); 4小卡底部间距实测校准(统一贴底16); 手机横屏信息密度压缩(≤932px 字体cqi自动缩); 中卡底部间距16→12; 3处…图标改更多N pill
+
+### 其他
+- 422 校验错误前后端留痕(RequestValidationError handler+前端4xx上报); col-price 双定义修复(居中); 空态统一(EmptyState 5页); 加载更多骨架; ConfirmDialog confirming; errText 错误分类(网络波动/加载失败); 导出分片字段齐全验证(合并120,119行=120,118+表头)
+
 ## 2026-10-08(下半场): 备注话术定稿 + 首屏性能优化(agg重建/warmup/拆批/digest共享) + 规则引擎优化(字段校验) + safety_qty 口径统一(ds×周期) + 错误文案组件 + CI 修复
 > **主线**: feat/edgeone, commits 72b9d410→f8c1af13(规则校验 → digest 性能 → 话术定稿 → 首屏优化 → 口径统一)。
 > **验证**: local_test 141/141 + test_audit 11 全过 + 线上首屏 10s→2-3s + 三场景 safety_qty 口径一致。
