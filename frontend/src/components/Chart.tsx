@@ -83,8 +83,15 @@ export default function Chart({ option, height = 260 }: ChartProps) {
         inst.current = chart
         const resize = () => chart.resize()
         window.addEventListener('resize', resize)
+        // 容器尺寸自适应(tab 切换/布局变化时宽度变化 → resize, 防柱形溢出卡片)
+        let ro: ResizeObserver | null = null
+        if (typeof ResizeObserver !== 'undefined') {
+          ro = new ResizeObserver(() => chart.resize())
+          ro.observe(ref.current)
+        }
         return () => {
           window.removeEventListener('resize', resize)
+          if (ro) ro.disconnect()
           try {
             chart.dispose()
           } catch (e) {}

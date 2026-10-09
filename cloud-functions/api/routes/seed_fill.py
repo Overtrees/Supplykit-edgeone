@@ -450,7 +450,7 @@ def _seed_config():
     rules = [
         ("低库存预警", "inventory.changed",
          '{"left":"inv.available_qty","op":"<","right":"inv.safety_qty"}',
-         "low_stock", "低库存预警: {product_name}", "可用 {avail} < 安全线 {safety}", "warning",
+         "low_stock", "低库存预警: {product_name}", "可用 {avail} < 动态安全线 {safety}", "warning",
          None),
         ("超卖保护", "order.created",
          '{"left":"order.quantity","op":">","right":"inv.available_qty"}',
@@ -520,7 +520,7 @@ def _seed_alerts():
             # 看板采购&补货告警卡改读补货/采购建议接口(动态缺口), 与静态 30% 阈值告警 100% 重叠, 无独立信息价值
             if avail < safety and ('low_stock', ch, sku, wh, 'rules_engine') not in existing:
                 existing.add(('low_stock', ch, sku, wh, 'rules_engine'))
-                inserts.append(("low_stock", "低库存预警: %s" % name, "可用 %d < 安全线 %d" % (avail, safety),
+                inserts.append(("low_stock", "低库存预警: %s" % name, "可用 %d < 动态安全线 %d" % (avail, safety),
                                 "warning", ch, sku, r.get('warehouse_type') or '', wh))
     for i in range(0, len(inserts), 500):
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "

@@ -20,6 +20,7 @@ interface OrderItem {
 import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
 import type { StockRiskShim } from '../api/types'
+import { errText } from '../components/ErrorRetry'
 
 const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 60000)
 const WS_URL = import.meta.env.VITE_WS_URL || ''

@@ -138,6 +138,7 @@ _INDEXES = [
     ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
     ("idx_alerts_ch_status_created", "alerts", "channel, status, created_at"),  # 告警分组配额/列表查询(2026-09-11 体检)
     ("idx_rules_ch_active", "rules", "channel, is_active"),  # 规则列表/评估孤儿查询(2026-09-11 体检)
+    ("idx_snapshot_ch_date", "daily_sales_snapshot", "channel, date"),  # 日销窗口查询(2026-10-08 建议页 10s→索引)
 ]
 # 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
 _DROP_INDEXES = [

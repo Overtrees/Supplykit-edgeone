@@ -31,7 +31,7 @@ const VARS = {
   product_name: '商品名',
   sku: 'SKU',
   avail: '可用量',
-  safety: '安全线',
+  safety: '动态安全线',
   days: '天数',
   stock: '库存量',
   order_qty: '订单数',
@@ -82,8 +82,8 @@ const LF = [
   { l: '锁定库存', v: 'inv.locked_qty' },
   { l: '可用+在途', v: 'inv.available_qty + inv.in_transit_qty' },
   { l: '可用+在途+锁定', v: 'inv.available_qty + inv.in_transit_qty + inv.locked_qty' },
-  { l: '安全线-可用(缺口)', v: 'inv.safety_qty - inv.available_qty' },
-  { l: '可用/安全线(比例)', v: 'inv.available_qty / inv.safety_qty' },
+  { l: '动态安全线-可用(缺口)', v: 'inv.safety_qty - inv.available_qty' },
+  { l: '可用/动态安全线(比例)', v: 'inv.available_qty / inv.safety_qty' },
   { l: '日销(定时任务提供)', v: 'daily_sales' },
   { l: '可撑天数(可用/日销)', v: 'inv.available_qty / daily_sales' },
   { l: '距上次销售(天)', v: 'inv.days_since_last' },
@@ -94,7 +94,7 @@ const LF = [
   { l: '订单数量×单价', v: 'order.quantity * order.unit_price' },
   { l: '单价', v: 'order.unit_price' },
   { l: '可售天数 Adj-DOS(看板断货同源)', v: 'inv.adj_dos' },
-  { l: '缓冲比 Buffer(可用/安全线)', v: 'inv.buffer' },
+  { l: '缓冲比 Buffer(可用/动态安全线)', v: 'inv.buffer' },
   { l: '在途置信 OTIF(供应商分/5)', v: 'inv.otif' },
   { l: '动态安全线 SS(规则参数)', v: 'inv.ss_dyn' },
   { l: '加速倍率(当天 vs 前3天)', v: 'inv.accel_rate' },
@@ -1066,7 +1066,7 @@ export default function RulesPage() {
                         minWidth: 110,
                       }}
                     >
-                      <option value="low_stock">低库存(安全线)</option>
+                      <option value="low_stock">低库存(动态安全线)</option>
                       <option value="stockout">濒临断货(看板同源)</option>
                       <option value="health">健康监控(看板同源)</option>
                       <option value="oversell">超卖保护</option>
@@ -1317,7 +1317,7 @@ export default function RulesPage() {
                         type="number"
                         step="any"
                         value={o.right === 'inv.safety_qty' ? '' : o.right}
-                        placeholder={o.right === 'inv.safety_qty' ? '安全线' : ''}
+                        placeholder={o.right === 'inv.safety_qty' ? '动态安全线' : ''}
                         onChange={e => {
                           const or = [...(cond.or || [])]
                           or[i] = {
@@ -1528,7 +1528,7 @@ export default function RulesPage() {
                       <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
                         {[
                           { v: '{avail}', l: '可用量' },
-                          { v: '{safety}', l: '安全线' },
+                          { v: '{safety}', l: '动态安全线' },
                           { v: '{sku}', l: 'SKU' },
                         ].map(t => (
                           <span
