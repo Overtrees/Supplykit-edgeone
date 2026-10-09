@@ -356,31 +356,12 @@ def export_status(task_id: str = "", page_size: int = 10000):
                 parts.append(part_name)
                 done = True
         if done:
-            # 合并分片 → 正式文件 → 删分片 → done
+            # 分片不合并(2026-10-09: TiDB 单行 entry 上限 6MB——20MB CSV 单行存不下):
+            # result 记分片列表, 下载时按 task 读分片合并返回
             filename = "exports_%s_%s_%s.%s" % (exp_type, channel, now_stamp(),
                                                 "csv" if parts[0].endswith(".csv") else "xlsx")
-            merged = b""
-            for p in parts:
-                rp = one("SELECT content FROM export_files WHERE filename=%s", [p])
-                c = rp.get("content") if rp else None
-                if isinstance(c, str):
-                    merged += (c[7:] if c.startswith("base64:") else c.encode("utf-8-sig"))
-                elif c is not None:
-                    merged += bytes(c)
-                execute("DELETE FROM export_files WHERE filename=%s", [p])
-            import base64 as _b64
-            try:
-                execute("ALTER TABLE export_files MODIFY COLUMN content LONGTEXT")
-            except Exception:
-                pass
-            try:
-                execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                        "ON DUPLICATE KEY UPDATE content=VALUES(content)", (filename, merged, channel))
-            except Exception:
-                execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                        "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                        (filename, "base64:" + _b64.b64encode(merged).decode("ascii"), channel))
-            _r = {"filename": filename, "type": exp_type, "rows": total if exp_type == "orders" else len(rows)}
+            _r = {"filename": filename, "type": exp_type, "parts": parts,
+                  "rows": total if exp_type == "orders" else len(rows)}
             execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({"result": _r}, ensure_ascii=False), task_id))
             return {"ok": True, "task_id": task_id, "status": "done", "filename": filename}
@@ -411,6 +392,25 @@ def _save_export_part(filename, content):
 def export_download(filename: str):
     row = one("SELECT content FROM export_files WHERE filename=%s", [filename])
     if not row:
+        # 分片模式: filename 为任务虚拟名(实际分片在 sync_tasks.result.parts) → 读分片合并
+        try:
+            tr = one("SELECT result FROM sync_tasks WHERE task_id=%s", [filename])
+            res = json.loads(tr.get("result") or "{}") if tr else {}
+            parts = res.get("parts") or []
+            if parts:
+                merged = b""
+                for p in parts:
+                    rp = one("SELECT content FROM export_files WHERE filename=%s", [p])
+                    c = rp.get("content") if rp else None
+                    if isinstance(c, str):
+                        merged += (c[7:] if c.startswith("base64:") else c.encode("utf-8-sig"))
+                    elif c is not None:
+                        merged += bytes(c)
+                filename = res.get("filename") or filename
+                row = {"content": merged}
+        except Exception as _e:
+                try_err('tasks', '分片下载降级', _e)
+    if row is None:
         return fail("导出文件不存在", 404)
     content = row.get("content")
     if isinstance(content, str):

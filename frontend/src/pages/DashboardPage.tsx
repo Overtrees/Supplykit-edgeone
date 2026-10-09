@@ -1647,25 +1647,41 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 })}
               </div>
               {_r.total > 3 && (
-                <div
+                <button
                   onClick={() => {
                     loadFullRisk()
                     setShowAllRisk(true)
                   }}
                   aria-label={`还有 ${_r.total - 3} 条`}
-                  className="clickable pill info"
+                  className="clickable"
                   style={{
+                    width: '100%',
+                    padding: '4px 0 0',
+                    border: 'none',
+                    borderRadius: 0,
+                    background: 'transparent',
+                    color: 'var(--primary)',
                     cursor: 'pointer',
-                    fontSize: 'var(--font-10)',
-                    padding: '1px 8px',
-                    minHeight: 'auto',
-                    lineHeight: '16px',
-                    marginTop: 6,
-                    width: 'fit-content',
+                    fontFamily: 'inherit',
+                    textAlign: 'left',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
                   }}
                 >
-                  更多 {_r.total - 3}
-                </div>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    style={{ display: 'block', flexShrink: 0 }}
+                  >
+                    <circle cx="5" cy="12" r="1.8" />
+                    <circle cx="12" cy="12" r="1.8" />
+                    <circle cx="19" cy="12" r="1.8" />
+                  </svg>
+                </button>
               )}
             </div>
           )}
