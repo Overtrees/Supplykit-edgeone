@@ -21,6 +21,8 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     setHammerCols,
     setOrderFilterLocal,
     orderStatus,
+    orderSelIds,
+    setOrderSelIds,
   } = useAppStore()
   const [localSearch, setLocalSearch] = useDebouncedSearch(hammerSearch, setHammerSearch)
   const [visCols, setVisCols] = useState(() => getOrderVis(channel) || ORDER_COLS.map(c => c.id))

@@ -43,18 +43,10 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
             <IconAlert size={20} />
           </div>
           <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--danger)', marginBottom: 4 }}>
-            {t('error.component_render')}
+            组件渲染异常
           </div>
-          <div
-            style={{
-              fontSize: 12,
-              fontFamily: 'monospace',
-              color: 'var(--muted2)',
-              marginBottom: 10,
-              overflowWrap: 'break-word',
-            }}
-          >
-            {String(this.state.err.message || this.state.err).slice(0, 120)}
+          <div style={{ fontSize: 12, color: 'var(--muted2)', marginBottom: 10 }}>
+            详细信息已记录日志
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
