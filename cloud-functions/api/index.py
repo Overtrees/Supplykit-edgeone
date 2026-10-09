@@ -85,7 +85,7 @@ async def auth_middleware(request: Request, next):
     if (path.startswith("/auth") or path == "/health" or path.startswith("/debug")
             or path.startswith("/docs") or path.startswith("/openapi")
             or path == "/insights/ping" or path.startswith("/cron")
-            or path == "/logs/frontend"):
+            or path.endswith("/logs/frontend")):
         return await next(request)
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
