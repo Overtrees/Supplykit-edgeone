@@ -92,7 +92,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
-  const [riskFilter, setRiskFilter] = useState('all') // 断货明细级别过滤: all/red/orange/yellow
+  const [riskFilter, setRiskFilter] = useState<'all' | 'red' | 'orange' | 'yellow'>('all')
+  const riskTabs: Array<['all' | 'red' | 'orange' | 'yellow', string, string]> = [
+    ['all', '全部', 'var(--muted)'],
+    ['red', '紧急', 'var(--danger)'],
+    ['orange', '预警', 'var(--warning)'],
+    ['yellow', '观察', 'var(--muted2)'],
+  ]
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
@@ -100,7 +106,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [oosList, setOosList] = useState(null) // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [healthTrend, setHealthTrend] = useState([]) // 健康分数趋势(近14天, health-trend 接口)
   const [fullAlerts, setFullAlerts] = useState(null) // 告警弹窗完整数据(点击时拉取)
-  const [fullRisk, setFullRisk] = useState(null) // 濒临断货完整列表
+  const [fullRisk, setFullRisk] = useState<InventoryRow[] | null>(null) // 濒临断货完整列表
   const [chLoading, setChLoading] = useState(false)
   const [dashErr, setDashErr] = useState('')
   const dashFailRef = useRef(0) // 兜底重试失败计数: 连续 >=2 次后提供"刷新页面"强刷兜底(WebView/实例连接异常时重连恢复)
@@ -1568,17 +1574,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           loadFullRisk()
                           setShowAllRisk(true)
                         }}
-                        className="clickable pill danger"
+                        className="clickable"
                         style={{
+                          color: 'var(--danger)',
+                          fontWeight: 600,
                           cursor: 'pointer',
-                          fontSize: 'var(--font-10)',
-                          padding: '1px 8px',
-                          minHeight: 'auto',
-                          lineHeight: '16px',
                         }}
-                        title="查看紧急明细"
                       >
-                        ● {riskCritical} {t('dash.critical')} ›
+                        ● {riskCritical} {t('dash.critical')}
                       </span>
                     )}
                     {riskWarning > 0 && (
@@ -1589,17 +1592,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           loadFullRisk()
                           setShowAllRisk(true)
                         }}
-                        className="clickable pill warning"
+                        className="clickable"
                         style={{
+                          color: 'var(--warning)',
+                          fontWeight: 600,
                           cursor: 'pointer',
-                          fontSize: 'var(--font-10)',
-                          padding: '1px 8px',
-                          minHeight: 'auto',
-                          lineHeight: '16px',
                         }}
-                        title="查看预警明细"
                       >
-                        ● {riskWarning} {t('dash.warning')} ›
+                        ● {riskWarning} {t('dash.warning')}
                       </span>
                     )}
                     {_r.total > riskCritical + riskWarning && (
@@ -1610,19 +1610,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           loadFullRisk()
                           setShowAllRisk(true)
                         }}
-                        className="clickable pill"
+                        className="clickable"
                         style={{
+                          color: 'var(--muted2)',
+                          fontWeight: 600,
                           cursor: 'pointer',
-                          fontSize: 'var(--font-10)',
-                          padding: '1px 8px',
-                          minHeight: 'auto',
-                          lineHeight: '16px',
-                          borderColor: 'transparent',
-                          opacity: 0.85,
                         }}
-                        title="查看观察明细"
                       >
-                        ● {_r.total - riskCritical - riskWarning} 观察 ›
+                        ● {_r.total - riskCritical - riskWarning} 观察
                       </span>
                     )}
                   </div>
@@ -2491,12 +2486,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     flexWrap: 'wrap',
                   }}
                 >
-                  {[
-                    ['all', '全部', 'var(--muted)'],
-                    ['red', `紧急 ${riskCritical}`, 'var(--danger)'],
-                    ['orange', `预警 ${riskWarning}`, 'var(--warning)'],
-                    ['yellow', `观察 ${_r.total - riskCritical - riskWarning}`, 'var(--muted2)'],
-                  ].map(([lv, lb, lc]) => (
+                  {riskTabs.map(([lv, lb, lc]) => (
                     <span
                       key={lv}
                       onClick={() => setRiskFilter(lv)}

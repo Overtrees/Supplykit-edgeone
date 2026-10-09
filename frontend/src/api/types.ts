@@ -6,6 +6,7 @@
 export interface InventoryRow {
   sku?: string
   product_name?: string
+  level?: string
   warehouse?: string
   warehouse_type?: string
   barcode?: string
