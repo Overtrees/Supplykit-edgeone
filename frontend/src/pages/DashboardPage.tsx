@@ -1105,12 +1105,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <>
                   <div
                     style={{
-                      fontSize: 'var(--font-9)',
+                      fontSize: 'var(--font-xs)',
                       display: 'flex',
-                      gap: 4,
-                      marginTop: 8,
+                      gap: 10,
+                      marginTop: 6,
                       flexWrap: 'wrap',
-                      lineHeight: 1.5,
+                      lineHeight: 1.4,
                       alignItems: 'center',
                     }}
                   >
@@ -1128,7 +1128,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                         }}
                         className="clickable"
                         style={{
-                          color: 'var(--muted2)',
+                          color: '#007AFF',
                           fontWeight: 600,
                           cursor: 'pointer',
                         }}
