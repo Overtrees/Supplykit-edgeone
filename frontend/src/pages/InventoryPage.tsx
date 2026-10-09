@@ -249,7 +249,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           />
         )
       ) : (
-        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}>
+        <div
+          key={loading ? 'skeleton' : 'data'}
+          className="fade-in"
+          style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
+        >
           <table>
             <colgroup>
               {visCols.map(id => {

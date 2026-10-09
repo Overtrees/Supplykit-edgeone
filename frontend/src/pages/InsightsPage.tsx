@@ -699,7 +699,11 @@ export default function InsightsPage() {
               )}
             </div>
           ) : (
-            <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}>
+            <div
+              key={replenLoading ? 'skeleton' : 'data'}
+              className="fade-in"
+              style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
+            >
               <table>
                 <colgroup>
                   {visCols.map(id => {

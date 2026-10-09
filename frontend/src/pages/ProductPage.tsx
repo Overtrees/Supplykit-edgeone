@@ -153,7 +153,11 @@ export default function ProductPage() {
     )
 
   return (
-    <div className="card" style={{ containerType: 'inline-size' }}>
+    <div
+      key={ld ? 'skeleton' : 'data'}
+      className="card fade-in"
+      style={{ containerType: 'inline-size' }}
+    >
       <div
         className="section-title"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}

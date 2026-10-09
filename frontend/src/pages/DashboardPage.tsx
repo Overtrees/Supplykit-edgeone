@@ -1163,7 +1163,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         </div>
 
         {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
-        <div className="card stat-card">
+        <div key={'hlth' + healthTab} className="card stat-card fade-in">
           {(() => {
             const healthData = dashboard?.health_index?.[healthTab] || {}
             const isJd = channel === 'jd'

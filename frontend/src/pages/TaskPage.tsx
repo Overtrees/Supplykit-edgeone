@@ -159,139 +159,141 @@ export default function TaskPage() {
       <div className="small muted" style={{ padding: '0 0 8px 0', fontSize: 12 }}>
         {channel === 'jd' ? '京东' : '其他渠道'} · 异步任务
       </div>
-      {loading ? (
-        <div className="skeleton" style={{ height: 40 }} />
-      ) : tasks.length === 0 ? (
-        <div className="small muted" style={{ padding: 24, textAlign: 'center' }}>
-          {loadErr ? (
-            <ErrorRetry error={'加载失败'} onRetry={loadTasks} />
-          ) : (
-            <>
-              <div style={{ marginBottom: 10 }}>暂无任务</div>
-              <button
-                className="btn btn-primary"
-                onClick={() => window.__setPage && window.__setPage('settings')}
-              >
-                去一键填充种子数据 →
-              </button>
-            </>
-          )}
-        </div>
-      ) : (
-        tasks.map(task => {
-          const type =
-            task.task_type === 'export'
-              ? 'export'
-              : task.task_type === 'seed'
-                ? 'seed'
-                : task.task_type === 'reset' || task.task_id.startsWith('reset_')
-                  ? 'reset'
-                  : 'cleansing'
-          const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
-          const st = task.status
-          const result = task.result
-            ? typeof task.result === 'string'
-              ? safeParse(task.result)
-              : task.result
-            : null
-          const filename = result?.result?.filename || result?.filename || ''
-          return (
-            <div key={task.task_id} className="task-card">
-              <div className="task-card-icon">
-                {meta.Icon ? <meta.Icon size={18} /> : <IconClipboard size={18} />}
-              </div>
-              <div className="task-card-body">
-                <div className="task-card-title">
-                  <span className="ellipsis">{meta.label}</span>
-                  <span className={'task-status ' + st}>{STATUS_LABEL[st]}</span>
+      <div key={loading ? 'skeleton' : 'data'} className="fade-in">
+        {loading ? (
+          <div className="skeleton" style={{ height: 40 }} />
+        ) : tasks.length === 0 ? (
+          <div className="small muted" style={{ padding: 24, textAlign: 'center' }}>
+            {loadErr ? (
+              <ErrorRetry error={'加载失败'} onRetry={loadTasks} />
+            ) : (
+              <>
+                <div style={{ marginBottom: 10 }}>暂无任务</div>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => window.__setPage && window.__setPage('settings')}
+                >
+                  去一键填充种子数据 →
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          tasks.map(task => {
+            const type =
+              task.task_type === 'export'
+                ? 'export'
+                : task.task_type === 'seed'
+                  ? 'seed'
+                  : task.task_type === 'reset' || task.task_id.startsWith('reset_')
+                    ? 'reset'
+                    : 'cleansing'
+            const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
+            const st = task.status
+            const result = task.result
+              ? typeof task.result === 'string'
+                ? safeParse(task.result)
+                : task.result
+              : null
+            const filename = result?.result?.filename || result?.filename || ''
+            return (
+              <div key={task.task_id} className="task-card">
+                <div className="task-card-icon">
+                  {meta.Icon ? <meta.Icon size={18} /> : <IconClipboard size={18} />}
                 </div>
-                <div className="task-card-sub">
-                  {task.task_type === 'export'
-                    ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
-                    : task.task_type === 'cleansing'
-                      ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
-                      : task.task_id.slice(0, 22)}
-                </div>
-                {Array.isArray(task.steps) && task.steps.length > 0 && (
-                  <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {task.steps.map((s, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          fontSize: 'var(--font-xs)',
-                        }}
-                      >
-                        <span
+                <div className="task-card-body">
+                  <div className="task-card-title">
+                    <span className="ellipsis">{meta.label}</span>
+                    <span className={'task-status ' + st}>{STATUS_LABEL[st]}</span>
+                  </div>
+                  <div className="task-card-sub">
+                    {task.task_type === 'export'
+                      ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
+                      : task.task_type === 'cleansing'
+                        ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
+                        : task.task_id.slice(0, 22)}
+                  </div>
+                  {Array.isArray(task.steps) && task.steps.length > 0 && (
+                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {task.steps.map((s, i) => (
+                        <div
+                          key={i}
                           style={{
-                            color:
-                              s.status === 'ok'
-                                ? 'var(--success)'
-                                : s.status === 'error'
-                                  ? 'var(--danger)'
-                                  : 'var(--muted2)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontSize: 'var(--font-xs)',
                           }}
                         >
-                          {s.status === 'ok' ? (
-                            <IconCheck size={12} />
-                          ) : s.status === 'error' ? (
-                            <IconClose size={12} />
-                          ) : (
-                            ''
-                          )}
-                        </span>
-                        <span style={{ color: 'var(--text)', flex: 1 }}>{s.name}</span>
-                        {s.status === 'ok' && (
-                          <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-10)' }}>
-                            {s.elapsed}s
+                          <span
+                            style={{
+                              color:
+                                s.status === 'ok'
+                                  ? 'var(--success)'
+                                  : s.status === 'error'
+                                    ? 'var(--danger)'
+                                    : 'var(--muted2)',
+                            }}
+                          >
+                            {s.status === 'ok' ? (
+                              <IconCheck size={12} />
+                            ) : s.status === 'error' ? (
+                              <IconClose size={12} />
+                            ) : (
+                              ''
+                            )}
                           </span>
-                        )}
-                        {s.status === 'error' && (
-                          <span style={{ color: 'var(--danger)', fontSize: 'var(--font-10)' }}>
-                            {String(s.error || '').slice(0, 30)}
-                          </span>
-                        )}
-                        {s.status === 'running' && (
-                          <>
-                            <span style={{ color: 'var(--primary)', fontSize: 'var(--font-10)' }}>
-                              进行中
+                          <span style={{ color: 'var(--text)', flex: 1 }}>{s.name}</span>
+                          {s.status === 'ok' && (
+                            <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-10)' }}>
+                              {s.elapsed}s
                             </span>
-                            <span
-                              className="hammer-spinner"
-                              style={{ width: 10, height: 10, borderWidth: 1.5 }}
-                            />
-                          </>
-                        )}
-                      </div>
-                    ))}
+                          )}
+                          {s.status === 'error' && (
+                            <span style={{ color: 'var(--danger)', fontSize: 'var(--font-10)' }}>
+                              {String(s.error || '').slice(0, 30)}
+                            </span>
+                          )}
+                          {s.status === 'running' && (
+                            <>
+                              <span style={{ color: 'var(--primary)', fontSize: 'var(--font-10)' }}>
+                                进行中
+                              </span>
+                              <span
+                                className="hammer-spinner"
+                                style={{ width: 10, height: 10, borderWidth: 1.5 }}
+                              />
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="task-card-sub-row">
+                    <div className="task-card-time">
+                      {task.created_at ? toBeijing(task.created_at) : ''}
+                    </div>
+                    {st === 'done' && filename && task.task_type === 'export' && (
+                      <button
+                        className="task-download"
+                        onClick={() => download(task.task_id, filename)}
+                        disabled={downloading[task.task_id]}
+                      >
+                        {downloading[task.task_id] ? '下载中...' : '下载'}
+                      </button>
+                    )}
                   </div>
-                )}
-                <div className="task-card-sub-row">
-                  <div className="task-card-time">
-                    {task.created_at ? toBeijing(task.created_at) : ''}
-                  </div>
-                  {st === 'done' && filename && task.task_type === 'export' && (
-                    <button
-                      className="task-download"
-                      onClick={() => download(task.task_id, filename)}
-                      disabled={downloading[task.task_id]}
-                    >
-                      {downloading[task.task_id] ? '下载中...' : '下载'}
-                    </button>
+                  {st === 'running' && (
+                    <div className="hero-progress">
+                      <div className="hero-progress-bar" />
+                    </div>
                   )}
                 </div>
-                {st === 'running' && (
-                  <div className="hero-progress">
-                    <div className="hero-progress-bar" />
-                  </div>
-                )}
               </div>
-            </div>
-          )
-        })
-      )}
+            )
+          })
+        )}
+      </div>
     </div>
   )
 }

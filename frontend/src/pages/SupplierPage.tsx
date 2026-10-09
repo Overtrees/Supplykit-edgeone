@@ -100,7 +100,7 @@ export default function SupplierPage() {
     }))
   })
   return (
-    <div className="card">
+    <div key={ld ? 'skeleton' : 'data'} className="card fade-in">
       <div
         className="section-title"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
