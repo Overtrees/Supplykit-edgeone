@@ -1523,6 +1523,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'flex-end',
+                marginBottom: 4,
               }}
             >
               <div style={{ marginTop: 4 }}>
