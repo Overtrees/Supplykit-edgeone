@@ -243,8 +243,8 @@ _EXPORT_DDL = ("CREATE TABLE IF NOT EXISTS export_files ("
 @router.post("/exports")
 @traced
 async def create_export(request: Request):
-    """导出任务(异步接力式: 后台线程生成, 防大批量同步超 120s; 前端 tasks 页轮询后下载)
-    POST ?type=replen|purchase_suggestions|purchase|slow&mode&channel&wh_type → 平铺 {ok, task_id}"""
+    """导出任务(接力式: 建任务 → 前端轮询 /exports/status 续跑分页生成, 防大批量 120s 超时;
+    Makers 请求后实例可能冻结, 不用纯后台线程) POST ?type&mode&channel&wh_type → {ok, task_id}"""
     from urllib.parse import parse_qs
     qs = parse_qs(request.url.query)
     exp_type = (qs.get("type") or ["replen"])[0]
@@ -254,29 +254,92 @@ async def create_export(request: Request):
     if _build_export_rows(exp_type, mode, channel, wh_type) is None:
         return fail("未知导出类型: " + str(exp_type))
     task_id = _new_task_id("exp")
-    # 建任务(running) → 后台线程生成(函数返回后线程继续, 无 120s 限制) → done/error
     execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
             "VALUES(%s,'export','running',%s,'{}',%s)",
-            (task_id, json.dumps({"type": exp_type, "mode": mode,
-                                  "wh_type": wh_type}, ensure_ascii=False), channel))
+            (task_id, json.dumps({"type": exp_type, "mode": mode, "channel": channel,
+                                  "wh_type": wh_type, "page": 0, "parts": []},
+                                 ensure_ascii=False), channel))
+    return {"ok": True, "task_id": task_id}
 
-    def _run():
-        started = time.time()
-        try:
+
+@router.get("/exports/status")
+@traced
+def export_status(task_id: str = "", page_size: int = 10000):
+    """导出续跑(前端轮询触发, 每步查 page_size 行生成 CSV 分片存 export_files; 完成合并→done)
+    返回 {ok, task_id, status, filename?, total?, error?}"""
+    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    if not row:
+        return {"ok": False, "error": "任务不存在"}
+    status = row.get("status") or ""
+    if status in ("done", "error"):
+        return {"ok": True, "task_id": task_id, "status": status,
+                "filename": (json.loads(row.get("result") or "{}") or {}).get("filename"),
+                "error": (json.loads(row.get("result") or "{}") or {}).get("error")}
+    # 续跑一步(防并发: 原子抢占 updated_at 锁, 同 seed)
+    try:
+        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
+                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
+                          [task_id])
+        if not _locked:
+            return {"ok": True, "task_id": task_id, "status": "running"}
+    except Exception as _e:
+            try_err('tasks', '静默降级', _e)
+    try:
+        params = json.loads(row.get("params") or "{}")
+        exp_type = params.get("type") or "replen"
+        mode = params.get("mode") or "bbcc"
+        channel = params.get("channel") or "jd"
+        wh_type = params.get("wh_type") or ""
+        page = int(params.get("page") or 0)
+        parts = list(params.get("parts") or [])
+        # 分批查询: 订单/库存大批量按 page 续跑; 其他类型一次全量(小)
+        from routes.orders import list_orders
+        if exp_type == "orders":
+            r = list_orders(channel=channel, page=page + 1, page_size=page_size)
+            data = (r.get("data") or {}) if isinstance(r, dict) else (r or {})
+            items = data.get("items") if isinstance(data, dict) else (data or [])
+            total = int(data.get("total") or 0) if isinstance(data, dict) else len(items)
+            buf = io.StringIO()
+            if items:
+                out = []
+                for o in items:
+                    out.append({
+                        "订单号": o.get("order_no", ""), "店铺": o.get("store", ""),
+                        "仓库": o.get("warehouse", ""), "SKU": o.get("sku", ""),
+                        "商品名": o.get("product_name", ""), "69码": o.get("barcode", ""),
+                        "数量": o.get("quantity", ""), "单价": o.get("unit_price", ""),
+                        "金额": o.get("total_amount", ""), "状态": o.get("order_status", ""),
+                        "下单时间": str(o.get("ordered_at") or "")[:10],
+                        "支付时间": str(o.get("paid_at") or "")[:10],
+                        "平台": o.get("platform", ""), "渠道": o.get("channel", ""),
+                    })
+                import csv as _csv
+                w = _csv.DictWriter(buf, fieldnames=list(out[0].keys()))
+                if page == 0:
+                    w.writeheader()
+                w.writerows(out)
+                part_name = "exp_part_%s_%d.csv" % (task_id, page)
+                _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
+                parts.append(part_name)
+            done = len(items) < page_size or page * page_size + len(items) >= total
+        else:
             rows = _build_export_rows(exp_type, mode, channel, wh_type)
-            # orders/inventory 大批量 → CSV 轻量; 其他 → xlsx
-            if exp_type in ("orders", "inventory"):
+            # 非订单类型: 一次生成(小数据量)
+            if exp_type in ("inventory",):
                 buf = io.StringIO()
                 if rows:
-                    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
-                    writer.writeheader()
-                    writer.writerows(rows)
-                content = buf.getvalue().encode("utf-8-sig")
-                filename = "exports_%s_%s_%s.csv" % (exp_type, channel, now_stamp())
+                    import csv as _csv
+                    w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+                    w.writeheader()
+                    w.writerows(rows)
+                part_name = "exp_part_%s_%d.csv" % (task_id, 0)
+                _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
+                parts.append(part_name)
+                done = True
             else:
                 from openpyxl import Workbook
                 from openpyxl.styles import Font
-                buf = io.BytesIO()
+                bbuf = io.BytesIO()
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "导出"
@@ -287,36 +350,56 @@ async def create_export(request: Request):
                         c.font = Font(bold=True)
                     for r in rows:
                         ws.append([r.get(k) for k in headers])
-                wb.save(buf)
-                content = buf.getvalue()
-                filename = "exports_%s_%s_%s.xlsx" % (exp_type, channel, now_stamp())
+                wb.save(bbuf)
+                part_name = "exp_part_%s_0.xlsx" % task_id
+                _save_export_part(part_name, bbuf.getvalue())
+                parts.append(part_name)
+                done = True
+        if done:
+            # 合并分片 → 正式文件 → 删分片 → done
+            filename = "exports_%s_%s_%s.%s" % (exp_type, channel, now_stamp(),
+                                                "csv" if parts[0].endswith(".csv") else "xlsx")
+            merged = b""
+            for p in parts:
+                rp = one("SELECT content FROM export_files WHERE filename=%s", [p])
+                c = rp.get("content") if rp else None
+                if isinstance(c, str):
+                    merged += (c[7:] if c.startswith("base64:") else c.encode("utf-8-sig"))
+                elif c is not None:
+                    merged += bytes(c)
+                execute("DELETE FROM export_files WHERE filename=%s", [p])
             import base64 as _b64
             try:
-                execute("ALTER TABLE export_files MODIFY COLUMN content MEDIUMBLOB")
-            except Exception as _e:
-                    try_err('tasks', '静默降级', _e)
-            try:
                 execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
-                        "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                        (filename, content, channel))
+                        "ON DUPLICATE KEY UPDATE content=VALUES(content)", (filename, merged, channel))
             except Exception:
                 execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,%s) "
                         "ON DUPLICATE KEY UPDATE content=VALUES(content)",
-                        (filename, "base64:" + _b64.b64encode(content).decode("ascii"), channel))
-            _r = {"filename": filename, "type": exp_type, "rows": len(rows),
-                  "elapsed": round(time.time() - started, 1)}
-            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() "
-                    "WHERE task_id=%s", (json.dumps({"result": _r}, ensure_ascii=False), task_id))
-        except Exception as e:
-            import traceback as _tb
-            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() "
-                    "WHERE task_id=%s",
-                    (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]},
-                                ensure_ascii=False), task_id))
+                        (filename, "base64:" + _b64.b64encode(merged).decode("ascii"), channel))
+            _r = {"filename": filename, "type": exp_type, "rows": total if exp_type == "orders" else len(rows)}
+            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps({"result": _r}, ensure_ascii=False), task_id))
+            return {"ok": True, "task_id": task_id, "status": "done", "filename": filename}
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({**params, "page": page + 1, "parts": parts}, ensure_ascii=False), task_id))
+        return {"ok": True, "task_id": task_id, "status": "running", "page": page + 1}
+    except Exception as e:
+        import traceback as _tb
+        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
+        return {"ok": True, "task_id": task_id, "status": "error", "error": str(e)[:200]}
 
-    import threading as _th
-    _th.Thread(target=_run, daemon=True).start()
-    return {"ok": True, "task_id": task_id}
+
+def _save_export_part(filename, content):
+    """存导出分片(与正式文件同列, base64 兜底)"""
+    try:
+        execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,'jd') "
+                "ON DUPLICATE KEY UPDATE content=VALUES(content)", (filename, content))
+    except Exception:
+        import base64 as _b64
+        execute("INSERT INTO export_files(filename, content, channel) VALUES(%s,%s,'jd') "
+                "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                (filename, "base64:" + _b64.b64encode(content).decode("ascii")))
 
 
 @router.get("/exports/download/{filename}")
