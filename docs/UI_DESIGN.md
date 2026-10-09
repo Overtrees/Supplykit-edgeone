@@ -78,12 +78,20 @@
 - **Header**：页面标题 + 锤子菜单（icon-btn 48px 圆形）+ 侧边栏按钮；欢迎页全屏覆盖（首次引导 4 核心入口）
 - **页面容器**：`main.container` maxWidth 1200 / padding 含安全区 / minHeight 100svh
 
+## 七·五、列表行规范（ListGroup 公共件）
+
+- Group（标题 + 圆角卡）/ Row（信息行）/ LastRow（末行无分隔线）/ ListItem（可选行：checkbox + 高亮）
+- 行规范：`padding: 0 16px`（外层）/ 内层 `14px 0` / `minHeight: 48` / `borderBottom: 1px solid var(--border)`（inset 分隔线）
+- **末行无分隔线**（LastRow / ListItem last）——列表末行 borderBottom:none（卡片底部不露分割线）
+- 分组卡列表**不用"每行独立卡片条"模式**（背景+圆角+marginBottom 内联行与分隔线行两套风格——必须统一为分隔线行）
+
 ## 八、弹窗体系（底部 sheet）
 
 - **一律 createPortal(document.body)**（防被滚动容器裁剪——嵌套弹窗教训）
 - 定位：`bottom: calc(env(safe-area-inset-bottom) + 14px)`；zIndex 4000（遮罩）/4001（面板）
 - 动效：纯 opacity（sheetIn 0.22s）+ 遮罩淡入——transform 破坏 fixed 禁止
 - 材料样式：`material-regular`（毛玻璃 + inset 高光 + radius-lg）
+- 标准模板：遮罩 `fixed inset:0 transparent zIndex:9998` + 面板 `fixed left:0 right:0 bottom:calc(safe+14px) zIndex:9999 flex center padding:0 14px pointerEvents:none` + 内 `width:100% maxWidth:600 radius-lg padding:18px 14px+safe boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)' maxHeight:70vh pointerEvents:auto`
 - 确认弹窗（ConfirmDialog）：标题 + 描述 + 取消/确认按钮（`sheet-close`/`sheet-danger`），`confirming` 态禁用+降透明
 - 级别明细弹窗：标题含级别 + tab 切换（选中高亮：白字 + 级别色底）
 
