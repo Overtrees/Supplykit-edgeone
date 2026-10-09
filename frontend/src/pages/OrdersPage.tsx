@@ -209,6 +209,8 @@ export default function OrdersPage() {
               </colgroup>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
                 <tr>
+                  {/* 选中列(固定最左, 与行 checkbox 对齐——不影响现有列布局) */}
+                  <th style={{ width: 32 }} />
                   {visCols.map(id => {
                     const col = COLS.find(c => c.id === id)
                     return col ? <th key={col.id}>{col.label}</th> : null
