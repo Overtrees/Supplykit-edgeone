@@ -333,6 +333,7 @@ td {
   word-break: break-word;
   font-size: 13px;
   line-height: 1.4;
+  font-variant-numeric: tabular-nums; /* 数字列等宽对齐, 防金额/数量跳动 */
 }
 td.mono {
   word-break: break-all;
