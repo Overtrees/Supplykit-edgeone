@@ -1,3 +1,28 @@
+## 2026-10-09(下半场): 订单批量操作 + 前端错误日志收口(白名单) + 订单页 TDZ 修复 + 看板 agg mode 修复 + 待处理卡/断货卡 UI
+> **主线**: feat/edgeone, commits 927e07bf→1e58f614。
+> **验证**: 订单页恢复正常(日志 component_error 定位 TDZ 实锤); 看板 summary agg 路径恢复(8.7s→3s); 前端错误可收口(日志验证); CI 全绿。
+
+### 订单批量操作(锤子菜单)
+- 后端 POST /orders/batch(delete 软删 deleted_at/restore/permanent-delete + invalidate_all)
+- 前端复用商品页同款体系(store orderBatch/orderSelIds + 批量模式选中列条件渲染——退出即隐藏不影响表格布局) + HammerOrders 面板仿商品布局(全选/删除软删/永久删 ConfirmDialog) + 单条删除合并批量链路(软删+回收站恢复)
+- **TDZ 坑(日志定位)**: orderSelIds 解构在 useEffect 依赖数组之后——依赖数组渲染时求值访问未声明 const → "Cannot access orderSelIds before initialization" → 解构合并到主解构(useEffect 前)
+
+### 前端错误日志收口(此前从未生效)
+- **根因**: /logs/frontend 不在鉴权白名单 + path 含 /api 前缀匹配失败 → 前端 reportError 无 token 401 静默 → component_error 从未进日志
+- 修复: 白名单 endswith 匹配 → 日志验证(component_error 带堆栈) → 订单页 TDZ 靠日志定位
+- ErrorBoundary: 统一"组件渲染异常"标题 + 重试按钮强制 children 重挂载(retryKey——同实例重渲染仍错) + 不显示内部错误文本(as any 清理)
+
+### 看板 agg 路径 mode 修复
+- dashboard _build_summary_agg 缺 mode 参数(签名+调用)——agg 路径每次 NameError → 降级直查 → summary 8.7s; 修复后 agg 路径恢复 3s(local_test 未覆盖 agg 路径——补审计需求)
+
+### 待处理卡/断货卡 UI
+- 其他 N 去 pill 恢复 ● 样式 + iOS 浅蓝 #007AFF; 右上角"紧急 N"移除(告警 error 子集冗余); 明细行字号对齐 font-xs
+- 断货卡: 三级预警(紧急/预警/观察)纯样式●N 各自点击进弹窗按级别明细(tab 切换); 底部…移除
+
+### 性能/数据
+- 5000 P 测试单批量清理(orders/batch permanent-delete 分批, 恢复 120,118)
+- digest 缓存/agg 重建/warmup 已生效; 大规模数据(12.5万单)各接口耗时: summary 3-4s/repl 5s(缓存命中后快)
+
 ## 2026-10-09: 导入/导出接力式异步(分片存储避 TiDB/EdgeOne 6MB 双限制) + 订单批量操作 + 断货卡三级入口 + UI 调优
 > **主线**: feat/edgeone, commits bebac8ff→927e07bf(导出接力 → 分片下载 → 导入接力 → 订单批量)。
 > **验证**: 导出 12 万行接力 13 步 done + 单片下载 200/合并 120,119 行完整; 导入 5000 行接力 done success:5000 + 联动(库存 1000 SKU/规则评估 5000); CI 全绿。

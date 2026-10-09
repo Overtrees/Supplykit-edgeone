@@ -820,3 +820,10 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 
 ### 15.43 批量操作模式(2026-10-09 订单)
 - 后端 POST /{resource}/batch {action,ids} + invalidate_all; 前端行勾选(Set)+选中高亮+锤子菜单按钮(事件 dispatch); 单条操作合并走批量链路(软删/恢复/永久删保留)
+
+### 15.44 前端错误收口链路(2026-10-09 修复——此前从未生效)
+- 链路: ErrorBoundary componentDidCatch → reportError → POST /api/logs/frontend → quality_logs(source=frontend)
+- **坑1**: /logs/frontend 必须入鉴权白名单(否则 401 静默, 前端错误永远进不了日志——"看日志定位"前提)
+- **坑2**: middleware path 含 /api 前缀——白名单用 endswith 匹配(== 不中)
+- **坑3**: ErrorBoundary 重试须强制 children 重挂载(retryKey key)——setState({err:null}) 同实例重渲染仍错
+- **坑4(TS)**: zustand 解构必须在所有使用前(useEffect 依赖数组渲染时求值——const 声明在后的 TDZ "Cannot access X before initialization")
