@@ -1120,7 +1120,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       gap: 10,
                       marginTop: 4,
                       flexWrap: 'wrap',
-                      lineHeight: 1.2,
+                      lineHeight: 1.0,
                       alignItems: 'center',
                       // 本行(滞销/其他)是最后一行时——字身沉底(lineHeight 1.2=16)与图柱底对齐
                     }}
@@ -1375,7 +1375,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     <div
                       style={{
                         display: 'flex',
-                        lineHeight: 1.2,
+                        lineHeight: 1.0,
                         alignItems: 'center',
                         gap: 8,
                         marginTop: 2,
