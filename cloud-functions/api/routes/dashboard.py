@@ -215,25 +215,58 @@ def _rebuild_day_agg(days=90, channel=None):
             try_err('dashboard', '静默降级', _e)
 
 
+def _q_agg(channel, days60, d1):
+    return query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
+                 "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
+                 "GROUP BY `date`, order_status, store", [channel, days60, d1])
+
+
+def _q_recent(channel, d1):
+    return query(
+        "SELECT DATE(ordered_at) AS d, order_status, store, "
+        "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
+        "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
+        "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
+        "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
+        (channel, d1 + " 00:00:00"))
+
+
+def _q_inventory(channel):
+    return query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                 "WHERE channel=%s AND available_qty>0", [channel])
+
+
+def _q_digest(channel):
+    try:
+        from biz.sales import get_sales_digest
+        _, _ds_map, _ = get_sales_digest(channel)
+        return _ds_map
+    except Exception:
+        return {}
+
+
 def _build_summary_agg(channel, days60, now, mode="bbcc"):
     """agg 路径(强实时): 前天及以前读 orders_day_agg, 昨天+今天实时直查 orders(补录/新增当日立即反映)
-    近 2 天直查失败降级仅 agg; 整体异常由调用方降级直查 60 天"""
+    4 个独立查询并行(agg/当天直查/inventory/digest——TiDB 多实例并发, 非缓存 3s→1.5s);
+    近 2 天直查失败降级仅 agg"""
     today = now.strftime("%Y-%m-%d")
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    agg = query("SELECT `date` AS d, order_status, store, SUM(gmv) AS g, SUM(subsidy) AS sub, SUM(cnt) AS cnt "
-                "FROM orders_day_agg WHERE channel=%s AND `date` >= %s AND `date` < %s "
-                "GROUP BY `date`, order_status, store", [channel, days60, d1])
-    try:
-        recent = query(
-            "SELECT DATE(ordered_at) AS d, order_status, store, "
-            "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)) AS g, "
-            "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)) AS sub, COUNT(*) AS cnt "
-            "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
-            "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
-            (channel, d1 + " 00:00:00"))
-    except Exception:
-        recent = []  # 近 2 天直查失败: 仅 agg(前天及以前), 不阻塞
-    return _assemble(list(agg) + list(recent), channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
+    _st30 = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _f1 = _ex.submit(_q_agg, channel, days60, d1)
+        _f2 = _ex.submit(_q_recent, channel, d1)
+        _f3 = _ex.submit(_q_inventory, channel)
+        _f4 = _ex.submit(_q_digest, channel)
+        agg = _f1.result()
+        try:
+            recent = _f2.result()
+        except Exception:
+            recent = []  # 近 2 天直查失败: 仅 agg, 不阻塞
+        _inv_rows = _f3.result()
+        _ds_map = _f4.result()
+    return _assemble(list(agg) + list(recent), channel, _st30, today, mode,
+                     _inv_rows=_inv_rows, _ds_map=_ds_map)
 
 
 def _build_summary(channel, start_date, end_date, mode="bbcc"):
@@ -279,7 +312,7 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
     return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
 
 
-def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
+def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None):
     # 行形态归一(兼容 DictCursor list[dict] 与非 DictCursor tuple rows——列序=SELECT 顺序)
     _cols = ("d", "order_status", "store", "g", "sub", "cnt")
     _norm = []
@@ -406,20 +439,22 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
                   "payout": round(mg - _refund(d30, today_s) - _sub(d30, today_s), 2)},
     }
 
-    health = _health_index(channel, mode)
+    health = _health_index(channel, mode, _inv_rows, _ds_map)
     # 低库存计数(动态安全线, 替代静态 SQL——seed safety_qty=0 后静态判定恒 0)
     low_stock = {"c": 0}
     try:
-        _ls_rows = query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                         "WHERE channel=%s AND available_qty>0", [channel])
-        _ls_ds = {}
-        try:
-            from biz.sales import load_daily_sales_grouped as _ldsg, calc_sales_multi as _csm, rolling_predict as _rp2
-            _by2, _ = _ldsg(28, channel)
-            _m2 = _csm(_by2, windows=[7, 14, 28])
-            _ls_ds = {s: _rp2(_m2[7].get(s, 0), _m2[14].get(s, 0), _m2[28].get(s, 0)) for s in _by2}
-        except Exception:
-            pass
+        _ls_rows = _inv_rows if _inv_rows is not None else query(
+            "SELECT sku, warehouse_type, available_qty FROM inventory "
+            "WHERE channel=%s AND available_qty>0", [channel])
+        _ls_ds = _ds_map if _ds_map is not None else {}
+        if not _ls_ds:
+            try:
+                from biz.sales import load_daily_sales_grouped as _ldsg, calc_sales_multi as _csm, rolling_predict as _rp2
+                _by2, _ = _ldsg(28, channel)
+                _m2 = _csm(_by2, windows=[7, 14, 28])
+                _ls_ds = {s: _rp2(_m2[7].get(s, 0), _m2[14].get(s, 0), _m2[28].get(s, 0)) for s in _by2}
+            except Exception:
+                pass
         _cfg_ls = {}
         try:
             _cfg_ls = {r.get("key"): r.get("value") for r in
@@ -584,18 +619,20 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
             "brands": brands, "period_stores": period_stores, "period_brands": period_brands}
 
 
-def _health_index(channel, mode="bbcc"):
+def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
     """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
     ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out"""
-    rows = query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                 "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+    rows = _inv_rows if _inv_rows is not None else query(
+        "SELECT sku, warehouse_type, available_qty FROM inventory "
+        "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
     # 日销(共享 get_sales_digest, 与规则引擎/低库存卡同源)
-    ds_map = {}
-    try:
-        from biz.sales import get_sales_digest
-        _, ds_map, _ = get_sales_digest(channel)
-    except Exception as _e:
-            try_err('dash', '健康指数日销降级', _e)
+    ds_map = _ds_map if _ds_map is not None else {}
+    if not ds_map:
+        try:
+            from biz.sales import get_sales_digest
+            _, ds_map, _ = get_sales_digest(channel)
+        except Exception as _e:
+                try_err('dash', '健康指数日销降级', _e)
     # 动态安全线周期(与补货/采购备注同口径)
     _cfg = {}
     try:
