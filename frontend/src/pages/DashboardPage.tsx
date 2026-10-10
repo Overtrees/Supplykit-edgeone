@@ -1111,7 +1111,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   </span>
                 </div>
               </div>
-              {(lowStockAlerts.length > 0 || procTotal > 0) && (
+              {(slowMovingTotal > 0 || otherTotal > 0) && (
                 <>
                   <div
                     style={{
