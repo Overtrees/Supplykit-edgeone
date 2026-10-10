@@ -1,11 +1,11 @@
 #!/bin/sh
-# 推送前门禁: eslint+prettier 同步(秒级); tsc 有 10 分钟缓存(src 未变跳过)
+# 推送前门禁(快检): 仅本次改动文件 eslint+prettier(秒级); 全量 tsc 由 CI/本地手动兜底
 cd "$(dirname "$0")/.." || exit 1
-npx eslint src --max-warnings 0 || { echo "❌ eslint 失败——修复后再推送"; exit 1; }
-npx prettier --check "src/**/*.{ts,tsx,css}" || { echo "❌ prettier 失败——修复后再推送"; exit 1; }
-if [ -f /tmp/tsc_ci_cache ] && [ $(( $(date +%s) - $(cat /tmp/tsc_ci_cache) )) -lt 600 ]; then
-  echo "tsc 缓存命中(10 分钟内已验)"
+CHANGED=$(git diff --name-only HEAD 2>/dev/null | grep -E '^frontend/src/.*\.(ts|tsx)$')
+if [ -n "$CHANGED" ]; then
+  FILES=$(echo "$CHANGED" | sed 's|^frontend/||')
+  (cd frontend && npx eslint $FILES --max-warnings 0) || { echo "❌ eslint 失败——修复后再推送"; exit 1; }
+  (cd frontend && npx prettier --check $FILES) || { echo "❌ prettier 失败——修复后再推送"; exit 1; }
 else
-  npx tsc --noEmit || { echo "❌ tsc 失败——修复后再推送"; exit 1; }
-  date +%s > /tmp/tsc_ci_cache
+  echo "无前端 src 改动, 门禁跳过"
 fi

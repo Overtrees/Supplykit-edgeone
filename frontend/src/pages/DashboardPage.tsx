@@ -656,16 +656,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     x => Number(x.available_qty) < Number(x.safety_qty),
   ).length
   const errCount = (qualityLogs || []).length
-  // 通用明细字号(少行 1-2 放大保障视觉统一 / 多行 3+ 紧凑——所有卡适用)
-  // 断货三级行字号(1 行放大/3 行紧凑)
-  const riskFont =
-    (riskCritical > 0 ? 1 : 0) + (riskWarning > 0 ? 1 : 0) <= 1
-      ? 'clamp(13px, 3.5cqi, 16px)'
-      : 'var(--font-xs)'
-  const detailFont =
-    (slowMovingTotal > 0 ? 1 : 0) + (otherTotal > 0 ? 1 : 0) <= 1
-      ? 'clamp(13px, 3.5cqi, 16px)'
-      : 'var(--font-xs)'
   const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
   const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
@@ -777,6 +767,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     _r.warning != null
       ? _r.warning
       : (_r.items || []).filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
+  // 断货三级行字号(1 行放大/3 行紧凑)——依赖 riskCritical/riskWarning 定义后
+  const riskFont =
+    (riskCritical > 0 ? 1 : 0) + (riskWarning > 0 ? 1 : 0) <= 1
+      ? 'clamp(13px, 3.5cqi, 16px)'
+      : 'var(--font-xs)'
+  const detailFont =
+    (slowMovingTotal > 0 ? 1 : 0) + (otherTotal > 0 ? 1 : 0) <= 1
+      ? 'clamp(13px, 3.5cqi, 16px)'
+      : 'var(--font-xs)'
   // 缺货列表 = stockOverview.items(本身就是 avail<=0 的缺货SKU, 含warehouse_type)
   // 缺货列表 = 当前视图维度全量(oosList, 随 healthTab 拉取); 未加载时回退旧逻辑
   const _oosSrc =
