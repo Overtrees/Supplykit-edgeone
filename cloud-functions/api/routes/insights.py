@@ -64,7 +64,7 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
 @router.get("/insights/with-sales")
 @traced
 def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 0,
-                         page_size: int = 0, search: str = ""):
+                         page_size: int = 0, search: str = "", mode: str = ""):
     """进销存台账: 库存 + 日销 + 周转 + 当月进出(wh_type=own/platform/platform_b)"""
     from datetime import datetime, timezone as _tz
     now = datetime.now(_tz.utc)
@@ -175,6 +175,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     _bbcc_period = (_mc3("b_to_c_days", "bbcc", 3) + _mc3("c_safety_days", "bbcc", 0)
                     + _mc3("ship_to_b_days", "bbcc", 0) + _mc3("safety_multiplier", "bbcc", 0))
     _trad_period = _mc3("lead_time_days", "traditional", 10) + _mc3("safety_multiplier", "traditional", 0)
+    # platform 维度周期跟随补货模式(mode 参数; 空=渠道默认 jd→bbcc/other→traditional)
+    if not mode:
+        mode = "bbcc" if channel == "jd" else "traditional"
     _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
     for r in rows:
         sku = r.get("sku")
@@ -188,7 +191,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
         _bm = batch_map.get(sku) or {}
         _wt3 = str(r.get("warehouse_type") or "")
-        _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if channel == "jd" else _trad_period)
+        _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
         _dyn_safety = round(ds * _per3, 1) if ds > 0 and _per3 > 0 else 0
         items.append({
             "sku": sku, "product_name": r.get("product_name") or sku,

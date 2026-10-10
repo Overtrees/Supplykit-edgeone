@@ -91,6 +91,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           whType +
           '&channel=' +
           globalChannel +
+          '&mode=' +
+          useAppStore.getState().hammerReplenMode +
           '&page=' +
           p +
           '&page_size=' +
