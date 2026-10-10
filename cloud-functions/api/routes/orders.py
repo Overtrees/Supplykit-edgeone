@@ -58,13 +58,16 @@ async def orders_batch(request: Request):
     ids = [x for x in (d.get("ids") or []) if str(x).isdigit()]
     if action not in ("delete", "restore", "permanent-delete") or not ids:
         return fail("参数无效: 需 action 与 ids")
-    _ph = ",".join(["%s"] * len(ids))
-    if action == "delete":
-        execute("UPDATE orders SET deleted_at=NOW() WHERE id IN (%s)" % _ph, ids)
-    elif action == "restore":
-        execute("UPDATE orders SET deleted_at='' WHERE id IN (%s)" % _ph, ids)
-    else:
-        execute("DELETE FROM orders WHERE id IN (%s)" % _ph, ids)
+    # 分批(5000/批)——防大批量单 SQL IN 过大/超时(10万级也稳定)
+    for _i in range(0, len(ids), 5000):
+        _batch = ids[_i:_i + 5000]
+        _ph = ",".join(["%s"] * len(_batch))
+        if action == "delete":
+            execute("UPDATE orders SET deleted_at=NOW() WHERE id IN (%s)" % _ph, _batch)
+        elif action == "restore":
+            execute("UPDATE orders SET deleted_at='' WHERE id IN (%s)" % _ph, _batch)
+        else:
+            execute("DELETE FROM orders WHERE id IN (%s)" % _ph, _batch)
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     return ok({"updated": len(ids)})
