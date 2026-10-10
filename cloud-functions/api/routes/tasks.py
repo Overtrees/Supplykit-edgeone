@@ -262,6 +262,42 @@ async def create_export(request: Request):
     return {"ok": True, "task_id": task_id}
 
 
+@router.post("/tasks/agg-continue")
+@traced
+def agg_continue(channel: str = "jd"):
+    """agg 接力续跑(前端定时器/任一触发): 推进重建至数据最新——summary 零阻塞的后台接力"""
+    try:
+        from routes.dashboard import _rebuild_day_agg
+        _rebuild_day_agg(15)  # 每步推进近 15 天(幂等 ON DUPLICATE)——多步至数据最新
+        from db import execute as _e
+        _e("DELETE FROM sync_tasks WHERE task_type='agg_rebuild' AND status='running' "
+           "AND task_id LIKE 'agg_rebuild_%'")
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()
+        return ok({"continued": True})
+    except Exception as e:
+        import traceback as _tb
+        return fail("agg 续跑失败: %s" % str(e)[:200])
+
+
+@router.post("/tasks/agg-continue")
+@traced
+def agg_continue(channel: str = "jd"):
+    """agg 接力续跑(前端定时器/任一触发): 推进重建至数据最新——summary 零阻塞的后台接力"""
+    try:
+        from routes.dashboard import _rebuild_day_agg
+        _rebuild_day_agg(15)  # 每步推进近 15 天(幂等 ON DUPLICATE)——多步至数据最新
+        from db import execute as _e
+        _e("DELETE FROM sync_tasks WHERE task_type='agg_rebuild' AND status='running' "
+           "AND task_id LIKE 'agg_rebuild_%'")
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()
+        return ok({"continued": True})
+    except Exception as e:
+        import traceback as _tb
+        return fail("agg 续跑失败: %s" % str(e)[:200])
+
+
 @router.get("/exports/status")
 @traced
 def export_status(task_id: str = "", page_size: int = 10000):
