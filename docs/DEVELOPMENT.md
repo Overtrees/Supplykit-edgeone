@@ -827,3 +827,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **坑2**: middleware path 含 /api 前缀——白名单用 endswith 匹配(== 不中)
 - **坑3**: ErrorBoundary 重试须强制 children 重挂载(retryKey key)——setState({err:null}) 同实例重渲染仍错
 - **坑4(TS)**: zustand 解构必须在所有使用前(useEffect 依赖数组渲染时求值——const 声明在后的 TDZ "Cannot access X before initialization")
+
+### 15.45 CI 预防机制(2026-10-09 沉淀——连续多日 CI 红的治本)
+- **推送前门禁(husky pre-push)**: tsc + eslint + prettier 本地全过才允许推送(源头拦截, CI 只兜底)——脚本 .husky/pre-push, prepare=husky 激活
+- **TS strict 联动清单(interface 改动的 4 处必须同步)**: ①interface 声明 ②state 初始化 ③getDerivedStateFromError/工厂返回对象 ④使用处——retryKey 曾漏 ②③(TS2741 连续多次)
+- **本地提交前自检**: git status 确认改动全提交; tsc 后台跑完确认 0 再推(勿推时 tsc 未完成——时序坑)
+- **local_test 覆盖缺口**: agg 路径(orders_day_agg 有数据时)未覆盖——dashboard mode 类签名错误线上才暴露——新增场景补断言

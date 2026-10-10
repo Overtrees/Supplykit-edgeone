@@ -1,0 +1,6 @@
+#!/bin/sh
+# 推送前门禁: 前端 tsc+lint+prettier 失败阻止推送(CI 提前预测——源头拦截)
+cd frontend
+npx tsc --noEmit || { echo "❌ tsc 失败——修复后再推送"; exit 1; }
+npx eslint src --max-warnings 0 || { echo "❌ eslint 失败——修复后再推送"; exit 1; }
+npx prettier --check "src/**/*.{ts,tsx,css}" || { echo "❌ prettier 失败——修复后再推送"; exit 1; }

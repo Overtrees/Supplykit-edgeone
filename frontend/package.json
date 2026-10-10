@@ -18,7 +18,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tsc": "tsc --noEmit",
-    "preflight": "bash ../scripts/preflight.sh"
+    "preflight": "bash ../scripts/preflight.sh",
+    "prepush": "tsc --noEmit && eslint src --max-warnings 0 && prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "prepare": "husky"
   },
   "dependencies": {
     "@sentry/browser": "^8.0.0",
@@ -49,6 +51,7 @@
     "jsdom": "^25.0.0",
     "prettier": "^3.3.3",
     "vite": "^5.4.8",
-    "vitest": "^3.1.0"
+    "vitest": "^3.1.0",
+    "husky": "^9.0.0"
   }
 }
