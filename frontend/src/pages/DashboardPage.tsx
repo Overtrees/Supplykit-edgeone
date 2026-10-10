@@ -1103,9 +1103,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     gap: 10,
                     flexWrap: 'wrap',
                     fontSize: detailFont,
-                    // 底部视觉补偿(动态下沉): 文字行高(1.4em) vs GMV 图表条高(22px)差——
-                    // 负 margin 下沉让文字行底部与图表条底部视觉对齐(字号小下沉多/大接近对齐)
-                    marginBottom: 'calc(1.4em - 22px)',
+                    // 视觉统一: 行高 1.6(块高≈图表 22px——文字行视觉块不矮) + 动态下沉补偿(1.6em-22px)
+                    lineHeight: 1.6,
+                    marginBottom: 'calc(1.6em - 22px)',
                   }}
                 >
                   <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
@@ -1570,9 +1570,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       gap: 6,
                       marginTop: 4,
                       flexWrap: 'wrap',
-                      lineHeight: 1.3,
-                      // 底部视觉补偿(动态下沉): calc(1.4em - 22px) 对齐 GMV 图表条视觉底部
-                      marginBottom: 'calc(1.4em - 22px)',
+                      lineHeight: 1.6,
+                      // 视觉统一: 行高 1.6(块高≈图表 22px) + 动态下沉补偿
+                      marginBottom: 'calc(1.6em - 22px)',
                     }}
                   >
                     {riskCritical > 0 && (
