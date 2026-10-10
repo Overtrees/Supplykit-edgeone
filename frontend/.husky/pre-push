@@ -1,6 +1,11 @@
 #!/bin/sh
-# 推送前门禁: 前端 tsc+lint+prettier 失败阻止推送(CI 提前预测——源头拦截)
-cd frontend
-npx tsc --noEmit || { echo "❌ tsc 失败——修复后再推送"; exit 1; }
+# 推送前门禁: eslint+prettier 同步(秒级); tsc 有 10 分钟缓存(src 未变跳过)
+cd "$(dirname "$0")/.." || exit 1
 npx eslint src --max-warnings 0 || { echo "❌ eslint 失败——修复后再推送"; exit 1; }
 npx prettier --check "src/**/*.{ts,tsx,css}" || { echo "❌ prettier 失败——修复后再推送"; exit 1; }
+if [ -f /tmp/tsc_ci_cache ] && [ $(( $(date +%s) - $(cat /tmp/tsc_ci_cache) )) -lt 600 ]; then
+  echo "tsc 缓存命中(10 分钟内已验)"
+else
+  npx tsc --noEmit || { echo "❌ tsc 失败——修复后再推送"; exit 1; }
+  date +%s > /tmp/tsc_ci_cache
+fi

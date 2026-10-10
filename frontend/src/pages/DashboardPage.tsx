@@ -656,6 +656,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     x => Number(x.available_qty) < Number(x.safety_qty),
   ).length
   const errCount = (qualityLogs || []).length
+  // 通用明细字号(少行 1-2 放大保障视觉统一 / 多行 3+ 紧凑——所有卡适用)
+  // 断货三级行字号(1 行放大/3 行紧凑)
+  const riskFont =
+    (riskCritical > 0 ? 1 : 0) + (riskWarning > 0 ? 1 : 0) <= 1
+      ? 'clamp(13px, 3.5cqi, 16px)'
+      : 'var(--font-xs)'
+  const detailFont =
+    (slowMovingTotal > 0 ? 1 : 0) + (otherTotal > 0 ? 1 : 0) <= 1
+      ? 'clamp(13px, 3.5cqi, 16px)'
+      : 'var(--font-xs)'
   const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
   const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
@@ -1087,16 +1097,17 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 </div>
                 <div
                   className="card-sub"
-                  style={{ marginTop: 2, display: 'flex', gap: 10, flexWrap: 'wrap' }}
+                  style={{
+                    // 少行放大/多行紧凑(与明细行协调——视觉统一)
+                    marginTop: 2,
+                    display: 'flex',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                    fontSize: detailFont,
+                  }}
                 >
-                  <span
-                    style={{ fontSize: 'var(--font-xs)', fontWeight: 600, color: 'var(--danger)' }}
-                  >
-                    ● {errCount} 异常
-                  </span>
-                  <span
-                    style={{ fontSize: 'var(--font-xs)', fontWeight: 600, color: 'var(--warning)' }}
-                  >
+                  <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
+                  <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
                     ● {dashboard?.summary?.active_alerts || 0} 告警
                   </span>
                 </div>
@@ -1105,7 +1116,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <>
                   <div
                     style={{
-                      fontSize: 'var(--font-xs)',
+                      fontSize: detailFont,
                       display: 'flex',
                       gap: 10,
                       marginTop: 6,
@@ -1573,6 +1584,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           color: 'var(--danger)',
                           fontWeight: 600,
                           cursor: 'pointer',
+                          fontSize: riskFont,
                         }}
                       >
                         ● {riskCritical} {t('dash.critical')}
@@ -1591,6 +1603,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           color: 'var(--warning)',
                           fontWeight: 600,
                           cursor: 'pointer',
+                          fontSize: riskFont,
                         }}
                       >
                         ● {riskWarning} {t('dash.warning')}
@@ -1609,6 +1622,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                           color: 'var(--muted2)',
                           fontWeight: 600,
                           cursor: 'pointer',
+                          fontSize: riskFont,
                         }}
                       >
                         ● {_r.total - riskCritical - riskWarning} 观察
