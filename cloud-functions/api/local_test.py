@@ -81,7 +81,7 @@ def fake_one(sql, params=None):
     if "FROM sync_tasks" in sql:
         if params and params[0] == "none":
             return None
-        return {"status": "done", "result": '{"result": {"target": "order", "success": 1, "failed": 0}}'}
+        return {"status": "done", "result": '{"result": {"target": "order", "success": 1, "failed": 0, "filename": "exp_test.csv", "parts": ["p0.csv"]}}'}
     if "FROM export_files" in sql:
         return {"content": "SKU,商品名\nSKU0001,禾味调味料1号\n"}
     if "GROUP BY DATE(ordered_at)" in sql or "GROUP BY warehouse_type" in sql or "warehouse_type IN" in sql:
@@ -647,6 +647,35 @@ for _s, _d in _bd.items():
 check("digest: fused 与直算等价", set(_f0.keys()) == set(_fd.keys()) and all(abs(_f0[k] - _fd[k]) < 1e-9 for k in _f0))
 check("digest: sigma 与直算等价", set(_s0.keys()) == set(_sd.keys()) and all(abs(_s0[k] - _sd[k]) < 1e-9 for k in _s0))
 check("digest: by_sku 全量(完整性)", len(_b0) == len(_bd))
+
+# ── agg 路径回归(2026-10-09: _build_summary_agg 缺 mode 曾线上 NameError——local_test 未覆盖 agg 路径) ──
+def fake_agg_query(sql, params=None):
+    if "FROM orders_day_agg" in sql:
+        return [{"d": _NOW.strftime("%Y-%m-%d"), "order_status": "已完成", "store": "自营",
+                 "g": 200.0, "sub": 10.0, "cnt": 4}]
+    if "GROUP BY DATE(ordered_at)" in sql:
+        return [{"d": _NOW.strftime("%Y-%m-%d"), "order_status": "已完成", "store": "自营",
+                 "g": 100.0, "sub": 5.0, "cnt": 2}]
+    return fake_query(sql, params)
+
+_db.query = fake_agg_query
+try:
+    from routes.dashboard import dashboard_summary
+    _ar = dashboard_summary(channel="jd", mode="bbcc")
+    check("agg 路径: summary 无 NameError(mode 传参)", _ar.get("ok") is True, str(_ar.get("error") or "")[:120])
+    _asum = (_ar.get("data") or {}).get("summary") or {}
+    check("agg 路径: 数据聚合(总数≥agg+当天)", int(_asum.get("total_orders") or 0) >= 6, str(_asum.get("total_orders")))
+    check("agg 路径: health_index 生成", ((_ar.get("data") or {}).get("health_index") or {}).get("score") is not None)
+except Exception as _e:
+    check("agg 路径: summary 调用无异常", False, str(_e)[:200])
+_db.query = fake_query
+
+# ── 接力 status 双层 result 解析回归(2026-10-09: filename 曾取错层级致下载失败) ──
+from routes.tasks import export_status
+_r2 = export_status(task_id="none")
+check("export status: 任务不存在返回", _r2.get("ok") is False or _r2.get("error") is not None, str(_r2))
+_r3 = export_status(task_id="t")
+check("export status: done 双层解析 filename", _r3.get("status") == "done" and _r3.get("filename"), str(_r3))
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

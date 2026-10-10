@@ -28,12 +28,14 @@ def list_rules(channel: str = "jd", include_deleted: int = 0):
     for r in rows:
         try:
             r["condition"] = json.loads(r.get("condition_json") or "{}")
-        except Exception:
+        except Exception as _e:
+            try_err('rules', '规则条件解析失败(静默置空——坏规则不触发)', _e)
             r["condition"] = {}
         try:
             _pp = r.get("params")
             r["params"] = json.loads(_pp) if _pp else {}
-        except Exception:
+        except Exception as _e:
+            try_err('rules', '规则参数解析失败(静默置空)', _e)
             r["params"] = {}
         out.append(r)
     return ok(out)
@@ -150,9 +152,11 @@ def _schedule_rule_eval():
                      "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
                 execute("INSERT INTO eval_pending(`task`, updated_at) VALUES('rules', NOW(6)) "
                         "ON DUPLICATE KEY UPDATE updated_at=NOW(6)")
-            except Exception:
+            except Exception as _e:
+                try_err('rules', 'eval_pending 表自愈失败', _e)
                 return
-    except Exception:
+    except Exception as _e:
+        try_err('rules', '规则即时重算降级', _e)
         return
 
     def _worker():
@@ -299,7 +303,8 @@ async def test_rule(rid: int, request: Request):
         return fail("规则不存在", 404)
     try:
         cond = json.loads(row.get("condition_json") or "{}")
-    except Exception:
+    except Exception as _e:
+        try_err('rules', '测试条件解析失败(静默置空)', _e)
         cond = {}
     body = {}
     try:
@@ -313,7 +318,8 @@ async def test_rule(rid: int, request: Request):
     if not isinstance(params, dict):
         try:
             params = json.loads(row.get("params") or "{}")
-        except Exception:
+        except Exception as _e:
+            try_err('rules', '测试参数解析失败(静默置空)', _e)
             params = {}
     _cj_all = json.dumps(cond, ensure_ascii=False)
     ctx = {
