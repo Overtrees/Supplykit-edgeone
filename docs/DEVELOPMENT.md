@@ -833,3 +833,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **TS strict 联动清单(interface 改动的 4 处必须同步)**: ①interface 声明 ②state 初始化 ③getDerivedStateFromError/工厂返回对象 ④使用处——retryKey 曾漏 ②③(TS2741 连续多次)
 - **本地提交前自检**: git status 确认改动全提交; tsc 后台跑完确认 0 再推(勿推时 tsc 未完成——时序坑)
 - **local_test 覆盖缺口**: agg 路径(orders_day_agg 有数据时)未覆盖——dashboard mode 类签名错误线上才暴露——新增场景补断言
+
+### 15.46 数据追平基准 + 快照分批 + 导入写入(2026-10-10 沉淀)
+- **物化落后检测基准 = 数据最新日(orders MAX)**——非"今天"：演示数据/休息日无新数据时不误判重建(10s 偶发根治); 真实导入→orders MAX 前移→即时追平; 通用场景
+- **快照分段重建**: 每 miss 续段 10天/段(幂等 ON DUPLICATE)——12.6万行单次 INSERT 8-10s 拆分 ~1s/段; 段互斥等价
+- **追平独立于 daily 维护条件**: 保持每 miss 无条件执行(放 builder 内非 _daily_maintenance——被 daily 抢占拦截教训)
+- **TiDB 写入性能**: 大批事务(持锁慢)/小批事务(往返多 366s 最差)/**无事务 executemany 单语句原子**(TiDB INSERT 多值单语句原子=无部分写入)——1000/批最优; 半写入防护由单语句原子性承担
