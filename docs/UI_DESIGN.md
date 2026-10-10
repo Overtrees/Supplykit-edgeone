@@ -18,12 +18,17 @@
 - 容器：`card-grid` → `grid-template-columns: repeat(auto-fit, minmax(140px, 1fr))`，gap 12
 - 内容：flex column，`justify-content: flex-end`（内容贴底——"上松下紧"），`overflow: hidden`
 
-**间距基线（以 GMV 卡为准，4 卡一致）**
+**间距基线（以 GMV 卡为准，4 卡一致——2026-10-10 定版）**
 - 标题行：`minHeight: 14` + 标题 `font-sm`/600/`var(--muted)`/letterSpacing 0.2
-- 内容区：统一 `marginBottom: 4`（卡内最后内容距卡底 = 4 + padding 16 = 20px）
 - 大数字：`clamp(17px, 8cqi, 28px)` / 700 / `tabular-nums`
-- 明细行：`font-9`/`font-10`，`flex-wrap`，行距 `lineHeight 1.3-1.5`
-- **禁止**：卡片内容 `marginBottom` 差异化（曾致 4 卡底部 16 vs 20 不一致——统一 16 贴底）
+- 明细行：统一 `font-xs`（12px）/600 色点语义 / `flex-wrap`
+- **底部几何统一（视觉基准）**：最后内容块 `margin: 0` + 卡 padding 16 兜底——4 卡底部留白**几何恒 16**
+- **动态下沉分层（图柱 vs 文字行视觉差）**：
+  - 卡底部有**图柱**（GMV 微趋势/健康趋势）→ 图柱是最后块 → **16 兜底**（图柱自带视觉重量）
+  - 图柱**缺失**（如 periodTrend<3 不渲染）→ 最后文字行是最后块 → 字身底接近行底（`lineHeight 1.2`——字身沉到 16 区，视觉与图柱对齐）
+  - 断货 SKU 行（自带内容，视觉重）→ **16 兜底**
+  - **不做负 margin 下沉**（曾致底距 16→11 破坏一致）；**不做少行放大**（曾致告警并排截断——统一 font-xs）
+- **禁止**：卡片内容 `marginBottom` 差异化；负 margin 补偿（破坏 16 基线）；少行字号放大（截断）
 
 **信息密度（手机横屏 ≤932px）**
 - 4 卡必须保持一行（不换 2×2）
