@@ -29,21 +29,6 @@ def _daily_maintenance(channel="jd"):
     """应用层每日维护(治本: 不依赖 edgeone schedules——实测未自动触发)
     抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
     内容: 快照/agg 数据追平(每 miss) + 每日例行(日志治理等)"""
-    # 快照/agg 数据追平(独立于 daily 抢占——每 miss 检查数据前进即续段/续步——真实导入新数据即时追平)
-    try:
-        _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-        _db2 = str(_om2.get("m") or "")[:10]
-        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
-        _m = str(_r.get("m") or "")[:10]
-        if (not _m) or (_db2 and _m < _db2):
-            _snapshot_step(channel, _db2)
-        _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
-        _amax = str(_am.get("m") or "")[:10]
-        if _db2 and _amax < _db2:
-            _rebuild_day_agg(3)  # agg 续步(近 3 天幂等——每 miss 推进至数据最新)
-    except Exception as _e:
-            try_err('dashboard', '数据追平降级', _e)
     try:
         _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
@@ -181,6 +166,21 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
 
     def _b():
+        # 数据追平(每 miss 无条件——真实导入新数据即时续段/续步到快照/agg; 独立于 daily 维护条件)
+        try:
+            _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                       "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+            _db2 = str(_om2.get("m") or "")[:10]
+            _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
+            _m = str(_r.get("m") or "")[:10]
+            if (not _m) or (_db2 and _m < _db2):
+                _snapshot_step(channel, _db2)
+            _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
+            _amax = str(_am.get("m") or "")[:10]
+            if _db2 and _amax < _db2:
+                _rebuild_day_agg(3)
+        except Exception as _e:
+                try_err('dashboard', '数据追平降级', _e)
         # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
         try:
             from db import query as _qm
