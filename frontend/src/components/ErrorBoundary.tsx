@@ -65,25 +65,27 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
             >
               {t('common.retry')}
             </button>
-            <button
-              onClick={() => {
-                this.setState({ err: null })
-                try {
-                  ;(window as any).__setPage && (window as any).__setPage('dash')
-                } catch (e) {}
-              }}
-              style={{
-                padding: '6px 14px',
-                fontSize: 12,
-                border: 'none',
-                borderRadius: 32,
-                background: 'var(--primary)',
-                color: '#fff',
-                cursor: 'pointer',
-              }}
-            >
-              回到看板
-            </button>
+            {typeof window !== 'undefined' && window.__page !== 'dash' && (
+              <button
+                onClick={() => {
+                  this.setState({ err: null })
+                  try {
+                    ;(window as unknown as { __setPage?: (p: string) => void }).__setPage?.('dash')
+                  } catch (e) {}
+                }}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  border: 'none',
+                  borderRadius: 32,
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                回到看板
+              </button>
+            )}
           </div>
         </div>
       )

@@ -74,6 +74,8 @@ export default function App() {
     } catch (e) {}
   }
   window.__setPage = (p: string) => {
+    window.__page = p
+
     navigateTo(p)
     closeHammerMenu()
   }
