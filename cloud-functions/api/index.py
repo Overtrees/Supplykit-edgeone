@@ -227,41 +227,11 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                               ("M1 订单69码补齐完成(补 %d 行)" % _m1,))
                     except Exception as _e:
                             try_err('index', '静默降级', _e)
-                    # M2: 订单时间仿真随机化(WHERE 0点幂等, 分批)
-                    try:
-                        _mx2 = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
-                        _mxn2 = int(_mx2.get("m") or 0)
-                        _m2 = 0
-                        for _lo in range(0, _mxn2 + 1, 50000):
-                            _m2 += _exec("UPDATE orders SET "
-                                         "ordered_at = CONCAT(DATE_FORMAT(ordered_at,'%%Y-%%m-%%d'),' ',"
-                                         "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')), "
-                                         "paid_at = CONCAT(DATE_FORMAT(paid_at,'%%Y-%%m-%%d'),' ',"
-                                         "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
-                                         "WHERE id BETWEEN %s AND %s AND RIGHT(ordered_at,8)='00:00:00'", [_lo, _lo + 49999])
-                        _exec("INSERT INTO quality_logs(log_type, level, message, source) "
-                              "VALUES('migration','info',%s,'index')",
-                              ("M2 订单时间随机化完成(%d 行)" % _m2,))
-                    except Exception as _e:
-                            try_err('index', '静默降级', _e)
-                    # M3: 出入库时间仿真随机化(同理; 2026-10-07 修复: Python % 格式化把 %%Y 变 %Y 后
-                    # pymysql 参数化再当占位符 → TypeError 迁移从未成功 —— 改 f-string 拼表名 + %% 交 pymysql 转义)
-                    try:
-                        _m3 = 0
-                        for _tbl, _col in (('inbound_records', 'inbound_date'), ('outbound_records', 'outbound_date')):
-                            _m3 += _exec(f"UPDATE `{_tbl}` SET `{_col}` = CONCAT(DATE_FORMAT(`{_col}`,'%%Y-%%m-%%d'),' ',"
-                                         "LPAD(FLOOR(RAND()*24),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0'),':',LPAD(FLOOR(RAND()*60),2,'0')) "
-                                         f"WHERE RIGHT(`{_col}`,8)='00:00:00'", [])
-                        _exec("INSERT INTO quality_logs(log_type, level, message, source) "
-                              "VALUES('migration','info',%s,'index')",
-                              ("M3 出入库时间随机化完成(%d 行)" % _m3,))
-                    except Exception as _e:
-                            try_err('index', '静默降级', _e)
-                except Exception as _e:
-                        try_err('index', '静默降级', _e)
+                except Exception as _e:  # 迁移整体降级(M0/M1 已各自兜底)
+                        try_err('index', '迁移降级', _e)
             _thM.Thread(target=_run_migrations, daemon=True).start()
-        except Exception as _e:
-                try_err('index', '静默降级', _e)
+        except Exception as _e:  # 启动迁移整体降级(不阻塞后续补列/启动)
+                try_err('index', '启动迁移降级', _e)
         # 启动补列(幂等): 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B 2026-09-10)
         try:
             from db import query as _qryX

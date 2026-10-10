@@ -26,7 +26,7 @@ def load_daily_sales(cutoff_days, channel, skus=None):
 
     # 1. 快照历史
     rows = query(
-        "SELECT date, sku, order_count FROM daily_sales_snapshot "
+        "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date) "
         "WHERE channel=%s AND date>=%s", (channel, cutoff))
     for r in rows:
         _add(str(r.get("sku") or ""), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
@@ -59,7 +59,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
         w[d] = w.get(d, 0) + qty
 
     rows = query(
-        "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot "
+        "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date) "
         "WHERE channel=%s AND date>=%s", (channel, cutoff))
     for r in rows:
         _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
@@ -168,7 +168,7 @@ def get_sales_digest(channel, days=28):
             _pl = _json.loads(_row["value"])
             _age = (_now - _t.mktime(_t.strptime(str(_row.get("created_at") or "")[:19],
                                                 "%Y-%m-%d %H:%M:%S"))) if _row.get("created_at") else 999
-            if _age <= 60 and _pl.get("fused") is not None:
+            if _age <= 300 and _pl.get("fused") is not None:
                 _f = {str(k): float(v) for k, v in _pl["fused"].items()}
                 _sg = {str(k): float(v) for k, v in (_pl.get("sigma") or {}).items()}
                 _SALES_DIGEST_CACHE[_key] = (_now, ({}, _f, _sg))
