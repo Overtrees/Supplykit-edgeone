@@ -102,7 +102,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
-  const [, setFullOut] = useState(null) // 缺货弹窗完整数据(按当前视图维度)
+  const [fullOut, setFullOut] = useState<any[] | null>(null) // 缺货弹窗完整数据(点击时按当前维度拉取)
   const [oosList, setOosList] = useState(null) // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [healthTrend, setHealthTrend] = useState([]) // 健康分数趋势(近14天, health-trend 接口)
   const [fullAlerts, setFullAlerts] = useState(null) // 告警弹窗完整数据(点击时拉取)
@@ -1403,7 +1403,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       </span>
                       <span
                         onClick={function () {
-                          if (_oosSrc.length > 0) setShowAllOut(true)
+                          // 入口点击时按当前维度拉全量(防 healthTab 异步竞态互串)
+                          loadFullOut()
+                          setShowAllOut(true)
                         }}
                         className="clickable"
                         style={{
@@ -2708,9 +2710,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     color: 'var(--text)',
                   }}
                 >
-                  缺货 · 共 {_oosSrc.length} 条
+                  缺货 · 共 {(fullOut && fullOut.length ? fullOut : _oosSrc).length} 条
                 </div>
-                {_oosSrc.map(function (x, i) {
+                {(fullOut && fullOut.length ? fullOut : _oosSrc).map(function (x, i) {
                   return (
                     <div
                       key={i}
