@@ -1094,8 +1094,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <div
                   className="card-sub"
                   style={{
-                    // 少行放大/多行紧凑(与明细行协调——视觉统一)
-                    marginTop: 2,
+                    // 上松下紧(定版): 数字下间距松(6)——异常/告警行
+                    marginTop: 6,
                     display: 'flex',
                     gap: 8,
                     flexWrap: 'nowrap',
@@ -1118,7 +1118,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       fontSize: detailFont,
                       display: 'flex',
                       gap: 10,
-                      marginTop: 6,
+                      marginTop: 4,
                       flexWrap: 'wrap',
                       lineHeight: 1.2,
                       alignItems: 'center',
