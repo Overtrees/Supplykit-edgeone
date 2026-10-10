@@ -885,7 +885,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               flexDirection: 'column',
               justifyContent: 'flex-end',
               // 动态兜底: 微趋势条(底部)缺失时内容区是最后——下沉对齐图柱视觉
-              marginBottom: periodTrend.length >= 3 ? 4 : 'calc(1em - 22px)',
+              marginBottom: 4,
             }}
           >
             <div
@@ -1101,9 +1101,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     flexWrap: 'nowrap',
                     whiteSpace: 'nowrap',
                     fontSize: detailFont,
-                    lineHeight: 1.6,
+                    lineHeight: 1.2,
                     // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
-                    marginBottom: slowMovingTotal > 0 || otherTotal > 0 ? 0 : 'calc(1em - 22px)',
                   }}
                 >
                   <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
@@ -1124,7 +1123,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       lineHeight: 1.4,
                       alignItems: 'center',
                       // 动态下沉: 有滞销/其他时本行是最后一行——对齐图柱底部区间
-                      marginBottom: 'calc(1em - 22px)',
                     }}
                   >
                     {/* 去重(2026-10-09): 低库存/采购补货计数与大卡冗余, 待处理卡只保留唯一信息:
@@ -1373,7 +1371,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     style={{
                       marginTop: 4,
                       // 动态兜底: 健康图柱(底部)缺失时明细行是最后——下沉对齐 GMV 图柱视觉
-                      marginBottom: healthTrendBar ? 'calc(1em - 22px)' : 0,
                     }}
                   >
                     <div
@@ -1583,7 +1580,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       gap: 6,
                       marginTop: 4,
                       flexWrap: 'wrap',
-                      lineHeight: 1.6,
+                      lineHeight: 1.2,
                     }}
                   >
                     {riskCritical > 0 && (
