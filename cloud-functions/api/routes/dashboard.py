@@ -39,8 +39,11 @@ def _daily_maintenance():
         if _got_snap:
             _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot") or {}
             _m = str(_r.get("m") or "")[:10]
-            _yest = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-            if (not _m) or _m < _yest:
+            # 基准 = 数据最新日(orders MAX)——数据追平语义: 数据前进才重建(演示 seed 到 10-08, now=10-10 误判致 12.6万行快照每次重建)
+            _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                       "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+            _db2 = str(_om2.get("m") or "")[:10]
+            if (not _m) or (_db2 and _m < _db2):
                 execute(
                     "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
                     "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
@@ -54,7 +57,10 @@ def _daily_maintenance():
             _rebuild_day_agg(3)
             _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
             _amax = str(_am.get("m") or "")[:10]
-            if not _amax or _amax < _yest:
+            # 落后 ≤2 天不重建(读 agg<前天 + 正查≥昨天 无缝覆盖——准确性✓, 消除 90 天重建 8-10s 偶发阻塞)
+            # 落后 >2 天(缺口>正查窗口)才全量重建——重建仍低频(maintenance 中断多日才触发)
+            _agg_need = _amax < (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+            if not _amax or _agg_need:
                 _rebuild_day_agg(90)
         except Exception as _e:
                 try_err('dashboard', '静默降级', _e)
