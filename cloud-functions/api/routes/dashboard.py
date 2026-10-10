@@ -320,13 +320,20 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc"):
             t["GMV"] += g
         funnel[st] = funnel.get(st, 0) + cnt
 
+    # 每日退款/补贴预聚合(一次遍历 day_rows——原每点 O(天×day_rows) 遍历提速)
+    _rf_by_day = {}
+    _sb_by_day = {}
+    for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items():
+        if _st == "申请退款":
+            _rf_by_day[_d2] = _rf_by_day.get(_d2, 0) + _g
+        if _st in _PAID:
+            _sb_by_day[_d2] = _sb_by_day.get(_d2, 0) + _sb
+
     trend_data = []
     for _k, _v in sorted(trend.items()):
         _d = str(_k)[:10]
-        _rf = sum(_g for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items()
-                  if _d2 == _d and _st == "申请退款")
-        _sb_all = sum(_sb for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items()
-                      if _d2 == _d and _st in _PAID)
+        _rf = _rf_by_day.get(_d, 0)
+        _sb_all = _sb_by_day.get(_d, 0)
         trend_data.append({"日期": _k, "GMV": _v["GMV"], "订单数": _v["订单数"],
                            "net_gmv": round(float(_v["GMV"]) - _rf, 2),
                            "payout": round(float(_v["GMV"]) - _rf - _sb_all, 2)})
