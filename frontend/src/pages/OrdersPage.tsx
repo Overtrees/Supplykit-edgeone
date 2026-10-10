@@ -5,6 +5,7 @@ import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 import { useToast } from '../components/Toast'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { IconCircle, IconCircleCheck } from '../components/Icons'
 import { t } from '../locale'
 
 const COLS = [
@@ -244,18 +245,27 @@ export default function OrdersPage() {
                           style={{ width: 32, textAlign: 'center' }}
                           onClick={e => e.stopPropagation()}
                         >
-                          <input
-                            type="checkbox"
-                            checked={orderSelIds.includes(x.id)}
-                            onChange={() =>
+                          <span
+                            onClick={() =>
                               setOrderSelIds(
                                 orderSelIds.includes(x.id)
                                   ? orderSelIds.filter(i => i !== x.id)
                                   : [...orderSelIds, x.id],
                               )
                             }
-                            style={{ cursor: 'pointer', width: 16, height: 16 }}
-                          />
+                            style={{
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            {orderSelIds.includes(x.id) ? (
+                              <IconCircleCheck size={20} />
+                            ) : (
+                              <IconCircle size={20} />
+                            )}
+                          </span>
                         </td>
                       )}
                       {visCols.map(id => {

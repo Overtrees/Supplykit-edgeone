@@ -496,6 +496,19 @@ export const IconWarning: React.FC<IconProps> = p => (
   </svg>
 )
 
+export const IconCircleCheck: React.FC<IconProps> = p => (
+  <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" {...p}>
+    <circle cx="12" cy="12" r="10" fill="var(--primary)" />
+    <path
+      d="M8 12.5l3 3 5-6"
+      stroke="#fff"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+  </svg>
+)
 export const IconCircle: React.FC<IconProps> = p => (
   <svg {...s(p)} viewBox="0 0 24 24" fill="currentColor" stroke="none">
     <circle cx="12" cy="12" r="6" />
