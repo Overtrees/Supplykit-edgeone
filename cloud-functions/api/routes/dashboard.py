@@ -252,6 +252,8 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     today = now.strftime("%Y-%m-%d")
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     _st30 = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    import time as _t
+    _t0 = _t.time()
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as _ex:
         _f1 = _ex.submit(_q_agg, channel, days60, d1)
@@ -265,8 +267,20 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
             recent = []  # 近 2 天直查失败: 仅 agg, 不阻塞
         _inv_rows = _f3.result()
         _ds_map = _f4.result()
-    return _assemble(list(agg) + list(recent), channel, _st30, today, mode,
+    _t1 = _t.time()
+    _ass = _assemble(list(agg) + list(recent), channel, _st30, today, mode,
                      _inv_rows=_inv_rows, _ds_map=_ds_map)
+    _t2 = _t.time()
+    # 临时计时(定位非缓存 3s 分布——排查后移除)
+    try:
+        from db import execute as _et
+        _et("INSERT INTO quality_logs(log_type, level, message, details, source) "
+            "VALUES('perf_debug','info',%s,%s,'dash')",
+            ("summary agg 计时: 查询 %.2fs 组装 %.2fs" % (_t1 - _t0, _t2 - _t1),
+             "parallel"))
+    except Exception:
+        pass
+    return _ass
 
 
 def _build_summary(channel, start_date, end_date, mode="bbcc"):

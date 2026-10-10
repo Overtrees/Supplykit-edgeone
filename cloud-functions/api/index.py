@@ -185,7 +185,7 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec("CREATE TABLE IF NOT EXISTS eval_pending ("
                   "`task` VARCHAR(32) PRIMARY KEY, "
                   "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
-            # 一次性数据迁移登记表(2026-09-15: barcode 补齐 / 时间仿真随机化 —— INSERT IGNORE 抢注幂等)
+            # 一次性数据迁移登记表(2026-09-15: barcode 补齐 —— INSERT IGNORE 抢注幂等; M2/M3 已移除)
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
             _exec("CREATE TABLE IF NOT EXISTS log_archives ("
                   "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
@@ -198,7 +198,7 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "PRIMARY KEY(`date`, channel, order_status, store))")
         except Exception as _e:
                 try_err('index', '静默降级', _e)
-        # ── 启动数据迁移(2026-09-15: barcode 补齐 / 时间仿真随机化)
+        # ── 启动数据迁移(2026-09-15: barcode 补齐; 2026-10-10 移除 M2/M3 时间随机化——演示专用且实际场景有害)
         # 设计: 不抢注, 靠 WHERE 条件幂等(空值/0点) + 分批(5万) → 每次启动续跑, 中断下次续跑, 完成自然零行
         # 注意: SQL 内 DATE_FORMAT 的 % 必须 %% 转义(pymysql 参数化时 % 被当占位符 → 曾致迁移假成功)
         try:
