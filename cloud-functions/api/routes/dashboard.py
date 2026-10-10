@@ -35,23 +35,14 @@ def _daily_maintenance():
         if not _got:
             return  # 今天已维护(本实例或其他实例)
         # 快照新鲜度自愈(独立 'snapshot' key 与 cron_freshness 互斥——一天只重建一次)
-        _got_snap = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'snapshot')", [_today])
-        if _got_snap:
-            _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot") or {}
-            _m = str(_r.get("m") or "")[:10]
-            # 基准 = 数据最新日(orders MAX)——数据追平语义: 数据前进才重建(演示 seed 到 10-08, now=10-10 误判致 12.6万行快照每次重建)
-            _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                       "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-            _db2 = str(_om2.get("m") or "")[:10]
-            if (not _m) or (_db2 and _m < _db2):
-                execute(
-                    "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
-                    "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
-                    "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
-                    "AND ordered_at >= %s "
-                    "GROUP BY DATE(ordered_at), channel, sku, warehouse "
-                    "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
-                    [(datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")])
+        # 快照分段推进: 每 miss 检查落后(基准=数据最新 orders MAX) → 续 10 天/段——12.6万行单次 INSERT 拆分为 ~1s/段
+        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
+        _m = str(_r.get("m") or "")[:10]
+        _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+        _db2 = str(_om2.get("m") or "")[:10]
+        if (not _m) or (_db2 and _m < _db2):
+            _snapshot_step(channel, _db2)
         # ② orders_day_agg 物化表增量(看板提速): 重建近 3 天(覆盖当天导入/删除) + MAX 落后则全量重建
         try:
             _rebuild_day_agg(3)
@@ -215,6 +206,31 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
 
     _result = _cache_get(_key, _SUMMARY_TTL, _b)
     return ok(_result)
+
+
+def _snapshot_step(channel, _db2):
+    """快照分段续跑(2026-10-10): 每 miss 推进 10 天(幂等 ON DUPLICATE)——12.6万行单次 INSERT 8-10s
+    拆分为 10天/段 ~1s, 多 miss 追平至数据最新; 准确性=段互斥([from,to) 并集=全量)/完整性=推进至 orders MAX
+    """
+    try:
+        from datetime import timedelta as _td
+        _now = datetime.now(timezone.utc)
+        _cur = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel=%s", [channel]) or {}
+        _cur_d = str(_cur.get("m") or "")[:10]
+        _frm = datetime.strptime(_cur_d, "%Y-%m-%d") + _td(days=1) if _cur_d else (datetime.strptime(_db2, "%Y-%m-%d") - _td(days=90))
+        _to = min(_frm + _td(days=10), datetime.strptime(_db2, "%Y-%m-%d") + _td(days=1))
+        if _frm >= _to:
+            return
+        execute(
+            "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
+            "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+            "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
+            "AND ordered_at >= %s AND ordered_at < %s "
+            "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+            "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
+            [_frm.strftime("%Y-%m-%d"), _to.strftime("%Y-%m-%d")])
+    except Exception as _e:
+            try_err('dashboard', '快照续段降级', _e)
 
 
 def _rebuild_day_agg(days=90, channel=None):
