@@ -1123,6 +1123,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       flexWrap: 'wrap',
                       lineHeight: 1.4,
                       alignItems: 'center',
+                      // 动态下沉: 有滞销/其他时本行是最后一行——对齐图柱底部区间
+                      marginBottom: 'calc(1em - 22px)',
                     }}
                   >
                     {/* 去重(2026-10-09): 低库存/采购补货计数与大卡冗余, 待处理卡只保留唯一信息:
