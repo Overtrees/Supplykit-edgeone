@@ -63,8 +63,8 @@ def _list_products_inner(channel, page, page_size, search, include_deleted):
         r.setdefault("is_active", 1 if (r.get("status") or "active") == "active" else 0)
 
     if page > 0 and page_size > 0:
-        return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
-    return ok(rows)
+        return {"items": rows, "total": total, "page": page, "page_size": page_size}
+    return rows
 
 
 @router.post("/products/batch")
