@@ -26,7 +26,7 @@ def load_daily_sales(cutoff_days, channel, skus=None):
 
     # 1. 快照历史
     rows = query(
-        "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date) "
+        "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
         "WHERE channel=%s AND date>=%s", (channel, cutoff))
     for r in rows:
         _add(str(r.get("sku") or ""), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
@@ -59,7 +59,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
         w[d] = w.get(d, 0) + qty
 
     rows = query(
-        "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date) "
+        "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
         "WHERE channel=%s AND date>=%s", (channel, cutoff))
     for r in rows:
         _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
