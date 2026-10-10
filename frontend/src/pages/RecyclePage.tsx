@@ -48,7 +48,9 @@ export default function RecyclePage() {
         const items = rData.data || rData || []
         setRules(items.filter((x: any) => x.deleted_at))
         const o = oData.data || oData || []
-        setOrders(Array.isArray(o) ? o.filter((x: any) => x.deleted_at) : [])
+        // 响应结构 {items,total}——取 items(原生 fetch 未解包 axios 层)
+        const orderItems = Array.isArray(o) ? o : Array.isArray(o.items) ? o.items : []
+        setOrders(orderItems.filter((x: any) => x.deleted_at))
         setLoading(false)
       })
       .catch(() => {
