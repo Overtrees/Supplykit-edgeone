@@ -1102,6 +1102,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     whiteSpace: 'nowrap',
                     fontSize: detailFont,
                     lineHeight: 1.0,
+                    // glyph descent 补偿(中文字形底行盒内上浮 0.4px)——微下沉对齐图柱底 16
+                    marginBottom: -0.4,
                     // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
                   }}
                 >
@@ -1122,6 +1124,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       flexWrap: 'wrap',
                       lineHeight: 1.0,
                       alignItems: 'center',
+                      // glyph descent 补偿(0.4px)——微下沉对齐图柱底 16
+                      marginBottom: -0.4,
                       // 本行(滞销/其他)是最后一行时——字身沉底(lineHeight 1.2=16)与图柱底对齐
                     }}
                   >
