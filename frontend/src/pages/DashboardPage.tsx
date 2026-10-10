@@ -1101,7 +1101,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     flexWrap: 'nowrap',
                     whiteSpace: 'nowrap',
                     fontSize: detailFont,
-                    lineHeight: 1.2,
+                    lineHeight: 1.0,
                     // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
                   }}
                 >
