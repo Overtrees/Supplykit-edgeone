@@ -153,11 +153,28 @@ def get_sales_digest(channel, days=28):
     与看板 summary/aux 缓存同频(30s/60s), 实时性不劣化; 数据变更后最迟 30s 反映
     """
     import time as _t
+    import json as _json
     _now = _t.time()
     _key = (channel, days)
     _hit = _SALES_DIGEST_CACHE.get(_key)
     if _hit and _now - _hit[0] < _SALES_DIGEST_TTL:
         return _hit[1]
+    # 表缓存(跨实例共享——首屏新实例命中, 60s; invalidate_all 数据变更清表 → 重算)
+    try:
+        from db import one as _one
+        _tk = "sales_digest|%s|%s" % (channel, days)
+        _row = _one("SELECT value, created_at FROM analysis_cache WHERE `key`=%s", [_tk])
+        if _row and _row.get("value"):
+            _pl = _json.loads(_row["value"])
+            _age = (_now - _t.mktime(_t.strptime(str(_row.get("created_at") or "")[:19],
+                                                "%Y-%m-%d %H:%M:%S"))) if _row.get("created_at") else 999
+            if _age <= 60 and _pl.get("fused") is not None:
+                _f = {str(k): float(v) for k, v in _pl["fused"].items()}
+                _sg = {str(k): float(v) for k, v in (_pl.get("sigma") or {}).items()}
+                _SALES_DIGEST_CACHE[_key] = (_now, ({}, _f, _sg))
+                return {}, _f, _sg
+    except Exception:
+        pass
     by_sku, _ = load_daily_sales_grouped(days, channel)
     _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
     fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
@@ -168,6 +185,15 @@ def get_sales_digest(channel, days=28):
             _mm = sum(_vl) / len(_vl)
             _vv = sum((x - _mm) ** 2 for x in _vl) / len(_vl)
             sigma[_s] = _vv ** 0.5
+    # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值)
+    try:
+        from db import execute as _exec
+        _exec("INSERT INTO analysis_cache(`key`, value) VALUES(%s,%s) "
+              "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+              ["sales_digest|%s|%s" % (channel, days),
+               _json.dumps({"fused": fused, "sigma": sigma})])
+    except Exception:
+        pass
     _SALES_DIGEST_CACHE[_key] = (_now, (by_sku, fused, sigma))
     return by_sku, fused, sigma
 
