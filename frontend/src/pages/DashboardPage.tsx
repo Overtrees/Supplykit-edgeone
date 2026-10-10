@@ -2494,7 +2494,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       : riskFilter === 'yellow'
                         ? '观察'
                         : '全部'}{' '}
-                  {_r.total} 条
+                  {(riskFilter === 'red'
+                    ? riskCritical
+                    : riskFilter === 'orange'
+                      ? riskWarning
+                      : riskFilter === 'yellow'
+                        ? _r.total - riskCritical - riskWarning
+                        : _r.total) || 0}{' '}
+                  条
                 </div>
                 {/* 级别切换 tab(三级 pill 入口联动, 弹窗内可切换) */}
                 <div
