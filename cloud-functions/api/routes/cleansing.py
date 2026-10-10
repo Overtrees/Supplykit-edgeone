@@ -543,6 +543,15 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         if "channel" not in it:
             it["channel"] = channel
     if target == "order":
+        # ordered_at 缺省补今天(2026-10-10: orders.ordered_at 无表默认——CSV 无日期列映射时曾 NULL——订单日期丢失/看板统计漏)
+        try:
+            from datetime import datetime as _dt2, timezone as _tz2
+            _now_s = _dt2.now(_tz2.utc).strftime("%Y-%m-%d %H:%M:%S")
+            for c in cleaned:
+                if not str(c.get("ordered_at") or "").strip():
+                    c["ordered_at"] = _now_s
+        except Exception as _e:
+                try_err('cleansing', '静默降级', _e)
         # 69 码自动查补(2026-09-15): 导入文件未映射/为空时从 products 按 sku 拉取(products.barcode 已全量填充)
         # —— 准确性(sku 1:1 唯一)/完整性(products 全有 barcode)/实时性(导入即补, 不再产生空 69 码)
         try:
