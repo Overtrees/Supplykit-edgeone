@@ -25,10 +25,10 @@ _SUMMARY_TTL = 30
 
 
 
-def _daily_maintenance():
+def _daily_maintenance(channel="jd"):
     """应用层每日维护(治本: 不依赖 edgeone schedules——实测未自动触发)
     抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
-    内容: ①快照新鲜度自愈(MAX(date) 落后昨天 → 重建 90 天快照, 应用层替代 cron/snapshot)"""
+    内容: 快照/agg 数据追平(每 miss) + 每日例行(日志治理等)"""
     # 快照/agg 数据追平(独立于 daily 抢占——每 miss 检查数据前进即续段/续步——真实导入新数据即时追平)
     try:
         _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
@@ -189,7 +189,7 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                      _qm("SELECT task FROM maintenance_log WHERE `date`=%s AND task IN ('daily','daily_rules')",
                          [_today])}
             if "daily" not in _done:
-                _daily_maintenance()
+                _daily_maintenance(channel)
             if "daily_rules" not in _done:
                 _daily_rules_guard()
         except Exception as _e:
