@@ -768,14 +768,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       ? _r.warning
       : (_r.items || []).filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
   // 断货三级行字号(1 行放大/3 行紧凑)——依赖 riskCritical/riskWarning 定义后
-  const riskFont =
-    (riskCritical > 0 ? 1 : 0) + (riskWarning > 0 ? 1 : 0) <= 1
-      ? 'clamp(13px, 3.5cqi, 16px)'
-      : 'var(--font-xs)'
-  const detailFont =
-    (slowMovingTotal > 0 ? 1 : 0) + (otherTotal > 0 ? 1 : 0) <= 1
-      ? 'clamp(13px, 3.5cqi, 16px)'
-      : 'var(--font-xs)'
+  // 断货三级行字号统一 font-xs(与明细一致)
+  const riskFont = 'var(--font-xs)'
+  // 明细行字号统一 font-xs(恢复原大小——少行放大曾致告警并排截断)
+  const detailFont = 'var(--font-xs)'
   // 缺货列表 = stockOverview.items(本身就是 avail<=0 的缺货SKU, 含warehouse_type)
   // 缺货列表 = 当前视图维度全量(oosList, 随 healthTab 拉取); 未加载时回退旧逻辑
   const _oosSrc =
@@ -889,7 +885,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               flexDirection: 'column',
               justifyContent: 'flex-end',
               // 动态兜底: 微趋势条(底部)缺失时内容区是最后——下沉对齐图柱视觉
-              marginBottom: periodTrend.length >= 3 ? 4 : 'calc(1.6em - 22px)',
+              marginBottom: periodTrend.length >= 3 ? 4 : 'calc(1em - 22px)',
             }}
           >
             <div
@@ -1107,7 +1103,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     fontSize: detailFont,
                     lineHeight: 1.6,
                     // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
-                    marginBottom: slowMovingTotal > 0 || otherTotal > 0 ? 0 : 'calc(1.6em - 22px)',
+                    marginBottom: slowMovingTotal > 0 || otherTotal > 0 ? 0 : 'calc(1em - 22px)',
                   }}
                 >
                   <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
@@ -1375,7 +1371,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     style={{
                       marginTop: 4,
                       // 动态兜底: 健康图柱(底部)缺失时明细行是最后——下沉对齐 GMV 图柱视觉
-                      marginBottom: healthTrendBar ? 'calc(1.6em - 22px)' : 0,
+                      marginBottom: healthTrendBar ? 'calc(1em - 22px)' : 0,
                     }}
                   >
                     <div
