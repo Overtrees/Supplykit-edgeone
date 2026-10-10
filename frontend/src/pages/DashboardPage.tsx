@@ -1103,6 +1103,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     gap: 10,
                     flexWrap: 'wrap',
                     fontSize: detailFont,
+                    // 底部视觉补偿: 文字行 vs GMV 图表条(22px)高度差——下沉对齐视觉底部线
+                    paddingBottom: 5,
                   }}
                 >
                   <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
@@ -1568,6 +1570,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       marginTop: 4,
                       flexWrap: 'wrap',
                       lineHeight: 1.3,
+                      // 底部视觉补偿: 文字行 vs GMV 图表条高度差——下沉对齐视觉底部线
+                      paddingBottom: 5,
                     }}
                   >
                     {riskCritical > 0 && (
