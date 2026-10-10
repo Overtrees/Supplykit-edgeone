@@ -203,6 +203,13 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
 
 
 def _snapshot_step(channel, _db2):
+    try:
+        from db import execute as _elog
+        _elog("INSERT INTO quality_logs(log_type, level, message, source) "
+              "VALUES('perf_debug','info',%s,'dash')",
+              ("快照续段: ch=%s db2=%s" % (channel, _db2)))
+    except Exception:
+        pass
     """快照分段续跑(2026-10-10): 每 miss 推进 10 天(幂等 ON DUPLICATE)——12.6万行单次 INSERT 8-10s
     拆分为 10天/段 ~1s, 多 miss 追平至数据最新; 准确性=段互斥([from,to) 并集=全量)/完整性=推进至 orders MAX
     """
@@ -223,6 +230,13 @@ def _snapshot_step(channel, _db2):
             "GROUP BY DATE(ordered_at), channel, sku, warehouse "
             "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
             [_frm.strftime("%Y-%m-%d"), _to.strftime("%Y-%m-%d")])
+        try:
+            from db import execute as _elog2
+            _elog2("INSERT INTO quality_logs(log_type, level, message, source) "
+                   "VALUES('perf_debug','info',%s,'dash')",
+                   ("快照续段完成: %s~%s" % (_frm.strftime('%Y-%m-%d'), _to.strftime('%Y-%m-%d'))))
+        except Exception:
+            pass
     except Exception as _e:
             try_err('dashboard', '快照续段降级', _e)
 
