@@ -29,32 +29,26 @@ def _daily_maintenance():
     """应用层每日维护(治本: 不依赖 edgeone schedules——实测未自动触发)
     抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
     内容: ①快照新鲜度自愈(MAX(date) 落后昨天 → 重建 90 天快照, 应用层替代 cron/snapshot)"""
+    # 快照/agg 数据追平(独立于 daily 抢占——每 miss 检查数据前进即续段/续步——真实导入新数据即时追平)
+    try:
+        _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+        _db2 = str(_om2.get("m") or "")[:10]
+        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
+        _m = str(_r.get("m") or "")[:10]
+        if (not _m) or (_db2 and _m < _db2):
+            _snapshot_step(channel, _db2)
+        _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
+        _amax = str(_am.get("m") or "")[:10]
+        if _db2 and _amax < _db2:
+            _rebuild_day_agg(3)  # agg 续步(近 3 天幂等——每 miss 推进至数据最新)
+    except Exception as _e:
+            try_err('dashboard', '数据追平降级', _e)
     try:
         _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
         if not _got:
             return  # 今天已维护(本实例或其他实例)
-        # 快照新鲜度自愈(独立 'snapshot' key 与 cron_freshness 互斥——一天只重建一次)
-        # 快照分段推进: 每 miss 检查落后(基准=数据最新 orders MAX) → 续 10 天/段——12.6万行单次 INSERT 拆分为 ~1s/段
-        _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
-        _m = str(_r.get("m") or "")[:10]
-        _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-        _db2 = str(_om2.get("m") or "")[:10]
-        if (not _m) or (_db2 and _m < _db2):
-            _snapshot_step(channel, _db2)
-        # ② orders_day_agg 物化表增量(看板提速): 重建近 3 天(覆盖当天导入/删除) + MAX 落后则全量重建
-        try:
-            _rebuild_day_agg(3)
-            _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
-            _amax = str(_am.get("m") or "")[:10]
-            # 落后 ≤2 天不重建(读 agg<前天 + 正查≥昨天 无缝覆盖——准确性✓, 消除 90 天重建 8-10s 偶发阻塞)
-            # 落后 >2 天(缺口>正查窗口)才全量重建——重建仍低频(maintenance 中断多日才触发)
-            _agg_need = _amax < (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
-            if not _amax or _agg_need:
-                _rebuild_day_agg(90)
-        except Exception as _e:
-                try_err('dashboard', '静默降级', _e)
         # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
         #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
         try:
