@@ -82,7 +82,11 @@ export default function OrdersPage() {
       const all = orders.map(x => x.id)
       setOrderSelIds(orderSelIds.length === all.length && all.length > 0 ? [] : all)
     }
-    const hChanged = () => useAppStore.getState().loadAll()
+    const hChanged = () => {
+      // 批量操作后清 orders 缓存再刷新(30s 内存缓存曾致 total 旧值)
+      clearCache('orders')
+      useAppStore.getState().loadAll()
+    }
     window.addEventListener('orders-toggle-all', hSelAll)
     window.addEventListener('orders-changed', hChanged)
     return () => {

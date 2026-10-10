@@ -2,6 +2,7 @@ import React from 'react'
 import { IconAlert } from './Icons'
 import { t } from '../locale'
 import { reportError } from '../api/logger'
+import { clearCache } from '../api/client'
 
 interface ErrorBoundaryProps {
   children: React.ReactNode
@@ -28,7 +29,13 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
       ((err.stack || '') + '\n' + (info.componentStack || '')).slice(0, 800),
     )
   }
-  retry = () => this.setState(s2 => ({ err: null, retryKey: s2.retryKey + 1 }))
+  retry = () => {
+    // 重试前清前端内存缓存(错误可能源于缓存数据——清后重挂载重新拉取)
+    try {
+      clearCache()
+    } catch (e) {}
+    this.setState(s2 => ({ err: null, retryKey: s2.retryKey + 1 }))
+  }
   render() {
     if (this.state.err) {
       return (
