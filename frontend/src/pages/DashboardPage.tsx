@@ -1120,9 +1120,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       gap: 10,
                       marginTop: 6,
                       flexWrap: 'wrap',
-                      lineHeight: 1.4,
+                      lineHeight: 1.2,
                       alignItems: 'center',
-                      // 动态下沉: 有滞销/其他时本行是最后一行——对齐图柱底部区间
+                      // 本行(滞销/其他)是最后一行时——字身沉底(lineHeight 1.2=16)与图柱底对齐
                     }}
                   >
                     {/* 去重(2026-10-09): 低库存/采购补货计数与大卡冗余, 待处理卡只保留唯一信息:
