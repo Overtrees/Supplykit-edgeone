@@ -1370,12 +1370,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     className="card-sub"
                     style={{
                       marginTop: 4,
-                      // 动态兜底: 健康图柱(底部)缺失时明细行是最后——下沉对齐 GMV 图柱视觉
                     }}
                   >
                     <div
                       style={{
                         display: 'flex',
+                        lineHeight: 1.2,
                         alignItems: 'center',
                         gap: 8,
                         marginTop: 2,
