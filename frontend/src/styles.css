@@ -334,6 +334,14 @@ td {
   font-size: 13px;
   line-height: 1.4;
   font-variant-numeric: tabular-nums; /* 数字列等宽对齐, 防金额/数量跳动 */
+  text-align: center; /* 2026-10-10: 所有表格列数据居中(用户要求) */
+}
+td.col-name,
+td.col-store,
+td.col-sku,
+td.col-date,
+td.mono {
+  text-align: left; /* 长文本/代码列左对齐(可读性) */
 }
 td.mono {
   word-break: break-all;
