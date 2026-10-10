@@ -888,7 +888,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'flex-end',
-              marginBottom: 4,
+              // 动态兜底: 微趋势条(底部)缺失时内容区是最后——下沉对齐图柱视觉
+              marginBottom: periodTrend.length >= 3 ? 4 : 'calc(1.6em - 22px)',
             }}
           >
             <div
@@ -1100,12 +1101,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     // 少行放大/多行紧凑(与明细行协调——视觉统一)
                     marginTop: 2,
                     display: 'flex',
-                    gap: 10,
-                    flexWrap: 'wrap',
+                    gap: 8,
+                    flexWrap: 'nowrap',
+                    whiteSpace: 'nowrap',
                     fontSize: detailFont,
-                    // 视觉统一: 行高 1.6(块高≈图表 22px——文字行视觉块不矮) + 动态下沉补偿(1.6em-22px)
                     lineHeight: 1.6,
-                    marginBottom: 'calc(1.6em - 22px)',
+                    // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
+                    marginBottom: slowMovingTotal > 0 || otherTotal > 0 ? 0 : 'calc(1.6em - 22px)',
                   }}
                 >
                   <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
@@ -1161,6 +1163,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           {(() => {
             const healthData = dashboard?.health_index?.[healthTab] || {}
             const isJd = channel === 'jd'
+            // 健康图柱是否渲染(近14天当前维度 ≥2 点才显示)——决定明细行是否兜底下沉
+            const _hk = healthTab === 'own' ? 'own' : healthTab === 'bc' ? 'bc' : 'platform'
+            const healthTrendBar =
+              (Array.isArray(healthTrend) ? healthTrend : []).filter(
+                x => x[_hk] != null && x[_hk] > 0,
+              ).length >= 2
             const bcActive = healthTab === 'bc' || healthTab === 'platform'
             const bcLabel = healthTab === 'platform' ? 'C仓' : 'BC'
             return (
@@ -1362,7 +1370,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   >
                     {healthData.score != null ? healthData.score + '分' : '—'}
                   </div>
-                  <div className="card-sub" style={{ marginTop: 4 }}>
+                  <div
+                    className="card-sub"
+                    style={{
+                      marginTop: 4,
+                      // 动态兜底: 健康图柱(底部)缺失时明细行是最后——下沉对齐 GMV 图柱视觉
+                      marginBottom: healthTrendBar ? 'calc(1.6em - 22px)' : 0,
+                    }}
+                  >
                     <div
                       style={{
                         display: 'flex',
@@ -1571,8 +1586,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       marginTop: 4,
                       flexWrap: 'wrap',
                       lineHeight: 1.6,
-                      // 视觉统一: 行高 1.6(块高≈图表 22px) + 动态下沉补偿
-                      marginBottom: 'calc(1.6em - 22px)',
                     }}
                   >
                     {riskCritical > 0 && (
