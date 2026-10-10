@@ -8,6 +8,7 @@ interface ErrorBoundaryProps {
 }
 interface ErrorBoundaryState {
   err: Error | null
+  retryKey: number
 }
 
 /**

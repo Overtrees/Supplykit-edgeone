@@ -40,7 +40,9 @@ export default function RecyclePage() {
       fetch(API + '/api/rules?channel=all&include_deleted=1', { headers: _auth }).then(r =>
         r.json(),
       ),
-      fetch(API + '/api/orders?page=1&page_size=200', { headers: _auth }).then(r => r.json()),
+      fetch(API + '/api/orders?page=1&page_size=200&include_deleted=1', { headers: _auth }).then(
+        r => r.json(),
+      ),
     ])
       .then(([rData, oData]: any[]) => {
         const items = rData.data || rData || []
