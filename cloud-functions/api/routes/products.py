@@ -17,7 +17,7 @@ def list_products(channel: str = "jd", page: int = 1, page_size: int = 30,
     # 接口缓存(30s——商品停用/启用/编辑 invalidate_all 清, 实时性不损; 缓解偶发 RU 慢)
     from routes.analysis_cache import cache_get as _cg
     _key = "products|%s|%s|%s|%s|%s|%s" % (channel, page, page_size, search, include_deleted, s if False else "")
-    _key = "products|%s|%s|%s|%s|%s" % (channel, page, page_size, search, include_deleted)
+    _key = "products|v2|%s|%s|%s|%s|%s" % (channel, page, page_size, search, include_deleted)
     return ok(_cg(_key, 30, lambda: _list_products_inner(channel, page, page_size, search, include_deleted)))
 
 
