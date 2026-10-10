@@ -18,7 +18,7 @@ interface ErrorBoundaryState {
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { err: null, retryKey: 0 }
   static getDerivedStateFromError(err: Error): ErrorBoundaryState {
-    return { err }
+    return { err, retryKey: 0 }
   }
   componentDidCatch(err: Error, info: React.ErrorInfo) {
     // 统一收口: 组件渲染错误上报(开发者层)
