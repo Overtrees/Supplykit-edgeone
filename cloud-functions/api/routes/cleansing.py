@@ -669,31 +669,20 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
             upd = ", ".join("`%s`=VALUES(`%s`)" % (c, c) for c in cols if c not in ("id", "deleted_at"))
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % upd
-        # 小批写入(500/批各包事务——TiDB serverless 大事务(5000行)慢 48-58s——拆分后 10 小批 ~5-10s)
-        for _bi in range(0, len(rows), 500):
-            _b = rows[_bi:_bi + 500]
+        # 批量写入(1000/批 executemany 单语句——TiDB 单语句原子无需事务; 事务(5000行大=持锁慢/500×10小=往返多)均慢——
+        # 无事务 + 1000 行/批: 5 批单语句(原子 + 往返少)——5000 行每步 ~5-15s)
+        for _bi in range(0, len(rows), 1000):
+            _b = rows[_bi:_bi + 1000]
             try:
-                execute("BEGIN")
                 executemany(sql, [tuple(r[c] for c in cols) for r in _b])
-                execute("COMMIT")
                 success += len(_b)
             except Exception:
-                # 小批失败回滚 → 单行降级(逐行事务, 精确 success/failed 计数)
-                try:
-                    execute("ROLLBACK")
-                except Exception:
-                    pass
+                # 批失败(单语句原子——无部分写入)→ 单行降级(精确计数)
                 for r in _b:
                     try:
-                        execute("BEGIN")
                         execute(sql, [r[c] for c in cols])
-                        execute("COMMIT")
                         success += 1
                     except Exception as e1:
-                        try:
-                            execute("ROLLBACK")
-                        except Exception:
-                            pass
                         failed += 1
                         if len(err_details) < 50:
                             err_details.append({"sku": str(r.get("sku") or r.get("supplier_code") or ""),
