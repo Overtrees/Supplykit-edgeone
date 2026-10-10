@@ -248,8 +248,9 @@ def _q_recent(channel, d1):
 
 
 def _q_inventory(channel):
+    # 全量行(health out_of_stock 需 avail<=0 缺货行; 低库存消费方自行过滤 avail>0)
     return query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                 "WHERE channel=%s AND available_qty>0", [channel])
+                 "WHERE channel=%s", [channel])
 
 
 def _q_digest(channel):
@@ -473,9 +474,10 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     # 低库存计数(动态安全线, 替代静态 SQL——seed safety_qty=0 后静态判定恒 0)
     low_stock = {"c": 0}
     try:
-        _ls_rows = _inv_rows if _inv_rows is not None else query(
-            "SELECT sku, warehouse_type, available_qty FROM inventory "
-            "WHERE channel=%s AND available_qty>0", [channel])
+        _ls_rows = ([x for x in _inv_rows if int(x.get("available_qty") or 0) > 0]
+                    if _inv_rows is not None else
+                    query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                          "WHERE channel=%s AND available_qty>0", [channel]))
         _ls_ds = _ds_map if _ds_map is not None else {}
         if not _ls_ds:
             try:
