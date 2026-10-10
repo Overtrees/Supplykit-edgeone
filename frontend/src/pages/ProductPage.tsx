@@ -69,7 +69,7 @@ export default function ProductPage() {
   const setSelIds = setProdBatchSel
   const [, setBatchBusy] = useState(false)
   const s = hammerSearch || ''
-  const fl = ld ? [] : Array.isArray(list) ? list : []
+  const fl = ld ? [] : list
   const loadProd = p => {
     const seq = ++reqSeq.current
     if (p === 1) setLd(true)
