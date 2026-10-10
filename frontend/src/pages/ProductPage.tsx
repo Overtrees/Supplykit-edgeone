@@ -69,7 +69,7 @@ export default function ProductPage() {
   const setSelIds = setProdBatchSel
   const [, setBatchBusy] = useState(false)
   const s = hammerSearch || ''
-  const fl = ld ? [] : list
+  const fl = ld ? [] : Array.isArray(list) ? list : []
   const loadProd = p => {
     const seq = ++reqSeq.current
     if (p === 1) setLd(true)
@@ -87,7 +87,8 @@ export default function ProductPage() {
       .then(r => {
         if (seq !== reqSeq.current) return
         const d = r.data || {}
-        const items = d.items || d || []
+        // 数组兜底(2026-10-10: 偶发响应结构异常曾致 fl.map 非函数——渲染崩溃)
+        const items = Array.isArray(d.items) ? d.items : Array.isArray(d) ? d : []
         setPgTotal(d.total || items.length || 0)
         setPg(p)
         pgRef.current = p
