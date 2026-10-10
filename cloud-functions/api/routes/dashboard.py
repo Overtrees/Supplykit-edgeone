@@ -186,12 +186,28 @@ def health_trend(channel: str = "jd", days: int = 14):
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc"):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
     附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
-    _daily_maintenance()
-    _daily_rules_guard()
     _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
-    _result = _cache_get(_key, _SUMMARY_TTL,
-                         lambda: _build_summary(channel, start_date, end_date, mode))
-    _sync_health_snapshot(channel, (_result or {}).get("health_index") if isinstance(_result, dict) else None)
+    # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
+
+    def _b():
+        # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
+        try:
+            from db import query as _qm
+            _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _done = {str(r.get("task") or "") for r in
+                     _qm("SELECT task FROM maintenance_log WHERE `date`=%s AND task IN ('daily','daily_rules')",
+                         [_today])}
+            if "daily" not in _done:
+                _daily_maintenance()
+            if "daily_rules" not in _done:
+                _daily_rules_guard()
+        except Exception as _e:
+            try_err('dashboard', '维护守卫降级(仍计算看板)', _e)
+        _r = _build_summary(channel, start_date, end_date, mode)
+        _sync_health_snapshot(channel, (_r or {}).get("health_index") if isinstance(_r, dict) else None)
+        return _r
+
+    _result = _cache_get(_key, _SUMMARY_TTL, _b)
     return ok(_result)
 
 

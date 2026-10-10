@@ -670,15 +670,28 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % upd
         try:
+            # 批级事务(2026-10-10): BEGIN/COMMIT 每批——失败回滚该批不留半写入(TiDB 单语句原子外跨行保护)
+            execute("BEGIN")
             executemany(sql, [tuple(r[c] for c in cols) for r in rows])
+            execute("COMMIT")
             success += len(rows)
         except Exception:
-            # 分批降级: 单行插入
+            # 批失败回滚 → 单行降级(逐行事务, 精确 success/failed 计数)
+            try:
+                execute("ROLLBACK")
+            except Exception:
+                pass
             for r in rows:
                 try:
+                    execute("BEGIN")
                     execute(sql, [r[c] for c in cols])
+                    execute("COMMIT")
                     success += 1
                 except Exception as e1:
+                    try:
+                        execute("ROLLBACK")
+                    except Exception:
+                        pass
                     failed += 1
                     if len(err_details) < 50:
                         err_details.append({"sku": str(r.get("sku") or r.get("supplier_code") or ""),
