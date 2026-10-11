@@ -1,23 +1,23 @@
-import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
-const ProductPage = lazy(() => import('./pages/ProductPage'))
-const SupplierPage = lazy(() => import('./pages/SupplierPage'))
-const InsightsPage = lazy(() => import('./pages/InsightsPage'))
-const CleansingPage = lazy(() => import('./pages/CleansingPage'))
-const RulesPage = lazy(() => import('./pages/RulesPage'))
-const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+import ProductPage from './pages/ProductPage'
+import SupplierPage from './pages/SupplierPage'
+import InsightsPage from './pages/InsightsPage'
+import CleansingPage from './pages/CleansingPage'
+import RulesPage from './pages/RulesPage'
+import DashboardPage from './pages/DashboardPage'
 import ErrorBoundary from './components/ErrorBoundary'
-const OrdersPage = lazy(() => import('./pages/OrdersPage'))
-const InventoryPage = lazy(() => import('./pages/InventoryPage'))
-const QualityPage = lazy(() => import('./pages/QualityPage'))
-const DevModePage = lazy(() => import('./pages/DevModePage'))
-const RecyclePage = lazy(() => import('./pages/RecyclePage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
-const TaskPage = lazy(() => import('./pages/TaskPage'))
-const LoginPage = lazy(() => import('./pages/LoginPage'))
+import OrdersPage from './pages/OrdersPage'
+import InventoryPage from './pages/InventoryPage'
+import QualityPage from './pages/QualityPage'
+import DevModePage from './pages/DevModePage'
+import RecyclePage from './pages/RecyclePage'
+import SettingsPage from './pages/SettingsPage'
+import TaskPage from './pages/TaskPage'
+import LoginPage from './pages/LoginPage'
 import Sidebar from './components/Sidebar'
 import HistorySheet from './components/hammer/HistorySheet'
 
@@ -624,16 +624,6 @@ export default function App() {
   ).length
   const errCount = (qualityLogs || []).length
 
-  // 关键页预取(2026-10-11): 首屏后后台加载高频页 chunk——切换时无懒加载 fallback(避免两次骨架)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      import('./pages/DashboardPage').catch(() => {})
-      import('./pages/OrdersPage').catch(() => {})
-      import('./pages/ProductPage').catch(() => {})
-      import('./pages/InsightsPage').catch(() => {})
-    }, 800)
-    return () => clearTimeout(t)
-  }, [])
   const renderPage = pageId => {
     const wrap = el => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
@@ -1140,13 +1130,7 @@ export default function App() {
             style={{ display: showWelcome ? 'none' : '', animation: 'fadeIn 0.2s ease' }}
             key={page}
           >
-            <Suspense
-              fallback={
-                <div className="skeleton" style={{ minHeight: 60, margin: 12, borderRadius: 16 }} />
-              }
-            >
-              {renderPage(page)}
-            </Suspense>
+            {renderPage(page)}
           </main>
 
           {/* 变更历史底部弹窗 */}
