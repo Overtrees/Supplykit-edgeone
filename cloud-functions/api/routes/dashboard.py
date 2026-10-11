@@ -922,9 +922,23 @@ def _build_aux(channel, mode):
 @router.get("/dashboard/stock-risk")
 @traced
 def stock_risk(channel: str = "jd", full: int = 0):
-    """濒临断货(30s 共享表缓存 —— 比 aux 实时, 数据变更由 invalidate_all 全局立即失效)"""
+    """濒临断货(30s 共享表缓存 —— 比 aux 实时, 数据变更由 invalidate_all 全局立即失效)
+    临时测锁影响: 绕过 cache_get(行锁)——直算(对比 16s 是否锁引起)"""
     _key = "stock_risk|%s|%s" % (channel, full)
-    return ok(_cache_get(_key, _RISK_TTL, lambda: _stock_risk(channel, full=full)))
+    try:
+        from db import one, execute
+        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                  "FROM analysis_cache WHERE `key`=%s", [_key])
+        if row:
+            age = row.get("age")
+            if age is not None and int(age) < _RISK_TTL:
+                return ok(_loads(row.get("value") or ""))
+        val = _stock_risk(channel, full=full)
+        execute("REPLACE INTO analysis_cache(`key`, value, created_at) VALUES(%s,%s,NOW(6))",
+                (_key, json.dumps(val, ensure_ascii=False, default=str)))
+        return ok(val)
+    except Exception:
+        return ok(_stock_risk(channel, full=full))
 
 
 _accel_cache = {}
