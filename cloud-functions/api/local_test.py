@@ -521,8 +521,11 @@ def _q3(sql, params=None):
 
 _db3.query = _q3
 import routes.purchase as _rp
+import routes.purchase_calc as _rpc
 _old_pq = _rp.query
-_rp.query = _q3  # _build_purchase 内部 query 为模块名字绑定, 需直改路由模块
+_old_pcq = _rpc.query
+_rp.query = _q3  # _build_purchase 内部 query 为模块名字绑定, 需直改路由模块(拆分后函数在 purchase_calc)
+_rpc.query = _q3
 from routes.purchase import _build_purchase as _bp
 _moq = _bp("jd", "bbcc", 28)
 _supA = [r for r in _moq if (r.get("supplier_code") or "") == "SUP-A"]
@@ -532,6 +535,7 @@ check("MOQ: 合计 84 < 起订 100 放大到 ≥100", _tot >= 100, "total=%d" % 
 _has_note = any("起订" in (r.get("note") or "") for r in _supA)
 check("MOQ: note 含起订说明", _has_note)
 _rp.query = _old_pq
+_rpc.query = _old_pcq
 _db3.query = _old_q3
 
 # ── except pass 治理链路验证: try_err 调用无 NameError(mock execute 环境) ──
