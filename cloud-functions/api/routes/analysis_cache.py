@@ -40,47 +40,38 @@ _CALC_INFLIGHT = {}
 
 def cache_get(key, ttl, builder):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
-    2026-10-11 并发合并(表级 __CALC__ 标记——跨 Makers 实例共享): 并发同 key → 首个实例抢注计算,
-    其余轮询表等待共享结果(挂起>30s 兜底重新抢算)"""
-    import time as _t
-    key = "%s|%s" % (_CACHE_V, key)
+    2026-10-11 并发根治(行锁): SELECT ... FOR UPDATE 串行化同 key 计算——第一请求持锁算,
+    其余阻塞在 FOR UPDATE(事务内)——释放后读结果共享(跨 Makers 实例可靠——替代轮询判定)"""
     try:
         from db import one, execute
-        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                  "FROM analysis_cache WHERE `key`=%s", [key])
-        if row:
-            age = row.get("age")
-            v0 = row.get("value")
-            if v0 != "__CALC__" and age is not None and int(age) < ttl:
-                v = _loads(v0 or "")
-                if v is not _FAILED:
-                    return v
-        # 抢注计算标记(原子: 已 __CALC__ 则保留原 created_at——判断谁在算)
-        execute("INSERT INTO analysis_cache(`key`, value, created_at) VALUES(%s,'__CALC__',NOW(6)) "
-                "ON DUPLICATE KEY UPDATE value='__CALC__', "
-                "created_at=IF(value='__CALC__', created_at, VALUES(created_at))", [key])
-        _t.sleep(0.3)
-        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                  "FROM analysis_cache WHERE `key`=%s", [key])
-        age = row.get("age") if row else 999
-        val = row.get("value") if row else None
-        if val == "__CALC__" and int(age or 0) > 2:
-            # 别人在算(已 >2s 非自己刚设) → 轮询等待共享结果
-            for _i in range(80):  # 4s
-                _t.sleep(0.05)
-                row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                          "FROM analysis_cache WHERE `key`=%s", [key])
-                val = row.get("value") if row else None
-                if val != "__CALC__":
-                    v = _loads(val or "")
-                    return v if v is not _FAILED else builder()
-            # 超时(计算挂起>30s) → 自己抢算
-            execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
-        val = builder()
-        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                "VALUES(%s,%s,NOW(6))",
-                (key, json.dumps(val, ensure_ascii=False, default=str)))
-        return val
+        # 行锁(事务: 命中直接返回; 未命中持锁计算——同 key 并发串行共享)
+        execute("BEGIN")
+        try:
+            row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                      "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
+            if row:
+                age = row.get("age")
+                v0 = row.get("value")
+                if v0 != "__CALC__" and age is not None and int(age) < ttl:
+                    v = _loads(v0 or "")
+                    if v is not _FAILED:
+                        execute("COMMIT")
+                        return v
+                if v0 == "__CALC__":
+                    # 上次计算中断残留(崩溃)——清理继续(持锁后别人已不阻塞)
+                    execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+            val = builder()
+            execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                    "VALUES(%s,%s,NOW(6))",
+                    (key, json.dumps(val, ensure_ascii=False, default=str)))
+            execute("COMMIT")
+            return val
+        except Exception:
+            try:
+                execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
         # 自愈本身也失败才降级直算(保底不阻塞业务)
