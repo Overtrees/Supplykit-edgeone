@@ -104,6 +104,8 @@ class _FakeConn:
     def rollback(self):
         pass
 _db.conn = lambda: _FakeConn()
+_db._acquire = lambda: _FakeConn()  # 连接池取用 mock(transaction 用 _acquire——沙箱不真连库)
+_db._release = lambda c: None
 
 _db.query = fake_query
 _db.one = fake_one
@@ -691,6 +693,8 @@ class _FakeConn:
     def rollback(self):
         pass
 _db.conn = lambda: _FakeConn()
+_db._acquire = lambda: _FakeConn()  # 连接池取用 mock(transaction 用 _acquire——沙箱不真连库)
+_db._release = lambda c: None
 
 _db.query = fake_query
 
