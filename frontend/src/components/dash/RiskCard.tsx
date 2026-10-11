@@ -15,6 +15,20 @@ export interface RiskCardProps {
   t: (k: string) => string
 }
 
+// 随迁自 DashboardPage(2026-10-11 组件化——依赖闭环)
+const fmtWh = (w: string | undefined) => {
+  if (!w) return ''
+  const p = String(w).split(',').filter(Boolean)
+  if (p.length <= 2) return p.join(',')
+  return p.slice(0, 2).join(',') + '等' + p.length + '仓'
+}
+
+const RISK_LV: Record<string, { c: string; t: string }> = {
+  red: { c: 'var(--danger)', t: '紧急' },
+  orange: { c: 'var(--warning)', t: '预警' },
+  yellow: { c: 'var(--accent-yellow)', t: '关注' },
+}
+
 export default function RiskCard({
   replMode,
   items,

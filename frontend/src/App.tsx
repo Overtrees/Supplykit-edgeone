@@ -48,6 +48,7 @@ export const NAV = [
 
 export default function App() {
   const [page, setPage] = useState('dash')
+  window.__page = page  // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {
     setPage(p)
     clearCache()
