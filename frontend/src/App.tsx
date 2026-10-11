@@ -623,6 +623,16 @@ export default function App() {
   ).length
   const errCount = (qualityLogs || []).length
 
+  // 关键页预取(2026-10-11): 首屏后后台加载高频页 chunk——切换时无懒加载 fallback(避免两次骨架)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      import('./pages/DashboardPage').catch(() => {})
+      import('./pages/OrdersPage').catch(() => {})
+      import('./pages/ProductPage').catch(() => {})
+      import('./pages/InsightsPage').catch(() => {})
+    }, 800)
+    return () => clearTimeout(t)
+  }, [])
   const renderPage = pageId => {
     const wrap = el => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
@@ -1129,7 +1139,11 @@ export default function App() {
             style={{ display: showWelcome ? 'none' : '', animation: 'fadeIn 0.2s ease' }}
             key={page}
           >
-            <Suspense fallback={<div className="page-loading">加载中...</div>}>
+            <Suspense
+              fallback={
+                <div className="skeleton" style={{ minHeight: 60, margin: 12, borderRadius: 16 }} />
+              }
+            >
               {renderPage(page)}
             </Suspense>
           </main>

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
+import RiskCard from '../components/dash/RiskCard'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import type { InventoryRow, StockRiskShim } from '../api/types'
@@ -1482,245 +1483,27 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         </div>
 
         {/* 4. 濒临断货预警 — 全量计数, 弹窗看完整(iOS 18 天气小组件风, 紧凑版) */}
-        <div className="card stat-card">
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              minHeight: 14,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'var(--font-sm)',
-                fontWeight: 600,
-                color: 'var(--muted)',
-                letterSpacing: 0.2,
-                lineHeight: 1.2,
-              }}
-            >
-              濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''}
-            </div>
-          </div>
-          {!_r.items || _r.items.length === 0 ? (
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-              }}
-            >
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: '50%',
-                  background: 'var(--bg)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--success)',
-                }}
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                  <polyline points="22 4 12 14.01 9 11.01" />
-                </svg>
-              </div>
-              <div style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--muted2)' }}>
-                {t('dash.stock_ok')}
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'flex-end',
-              }}
-            >
-              <div style={{ marginTop: 4 }}>
-                <div
-                  className="card-value"
-                  style={{
-                    fontSize: 'clamp(17px,8cqi,28px)',
-                    fontWeight: 700,
-                    lineHeight: 1.15,
-                    color: 'var(--danger)',
-                    fontVariantNumeric: 'tabular-nums',
-                    marginBottom: 1,
-                  }}
-                >
-                  {_r.total}
-                </div>
-                <div
-                  className="card-sub"
-                  style={{
-                    marginTop: 0,
-                    fontSize: 'var(--font-xs)',
-                    color: 'var(--muted)',
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {t('dash.min_days')} {_r.items[0].days_to_empty} {t('dash.days_out')}
-                </div>
-                {(riskCritical > 0 || riskWarning > 0 || _r.total > riskCritical + riskWarning) && (
-                  <div
-                    style={{
-                      fontSize: 'var(--font-10)',
-                      display: 'flex',
-                      gap: 6,
-                      marginTop: 4,
-                      flexWrap: 'wrap',
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    {riskCritical > 0 && (
-                      <span
-                        onClick={function (e) {
-                          e.stopPropagation()
-                          setRiskFilter('red')
-                          loadFullRisk()
-                          setShowAllRisk(true)
-                        }}
-                        className="clickable"
-                        style={{
-                          color: 'var(--danger)',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          fontSize: riskFont,
-                        }}
-                      >
-                        ● {riskCritical} {t('dash.critical')}
-                      </span>
-                    )}
-                    {riskWarning > 0 && (
-                      <span
-                        onClick={function (e) {
-                          e.stopPropagation()
-                          setRiskFilter('orange')
-                          loadFullRisk()
-                          setShowAllRisk(true)
-                        }}
-                        className="clickable"
-                        style={{
-                          color: 'var(--warning)',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          fontSize: riskFont,
-                        }}
-                      >
-                        ● {riskWarning} {t('dash.warning')}
-                      </span>
-                    )}
-                    {_r.total > riskCritical + riskWarning && (
-                      <span
-                        onClick={function (e) {
-                          e.stopPropagation()
-                          setRiskFilter('yellow')
-                          loadFullRisk()
-                          setShowAllRisk(true)
-                        }}
-                        className="clickable"
-                        style={{
-                          color: 'var(--muted2)',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          fontSize: riskFont,
-                        }}
-                      >
-                        ● {_r.total - riskCritical - riskWarning} 观察
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-              <div style={{ flexShrink: 0, paddingTop: 6 }}>
-                {_r.items.slice(0, 3).map((x, i) => {
-                  const whLabel =
-                    fmtWh(x.warehouse) ||
-                    (x.type === 'C'
-                      ? 'C仓'
-                      : x.type === 'OWN'
-                        ? '自有'
-                        : x.type === 'B'
-                          ? 'B仓'
-                          : _replMode === 'bbcc'
-                            ? 'BC'
-                            : 'C仓')
-                  const lv = RISK_LV[x.level]
-                  return (
-                    <div
-                      key={i}
-                      title={x.product_name || x.sku}
-                      onClick={function () {
-                        const _b = x.type === 'BC' || x.warehouse === 'BC'
-                        onAlert &&
-                          onAlert(
-                            x.sku,
-                            x.type === 'OWN' ? 'own' : 'platform',
-                            _b ? '' : x.warehouse,
-                          )
-                      }}
-                      className="clickable"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        fontSize: 'var(--font-9)',
-                        color: 'var(--muted2)',
-                        lineHeight: 1.3,
-                        marginTop: i === 0 ? 0 : 2,
-                        overflow: 'hidden',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {lv ? <span style={{ color: lv.c, lineHeight: 1 }}>●</span> : null}
-                      <span
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {x.product_name || x.sku}
-                      </span>
-                      <span
-                        style={{
-                          flexShrink: 0,
-                          fontSize: 8,
-                          fontWeight: 600,
-                          color: 'var(--muted)',
-                          background: 'var(--bg)',
-                          padding: '0 4px',
-                          borderRadius: 4,
-                        }}
-                      >
-                        {whLabel}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-        </div>
+        <RiskCard
+          replMode={_replMode}
+          items={_r.items || []}
+          total={_r.total}
+          riskCritical={riskCritical}
+          riskWarning={riskWarning}
+          riskFont={riskFont}
+          onAlert={function (sku, whType, wh) {
+            useAppStore.getState().setHighlightSku(sku)
+            if (whType === 'own') {
+              useAppStore.getState().setHammerWhType('own')
+            } else {
+              useAppStore.getState().setHammerWhType(wh === 'B' ? 'platform_b' : 'platform')
+            }
+            window.__setPage && window.__setPage('inventory')
+          }}
+          onLoadFull={loadFullRisk}
+          onShowAllRisk={setShowAllRisk}
+          onRiskFilter={setRiskFilter}
+          t={t}
+        />
       </div>
 
       <div className="mid-chart-grid">
