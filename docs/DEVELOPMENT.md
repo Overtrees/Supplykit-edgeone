@@ -854,3 +854,7 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
   - 后端：dashboard.py(1162——已拆维护组)/cleansing.py(745)/seed_fill.py(610)/core/rules.py(565)/purchase.py(535)/tasks.py(502)
   - 新增逻辑归属参考：看板区块→页面内子组件或新组件文件; 规则功能→core/rules.py 已有模块; 导入新类型→cleansing.py 已有分派; 通用工具→components/common/* 或 routes/common.py
 - **拆分准则**（必须拆时）：①选风险最低独立组（无跨模块依赖优先）②re-export 保持外部调用不变 ③local_test 全量回归 150+ ④一次拆一步（勿打包拆）
+
+### 15.48 拆分依赖随迁红线(2026-10-11 教训: health 移动漏带 _rule_params——NameError)
+- 移动函数时**依赖必须随迁**：函数体引用的其他模块函数(如 _health_index 用 _rule_params)需 ①同迁 或 ②目标模块显式 import——移后 AST 扫描函数引用 + local_test 全量回归(150)验证
+- 拆分后**先本地复现**(mock db 导入 + 调用主链)——勿直接部署(线上 NameError 才暴露)
