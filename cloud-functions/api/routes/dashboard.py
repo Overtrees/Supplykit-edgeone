@@ -940,7 +940,8 @@ def _build_aux(channel, mode):
 def stock_risk(channel: str = "jd", full: int = 0):
     """濒临断货(30s 共享表缓存)+单独无锁路径(2026-10-11: 行锁对 stock-risk 16s/无锁 2s——无锁保留;
     瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)"""
-    _key = "stock_risk|%s|%s" % (channel, full)
+    from routes.analysis_cache import _CACHE_V as _CV
+    _key = "%s|stock_risk|%s|%s" % (_CV, channel, full)
     try:
         from db import one, execute
         row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
