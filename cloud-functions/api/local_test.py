@@ -93,6 +93,18 @@ def fake_one(sql, params=None):
     return None
 
 
+# 假 conn(transaction 不真连库——沙箱 TiDB 连接超时)
+class _FakeConn:
+    def __init__(self):
+        self._ac = True
+    def autocommit(self, v):
+        self._ac = v
+    def commit(self):
+        pass
+    def rollback(self):
+        pass
+_db.conn = lambda: _FakeConn()
+
 _db.query = fake_query
 _db.one = fake_one
 _db.execute = lambda sql, params=None: 0
@@ -668,6 +680,18 @@ try:
     check("agg 路径: health_index 生成", ((_ar.get("data") or {}).get("health_index") or {}).get("score") is not None)
 except Exception as _e:
     check("agg 路径: summary 调用无异常", False, str(_e)[:200])
+# 假 conn(transaction 不真连库——沙箱 TiDB 连接超时)
+class _FakeConn:
+    def __init__(self):
+        self._ac = True
+    def autocommit(self, v):
+        self._ac = v
+    def commit(self):
+        pass
+    def rollback(self):
+        pass
+_db.conn = lambda: _FakeConn()
+
 _db.query = fake_query
 
 # ── 接力 status 双层 result 解析回归(2026-10-09: filename 曾取错层级致下载失败) ──

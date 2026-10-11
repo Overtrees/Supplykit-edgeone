@@ -7,6 +7,7 @@
 """
 import os
 import threading
+from contextlib import contextmanager
 
 import pymysql
 
@@ -37,6 +38,24 @@ def conn():
             _local.c = None
             return conn()
     return _local.c
+
+
+@contextmanager
+def transaction():
+    """事务上下文(临时关 autocommit——FOR UPDATE 行锁/多语句原子; 用完恢复)"""
+    c = conn()
+    c.autocommit(False)
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        c.autocommit(True)
 
 
 def query(sql, params=None):

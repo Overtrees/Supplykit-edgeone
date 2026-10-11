@@ -44,34 +44,42 @@ def cache_get(key, ttl, builder):
     其余阻塞在 FOR UPDATE(事务内)——释放后读结果共享(跨 Makers 实例可靠——替代轮询判定)"""
     try:
         from db import one, execute
-        # 行锁(事务: 命中直接返回; 未命中持锁计算——同 key 并发串行共享)
-        execute("BEGIN")
         try:
+            from db import transaction
+            with transaction():
+                row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                          "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
+                if row:
+                    age = row.get("age")
+                    v0 = row.get("value")
+                    if v0 != "__CALC__" and age is not None and int(age) < ttl:
+                        v = _loads(v0 or "")
+                        if v is not _FAILED:
+                            return v
+                    if v0 == "__CALC__":
+                        execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+                val = builder()
+                execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                        "VALUES(%s,%s,NOW(6))",
+                        (key, json.dumps(val, ensure_ascii=False, default=str)))
+                return val
+        except Exception as _elock:
+            # 锁不可用(连接/环境)降级: 无锁直算(生产正常; 测试/mock 环境兜底)
+            try_err('analysis_cache', '缓存锁降级直算', _elock)
             row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                      "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
+                      "FROM analysis_cache WHERE `key`=%s", [key])
             if row:
                 age = row.get("age")
                 v0 = row.get("value")
                 if v0 != "__CALC__" and age is not None and int(age) < ttl:
                     v = _loads(v0 or "")
                     if v is not _FAILED:
-                        execute("COMMIT")
                         return v
-                if v0 == "__CALC__":
-                    # 上次计算中断残留(崩溃)——清理继续(持锁后别人已不阻塞)
-                    execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
             val = builder()
             execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
                     "VALUES(%s,%s,NOW(6))",
                     (key, json.dumps(val, ensure_ascii=False, default=str)))
-            execute("COMMIT")
             return val
-        except Exception:
-            try:
-                execute("ROLLBACK")
-            except Exception:
-                pass
-            raise
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
         # 自愈本身也失败才降级直算(保底不阻塞业务)
