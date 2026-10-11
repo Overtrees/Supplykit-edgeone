@@ -311,7 +311,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     import time as _t
     _t0 = _t.time()
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=4) as _ex:
+    with ThreadPoolExecutor(max_workers=3) as _ex:  # 2026-10-11 线程收敛(4→3——TiDB 连接数压力降, 查询并行收益保留)
         _f1 = _ex.submit(_q_agg, channel, days60, d1)
         _f2 = _ex.submit(_q_recent, channel, d1)
         _f3 = _ex.submit(_q_inventory, channel)

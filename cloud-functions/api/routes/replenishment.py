@@ -110,7 +110,7 @@ def _build_repl(channel, mode):
     """补货建议计算体(共享缓存 builder, 返回全量列表)——2026-10-11 独立查询并行(快照/config/库存/商品/季节——
     串行 5 查询曾 13s, 并行后 = 最重查询耗时)"""
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=5) as _ex:
+    with ThreadPoolExecutor(max_workers=3) as _ex:  # 2026-10-11 线程收敛(5→3——连接数降, 快照重查询仍并行)
         _fc = _ex.submit(_config, channel, mode)
         _fp = _ex.submit(_products, channel)
         _fi = _ex.submit(_inventory, channel)
