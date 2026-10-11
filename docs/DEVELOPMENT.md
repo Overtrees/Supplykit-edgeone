@@ -842,10 +842,15 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 
 ### 15.47 模块化红线：新增/改动以"后续维护方便"为主（2026-10-11 强制）
 - **背景**：dashboard.py 1162 行、RulesPage 2971 行等大文件——今日拆维护/追平模块返工（一个个拆一个个测回归——费时费力）。**根因 = 此前新增逻辑堆积大文件**。
+- **红线适用：项目全部文件**（后端所有 routes/*、core/*、biz/* + 前端所有 pages/*、components/*、store/*——不是仅 dashboard）
 - **红线（新增功能/逻辑调整时）**：
-  1. **先定位归属模块**（不是"加在最近处"）：按业务域放——维护/追平→`routes/dashboard_maintain.py`、stock-risk→拟独立模块、summary/aux→dashboard 主路由、规则引擎→`core/rules.py`、日销→`biz/sales.py`——**大文件（>800 行）新增逻辑优先独立模块/子函数文件**
+  1. **先定位归属模块**（不是"加在最近处"）：按业务域放——维护/追平→`routes/dashboard_maintain.py`、stock-risk→拟独立模块、summary/aux→dashboard 主路由、规则引擎→`core/rules.py`、日销→`biz/sales.py`、补货/采购→`replenishment.py`/`purchase.py`、导入→`cleansing.py`+`cleanse_write.py`(拟)、列表/表格公共→`components/`、store 逻辑→`useAppStore.ts` 或拆分 store——**大文件（>800 行）新增逻辑优先独立模块/子函数文件**
   2. **子组件/子函数优先**：前端大页面（>1000 行）新增区块 → 拆子组件（`components/` 或页面内子组件文件）；后端路由函数膨胀 → 独立模块
   3. **函数粒度**：单函数 >150 行拆子函数（今日 TDZ/缩进类错误多来自长函数）
   4. **新增即放对位**：不积攒——新增逻辑当天放归属位置（避免文件膨胀后集中重构）
 - **触发"必须拆"阈值**：后端路由文件 >1000 行 / 前端页面 >1500 行 / 单函数 >200 行——超阈值新增逻辑须独立文件
+- **当前需按此管理的大文件**（新增大逻辑禁止再堆入）：
+  - 前端：RulesPage(2971)/DashboardPage(2774)/InsightsPage(2079)/CleansingPage(1706)/InventoryPage(1036)
+  - 后端：dashboard.py(1162——已拆维护组)/cleansing.py(745)/seed_fill.py(610)/core/rules.py(565)/purchase.py(535)/tasks.py(502)
+  - 新增逻辑归属参考：看板区块→页面内子组件或新组件文件; 规则功能→core/rules.py 已有模块; 导入新类型→cleansing.py 已有分派; 通用工具→components/common/* 或 routes/common.py
 - **拆分准则**（必须拆时）：①选风险最低独立组（无跨模块依赖优先）②re-export 保持外部调用不变 ③local_test 全量回归 150+ ④一次拆一步（勿打包拆）
