@@ -426,11 +426,15 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     # 每日退款/补贴预聚合(一次遍历 day_rows——原每点 O(天×day_rows) 遍历提速)
     _rf_by_day = {}
     _sb_by_day = {}
+    _gmv_by_day = {}
+    _cnt_by_day = {}
     for (_d2, _st, _s2), (_g, _sb, _cn) in day_rows.items():
         if _st == "申请退款":
             _rf_by_day[_d2] = _rf_by_day.get(_d2, 0) + _g
         if _st in _PAID:
             _sb_by_day[_d2] = _sb_by_day.get(_d2, 0) + _sb
+            _gmv_by_day[_d2] = _gmv_by_day.get(_d2, 0) + _g
+            _cnt_by_day[_d2] = _cnt_by_day.get(_d2, 0) + _cn
 
     trend_data = []
     for _k, _v in sorted(trend.items()):
@@ -469,25 +473,29 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     d60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
 
     def _agg(d0, d1):
+        # 区间按天索引求和(等价: 原全遍历窗口内 PAID 累加——O(天) 替代 O(day_rows))
         g = o = 0
-        for (d, st, s2), (gv, sb, cn) in day_rows.items():
-            if d0 <= (d or "") <= d1 and st in _PAID:
-                g += gv
-                o += cn
+        _d0k = str(d0)
+        for _dk, _gv in _gmv_by_day.items():
+            if _d0k <= _dk <= str(d1):
+                g += _gv
+                o += _cnt_by_day.get(_dk, 0)
         return round(g, 2), o
 
     def _refund(d0, d1):
         r = 0.0
-        for (d, st, s2), (gv, sb, cn) in day_rows.items():
-            if d0 <= (d or "") <= d1 and st == "申请退款":
-                r += gv
+        _d0k = str(d0)
+        for _dk, _rv in _rf_by_day.items():
+            if _d0k <= _dk <= str(d1):
+                r += _rv
         return r
 
     def _sub(d0, d1):
         s = 0.0
-        for (d, st, s2), (gv, sb, cn) in day_rows.items():
-            if d0 <= (d or "") <= d1 and st in _PAID:
-                s += sb
+        _d0k = str(d0)
+        for _dk, _sv in _sb_by_day.items():
+            if _d0k <= _dk <= str(d1):
+                s += _sv
         return s
 
     tg, to = _agg(today_s, today_s)
