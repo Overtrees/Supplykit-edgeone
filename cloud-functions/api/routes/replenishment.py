@@ -107,16 +107,22 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
 
 
 def _build_repl(channel, mode):
-    """补货建议计算体(共享缓存 builder, 返回全量列表)"""
-    cfg = _config(channel, mode)
-    products = _products(channel)
-    inv = _inventory(channel)
+    """补货建议计算体(共享缓存 builder, 返回全量列表)——2026-10-11 独立查询并行(快照/config/库存/商品/季节——
+    串行 5 查询曾 13s, 并行后 = 最重查询耗时)"""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=5) as _ex:
+        _fc = _ex.submit(_config, channel, mode)
+        _fp = _ex.submit(_products, channel)
+        _fi = _ex.submit(_inventory, channel)
+        _fs = _ex.submit(_season_factor, channel, mode)
+        _fd = _ex.submit(load_daily_sales_grouped, 60, channel)
+        cfg = _fc.result()
+        products = _fp.result()
+        inv = _fi.result()
+        season = _fs.result()
+        by_sku, by_sku_wh = _fd.result()
     lead = (int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))) if mode == "bbcc" \
         else int(cfg.get("lead_time_days", "0"))
-    season = _season_factor(channel, mode)
-
-    # 日销: BBCC=全国 C 仓合计(平台仓名), 传统=逐仓
-    by_sku, by_sku_wh = load_daily_sales_grouped(60, channel)
     if mode == "bbcc":
         c_whs = {r.get("warehouse") for r in query(
             "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",

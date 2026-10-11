@@ -245,42 +245,42 @@ const initAppStore = (set, get) => ({
     dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'mode=' + get().hammerReplenMode
     if (opts && opts.refresh) dashUrl += '&refresh=1'
     try {
-      // 首屏优先: 轻接口+summary 先行(骨架屏 1-3s 出数据), stock-risk(断货卡重接口)后置补齐——
-      // 避免 5 接口并发重算竞争 TiDB RU(首屏 10s→3s 感知, 数据最终一致)
-      const results = await Promise.allSettled([
-        api.get(dashUrl),
-        api.get(
-          '/api/orders?page=' +
-            p +
-            '&page_size=30&search=' +
-            encodeURIComponent(s) +
-            '&status=' +
-            encodeURIComponent(st),
-        ),
-        api.get('/api/quality-logs'),
-        api.get('/api/alerts'),
-      ])
-      const [dashboard, orders, qualityLogs, alerts] = results.map(r =>
-        r.status === 'fulfilled' ? r.value : { data: null },
+      // 首屏错峰(2026-10-11 三批): summary 先行渲染 → orders/alerts 0.3s 后 → stock-risk 最后——
+      // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
+      const r0 = await Promise.allSettled([api.get(dashUrl)])
+      const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
+      set({ dashboard: dashboard.data, loading: false, dataLoaded: true })
+      const [orders, qualityLogs, alerts] = await new Promise<void>(resolve =>
+        setTimeout(async () => {
+          const r1 = await Promise.allSettled([
+            api.get(
+              '/api/orders?page=' +
+                p +
+                '&page_size=30&search=' +
+                encodeURIComponent(s) +
+                '&status=' +
+                encodeURIComponent(st),
+            ),
+            api.get('/api/quality-logs'),
+            api.get('/api/alerts'),
+          ])
+          const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
+          set({
+            orders: arr[0].data?.items || arr[0].data || [],
+            orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
+            orderPage: arr[0].data?.page || p,
+            qualityLogs: arr[1].data || [],
+            alerts: arr[2].data || [],
+            orderLoadErr: r1[0] && r1[0].status === 'rejected' ? errText((r1[0] as { reason?: unknown }).reason as string) : '',
+          })
+          resolve([arr[0], arr[1], arr[2]])
+        }, 300),
       )
-      set({
-        dashboard: dashboard.data,
-        orders: orders.data?.items || orders.data || [],
-        orderTotal: orders.data?.total || (orders.data || []).length || 0,
-        orderPage: orders.data?.page || p,
-        qualityLogs: qualityLogs.data || [],
-        alerts: alerts.data || [],
-        stockRisk: get().stockRisk && get().stockRisk.length ? get().stockRisk : [], // 断货卡后置: 首次清空不误导; 刷新保留旧值不闪空
-        dataLoaded: true,
-        loading: false,
-        orderLoading: false,
-        orderLoadErr:
-          results[1] && results[1].status === 'rejected' ? errText(results[1].reason) : '',
-      })
-      // 后置: stock-risk 断货卡(重接口, 不阻塞首屏; 失败保留空态不误导)
+      // 最后: stock-risk 断货卡(重接口, 不阻塞; 失败保留旧值不闪空)
       const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData) set({ stockRisk: srData })
+      set({ orderLoading: false })
     } catch (e) {
       console.error('loadAll failed:', e)
       set({ loading: false, orderLoading: false })

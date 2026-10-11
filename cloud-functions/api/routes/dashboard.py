@@ -25,6 +25,25 @@ _SUMMARY_TTL = 30
 
 
 
+def _track_data(channel, _db2):
+    """数据追平(即时): 一次 SQL 合并三 MAX 子查询(orders/快照/agg——3 查询→1 往返)——
+    每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate_all 触发增量"""
+    try:
+        _r = one("SELECT (SELECT COALESCE(MAX(DATE(ordered_at)),'') FROM orders "
+                 "WHERE (deleted_at IS NULL OR deleted_at='')) AS om, "
+                 "(SELECT MAX(`date`) FROM daily_sales_snapshot WHERE channel=%s) AS sm, "
+                 "(SELECT COALESCE(MAX(`date`),'') FROM orders_day_agg) AS am", [channel]) or {}
+        _db2 = str(_r.get("om") or "")[:10]
+        _m = str(_r.get("sm") or "")[:10]
+        if (not _m) or (_db2 and _m < _db2):
+            _snapshot_step(channel, _db2)
+        _amax = str(_r.get("am") or "")[:10]
+        if _db2 and _amax < _db2:
+            _rebuild_day_agg(3)
+    except Exception as _e:
+            try_err('dashboard', '数据追平降级', _e)
+
+
 def _daily_maintenance(channel="jd"):
     """应用层每日维护(治本: 不依赖 edgeone schedules——实测未自动触发)
     抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
@@ -166,19 +185,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
 
     def _b():
-        # 数据追平(每 miss 无条件——真实导入新数据即时续段/续步到快照/agg; 独立于 daily 维护条件)
+        # 数据追平(每 miss 即时——一次 SQL 三 MAX 合并, 物化跟数据不延迟)
         try:
-            _om2 = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                       "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-            _db2 = str(_om2.get("m") or "")[:10]
-            _r = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel='jd'") or {}
-            _m = str(_r.get("m") or "")[:10]
-            if (not _m) or (_db2 and _m < _db2):
-                _snapshot_step(channel, _db2)
-            _am = one("SELECT COALESCE(MAX(`date`),'') AS m FROM orders_day_agg") or {}
-            _amax = str(_am.get("m") or "")[:10]
-            if _db2 and _amax < _db2:
-                _rebuild_day_agg(3)
+            _track_data(channel, None)
         except Exception as _e:
                 try_err('dashboard', '数据追平降级', _e)
         # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
@@ -804,20 +813,24 @@ def _build_aux(channel, mode):
     # 低库存维度过滤(跟随补货模式): bbcc → BC+own; traditional → C+own(白名单拼接)
     _wh_in = "('own','platform','platform_b')" if mode == "bbcc" else "('own','platform')"
     _wh_cond = " AND warehouse_type IN " + _wh_in
-    # alerts 分组配额
+    # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
     alerts = []
-    for atype in ("low_stock", "replenish", None):
-        if atype:
-            if atype == "low_stock":
-                rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s%s "
-                             "ORDER BY id DESC LIMIT 100" % (_AF, _wh_cond), [channel, atype])
-            else:
-                rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
-                             "ORDER BY id DESC LIMIT 100" % _AF, [channel, atype])
-        else:
-            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
-                         "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT 100" % _AF, [channel])
-        alerts.extend(rows)
+    _ar = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
+                "ORDER BY id DESC LIMIT 300" % _AF, [channel])
+    _ls_c = _rp_c = _ot_c = 0
+    for r in _ar:
+        at = r.get("alert_type") or ""
+        if at == "low_stock":
+            if _ls_c < 100 and str(r.get("warehouse_type") or "") in _wh_in:
+                alerts.append(r)
+                _ls_c += 1
+        elif at == "replenish":
+            if _rp_c < 100:
+                alerts.append(r)
+                _rp_c += 1
+        elif _ot_c < 100:
+            alerts.append(r)
+            _ot_c += 1
     from routes.alerts import _attach_warehouse as _att
     _att(alerts, channel)
     counts = query("SELECT alert_type, severity, "
