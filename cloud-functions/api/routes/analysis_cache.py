@@ -81,19 +81,25 @@ def invalidate_all():
                 fn()
             except Exception as _e:
                     try_err('analysis_cache', '静默降级', _e)
-        # 物化即时追平(写后同步: agg 近 3 天增量 + 快照续段——导入/删单后立即反映到物化表)
+        # 物化追平(异步线程尽力——写操作不阻塞; 兜底链: 每 miss 即时检查续段 + 读路径当天直查保证数据完整)
         try:
-            from routes.dashboard import _rebuild_day_agg, _snapshot_step
-            from db import one as _o1
-            _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                      "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-            _dbs = str(_db.get("m") or "")[:10]
-            _rebuild_day_agg(3)
-            if _dbs:
-                _snapshot_step("jd", _dbs)
-                _snapshot_step("other", _dbs)
-        except Exception as _e2:
-                try_err('analysis_cache', '物化追平降级', _e2)
+            import threading as _thm
+            def _mat():
+                try:
+                    from routes.dashboard import _rebuild_day_agg, _snapshot_step
+                    from db import one as _o1
+                    _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                              "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+                    _dbs = str(_db.get("m") or "")[:10]
+                    _rebuild_day_agg(3)
+                    if _dbs:
+                        _snapshot_step("jd", _dbs)
+                        _snapshot_step("other", _dbs)
+                except Exception as _e2:
+                        try_err('analysis_cache', '物化追平降级', _e2)
+            _thm.Thread(target=_mat, daemon=True).start()
+        except Exception:
+            pass
     except Exception as e:
         # 失效失败可见性(四维-实时性): 缓存未清则 TTL 内读旧值, 记 quality_logs 供审计
         try:
