@@ -13,6 +13,12 @@ PAID_STATUSES = ("待发货", "已发货", "已完成", "申请退款")
 SALES_STATUSES = ("已完成",)
 
 
+def status_cond(col="order_status"):
+    """GMV 已支付口径条件(2026-10-11 从 dashboard 提为公共——maintain 与 dashboard 共享同口径)"""
+    _paid = tuple(PAID_STATUSES)
+    return "%s IN (%s)" % (col, ",".join(["'%s'" % s for s in _paid]))
+
+
 def ok(data):
     return {"ok": True, "data": data}
 
