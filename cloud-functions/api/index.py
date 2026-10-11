@@ -73,8 +73,31 @@ async def slow_log_middleware(request: Request, next):
             _e("INSERT INTO quality_logs(log_type, level, message, source) "
                "VALUES(%s,%s,%s,%s)", ("slow_request","warning",
                ("%s %s %.1fs" % (request.method, request.url.path, _el)), "api"))
+            if _el > 10:
+                # 严重慢请求(>10s)升级 error + 可选 webhook 告警(env SLOW_WEBHOOK_URL)
+                _e("INSERT INTO quality_logs(log_type, level, message, source) "
+                   "VALUES('slow_alert','error',%s,%s)",
+                   ("严重慢请求: %s %s %.1fs" % (request.method, request.url.path, _el), "api"))
         except Exception as _e:
                 try_err('index', '静默降级', _e)
+        if _el > 10:
+            try:
+                import os as _os
+                _wh = _os.environ.get("SLOW_WEBHOOK_URL", "")
+                if _wh:
+                    import threading as _thw
+                    def _notify():
+                        try:
+                            import urllib.request as _ur
+                            _req = _ur.Request(_wh, data=("严重慢请求: %s %s %.1fs" % (
+                                request.method, request.url.path, _el)).encode(),
+                                headers={"Content-Type": "text/plain"})
+                            _ur.urlopen(_req, timeout=5)
+                        except Exception:
+                            pass
+                    _thw.Thread(target=_notify, daemon=True).start()
+            except Exception:
+                pass
     return _resp
 
 

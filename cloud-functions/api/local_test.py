@@ -705,5 +705,18 @@ check("export status: 任务不存在返回", _r2.get("ok") is False or _r2.get(
 _r3 = export_status(task_id="t")
 check("export status: done 双层解析 filename", _r3.get("status") == "done" and _r3.get("filename"), str(_r3))
 
+# ── stock-risk 回归(2026-10-11 P2-1: 无锁缓存/冷算稳定性——mock 下结构正确) ──
+try:
+    from routes.dashboard import _stock_risk, stock_risk
+    _sr = _stock_risk("jd")
+    check("stock-risk: 计算无异常", isinstance(_sr, dict), str(_sr)[:100])
+    check("stock-risk: bcItems 列表", isinstance(_sr.get("bcItems"), list) and isinstance(_sr.get("cItems"), list)
+          and isinstance(_sr.get("ownItems"), list), str(_sr.get("bcItems"))[:60])
+    _sr2 = _stock_risk("jd", full=1)
+    check("stock-risk: full 模式同结构", isinstance(_sr2.get("bcItems"), list), "")
+    check("stock-risk: 计数字段存在", "bcTotal" in _sr and "bcCritical" in _sr and "bcWarning" in _sr, "")
+except Exception as _e:
+    check("stock-risk: 调用无异常", False, str(_e)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
