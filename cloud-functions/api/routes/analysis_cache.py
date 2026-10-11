@@ -39,8 +39,9 @@ _CALC_INFLIGHT = {}
 
 
 def cache_get(key, ttl, builder):
-    """共享表缓存读: 命中(存在且 TTL 内)返回缓存; 否则 builder() 重算落表
-    2026-10-11 并发合并: 同 key 计算中去重(进程内 inflight——多标签/多次刷新并发同 key → 第一个算, 其余共享等待)"""
+    """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
+    2026-10-11 并发合并(表级 __CALC__ 标记——跨 Makers 实例共享): 并发同 key → 首个实例抢注计算,
+    其余轮询表等待共享结果(挂起>30s 兜底重新抢算)"""
     import time as _t
     key = "%s|%s" % (_CACHE_V, key)
     try:
@@ -49,35 +50,37 @@ def cache_get(key, ttl, builder):
                   "FROM analysis_cache WHERE `key`=%s", [key])
         if row:
             age = row.get("age")
-            if age is not None and int(age) < ttl:
-                v = _loads(row.get("value") or "")
+            v0 = row.get("value")
+            if v0 != "__CALC__" and age is not None and int(age) < ttl:
+                v = _loads(v0 or "")
                 if v is not _FAILED:
                     return v
-        # 并发计算合并(同 key inflight)
-        _nowk = _t.time()
-        if key in _CALC_INFLIGHT and _CALC_INFLIGHT[key][0] > _nowk - 20:
-            _cal = _CALC_INFLIGHT[key]
-            for _i in range(200):  # 等待 10s 共享首个结果
+        # 抢注计算标记(原子: 已 __CALC__ 则保留原 created_at——判断谁在算)
+        execute("INSERT INTO analysis_cache(`key`, value, created_at) VALUES(%s,'__CALC__',NOW(6)) "
+                "ON DUPLICATE KEY UPDATE value='__CALC__', "
+                "created_at=IF(value='__CALC__', created_at, VALUES(created_at))", [key])
+        _t.sleep(0.3)
+        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                  "FROM analysis_cache WHERE `key`=%s", [key])
+        age = row.get("age") if row else 999
+        val = row.get("value") if row else None
+        if val == "__CALC__" and int(age or 0) > 2:
+            # 别人在算(已 >2s 非自己刚设) → 轮询等待共享结果
+            for _i in range(80):  # 4s
                 _t.sleep(0.05)
-                _cal = _CALC_INFLIGHT.get(key)
-                if _cal is None:
-                    break
-                if _cal[1] is not None:
-                    return _cal[1]
-                if _cal[0] < _nowk - 20:
-                    break
-            _CALC_INFLIGHT.pop(key, None)
-        _CALC_INFLIGHT[key] = (_nowk, None)
-        try:
-            val = builder()
-            execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                    "VALUES(%s,%s,NOW(6))",
-                    (key, json.dumps(val, ensure_ascii=False, default=str)))
-            _CALC_INFLIGHT[key] = (_nowk, val)
-            return val
-        except Exception:
-            _CALC_INFLIGHT.pop(key, None)
-            raise
+                row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                          "FROM analysis_cache WHERE `key`=%s", [key])
+                val = row.get("value") if row else None
+                if val != "__CALC__":
+                    v = _loads(val or "")
+                    return v if v is not _FAILED else builder()
+            # 超时(计算挂起>30s) → 自己抢算
+            execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+        val = builder()
+        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                "VALUES(%s,%s,NOW(6))",
+                (key, json.dumps(val, ensure_ascii=False, default=str)))
+        return val
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
         # 自愈本身也失败才降级直算(保底不阻塞业务)
