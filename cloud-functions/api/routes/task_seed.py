@@ -79,6 +79,7 @@ def seed_fill_status(task_id: str = ""):
 @router.post("/seed/fill")
 @traced
 async def seed_fill(request: Request):
+    from routes.tasks import _new_task_id, _log_task  # 延迟(防循环)
     """空库生成完整演示数据(PA 原版逻辑移植, 异步分步: 任务表驱动, status 轮询续跑)"""
     channel = "jd"
     try:
