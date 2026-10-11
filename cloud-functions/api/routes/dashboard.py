@@ -53,6 +53,14 @@ def _daily_maintenance(channel="jd"):
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
         if not _got:
             return  # 今天已维护(本实例或其他实例)
+        # ② digest 预填(每日维护——get_sales_digest 填表缓存——健康/低库存/规则/补货/断货消费方首访命中——首冷降频)
+        try:
+            from biz.sales import get_sales_digest
+            get_sales_digest(channel)
+            if channel == "jd":
+                get_sales_digest("other")
+        except Exception as _e:
+                try_err('dashboard', 'digest 预填降级', _e)
         # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
         #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
         try:
