@@ -165,14 +165,43 @@ def get_sales_digest(channel, days=28):
         _tk = "sales_digest|%s|%s" % (channel, days)
         _row = _one("SELECT value, created_at FROM analysis_cache WHERE `key`=%s", [_tk])
         if _row and _row.get("value"):
-            _pl = _json.loads(_row["value"])
-            _age = (_now - _t.mktime(_t.strptime(str(_row.get("created_at") or "")[:19],
-                                                "%Y-%m-%d %H:%M:%S"))) if _row.get("created_at") else 999
-            if _age <= 300 and _pl.get("fused") is not None:
-                _f = {str(k): float(v) for k, v in _pl["fused"].items()}
-                _sg = {str(k): float(v) for k, v in (_pl.get("sigma") or {}).items()}
-                _SALES_DIGEST_CACHE[_key] = (_now, ({}, _f, _sg))
-                return {}, _f, _sg
+            _v0 = _row["value"]
+            if _v0 == "__CALC__":
+                # 并发共享: 别人在重算(表级 __CALC__ 标记) → 轮询等待结果(2s 内共享, 超时自己抢)
+                for _i in range(40):
+                    _t.sleep(0.05)
+                    _row = _one("SELECT value FROM analysis_cache WHERE `key`=%s", [_tk])
+                    _v0 = _row.get("value") if _row else None
+                    if _v0 and _v0 != "__CALC__":
+                        break
+                if _v0 and _v0 != "__CALC__":
+                    try:
+                        _pl = _json.loads(_v0)
+                        if _pl.get("fused") is not None:
+                            _f = {str(k): float(v) for k, v in _pl["fused"].items()}
+                            _sg = {str(k): float(v) for k, v in (_pl.get("sigma") or {}).items()}
+                            _SALES_DIGEST_CACHE[_key] = (_now, ({}, _f, _sg))
+                            return {}, _f, _sg
+                    except Exception:
+                        pass
+            else:
+                _pl = _json.loads(_v0)
+                _age = (_now - _t.mktime(_t.strptime(str(_row.get("created_at") or "")[:19],
+                                                    "%Y-%m-%d %H:%M:%S"))) if _row.get("created_at") else 999
+                if _age <= 300 and _pl.get("fused") is not None:
+                    _f = {str(k): float(v) for k, v in _pl["fused"].items()}
+                    _sg = {str(k): float(v) for k, v in (_pl.get("sigma") or {}).items()}
+                    _SALES_DIGEST_CACHE[_key] = (_now, ({}, _f, _sg))
+                    return {}, _f, _sg
+    except Exception:
+        pass
+    # 并发合并(表级 __CALC__——summary/risk 冷算同时 miss digest 时共享一次重算, 非竞争×2)
+    try:
+        from db import execute as _em
+        _em("INSERT INTO analysis_cache(`key`, value, created_at) VALUES(%s,'__CALC__',NOW(6)) "
+            "ON DUPLICATE KEY UPDATE value='__CALC__', "
+            "created_at=IF(value='__CALC__', created_at, VALUES(created_at))",
+            ["sales_digest|%s|%s" % (channel, days)])
     except Exception:
         pass
     by_sku, _ = load_daily_sales_grouped(days, channel)
@@ -185,7 +214,7 @@ def get_sales_digest(channel, days=28):
             _mm = sum(_vl) / len(_vl)
             _vv = sum((x - _mm) ** 2 for x in _vl) / len(_vl)
             sigma[_s] = _vv ** 0.5
-    # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值)
+    # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值; 覆盖 __CALC__ 标记为结果)
     try:
         from db import execute as _exec
         _exec("INSERT INTO analysis_cache(`key`, value) VALUES(%s,%s) "
