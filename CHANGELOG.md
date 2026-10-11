@@ -1,3 +1,26 @@
+## 2026-10-11: 全接口性能根治 + 模块化拆分(红线) + seed 重置验证 + 懒加载回退
+> **主线**: feat/edgeone, commits 7de1f786→bc592f4b。
+> **验证**: 全接口 1-3s(破缓存)/热态1s; 后端 8 模块拆分 150/150; seed 重置填充 done(orders179k/库存17k/告警3825); 前端断货卡 RiskCard 组件化+懒加载回退; 指纹部署确认法(M1 时间戳——避免旧实例误判)。
+
+### 性能根治(10s+ → 1-3s)
+- **根因**: TiDB serverless 固定 ~1s/查询(跨区网络——SELECT 1 都 1s)+ 接口内查询数 6-8 + 首屏 5 接口并发竞争(RU/连接排队)
+- **错峰**: loadAll 三批(summary 先行渲染→orders/alerts 0.3s 后→stock-risk 最后)——消除并发竞争(10s+ 主因)
+- **查询收敛**: MAX 合并(追平 3 SELECT→一条子查询)/aux alerts 3 次串行→一次+Python 分组/repl 5 查询 ThreadPool 并行/stock-risk 无锁(行锁 16s→2s——弃 TiDB 悲观锁: FOR UPDATE 单请求 80s)
+- **digest/缓存**: digest 表缓存 __CALC__ 合并(首冷 summary/risk 共享一次重算——竞争×2→1)/进程内锁(同实例并发共享)/池 20+线程 3→2(并发连接友好)/invalidate 物化追平异步(写操作不阻塞)
+- **锁定误判教训**: stock-risk 83s 曾归咎行锁——控制变量(无锁也 84s 首冷瞬时/重测 2s)=TiDB serverless 环境瞬时波动——重测确认再动代码
+
+### 模块化拆分(红线 §15.47——现有大文件主动拆, 后续新增按域归属)
+- 后端 8 模块: dashboard→maintain/stock_risk/health; rules→rule_cond; cleansing→cleanse_write; purchase→purchase_calc; tasks→task_export/task_seed(re-export 保外部调用; 依赖随迁 §15.48)
+- 前端: DashboardPage 断货小卡→components/dash/RiskCard.tsx(props 化+fmtWh/RISK_LV 随迁——组件化漏依赖教训)
+- 懒加载引入→回退(双骨架视觉差——懒加载 fallback+页面数据骨架两次加载; 恢复直接 import 单次骨架)
+
+### 工程/验证
+- 连接池: db.py queue 池(上限10/实例, DB_POOL_LIMIT 可调)+ transaction 事务连接隔离(FOR UPDATE 锁保持)+ finally 归还
+- 监控告警: 慢请求 >10s 升级 slow_alert(error)+ 可选 webhook(SLOW_WEBHOOK_URL)
+- 指纹部署确认法: 实例启动 M1 日志时间戳 ≥ 推送时刻=部署完成(勿凭 health+固定等待误判)
+- seed 重置填充完整验证 + seed/fill 修复(_new_task_id/_TABLES_RESET 延迟 import); window.__page 渲染同步(异常页"回到看板"看板页隐藏)
+- local_test 150/150; CI 绿
+
 ## 2026-10-10: 计数/入口根治 + 看板 10s 偶发根治(数据追平基准) + 快照分批重建 + 导入写入提速 + 健康卡缺货修复
 > **主线**: feat/edgeone, commits 495ed54f→4bc984cd。
 > **验证**: 健康卡 out_of_stock 全维度恢复(own 8/platform 293); 快照分段落实(10-08→10-10, 段 ~1s); summary miss 稳定 3s(非 10s); 导入写入去事务 1000/批(待部署验证提速)。
