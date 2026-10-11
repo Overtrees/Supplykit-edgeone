@@ -21,7 +21,7 @@ def _status_cond(col="order_status"):
 
 
 _summary_cache = {}
-_SUMMARY_TTL = 30
+_SUMMARY_TTL = 60  # 2026-10-11 30→60(冷算频次降; invalidate 变更立即清——实时不损)
 
 
 
@@ -791,7 +791,7 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
 _aux_cache = {}
 _AUX_TTL = 60
 _risk_cache = {}
-_RISK_TTL = 30
+_RISK_TTL = 300  # 2026-10-11 30→300(冷算 12.8s 频次降 10 倍; invalidate 变更清——断货卡实时)
 
 
 @router.get("/dashboard/aux")
