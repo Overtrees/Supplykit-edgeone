@@ -35,8 +35,13 @@ def _loads(value):
         return _FAILED
 
 
+_CALC_INFLIGHT = {}
+
+
 def cache_get(key, ttl, builder):
-    """共享表缓存读: 命中(存在且 TTL 内)返回缓存; 否则 builder() 重算落表"""
+    """共享表缓存读: 命中(存在且 TTL 内)返回缓存; 否则 builder() 重算落表
+    2026-10-11 并发合并: 同 key 计算中去重(进程内 inflight——多标签/多次刷新并发同 key → 第一个算, 其余共享等待)"""
+    import time as _t
     key = "%s|%s" % (_CACHE_V, key)
     try:
         from db import one, execute
@@ -48,11 +53,31 @@ def cache_get(key, ttl, builder):
                 v = _loads(row.get("value") or "")
                 if v is not _FAILED:
                     return v
-        val = builder()
-        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                "VALUES(%s,%s,NOW(6))",
-                (key, json.dumps(val, ensure_ascii=False, default=str)))
-        return val
+        # 并发计算合并(同 key inflight)
+        _nowk = _t.time()
+        if key in _CALC_INFLIGHT and _CALC_INFLIGHT[key][0] > _nowk - 20:
+            _cal = _CALC_INFLIGHT[key]
+            for _i in range(200):  # 等待 10s 共享首个结果
+                _t.sleep(0.05)
+                _cal = _CALC_INFLIGHT.get(key)
+                if _cal is None:
+                    break
+                if _cal[1] is not None:
+                    return _cal[1]
+                if _cal[0] < _nowk - 20:
+                    break
+            _CALC_INFLIGHT.pop(key, None)
+        _CALC_INFLIGHT[key] = (_nowk, None)
+        try:
+            val = builder()
+            execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                    "VALUES(%s,%s,NOW(6))",
+                    (key, json.dumps(val, ensure_ascii=False, default=str)))
+            _CALC_INFLIGHT[key] = (_nowk, val)
+            return val
+        except Exception:
+            _CALC_INFLIGHT.pop(key, None)
+            raise
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
         # 自愈本身也失败才降级直算(保底不阻塞业务)
