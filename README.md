@@ -131,7 +131,7 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 91 项全过
+cd cloud-functions/api && python3 local_test.py        # 150 项全过
 
 # 前端
 cd frontend && npm install && npm run dev
@@ -161,7 +161,7 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 17 路由模块 · local_test 91 项     │
+│  FastAPI · 24 路由模块 · local_test 150 项     │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -205,7 +205,7 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 frontend/src/
 ├── pages/ (13个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
 │                 Products / Suppliers / Quality / Settings / Task / Login / ...
-├── components/ (13个): Chart / Sidebar / Toast / ErrorBoundary / Icons / hammer/(9) / ...
+├── components/ (14个): Chart / Sidebar / Toast / ErrorBoundary / Icons / hammer/(9) / dash/RiskCard / ...
 ├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态
 ├── api/client.ts                 Axios + 缓存 + 统一响应解包
 └── App.tsx / main.tsx / theme.ts / styles.css
@@ -215,8 +215,9 @@ cloud-functions/api/
 ├── db.py                         TiDB 原生数据层（pymysql DictCursor）
 ├── biz/sales.py                  三窗口日销滚动预测 + 逐仓/全国C仓双口径
 ├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
-├── routes/ (17个)                业务路由
-└── local_test.py                 本地回归 91 项（mock db + TestClient）
+├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
+├── routes/ (24个)                业务路由(2026-10-11 模块化: dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed)
+└── local_test.py                 本地回归 150 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -259,7 +260,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 91 项（auth/看板/补货/清洗/规则/开关联动/字符串契约）
+cd cloud-functions/api && python3 local_test.py   # 150 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出）
 ```
 
 ---
@@ -275,7 +276,7 @@ cd cloud-functions/api && python3 local_test.py   # 91 项（auth/看板/补货/
 ```bash
 # 部署：提交后推送 edgeone 远程 → Makers Git 集成自动构建
 git push edgeone feat/edgeone
-# 构建状态查询（DescribePagesDeployments）；部署后冒烟 /api/health
+# 构建状态查询（DescribePagesDeployments）；部署后冒烟 /api/health + 指纹确认(quality-logs M1 时间戳≥推送时刻=新实例——勿凭 health 误判旧代码)
 ```
 
 > **定时任务**：cron 7 端点由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
