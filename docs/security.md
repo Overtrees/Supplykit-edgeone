@@ -13,9 +13,9 @@
 ## 加固建议（待办——非紧急）
 | 项 | 现状 | 建议 | 优先级 |
 |---|---|---|---|
-| cron secret 传输 | query 参数 `?secret=`（URL 落日志风险） | **仅用 X-Cron-Secret 头**——拒绝 query | 中 |
-| cron secret 比较 | `q == secret`（平文比较——timing） | `hmac.compare_digest` | 中 |
-| cron 未配置 secret | `return True`（依赖平台签名 q-sign） | 平台签名可靠性依赖外部——建议生产必配 CRON_SECRET | 中 |
+| cron secret 传输 | query 参数 `?secret=`（URL 落日志风险） | ✅ 已完成：仅 X-Cron-Secret 头（弃 query） | 中→已办 |
+| cron secret 比较 | `q == secret`（平文比较——timing） | ✅ 已完成：hmac.compare_digest | 中→已办 |
+| cron 未配置 secret | `return True`（依赖平台签名 q-sign） | 保留（平台签名保护——生产建议必配 CRON_SECRET） | 低 |
 | 密钥轮换 | 未设轮换机制 | 若曾疑似泄漏——立即轮换（env 更新即生效） | 低 |
 
 ## README 层面无法验证（仅清单——需人工/定期）
