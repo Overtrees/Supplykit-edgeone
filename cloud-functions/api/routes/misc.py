@@ -13,7 +13,7 @@ router = APIRouter(tags=["misc"])
 @traced
 def jwt_check(token: str = ""):
     """临时探测(401 排查): 用当前实例 secret 验证给定 token——回显失败步骤"""
-    from routes.common import verify_token, _b64decode, jwt_secret
+    from routes.common import verify_token, _b64decode, _b64, jwt_secret
     if not token:
         return ok({"fail": "no-token"})
     import json as _json
