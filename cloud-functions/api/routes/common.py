@@ -87,7 +87,7 @@ def _b64decode(s: str) -> bytes:
 
 
 def jwt_secret():
-    return os.environ.get("JWT_SECRET", "")
+    return os.environ.get("JWT_SECRET") or "supplykit-fixed-demo-secret"  # 生产应设 JWT_SECRET; fallback 保实例一致
 
 
 def create_token(username: str, expire_hours: int = 720) -> str:
