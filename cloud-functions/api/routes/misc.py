@@ -24,6 +24,19 @@ def jwt_check(token: str = ""):
         return ok({"fail": "err:" + str(e)[:60]})
 
 
+@router.get("/debug/auth-sim")
+@traced
+def auth_sim(request: Request):
+    """模拟 auth 中间件: 从 Authorization header 取 Bearer → auth[7:] → verify_token——对比传参路径"""
+    from routes.common import verify_token
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return ok({"fail": "no-bearer", "auth_head": auth[:12]})
+    token7 = auth[7:]
+    user = verify_token(token7)
+    return ok({"user": user, "token7_len": len(token7), "token7_head": token7[:12], "auth_len": len(auth)})
+
+
 @router.get("/debug/jwt-fingerprint")
 @traced
 def jwt_fingerprint():
