@@ -789,9 +789,24 @@ input[type='file'] {
   font-weight: 400;
 }
 .hammer-panel {
-  border-top: 1px solid var(--border);
+  /* 2026-10-11 同侧边栏同款: fixed 视口内固定——PWA/Safari 表现一致(不随页面流, 消除全屏视口下底部空余差异) */
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 7px + 46px + 6px);
+  left: 16px;
+  right: 16px;
+  z-index: 2000;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
+    brightness(var(--glass-brightness));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
+    brightness(var(--glass-brightness));
+  border: 0.5px solid var(--glass-border);
+  box-shadow:
+    0 2px 20px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  border-radius: 16;
   padding-top: 8px;
-  margin-top: 8px;
+  padding-bottom: 8px;
 }
 .hammer-panel-scroll {
   max-height: 260px;
