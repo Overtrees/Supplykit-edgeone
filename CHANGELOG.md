@@ -1,3 +1,27 @@
+## 2026-10-13: 全页面 401 根治(X-Auth-Token) + 锤子面板 PWA 底部留空根治 + 调试口统一收口
+> **主线**: feat/edgeone, commits 743f6ff1→d4d66542。
+> **验证**: X-Auth-Token 全接口 200/Bearer 拒(401 预期); 锤子面板底部 16px 统一(PWA 50px 空白消除); 150/150。
+
+### 全页面 401 根治(能登录但接口全拒——用户排查挑战后实锤)
+- **根因**: Makers/边缘网关将 Authorization 改写为 q-sign(腾讯云签名)——Bearer JWT 被拦截 → verify_token 收到非 JWT → 全接口 401; login 放行白名单不受影响(能登录)
+- **排查链**(用户主导方法论——先绕鉴权分层, 勿先抠 secret): 指纹(多实例 secret 一致) → jwt-check(签名/解码/exp 通过) → auth-sim(Authorization=q-sign 实锤)
+- **修复**: token 走自定义头 X-Auth-Token(网关不改写)——后端 auth 中间件/auth.py(check+require_user)/misc diag/tasks maintain 全链只认 X-Auth-Token(去 Bearer 回退冗余) + 前端 client/App/RulesPage 改发 + local_test/smoke 同步
+- **去兜底**: JWT_SECRET fallback 引入后去除(必设——生产安全); Bearer 回退去除(非冗余)
+- **安全链**: TLS+JWT 验签+密钥必设——X-Auth-Token 等价 Bearer 且网关不接触 token(暴露更小)
+
+### 锤子面板 PWA 底部留空根治(截图精确吻合——按钮下 50px 空白≈按钮高)
+- **根因**: 面板容器底部 padding = 16 + env(safe-area-inset-bottom)——PWA safe-area-bottom≈34 → 50px 空白(Safari 0 → 16 正常); 面板 maxHeight 100vh-120 底不在 home indicator 区——safe-area 底部多余
+- **修复**: 底部 padding 统一 16px(移除 safe-area)——PWA/Safari 一致
+- 此前误试: fixed 化无效回退(c992073e); 规范对齐误读回退(03f4299f/0ae285f4)
+
+### 调试口统一收口
+- routes/debug.py 统一(jwt-check/auth-sim/jwt-fingerprint + /debug/list 清单) + DEVELOPMENT §15.50/§15.51(路由/日志/前端 console/window.__/DevMode 全清单+策略)
+- 诊断方法论固化(§15.49): 先绕鉴权分层(/debug 放行直调接口层)——勿先抠 secret/签名
+
+### 其他
+- README: 认证段 X-Auth-Token/JWT_SECRET 必设更新; 路由一览 17→24 后按用户要求回退(恢复 17)
+- local_test 150/150; CI 绿
+
 ## 2026-10-11: 全接口性能根治 + 模块化拆分(红线) + seed 重置验证 + 懒加载回退
 > **主线**: feat/edgeone, commits 7de1f786→bc592f4b。
 > **验证**: 全接口 1-3s(破缓存)/热态1s; 后端 8 模块拆分 150/150; seed 重置填充 done(orders179k/库存17k/告警3825); 前端断货卡 RiskCard 组件化+懒加载回退; 指纹部署确认法(M1 时间戳——避免旧实例误判)。
