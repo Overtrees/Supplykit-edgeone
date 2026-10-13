@@ -263,14 +263,13 @@ export default function RulesPage() {
       const r = await fetch(API + '/api/rules/' + testRule.id + '/test', {
         method: 'POST',
         headers: {
-          'X-Auth-Token':
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -719,14 +718,13 @@ export default function RulesPage() {
       const r = await fetch(url, {
         method: isNew ? 'POST' : 'PUT',
         headers: {
-          'X-Auth-Token':
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -776,14 +774,13 @@ export default function RulesPage() {
     addDebug('del 开始', { id })
     await fetch(API + '/api/rules/' + id, {
       headers: {
-        'X-Auth-Token':
-          (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
+        'X-Auth-Token': (() => {
+          try {
+            return localStorage.getItem('c_token')
+          } catch {
+            return ''
+          }
+        })(),
       },
       method: 'DELETE',
     })
@@ -795,14 +792,13 @@ export default function RulesPage() {
     const timer = setTimeout(async function () {
       await fetch(API + '/api/rules/' + id + '/permanent-delete', {
         headers: {
-          'X-Auth-Token':
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
         method: 'POST',
       })
@@ -817,14 +813,13 @@ export default function RulesPage() {
           clearTimeout(timer)
           await fetch(API + '/api/rules/' + id + '/restore', {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
             method: 'POST',
           })

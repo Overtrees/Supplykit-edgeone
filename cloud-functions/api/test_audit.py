@@ -93,7 +93,7 @@ for f, tmpl, args in key_defs:
             seen.add(prefix)
             missing = [p for p in need if p not in argnames]
             check("缓存 key %s 含 %s" % (prefix, ",".join(need)),
-                  not missing and n_ps >= len(need),  # 容忍 _CACHE_V 前缀参数(防前缀 key 误红)
+                  not missing and (n_ps - (1 if tmpl.startswith('%s|') else 0)) == len(need),  # 严格: 剥离 _CACHE_V 前缀 %s 后 == need(0 容忍)
                   "模板=%s 参数=%s" % (tmpl, argnames))
 for prefix, need in EXPECT:
     if prefix not in seen:

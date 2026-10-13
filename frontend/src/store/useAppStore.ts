@@ -271,7 +271,10 @@ const initAppStore = (set, get) => ({
             orderPage: arr[0].data?.page || p,
             qualityLogs: arr[1].data || [],
             alerts: arr[2].data || [],
-            orderLoadErr: r1[0] && r1[0].status === 'rejected' ? errText((r1[0] as { reason?: unknown }).reason as string) : '',
+            orderLoadErr:
+              r1[0] && r1[0].status === 'rejected'
+                ? errText((r1[0] as { reason?: unknown }).reason as string)
+                : '',
           })
           resolve([arr[0], arr[1], arr[2]])
         }, 300),
