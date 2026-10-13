@@ -9,6 +9,16 @@ from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["misc"])
 
 
+@router.get("/debug/jwt-fingerprint")
+@traced
+def jwt_fingerprint():
+    """临时探测(2026-10-13 401 排查): 返回当前实例 jwt_secret 指纹(sha256 前16——不泄露 secret)——多实例对比一致性"""
+    import hashlib as _h
+    from routes.common import jwt_secret as _js
+    _s = _js() or ""
+    return ok({"fp": _h.sha256(_s.encode()).hexdigest()[:16], "len": len(_s)})
+
+
 @router.get("/quality-logs/export")
 @traced
 def export_quality_logs(date: str = "", scope: str = "", level: str = ""):
