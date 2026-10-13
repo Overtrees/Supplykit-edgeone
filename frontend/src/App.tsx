@@ -48,7 +48,7 @@ export const NAV = [
 
 export default function App() {
   const [page, setPage] = useState('dash')
-  window.__page = page  // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
+  window.__page = page // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {
     setPage(p)
     clearCache()
@@ -169,14 +169,13 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
           })
           const d = await r.json()
@@ -220,14 +219,13 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
           })
           const d = await r.json()
@@ -273,14 +271,13 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
           })
           const d = await r.json()
@@ -312,14 +309,13 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
           })
           const d = await r.json()
@@ -407,14 +403,13 @@ export default function App() {
           API + '/api/replenishment-config/history?channel=' + (ch || channel) + '&limit=50',
           {
             headers: {
-              'X-Auth-Token':
-                (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
             },
           },
         )
@@ -865,7 +860,8 @@ export default function App() {
                   transformOrigin: '85% -18px',
                   transition: 'opacity 180ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1)',
                   willChange: 'opacity, transform',
-                  padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+                  // 2026-10-13 PWA 底部留空根治: 面板 maxHeight 100vh-120(底不在 home indicator 区)——底部 safe-area padding 多余致 PWA 下按钮下 50px 空白; 统一 16px
+                  padding: '16px 16px 16px',
                 }}
               >
                 {page === 'dash' ? (
@@ -1063,14 +1059,13 @@ export default function App() {
                     try {
                       const r = await fetch(API + '/api/seed/fill', {
                         headers: {
-                          'X-Auth-Token':
-                            (() => {
-                              try {
-                                return localStorage.getItem('c_token')
-                              } catch {
-                                return ''
-                              }
-                            })(),
+                          'X-Auth-Token': (() => {
+                            try {
+                              return localStorage.getItem('c_token')
+                            } catch {
+                              return ''
+                            }
+                          })(),
                         },
                         method: 'POST',
                       })
