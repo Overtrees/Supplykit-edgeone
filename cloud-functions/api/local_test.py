@@ -158,7 +158,7 @@ check("login 返回 token", bool(TOKEN))
 r = client.post("/auth/login", json={"username": "x", "password": "bad"})
 check("auth/login 错误密码", r.json().get("ok") is False)
 
-r = client.get("/auth/check", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/auth/check", headers={"X-Auth-Token": TOKEN})
 check("auth/check 带 token", r.status_code == 200 and r.json().get("ok"), r.text[:150])
 
 # admin 用户(写操作测试用; demo 只读)
@@ -175,7 +175,7 @@ r = client.get("/dashboard/summary")
 check("无 token 401", r.status_code == 401, str(r.status_code))
 
 # dashboard summary
-r = client.get("/dashboard/summary?channel=jd", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/dashboard/summary?channel=jd", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 dd = d.get("data") if isinstance(d, dict) else d
 if d.get("ok") is False:
@@ -191,11 +191,11 @@ else:
 
 # 自定义日期
 r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=2026-08-31",
-               headers={"Authorization": "Bearer " + TOKEN})
+               headers={"X-Auth-Token": TOKEN})
 check("自定义日期 200", r.status_code == 200 and r.json().get("ok") is not False, r.text[:120])
 
 # replenishment
-r = client.get("/insights/replenishment?channel=jd&mode=bbcc", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/insights/replenishment?channel=jd&mode=bbcc", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 if d.get("ok") is False:
     check("replenish 无错误", False, (d.get("detail") or "")[:200])
@@ -204,26 +204,26 @@ else:
     check("replenish 返回列表", isinstance(items, list), str(d)[:150])
     check("replenish SKU0001 充足无建议", not any(i.get("sku") == "SKU0001" and (i.get("suggested_qty") or 0) > 0 for i in items), str(items)[:300])
     check("replenish SKU0002 有建议(缺货)", any(i.get("sku") == "SKU0002" for i in items))
-r = client.get("/insights/replenishment?channel=jd&mode=traditional", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/insights/replenishment?channel=jd&mode=traditional", headers={"X-Auth-Token": TOKEN})
 check("replenish traditional 200", r.status_code == 200, r.text[:120])
 
 # orders / products / insights
-r = client.get("/orders?page=1&page_size=5", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/orders?page=1&page_size=5", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 check("orders 返回分页", d.get("ok") and len(d.get("data", {}).get("items", [])) >= 1, r.text[:150])
-r = client.get("/products?page=1&page_size=5", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/products?page=1&page_size=5", headers={"X-Auth-Token": TOKEN})
 check("products 200", r.status_code == 200 and r.json().get("ok"), r.text[:120])
-r = client.get("/insights/slow-moving?channel=jd", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/insights/slow-moving?channel=jd", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 check("slow-moving 200", d.get("ok") is not False, (d.get("detail") or "")[:150])
-r = client.get("/insights/with-sales?wh_type=own&channel=jd", headers={"Authorization": "Bearer " + TOKEN})
+r = client.get("/insights/with-sales?wh_type=own&channel=jd", headers={"X-Auth-Token": TOKEN})
 check("with-sales 200", r.json().get("ok") is not False, r.text[:150])
 
 # ── 契约补齐组 A: ping/删除恢复/批量/缺货/批次/配置 ──
 r = client.get("/insights/ping")
 check("ping 免鉴权 {ok:true}", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
-AH = {"Authorization": "Bearer " + ADMIN}
-r = client.delete("/orders/1", headers={"Authorization": "Bearer " + TOKEN})
+AH = {"X-Auth-Token": ADMIN}
+r = client.delete("/orders/1", headers={"X-Auth-Token": TOKEN})
 check("orders 软删 demo 只读403", r.status_code == 403, r.text[:120])
 r = client.delete("/orders/1", headers=AH)
 check("orders 软删 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])

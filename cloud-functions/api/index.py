@@ -110,13 +110,11 @@ async def auth_middleware(request: Request, next):
             or path == "/insights/ping" or path.startswith("/cron")
             or path.endswith("/logs/frontend")):
         return await next(request)
-    # 2026-10-13: 网关将 Authorization 改写为 q-sign(腾讯云签名)——Bearer 被拦截→全接口 401
-    # 改走 X-Auth-Token 自定义头(网关不透传/不改写); 兼容 Authorization Bearer 回退
-    auth = request.headers.get("X-Auth-Token", "") or request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") and "X-Auth-Token" not in request.headers:
-        if not auth.startswith("Bearer "):
-            return JSONResponse({"detail": "未登录，请先登录"}, status_code=401)
-    token = auth[7:] if auth.startswith("Bearer ") else auth
+    # 2026-10-13: 网关将 Authorization 改写为 q-sign——Bearer 被拦截(401 根因)
+    # 方案: token 统一走 X-Auth-Token(网关不改写)——只认此头(Bearer 回退去除——非冗余; 本地/冒烟同步改)
+    token = request.headers.get("X-Auth-Token", "")
+    if not token:
+        return JSONResponse({"detail": "未登录，请先登录"}, status_code=401)
     user = verify_token(token)
     if not user:
         return JSONResponse({"detail": "Token 无效或已过期"}, status_code=401)

@@ -69,10 +69,8 @@ def list_tasks(channel: str = "jd", limit: int = 50):
 @router.post("/tasks/maintain")
 async def tasks_maintain(request: Request):
     """数据维护入口(admin): action=rebuild_agg → 后台重建 orders_day_agg 90 天(重置后/陈旧修复)"""
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
     from routes.common import verify_token
-    if verify_token(token) != "admin":
+    if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
         return fail("仅 admin 可用", 403)
     d = {}
     try:

@@ -56,8 +56,7 @@ async def login(request: Request):
 @router.get("/auth/check")
 @traced
 def check_auth(request: Request):
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
+    token = request.headers.get("X-Auth-Token", "")
     user = verify_token(token) if token else None
     if not user:
         return fail("未登录", 401)
@@ -66,6 +65,5 @@ def check_auth(request: Request):
 
 def require_user(request: Request):
     """中间件用: 返回 username 或 None"""
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
+    token = request.headers.get("X-Auth-Token", "")
     return verify_token(token) if token else None

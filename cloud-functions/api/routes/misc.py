@@ -255,9 +255,8 @@ def monitor():
 @traced
 async def db_diag(request: Request):
     """RU/执行计划测算(admin 专用, 只读): 免费额度数据驱动优化——EXPLAIN ANALYZE 拿真实扫描行数/耗时"""
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
     from routes.common import verify_token
+    token = request.headers.get("X-Auth-Token", "")
     user = verify_token(token)
     if user != "admin":
         return fail("仅 admin 可用", 403)

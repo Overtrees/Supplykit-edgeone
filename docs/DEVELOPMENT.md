@@ -858,3 +858,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 ### 15.48 拆分依赖随迁红线(2026-10-11 教训: health 移动漏带 _rule_params——NameError)
 - 移动函数时**依赖必须随迁**：函数体引用的其他模块函数(如 _health_index 用 _rule_params)需 ①同迁 或 ②目标模块显式 import——移后 AST 扫描函数引用 + local_test 全量回归(150)验证
 - 拆分后**先本地复现**(mock db 导入 + 调用主链)——勿直接部署(线上 NameError 才暴露)
+
+### 15.49 token 认证头约定（2026-10-13 强约束——401 事故根治）
+- **认证头统一用 `X-Auth-Token`**（非 Authorization）——Makers/边缘网关将 Authorization 改写为 q-sign（腾讯云签名）→ Bearer JWT 被拦截 → 全接口 401（login 放行不受影响——能登录但接口全拒）
+- **禁止**：新增任何 `Authorization: Bearer` 发送/读取（后端中间件/路由自验/auth.py check+require_user/tasks_maintain/misc db_diag 已全部改 X-Auth-Token）
+- **安全链**：TLS 传输 + 服务端 JWT 验签（HMAC-SHA256 + JWT_SECRET 必设——无 fallback 兜底）+ token 过期校验——X-Auth-Token 与 Bearer 同等级（且网关不接触 token——暴露面更小）
+- 排查方法（先绕鉴权分层）：/debug 前缀放行——临时探测直调接口逻辑确认接口层 → 再定位鉴权/token 层（勿先抠 secret/签名）

@@ -32,7 +32,7 @@ def check(name, cond, extra=""):
 def req(path, method="GET", body=None, token=None, timeout=60):
     h = {"Content-Type": "application/json"}
     if token:
-        h["Authorization"] = "Bearer " + token
+        h["X-Auth-Token"] = token  # 2026-10-13: 网关改写 Authorization——统一 X-Auth-Token
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.urlopen(
         urllib.request.Request(BASE + path, data=data, headers=h, method=method),
