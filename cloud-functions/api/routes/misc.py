@@ -13,24 +13,13 @@ router = APIRouter(tags=["misc"])
 @traced
 def jwt_check(token: str = ""):
     """临时探测(401 排查): 用当前实例 secret 验证给定 token——回显失败步骤"""
-    from routes.common import verify_token, _b64decode, _b64, jwt_secret
+    from routes.common import verify_token, jwt_secret
     if not token:
         return ok({"fail": "no-token"})
-    import json as _json
     try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return ok({"fail": "parts:" + str(len(parts))})
-        try:
-            hdr = _json.loads(_b64decode(parts[1]))
-        except Exception as e:
-            return ok({"fail": "payload-decode:" + str(e)[:50]})
-        secret = jwt_secret()
-        import hashlib as _h, hmac as _hm
-        expected = _b64( _hm.new(secret.encode(), ("%s.%s" % (parts[0], parts[1])).encode(), _h.sha256).digest())
-        sig_ok = parts[2] == expected
-        return ok({"fail": "sig-mismatch" if not sig_ok else "exp-check",
-                   "sub": hdr.get("sub"), "exp": hdr.get("exp"), "secret_len": len(secret)})
+        # 直接调真实 verify_token(线上同函数)——定位其真实结果
+        user = verify_token(token)
+        return ok({"verify_user": user, "secret_len": len(jwt_secret() or "")})
     except Exception as e:
         return ok({"fail": "err:" + str(e)[:60]})
 
