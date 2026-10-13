@@ -75,7 +75,7 @@ print("B. 缓存 key 完整性审计(维度参数全覆盖)")
 EXPECT = [
     ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
-    ("stock_risk|", ["channel", "full"]),
+    ("stock_risk|", ["channel", "full"]),  # key 现带 _CACHE_V 前缀(%s|stock_risk|...)
     ("accel|", ["channel", "ratio", "min_qty"]),
     ("purchase|", ["channel", "mode", "days"]),
     ("repl|", ["channel", "mode", "days", "source"]),
@@ -89,11 +89,11 @@ for f, tmpl, args in key_defs:
     n_ps = tmpl.count("%s")
     argnames = [a.strip().split("=")[0].strip() for a in args.split(",") if a.strip()]
     for prefix, need in EXPECT:
-        if tmpl.startswith(prefix):
+        if prefix in tmpl:  # 容忍 _CACHE_V 前缀(%s|stock_risk|...)
             seen.add(prefix)
             missing = [p for p in need if p not in argnames]
             check("缓存 key %s 含 %s" % (prefix, ",".join(need)),
-                  not missing and n_ps == len(need),
+                  not missing and n_ps >= len(need),  # 容忍 _CACHE_V 前缀参数(防前缀 key 误红)
                   "模板=%s 参数=%s" % (tmpl, argnames))
 for prefix, need in EXPECT:
     if prefix not in seen:
