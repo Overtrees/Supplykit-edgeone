@@ -1491,7 +1491,6 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           riskWarning={riskWarning}
           riskFont={riskFont}
           onAlert={function (sku, whType, wh) {
-            setHighlightSku(sku)
             if (whType === 'own') {
               useAppStore.getState().setHammerWhType('own')
             } else {

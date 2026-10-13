@@ -6,8 +6,8 @@ import { t } from '../locale'
  * 错误文案统一判断(供 ErrorRetry 与各状态共用):
  * 网络层失败(axios 无 response: 断网/超时) → "网络波动"; 服务端/业务错误(有 response) → "加载失败"
  */
-export function errText(e?: { response?: unknown } | null): string {
-  return e && e.response ? '加载失败' : '网络波动'
+export function errText(e?: unknown): string {  // 兼容 string(reason)/对象({response})
+  return e && typeof e === 'object' && (e as { response?: unknown }).response ? '加载失败' : '网络波动'
 }
 
 interface ErrorRetryProps {
