@@ -181,15 +181,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       const r = await fetch(`${API}/api/inventory/${confirmDel}`, {
         method: 'DELETE',
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
       })
       if (r.ok) {

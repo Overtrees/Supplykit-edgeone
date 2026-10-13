@@ -91,15 +91,13 @@ export default function DevModePage() {
       const r = await fetch(API + '/api/seed/fill', {
         method: 'POST',
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
       })
       const d = await r.json()
@@ -144,15 +142,13 @@ export default function DevModePage() {
       const r = await fetch(API + '/api/seed/reset', {
         method: 'POST',
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
       })
       const d = await r.json()
@@ -166,15 +162,13 @@ export default function DevModePage() {
           try {
             const sr = await fetch(API + '/api/seed/fill/status?task_id=' + d.data.task_id, {
               headers: {
-                Authorization:
-                  'Bearer ' +
-                  (() => {
-                    try {
-                      return localStorage.getItem('c_token')
-                    } catch {
-                      return ''
-                    }
-                  })(),
+                'X-Auth-Token': (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
               },
             })
             const sd = await sr.json()

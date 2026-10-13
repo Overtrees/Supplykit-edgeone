@@ -55,15 +55,13 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
         {
           method: 'POST',
           headers: {
-            Authorization:
-              'Bearer ' +
-              (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
+            'X-Auth-Token': (() => {
+              try {
+                return localStorage.getItem('c_token')
+              } catch {
+                return ''
+              }
+            })(),
           },
         },
       )

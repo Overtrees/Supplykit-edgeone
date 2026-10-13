@@ -129,15 +129,13 @@ export default function OrdersPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
         body: JSON.stringify({ action, ids }),
       })

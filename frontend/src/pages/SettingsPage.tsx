@@ -30,15 +30,13 @@ export default function SettingsPage() {
       try {
         const r = await fetch(API + '/api/replenishment-config?channel=jd', {
           headers: {
-            Authorization:
-              'Bearer ' +
-              (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
+            'X-Auth-Token': (() => {
+              try {
+                return localStorage.getItem('c_token')
+              } catch {
+                return ''
+              }
+            })(),
           },
         })
         const d = await r.json()
@@ -52,15 +50,13 @@ export default function SettingsPage() {
       const r = await fetch(API + '/api/replenishment-config?channel=jd', {
         method: 'PUT',
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ webhook_url: webhookUrl.trim() }),

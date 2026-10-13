@@ -26,15 +26,13 @@ export default function RecyclePage() {
   const loadData = () => {
     setLoading(true)
     const _auth = {
-      Authorization:
-        'Bearer ' +
-        (() => {
-          try {
-            return localStorage.getItem('c_token')
-          } catch {
-            return ''
-          }
-        })(),
+      'X-Auth-Token': (() => {
+        try {
+          return localStorage.getItem('c_token')
+        } catch {
+          return ''
+        }
+      })(),
     }
     Promise.all([
       fetch(API + '/api/rules?channel=all&include_deleted=1', { headers: _auth }).then(r =>
@@ -93,15 +91,13 @@ export default function RecyclePage() {
     setBatchBusy(true)
     try {
       const _auth = {
-        Authorization:
-          'Bearer ' +
-          (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
+        'X-Auth-Token': (() => {
+          try {
+            return localStorage.getItem('c_token')
+          } catch {
+            return ''
+          }
+        })(),
         'Content-Type': 'application/json',
       }
       // 规则: 永久删除走 batch purge(批量接口), 其余走单条

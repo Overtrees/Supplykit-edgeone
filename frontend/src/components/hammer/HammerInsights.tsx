@@ -107,15 +107,13 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
         {
           method: 'POST',
           headers: {
-            Authorization:
-              'Bearer ' +
-              (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
+            'X-Auth-Token': (() => {
+              try {
+                return localStorage.getItem('c_token')
+              } catch {
+                return ''
+              }
+            })(),
           },
         },
       )

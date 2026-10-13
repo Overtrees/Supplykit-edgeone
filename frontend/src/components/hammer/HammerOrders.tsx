@@ -49,15 +49,13 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
         body: JSON.stringify({ action, ids }),
       })
@@ -84,15 +82,13 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
       const r = await fetch(API + '/api/exports?type=orders&channel=' + channel, {
         method: 'POST',
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
       })
       const d = await r.json()

@@ -53,15 +53,13 @@ export default function TaskPage() {
     try {
       const r = await fetch(API + '/api/tasks?channel=' + channel, {
         headers: {
-          Authorization:
-            'Bearer ' +
-            (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token')
+            } catch {
+              return ''
+            }
+          })(),
         },
       })
       const d = await r.json()
@@ -133,15 +131,13 @@ export default function TaskPage() {
     setDownloading(p => ({ ...p, [taskId]: true }))
     try {
       const auth = {
-        Authorization:
-          'Bearer ' +
-          (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
+        'X-Auth-Token': (() => {
+          try {
+            return localStorage.getItem('c_token')
+          } catch {
+            return ''
+          }
+        })(),
       }
       // 分片导出(EdgeOne 响应体 6MB 限制): 逐片下载合并(单片 ≤6MB), 文件名用正式名
       let parts: string[] = []
