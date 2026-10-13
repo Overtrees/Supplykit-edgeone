@@ -736,6 +736,7 @@ input[type='file'] {
   text-align: center;
 }
 .hammer-btn-row {
+  margin-bottom: 0;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -792,6 +793,8 @@ input[type='file'] {
   border-top: 1px solid var(--border);
   padding-top: 8px;
   margin-top: 8px;
+  /* 2026-10-11: 面板底部统一呼吸(内容与面板底 8px——PWA 全屏视口下底部留空过大缓解) */
+  padding-bottom: 8px;
 }
 .hammer-panel-scroll {
   max-height: 260px;
