@@ -890,3 +890,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - DevModePage(设置彩蛋——开发者页: 连接状态/环境/monitor/日志分析)
 
 **约定**: 新增调试/临时代码统一登记(§15.50 路由集中) + 本清单补充; 生产禁敏感回显; 排查完成保留(有调试价值)
+
+### 15.52 CI 0 容忍纪律(2026-10-13 沉淀——CI 红连续多轮)
+- 本地 tsc 判 0 须确认进程完成(log 非空——空 log≠0); CI 为严格完整环境(完整 checkout/node_modules)——差异以 CI 为准
+- 改后必跑: 前端 prettier --check 全绿 + tsc + eslint; 后端 local_test 150 + test_audit 11(《husky pre-push 已验)
+- package.json 依赖变更须同步 package-lock(否则 npm ci 红); 全局 window 扩展写 global.d.ts(勿 (window as any))
+- 审计修 bug 用精准(核对实际语义)——勿放宽/掩盖(startswith→in + 剥离前缀严格校验——非 n_ps>=宽容)
