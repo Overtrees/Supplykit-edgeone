@@ -130,7 +130,7 @@
 
 ---
 
-## 快速开始（开发）
+## 快速开始
 
 ```bash
 git clone https://github.com/Overtrees/Supplykit-edgeone.git
