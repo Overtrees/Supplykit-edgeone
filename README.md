@@ -12,8 +12,9 @@
   <a href="https://supplykit.top">🌐 在线体验</a> ·
   <a href="#产品亮点">亮点</a> ·
   <a href="#功能总览">功能</a> ·
-  <a href="#快速开始">开发</a> ·
-  <a href="#部署">部署</a>
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#关于使用与授权">授权</a> ·
+  <a href="docs/ARCHITECTURE.md">架构</a>
 </p>
 
 ---
