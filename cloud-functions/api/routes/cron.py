@@ -9,7 +9,7 @@ PA 版 APScheduler 10 任务中, TiDB 场景需要外部化的核心任务(备�
 - recycle:           每天清理超 30 天软删数据(订单/规则)
 - push-alerts:       每 30 分钟推送新告警到 webhook(设置页 webhook_url)
 
-安全: /cron/* 放行鉴权中间件, 路由内校验 CRON_SECRET(query secret 或 X-Cron-Secret 头)
+安全: /cron/* 放行鉴权中间件, 路由内校验 CRON_SECRET(仅 X-Cron-Secret 头——弃 query; hmac.compare_digest)
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -27,13 +27,13 @@ _PAID_SQL = ",".join("'%s'" % s for s in PAID)
 
 
 def _authed(request: Request) -> bool:
-    """CRON_SECRET 校验(未配置时依赖平台签名保护放行)"""
+    """CRON_SECRET 校验(2026-10-13 加固: 仅 X-Cron-Secret 头——弃 query secret(URL 落日志); hmac.compare_digest 防 timing; 未配置仍依赖平台签名)"""
     secret = os.environ.get("CRON_SECRET", "")
     if not secret:
-        return True
-    q = request.query_params.get("secret", "")
+        return True  # 未配置→依赖平台签名保护(q-sign——README 已不公开细节)
     h = request.headers.get("X-Cron-Secret", "")
-    return q == secret or h == secret
+    import hmac as _hm
+    return bool(h) and _hm.compare_digest(h.encode(), secret.encode())
 
 
 def _log(level, message, source="cron"):
