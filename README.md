@@ -53,7 +53,7 @@
 ### 🔐 JWT 认证，支持访客模式
 
 - HS256 JWT（零依赖）+ PBKDF2 密码哈希，首次设置管理员账号
-- **认证头用 `X-Auth-Token`**（2026-10-13: 边缘网关将 Authorization 改写为平台签名——Bearer 被拦截——统一自定义头，安全链 TLS+JWT 验签+密钥必设）
+- **认证头用 `X-Auth-Token`**（自定义认证头；安全链 TLS+JWT 验签+密钥必设）
 - **访客模式** `demo / demo123`（只读，403 拦截写操作），适合在线体验
 
 ### 🔄 双模式补货 + 全页模式跟随
@@ -269,14 +269,14 @@ cd cloud-functions/api && python3 local_test.py   # 150 项（auth/看板/补货
 
 | 组件 | 位置 | 方式 |
 |------|------|------|
-| 前端+后端 | **EdgeOne Makers**（makers-8gstkvheqm2c, Area=overseas 免备案） | push `edgeone` 远程自动构建 |
+| 前端+后端 | **EdgeOne Makers**（Git 集成自动构建部署） | push `edgeone` 远程自动构建 |
 | 生产域名 | **supplykit.top**（免签公开访问） | CNAME → supplykit.top.pages.dnsoe6.com |
 | 数据库 | **TiDB Serverless** | pymysql 直连 |
 
 ```bash
 # 部署：提交后推送 edgeone 远程 → Makers Git 集成自动构建
 git push edgeone feat/edgeone
-# 构建状态查询（DescribePagesDeployments）；部署后冒烟 /api/health + 指纹确认(quality-logs M1 时间戳≥推送时刻=新实例——勿凭 health 误判旧代码)
+# 构建状态查询 + 部署后冒烟 /api/health（部署确认/细粒度指纹方法见 docs/DEVELOPMENT）
 ```
 
 > **定时任务**：cron 7 端点由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
