@@ -230,7 +230,7 @@ header {
   max-width: 1200px;
   margin: 0 auto;
   padding: calc(70px + env(safe-area-inset-top, 0px)) 16px
-    calc(20px + env(safe-area-inset-bottom, 0px));
+    max(20px, env(safe-area-inset-bottom, 0px)); /* PWA standalone 底部留空过大修复(20+34=54→max=34; 网页保20) */
   min-height: 100svh;
 }
 
@@ -1512,4 +1512,3 @@ input[type='file'] {
   color: #fff;
   border: none;
 }
-
