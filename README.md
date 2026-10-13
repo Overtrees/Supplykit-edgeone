@@ -53,6 +53,7 @@
 ### 🔐 JWT 认证，支持访客模式
 
 - HS256 JWT（零依赖）+ PBKDF2 密码哈希，首次设置管理员账号
+- **认证头用 `X-Auth-Token`**（2026-10-13: 边缘网关将 Authorization 改写为平台签名——Bearer 被拦截——统一自定义头，安全链 TLS+JWT 验签+密钥必设）
 - **访客模式** `demo / demo123`（只读，403 拦截写操作），适合在线体验
 
 ### 🔄 双模式补货 + 全页模式跟随
@@ -146,7 +147,7 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 |------|------|
 | `TIDB_HOST/PORT/USER/PASSWORD/DB/SSL` | TiDB Serverless 连接 |
 | `DB_BACKEND` | `tidb` |
-| `JWT_SECRET` | 固定值（防多实例竞态） |
+| `JWT_SECRET` | 环境变量必设（无 fallback——缺失即校验全拒；多实例同值） |
 | `CRON_SECRET` | 定时任务校验 |
 
 ---

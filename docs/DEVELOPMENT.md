@@ -864,3 +864,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **禁止**：新增任何 `Authorization: Bearer` 发送/读取（后端中间件/路由自验/auth.py check+require_user/tasks_maintain/misc db_diag 已全部改 X-Auth-Token）
 - **安全链**：TLS 传输 + 服务端 JWT 验签（HMAC-SHA256 + JWT_SECRET 必设——无 fallback 兜底）+ token 过期校验——X-Auth-Token 与 Bearer 同等级（且网关不接触 token——暴露面更小）
 - 排查方法（先绕鉴权分层）：/debug 前缀放行——临时探测直调接口逻辑确认接口层 → 再定位鉴权/token 层（勿先抠 secret/签名）
+
+### 15.50 调试端点统一收口(2026-10-13)
+- **调试/探测端点统一进 `routes/debug.py`**（/debug/* 前缀——鉴权白名单放行）——禁止散落各路由
+- **入口**：`GET /api/debug/list` 列出全部调试端点(路径/方法/说明)——排查先看这里
+- 现有端点: jwt-check(verify 结果)/auth-sim(网关改写模拟)/jwt-fingerprint(实例 secret 一致性)
+- 约定: 加调试端点带 @traced + docstring 说明用途; 排查完成保留(调试价值); 防敏感回显
