@@ -25,6 +25,7 @@
 ### CI 红根治(10-13 多轮修复——0 容忍恢复)
 - 根因链: ①test_audit 缓存 key 审计——stock_risk key 加 _CACHE_V 前缀后 startswith/n_ps 误红(修: in 匹配+精准剥离前缀严格校验——非放宽掩盖) ②package.json 加 husky 但 lock 未同步→npm ci 红( option: 去 husky 依赖——pre-push 脚本保留) ③本地 tsc 误判 0(空 log 未完成)——CI strict 完整环境报真实 error(window.__page 全局声明/useAppStore 错峰 Promise 类型/onAlert setHighlightSku 误用/errText 参数/global.d.ts) ④prettier 多文件未格式化
 - 纪律: 本地 tsc 须确认进程完成+log 非空才判 0(空 log≠0); CI 为准(strict 完整环境); 改完跑 prestier --check 全绿再推
+- 补漏: 任务管理页报错——TaskPage 直接 fetch 漏 X-Auth-Token; 全项目扫清 9 文件 13 处 Authorization 残余(hammer×3/api client/Settings/Recycle/Inventory/Orders/DevMode)——统一 X-Auth-Token
 
 ## 2026-10-11: 全接口性能根治 + 模块化拆分(红线) + seed 重置验证 + 懒加载回退
 > **主线**: feat/edgeone, commits 7de1f786→bc592f4b。

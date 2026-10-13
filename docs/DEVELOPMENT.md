@@ -896,3 +896,4 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - 改后必跑: 前端 prettier --check 全绿 + tsc + eslint; 后端 local_test 150 + test_audit 11(《husky pre-push 已验)
 - package.json 依赖变更须同步 package-lock(否则 npm ci 红); 全局 window 扩展写 global.d.ts(勿 (window as any))
 - 审计修 bug 用精准(核对实际语义)——勿放宽/掩盖(startswith→in + 剥离前缀严格校验——非 n_ps>=宽容)
+- **直接 fetch 纪律(2026-10-13 漏网教训——任务管理页报错)**: api client 拦截器只覆盖 api 实例——裸 fetch 必须手动 `'X-Auth-Token': token`(禁 Authorization)——新请求/页面统一走 api 实例或手动 X-Auth-Token; 上线前 grep 全项目 'Authorization' 确认 0 残留
