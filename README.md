@@ -178,7 +178,7 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 └──────────────────────────────────────────────┘
 ```
 
-### 后端路由一览（17 个）
+### 后端路由一览（24 个）——2026-10-11 模块化拆分新增 8 模块
 
 | 路由 | 前缀 | 功能 |
 |------|------|------|
@@ -199,14 +199,22 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 | `auth` | `/api/auth` | setup/login/check |
 | `cron` | `/api/cron` | 7 端点（snapshot/freshness/archive/cleanup/daily-rules/recycle/push-alerts） |
 | `analysis_cache` | — | 中央缓存失效注册表 |
+| `dashboard_maintain` | `routes/` | 数据追平/快照分段/agg 物化(从 dashboard 拆出) |
+| `dashboard_stock_risk` | `routes/` | 濒临断货计算(从 dashboard 拆出) |
+| `dashboard_health` | `routes/` | 健康指数(从 dashboard 拆出) |
+| `core/rule_cond` | `core/` | 规则条件解析(从 core/rules 拆出) |
+| `cleanse_write` | `routes/` | 清洗写入/库存联动(从 cleansing 拆出) |
+| `purchase_calc` | `routes/` | 采购/滞销建议计算(从 purchase 拆出) |
+| `task_export` | `routes/` | 导出接力链路(从 tasks 拆出) |
+| `task_seed` | `routes/` | seed 接力/reset/status(从 tasks 拆出) |
 
 ### 项目结构
 
 ```
 frontend/src/
-├── pages/ (13个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
+├── pages/ (14个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
 │                 Products / Suppliers / Quality / Settings / Task / Login / ...
-├── components/ (14个): Chart / Sidebar / Toast / ErrorBoundary / Icons / hammer/(9) / dash/RiskCard / ...
+├── components/ (11个): Chart / Sidebar / Toast / ErrorBoundary / Icons / dash/RiskCard 等 + hammer/(10 个锤子面板组件)
 ├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态
 ├── api/client.ts                 Axios + 缓存 + 统一响应解包
 └── App.tsx / main.tsx / theme.ts / styles.css
