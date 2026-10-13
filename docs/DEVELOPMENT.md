@@ -870,3 +870,23 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **入口**：`GET /api/debug/list` 列出全部调试端点(路径/方法/说明)——排查先看这里
 - 现有端点: jwt-check(verify 结果)/auth-sim(网关改写模拟)/jwt-fingerprint(实例 secret 一致性)
 - 约定: 加调试端点带 @traced + docstring 说明用途; 排查完成保留(调试价值); 防敏感回显
+
+### 15.51 调试口全清单（2026-10-13 统一收束——排查定位入口）
+**路由级（/debug/* 统一收口到 debug.py——入口 /api/debug/list 列出）**
+| 端点 | 用途 | 处置 |
+|---|---|---|
+| /debug/list | 调试端点清单 | 永久保留 |
+| /debug/jwt-check | JWT 校验结果(401 排查) | 保留 |
+| /debug/auth-sim | 网关改写 Authorization 模拟 | 保留 |
+| /debug/jwt-fingerprint | 实例 JWT_SECRET 一致性 | 保留 |
+| /db/diag | EXPLAIN/SELECT(admin 只读运维) | 保留(admin 专用) |
+
+**日志级（quality_logs——排查保留）**
+- perf_debug（summary/stock-risk 计时）/ slow_alert（>10s 慢请求告警）/ migration（启动迁移留痕）/ 快照续段
+
+**前端级**
+- console.debug（api/client 请求链路——排查接口用——保留 debug 级别不刷屏）
+- window.__ 全局: __setPage/__page(导航/ErrorBoundary 功能) __seedMissCount/__cleanMissCount(填充/清洗计数调试) __hammerReplenMode(模式——功能)
+- DevModePage(设置彩蛋——开发者页: 连接状态/环境/monitor/日志分析)
+
+**约定**: 新增调试/临时代码统一登记(§15.50 路由集中) + 本清单补充; 生产禁敏感回显; 排查完成保留(有调试价值)
