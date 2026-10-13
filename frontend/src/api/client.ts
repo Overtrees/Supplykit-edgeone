@@ -38,7 +38,8 @@ instance.interceptors.request.use((config: any) => {
   })()
   if (token) {
     config.headers = config.headers || {}
-    config.headers.Authorization = 'Bearer ' + token
+    // 2026-10-13: 网关改写 Authorization(q-sign)——token 走 X-Auth-Token 自定义头
+    config.headers['X-Auth-Token'] = token
   }
   return config
 })

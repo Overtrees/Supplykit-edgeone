@@ -169,8 +169,7 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
@@ -221,8 +220,7 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
@@ -275,8 +273,7 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
@@ -315,8 +312,7 @@ export default function App() {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
@@ -389,7 +385,7 @@ export default function App() {
       setLoggedIn(false)
       return
     }
-    fetch(API + '/api/auth/check', { headers: { Authorization: 'Bearer ' + token } })
+    fetch(API + '/api/auth/check', { headers: { 'X-Auth-Token': token } })
       .then(r => {
         if (r.status === 401) {
           try {
@@ -411,8 +407,7 @@ export default function App() {
           API + '/api/replenishment-config/history?channel=' + (ch || channel) + '&limit=50',
           {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
@@ -1068,8 +1063,7 @@ export default function App() {
                     try {
                       const r = await fetch(API + '/api/seed/fill', {
                         headers: {
-                          Authorization:
-                            'Bearer ' +
+                          'X-Auth-Token':
                             (() => {
                               try {
                                 return localStorage.getItem('c_token')

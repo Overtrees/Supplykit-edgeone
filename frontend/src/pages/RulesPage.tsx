@@ -263,8 +263,7 @@ export default function RulesPage() {
       const r = await fetch(API + '/api/rules/' + testRule.id + '/test', {
         method: 'POST',
         headers: {
-          Authorization:
-            'Bearer ' +
+          'X-Auth-Token':
             (() => {
               try {
                 return localStorage.getItem('c_token')
@@ -492,7 +491,7 @@ export default function RulesPage() {
         }
       })()
       const r = await fetch(API + '/api/rules?channel=' + c, {
-        headers: { Authorization: 'Bearer ' + token },
+        headers: { 'X-Auth-Token': token },
       })
       const d = await r.json()
       // 防御: 异常响应(401/500/结构异常)可能非数组 → setRules(object) 导致 rules.length
@@ -720,8 +719,7 @@ export default function RulesPage() {
       const r = await fetch(url, {
         method: isNew ? 'POST' : 'PUT',
         headers: {
-          Authorization:
-            'Bearer ' +
+          'X-Auth-Token':
             (() => {
               try {
                 return localStorage.getItem('c_token')
@@ -778,8 +776,7 @@ export default function RulesPage() {
     addDebug('del 开始', { id })
     await fetch(API + '/api/rules/' + id, {
       headers: {
-        Authorization:
-          'Bearer ' +
+        'X-Auth-Token':
           (() => {
             try {
               return localStorage.getItem('c_token')
@@ -798,8 +795,7 @@ export default function RulesPage() {
     const timer = setTimeout(async function () {
       await fetch(API + '/api/rules/' + id + '/permanent-delete', {
         headers: {
-          Authorization:
-            'Bearer ' +
+          'X-Auth-Token':
             (() => {
               try {
                 return localStorage.getItem('c_token')
@@ -821,8 +817,7 @@ export default function RulesPage() {
           clearTimeout(timer)
           await fetch(API + '/api/rules/' + id + '/restore', {
             headers: {
-              Authorization:
-                'Bearer ' +
+              'X-Auth-Token':
                 (() => {
                   try {
                     return localStorage.getItem('c_token')
