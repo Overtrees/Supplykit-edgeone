@@ -250,35 +250,31 @@ const initAppStore = (set, get) => ({
       const r0 = await Promise.allSettled([api.get(dashUrl)])
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       set({ dashboard: dashboard.data, loading: false, dataLoaded: true })
-      const [orders, qualityLogs, alerts] = await new Promise<void>(resolve =>
-        setTimeout(async () => {
-          const r1 = await Promise.allSettled([
-            api.get(
-              '/api/orders?page=' +
-                p +
-                '&page_size=30&search=' +
-                encodeURIComponent(s) +
-                '&status=' +
-                encodeURIComponent(st),
-            ),
-            api.get('/api/quality-logs'),
-            api.get('/api/alerts'),
-          ])
-          const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
-          set({
-            orders: arr[0].data?.items || arr[0].data || [],
-            orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
-            orderPage: arr[0].data?.page || p,
-            qualityLogs: arr[1].data || [],
-            alerts: arr[2].data || [],
-            orderLoadErr:
-              r1[0] && r1[0].status === 'rejected'
-                ? errText((r1[0] as { reason?: unknown }).reason as string)
-                : '',
-          })
-          resolve([arr[0], arr[1], arr[2]])
-        }, 300),
-      )
+      await new Promise<void>(resolve => setTimeout(resolve, 300))
+      const r1 = await Promise.allSettled([
+        api.get(
+          '/api/orders?page=' +
+            p +
+            '&page_size=30&search=' +
+            encodeURIComponent(s) +
+            '&status=' +
+            encodeURIComponent(st),
+        ),
+        api.get('/api/quality-logs'),
+        api.get('/api/alerts'),
+      ])
+      const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
+      set({
+        orders: arr[0].data?.items || arr[0].data || [],
+        orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
+        orderPage: arr[0].data?.page || p,
+        qualityLogs: arr[1].data || [],
+        alerts: arr[2].data || [],
+        orderLoadErr:
+          r1[0] && r1[0].status === 'rejected'
+            ? errText((r1[0] as { reason?: unknown }).reason as string)
+            : '',
+      })
       // 最后: stock-risk 断货卡(重接口, 不阻塞; 失败保留旧值不闪空)
       const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
