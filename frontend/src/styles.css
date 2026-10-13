@@ -736,7 +736,6 @@ input[type='file'] {
   text-align: center;
 }
 .hammer-btn-row {
-  margin-bottom: 0;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -744,9 +743,7 @@ input[type='file'] {
 .hammer-btn {
   flex: 1;
   font-size: var(--font-sm);
-  min-height: 50px; /* 规范: 菜单项 minHeight 50px(固定) */
-  padding: 8px 10px; /* 规范: 行内内边距 8px 10px(固定 px) */
-  gap: 11px; /* 规范: 图标与文字 gap 11px */
+  min-height: var(--h-btn);
   height: auto;
   width: auto;
   padding: 2px var(--space-sm);
@@ -793,9 +790,8 @@ input[type='file'] {
 }
 .hammer-panel {
   border-top: 1px solid var(--border);
+  padding-top: 8px;
   margin-top: 8px;
-  /* 2026-10-11 面板内部间距规范(固定 px——零变量/零视口, PWA/Safari 内部像素级一致) */
-  padding: 7px;
 }
 .hammer-panel-scroll {
   max-height: 260px;
@@ -1515,12 +1511,4 @@ input[type='file'] {
   background: var(--danger);
   color: #fff;
   border: none;
-}
-
-/* 2026-10-11 锤子面板内部间距规范(固定 px——零变量/零视口, PWA/Safari 内部像素级一致) */
-.hammer-panel .hm-group {
-  margin: 4px 10px; /* 规范: 分隔线 margin 4px 10px */
-}
-.hammer-panel .hm-group:last-child {
-  margin-bottom: 4px; /* 规范: 最后一项 marginBottom 4px */
 }
