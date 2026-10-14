@@ -1494,7 +1494,8 @@ export default function CleansingPage() {
                 style={{ display: 'none' }}
                 onChange={e => {
                   const fi = e.target.files[0]
-                  if (fi) detect(fi)}
+                  if (fi) detect(fi)
+                }}
               />
             </label>
           </div>
