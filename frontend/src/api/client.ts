@@ -70,6 +70,15 @@ instance.interceptors.response.use(
       if (!response.data.ok) {
         const err: Error & { status?: number } = new Error(response.data.error || '请求失败')
         err.status = response.status
+        // 2026-10-13 业务错误收口: ok:false 且 HTTP 200(导入/预览/规则测试等)——曾因 status<400 不上报(导入异常无日志)
+        if (response.data.error) {
+          reportError(
+            'business_error',
+            ((response.data.error || '') + ' ' + (url || '')).slice(0, 200),
+            'HTTP ' + response.status,
+            'warning',
+          )
+        }
         return Promise.reject(err)
       }
       // 有 data 字段才解包，否则保留原始响应（如清洗接口的 {ok,success,failed}）
