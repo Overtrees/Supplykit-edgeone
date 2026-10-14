@@ -546,6 +546,11 @@ export default function CleansingPage() {
   }
 
   const preview = async () => {
+    if (!f) {
+      toast.error('请先选择文件后再预览')
+      setBs('')
+      return
+    }
     setBs('预览中')
     const fd = new FormData()
     fd.append('file', f)
