@@ -924,7 +924,7 @@ export default function CleansingPage() {
                 if (fi) {
                   // PWA 根治: File 对象跨请求可能失效(iOS)——读入 ArrayBuffer 缓存, 上传用 new Blob 不依赖原 File
                   const rd = new FileReader()
-                  rd.onload = () => setFBuf(rd.result)
+                  rd.onload = () => setFBuf(rd.result as ArrayBuffer) // readAsArrayBuffer 保证 ArrayBuffer
                   rd.readAsArrayBuffer(fi)
                   detect(fi)
                 }
