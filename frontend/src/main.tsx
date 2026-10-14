@@ -81,11 +81,7 @@ if ('serviceWorker' in navigator) {
           const nw = reg.installing
           if (!nw) return
           nw.addEventListener('statechange', () => {
-            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-              // 2026-10-14 部署自动切新代码(免删 PWA 重加): 新 SW 安装并接管后自动刷新——一次性
-              navigator.serviceWorker.addEventListener('controllerchange', () => location.reload())
-              showUpdateBanner()
-            }
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner()
           })
         })
       })

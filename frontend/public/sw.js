@@ -15,15 +15,8 @@ self.addEventListener('install', e => {
 // 激活时清理旧缓存
 self.addEventListener('activate', e => {
   e.waitUntil(
-    Promise.all([
-      caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))),
-      self.clients.claim(), // SPA 切页非导航——claim 让新 SW 立即接管(否则旧 SW 永驻——部署后旧代码一直跑)
-    ])
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
   )
-})
-// 新 SW 接管后告知客户端刷新(部署向新代码)
-self.addEventListener('message', e => {
-  if (e.data === 'SKIP_WAITING') self.skipWaiting()
 })
 
 // 网络优先，缓存兜底
