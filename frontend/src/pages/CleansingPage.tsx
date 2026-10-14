@@ -8,7 +8,7 @@ import {
   IconWarning,
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
-import { api } from '../api/client'
+import { api, uploadRawBytes } from '../api/client'
 import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
@@ -388,6 +388,7 @@ export default function CleansingPage() {
   const toast = useToast()
   const [s, setS] = useState(0)
   const [f, setF] = useState(null)
+  const [fBuf, setFBuf] = useState<ArrayBuffer | null>(null) // 间断 422 根治: iOS multipart body 空——raw bytes 直传
   const [cols, setCols] = useState([])
   const [tr, setTr] = useState(0)
   const [tt, setTt] = useState('order')
@@ -504,7 +505,7 @@ export default function CleansingPage() {
     fd.append('file', file)
 
     try {
-      const r = await api.post('/api/cleansing/detect', fd)
+      const r = await uploadRawBytes('/api/cleansing/detect', fBuf ? new Blob([fBuf]) : file)
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '识别失败')
@@ -582,7 +583,7 @@ export default function CleansingPage() {
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await api.post('/api/cleansing/preview', fd, { timeout: 60000 })
+      const r = await uploadRawBytes('/api/cleansing/preview', fBuf ? new Blob([fBuf]) : f)
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '预览失败')
@@ -670,7 +671,7 @@ export default function CleansingPage() {
       fd.append('channel', ch)
       fd.append('conflict_mode', hammerCleansingConflict)
       try {
-        const r = await api.postHeavy('/api/cleansing/execute-async', fd) // postHeavy 90s: 大文件上传/提交不超PA 30s
+        const r = await uploadRawBytes('/api/cleansing/execute-async', fBuf ? new Blob([fBuf]) : f) // postHeavy 90s: 大文件上传/提交不超PA 30s
         const d = r.data
         if (!d.ok) {
           toast.error(d.error || '提交失败')
@@ -776,7 +777,7 @@ export default function CleansingPage() {
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await api.post('/api/cleansing/preview', fd, { timeout: 60000 })
+      const r = await uploadRawBytes('/api/cleansing/preview', fBuf ? new Blob([fBuf]) : f)
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '提交失败')
@@ -893,7 +894,11 @@ export default function CleansingPage() {
           <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 24 }}>
             <select
               value={tt}
-              onChange={e => setTt(e.target.value)}
+              onChange={e => {
+                setTt(e.target.value)
+                setF(null)
+                setFBuf(null)
+              }}
               style={{
                 fontSize: 'var(--font-15)',
                 padding: '11px 16px',
@@ -941,7 +946,12 @@ export default function CleansingPage() {
               style={{ display: 'none' }}
               onChange={e => {
                 const fi = e.target.files[0]
-                if (fi) detect(fi)
+                if (fi) {
+                  const rd = new FileReader()
+                  rd.onload = () => setFBuf(rd.result as ArrayBuffer)
+                  rd.readAsArrayBuffer(fi)
+                  detect(fi)
+                }
               }}
             />
           </label>
@@ -1493,7 +1503,12 @@ export default function CleansingPage() {
                 style={{ display: 'none' }}
                 onChange={e => {
                   const fi = e.target.files[0]
-                  if (fi) detect(fi)
+                  if (fi) {
+                    const rd = new FileReader()
+                    rd.onload = () => setFBuf(rd.result as ArrayBuffer)
+                    rd.readAsArrayBuffer(fi)
+                    detect(fi)
+                  }
                 }}
               />
             </label>

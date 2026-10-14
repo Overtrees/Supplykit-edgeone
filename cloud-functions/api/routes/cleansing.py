@@ -33,6 +33,13 @@ _NUMS = {"number", "price", "quantity", "score", "safety_qty", "available_qty", 
          "freight_amount", "subsidy_amount", "tax_amount", "discount_amount", "actual_amount"}
 
 
+def _mk_upload(data: bytes, filename: str):
+    """构造 UploadFile(raw body/ base64 路径——绕 iOS multipart body 空)"""
+    import io
+    from starlette.datastructures import UploadFile as _UF, Headers as _H
+    return _UF(io.BytesIO(data), headers=_H({"content-type": "application/octet-stream"}), size=len(data))
+
+
 def _read_file_bytes(upload: UploadFile):
     data = upload.file.read()
     name = (upload.filename or "upload.csv").lower()
@@ -155,7 +162,11 @@ def _detect_columns(fname, data):
 # ── detect: 识别列名 ────────────────────────────────────────────────────
 @router.post("/cleansing/detect")
 @traced
-async def cleansing_detect(file: UploadFile = File(...)):
+async def cleansing_detect(request: Request, file: UploadFile = File(None)):
+    if not file:
+        _raw = await request.body()
+        if _raw:
+            file = _mk_upload(_raw, "file.xlsx")
     # 临时诊断(2026-10-14 422 file missing 定位): 记录请求表单/文件到达情况
     try:
         from db import execute as _ed

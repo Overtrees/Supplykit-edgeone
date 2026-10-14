@@ -204,6 +204,54 @@ export async function uploadForm(url: string, fd: FormData, timeout = 90000): Pr
   }
 }
 
+// 2026-10-14 间断性 422 根治: iOS Safari multipart body 空(File 引用时效/Blob 序列化)——raw bytes 直传(CT octet-stream)
+export async function uploadRawBytes(
+  url: string,
+  data: ArrayBuffer | Blob,
+  timeout = 90000,
+): Promise<any> {
+  const token = (() => {
+    try {
+      return localStorage.getItem('c_token')
+    } catch {
+      return ''
+    }
+  })()
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), timeout)
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      body: data,
+      headers: { 'X-Auth-Token': token || '', 'Content-Type': 'application/octet-stream' },
+      signal: controller.signal,
+    })
+    const d = await resp.json().catch(() => ({}))
+    if (!resp.ok) {
+      const err: Error & { status?: number } = new Error(
+        'Request failed with status code ' + resp.status,
+      )
+      err.status = resp.status
+      reportError(
+        'api_http_error',
+        (err.message + ' ' + url).slice(0, 200),
+        'HTTP ' + resp.status,
+        'warning',
+      )
+      throw err
+    }
+    if (d && typeof d === 'object' && 'ok' in d && !d.ok) {
+      const err: Error = new Error(d.error || '请求失败')
+      if (d.error)
+        reportError('business_error', (d.error + ' ' + url).slice(0, 200), 'HTTP 200', 'warning')
+      throw err
+    }
+    return { data: 'data' in d ? d.data : d, status: resp.status }
+  } finally {
+    clearTimeout(t)
+  }
+}
+
 export const api = {
   get: apiGet,
   post: async (url, data?, config = {}) => {
