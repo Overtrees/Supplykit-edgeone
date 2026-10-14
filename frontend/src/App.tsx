@@ -861,7 +861,7 @@ export default function App() {
                   transition: 'opacity 180ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1)',
                   willChange: 'opacity, transform',
                   // 2026-10-13 PWA 底部留空根治: 面板 maxHeight 100vh-120(底不在 home indicator 区)——底部 safe-area padding 多余致 PWA 下按钮下 50px 空白; 统一 16px
-                  padding: '16px 16px 16px',
+                  padding: '16px 16px 12px' /* 底部 16→12(导入等矮面板底部白条减) */,
                 }}
               >
                 {page === 'dash' ? (

@@ -51,6 +51,8 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
               borderRadius: 'var(--radius-lg)',
               padding: '9px 12px',
               minHeight: 32,
+              width: '100%' /* 防 flex 压缩(黄条被限 190 宽→3 行→底部 4px 裁切) */,
+              lineHeight: 1.3 /* 行高收紧——内容完整不裁 */,
             }}
           >
             <IconWarning size={13} style={{ verticalAlign: -2 }} /> 当前全局主体是「
@@ -69,7 +71,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
             >
               重复数据冲突处理
             </div>
-            <div className="hammer-segmented">
+            <div className="hammer-segmented" style={{ flexWrap: 'wrap' }}>
               <span
                 onClick={() => setHammerCleansingConflict('sum')}
                 className={'hammer-segment' + (hammerCleansingConflict === 'sum' ? ' active' : '')}
