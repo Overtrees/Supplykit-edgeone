@@ -1,3 +1,19 @@
+## 2026-10-14: PWA 导入 422 根治 + 锤子面板嵌套重叠根治 + 快速切页竞态 + 业务错误收口
+> **主线**: feat/edgeone, commits 63be4e33→2e5b56c1。
+> **验证**: CI 绿; 150/150; PWA 导入/面板/切页修复。
+
+### 导入 422 file missing 根治(PWA)
+- **根因**: iOS PWA File 对象生命周期失效——detect 后 File 跨请求丢失(detect 用 File OK, preview/execute 用同一 File 引用——PWA 下失效) → fd.append('file', 失效) → 后端 422 "field required"
+- **修复**: 文件 onChange FileReader 读 ArrayBuffer 缓存(fBuf)——preview/execute 用 new Blob([fBuf]) 上传(不依赖原 File 生命周期); preview 前 f/fBuf 校验(空则提示"请先选择文件")
+
+### 锤子面板嵌套重叠根治(覆盖/白条/截断)
+- **根因**: .hammer-panel 全局 fixed(10-11 为 PWA 一致性改)误伤嵌套面板——组件内 hammer-panel 在 App 外层 fixed+transform 容器内再 fixed → 相对 transform 容器定位重叠(渠道 tab 被盖下半/黄条冲突截断——PWA safe-area 下移避开显正常)
+- **修复**: .hammer-panel 回退 fixed(内层回页面流——外层 App 面板保持 fixed); 黄条 width 100%+lineHeight 1.3; 冲突按钮 flexWrap; HammerCleansing 面板空场景不渲染(横线根治); padding 回 16(白条非 padding——覆盖问题)
+
+### 快速切页竞态 + 工程
+- **loadAll 版本守卫(_loadSeq)**: 快速切换按钮——旧 loadAll 回调 seq 不匹配丢弃不 set——最新点击页面数据优先(页面级 reqSeq 已有, 全局 loadAll 补齐)
+- **业务错误收口**: client 拦截器 ok:false(HTTP 200)记 business_error(quality_logs)——导入/预览/规则测试业务错误曾因 status<400 不上报(导入异常无日志)——logger 5min 限频
+- CI 0 容忍修复(tsc 断言/import 注入/类型多轮——见 §15.52 纪律)
 ## 2026-10-13: 全页面 401 根治(X-Auth-Token) + 锤子面板 PWA 底部留空根治 + 调试口统一收口
 > **主线**: feat/edgeone, commits 743f6ff1→d4d66542。
 > **验证**: X-Auth-Token 全接口 200/Bearer 拒(401 预期); 锤子面板底部 16px 统一(PWA 50px 空白消除); 150/150。
