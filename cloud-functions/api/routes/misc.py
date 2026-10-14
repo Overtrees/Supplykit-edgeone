@@ -30,7 +30,8 @@ def _export_md(date="", scope="", level=""):
         "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
                  "format_error", "field_warning", "field_error", "mapping_info"),
         "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
-                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
+                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error",
+                "detect_debug", "business_error"),
     }
     _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
     _next = (_dt.strptime(_d, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")

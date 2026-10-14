@@ -476,6 +476,18 @@ export default function CleansingPage() {
     } catch {}
   }
   const detect = async file => {
+    // 2026-10-14 422 诊断: 发送前记录 file 状态(前端是否拿到/类型)——console 即时 + reportError 收口
+    console.info(
+      '[detect] file:',
+      file && file.name,
+      file && file.size,
+      file && file.type,
+      '| fisFile:',
+      file instanceof File,
+    )
+    if (!file) {
+      console.warn('[detect] file 为空——未获取到文件对象')
+    }
     setF(file)
     setBs('识别中')
     const fd = new FormData()
