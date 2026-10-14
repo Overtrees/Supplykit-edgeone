@@ -27,13 +27,21 @@ def continue_tasks():
     """2026-10-14: 续跑所有 running 的 cleansing/seed/export 任务(后端跟进——app 后台/页面不驻留任务也推进)
     由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)"""
     from db import query as _qc, execute as _ec, one as _oc
-    done = {"cleansing": 0, "seed": 0, "export": 0, "skipped": 0}
+    from datetime import datetime, timedelta as _td2, timezone as _tz2
+    done = {"cleansing": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
     try:
-        rows = _qc("SELECT task_id, task_type FROM sync_tasks WHERE status='running' "
-                   "AND updated_at > NOW() - INTERVAL 30 MINUTE LIMIT 20")
+        rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
+        _cutoff = (datetime.now(_tz2.utc) - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
         for r in (rows or []):
             tt = r.get("task_type") or ""
             tid = r.get("task_id") or ""
+            ua = str(r.get("updated_at") or "")[:19]
+            if ua and ua < _cutoff:
+                # 超时任务(>30 分钟无更新——前端轮询停/实例冻结)——标记 error 释放防重/结束卡住
+                _ec("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
+                    [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——自动标记结束，请重新导入"}}), tid])
+                done["timeout"] += 1
+                continue
             try:
                 if tt == "cleansing":
                     from .cleansing import cleansing_status
