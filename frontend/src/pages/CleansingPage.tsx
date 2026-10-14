@@ -691,10 +691,9 @@ export default function CleansingPage() {
         let finished = false
         const threshold = setTimeout(() => {
           if (!finished) {
-            finished = true
             toast.add({
               type: 'success',
-              title: '导入任务已提交',
+              title: '导入任务已提交，后台续跑中',
               duration: 6000,
               action: {
                 label: '查看进度 →',

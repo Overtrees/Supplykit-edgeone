@@ -201,6 +201,14 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
     """导入(接力式: POST 存源文件+建任务 → GET /cleansing/status 续跑分窗清洗写入,
     防大批量 120s 超时——与导出/seed 同模式; Makers 实例请求后可冻结, 不用纯后台线程)
     返回 {ok, task_id}"""
+    # 2026-10-14 防重: 同渠道已有进行中导入任务(误触/重复提交同批) → 拒绝
+    try:
+        _busy = one("SELECT COUNT(*) AS c FROM sync_tasks WHERE task_type='cleansing' "
+                    "AND status='running' AND channel=%s AND updated_at > NOW() - INTERVAL 30 MINUTE", [channel]) or {}
+        if int(_busy.get("c") or 0) > 0:
+            return {"ok": False, "error": "已有进行中的导入任务，请等待完成后再提交（防止同批重复导入）"}
+    except Exception:
+        pass
     data, fname = _read_file_bytes(file)
     task_id = "clean_%d_%04d" % (int(time.time()), int(time.time() * 1000) % 10000)
     try:
@@ -364,7 +372,7 @@ def cleansing_task(task_id: str):
 @router.delete("/cleansing/templates/{tid}")
 @traced
 def cleansing_templates_delete(tid: int):
-    """删除清洗模板(对齐 PA)"""
+    """删除清洗模板"""
     execute("DELETE FROM cleansing_templates WHERE id=%s", [tid])
     return ok({"message": "已删除"})
 
@@ -391,7 +399,7 @@ async def cleansing_templates_save(request: Request):
     mapping = d.get("mapping")
     if isinstance(mapping, dict):
         mapping = json.dumps(mapping, ensure_ascii=False)
-    # 同名模板更新覆盖(对齐 PA: name 存在 → UPDATE; 否则 INSERT——防止同名重复)
+    # 同名模板更新覆盖(name 存在 → UPDATE; 否则 INSERT——防同名重复)
     existing = one("SELECT id FROM cleansing_templates WHERE name=%s", [name])
     if existing:
         execute("UPDATE cleansing_templates SET mapping=%s, doc_type=%s, updated_at=NOW() WHERE id=%s",
