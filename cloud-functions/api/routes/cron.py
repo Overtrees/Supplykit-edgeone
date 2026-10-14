@@ -21,6 +21,42 @@ from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["cron"])
+@router.get("/cron/continue-tasks")
+@traced
+def continue_tasks():
+    """2026-10-14: 续跑所有 running 的 cleansing/seed/export 任务(后端跟进——app 后台/页面不驻留任务也推进)
+    由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)"""
+    from db import query as _qc, execute as _ec, one as _oc
+    done = {"cleansing": 0, "seed": 0, "export": 0, "skipped": 0}
+    try:
+        rows = _qc("SELECT task_id, task_type FROM sync_tasks WHERE status='running' "
+                   "AND updated_at > NOW() - INTERVAL 30 MINUTE LIMIT 20")
+        for r in (rows or []):
+            tt = r.get("task_type") or ""
+            tid = r.get("task_id") or ""
+            try:
+                if tt == "cleansing":
+                    from .cleansing import cleansing_status
+                    cleansing_status(tid, page_size=5000)
+                    done["cleansing"] += 1
+                elif tt == "seed":
+                    from .task_seed import seed_fill_status
+                    seed_fill_status(tid)
+                    done["seed"] += 1
+                elif tt == "export":
+                    from .task_export import export_status
+                    export_status(tid)
+                    done["export"] += 1
+                else:
+                    done["skipped"] += 1
+            except Exception:
+                done["skipped"] += 1
+    except Exception:
+        pass
+    return ok(done)
+
+
+
 
 PAID = ("已完成",)  # 销量池口径(仅钱货两清且离仓的实销; 待发货走扣减池, 其余状态屏蔽)
 _PAID_SQL = ",".join("'%s'" % s for s in PAID)

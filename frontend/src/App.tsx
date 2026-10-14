@@ -614,6 +614,26 @@ export default function App() {
   ).length
   const errCount = (qualityLogs || []).length
 
+  // 2026-10-14: 回前台立即续跑 running 导入/填充/导出任务(后端 continue-tasks 兜底 + 前端恢复接力)
+  useEffect(() => {
+    const cont = () => {
+      fetch(API + '/api/cron/continue-tasks?task=manual', {
+        headers: {
+          'X-Auth-Token': (() => {
+            try {
+              return localStorage.getItem('c_token') || ''
+            } catch {
+              return ''
+            }
+          })(),
+        },
+      }).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') cont()
+    })
+    return () => document.removeEventListener('visibilitychange', cont)
+  }, [])
   const renderPage = pageId => {
     const wrap = el => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>
     switch (pageId) {
