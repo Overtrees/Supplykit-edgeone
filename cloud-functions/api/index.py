@@ -51,10 +51,18 @@ async def _validation(request: Request, exc: RequestValidationError):
     """校验错误(422)收口: FastAPI 校验层异常不走路由 traced——显式 handler 记 quality_logs 留痕"""
     try:
         from db import execute as _e
+        _ct = (request.headers.get("content-type") or "")[:120]
+        _body_preview = ""
+        try:
+            _raw = await request.body()
+            _body_preview = _raw[:300].decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        # 422 诊断(2026-10-14): 记录 Content-Type/multipart boundary + body 前 300 字节——定位前端 FormData 构造 vs 网关
         _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
            "VALUES(%s,%s,%s,%s,%s)",
-           ("api_error", "warning", ("422 %s %s" % (request.method, request.url.path)),
-            str(exc.errors())[:300], "api"))
+           ("api_error", "warning", ("422 %s %s CT=%s" % (request.method, request.url.path, _ct)),
+            ("body: " + _body_preview[:280] + " | err: " + str(exc.errors())[:100]), "api"))
     except Exception:
         pass
     return JSONResponse({"detail": exc.errors()}, status_code=422)
