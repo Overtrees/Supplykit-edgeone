@@ -228,6 +228,19 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
         execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                 "VALUES(%s,'cleansing','running',%s,'{}',%s)",
                 (task_id, json.dumps(params, ensure_ascii=False), channel))
+        # 同步分支(2026-10-14): 小行数(<1000)请求内完成秒级返回——不依赖轮询续跑; >=1000 走接力
+        try:
+            _, rows0 = _parse_table(data, fname)
+            if len(rows0) < 1000:
+                # 同步: 请求内触发首窗口续跑(解析+写入+联动秒级)——直接返回 success/failed
+                _sr = cleansing_status(task_id, page_size=5000)
+                _sd = _sr.get("data") or _sr
+                if _sr.get("ok") is not False and _sd.get("status") in ("done", "running"):
+                    return {"ok": True, "task_id": task_id,
+                            "success": _sd.get("success", 0), "failed": _sd.get("failed", 0),
+                            "total_rows": len(rows0)}
+        except Exception:
+            pass  # 解析/同步异常 → 走接力(由 status 续跑兜底)
         return {"ok": True, "task_id": task_id}
     except Exception as e:
         import traceback as _tb
@@ -249,10 +262,17 @@ async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{
 def cleansing_status(task_id: str = "", page_size: int = 5000):
     """导入续跑(前端轮询触发): 每步读源文件 → 解析 → 窗口清洗写入(5000 行/步, ≤120s)
     全部完成 → 最后步全量重清洗做库存联动+规则评估+汇总 → done"""
-    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    row = one("SELECT status, params, result, updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
     status = row.get("status") or ""
+    if status == "running":
+        # 2026-10-14 超时自愈: running 超过 30 分钟无更新(前端轮询停/实例冻结)——标记 error 防永久卡(释放防重拦截)
+        ua = str(row.get("updated_at") or "")[:19]
+        if ua and ua < (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"):
+            execute("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
+                    [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——已自动标记结束，请重新导入"}}), task_id])
+            row["status"] = "error"
     if status in ("done", "error"):
         _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
         return {"ok": True, "task_id": task_id, "status": status,
