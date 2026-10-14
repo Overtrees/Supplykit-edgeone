@@ -8,7 +8,7 @@ import {
   IconWarning,
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
-import { api, uploadForm } from '../api/client'
+import { api } from '../api/client'
 import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
@@ -504,7 +504,7 @@ export default function CleansingPage() {
     fd.append('file', file)
 
     try {
-      const r = await uploadForm('/api/cleansing/detect', fd)
+      const r = await api.post('/api/cleansing/detect', fd)
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '识别失败')
@@ -582,7 +582,7 @@ export default function CleansingPage() {
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await uploadForm('/api/cleansing/preview', fd)
+      const r = await api.post('/api/cleansing/preview', fd, { timeout: 60000 })
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '预览失败')
@@ -670,7 +670,7 @@ export default function CleansingPage() {
       fd.append('channel', ch)
       fd.append('conflict_mode', hammerCleansingConflict)
       try {
-        const r = await uploadForm('/api/cleansing/execute-async', fd) // postHeavy 90s: 大文件上传/提交不超PA 30s
+        const r = await api.postHeavy('/api/cleansing/execute-async', fd) // postHeavy 90s: 大文件上传/提交不超PA 30s
         const d = r.data
         if (!d.ok) {
           toast.error(d.error || '提交失败')
@@ -777,7 +777,7 @@ export default function CleansingPage() {
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await uploadForm('/api/cleansing/preview', fd)
+      const r = await api.post('/api/cleansing/preview', fd, { timeout: 60000 })
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '提交失败')
