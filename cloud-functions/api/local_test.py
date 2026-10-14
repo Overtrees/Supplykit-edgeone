@@ -305,7 +305,7 @@ MP = json.dumps({"订单号": {"target": "order_no", "type": "string"},
                  "SKU": {"target": "sku", "type": "string"},
                  "数量": {"target": "quantity", "type": "number"}})
 r = client.post("/cleansing/preview", files=F, headers=AH,
-                data={"mapping": MP, "target": "order", "channel": "jd"})
+                params={"q_mp": MP, "q_target": "order", "q_channel": "jd"})
 d = r.json()
 pv = d.get("preview") or [{}]
 check("cleansing/preview", d.get("ok") is True and d.get("total") == 1

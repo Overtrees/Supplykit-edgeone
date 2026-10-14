@@ -578,10 +578,6 @@ export default function CleansingPage() {
       return
     }
     setBs('预览中')
-    fd.append('mapping', JSON.stringify(mp))
-    fd.append('target', tt)
-    fd.append('channel', ch)
-    fd.append('conflict_mode', hammerCleansingConflict)
     try {
       const r = await uploadRawBytes(
         '/api/cleansing/preview?q_target=' +
@@ -784,10 +780,6 @@ export default function CleansingPage() {
 
   const quickExecute = async () => {
     setBs('执行中')
-    fd.append('mapping', JSON.stringify(mp))
-    fd.append('target', tt)
-    fd.append('channel', ch)
-    fd.append('conflict_mode', hammerCleansingConflict)
     try {
       const r = await uploadRawBytes(
         '/api/cleansing/preview?q_target=' +
