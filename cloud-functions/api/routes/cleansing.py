@@ -11,7 +11,7 @@ import io
 import json
 import re
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone  # datetime 用于 status 超时标记(缺 datetime 曾 NameError——同步分支/轮询全崩)
 
 from fastapi import APIRouter, Query
 from fastapi import Request
