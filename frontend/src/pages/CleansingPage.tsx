@@ -477,7 +477,7 @@ export default function CleansingPage() {
       localStorage.setItem('c_alias_map', JSON.stringify(m))
     } catch {}
   }
-  const detect = async file => {
+  const detect = async (file, buf = null) => {
     // 2026-10-14 422 诊断: 发送前记录 file 状态(前端是否拿到/类型)——console 即时 + reportError 收口
     console.info(
       '[detect] file:',
@@ -501,11 +501,13 @@ export default function CleansingPage() {
     }
     setF(file)
     setBs('识别中')
-    const fd = new FormData()
-    fd.append('file', file)
 
     try {
-      const r = await uploadRawBytes('/api/cleansing/detect', fBuf ? new Blob([fBuf]) : file)
+      const r = await uploadRawBytes(
+        '/api/cleansing/detect',
+        buf || (fBuf ? new Blob([fBuf]) : file),
+        60000,
+      )
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '识别失败')
@@ -576,14 +578,22 @@ export default function CleansingPage() {
       return
     }
     setBs('预览中')
-    const fd = new FormData()
-    fd.append('file', f)
     fd.append('mapping', JSON.stringify(mp))
     fd.append('target', tt)
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await uploadRawBytes('/api/cleansing/preview', fBuf ? new Blob([fBuf]) : f)
+      const r = await uploadRawBytes(
+        '/api/cleansing/preview?q_target=' +
+          tt +
+          '&q_channel=' +
+          ch +
+          '&q_conflict=' +
+          hammerCleansingConflict +
+          '&q_mp=' +
+          encodeURIComponent(JSON.stringify(mp)),
+        fBuf ? new Blob([fBuf]) : f,
+      )
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '预览失败')
@@ -664,14 +674,18 @@ export default function CleansingPage() {
           return
         }
       }
-      const fd = new FormData()
-      fd.append('file', f)
-      fd.append('mapping', JSON.stringify(mp))
-      fd.append('target', tt)
-      fd.append('channel', ch)
-      fd.append('conflict_mode', hammerCleansingConflict)
       try {
-        const r = await uploadRawBytes('/api/cleansing/execute-async', fBuf ? new Blob([fBuf]) : f) // postHeavy 90s: 大文件上传/提交不超PA 30s
+        const r = await uploadRawBytes(
+          '/api/cleansing/execute-async?q_target=' +
+            tt +
+            '&q_channel=' +
+            ch +
+            '&q_conflict=' +
+            hammerCleansingConflict +
+            '&q_mp=' +
+            encodeURIComponent(JSON.stringify(mp)),
+          fBuf ? new Blob([fBuf]) : f,
+        ) // raw 直传 90s
         const d = r.data
         if (!d.ok) {
           toast.error(d.error || '提交失败')
@@ -770,14 +784,22 @@ export default function CleansingPage() {
 
   const quickExecute = async () => {
     setBs('执行中')
-    const fd = new FormData()
-    fd.append('file', f)
     fd.append('mapping', JSON.stringify(mp))
     fd.append('target', tt)
     fd.append('channel', ch)
     fd.append('conflict_mode', hammerCleansingConflict)
     try {
-      const r = await uploadRawBytes('/api/cleansing/preview', fBuf ? new Blob([fBuf]) : f)
+      const r = await uploadRawBytes(
+        '/api/cleansing/preview?q_target=' +
+          tt +
+          '&q_channel=' +
+          ch +
+          '&q_conflict=' +
+          hammerCleansingConflict +
+          '&q_mp=' +
+          encodeURIComponent(JSON.stringify(mp)),
+        fBuf ? new Blob([fBuf]) : f,
+      )
       const d = r.data
       if (!d.ok) {
         toast.error(d.error || '提交失败')
@@ -948,9 +970,12 @@ export default function CleansingPage() {
                 const fi = e.target.files[0]
                 if (fi) {
                   const rd = new FileReader()
-                  rd.onload = () => setFBuf(rd.result as ArrayBuffer)
+                  rd.onload = () => {
+                    const buf = rd.result as ArrayBuffer
+                    setFBuf(buf)
+                    detect(fi, buf)
+                  }
                   rd.readAsArrayBuffer(fi)
-                  detect(fi)
                 }
               }}
             />
@@ -1505,7 +1530,11 @@ export default function CleansingPage() {
                   const fi = e.target.files[0]
                   if (fi) {
                     const rd = new FileReader()
-                    rd.onload = () => setFBuf(rd.result as ArrayBuffer)
+                    rd.onload = () => {
+                      const buf = rd.result as ArrayBuffer
+                      setFBuf(buf)
+                      detect(fi, buf)
+                    }
                     rd.readAsArrayBuffer(fi)
                     detect(fi)
                   }

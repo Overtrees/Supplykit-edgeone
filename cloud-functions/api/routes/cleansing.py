@@ -13,7 +13,7 @@ import re
 import time
 from datetime import timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi import Request
 from fastapi import UploadFile
 from fastapi import File
@@ -33,11 +33,15 @@ _NUMS = {"number", "price", "quantity", "score", "safety_qty", "available_qty", 
          "freight_amount", "subsidy_amount", "tax_amount", "discount_amount", "actual_amount"}
 
 
-def _mk_upload(data: bytes, filename: str):
+def _mk_upload(data: bytes, filename: str = "file.csv"):
     """构造 UploadFile(raw body/ base64 路径——绕 iOS multipart body 空)"""
     import io
     from starlette.datastructures import UploadFile as _UF, Headers as _H
-    return _UF(io.BytesIO(data), headers=_H({"content-type": "application/octet-stream"}), size=len(data))
+    # 魔数嗅探: xlsx(zip) PK 头 → filename 置 xlsx——否则退化 csv 当 CSV 解析乱码单列
+    if data[:4] == b"PK\x03\x04":
+        filename = "file.xlsx"
+    return _UF(io.BytesIO(data), filename=filename,
+               headers=_H({"content-type": "application/octet-stream"}), size=len(data))
 
 
 def _read_file_bytes(upload: UploadFile):
@@ -186,9 +190,17 @@ async def cleansing_detect(request: Request, file: UploadFile = File(None)):
 # ── preview: 清洗预览(前 50 行) ─────────────────────────────────────────
 @router.post("/cleansing/preview")
 @traced
-async def cleansing_preview(file: UploadFile = File(...), mapping: str = Form("{}"),
-                            target: str = Form("order"), channel: str = Form("jd"),
-                            conflict_mode: str = Form("sum")):
+async def cleansing_preview(request: Request, file: UploadFile = File(None),
+                            q_target: str = Query(""), q_channel: str = Query(""), q_conflict: str = Query(""), q_mp: str = Query("")):
+    # 新方式(2026-10-14 根治): raw body 直传(绕 iOS multipart body 空) + 参数走 query
+    if not file:
+        _raw = await request.body()
+        if _raw:
+            file = _mk_upload(_raw, "file.csv")
+    target = q_target or "order"
+    channel = q_channel or "jd"
+    conflict_mode = q_conflict or "sum"
+    mapping = q_mp or "{}"
     data, fname = _read_file_bytes(file)
     try:
         _, rows = _parse_table(data, fname)
@@ -206,9 +218,17 @@ async def cleansing_preview(file: UploadFile = File(...), mapping: str = Form("{
 # ── execute-async: 全量清洗写入 ─────────────────────────────────────────
 @router.post("/cleansing/execute-async")
 @traced
-async def cleansing_execute(file: UploadFile = File(...), mapping: str = Form("{}"),
-                            target: str = Form("order"), channel: str = Form("jd"),
-                            conflict_mode: str = Form("sum")):
+async def cleansing_execute(request: Request, file: UploadFile = File(None),
+                            q_target: str = Query(""), q_channel: str = Query(""), q_conflict: str = Query(""), q_mp: str = Query("")):
+    if not file:
+        _raw = await request.body()
+        if _raw:
+            file = _mk_upload(_raw, "file.csv")
+    target = q_target or "order"
+    channel = q_channel or "jd"
+    conflict_mode = q_conflict or "sum"
+    mapping = q_mp or "{}"
+    import logging as _lg
     """导入(接力式: POST 存源文件+建任务 → GET /cleansing/status 续跑分窗清洗写入,
     防大批量 120s 超时——与导出/seed 同模式; Makers 实例请求后可冻结, 不用纯后台线程)
     返回 {ok, task_id}"""
