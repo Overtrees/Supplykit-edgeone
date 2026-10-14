@@ -60,6 +60,12 @@
       "cron": "55 13 * * *",
       "timezone": "Asia/Shanghai",
       "path": "/api/cron/ping"
+    },
+    {
+      "name": "continue-tasks",
+      "cron": "*/5 * * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/continue-tasks"
     }
   ]
 }
