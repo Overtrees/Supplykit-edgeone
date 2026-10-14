@@ -32,6 +32,7 @@ def continue_tasks():
     try:
         rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
         _cutoff = (datetime.now(_tz2.utc) - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+        try_err('cron', 'continue-tasks 诊断: rows=%d cutoff=%s' % (len(rows or []), _cutoff))
         for r in (rows or []):
             tt = r.get("task_type") or ""
             tid = r.get("task_id") or ""
