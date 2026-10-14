@@ -109,6 +109,12 @@ async def slow_log_middleware(request: Request, next):
     return _resp
 
 
+# 2026-10-14 请求驱动续跑: 任意 API 请求顺带推进 running 导入/填充/导出任务(限频 60s 进程内标记)
+# ——免费版调度 1 天限制 + Makers 实例冻结——不能挂页面时, 有请求即推进(用户在线任务不卡)
+import time as _ctime
+_LAST_CONT = 0.0
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, next):
     """鉴权: auth/health/debug 放行, 其余需 Bearer; demo 只读"""
@@ -128,6 +134,22 @@ async def auth_middleware(request: Request, next):
         return JSONResponse({"detail": "Token 无效或已过期"}, status_code=401)
     if request.method in ("POST", "PUT", "DELETE", "PATCH") and user == "demo":
         return JSONResponse({"detail": "访客模式仅可查看，不可修改数据"}, status_code=403)
+    # 请求驱动续跑(限频 60s——轻量推进 running 任务——不阻塞主请求)
+    try:
+        global _LAST_CONT
+        _nowc = _ctime.time()
+        if _nowc - _LAST_CONT > 60 and request.url.path.startswith("/api/"):
+            _LAST_CONT = _nowc
+            import threading as _thc
+            def _cont():
+                try:
+                    from routes.cron import continue_tasks
+                    continue_tasks()
+                except Exception:
+                    pass
+            _thc.Thread(target=_cont, daemon=True).start()
+    except Exception:
+        pass
     return await next(request)
 
 
