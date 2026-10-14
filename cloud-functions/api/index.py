@@ -145,11 +145,11 @@ async def auth_middleware(request: Request, next):
                 try:
                     from routes.cron import continue_tasks
                     continue_tasks()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    try_err('index', '请求驱动续跑线程异常', _e)
             _thc.Thread(target=_cont, daemon=True).start()
-    except Exception:
-        pass
+    except Exception as _e:
+        try_err('index', '请求驱动续跑调度异常', _e)
     return await next(request)
 
 
