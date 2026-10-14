@@ -387,7 +387,6 @@ export default function CleansingPage() {
   const toast = useToast()
   const [s, setS] = useState(0)
   const [f, setF] = useState(null)
-  const [fBuf, setFBuf] = useState<ArrayBuffer | null>(null) // PWA File 生命周期兜底
   const [cols, setCols] = useState([])
   const [tr, setTr] = useState(0)
   const [tt, setTt] = useState('order')
@@ -547,15 +546,14 @@ export default function CleansingPage() {
   }
 
   const preview = async () => {
-    if (!f && !fBuf) {
+    if (!f) {
       toast.error('请先选择文件后再预览')
       setBs('')
       return
     }
     setBs('预览中')
     const fd = new FormData()
-    // PWA: 优先 fBuf(new Blob——不依赖原 File 生命周期); 回退 f
-    fd.append('file', fBuf ? new Blob([fBuf]) : f)
+    fd.append('file', f)
     fd.append('mapping', JSON.stringify(mp))
     fd.append('target', tt)
     fd.append('channel', ch)
@@ -643,7 +641,7 @@ export default function CleansingPage() {
         }
       }
       const fd = new FormData()
-      fd.append('file', fBuf ? new Blob([fBuf]) : f)
+      fd.append('file', f)
       fd.append('mapping', JSON.stringify(mp))
       fd.append('target', tt)
       fd.append('channel', ch)
@@ -921,13 +919,7 @@ export default function CleansingPage() {
               style={{ display: 'none' }}
               onChange={e => {
                 const fi = e.target.files[0]
-                if (fi) {
-                  // PWA 根治: File 对象跨请求可能失效(iOS)——读入 ArrayBuffer 缓存, 上传用 new Blob 不依赖原 File
-                  const rd = new FileReader()
-                  rd.onload = () => setFBuf(rd.result as ArrayBuffer) // readAsArrayBuffer 保证 ArrayBuffer
-                  rd.readAsArrayBuffer(fi)
-                  detect(fi)
-                }
+                if (fi) detect(fi)
               }}
             />
           </label>
