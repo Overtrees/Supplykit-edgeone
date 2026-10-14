@@ -501,10 +501,8 @@ export default function CleansingPage() {
     setF(file)
     setBs('识别中')
     const fd = new FormData()
-        fd.append(
-      'file',
-      fBuf ? new Blob([fBuf], { type: file ? file.type : 'application/octet-stream' }) : file,
-    )
+    fd.append('file', file)
+
     try {
       const r = await api.post('/api/cleansing/detect', fd)
       const d = r.data
