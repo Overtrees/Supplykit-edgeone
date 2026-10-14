@@ -9,6 +9,7 @@ import {
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
+import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
 import { t } from '../locale'
@@ -485,6 +486,15 @@ export default function CleansingPage() {
       '| fisFile:',
       file instanceof File,
     )
+    try {
+      reportError(
+        'detect_debug',
+        'detect file: ' +
+          (file ? String(file.name) + '|' + String(file.size) + '|' + String(file.type) : 'EMPTY'),
+        'isFile=' + String(file instanceof File),
+        'info',
+      )
+    } catch (err) {}
     if (!file) {
       console.warn('[detect] file 为空——未获取到文件对象')
     }
