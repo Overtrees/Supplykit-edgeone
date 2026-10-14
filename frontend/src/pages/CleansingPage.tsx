@@ -8,7 +8,7 @@ import {
   IconWarning,
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
-import { api } from '../api/client'
+import { api, uploadForm } from '../api/client'
 import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
