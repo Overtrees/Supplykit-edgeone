@@ -79,7 +79,8 @@ def _parse_table(data: bytes, fname: str):
             continue
     else:
         text = raw.decode("utf-8", errors="replace")
-    text = text.replace("\x00", "")  # 2026-10-14: 文件含 NUL 字节致 csv.Error 'line contains NUL'——清洗后解析
+    text = text.replace("\x00", "")  # NUL 清洗
+    text = text.replace("\r\n", "\n").replace("\r", "\n")  # 2026-10-14 换行归一(\r 老Mac——csv universal newline 防 'new-line character seen')
     try:
         # 分隔符探测扩展到多平台导出常见分隔: 逗号/制表/分号/竖线/中文逗号顿号
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;|，、")
