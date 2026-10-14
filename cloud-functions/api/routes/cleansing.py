@@ -155,6 +155,14 @@ def _detect_columns(fname, data):
 @router.post("/cleansing/detect")
 @traced
 async def cleansing_detect(file: UploadFile = File(...)):
+    # 临时诊断(2026-10-14 422 file missing 定位): 记录请求表单/文件到达情况
+    try:
+        from db import execute as _ed
+        _ed("INSERT INTO quality_logs(log_type, level, message, source) VALUES('perf_debug','info',%s,'cleansing')",
+            ("detect 收到 file: %s, filename: %s, size: %s" % (
+                bool(file), (file.filename or '')[:40], getattr(file, 'size', None))))
+    except Exception:
+        pass
     data, fname = _read_file_bytes(file)
     try:
         headers, rows = _parse_table(data, fname)
