@@ -388,7 +388,6 @@ export default function CleansingPage() {
   const toast = useToast()
   const [s, setS] = useState(0)
   const [f, setF] = useState(null)
-  const [fBuf, setFBuf] = useState<ArrayBuffer | null>(null) // 2026-10-14 422 根治: iOS File 引用时效失效——onChange 读入 ArrayBuffer(持久), 上传用 Blob 不依赖原 File
   const [cols, setCols] = useState([])
   const [tr, setTr] = useState(0)
   const [tt, setTt] = useState('order')
@@ -502,8 +501,7 @@ export default function CleansingPage() {
     setF(file)
     setBs('识别中')
     const fd = new FormData()
-    // iOS File 引用时效根治: 用 Blob(fBuf 持久)而非原 File
-    fd.append(
+        fd.append(
       'file',
       fBuf ? new Blob([fBuf], { type: file ? file.type : 'application/octet-stream' }) : file,
     )
@@ -580,7 +578,7 @@ export default function CleansingPage() {
     }
     setBs('预览中')
     const fd = new FormData()
-    fd.append('file', fBuf ? new Blob([fBuf], { type: 'application/octet-stream' }) : f)
+    fd.append('file', f)
     fd.append('mapping', JSON.stringify(mp))
     fd.append('target', tt)
     fd.append('channel', ch)
@@ -668,7 +666,7 @@ export default function CleansingPage() {
         }
       }
       const fd = new FormData()
-      fd.append('file', fBuf ? new Blob([fBuf], { type: 'application/octet-stream' }) : f)
+      fd.append('file', f)
       fd.append('mapping', JSON.stringify(mp))
       fd.append('target', tt)
       fd.append('channel', ch)
@@ -775,7 +773,7 @@ export default function CleansingPage() {
   const quickExecute = async () => {
     setBs('执行中')
     const fd = new FormData()
-    fd.append('file', fBuf ? new Blob([fBuf], { type: 'application/octet-stream' }) : f)
+    fd.append('file', f)
     fd.append('mapping', JSON.stringify(mp))
     fd.append('target', tt)
     fd.append('channel', ch)
@@ -946,12 +944,7 @@ export default function CleansingPage() {
               style={{ display: 'none' }}
               onChange={e => {
                 const fi = e.target.files[0]
-                if (fi) {
-                  const rd = new FileReader()
-                  rd.onload = () => setFBuf(rd.result as ArrayBuffer)
-                  rd.readAsArrayBuffer(fi)
-                  detect(fi)
-                }
+                if (fi) detect(fi)
               }}
             />
           </label>
@@ -1503,13 +1496,7 @@ export default function CleansingPage() {
                 style={{ display: 'none' }}
                 onChange={e => {
                   const fi = e.target.files[0]
-                  if (fi) {
-                    setF(fi)
-                    setBs('识别中')
-                    goStep(1)
-                    detect(fi)
-                  }
-                }}
+                  if (fi) detect(fi)}
               />
             </label>
           </div>

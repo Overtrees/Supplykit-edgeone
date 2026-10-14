@@ -158,6 +158,38 @@ function invalidateCache() {
 }
 
 // 导出 api 对象，保持与原接口兼容
+// 2026-10-14 422 根治: iOS Safari 移动端 axios XHR FormData 发送 body 空(boundary 有内容无)——上传类改 fetch 原生(Safari fetch multipart 可靠)
+export async function uploadForm(url: string, fd: FormData, timeout = 90000): Promise<any> {
+  const token = (() => { try { return localStorage.getItem('c_token') } catch { return '' } })()
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), timeout)
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      body: fd,
+      headers: { 'X-Auth-Token': token || '' },
+      signal: controller.signal,
+    })
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok) {
+      const err: Error & { status?: number } = new Error(
+        'Request failed with status code ' + resp.status + (data.detail ? ': ' + JSON.stringify(data.detail).slice(0, 120) : ''),
+      )
+      err.status = resp.status
+      reportError('api_http_error', (err.message + ' ' + url).slice(0, 200), 'HTTP ' + resp.status, 'warning')
+      throw err
+    }
+    if (data && typeof data === 'object' && 'ok' in data && !data.ok) {
+      const err: Error = new Error(data.error || '请求失败')
+      if (data.error) reportError('business_error', (data.error + ' ' + url).slice(0, 200), 'HTTP 200', 'warning')
+      throw err
+    }
+    return { data: 'data' in data ? data.data : data, status: resp.status }
+  } finally {
+    clearTimeout(t)
+  }
+}
+
 export const api = {
   get: apiGet,
   post: async (url, data?, config = {}) => {
