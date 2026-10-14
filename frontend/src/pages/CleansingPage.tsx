@@ -689,7 +689,7 @@ export default function CleansingPage() {
           execLock.current = false
           return
         }
-        // 同步结果(<400行后端直接返回success/failed) → 直接显示, 不走轮询
+        // 同步结果(<1000行后端请求内完成返回success/failed——同步分支) → 直显, 不走轮询
         if (d.success !== undefined) {
           setRes(d)
           goStep(3)
