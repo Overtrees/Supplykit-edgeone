@@ -35,7 +35,7 @@ def continue_tasks():
         for r in (rows or []):
             tt = r.get("task_type") or ""
             tid = r.get("task_id") or ""
-            ua = str(r.get("updated_at") or "")[:19]
+            ua = str(r.get("updated_at") or "")[:19].replace("T", " ")  # T vs 空格分隔——字符串比较需归一(否则 10:34 T 版 > cutoff 空格版误判不超时)
             if ua and ua < _cutoff:
                 # 超时任务(>30 分钟无更新——前端轮询停/实例冻结)——标记 error 释放防重/结束卡住
                 _ec("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
