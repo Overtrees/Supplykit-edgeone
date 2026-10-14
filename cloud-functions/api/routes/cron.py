@@ -57,10 +57,11 @@ def continue_tasks():
                     done["export"] += 1
                 else:
                     done["skipped"] += 1
-            except Exception:
+            except Exception as _e:
+                try_err('cron', 'continue-tasks 续跑异常[%s/%s]' % (tt, tid), _e)
                 done["skipped"] += 1
-    except Exception:
-        pass
+    except Exception as _e:
+        try_err('cron', 'continue-tasks 整体异常', _e)
     return ok(done)
 
 
