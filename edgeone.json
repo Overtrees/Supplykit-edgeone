@@ -63,7 +63,7 @@
     },
     {
       "name": "continue-tasks",
-      "cron": "*/5 * * * *",
+      "cron": "5 5 * * *",
       "timezone": "Asia/Shanghai",
       "path": "/api/cron/continue-tasks"
     }
