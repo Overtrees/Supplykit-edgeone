@@ -9,7 +9,7 @@ import json
 
 from db import query, one, execute, executemany
 from routes.common import try_err
-from core.rule_eval import evaluate_stock_skus, close_oversell_for_skus  # 拆分 re-export(2026-10-15)
+from core.rule_eval import evaluate_stock_skus, close_oversell_for_skus, close_orphan_for_skus  # 拆分 re-export(2026-10-15)
 from core.rule_cond import _resolve_single, _resolve_muldiv, _resolve_value, _resolve_any, _check_single, _check_condition
 
 
