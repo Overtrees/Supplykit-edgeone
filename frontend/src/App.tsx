@@ -217,19 +217,36 @@ export default function App() {
     if (cleansingTask && cleansingTask.task_id) {
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/cleansing/task/' + cleansingTask.task_id, {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
+          const r = await fetch(
+            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000',
+            {
+              headers: {
+                'X-Auth-Token': (() => {
+                  try {
+                    return localStorage.getItem('c_token')
+                  } catch {
+                    return ''
+                  }
+                })(),
+              },
             },
-          })
+          )
           const d = await r.json()
           if (document.visibilityState === 'hidden') return
+          // 2026-10-15 App 级续跑: status 续跑一窗 + 写 driver=frontend——任意页面在线=前端推进(不再全靠后端保活)
+          try {
+            fetch(
+              API +
+                '/api/cleansing/driver?task_id=' +
+                cleansingTask.task_id +
+                '&driver=frontend&channel=' +
+                (cleansingTask.channel || 'jd'),
+              {
+                method: 'POST',
+                headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
+              },
+            )
+          } catch {}
           if (d.status === 'done') {
             clearInterval(poll)
             try {
