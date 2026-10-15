@@ -218,7 +218,7 @@ export default function App() {
       const poll = setInterval(async () => {
         try {
           const r = await fetch(
-            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=5000', // 大窗(seed 同批吞吐)
+            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000', // 小窗(实时进度——大窗 263s 超时积压教训)
             {
               headers: {
                 'X-Auth-Token': (() => {
