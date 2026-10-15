@@ -124,20 +124,38 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
     """
     if not deltas:
         return 0, []
+    # 2026-10-15 批量联动(逐键 SELECT+UPDATE 曾 5000 键 ~10000 往返——210s 大头): 批量 SELECT 一次 + executemany 更新
     n = 0
     touched = []
+    _keys = list(deltas.keys())
+    _cur_map = {}
+    for _i in range(0, len(_keys), 200):
+        _batch = _keys[_i:_i + 200]
+        _or = " OR ".join("(sku=%s AND warehouse=%s AND channel=%s)" for _ in _batch)
+        _params = []
+        for (sk, wh, wt) in _batch:
+            _params += [sk, wh or "", channel]
+        if _or:
+            for _c in query("SELECT id, sku, warehouse, available_qty FROM inventory WHERE %s" % _or, _params):
+                _cur_map[(_c.get("sku"), _c.get("warehouse") or "", channel)] = _c
+    _upd = []
+    _ins = []
     for (sku, wh, wht), delta in deltas.items():
-        cur = one("SELECT id, available_qty FROM inventory WHERE sku=%s AND warehouse=%s AND channel=%s",
-                  [sku, wh, channel])
+        _ck = (sku, wh or "", channel)
+        cur = _cur_map.get(_ck)
         if cur:
             new_qty = max(0, int(cur.get("available_qty") or 0) + delta)
-            execute("UPDATE inventory SET available_qty=%s WHERE id=%s", [new_qty, cur.get("id")])
+            _upd.append((new_qty, cur.get("id")))
         else:
-            execute("INSERT INTO inventory(sku, warehouse, warehouse_type, available_qty, safety_qty, channel) "
-                    "VALUES(%s,%s,%s,%s,10,%s)", [sku, wh or "", wht or "own", max(0, delta), channel])
+            _ins.append((sku, wh or "", wht or "own", max(0, delta), channel))
         n += 1
         if sku not in touched:
             touched.append(sku)
+    if _upd:
+        executemany("UPDATE inventory SET available_qty=%s WHERE id=%s", _upd)
+    if _ins:
+        executemany("INSERT INTO inventory(sku, warehouse, warehouse_type, available_qty, safety_qty, channel) "
+                    "VALUES(%s,%s,%s,%s,10,%s)", _ins)
     skus = touched
     try:
         from core.rules import evaluate_many, load_rules_for
