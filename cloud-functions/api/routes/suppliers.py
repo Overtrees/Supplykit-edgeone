@@ -227,6 +227,12 @@ _DEFAULT_COLUMN_MAP = {
         {"name": "已取消", "group": "blocked"}, {"name": "已退款", "group": "blocked"},
         {"name": "退款中", "group": "blocked"}, {"name": "申请退款", "group": "blocked"},
         {"name": "已退货", "group": "blocked"}, {"name": "运输中", "group": "blocked"}, {"name": "在途", "group": "blocked"},
+        # 2026-10-15 京东导出状态(blocked——写入订单可见/不计销量池; 可被 column_value_map 渠道配置覆盖)
+        {"name": "卖家已发货", "group": "blocked"}, {"name": "等待出库", "group": "blocked"},
+        {"name": "等待收货", "group": "blocked"}, {"name": "等待买家付款", "group": "blocked"},
+        {"name": "买家已付款", "group": "blocked"}, {"name": "交易关闭", "group": "blocked"},
+        {"name": "等待卖家发货", "group": "blocked"}, {"name": "待付款", "group": "blocked"},
+        {"name": "部分发货", "group": "blocked"},
     ]
 }
 
