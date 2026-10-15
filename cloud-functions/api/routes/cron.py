@@ -222,6 +222,19 @@ def run_daily_rules() -> dict:
         cleaned += int(_old or 0)
     except Exception as _e:
             try_err('cron', '静默降级', _e)
+    # 1.6 无需求告警兜底(2026-10-15): 无未删订单 且 无在档(products/inventory 均无) 的 active rules_engine 告警 → inactive
+    #     ——SKU 只有订单页有(订单删了=无需求)——告警孤儿(删单联动同口径; 有在档保留——真缺货/低库存不误伤; 解存量 TypeError 期孤儿)
+    try:
+        _c2 = execute(
+            "UPDATE alerts a SET a.status='inactive' WHERE a.status='active' AND a.source='rules_engine' "
+            "AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.sku=a.related_sku AND o.channel=a.channel "
+            "AND (o.deleted_at IS NULL OR o.deleted_at='')) "
+            "AND NOT EXISTS (SELECT 1 FROM products p WHERE p.sku=a.related_sku AND p.channel=a.channel "
+            "AND (p.deleted_at IS NULL OR p.deleted_at='')) "
+            "AND NOT EXISTS (SELECT 1 FROM inventory i WHERE i.sku=a.related_sku AND i.channel=a.channel)")
+        cleaned += int(_c2 or 0)
+    except Exception as _e:
+            try_err('cron', '静默降级', _e)
     # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存行
     #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
     from core.rules import evaluate_stock_skus
