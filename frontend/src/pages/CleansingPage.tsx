@@ -1597,8 +1597,9 @@ export default function CleansingPage() {
                 marginBottom: 12,
               }}
             >
-              按列配置 值→档位，导入时自动归一化/筛选 · 渠道：{ch === 'jd' ? '京东' : '其他渠道'}
-              （全局主体隔离）
+              按列配置 值→档位，导入时自动归一化 · 渠道：{ch === 'jd' ? '京东' : '其他渠道'}
+              （全局主体隔离） 计入销量池=日销/GMV 都算；仅订单记录=写订单可见，GMV
+              按状态（已发货类算），不计日销补货
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <span style={{ fontSize: 'var(--font-13)', fontWeight: 600, flexShrink: 0 }}>
@@ -1673,8 +1674,8 @@ export default function CleansingPage() {
                     minHeight: 36,
                   }}
                 >
-                  <option value="sale">✅ 销量池</option>
-                  <option value="blocked">⛔ 屏蔽</option>
+                  <option value="sale">✅ 计入销量池（日销+GMV）</option>
+                  <option value="blocked">📋 仅订单记录（GMV 按状态·不计日销）</option>
                 </select>
                 <button
                   onClick={() =>
