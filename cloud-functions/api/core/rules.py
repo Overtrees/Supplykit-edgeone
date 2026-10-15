@@ -224,6 +224,31 @@ def validate_condition(cond):
 _CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty")
 
 
+def close_oversell_for_skus(skus, channel="jd"):
+    """删单联动(2026-10-15): 该 SKU 未删订单量 vs 可用库存重评估——不超卖 → 关 active oversell 告警
+    (曾只 invalidate_all 缓存——告警表不清——孤儿 oversell 残留看板)"""
+    if not skus:
+        return
+    from db import query as _q, execute as _e
+    from routes.common import try_err as _terr
+    try:
+        _ph = ",".join(["%s"] * len(skus))
+        # 未删订单量(待发货/已完成等有效状态——与规则引擎同口径)
+        _rows = _q("SELECT sku, SUM(quantity) AS q FROM orders WHERE deleted_at IS NULL OR deleted_at='' "
+                   "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
+        _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
+        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "
+                  "GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
+        _avail = {r.get("sku"): r.get("a") or 0 for r in _inv}
+        _close_sku = [s for s in set(skus) if float(_live.get(s, 0) or 0) <= float(_avail.get(s, 0) or 0)]
+        if _close_sku:
+            _ph2 = ",".join(["%s"] * len(_close_sku))
+            _e("UPDATE alerts SET status='inactive' WHERE alert_type='oversell' AND status='active' "
+               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph2), [channel] + _close_sku)
+    except Exception as _e2:
+        _terr('core_rules', 'close_oversell 降级', _e2)
+
+
 def evaluate_stock_skus(channel, limit=100000):
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
