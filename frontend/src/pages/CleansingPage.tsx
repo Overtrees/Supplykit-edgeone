@@ -699,6 +699,15 @@ export default function CleansingPage() {
         }
         // 同步结果(<1000行后端请求内完成返回success/failed——同步分支) → 直显, 不走轮询
         if (d.success !== undefined) {
+          // 2026-10-15 重复提前检测: 后端返回 duplicate(全部同键已存在——二次导入同表)→ 跳过提示(非'清洗完成'——秒级拦截)
+          if (d.duplicate) {
+            setRes({ success: d.success, failed: d.failed, message: d.message || '文件已导入过' })
+            goStep(3)
+            setBs('')
+            execLock.current = false
+            toast.warning(d.message || '文件已导入过，跳过 ' + d.failed + ' 条')
+            return
+          }
           setRes(d)
           goStep(3)
           setBs('')
@@ -1455,24 +1464,9 @@ export default function CleansingPage() {
           ) : (
             ''
           )}
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 'var(--font-18)',
-              marginBottom: 4,
-              color: res.error ? 'var(--danger)' : '',
-            }}
-          >
-            {res.error
-              ? '清洗失败'
-              : res.async
-                ? '已提交 ' + (res.submitted ?? 0) + ' 条'
-                : res.success > 0
-                  ? '清洗完成'
-                  : '清洗完成（无新增）'}
-          </div>
+
           <div className="small muted" style={{ marginBottom: 16 }}>
-            {res.error || (res.async ? '' : res.message || '')}
+            {res.error || res.message || ''}
             {res.error ? (
               <span style={{ marginLeft: 6, fontSize: 'var(--font-sm)', color: 'var(--warning)' }}>
                 （侧边栏{' '}
@@ -1489,6 +1483,7 @@ export default function CleansingPage() {
                 <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--primary)' }}>
                   {res.submitted}
                 </div>
+                <div className="small muted">已提交</div>
               </div>
             </div>
           ) : (
