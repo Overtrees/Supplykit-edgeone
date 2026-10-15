@@ -1,3 +1,26 @@
+## 2026-10-15: 导入链路根治+孤儿清理闭环+任务卡片可视化+推进机制+日志收束
+> commits 30f2a7a0→cfa4abcb; CI 绿; 150/150。
+
+### 导入链路(5000 单无明细根因 + 间断 422 + 状态归一)
+- **5000 全跳过**: 映射缺 SKU(写入 key order_no+sku)——前端 SKU 必映射校验(防整批跳); 状态归一(卖家已发货→已发货等——GMV 覆盖 PAID——销量池只已完成分离)
+- **间断 422 根治**: iOS Safari multipart body 空——raw bytes 直传(uploadRawBytes fetch body Blob + octet-stream)——后端 request.body + _mk_upload(魔数嗅探 xlsx PK→file.xlsx 防乱码单列)——参数走 Query(q_target/q_channel/q_conflict/q_mp)
+- **同步分支锁边界**: sleep 4(建任务 updated_at<3s 锁失败返 running)——done 才 success——8 条秒级
+- **status b64decode**: cleansing_status 读源 _b64 冲突——局部 import base64——xlsx 实证 done
+
+### 孤儿告警闭环(删单联动通用化 + 每日兜底)
+- close_orphan_for_skus(该 SKU 规则 event 重评估——自定义 alert_type 覆盖——low_stock 无行特殊不误伤有在档真缺货); restore 对称(恢复→重评估生成)
+- daily-rules 每日兜底(无未删订单+无在档告警关——解存量+防缺口——实测孤儿清零 2)
+
+### 任务卡片可视化 + 推进机制
+- 后端三类型(cleansing/seed/export)每窗 steps/耗时 + cur_step 进行中 + total 进度; 前端 TaskCard 组件(进度条/步骤耗时/状态徽标/下载) + CSS 全局
+- 异步连贯(提交→立即 toast 已提交 N 条→跳完成页——同步=成功 N 条/异步=已提交+指引任务页); total_rows 返回(非问号)
+- 推进机制: 前端轮询主导(page_size=1000 小窗多进度)+ 后端保活兜底(health 顺带续跑——有任务才调零开销)+ 每日 cron; driver 标签(前端轮询/后端推进——TaskCard 动态)
+- SCF 方案评估(异步执行 24h/定时 1 分钟/免费 100 万次)——优于 UptimeRobot 5 分钟——待实施
+
+### 工程/文档
+- 日志收束 §15.57(用户/开发者双维度接口清单+白名单分组)+ except pass 红线 §15.58(禁新增——try_err 留痕)
+- 5000 导入 2.3 分钟/121k 导出 13 窗实证; 保活顺带续跑 health continue:ran/零开销
+
 ## 2026-10-14: PWA 导入 422 根治 + 锤子面板嵌套重叠根治 + 快速切页竞态 + 业务错误收口
 > **主线**: feat/edgeone, commits 63be4e33→2e5b56c1。
 > **验证**: CI 绿; 150/150; PWA 导入/面板/切页修复。
