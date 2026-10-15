@@ -941,3 +941,29 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **GitHub Actions cron 最小 5 分钟可做**——但**无条件每 5 分钟请求 = RU/调用配额浪费**(TiDB RU 有限/EdgeOne 配额)
 - **最终方案**: UptimeRobot(已有 5 分钟保活 ping /api/health)→ **health 端点顺带检查** sync_tasks 有无 running(1 行轻查询——RU 极小)→ **有任务才调 continue_tasks**(续跑一窗——接力盘活)→ **无任务零开销**(仅保活本身)
 - 效果: 有任务 → 每 5 分钟 UptimeRobot ping 触发续跑(真后台——不依赖 iOS/app); 无任务 → 零额外 RU
+
+### 15.57 日志接口统一收束标准(2026-10-15——用户/开发者双维度)
+**接口清单(调用方法)**
+| 用途 | 接口 | 维度 |
+|---|---|---|
+| 质量日志(分页/筛选) | GET /api/quality-logs?page&page_size&scope&date&level | 用户(运营) |
+| 日志导出(当日 Markdown) | GET /api/quality-logs/export?date&scope&level | 用户(运营) |
+| 日志文件(按天) | GET /api/quality-logs/file?date&page | 开发者 |
+| 日志文件列表 | GET /api/quality-logs/files | 开发者 |
+| 前端异常上报 | POST /api/logs/frontend(log_type/message/details/level) | 前端统一收口 |
+| 调试端点清单 | GET /api/debug/list | 开发者 |
+| 慢请求告警 | quality_logs slow_request(>3s)/slow_alert(>10s) | 开发者 |
+
+**日志类型白名单(scope 分组——§15.51)**
+- **user(运营)**: risk_summary/cron/maint/cleansing/task/duplicate_order/duplicate_sku/format_error/field_warning/field_error/mapping_info/business_error/detect_debug
+- **dev(开发者)**: api_error/slow_request/cache_error/quiet_error/frontend_error/window_error/unhandled_rejection/component_error/api_http_error/detect_debug/business_error
+
+**收束标准(新增日志)**:
+- 前端统一走 reportError(type, message, details, level)(client.ts)——5 分钟限频去重; 业务错误 ok:false(HTTP200) 记 business_error
+- 后端统一 try_err(src, what, exc)——10s 同源限频; 慢请求中间件 slow_request; 422 handler 记 api_error(含 Content-Type/body 诊断)
+- 新日志类型须登记白名单(scope 分组)——勿散落
+
+### 15.58 except pass 红线(2026-10-15 强制)
+- **禁止新增 `except: pass` / `except Exception: pass`**——静默吞异常=错误无痕(事故多源于此: 续跑 NameError/TypeError 被吞任务卡)
+- 必须: except → try_err(src, what, exc) 留痕(至少 quiet_error); 已有 except pass 逐步清理(排查时发现即改)
+- 例外: 前端 catch{} 静默(可选链防御——非错误路径)允许; 后端禁 pass
