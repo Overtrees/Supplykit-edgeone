@@ -897,3 +897,12 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - package.json 依赖变更须同步 package-lock(否则 npm ci 红); 全局 window 扩展写 global.d.ts(勿 (window as any))
 - 审计修 bug 用精准(核对实际语义)——勿放宽/掩盖(startswith→in + 剥离前缀严格校验——非 n_ps>=宽容)
 - **直接 fetch 纪律(2026-10-13 漏网教训——任务管理页报错)**: api client 拦截器只覆盖 api 实例——裸 fetch 必须手动 `'X-Auth-Token': token`(禁 Authorization)——新请求/页面统一走 api 实例或手动 X-Auth-Token; 上线前 grep 全项目 'Authorization' 确认 0 残留
+
+### 15.53 订单状态映射与口径(2026-10-15)
+- **两口径分离**：
+  - **GMV**(PAID_STATUSES): 待发货/已发货/已完成/申请退款——已支付即计(宽)
+  - **销量池**(SALES_STATUSES): 仅已完成——实销(窄)——补货/断货/日销分母
+- **导入状态归一**(写入时): sale 档→已完成(销量池+GMV); blocked→内置归一标准(卖家已发货→已发货/等待出库→待发货/交易关闭→已取消 等——GMV 覆盖 PAID 含标准状态; 销量池只已完成分离); 未映射→保留原值
+- **配置板**(映射界面锤子面板→表格列状态映射): column_value_map(渠道级——值→档位——覆盖内置默认; 兼容旧 order_status_map)——sale 档=入销量池(→已完成)/blocked=写订单不计销量池
+- **订单写入 key**: order_no+sku——sku 必映射(前端校验拦截——缺失整批跳过——5000 单无明细教训)
+- 表格实际值异于内置集 → 配置板补映射(值→sale/blocked)即可——订单写入由 sku 决定; 状态只影响销量池归属(blocked 也写订单)

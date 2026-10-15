@@ -260,13 +260,24 @@ def _column_map_items(channel, col):
     return {x.get("name"): x.get("group") for x in (d or []) if x.get("name")}
 
 
+# blocked 状态归一标准(2026-10-15): 京东导出状态→标准(待发货/已发货/已取消类)——GMV(PAID 含标准)覆盖; 销量池(只已完成)分离
+_NORM_STATUS = {
+    "卖家已发货": "已发货", "部分发货": "已发货", "运输中": "已发货", "在途": "已发货",
+    "等待出库": "待发货", "等待收货": "待发货", "买家已付款": "待发货", "等待买家付款": "待发货",
+    "待付款": "待发货", "待确认": "待发货", "等待卖家发货": "待发货",
+    "交易关闭": "已取消", "已退货": "已退款", "退款中": "申请退款",
+}
+
+
 def _norm_column_value(channel, col, raw):
-    """列值归一化(导入写入时): 命中 sale 档位且为销量池列 → 归一化标准值; 其余保留原值"""
+    """列值归一化(导入写入时): sale 档位→已完成(销量池); blocked/未映射→内置归一标准(待发货/已发货/已取消——GMV 覆盖); 其余保留"""
     if not raw:
         return raw
     g = _column_map_items(channel, col).get(str(raw).strip(), "blocked")
-    if col == "order_status" and g == "sale":
-        return "已完成"
+    if col == "order_status":
+        if g == "sale":
+            return "已完成"
+        return _NORM_STATUS.get(str(raw).strip(), raw)
     return raw
 
 
