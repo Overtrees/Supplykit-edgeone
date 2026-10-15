@@ -669,6 +669,14 @@ export default function CleansingPage() {
           execLock.current = false
           return
         }
+        // 2026-10-15 SKU 必映射(写入 key order_no+sku——sku 缺失整批跳过——5000 单无明细根因)
+        const hasSku = Object.values(mp || {}).some(m => m && (m.target === 'sku' || m.t === 'sku'))
+        if (!hasSku) {
+          toast.error('导入订单必须映射「SKU/商品编号」列（写入唯一键），否则整批订单将被跳过')
+          setBs('')
+          execLock.current = false
+          return
+        }
       }
       try {
         const r = await uploadRawBytes(
