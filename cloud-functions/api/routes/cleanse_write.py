@@ -284,15 +284,20 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
                 for _k, _ in _key_rows:
                     for _v in _k:
                         _params.append(_v)
-                # 分 key 逐列 IN(键组合——TiDB 无多列 IN)——逐键 EXISTS 查(500 内——往返可控)
+                # 2026-10-15 批量查重优化(逐键 EXISTS 曾 5000 行~277s——性能灾难): CONCAT 键单列 IN 一次查
+                # TiDB 无多列 IN——用 CONCAT(col1,'|',col2) 合成键——IN 500 分片(往返 10 次内)
+                _key2 = [str(_k[0]) + "|" + str(_k[1]) if len(_k) > 1 else str(_k[0]) for _k, _ in _key_rows]
                 _dup = set()
-                for _k, _ in _key_rows:
-                    _wh = " AND ".join("`%s`=%s" % (k, "%s") for k in keys)
-                    _ex = one("SELECT 1 FROM `%s` WHERE %s LIMIT 1" % (table, _wh), list(_k))
-                    if _ex:
-                        _dup.add(_k)
+                _uk = list(dict.fromkeys(_key2))
+                for _i in range(0, len(_uk), 500):
+                    _batch = _uk[_i:_i + 500]
+                    _in_ph = ",".join(["%s"] * len(_batch))
+                    _sep = "|" if len(keys) > 1 else ""
+                    _concat = "CONCAT(" + ", '.', ".join("`%s`" % k for k in keys) + ", '|')" if len(keys) > 1 else "`%s`" % keys[0]
+                    for _ex in query("SELECT %s AS k FROM `%s` WHERE %s IN (%s)" % (_concat, table, _concat, _in_ph), _batch):
+                        _dup.add(_ex.get("k"))
                 if _dup:
-                    rows = [r for r in rows if tuple(str(r.get(k)) for k in keys) not in _dup]
+                    rows = [r for r in rows if (str(r.get(keys[0])) + ("|" + str(r.get(keys[1])) if len(keys) > 1 else "")) not in _dup]
                     failed += len(_dup)
                     continue
         cols = list(rows[0].keys())
