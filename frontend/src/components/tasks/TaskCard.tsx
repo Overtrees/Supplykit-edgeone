@@ -84,6 +84,16 @@ export default function TaskCard({
       <div className="task-card-body">
         <div className="task-card-title">
           <span className="ellipsis">{label}</span>
+          {st === 'running' && params.driver ? (
+            <span
+              className={
+                'task-driver ' +
+                (params.driver === 'backend' ? 'task-driver-back' : 'task-driver-front')
+              }
+            >
+              {params.driver === 'backend' ? '后端推进' : '前端轮询'}
+            </span>
+          ) : null}
           <span className={'task-status ' + st}>
             {st === 'running' && <IconRefresh size={11} className="task-spin" />}
             {st === 'done' && <IconCheck size={11} />}

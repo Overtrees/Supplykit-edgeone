@@ -729,11 +729,15 @@ export default function CleansingPage() {
             },
           },
         })
-        // 全局持久化(任务表自动续跑——离开页面回前台续; 无需页面内轮询)
+        // 2026-10-15 修复: 此处曾 return 提前(轮询死代码——全靠后端保活 5 分钟)——移除——页面停留轮询小窗推进(前端主导)
+        // 离开页面: localStorage 持久化 + 回前台 visibilitychange/保活顺带续跑兜底——两机制并存
         try {
           localStorage.setItem('c_clean_task', JSON.stringify({ task_id: d.task_id, channel: ch }))
         } catch {}
-        return
+        // 前端轮询驱动标记(后端 continue_tasks 写 params.driver=backend——卡片动态显示)
+        try {
+          api.post('/api/cleansing/driver?task_id=' + d.task_id + '&driver=frontend&channel=' + ch)
+        } catch {}
         let finished = false
         const threshold = setTimeout(() => {
           if (!finished) {

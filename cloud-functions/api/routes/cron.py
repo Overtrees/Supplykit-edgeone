@@ -47,6 +47,11 @@ def continue_tasks():
             try:
                 if tt == "cleansing":
                     from .cleansing import cleansing_status
+                    _row2 = _qc("SELECT params FROM sync_tasks WHERE task_id=%s", [tid])
+                    if _row2:
+                        _pj = json.loads((_row2[0].get("params") or "{}"))
+                        _ec("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
+                            [json.dumps({**_pj, "driver": "backend"}, ensure_ascii=False), tid])
                     cleansing_status(tid, page_size=5000)
                     done["cleansing"] += 1
                 elif tt == "seed":
