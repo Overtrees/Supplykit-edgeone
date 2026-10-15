@@ -31,7 +31,7 @@ def close_oversell_for_skus(skus, channel="jd"):
         _terr('core_rules', 'close_oversell 降级', _e2)
 
 def evaluate_stock_skus(channel, limit=100000):
-    from core.rules import evaluate_many, load_rules_for  # 延迟(防循环)
+    from core.rules import evaluate_many, load_rules_for, _CALC_VARS  # 延迟(防循环——_CALC_VARS 常量随迁依赖)
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
     跳过 warehouse 为空的行(脏数据/导入错误行无实际仓归属, 不产生告警)
