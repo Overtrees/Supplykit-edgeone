@@ -314,10 +314,8 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(upd)
         else:
-            # 统一全列覆盖(对齐 PA: 冲突即覆盖新值)
-            upd = ", ".join("`%s`=VALUES(`%s`)" % (c, c) for c in cols if c not in ("id", "deleted_at"))
-            if upd:
-                sql += " ON DUPLICATE KEY UPDATE %s" % upd
+            # 2026-10-15 性能: 非 sum 模式已做已存在跳过(rows 全新键)——纯 INSERT 无 ON DUPLICATE(executemany+ON DUP 对 TiDB 慢 10 倍——seed 5000/批 36s vs 此处 5.5 分钟)
+            pass
         # 批量写入(1000/批 executemany 单语句——TiDB 单语句原子无需事务; 事务(5000行大=持锁慢/500×10小=往返多)均慢——
         # 无事务 + 1000 行/批: 5 批单语句(原子 + 往返少)——5000 行每步 ~5-15s)
         for _bi in range(0, len(rows), 1000):
