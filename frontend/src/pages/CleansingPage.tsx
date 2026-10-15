@@ -713,14 +713,14 @@ export default function CleansingPage() {
           async: true,
           taskId: d.task_id,
           submitted: totalRows,
-          message: '已提交 ' + totalRows + ' 条，后台续跑中，可前往任务管理页查看进度',
+          message: '已提交 ' + totalRows + ' 条',
         })
         goStep(3)
         setBs('')
         execLock.current = false
         toast.add({
           type: 'success',
-          title: '导入任务已提交（共 ' + totalRows + ' 条）',
+          title: '已提交 ' + totalRows + ' 条',
           duration: 6000,
           action: {
             label: '查看进度 →',
@@ -1507,7 +1507,7 @@ export default function CleansingPage() {
           {res.async && (
             <button
               className="btn btn-primary"
-              style={{ marginTop: 4 }}
+              style={{ marginTop: 14 }}
               onClick={() => window.__setPage && window.__setPage('tasks')}
             >
               前往任务管理页查看进度 →

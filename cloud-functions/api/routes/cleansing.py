@@ -274,7 +274,14 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                             "total_rows": len(rows0)}
         except Exception:
             pass  # 解析/同步异常 → 走接力(由 status 续跑兜底)
-        return {"ok": True, "task_id": task_id}
+        # 2026-10-15 异步返回 total_rows(前端显示已提交 N 条——非问号): len(rows0) 已解析可用
+        _tr = 0
+        try:
+            _, _r0 = _parse_table(data, fname)
+            _tr = len(_r0)
+        except Exception:
+            pass
+        return {"ok": True, "task_id": task_id, "total_rows": _tr}
     except Exception as e:
         import traceback as _tb
         try:
