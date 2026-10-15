@@ -730,7 +730,9 @@ export default function CleansingPage() {
           if (finished) return
           try {
             // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
-            const sr = await api.get('/api/cleansing/status?task_id=' + d.task_id)
+            const sr = await api.get(
+              '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000',
+            ) // 小窗(1000行)——进度频繁更新+轮询30s内不超时
             const sd = sr.data
             if (sd.status === 'done') {
               finished = true

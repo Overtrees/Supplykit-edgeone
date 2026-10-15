@@ -344,7 +344,10 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             raise Exception("源文件不存在")
         headers, rows = _parse_table(data, fname)
         total = len(rows)
-        # 分窗清洗+写入
+        # 分窗清洗+写入(2026-10-15 进度中: 窗口开始即设 cur_step——前端 TaskCard 实时显示进行中)
+        _win_no = offset // page_size + 1
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({**params, "cur_step": {"name": "清洗写入窗口 %d/%d" % (_win_no, max((total // page_size) + 1, 1)), "started": int(_t.time())}}, ensure_ascii=False), task_id))
         window = rows[offset:offset + page_size]
         cleaned = _clean_rows(window, mp)
         if target == "order":
