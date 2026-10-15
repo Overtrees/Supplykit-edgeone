@@ -45,12 +45,12 @@ def _skus_of(ids):
 
 
 def _close_orphan(skus):
-    """删单联动(2026-10-15): SKU 级孤儿关闭(oversell + low_stock——核心在 core/rules.close_oversell_for_skus)"""
+    """删单联动(2026-10-15 通用化): SKU 级孤儿关闭——core/rules.close_orphan_for_skus(该 SKU active 告警→规则 event 重评估——自定义 alert_type 覆盖 + low_stock 无行特殊)"""
     try:
-        from core.rules import close_oversell_for_skus
-        close_oversell_for_skus(skus)
+        from core.rules import close_orphan_for_skus
+        close_orphan_for_skus(skus)
     except Exception as _e:
-        try_err('orders', '删单联动 oversell 关闭降级', _e)
+        try_err('orders', '删单联动孤儿关闭降级', _e)
 
 
 

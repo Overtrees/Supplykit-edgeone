@@ -6,6 +6,69 @@ from db import query, one, execute
 from routes.common import try_err
 
 
+def close_orphan_for_skus(skus, channel="jd"):
+    """删单联动通用化(2026-10-15): 该 SKU active 告警 → 其规则 event → 重评估(基于现有未删订单)——命中保留/未命中关;
+    + low_stock 无行特殊(无未删订单且无在档——关); 替代硬编码 oversell/low_stock(自定义 alert_type 覆盖)"""
+    if not skus:
+        return
+    from db import query as _q, execute as _e
+    from routes.common import try_err as _terr
+    try:
+        _skus = list(set(skus))
+        _ph = ",".join(["%s"] * len(_skus))
+        # 未删订单量 + 在档
+        _rows = _q("SELECT sku, SUM(quantity) AS q FROM orders WHERE deleted_at IS NULL OR deleted_at='' "
+                   "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + _skus)
+        _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
+        _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
+                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)" % ("%s", _ph, "%s", _ph),
+                  [channel] + _skus + [channel] + _skus)
+        _infile = {r.get("sku") for r in _inf}
+        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "
+                  "GROUP BY sku" % ("%s", _ph), [channel] + _skus)
+        _avail = {r.get("sku"): r.get("a") or 0 for r in _inv}
+        # low_stock 特殊: 无未删订单且无在档(只有订单页有——订单删了孤儿)——关(有在档/真缺货保留)
+        _ls_orphan = [s for s in _skus if not _live.get(s) and s not in _infile]
+        if _ls_orphan:
+            _ph3 = ",".join(["%s"] * len(_ls_orphan))
+            _e("UPDATE alerts SET status='inactive' WHERE alert_type='low_stock' AND status='active' "
+               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph3), [channel] + _ls_orphan)
+        # 通用: 该 SKU active 告警 → 规则 event → 重评估(基于现有订单)——命中保留/未命中关
+        _al = _q("SELECT DISTINCT alert_type FROM alerts WHERE status='active' AND channel=%s AND source='rules_engine' "
+                 "AND related_sku IN (%s)" % ("%s", _ph), [channel] + _skus)
+        _ats = [r.get("alert_type") for r in _al if r.get("alert_type")]
+        for _at in _ats:
+            _rl = _q("SELECT event FROM rules WHERE alert_type=%s AND channel=%s AND is_active=1 "
+                     "AND (deleted_at IS NULL OR deleted_at='')", [_at, channel])
+            if not _rl:
+                continue
+            _ev = _rl[0].get("event") or "order.created"
+            from core.rules import load_rules_for
+            _rules = load_rules_for(_ev, channel)
+            _rel = [r for r in _rules if r.get("alert_type") == _at]
+            if not _rel:
+                continue
+            _ctxs = []
+            for _sk in _skus:
+                _av = float(_avail.get(_sk, 0) or 0)
+                _ctxs.append({"sku": _sk, "channel": channel,
+                              "order": {"quantity": _live.get(_sk, 0) or 0}, "order_qty": _live.get(_sk, 0) or 0,
+                              "available_stock": _av,
+                              "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
+            if not _ctxs:
+                continue
+            from core.rules import evaluate_many
+            _hits = evaluate_many(_ev, _ctxs, channel, _rel, return_hits=True)[1]
+            _hit_skus = {h[1] for h in _hits if h[0] == _at and h[3] == channel}
+            _close_sk = [sk for sk in _skus if sk not in _hit_skus]
+            if _close_sk:
+                _ph4 = ",".join(["%s"] * len(_close_sk))
+                _e("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND status='active' "
+                   "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph4), [_at, channel] + _close_sk)
+    except Exception as _e2:
+        _terr('core_rules', 'close_orphan 降级', _e2)
+
+
 def close_oversell_for_skus(skus, channel="jd"):
     """删单联动(2026-10-15): 该 SKU 未删订单量 vs 可用库存重评估——不超卖 → 关 active oversell 告警
     (曾只 invalidate_all 缓存——告警表不清——孤儿 oversell 残留看板)"""
