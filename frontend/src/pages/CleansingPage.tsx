@@ -771,8 +771,9 @@ export default function CleansingPage() {
           try {
             // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
             const sr = await api.get(
-              '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000',
-            ) // 小窗(1000行)——进度频繁更新+轮询30s内不超时
+              '/api/cleansing/status?task_id=' + d.task_id + '&page_size=5000',
+              { timeout: 90000 },
+            ) // 2026-10-15 大窗(5000——seed 同批吞吐)——5000单单窗~26s done; timeout 90s(5000窗内)
             // 2026-10-15 driver 每轮标记: 轮询活跃=前端推进(覆盖保活 backend 标签——保活只在无轮询时生效)
             try {
               api.post(
