@@ -267,6 +267,34 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
             rows.append(row)
         if not rows:
             continue
+        # 2026-10-15 已存在跳过(用户记忆机制落地): 同键已在库(非 sum 模式)——跳过该行不覆盖(防白导/防误覆盖)
+        # 语义: 重复导入同表——已存在行跳过(完成页显示跳过 N 条); 冲突按钮 overwrite 仍覆盖?——本实现跳过(贴合'提示已存在重复→跳过')
+        if not sum_mode:
+            _key_rows = []
+            _seen = set()
+            for _r in rows:
+                _key = tuple(str(_r.get(k)) for k in keys)
+                if _key in _seen:
+                    continue
+                _seen.add(_key)
+                _key_rows.append((_key, _r))
+            if _key_rows:
+                _cond = " AND ".join("`%s` IN (%s)" % (k, ",".join(["%s"] * len(_key_rows))) for k in keys)
+                _params = []
+                for _k, _ in _key_rows:
+                    for _v in _k:
+                        _params.append(_v)
+                # 分 key 逐列 IN(键组合——TiDB 无多列 IN)——逐键 EXISTS 查(500 内——往返可控)
+                _dup = set()
+                for _k, _ in _key_rows:
+                    _wh = " AND ".join("`%s`=%s" % (k, "%s") for k in keys)
+                    _ex = one("SELECT 1 FROM `%s` WHERE %s LIMIT 1" % (table, _wh), list(_k))
+                    if _ex:
+                        _dup.add(_k)
+                if _dup:
+                    rows = [r for r in rows if tuple(str(r.get(k)) for k in keys) not in _dup]
+                    failed += len(_dup)
+                    continue
         cols = list(rows[0].keys())
         sql = "INSERT INTO `%s` (%s) VALUES (%s)" % (
             table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
