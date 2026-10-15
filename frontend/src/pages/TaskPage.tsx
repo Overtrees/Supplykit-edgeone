@@ -3,13 +3,7 @@ import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import TaskCard from '../components/tasks/TaskCard'
-import {
-  IconRefresh,
-  IconBroom,
-  IconExport,
-  IconClipboard,
-  IconUndo,
-} from '../components/Icons'
+import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
