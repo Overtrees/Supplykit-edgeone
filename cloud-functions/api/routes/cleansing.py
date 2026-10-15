@@ -266,7 +266,10 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
         try:
             _bh, _brows = _parse_table(_bdata, _bfname)
             if target in ("order",) and _brows:
-                _keys = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in _brows if r.get("order_no") and r.get("sku")]
+                # 2026-10-15 修复: 原始行无目标键(中文列名)——需清洗后取键(否则 _keys 空不拦截——重复仍建任务)
+                _mapping = json.loads(mapping or "{}")
+                _cb = _clean_rows(_brows, _mapping)
+                _keys = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in _cb if r.get("order_no") and r.get("sku")]
                 _uk = list(dict.fromkeys(_keys))
                 _exists = 0
                 for _i in range(0, len(_uk), 200):
