@@ -1466,13 +1466,13 @@ export default function CleansingPage() {
             {res.error
               ? '清洗失败'
               : res.async
-                ? '任务已提交'
+                ? '已提交 ' + (res.submitted ?? 0) + ' 条'
                 : res.success > 0
                   ? '清洗完成'
                   : '清洗完成（无新增）'}
           </div>
           <div className="small muted" style={{ marginBottom: 16 }}>
-            {res.error || res.message || ''}
+            {res.error || (res.async ? '' : res.message || '')}
             {res.error ? (
               <span style={{ marginLeft: 6, fontSize: 'var(--font-sm)', color: 'var(--warning)' }}>
                 （侧边栏{' '}
@@ -1517,7 +1517,7 @@ export default function CleansingPage() {
           {res.async && (
             <button
               className="btn btn-primary"
-              style={{ marginTop: 14 }}
+              style={{ marginTop: 14, marginBottom: 14 }}
               onClick={() => window.__setPage && window.__setPage('tasks')}
             >
               前往任务管理页查看进度 →
