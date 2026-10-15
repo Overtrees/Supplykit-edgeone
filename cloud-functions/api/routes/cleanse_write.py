@@ -237,7 +237,7 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
     其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)"""
     if not cleaned:
         return 0, 0, []
-    keys = set(key_cols)
+    keys = list(dict.fromkeys(key_cols))  # 保序 list(曾 set 无序——查重 OR keys[0]/keys[1] 下标崩)
     success = failed = 0
     err_details = []
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
