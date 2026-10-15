@@ -27,8 +27,14 @@ def close_oversell_for_skus(skus, channel="jd"):
             _ph2 = ",".join(["%s"] * len(_close_sku))
             _e("UPDATE alerts SET status='inactive' WHERE alert_type='oversell' AND status='active' "
                "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph2), [channel] + _close_sku)
-        # low_stock 孤儿(2026-10-15): 无未删订单即关(不论 avail——覆盖无库存记录 SKU——进销存无该 SKU 每日评估不覆盖; 有订单保留不误伤)
-        _ls_orphan = [s for s in set(skus) if not _live.get(s)]
+        # low_stock 孤儿(2026-10-15 修正): 无未删订单 且 无在档(products/inventory 均无——只有订单页有——订单删了告警孤儿)才关;
+        # 有在档(商品/进销存有该 SKU——即使 avail 0 真缺货)保留——不误伤
+        _ph_in = ",".join(["%s"] * len(set(skus)))
+        _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
+                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)" % ("%s", _ph_in, "%s", _ph_in),
+                  [channel] + list(set(skus)) + [channel] + list(set(skus)))
+        _infile = {r.get("sku") for r in _inf}
+        _ls_orphan = [s for s in set(skus) if not _live.get(s) and s not in _infile]
         if _ls_orphan:
             _ph3 = ",".join(["%s"] * len(_ls_orphan))
             _e("UPDATE alerts SET status='inactive' WHERE alert_type='low_stock' AND status='active' "
