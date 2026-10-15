@@ -258,6 +258,35 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
     except Exception:
         pass
     data, fname = _read_file_bytes(file)
+    # 2026-10-15 重复提前检测: 同键已存在(全部重复——二次导入同表)→ 同步返回跳过计数(不建任务——秒级拦截——不等异步 4 分钟)
+    try:
+        from db import query as _qk
+        _dr = _mk_upload(data, fname)
+        _bdata, _bfname = _read_file_bytes(_dr)
+        try:
+            _bh, _brows = _parse_table(_bdata, _bfname)
+            if target in ("order",) and _brows:
+                _keys = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in _brows if r.get("order_no") and r.get("sku")]
+                _uk = list(dict.fromkeys(_keys))
+                _exists = 0
+                for _i in range(0, len(_uk), 200):
+                    _batch = _uk[_i:_i+200]
+                    _pairs = [(b.split("|")[0], b.split("|")[1]) for b in _batch]
+                    # 同键 EXISTS——分片查
+                    _in_ph = ",".join(["%s"] * len(_batch))
+                    _sql = ("SELECT COUNT(*) c FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                            "AND CONCAT(order_no,'|',sku) IN (%s)" % ("%s", _in_ph))
+                    _cnt = one(_sql, [channel] + _batch)
+                    _exists += int((_cnt or {}).get("c") or 0)
+                if _keys and _exists >= len(set(_keys)):
+                    # 全部已存在——重复导入——同步返回跳过(不建任务)
+                    return {"ok": True, "task_id": "", "success": 0, "failed": len(_keys),
+                            "total_rows": len(_brows), "duplicate": True,
+                            "message": "文件已导入过（同键全部已存在），已跳过 %d 条" % len(_keys)}
+        except Exception:
+            pass
+    except Exception:
+        pass
     task_id = "clean_%d_%04d" % (int(time.time()), int(time.time() * 1000) % 10000)
     try:
         # source 文件存 export_files(clean_ 前缀, 7 天清理覆盖)

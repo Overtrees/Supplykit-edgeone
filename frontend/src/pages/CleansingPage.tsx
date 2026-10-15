@@ -1489,7 +1489,6 @@ export default function CleansingPage() {
                 <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--primary)' }}>
                   {res.submitted}
                 </div>
-                <div className="small muted">已提交</div>
               </div>
             </div>
           ) : (
