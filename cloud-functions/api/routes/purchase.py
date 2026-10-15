@@ -108,6 +108,11 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
 # ── 滞销处置建议(disposal-suggestions) ──────────────────────────────────
 @router.get("/insights/disposal-suggestions")
 @traced
+def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
+                         search: str = ""):
+    """滞销处置建议(2026-10-15 修复: 拆分时函数体丢失——GET 误挂 disposals_batch 返 updated:0——滞销 tab 无数据)"""
+    from routes.purchase_calc import disposal_suggestions as _ds
+    return _ds(channel, page, page_size, search)
 
 
 # ── 批量处置 ─────────────────────────────────────────────────────────────

@@ -27,6 +27,12 @@ def close_oversell_for_skus(skus, channel="jd"):
             _ph2 = ",".join(["%s"] * len(_close_sku))
             _e("UPDATE alerts SET status='inactive' WHERE alert_type='oversell' AND status='active' "
                "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph2), [channel] + _close_sku)
+        # low_stock 孤儿(2026-10-15): 无未删订单即关(不论 avail——覆盖无库存记录 SKU——进销存无该 SKU 每日评估不覆盖; 有订单保留不误伤)
+        _ls_orphan = [s for s in set(skus) if not _live.get(s)]
+        if _ls_orphan:
+            _ph3 = ",".join(["%s"] * len(_ls_orphan))
+            _e("UPDATE alerts SET status='inactive' WHERE alert_type='low_stock' AND status='active' "
+               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph3), [channel] + _ls_orphan)
     except Exception as _e2:
         _terr('core_rules', 'close_oversell 降级', _e2)
 
