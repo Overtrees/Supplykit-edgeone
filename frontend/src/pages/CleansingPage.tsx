@@ -706,7 +706,34 @@ export default function CleansingPage() {
           toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
           return
         }
-        const totalRows = d.total_rows || '?'
+        const totalRows = d.total_rows || d.total || '?'
+        // 2026-10-15 异步连贯: 后台任务已创建 → 立即 toast"已提交" + 立即跳完成页(不留在预览页防误点"确认写入")
+        // 完成页显示区分: 异步=已提交 N 条(指引任务页查看进度); 同步=成功 N 条(上方 d.success 分支)
+        setRes({
+          async: true,
+          taskId: d.task_id,
+          submitted: totalRows,
+          message: '已提交 ' + totalRows + ' 条，后台续跑中，可前往任务管理页查看进度',
+        })
+        goStep(3)
+        setBs('')
+        execLock.current = false
+        toast.add({
+          type: 'success',
+          title: '导入任务已提交（共 ' + totalRows + ' 条）',
+          duration: 6000,
+          action: {
+            label: '查看进度 →',
+            handler: () => {
+              window.__setPage && window.__setPage('tasks')
+            },
+          },
+        })
+        // 全局持久化(任务表自动续跑——离开页面回前台续; 无需页面内轮询)
+        try {
+          localStorage.setItem('c_clean_task', JSON.stringify({ task_id: d.task_id, channel: ch }))
+        } catch {}
+        return
         let finished = false
         const threshold = setTimeout(() => {
           if (!finished) {
@@ -1403,7 +1430,9 @@ export default function CleansingPage() {
       {s === 3 && res && (
         <div style={{ textAlign: 'center', padding: 40 }}>
           <div style={{ fontSize: 32, marginBottom: 4 }}>
-            {res.success > 0 ? (
+            {res.async ? (
+              <IconCheck size={32} style={{ color: 'var(--primary)' }} />
+            ) : res.success > 0 ? (
               <IconCheck size={32} style={{ color: 'var(--success)' }} />
             ) : (
               <IconAlert size={32} style={{ color: 'var(--warning)' }} />
@@ -1424,7 +1453,13 @@ export default function CleansingPage() {
               color: res.error ? 'var(--danger)' : '',
             }}
           >
-            {res.error ? '清洗失败' : res.success > 0 ? '清洗完成' : '清洗完成（无新增）'}
+            {res.error
+              ? '清洗失败'
+              : res.async
+                ? '任务已提交'
+                : res.success > 0
+                  ? '清洗完成'
+                  : '清洗完成（无新增）'}
           </div>
           <div className="small muted" style={{ marginBottom: 16 }}>
             {res.error || res.message || ''}
@@ -1438,26 +1473,46 @@ export default function CleansingPage() {
               ''
             )}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 16 }}>
-            <div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--success)' }}>
-                {res.success}
+          {res.async ? (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--primary)' }}>
+                  {res.submitted}
+                </div>
+                <div className="small muted">已提交</div>
               </div>
-              <div className="small muted">成功</div>
             </div>
-            <div>
-              <div
-                style={{
-                  fontSize: 24,
-                  fontWeight: 700,
-                  color: res.failed > 0 ? 'var(--danger)' : 'var(--muted2)',
-                }}
-              >
-                {res.failed}
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--success)' }}>
+                  {res.success}
+                </div>
+                <div className="small muted">成功</div>
               </div>
-              <div className="small muted">跳过</div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 700,
+                    color: res.failed > 0 ? 'var(--danger)' : 'var(--muted2)',
+                  }}
+                >
+                  {res.failed}
+                </div>
+                <div className="small muted">跳过</div>
+              </div>
             </div>
-          </div>
+          )}
+          {res.async && (
+            <button
+              className="btn btn-primary"
+              style={{ marginTop: 4 }}
+              onClick={() => window.__setPage && window.__setPage('tasks')}
+            >
+              前往任务管理页查看进度 →
+            </button>
+          )}
           {res.failed > 0 && Array.isArray(res.failed_details) && res.failed_details.length > 0 && (
             <div
               style={{
