@@ -332,11 +332,12 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         offset = int(params.get("offset") or 0)
         success = int(params.get("success") or 0)
         failed = int(params.get("failed") or 0)
-        # 读源文件
+        # 读源文件(局部 import base64——覆盖模块级 def _b64(line 399)冲突——曾 _b64.b64decode attr error 任务 error)
+        import base64 as _b64x
         fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + task_id])
         c = fr.get("content") if fr else None
         if isinstance(c, str):
-            data = _b64.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8-sig")
+            data = _b64x.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8-sig")
         elif c is not None:
             data = bytes(c)
         else:
