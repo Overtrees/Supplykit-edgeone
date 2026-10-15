@@ -263,10 +263,12 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
         try:
             _, rows0 = _parse_table(data, fname)
             if len(rows0) < 1000:
-                # 同步: 请求内触发首窗口续跑(解析+写入+联动秒级)——直接返回 success/failed
+                # 同步分支(2026-10-14 修复): 任务刚建锁未满足(updated_at<3s 返回 running)——sleep 3 等锁; done 才 success, running 返 task_id 前端轮询
+                import time as _ts
+                _ts.sleep(3)
                 _sr = cleansing_status(task_id, page_size=5000)
                 _sd = _sr.get("data") or _sr
-                if _sr.get("ok") is not False and _sd.get("status") in ("done", "running"):
+                if _sr.get("ok") is not False and _sd.get("status") == "done":
                     return {"ok": True, "task_id": task_id,
                             "success": _sd.get("success", 0), "failed": _sd.get("failed", 0),
                             "total_rows": len(rows0)}
