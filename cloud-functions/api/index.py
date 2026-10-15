@@ -157,6 +157,15 @@ async def auth_middleware(request: Request, next):
 def health():
     from datetime import datetime, timezone
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
+    # 2026-10-15 保活顺带续跑(UptimeRobot 5min ping——有 running 任务才调 continue——无任务零开销——RU 不浪费)
+    try:
+        _run = one("SELECT COUNT(*) AS c FROM sync_tasks WHERE status='running' AND updated_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE)")
+        if _run and int(_run.get("c") or 0) > 0:
+            from routes.cron import continue_tasks
+            continue_tasks()
+            out["continue"] = "ran"
+    except Exception as _e:
+        try_err('index', '保活顺带续跑降级', _e)
     try:
         r = one("SELECT 1 AS ok")
         out["db"] = "ok" if r else "unknown"

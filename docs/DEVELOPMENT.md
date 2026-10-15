@@ -935,3 +935,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 **替代(更轻)**: 若不想暴露 token——自动化仅请求任意接口(如 /api/health)触发请求驱动续跑(限频 60s——5 分钟间隔足够)——但请求驱动线程在 Makers 不可靠(实测)——**推荐 continue-tasks 直调**(可靠)。
 
 **注意**: token 安全——自动化内 token 存快捷指令(设备本地——不云端); 建议专用只读/低权 token 或定期轮换。
+
+### 15.56 保活顺带续跑(2026-10-15——真后台推进最终方案)
+- **快捷指令不适用**(iOS 只支持特定时间/小时——无每几分钟)——废弃
+- **GitHub Actions cron 最小 5 分钟可做**——但**无条件每 5 分钟请求 = RU/调用配额浪费**(TiDB RU 有限/EdgeOne 配额)
+- **最终方案**: UptimeRobot(已有 5 分钟保活 ping /api/health)→ **health 端点顺带检查** sync_tasks 有无 running(1 行轻查询——RU 极小)→ **有任务才调 continue_tasks**(续跑一窗——接力盘活)→ **无任务零开销**(仅保活本身)
+- 效果: 有任务 → 每 5 分钟 UptimeRobot ping 触发续跑(真后台——不依赖 iOS/app); 无任务 → 零额外 RU
