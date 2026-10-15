@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { IconCheck, IconX, IconLoader, IconClipboard } from '../Icons'
+import { IconCheck, IconClose, IconRefresh, IconClipboard } from '../Icons'
 
 interface TaskStep {
   name?: string
@@ -85,9 +85,9 @@ export default function TaskCard({
         <div className="task-card-title">
           <span className="ellipsis">{label}</span>
           <span className={'task-status ' + st}>
-            {st === 'running' && <IconLoader size={11} className="task-spin" />}
+            {st === 'running' && <IconRefresh size={11} className="task-spin" />}
             {st === 'done' && <IconCheck size={11} />}
-            {st === 'error' && <IconX size={11} />}
+            {st === 'error' && <IconClose size={11} />}
             {st === 'done'
               ? '完成'
               : st === 'error'
@@ -123,7 +123,7 @@ export default function TaskCard({
             ))}
             {cur && st === 'running' && (
               <div className="task-step-row task-cur">
-                <IconLoader size={10} className="task-spin" />
+                <IconRefresh size={10} className="task-spin" />
                 <span className="task-step-name">{cur.name || '处理中'}</span>
                 <span className="task-step-time task-cur-time">
                   {cur.started ? ((now - Number(cur.started) * 1000) / 1000).toFixed(0) + 's' : '…'}
