@@ -126,6 +126,8 @@ def export_status(task_id: str = "", page_size: int = 10000):
     except Exception as _e:
             try_err('tasks', '静默降级', _e)
     try:
+        import time as _ttx
+        _t0x = _ttx.time()
         params = json.loads(row.get("params") or "{}")
         exp_type = params.get("type") or "replen"
         mode = params.get("mode") or "bbcc"
@@ -203,11 +205,20 @@ def export_status(task_id: str = "", page_size: int = 10000):
                                                   "csv" if parts[0].endswith(".csv") else "xlsx")
             _r = {"filename": task_id, "name": realname, "type": exp_type, "parts": parts,
                   "rows": total if exp_type == "orders" else len(rows)}
-            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
-                    (json.dumps({"result": _r}, ensure_ascii=False), task_id))
+            _sqd = round(_ttx.time() - _t0x, 1)
+            _sd = (params.get("steps") or []) + [{"name": "%s 窗%d" % (exp_type, page + 1), "elapsed": _sqd}]
+            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps({**params, "page": page + 1, "parts": parts, "total": total if exp_type == "orders" else len(rows),
+                                 "steps": _sd, "cur_step": None}, ensure_ascii=False),
+                     json.dumps({"result": _r}, ensure_ascii=False), task_id))
             return {"ok": True, "task_id": task_id, "status": "done", "filename": task_id}
+        _sqr = round(_ttx.time() - _t0x, 1)
+        _sr = (params.get("steps") or []) + [{"name": "%s 窗%d" % (exp_type, page + 1), "elapsed": _sqr}]
+        _curx = {"name": "%s 窗%d" % (exp_type, page + 2), "started": int(_ttx.time())}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
-                (json.dumps({**params, "page": page + 1, "parts": parts}, ensure_ascii=False), task_id))
+                (json.dumps({**params, "page": page + 1, "parts": parts,
+                             "total": total if exp_type == "orders" else len(rows),
+                             "steps": _sr, "cur_step": _curx}, ensure_ascii=False), task_id))
         return {"ok": True, "task_id": task_id, "status": "running", "page": page + 1}
     except Exception as e:
         import traceback as _tb

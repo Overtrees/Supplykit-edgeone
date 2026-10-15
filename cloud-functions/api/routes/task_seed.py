@@ -40,14 +40,20 @@ def seed_fill_status(task_id: str = ""):
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json
+        import time as _tt
+        from datetime import datetime, timezone as _tz
         params = _json.loads(row.get("params") or "{}")
         step = int(params.get("step") or 0)
         from routes.seed_fill import prepare_skus, seed_step
-        from datetime import datetime, timezone as _tz
+        _t0 = _tt.time()
         skus_data = prepare_skus()
         today = datetime.now(_tz.utc)
         nxt, part = seed_step(step, today, skus_data)
-        new_params = _json.dumps({"step": nxt})
+        _sq = round(_tt.time() - _t0, 1)
+        # 2026-10-15 每步耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
+        _steps = (params.get("steps") or []) + [{"name": str(part) or ("步骤%d" % step), "elapsed": _sq}]
+        _cur = {"name": ("步骤%d" % nxt) if nxt < 10 else "完成", "started": int(_tt.time())}
+        new_params = _json.dumps({"step": nxt, "steps": _steps, "cur_step": None if nxt >= 10 else _cur})
         if nxt >= 10:
             # 全部步骤完成 → done(汇总 part 简单展示)
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",

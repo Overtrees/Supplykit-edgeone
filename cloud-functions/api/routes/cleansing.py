@@ -373,8 +373,11 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                         try_err('cleansing', '静默降级', _e)
             elapsed = round(_t.time() - started, 1)
             adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
-            execute("UPDATE sync_tasks SET status='done', result=%s, updated_at=NOW() WHERE task_id=%s",
-                    (json.dumps({"result": {"target": target, "success": success, "failed": failed,
+            _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": round(_t.time() - started, 1)}]
+            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
+                                 "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
+                     json.dumps({"result": {"target": target, "success": success, "failed": failed,
                                             "elapsed": elapsed, "rules_evaluated": evaluated,
                                             "inventory_adjusted": adjusted, "message": _msg}},
                                 ensure_ascii=False), task_id))
@@ -382,10 +385,13 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             invalidate_all()
             return {"ok": True, "task_id": task_id, "status": "done",
                     "success": success, "failed": failed, "message": _msg}
-        # 未完 → 更新 offset/累积, running
+        # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
+        _sq = round(_t.time() - started, 1)
+        _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": _sq}]
+        _cur = {"name": "窗口 %d" % (offset // page_size + 1), "started": int(_t.time())}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
-                             "total": total}, ensure_ascii=False), task_id))
+                             "total": total, "steps": _steps, "cur_step": _cur}, ensure_ascii=False), task_id))
         return {"ok": True, "task_id": task_id, "status": "running",
                 "page": offset // page_size, "total": total}
     except Exception as e:

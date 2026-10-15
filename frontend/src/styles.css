@@ -1516,3 +1516,90 @@ input[type='file'] {
   color: #fff;
   border: none;
 }
+
+/* ── 任务卡片可视化(2026-10-15——进度条/步骤耗时/状态徽标——全局管理) ── */
+.task-running {
+  border-color: var(--primary) !important;
+}
+.task-spin {
+  animation: task-spin 1s linear infinite;
+}
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.task-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.task-progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.task-progress-bar {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--primary), var(--primary-light, var(--primary)));
+  transition: width 0.4s ease;
+}
+.task-progress-pct {
+  font-size: var(--font-xs);
+  color: var(--muted);
+  min-width: 34px;
+  text-align: right;
+}
+.task-steps {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.task-step-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--muted2);
+}
+.task-step-ok {
+  color: var(--success);
+  flex-shrink: 0;
+}
+.task-step-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-step-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.task-cur {
+  color: var(--primary);
+}
+.task-cur-time {
+  font-weight: 600;
+}
+.task-card-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+.task-fail {
+  color: var(--danger);
+}
+.task-err {
+  color: var(--danger);
+  word-break: break-all;
+}
