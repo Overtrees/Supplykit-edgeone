@@ -9,8 +9,6 @@ import {
   IconExport,
   IconClipboard,
   IconUndo,
-  IconCheck,
-  IconClose,
 } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
 
