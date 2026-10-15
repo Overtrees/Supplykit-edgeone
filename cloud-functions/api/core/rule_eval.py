@@ -64,7 +64,7 @@ def close_orphan_for_skus(skus, channel="jd"):
             if _close_sk:
                 _ph4 = ",".join(["%s"] * len(_close_sk))
                 _e("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND status='active' "
-                   "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph4), [_at, channel] + _close_sk)
+                   "AND channel=%s AND related_sku IN (%s)" % ("%s", "%s", _ph4), [_at, channel] + _close_sk)
     except Exception as _e2:
         _terr('core_rules', 'close_orphan 降级', _e2)
 
