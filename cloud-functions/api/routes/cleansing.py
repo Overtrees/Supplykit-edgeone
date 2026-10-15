@@ -164,6 +164,23 @@ def _detect_columns(fname, data):
 
 
 # ── detect: 识别列名 ────────────────────────────────────────────────────
+@router.post("/cleansing/driver")
+@traced
+def cleansing_driver(task_id: str = "", driver: str = "", channel: str = ""):
+    """前端轮询驱动标记(2026-10-15): 前端轮询时写 params.driver=frontend——TaskCard 显示推进方式(前端轮询/后端推进)"""
+    if task_id and driver in ("frontend", "backend"):
+        try:
+            execute("UPDATE sync_tasks SET params=JSON_SET(params, '$.driver', %s) WHERE task_id=%s", [driver, task_id])
+        except Exception:
+            try:
+                _row = one("SELECT params FROM sync_tasks WHERE task_id=%s", [task_id])
+                _pj = json.loads((_row or {}).get("params") or "{}")
+                _pj["driver"] = driver
+                execute("UPDATE sync_tasks SET params=%s WHERE task_id=%s", [json.dumps(_pj, ensure_ascii=False), task_id])
+            except Exception as _e:
+                    try_err('cleansing', 'driver 标记降级', _e)
+    return ok({})
+
 @router.post("/cleansing/detect")
 @traced
 async def cleansing_detect(request: Request, file: UploadFile = File(None)):
