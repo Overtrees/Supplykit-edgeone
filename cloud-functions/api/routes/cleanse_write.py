@@ -319,6 +319,7 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                         success += 1
                     except Exception as e1:
                         failed += 1
+                        try_err('cleanse_write', '单行写失败 %s: %s' % (r.get("sku") or "?", str(e1)[:90]), e1)
                         if len(err_details) < 50:
                             err_details.append({"sku": str(r.get("sku") or r.get("supplier_code") or ""),
                                                 "reason": str(e1)[:80], "row": str(r)[:200]})

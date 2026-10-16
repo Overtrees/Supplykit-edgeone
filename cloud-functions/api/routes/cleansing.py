@@ -443,11 +443,11 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         success += w_success
         failed += w_failed
         offset += len(window)
-        # 2026-10-16 窗口写后计数留痕(定位 4000/1000——窗口5 计数 bug)
+        # 2026-10-16 窗口写后计数留痕(message 含 task_id——唯一不禁频)——窗口5 failed 1000 定位
         try:
             from db import execute as _ew
             _ew("INSERT INTO quality_logs(log_type, level, message, source) VALUES('perf_debug','info',%s,'cleansing')",
-                ("窗口%d 写: success=%d failed=%d offset=%d/%d" % ((offset // page_size), w_success, w_failed, offset, total)))
+                ("[w%d] %s 窗写 success=%d failed=%d offset=%d/%d" % (offset // page_size, task_id, w_success, w_failed, offset, total)))
         except Exception:
             pass
         done = offset >= total
