@@ -427,7 +427,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + task_id])
         c = fr.get("content") if fr else None
         if isinstance(c, str):
-            data = _b64x.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8-sig")
+            data = _b64x.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8")
         elif c is not None:
             data = bytes(c)
         else:
@@ -665,7 +665,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         import base64 as _b64e
         fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + src_task])
         c = fr.get("content") if fr else None
-        _data = _b64e.b64decode(c[7:]) if isinstance(c, str) and c.startswith("base64:") else (c.encode("utf-8-sig") if isinstance(c, str) else (bytes(c) if c is not None else b""))
+        _data = _b64e.b64decode(c[7:]) if isinstance(c, str) and c.startswith("base64:") else (c.encode("utf-8") if isinstance(c, str) else (bytes(c) if c is not None else b""))
         _mpd = params.get("mp") or {}
         _mpd = _mpd if isinstance(_mpd, dict) else json.loads(_mpd or "{}")
         headers, rows = _parse_table(_data, params.get("fname") or "import.csv")

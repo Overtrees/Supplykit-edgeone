@@ -207,11 +207,25 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
         try_err('cleanse_write', 'gmv_flow 分支进入 cleaned=%d' % len(cleaned))
         try:
-            execute("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow (platform, flow_no))")
+            execute("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))")
         except Exception as _etb:
             try_err('cleanse_write', 'gmv_flows 建表降级', _etb)
         for it in cleaned:
             it["channel"] = channel
+            # 2026-10-16 唯一键补 channel 幂等迁移(跨渠道 platform+flow_no 撞键互阻——jd 与 other
+            # 各自平台流水号独立编号, 无 channel 维度第二条渠道 1062 整批失败):
+            # 老表 uq_platform_flow(platform,flow_no) → 新 uq_platform_flow_ch(channel,platform,flow_no)
+            try:
+                from db import query as _qix
+                _ix = _qix("SHOW INDEX FROM gmv_flows")
+                _uq_cols = [str(r.get("Column_name") or "") for r in (_ix or [])
+                            if r.get("Key_name") == "uq_platform_flow" and r.get("Column_name")]
+                if _uq_cols and "channel" not in _uq_cols:
+                    execute("ALTER TABLE gmv_flows DROP INDEX uq_platform_flow")
+                    execute("ALTER TABLE gmv_flows ADD UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no)")
+                    try_err('cleanse_write', 'gmv_flows 唯一键迁移完成(channel 补入)', '')
+            except Exception as _eix:
+                try_err('cleanse_write', 'gmv_flows 唯一键迁移降级', _eix)
             # 2026-10-16 钉死 1366 根因: amount/settled_amount 为 DECIMAL, 映射类型 string 时
             # 原样直写(如 ¥1,200.50/文本/空态) → TiDB 1366 整批失败。写入前强制 number 清洗
             # (与 _v 同规: 去 ¥,元/逗号/空格 → float; 无法解析归 0, 不炸批)
