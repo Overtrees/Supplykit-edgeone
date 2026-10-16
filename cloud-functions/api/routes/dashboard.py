@@ -380,12 +380,26 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     now = datetime.now(timezone.utc)
     today_s = now.strftime("%Y-%m-%d")
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    d7 = (now - timedelta(days=6)).strftime("%Y-%m-%d")
-    d8 = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    d14 = (now - timedelta(days=13)).strftime("%Y-%m-%d")
-    d30 = (now - timedelta(days=29)).strftime("%Y-%m-%d")
-    d31 = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    d60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
+    # 2026-10-16 自然口径(v1.0 GMV 矩阵): 上周=上周一~上周日完整自然周 / 上月=上月1号~月末完整自然月(环比=上上周/上上月)
+    _wk = now.isoweekday()  # 1=周一..7=周日
+    _last_mon = (now - timedelta(days=_wk + 6)).strftime("%Y-%m-%d")  # 上周一
+    _last_sun = (now - timedelta(days=_wk)).strftime("%Y-%m-%d")      # 上周日
+    _prev_mon = (now - timedelta(days=_wk + 13)).strftime("%Y-%m-%d") # 上上周一
+    _prev_sun = (now - timedelta(days=_wk + 7)).strftime("%Y-%m-%d")  # 上上周日
+    _this_m1 = now.replace(day=1).strftime("%Y-%m-%d")  # 本月1号
+    _last_m1 = (now.replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")        # 上月1号
+    _last_m_end = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d")                     # 上月最后一天
+    _prev_m1 = (_last_m1 and (now.replace(day=1) - timedelta(days=1)).replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d") if False else None
+    _tmp = now.replace(day=1) - timedelta(days=1)  # 上月最后一天
+    _prev_m1 = _tmp.replace(day=1) - timedelta(days=1)
+    _prev_m1 = _prev_m1.replace(day=1).strftime("%Y-%m-%d")           # 上上月1号
+    _prev_m_end = (_tmp - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")  # 占位(实际用上月结束-一个月)
+    _prev_m_end = (_tmp.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d")  # 上上月最后一天
+    d7, d8 = _last_mon, _last_sun
+    d14 = _prev_mon
+    d30 = _last_m1
+    d31 = _last_m_end
+    d60 = _prev_m1
 
     def _agg(d0, d1):
         # 区间按天索引求和(等价: 原全遍历窗口内 PAID 累加——O(天) 替代 O(day_rows))
@@ -416,15 +430,15 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     tg, to = _agg(today_s, today_s)
     pg, po = _agg(d1, d1)
     wg, wo = _agg(d7, today_s)
-    pwg, pwo = _agg(d14, d8)
-    mg, mo = _agg(d30, today_s)
-    pmg, pmo = _agg(d60, d31)
+    pwg, pwo = _agg(d14, _prev_sun)
+    mg, mo = _agg(d30, d31)
+    pmg, pmo = _agg(_prev_m1, _prev_m_end)
 
     periods = {
         "today": {"gmv": tg, "orders": to, "days": 1, "prev_gmv": pg, "prev_orders": po,
                   "net_gmv": round(tg - _refund(today_s, today_s), 2), "subsidy_amount": round(_sub(today_s, today_s), 2),
                   "payout": round(tg - _refund(today_s, today_s) - _sub(today_s, today_s), 2)},
-        "week": {"gmv": wg, "orders": wo, "days": 7, "prev_gmv": pwg, "prev_orders": pwo,
+        "week": {"gmv": wg, "orders": wo, "days": (_last_sun and 7), "prev_gmv": pwg, "prev_orders": pwo,
                  "net_gmv": round(wg - _refund(d7, today_s), 2), "subsidy_amount": round(_sub(d7, today_s), 2),
                  "payout": round(wg - _refund(d7, today_s) - _sub(d7, today_s), 2)},
         "month": {"gmv": mg, "orders": mo, "days": 30, "prev_gmv": pmg, "prev_orders": pmo,
