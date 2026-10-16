@@ -1890,10 +1890,12 @@ export default function CleansingPage() {
         <ConfirmDialog
           open={!!overlapAsk}
           title="检测到重复数据"
-          message={overlapAsk.message}
+          desc={overlapAsk.message}
           confirmLabel="确认导入新增"
-          onClose={() => setOverlapAsk(null)}
-          onConfirm={confirmOverlap}
+          onCancel={() => setOverlapAsk(null)}
+          onConfirm={() => {
+            confirmOverlap()
+          }}
         />
       )}
     </div>
