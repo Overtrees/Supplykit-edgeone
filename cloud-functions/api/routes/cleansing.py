@@ -258,6 +258,7 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
     except Exception:
         pass
     data, fname = _read_file_bytes(file)
+    try_err('cleansing', 'execute target=%s fname=%s' % (target, fname))
     # 2026-10-15 重复提前检测: 同键已存在(全部重复——二次导入同表)→ 同步返回跳过计数(不建任务——秒级拦截——不等异步 4 分钟)
     try:
         from db import query as _qk

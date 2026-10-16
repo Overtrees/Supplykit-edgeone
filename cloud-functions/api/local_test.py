@@ -6,6 +6,8 @@
 import sys
 import os
 import json
+import io
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("JWT_SECRET", "local-test-secret")
@@ -724,6 +726,19 @@ try:
     check("stock-risk: 计数字段存在", "bcTotal" in _sr and "bcCritical" in _sr and "bcWarning" in _sr, "")
 except Exception as _e:
     check("stock-risk: 调用无异常", False, str(_e)[:200])
+
+# 2026-10-16 GMV 回款(gmv_flow): 写入分支触发 + 非 fall-through(0, len)
+try:
+    _ins_count[0] = 0
+    _gf = io.BytesIO(("platform,shop,flow_no,arrived_time,amount,flow_type\npdd,x,FLOW-1,2026-09-10,100,交易收入\npdd,x,FLOW-2,2026-09-11,50,交易收入").encode("utf-8"))
+    _gf.name = "f.csv"
+    _gm = client.post("/cleansing/execute-async?q_target=gmv_flow&q_channel=jd&q_conflict=sum&q_mp=" + urllib.parse.quote('{"platform":{"target":"platform"},"shop":{"target":"shop"},"flow_no":{"target":"flow_no"},"arrived_time":{"target":"arrived_time"},"amount":{"target":"amount"},"flow_type":{"target":"flow_type"}}'),
+                      files={"file": ("f.csv", _gf.getvalue(), "text/csv")}, headers=AH)
+    _gd = _gm.json()
+    check("gmv_flow execute ok", _gd.get("ok") is True, str(_gd)[:120])
+    check("gmv_flow execute ok", _gd.get("ok") is True, str(_gd)[:120])
+except Exception as _e:
+    check("gmv_flow 用例无异常", False, str(_e)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

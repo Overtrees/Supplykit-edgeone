@@ -205,6 +205,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             cleaned, conflict_mode, "order_no", "sku", channel=channel)
     if target == "gmv_flow":
         # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
+        try_err('cleanse_write', 'gmv_flow 分支进入 cleaned=%d' % len(cleaned))
         try:
             execute("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow (platform, flow_no))")
         except Exception as _etb:
