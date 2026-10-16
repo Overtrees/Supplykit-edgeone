@@ -254,6 +254,18 @@ const SUPPLIER_FIELDS = [
   { t: 'channel', l: '渠道', tp: 'string' },
   { t: 'brand', l: '品牌', tp: 'string' },
 ]
+// 2026-10-16 GMV 回款(资金流水——平台账单/对账单——payout 到账时间归属)
+const GMV_FLOW_FIELDS = [
+  { t: 'platform', l: '平台', tp: 'string' },
+  { t: 'shop', l: '店铺', tp: 'string' },
+  { t: 'flow_no', l: '流水号', tp: 'string' },
+  { t: 'related_no', l: '关联单号', tp: 'string' },
+  { t: 'arrived_time', l: '到账时间', tp: 'string' },
+  { t: 'amount', l: '金额', tp: 'number' },
+  { t: 'flow_type', l: '流水类型', tp: 'string' },
+  { t: 'settled_amount', l: '结算金额', tp: 'number' },
+  { t: 'data_source', l: '数据来源', tp: 'string' },
+]
 const TARGET_FIELDS = {
   order: ORDER_FIELDS,
   inventory: INV_FIELDS,
@@ -263,6 +275,7 @@ const TARGET_FIELDS = {
   supplier: SUPPLIER_FIELDS,
   inbound: INBOUND_FIELDS,
   outbound: OUTBOUND_FIELDS,
+  gmv_flow: GMV_FLOW_FIELDS,
 }
 const TARGET_TARGETS = {}
 for (const _k in TARGET_FIELDS) TARGET_TARGETS[_k] = TARGET_FIELDS[_k].map(f => f.t)
@@ -1049,6 +1062,7 @@ export default function CleansingPage() {
               </optgroup>
               <option value="product">导入商品</option>
               <option value="supplier">导入供应商</option>
+              <option value="gmv_flow">GMV 回款（资金流水）</option>
             </select>
           </div>
           <label

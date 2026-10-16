@@ -427,6 +427,21 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                 s += _sv
         return s
 
+    # 2026-10-16 GMV 回款: 优先真实资金流水(gmv_flows——按到账时间月度归属); 无数据降级 orders 推算
+    def _payout_flows(d0, d1):
+        """gmv_flows 月度到账净额(货款到账+ / 退款扣回/扣点扣款-); 返回 None=无数据(降级 orders 推算)"""
+        try:
+            from db import query as _qf
+            _r = _qf("SELECT COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
+                     "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) AS v, "
+                     "COUNT(*) AS c FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s",
+                     [channel, d0 + " 00:00:00", d1 + " 23:59:59"])
+            if _r and int((_r[0] or {}).get("c") or 0) > 0:
+                return round(float((_r[0] or {}).get("v") or 0), 2)
+        except Exception:
+            pass
+        return None
+
     tg, to = _agg(today_s, today_s)
     pg, po = _agg(d1, d1)
     wg, wo = _agg(d7, d8)  # d7=上周一 d8=上周日——完整自然周(2026-10-16 曾 _agg(d7,today_s) 终点错含今天)
@@ -525,6 +540,21 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                  "net_gmv": round(v - srf.get(k, 0), 2),
                  "payout": round(v - srf.get(k, 0) - ssb.get(k, 0), 2)}
                 for k, v in sorted(sg.items(), key=lambda x: -x[1])]
+
+    # 2026-10-16 GMV 回款: 真实资金流水(gmv_flows)优先——月度按到账时间归属; 无数据降级 orders 推算
+    _po_m = None
+    try:
+        from db import query as _qf
+        _rr = _qf("SELECT COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
+                   "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) AS v, "
+                   "COUNT(*) AS c FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s",
+                   [channel, d30 + " 00:00:00", d31 + " 23:59:59"])
+        if _rr and int((_rr[0] or {}).get("c") or 0) > 0:
+            _po_m = round(float((_rr[0] or {}).get("v") or 0), 2)
+    except Exception:
+        pass
+    if _po_m is not None:
+        periods["month"]["payout"] = _po_m
 
     periods["today_trend"] = _trend_range(today_s, today_s)
     periods["week_trend"] = _trend_range(d7, d8)  # 完整上周趋势(曾终点 today)

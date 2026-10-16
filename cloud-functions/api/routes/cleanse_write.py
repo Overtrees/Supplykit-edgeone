@@ -203,6 +203,14 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "freight_amount", "subsidy_amount", "tax_amount", "discount_amount",
                              "actual_amount", "supplier", "remark"],
                             cleaned, conflict_mode, "order_no", "sku", channel=channel)
+    if target == "gmv_flow":
+        # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
+        for it in cleaned:
+            it["channel"] = channel
+        return _write_batch("gmv_flows",
+                            ["platform", "shop", "flow_no", "related_no", "arrived_time",
+                             "amount", "flow_type", "settled_amount", "channel", "data_source"],
+                            cleaned, conflict_mode, "platform", "flow_no")
     if target in ("inventory", "platform_inv", "inventory_b"):
         wt = _TARGET_WH[target]
         for it in cleaned:
