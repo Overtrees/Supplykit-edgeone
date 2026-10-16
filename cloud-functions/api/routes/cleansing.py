@@ -287,7 +287,7 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                     _uk_n = len(set(_keys))
                     if _exists >= _uk_n:
                         # 全部已存在——重复导入——同步返回跳过(不建任务)
-                        return {"ok": True, "task_id": "", "success": 0, "failed": len(_keys),
+                        return {"ok": True, "task_id": "", "target": target, "success": 0, "failed": len(_keys),
                                 "total_rows": len(_brows), "duplicate": True,
                                 "message": "文件已导入过（同键全部已存在），已跳过 %d 条" % len(_keys)}
                     if _exists > 0:
@@ -328,7 +328,7 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                 _sr = cleansing_status(task_id, page_size=5000)
                 _sd = _sr.get("data") or _sr
                 if _sr.get("ok") is not False and _sd.get("status") == "done":
-                    return {"ok": True, "task_id": task_id,
+                    return {"ok": True, "task_id": task_id, "target": target,
                             "success": _sd.get("success", 0), "failed": _sd.get("failed", 0),
                             "total_rows": len(rows0)}
         except Exception:

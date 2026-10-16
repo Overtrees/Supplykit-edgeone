@@ -736,7 +736,7 @@ try:
                       files={"file": ("f.csv", _gf.getvalue(), "text/csv")}, headers=AH)
     _gd = _gm.json()
     check("gmv_flow execute ok", _gd.get("ok") is True, str(_gd)[:120])
-    check("gmv_flow execute ok", _gd.get("ok") is True, str(_gd)[:120])
+    check("gmv_flow target 传递", _gd.get("target") == "gmv_flow", "target=%s resp=%s" % (_gd.get("target"), str(_gd)[:140]))
 except Exception as _e:
     check("gmv_flow 用例无异常", False, str(_e)[:200])
 
