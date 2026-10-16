@@ -557,8 +557,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
               "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
               for k, v in sorted(brands_map.items(), key=lambda x: -x[1]["g"])]
-    def _brands_range(d0):
-        """按起始日聚合品牌 GMV(周期联动)"""
+    def _brands_range(d0, d1=""):
+        """按起始日聚合品牌 GMV(周期联动)——2026-10-16 双参(d1 终点——完整自然周/月; 空=至今)"""
         try:
             _bm = {}
             for _r2 in query(
@@ -570,8 +570,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                     "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
                     "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
                     "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
-                    "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
-                    [channel, d0 + " 00:00:00"]):
+                    "AND o.ordered_at>=%%s AND o.ordered_at<=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
+                    [channel, d0 + " 00:00:00", (d1 or d0) + " 23:59:59"]):  # 双参完整区间(2026-10-16): 终点含当日
                 _b = _r2.get("brand") or ""
                 if not _b or _b == "未分类":
                     continue
@@ -583,12 +583,12 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                     for k, v in sorted(_bm.items(), key=lambda x: -x[1]["g"])]
         except Exception:
             return []
-    period_brands = {"today": _brands_range(today_s),
-                     "week": _brands_range(d7),
-                     "month": _brands_range(d30)}
+    period_brands = {"today": _brands_range(today_s, today_s),
+                     "week": _brands_range(d7, d8),
+                     "month": _brands_range(d30, d31)}
     period_stores = {"today": _stores_range(today_s, today_s),
-                     "week": _stores_range(d7, today_s),
-                     "month": _stores_range(d30, today_s)}
+                     "week": _stores_range(d7, d8),
+                     "month": _stores_range(d30, d31)}
     if start_date and end_date:
         # 自定义区间: 补齐 periods.custom(GMV 卡周期联动), 无环比(前端 prev=0 跳过显示)
         _cg, _co = _agg(start_date, end_date)
@@ -617,8 +617,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                          "conversion": round(min(v / prev * 100, 100), 1) if prev else 0})
         return _out
     period_funnel = {"today": _funnel_range(today_s, today_s),
-                     "week": _funnel_range(d7, today_s),
-                     "month": _funnel_range(d30, today_s)}
+                     "week": _funnel_range(d7, d8),
+                     "month": _funnel_range(d30, d31)}
     if start_date and end_date:
         period_funnel["custom"] = _funnel_range(start_date, end_date)
 
