@@ -967,3 +967,16 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **禁止新增 `except: pass` / `except Exception: pass`**——静默吞异常=错误无痕(事故多源于此: 续跑 NameError/TypeError 被吞任务卡)
 - 必须: except → try_err(src, what, exc) 留痕(至少 quiet_error); 已有 except pass 逐步清理(排查时发现即改)
 - 例外: 前端 catch{} 静默(可选链防御——非错误路径)允许; 后端禁 pass
+
+### 15.59 导入/评估分离 + 性能基线(2026-10-16)
+- **两任务分离**: 导入(纯写加速——done) 自动创建 cleansing_eval 任务(sku_list 驱动分窗接力 1000/请求——每请求<90s——前端轮询/保活续跑)——根治 done 步长请求被 Makers 限时杀(233s 崩溃历史)
+- **计数器防伪**: 窗口写与 done 步同请求时——防并发锁必须 > 窗时长(否则重试重跑窗→唯一索引冲突→failed 覆盖)——finalizing 标记 + done 步事务化 + finalizing 超时恢复(5min——进程死连接回滚)
+- **写入性能(TiDB 官方依据)**: 每索引=1 KV 写放大——orders 11→9 索引/告警预载走复合索引(status,source); 批大小 1000(官方单语句多值——seed 注释 500 为经验)
+- **评估/联动快**(对照: evaluate_many 非事务 4-10s; inv_map 200→500/片; 联动批量)——事务包裹评估是慢源(写放大)
+- **经验**: 先读逻辑再动手(计数器 bug=没读锁代码加日志跑圈 N 轮); TiDB 行为查官方文档不猜
+
+### 15.60 GMV 自然口径 + 回款矩阵(2026-10-16——v1.0 方案落地)
+- **窗口口径**(仅 GMV 及联动——日销/补货/采购保持滚动): week=上周完整自然周/isoweekday 边界; month=上月完整自然月(day=1 推导月末)——GMV+trend+brands/stores/funnel 联动统一终点——边界用本地脚本验证(10-16 实证 10-05~11/09-01~30)
+- **回款矩阵**(按到账时间归属): 仅月度/完整月可用——today/week/custom 前端弱化禁点+hover 提示; month 全亮
+- **回款数据源**: gmv_flows 表(platform+flow_no 去重——表B 资金流水——清洗页「GMV 回款」类型导入); dashboard payout=真实流水优先(无数据→None+pending 前端"待接入资金流水"——算不准宁可不给)
+- **日志收口**: perf_debug/slow_alert 入 dev 白名单(直插日志); execute 响应含 target 字段(部署验证/诊断)
