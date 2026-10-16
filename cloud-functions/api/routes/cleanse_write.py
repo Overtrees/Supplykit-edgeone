@@ -320,7 +320,8 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                         _sql = ("SELECT CONCAT(`%s`,'|',`%s`) AS k FROM `%s` WHERE channel=%s AND (%s)"
                                 % (keys[0], keys[1], table, "%s", _or))
                         for _ex in query(_sql, _params):
-                            _dup.add((_ex.get("k") or "").split("|")[0], (_ex.get("k") or "").split("|")[1] if len((_ex.get("k") or "").split("|")) > 1 else "")
+                            _k_p = (_ex.get("k") or "").split("|")
+                            _dup.add((_k_p[0], _k_p[1] if len(_k_p) > 1 else ""))
                     else:
                         _ph = ",".join(["%s"] * len(_batch))
                         for _ex in query("SELECT `%s` AS k FROM `%s` WHERE `%s` IN (%s)" % (keys[0], table, keys[0], _ph), _batch):
