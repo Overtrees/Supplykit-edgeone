@@ -260,26 +260,33 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
     data, fname = _read_file_bytes(file)
     try_err('cleansing', 'execute target=%s fname=%s' % (target, fname))
     # 2026-10-15 重复提前检测: 同键已存在(全部重复——二次导入同表)→ 同步返回跳过计数(不建任务——秒级拦截——不等异步 4 分钟)
+    # 2026-10-16 泛化: order(键=order_no|sku) + gmv_flow(键=platform|flow_no) 对称拦截
+    #   —— gmv_flow 此前无提前检测(仅 DB 唯一索引兜底, 二次导入全批 1062 失败无因)——用户实测重复导入痛点
     try:
         from db import query as _qk
         _dr = _mk_upload(data, fname)
         _bdata, _bfname = _read_file_bytes(_dr)
         try:
             _bh, _brows = _parse_table(_bdata, _bfname)
-            if target in ("order",) and _brows:
+            _dup_cfg = {"order": ("orders", "order_no", "sku"),
+                        "gmv_flow": ("gmv_flows", "platform", "flow_no")}
+            if target in _dup_cfg and _brows:
                 # 2026-10-15 修复: 原始行无目标键(中文列名)——需清洗后取键(否则 _keys 空不拦截——重复仍建任务)
+                _tbl_d, _k1_d, _k2_d = _dup_cfg[target]
                 _mapping = json.loads(mapping or "{}")
                 _cb = _clean_rows(_brows, _mapping)
-                _keys = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in _cb if r.get("order_no") and r.get("sku")]
+                _keys = [str(r.get(_k1_d) or "") + "|" + str(r.get(_k2_d) or "") for r in _cb
+                         if r.get(_k1_d) and r.get(_k2_d)]
                 _uk = list(dict.fromkeys(_keys))
                 _exists = 0
                 for _i in range(0, len(_uk), 200):
                     _batch = _uk[_i:_i+200]
                     _pairs = [(b.split("|")[0], b.split("|")[1]) for b in _batch]
-                    # 同键 EXISTS——分片查
+                    # 同键 EXISTS——分片查(order 需排除软删——软删单可重导; gmv_flows 无 deleted_at 列)
                     _in_ph = ",".join(["%s"] * len(_batch))
-                    _sql = ("SELECT COUNT(*) c FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
-                            "AND CONCAT(order_no,'|',sku) IN (%s)" % ("%s", _in_ph))
+                    _soft = (" AND (deleted_at IS NULL OR deleted_at='')" if _tbl_d == "orders" else "")
+                    _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                            "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _in_ph))
                     _cnt = one(_sql, [channel] + _batch)
                     _exists += int((_cnt or {}).get("c") or 0)
                 _force_new = request.query_params.get("force_new", "")
@@ -330,7 +337,8 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                 if _sr.get("ok") is not False and _sd.get("status") == "done":
                     return {"ok": True, "task_id": task_id, "target": target,
                             "success": _sd.get("success", 0), "failed": _sd.get("failed", 0),
-                            "total_rows": len(rows0)}
+                            "total_rows": len(rows0),
+                            "failed_details": _sd.get("failed_details") or []}
         except Exception:
             pass  # 解析/同步异常 → 走接力(由 status 续跑兜底)
         # 2026-10-15 异步返回 total_rows(前端显示已提交 N 条——非问号): len(rows0) 已解析可用
@@ -376,7 +384,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
         return {"ok": True, "task_id": task_id, "status": status,
                 "success": _ri.get("success"), "failed": _ri.get("failed"),
-                "message": _ri.get("message"), "error": _ri.get("error")}
+                "message": _ri.get("message"), "error": _ri.get("error"),
+                "failed_details": _ri.get("failed_details") or []}
     # 抢占锁(防并发续跑): 锁 3s(窗间快——done 步防重跑用 finalizing 标记——见 done 分支)
     try:
         _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
@@ -440,24 +449,38 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             except Exception as _e:
                     try_err('cleansing', '静默降级', _e)
         # 2026-10-16 force_new 只写新增: 确认导入后过滤重叠行(unique idx 兜底防重复插入失败)
-        if params.get("force_new") and target == "order" and cleaned:
+        #   —— 泛化 2026-10-16: order(键=order_no|sku) + gmv_flow(键=platform|flow_no) 对称
+        if params.get("force_new") and target in ("order", "gmv_flow") and cleaned:
             try:
-                _fk = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in cleaned if r.get("order_no") and r.get("sku")]
-                _fuk = list(dict.fromkeys(_fk))
+                _fk_cfg = {"order": ("orders", "order_no", "sku"),
+                           "gmv_flow": ("gmv_flows", "platform", "flow_no")}
+                _ftbl, _fk1, _fk2 = _fk_cfg[target]
+                _fkeys = [str(r.get(_fk1) or "") + "|" + str(r.get(_fk2) or "") for r in cleaned
+                          if r.get(_fk1) and r.get(_fk2)]
+                _fuk = list(dict.fromkeys(_fkeys))
                 _fexists = set()
                 for _fi in range(0, len(_fuk), 200):
                     _fb = _fuk[_fi:_fi+200]
                     _fp = ",".join(["%s"] * len(_fb))
-                    _frow = query("SELECT CONCAT(order_no,'|',sku) k FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND CONCAT(order_no,'|',sku) IN (%s)" % ("%s", _fp), [channel] + _fb)
+                    _fsoft = (" AND (deleted_at IS NULL OR deleted_at='')" if _ftbl == "orders" else "")
+                    _frow = query("SELECT CONCAT(`%s`,'|',`%s`) k FROM `%s` WHERE channel=%%s%s "
+                                  "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_fk1, _fk2, _ftbl, _fsoft,
+                                                                          _fk1, _fk2, _fp),
+                                  [channel] + _fb)
                     for _r2 in _frow:
                         _fexists.add(_r2.get("k") or "")
                 if _fexists:
-                    cleaned = [r for r in cleaned if not (str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") in _fexists)]
+                    cleaned = [r for r in cleaned if not (str(r.get(_fk1) or "") + "|" + str(r.get(_fk2) or "") in _fexists)]
             except Exception:
                 pass
         w_success, w_failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
         success += w_success
         failed += w_failed
+        # 2026-10-16 失败明细累积(跨窗口→done 回传前端 failed_details——曾窗口间丢弃无因可查)
+        _fd = list(params.get("err_details") or [])
+        for _e1 in (err_details or []):
+            if len(_fd) < 50:
+                _fd.append(_e1)
         offset += len(window)
         # 2026-10-16 窗口写后计数留痕(message 含 task_id——唯一不禁频)——窗口5 failed 1000 定位
         try:
@@ -496,6 +519,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                      json.dumps({"result": {"target": target, "success": success, "failed": failed,
                                             "elapsed": elapsed,
                                             "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed),
+                                            "failed_details": _fd if _fd else [],
                                             "eval_task": task_id + "_eval"}}, ensure_ascii=False), task_id))
             # 2026-10-16 分离: 创建评估联动任务(独立续跑——分片评估不超时——导入 done 后自动触发)
             try:
@@ -521,7 +545,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             invalidate_all()
             return {"ok": True, "task_id": task_id, "status": "done",
                     "success": success, "failed": failed,
-                    "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed)}
+                    "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed),
+                    "failed_details": _fd if _fd else []}
         # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
         _sq = round(_t.time() - started, 1)
         _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": _sq}]

@@ -24,9 +24,11 @@ _MIN_DS = 0.1
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
                                   search: str = "", need_only: int = 0):
-    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索/need_only 在缓存后处理——降 RU): mode=bbcc/traditional"""
+    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索/need_only 在缓存后处理——降 RU): mode=bbcc/traditional
+    2026-10-16: 无分页裸调(全量 5 万+ 行) → EdgeOne 网关 413 拦截——默认截断 2000(前端全部分页/need_only, 不受影响)"""
     _key = "repl|%s|%s|%s|%s" % (channel, mode, days, source)
     _all = _cache_get(_key, _REPL_TTL, lambda: _build_repl(channel, mode))
+    _no_page = page <= 0 or page_size <= 0
     if need_only:
         _all = [s for s in _all if (s.get("suggested_qty") or 0) > 0 or (s.get("b_suggested") or 0) > 0]
     if search:
@@ -34,6 +36,10 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
         _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()
                 or _sq in str(s.get("product_name", "")).lower()
                 or _sq in str(s.get("barcode", "")).lower()]
+    # 2026-10-16: 无分页裸调全量(5万+行) → EdgeOne 网关 413 拦截——过滤后再截断兜底
+    # (need_only/search 结果通常 <2000 不受影响; 纯全量裸调截断, 语义: 完整数据请带 page)
+    if _no_page:
+        _all = _all[:2000]
     if page > 0 and page_size > 0:
         return ok({"items": _all[(page - 1) * page_size: page * page_size],
                    "total": len(_all), "page": page, "page_size": page_size})

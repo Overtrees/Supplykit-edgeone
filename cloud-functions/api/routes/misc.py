@@ -114,10 +114,18 @@ def list_log_files(days: int = 30, scope: str = ""):
                  "ORDER BY `date` DESC", [_sc, _cut])
     arch_map = {str(r.get("date") or "")[:10]: r for r in arch}
     # 2) 明细表近 N 天按日(未归档日期 → 实时生成标记)
-    _in = ",".join(["%s"] * len(_SCOPE_TYPES.get(_sc, ())))
+    # 2026-10-16 修复: scope 空/未知/all 时 _SCOPE_TYPES.get 返回空元组 → IN () 语法错误(1064)
+    # —— 降级为不过滤类型(全量明细), 语义=全部视图; user/dev 显式时仍按白名单
+    _sc2 = _sc if _sc in _SCOPE_TYPES else ""
     _sql = ("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM quality_logs "
-            "WHERE log_type IN (%s) AND created_at >= %%s GROUP BY d ORDER BY d DESC") % _in
-    _rows = query(_sql, list(_SCOPE_TYPES.get(_sc, ())) + [_cut + " 00:00:00"])
+            "WHERE created_at >= %%s GROUP BY d ORDER BY d DESC")
+    _params = [_cut + " 00:00:00"]
+    if _sc2:
+        _in = ",".join(["%s"] * len(_SCOPE_TYPES[_sc2]))
+        _sql = ("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM quality_logs "
+                "WHERE log_type IN (%s) AND created_at >= %%s GROUP BY d ORDER BY d DESC") % _in
+        _params = list(_SCOPE_TYPES[_sc2]) + [_cut + " 00:00:00"]
+    _rows = query(_sql, _params)
     items = []
     seen = set()
     for r in _rows:

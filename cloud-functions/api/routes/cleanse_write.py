@@ -212,6 +212,34 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             try_err('cleanse_write', 'gmv_flows 建表降级', _etb)
         for it in cleaned:
             it["channel"] = channel
+            # 2026-10-16 钉死 1366 根因: amount/settled_amount 为 DECIMAL, 映射类型 string 时
+            # 原样直写(如 ¥1,200.50/文本/空态) → TiDB 1366 整批失败。写入前强制 number 清洗
+            # (与 _v 同规: 去 ¥,元/逗号/空格 → float; 无法解析归 0, 不炸批)
+            for _nc in ("amount", "settled_amount"):
+                if it.get(_nc) in (None, ""):
+                    continue  # 空值跳过列(DECIMAL DEFAULT 0)
+                try:
+                    _s = str(it[_nc]).replace("¥", "").replace("元", "").replace(",", "").replace(" ", "").strip()
+                    it[_nc] = float(_s) if _s not in ("", "-", "--") else 0.0
+                except Exception:
+                    it[_nc] = 0.0  # 无法解析归 0(计数成功——不做静默失败)
+            # arrived_time 宽松归一(样例可能是 "2026-09-15 10:00:00" / 带 T / 仅日期):
+            # 解析失败置 None(空值走缺列跳过——不 1366)
+            if it.get("arrived_time") not in (None, ""):
+                _at = str(it["arrived_time"]).strip()
+                _norm = ""
+                try:
+                    from datetime import datetime as _dtn
+                    for _fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                                 "%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M", "%Y年%m月%d日"):
+                        try:
+                            _norm = _dtn.strptime(_at, _fmt).strftime("%Y-%m-%d %H:%M:%S")
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    _norm = ""
+                it["arrived_time"] = _norm
         return _write_batch("gmv_flows",
                             ["platform", "shop", "flow_no", "related_no", "arrived_time",
                              "amount", "flow_type", "settled_amount", "channel", "data_source"],
@@ -272,6 +300,13 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
     success = failed = 0
     err_details = []
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
+    # 2026-10-16: 数字列兜底(缺失列补 0 而非 KeyError——曾空值跳键 → tuple(r[c]) KeyError 整批降级)
+    _num_fill = {c for c in ("quantity", "available_qty", "amount", "settled_amount", "price",
+                             "total_amount", "unit_price", "freight_amount", "subsidy_amount",
+                             "tax_amount", "discount_amount", "actual_amount", "safety_qty",
+                             "in_transit_qty", "c_transit", "locked_qty", "weight", "volume",
+                             "box_qty", "score", "beginning_stock", "month_inbound",
+                             "month_outbound", "turnover_days") if c in allowed_cols}
     # sum 累加仅限出入库记录(HammerCleansing 只在 inbound/outbound 暴露 sum/overwrite 选择)
     sum_mode = table in ("inbound_records", "outbound_records") and conflict_mode == "sum"
     for i in range(0, len(cleaned), 500):
@@ -291,15 +326,24 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
             if ext:
                 row["ext_json"] = json.dumps(ext, ensure_ascii=False)
             # 严谨性: key 列必须存在且有值(原 `k in row` 跳过缺失列 → 无有效映射的导入
-            # 也会写入空记录污染数据); 缺 key 的行判失败
+            # 也会写入空记录污染数据); 缺 key 的行判失败 + 留痕原因(2026-10-16: 曾只 failed++
+            # 无明细——gmv_flow 5 次导入 failed=15 全无因可查——用户无法定位缺哪个必填列)
             if not row or not all(k in row and row.get(k) for k in keys):
                 failed += 1
+                if len(err_details) < 50:
+                    _miss = [str(k) for k in keys if not (k in row and row.get(k))]
+                    err_details.append({
+                        "sku": str(it.get("sku") or it.get("flow_no") or it.get("platform") or "")[:40],
+                        "reason": "缺少必填列: %s" % "、".join(_miss),
+                        "row": str({k: it.get(k) for k in keys})[:200]})
                 continue
             rows.append(row)
         if not rows:
             continue
         # 2026-10-16 去写入层查重(前端提前检测已拦截重复——订单号+sku+69码组合——后端纯写入提速回 seed)
-        cols = list(rows[0].keys())
+        # 2026-10-16 列并集: 曾 cols=rows[0] 键——首行缺列(空值跳键)时后续行该列静默丢弃——
+        # 并集 + .get 兜底(缺失补默认)保列完整(不丢数据)
+        cols = list(dict.fromkeys(c for r in rows for c in (r.keys() if isinstance(r, dict) else [])))
         sql = "INSERT INTO `%s` (%s) VALUES (%s)" % (
             table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
         if sum_mode:
@@ -320,7 +364,7 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
         for _bi in range(0, len(rows), 1000):
             _b = rows[_bi:_bi + 1000]
             try:
-                executemany(sql, [tuple(r[c] for c in cols) for r in _b])
+                executemany(sql, [tuple(r.get(c, 0 if c in _num_fill else "") for c in cols) for r in _b])
                 success += len(_b)
             except Exception as _be:
                 # 2026-10-16 留痕(曾无痕——批失败被吞——窗口5 计数 4000/1000 无法定位)

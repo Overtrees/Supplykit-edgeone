@@ -693,6 +693,28 @@ export default function CleansingPage() {
           return
         }
       }
+      // 2026-10-16 GMV 回款必填 key(platform+flow_no 去重键——缺失整批跳过——曾 failed=15 无因可查):
+      // platform 平台 + flow_no 流水号 必须映射
+      if (tt === 'gmv_flow') {
+        const hasPlat = Object.values(mp || {}).some(
+          m => m && (m.target === 'platform' || m.t === 'platform'),
+        )
+        if (!hasPlat) {
+          toast.error('导入 GMV 回款必须映射「平台」列（与流水号组成去重键）')
+          setBs('')
+          execLock.current = false
+          return
+        }
+        const hasFlow = Object.values(mp || {}).some(
+          m => m && (m.target === 'flow_no' || m.t === 'flow_no'),
+        )
+        if (!hasFlow) {
+          toast.error('导入 GMV 回款必须映射「流水号」列（与平台组成去重键），否则整批将被跳过')
+          setBs('')
+          execLock.current = false
+          return
+        }
+      }
       try {
         const r = await uploadRawBytes(
           '/api/cleansing/execute-async?q_target=' +
@@ -807,7 +829,12 @@ export default function CleansingPage() {
               finished = true
               clearTimeout(threshold)
               clearInterval(poll)
-              setRes({ success: sd.success, failed: sd.failed, message: sd.message })
+              setRes({
+                success: sd.success,
+                failed: sd.failed,
+                message: sd.message,
+                failed_details: sd.failed_details || [],
+              })
               goStep(3)
               setBs('')
               toast.success(
