@@ -376,11 +376,10 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         return {"ok": True, "task_id": task_id, "status": status,
                 "success": _ri.get("success"), "failed": _ri.get("failed"),
                 "message": _ri.get("message"), "error": _ri.get("error")}
-    # 抢占锁(防并发续跑, 同 seed/导出)
-    # 2026-10-16 锁 3s→150s: 窗口5(done 步 26s写+55s联动≈80s) > 锁3s——轮询重试抢锁重跑窗口5→唯一索引冲突→failed +1000 覆盖计数(库全写但计数 4000/1000 假象)——锁覆盖整窗+done——重试不抢锁返回 running 不重跑
+    # 抢占锁(防并发续跑): 锁 3s(窗间快——done 步防重跑用 finalizing 标记——见 done 分支)
     try:
         _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 150 SECOND))",
+                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
                           [task_id])
         if not _locked:
             return {"ok": True, "task_id": task_id, "status": "running"}
@@ -391,6 +390,12 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
     try:
         params = json.loads(row.get("params") or "{}")
         fname = params.get("fname") or "import.csv"
+        # 2026-10-16 done 步中(finalizing=1)→ 返回 running 不重跑(锁已释放但 done 步进行中——防重跑覆盖计数)
+        try:
+            if params.get("finalizing"):
+                return {"ok": True, "task_id": task_id, "status": "running"}
+        except Exception:
+            pass
         mp = json.loads(params.get("mp") or "{}")
         target = params.get("target") or "order"
         channel = params.get("channel") or "jd"
@@ -453,6 +458,13 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             pass
         done = offset >= total
         if done:
+            # 2026-10-16 done 步前置 finalizing 标记(防重跑: 锁3s会释放——重试重跑窗口5→唯一索引冲突→failed 覆盖——标记后重试不重跑)
+            try:
+                from db import execute as _ef
+                _ef("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
+                    [json.dumps({**params, "finalizing": 1, "success": success, "failed": failed, "offset": offset, "total": total}, ensure_ascii=False), task_id])
+            except Exception:
+                pass
             # 最后步: 全量重清洗(联动/评估/汇总用)
             _st0 = _t.time()
             cleaned_all = _clean_rows(rows, mp)
