@@ -421,7 +421,9 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         done = offset >= total
         if done:
             # 最后步: 全量重清洗(联动/评估/汇总用)
+            _st0 = _t.time()
             cleaned_all = _clean_rows(rows, mp)
+            try_err('cleansing', 'done步 清洗耗时: %s' % round(_t.time() - _st0, 1))
             if target == "order":
                 try:
                     from routes.suppliers import _norm_column_value as _ncol2
@@ -431,7 +433,9 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                 except Exception as _e:
                         try_err('cleansing', '静默降级', _e)
             elapsed = round(_t.time() - started, 1)
+            _st1 = _t.time()
             adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
+            try_err('cleansing', 'done步 finalize(联动+评估)耗时: %s' % round(_t.time() - _st1, 1))
             _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": round(_t.time() - started, 1)}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
