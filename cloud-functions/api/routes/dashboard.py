@@ -555,6 +555,10 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
         pass
     if _po_m is not None:
         periods["month"]["payout"] = _po_m
+        periods["month"]["payout_source"] = "flow"   # 真实资金流水
+    else:
+        periods["month"]["payout"] = None            # 无真实流水——前端弱化提示(不显示推算——v1.0 算不准宁可不给)
+        periods["month"]["payout_source"] = "pending"
 
     periods["today_trend"] = _trend_range(today_s, today_s)
     periods["week_trend"] = _trend_range(d7, d8)  # 完整上周趋势(曾终点 today)

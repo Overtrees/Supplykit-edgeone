@@ -29,7 +29,7 @@ def _export_md(date="", scope="", level=""):
     _SCOPE_TYPES = {
         "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
                  "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
                 "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error",
                 "detect_debug", "business_error"),
     }
@@ -104,7 +104,7 @@ def list_log_files(days: int = 30, scope: str = ""):
     _SCOPE_TYPES = {
         "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
                  "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
                 "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
     }
     _sc = scope or "all"
@@ -146,7 +146,7 @@ def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_s
     _SCOPE_TYPES = {
         "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
                  "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error",
+        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
                 "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
     }
     where = ""

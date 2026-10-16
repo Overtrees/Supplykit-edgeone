@@ -925,10 +925,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     : gmvView === 'payout'
                       ? periodMeta.payout != null
                         ? periodMeta.payout
-                        : (periodMeta.gmv || 0) -
-                          (dashboard?.summary?.refund_amount || 0) -
-                          (dashboard?.summary?.subsidy_amount || 0)
+                        : null // 2026-10-16 pending: 无真实资金流水——不显示推算——下方提示待接入
                       : periodMeta.gmv
+                if (gmvView === 'payout' && _g == null)
+                  return (
+                    <span style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: 500 }}>
+                      回款待接入资金流水
+                    </span>
+                  )
                 return '¥' + Number(_g || 0).toLocaleString()
               })()}
             </div>
