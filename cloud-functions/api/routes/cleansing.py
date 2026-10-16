@@ -377,9 +377,10 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                 "success": _ri.get("success"), "failed": _ri.get("failed"),
                 "message": _ri.get("message"), "error": _ri.get("error")}
     # 抢占锁(防并发续跑, 同 seed/导出)
+    # 2026-10-16 锁 3s→150s: 窗口5(done 步 26s写+55s联动≈80s) > 锁3s——轮询重试抢锁重跑窗口5→唯一索引冲突→failed +1000 覆盖计数(库全写但计数 4000/1000 假象)——锁覆盖整窗+done——重试不抢锁返回 running 不重跑
     try:
         _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
+                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 150 SECOND))",
                           [task_id])
         if not _locked:
             return {"ok": True, "task_id": task_id, "status": "running"}
