@@ -479,7 +479,20 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                         try_err('cleansing', '静默降级', _e)
             elapsed = round(_t.time() - started, 1)
             _st1 = _t.time()
-            adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
+            try:
+                # 2026-10-16 done 步事务化(根治: 失败回滚联动不落库→清 finalizing 保持 running→重试重跑干净——四维全保——非标 error 让每日兜底)
+                from db import transaction as _txn2
+                with _txn2():
+                    adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
+            except Exception as _e3:
+                # 事务已回滚(联动/评估未落库)——清 finalizing 保持 running——重试可重跑 done 步(写入已完成 offset=total——done 步幂等重跑)
+                try:
+                    execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                            [json.dumps({**params, "finalizing": 0}, ensure_ascii=False), task_id])
+                except Exception:
+                    pass
+                try_err('cleansing', 'done步事务异常(回滚可重试)', _e3)
+                return {"ok": True, "task_id": task_id, "status": "running"}
             try_err('cleansing', 'done步 finalize(联动+评估)耗时: %s' % round(_t.time() - _st1, 1))
             _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": round(_t.time() - started, 1)}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
