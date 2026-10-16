@@ -781,7 +781,7 @@ export default function CleansingPage() {
             // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
             const sr = await api.get(
               '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000',
-              { timeout: 115000 },
+              { timeout: 150000 },
             ) // 2026-10-15 回小窗(1000): 四维评估大窗 263s+轮询超时积压(9分钟) vs 小窗每窗<40s 实时进度无积压——小窗优; 联动批量修复已使每窗更快
             // 2026-10-15 driver 每轮标记: 轮询活跃=前端推进(覆盖保活 backend 标签——保活只在无轮询时生效)
             try {
