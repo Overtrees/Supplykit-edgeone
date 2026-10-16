@@ -312,15 +312,15 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
                     _batch = _uk2[_i:_i + 500]
                     _parsed = [b.split("|") for b in _batch]
                     if len(keys) > 1:
+                        # 2026-10-16 精确查重: 查询返回实际存在键集(含 channel)——只标记命中键(曾 one() 任一命中→整片 500 全判 dup 误伤)
                         _or = " OR ".join("(`%s`=%s AND `%s`=%s)" % (keys[0], "%s", keys[1], "%s") for _ in _parsed)
-                        _params = []
+                        _params = [channel]
                         for p in _parsed:
                             _params += [p[0], p[1] if len(p) > 1 else ""]
-                        _sql = "SELECT %s FROM `%s` WHERE %s LIMIT 1" % (keys[0], table, _or) if False else "SELECT 1 FROM `%s` WHERE %s LIMIT 1" % (table, _or)
-                        if _params:
-                            if one(_sql, _params):
-                                for p in _parsed:
-                                    _dup.add((p[0], p[1] if len(p) > 1 else ""))
+                        _sql = ("SELECT CONCAT(`%s`,'|',`%s`) AS k FROM `%s` WHERE channel=%s AND (%s)"
+                                % (keys[0], keys[1], table, "%s", _or))
+                        for _ex in query(_sql, _params):
+                            _dup.add((_ex.get("k") or "").split("|")[0], (_ex.get("k") or "").split("|")[1] if len((_ex.get("k") or "").split("|")) > 1 else "")
                     else:
                         _ph = ",".join(["%s"] * len(_batch))
                         for _ex in query("SELECT `%s` AS k FROM `%s` WHERE `%s` IN (%s)" % (keys[0], table, keys[0], _ph), _batch):
