@@ -493,7 +493,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                     (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
                                  "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
                      json.dumps({"result": {"target": target, "success": success, "failed": failed,
-                                            "elapsed": elapsed, "message": _msg,
+                                            "elapsed": elapsed,
+                                            "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed),
                                             "eval_task": task_id + "_eval"}}, ensure_ascii=False), task_id))
             # 2026-10-16 分离: 创建评估联动任务(独立续跑——分片评估不超时——导入 done 后自动触发)
             try:
