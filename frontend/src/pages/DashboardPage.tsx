@@ -85,6 +85,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }
   // GMV 视角切换: total=总GMV(含退款流水) / net=净GMV(剔除退款)——GMV小卡+店铺GMV卡共用
   const [gmvView, setGmvView] = useState('total')
+  // 2026-10-16 GMV 矩阵: 回款按到账时间归属——仅月度/完整月可用(today/week/custom 弱化禁点)
+  const gmvPayoutOk = periodTab === 'month'
   const [bcMenuOpen, setBcMenuOpen] = useState(false)
   const [showAllLowStock, setShowAllLowStock] = useState(false)
   // 采购&补货告警卡(重构): 补货建议需补(接口) + 采购建议需采(接口), 行标签区分, 跟随补货模式
@@ -860,17 +862,30 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <span
                   key={v}
                   onClick={function () {
+                    if (v === 'payout' && !gmvPayoutOk) return // 回款仅月度可用——弱化禁点
                     setGmvView(v)
                   }}
+                  onMouseEnter={function () {}}
                   className="clickable"
+                  title={
+                    v === 'payout' && !gmvPayoutOk
+                      ? '回款按到账时间归属——仅月度/完整月可用'
+                      : undefined
+                  }
                   style={{
                     fontSize: 'var(--font-9)',
                     padding: '2px 6px',
                     borderRadius: 'var(--radius-full)',
-                    cursor: 'pointer',
+                    cursor: v === 'payout' && !gmvPayoutOk ? 'not-allowed' : 'pointer',
                     fontWeight: gmvView === v ? 600 : 400,
                     background: gmvView === v ? 'var(--card)' : 'transparent',
-                    color: gmvView === v ? 'var(--text)' : 'var(--muted2)',
+                    color:
+                      v === 'payout' && !gmvPayoutOk
+                        ? 'var(--muted2)'
+                        : gmvView === v
+                          ? 'var(--text)'
+                          : 'var(--muted2)',
+                    opacity: v === 'payout' && !gmvPayoutOk ? 0.4 : 1,
                     whiteSpace: 'nowrap',
                   }}
                 >
