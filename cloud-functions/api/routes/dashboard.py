@@ -528,7 +528,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
 
     periods["today_trend"] = _trend_range(today_s, today_s)
     periods["week_trend"] = _trend_range(d7, d8)  # 完整上周趋势(曾终点 today)
-    periods["month_trend"] = _trend_range(d30, today_s)
+    periods["month_trend"] = _trend_range(d30, d31)  # 完整上月趋势(曾终点 today)
 
     # 品牌维度(店铺 GMV 卡切品牌: 近 60 天 paid 订单按品牌聚合, join products)
     # v4-paidset: g/sb 必须用 _status_cond()(PAID 4 状态含申请退款) —— 历史线上曾误用非支付状态集(待确认+已退货)导致品牌 GMV 低估/净额为负
