@@ -202,7 +202,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "ordered_at", "paid_at", "platform", "channel", "data_source",
                              "freight_amount", "subsidy_amount", "tax_amount", "discount_amount",
                              "actual_amount", "supplier", "remark"],
-                            cleaned, conflict_mode, "order_no", "sku")
+                            cleaned, conflict_mode, "order_no", "sku", channel=channel)
     if target in ("inventory", "platform_inv", "inventory_b"):
         wt = _TARGET_WH[target]
         for it in cleaned:
@@ -212,17 +212,17 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
                              "beginning_stock", "month_inbound", "month_outbound", "locked_qty",
                              "c_transit", "weight", "volume"],
-                            cleaned, conflict_mode, "sku", "warehouse")
+                            cleaned, conflict_mode, "sku", "warehouse", channel=channel)
     if target == "product":
         return _write_batch("products",
                             ["sku", "product_name", "barcode", "store", "category", "price",
                              "box_qty", "unit", "status", "channel", "brand", "weight", "volume"],
-                            cleaned, conflict_mode, "sku")
+                            cleaned, conflict_mode, "sku", channel=channel)
     if target == "supplier":
         return _write_batch("suppliers",
                             ["supplier_code", "supplier_name", "contact_person", "contact_phone",
                              "score", "status", "channel", "brand"],
-                            cleaned, conflict_mode, "supplier_code")
+                            cleaned, conflict_mode, "supplier_code", channel=channel)
     if target == "inbound":
         s, f, ed = _write_batch("inbound_records",
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
@@ -246,10 +246,10 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
                              "price", "box_qty", "unit", "weight", "volume", "status"],
-                            cleaned, conflict_mode, "sku", "outbound_date")
+                            cleaned, conflict_mode, "sku", "outbound_date", channel=channel)
     return 0, len(cleaned), []
 
-def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols):
+def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd"):
     """批量写入: 仅保留存在的列; 冲突策略——
     inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
     其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)"""
