@@ -111,28 +111,16 @@ def invalidate_all():
             except Exception as _e:
                     try_err('analysis_cache', '静默降级', _e)
         # 物化追平(异步线程尽力——写操作不阻塞; 兜底链: 每 miss 即时检查续段 + 读路径当天直查保证数据完整)
-        # 2026-10-16 根治: 固定重建 3 天 → 历史日期导入(9月订单)后 agg 永不更新(9月差 146 万实证)——
-        # 重建窗口=订单实际范围(MIN~MAX+余量, 有界 400 天), 写后 agg 与 orders 强一致(幂等 ON DUPLICATE)
         try:
             import threading as _thm
             def _mat():
                 try:
                     from routes.dashboard import _rebuild_day_agg, _snapshot_step
                     from db import one as _o1
-                    from datetime import datetime as _dtm
-                    _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m, "
-                              "COALESCE(MIN(DATE(ordered_at)),'') AS n FROM orders "
+                    _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
                               "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
                     _dbs = str(_db.get("m") or "")[:10]
-                    _dbn = str(_db.get("n") or "")[:10]
-                    _span = 3
-                    try:
-                        if _dbs and _dbn:
-                            _span = min(max((_dtm.strptime(_dbs, "%Y-%m-%d")
-                                             - _dtm.strptime(_dbn, "%Y-%m-%d")).days + 7, 3), 400)
-                    except Exception:
-                        pass
-                    _rebuild_day_agg(_span)
+                    _rebuild_day_agg(3)
                     if _dbs:
                         _snapshot_step("jd", _dbs)
                         _snapshot_step("other", _dbs)
