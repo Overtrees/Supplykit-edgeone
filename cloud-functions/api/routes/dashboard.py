@@ -429,7 +429,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
 
     tg, to = _agg(today_s, today_s)
     pg, po = _agg(d1, d1)
-    wg, wo = _agg(d7, today_s)
+    wg, wo = _agg(d7, d8)  # d7=上周一 d8=上周日——完整自然周(2026-10-16 曾 _agg(d7,today_s) 终点错含今天)
     pwg, pwo = _agg(d14, _prev_sun)
     mg, mo = _agg(d30, d31)
     pmg, pmo = _agg(_prev_m1, _prev_m_end)
@@ -441,7 +441,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
         "week": {"gmv": wg, "orders": wo, "days": (_last_sun and 7), "prev_gmv": pwg, "prev_orders": pwo,
                  "net_gmv": round(wg - _refund(d7, today_s), 2), "subsidy_amount": round(_sub(d7, today_s), 2),
                  "payout": round(wg - _refund(d7, today_s) - _sub(d7, today_s), 2)},
-        "month": {"gmv": mg, "orders": mo, "days": 30, "prev_gmv": pmg, "prev_orders": pmo,
+        "month": {"gmv": mg, "orders": mo, "days": _last_m1 and (_tmp_ld := ((now.replace(day=1) - timedelta(days=1)).day)) or 30, "prev_gmv": pmg, "prev_orders": pmo,
                   "net_gmv": round(mg - _refund(d30, today_s), 2), "subsidy_amount": round(_sub(d30, today_s), 2),
                   "payout": round(mg - _refund(d30, today_s) - _sub(d30, today_s), 2)},
     }
@@ -527,7 +527,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                 for k, v in sorted(sg.items(), key=lambda x: -x[1])]
 
     periods["today_trend"] = _trend_range(today_s, today_s)
-    periods["week_trend"] = _trend_range(d7, today_s)
+    periods["week_trend"] = _trend_range(d7, d8)  # 完整上周趋势(曾终点 today)
     periods["month_trend"] = _trend_range(d30, today_s)
 
     # 品牌维度(店铺 GMV 卡切品牌: 近 60 天 paid 订单按品牌聚合, join products)
