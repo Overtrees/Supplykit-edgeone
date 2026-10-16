@@ -29,7 +29,7 @@ def continue_tasks():
     由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)"""
     from db import query as _qc, execute as _ec, one as _oc
     from datetime import datetime, timedelta as _td2, timezone as _tz2
-    done = {"cleansing": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
+    done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
     try:
         rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
         _cutoff = (datetime.now(_tz2.utc) - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
@@ -53,6 +53,10 @@ def continue_tasks():
                         _ec("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
                             [json.dumps({**_pj, "driver": "backend"}, ensure_ascii=False), tid])
                     cleansing_status(tid, page_size=5000)
+                    done["cleansing"] += 1
+                elif tt == "cleansing_eval":
+                    from .cleansing import cleansing_eval_status
+                    cleansing_eval_status(tid, page_size=500)
                     done["cleansing"] += 1
                 elif tt == "seed":
                     from .task_seed import seed_fill_status

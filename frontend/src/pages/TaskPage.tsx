@@ -25,6 +25,7 @@ const CLEAN_TARGET_NAME = {
   product: '商品表',
 }
 const TYPE_LABEL = {
+  cleansing_eval: { label: '评估联动', Icon: IconRefresh },
   seed: { label: '种子数据填充', Icon: IconRefresh },
   cleansing: { label: '数据清洗导入', Icon: IconBroom },
   export: { label: '导出任务', Icon: IconExport },
@@ -71,9 +72,11 @@ export default function TaskPage() {
                     ? '种子填充'
                     : t.task_type === 'clean'
                       ? '清洗导入'
-                      : t.task_type === 'export'
-                        ? '导出'
-                        : t.task_type) +
+                      : t.task_type === 'cleansing_eval'
+                        ? '评估联动'
+                        : t.task_type === 'export'
+                          ? '导出'
+                          : t.task_type) +
                   ' ✓',
               )
               // 数据已变更，通知各页面刷新；dashboard 强制同步重建拿最新值（不用旧值）
@@ -201,7 +204,9 @@ export default function TaskPage() {
                   ? 'seed'
                   : task.task_type === 'reset' || task.task_id.startsWith('reset_')
                     ? 'reset'
-                    : 'cleansing'
+                    : task.task_type === 'cleansing_eval'
+                      ? 'cleansing_eval'
+                      : 'cleansing'
             const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
             const result = task.result
               ? typeof task.result === 'string'
@@ -213,7 +218,9 @@ export default function TaskPage() {
                 ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
                 : task.task_type === 'cleansing'
                   ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
-                  : task.task_id.slice(0, 22)
+                  : task.task_type === 'cleansing_eval'
+                    ? '评估联动'
+                    : task.task_id.slice(0, 22)
             return (
               <TaskCard
                 key={task.task_id}

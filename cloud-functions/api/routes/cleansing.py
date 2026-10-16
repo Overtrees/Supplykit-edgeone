@@ -487,30 +487,26 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                 except Exception as _e:
                         try_err('cleansing', '静默降级', _e)
             elapsed = round(_t.time() - started, 1)
-            _st1 = _t.time()
-            try:
-                # 2026-10-16 done 步事务化(根治: 失败回滚联动不落库→清 finalizing 保持 running→重试重跑干净——四维全保——非标 error 让每日兜底)
-                from db import transaction as _txn2
-                with _txn2():
-                    adjusted, evaluated, _msg = _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
-            except Exception as _e3:
-                # 事务已回滚(联动/评估未落库)——清 finalizing 保持 running——重试可重跑 done 步(写入已完成 offset=total——done 步幂等重跑)
-                try:
-                    execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
-                            [json.dumps({**params, "finalizing": 0}, ensure_ascii=False), task_id])
-                except Exception:
-                    pass
-                try_err('cleansing', 'done步事务异常(回滚可重试)', _e3)
-                return {"ok": True, "task_id": task_id, "status": "running"}
-            try_err('cleansing', 'done步 finalize(联动+评估)耗时: %s' % round(_t.time() - _st1, 1))
+            # 2026-10-16 分离: 导入 done(写 done 计数——联动评估由独立 cleansing_eval 任务续跑分片——根治 done 步 80s 请求被杀)
             _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": round(_t.time() - started, 1)}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
                                  "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
                      json.dumps({"result": {"target": target, "success": success, "failed": failed,
-                                            "elapsed": elapsed, "rules_evaluated": evaluated,
-                                            "inventory_adjusted": adjusted, "message": _msg}},
-                                ensure_ascii=False), task_id))
+                                            "elapsed": elapsed, "message": _msg,
+                                            "eval_task": task_id + "_eval"}}, ensure_ascii=False), task_id))
+            # 2026-10-16 分离: 创建评估联动任务(独立续跑——分片评估不超时——导入 done 后自动触发)
+            try:
+                from db import execute as _ee2
+                _eval_task = task_id + "_eval"
+                _ee2("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                     "VALUES(%s,'cleansing_eval','running',%s,'{}',%s) "
+                     "ON DUPLICATE KEY UPDATE status='running', params=VALUES(params), updated_at=NOW()",
+                     [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
+                                              "mp": mp, "fname": fname, "offset": 0, "success": 0, "failed": 0,
+                                              "steps": [], "cur_step": {"name": "评估联动准备", "started": int(_t.time())}}, ensure_ascii=False), channel])
+            except Exception as _e4:
+                try_err('cleansing', '创建评估任务降级', _e4)
             from routes.analysis_cache import invalidate_all
             invalidate_all()
             return {"ok": True, "task_id": task_id, "status": "done",
@@ -572,6 +568,127 @@ def cleansing_templates_delete(tid: int):
 def cleansing_templates():
     rows = query("SELECT id, name, doc_type, mapping FROM cleansing_templates ORDER BY id DESC LIMIT 100")
     return ok(rows)
+
+
+@router.get("/cleansing/eval-status")
+@traced
+def cleansing_eval_status(task_id: str = "", page_size: int = 500):
+    """2026-10-16 评估联动独立任务续跑(分离——导入 done 后自动创建):
+    读源文件→清洗→SKU 去重→分片(500/片——每请求<20s 不超时)→每片事务(订单聚合评估 order.created + 库存联动)"""
+    import time as _t
+    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    if not row:
+        return {"ok": False, "error": "任务不存在"}
+    status = row.get("status") or ""
+    if status in ("done", "error"):
+        _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
+        return {"ok": True, "task_id": task_id, "status": status, "success": _ri.get("success"),
+                "failed": _ri.get("failed"), "error": _ri.get("error"),
+                "rules_evaluated": _ri.get("rules_evaluated"), "inventory_adjusted": _ri.get("inventory_adjusted")}
+    params = json.loads(row.get("params") or "{}")
+    src_task = params.get("src_task") or ""
+    target = params.get("target") or "order"
+    channel = params.get("channel") or "jd"
+    mp = params.get("mp") or "{}"
+    offset = int(params.get("offset") or 0)
+    try:
+        # 读源文件(与导入同源——确定性)
+        import base64 as _b64e
+        fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + src_task])
+        c = fr.get("content") if fr else None
+        if isinstance(c, str):
+            data = _b64e.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8-sig")
+        elif c is not None:
+            data = bytes(c)
+        else:
+            return {"ok": False, "error": "源文件不存在"}
+        headers, rows = _parse_table(data, params.get("fname") or "import.csv")
+        cleaned_all = _clean_rows(rows, json.loads(mp))
+        if target == "order":
+            from routes.suppliers import _norm_column_value as _ncol3
+            for x in cleaned_all:
+                if x.get("order_status"):
+                    x["order_status"] = _ncol3(channel, "order_status", str(x["order_status"]))
+        # SKU 去重集
+        seen = set()
+        skus = [c.get("sku") for c in cleaned_all
+                if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
+        total_skus = len(skus)
+        _win_no = offset // page_size + 1
+        # 进度中 cur_step
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                (json.dumps({**params, "cur_step": {"name": "评估联动 分片 %d/%d" % (_win_no, max((total_skus // page_size) + 1, 1)), "started": int(_t.time())}}, ensure_ascii=False), task_id))
+        _batch_skus = skus[offset:offset + page_size]
+        if not _batch_skus:
+            return {"ok": True, "task_id": task_id, "status": "running", "page": offset // page_size}
+        # 每片事务(评估+联动原子——失败回滚可重试)
+        try:
+            from db import transaction as _txn3
+            from db import query as _q3, execute as _e3
+            from routes.cleanse_write import _adjust_inventory
+            from core.rules import evaluate_many, load_rules_for
+            with _txn3():
+                # 该片 SKU 订单聚合量(orders 已写——按 SKU 累计——行级→SKU 聚合口径)
+                _ph3 = ",".join(["%s"] * len(_batch_skus))
+                _ord = _q3("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                           "AND sku IN (%s) GROUP BY sku" % ("%s", _ph3), [channel] + _batch_skus)
+                _qty_map = {r.get("sku"): int(r.get("q") or 0) for r in _ord}
+                _inv3 = _q3("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) GROUP BY sku"
+                           % ("%s", _ph3), [channel] + _batch_skus)
+                _avail_map = {r.get("sku"): int(r.get("a") or 0) for r in _inv3}
+                o_ctxs = []
+                for sku in _batch_skus:
+                    o_ctxs.append({"sku": sku, "channel": channel,
+                                   "order": {"quantity": _qty_map.get(sku, 0)}, "order_qty": _qty_map.get(sku, 0),
+                                   "available_stock": _avail_map.get(sku, 0),
+                                   "inv": {"available_qty": _avail_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
+                evaluated = 0
+                if o_ctxs:
+                    evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
+                    evaluated = len(o_ctxs)
+                # 联动: 该片 SKU 的库存增减(行 quantity 累计)
+                from collections import defaultdict
+                deltas = defaultdict(int)
+                for c in cleaned_all:
+                    sku = c.get("sku")
+                    if sku not in set(_batch_skus):
+                        continue
+                    _qty = int(c.get("quantity") or 0)
+                    _wh = str(c.get("warehouse") or "")
+                    _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
+                    _d = _qty if _ds == "jd_po" else -_qty
+                    if _d:
+                        deltas[(_sku2 if (_sku2 := sku) else "", _wh, "platform")] = _d
+                adjusted = 0
+                if deltas:
+                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+            _n_off = offset + len(_batch_skus)
+            _done_e = _n_off >= total_skus
+            _sq = round(_t.time() - 0, 1)  # 片内耗时
+            _steps = (params.get("steps") or []) + [{"name": "评估分片 %d" % _win_no, "elapsed": _sq}]
+            if _done_e:
+                execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+                        (json.dumps({**params, "offset": _n_off, "success": len(_batch_skus), "failed": 0,
+                                     "total": total_skus, "steps": _steps, "cur_step": None}, ensure_ascii=False),
+                         json.dumps({"result": {"target": target, "success": len(_batch_skus), "failed": 0,
+                                                "rules_evaluated": evaluated, "inventory_adjusted": adjusted,
+                                                "message": "评估联动完成: 评估 %d SKU, 联动 %d" % (evaluated, adjusted)}},
+                                    ensure_ascii=False), task_id))
+                from routes.analysis_cache import invalidate_all
+                invalidate_all()
+                return {"ok": True, "task_id": task_id, "status": "done", "success": len(_batch_skus),
+                        "rules_evaluated": evaluated, "inventory_adjusted": adjusted}
+            execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps({**params, "offset": _n_off, "success": len(_batch_skus), "failed": 0,
+                                 "total": total_skus, "steps": _steps}, ensure_ascii=False), task_id))
+            return {"ok": True, "task_id": task_id, "status": "running", "page": _win_no}
+        except Exception as _e5:
+            try_err('cleansing', '评估分片事务异常(回滚可重试)', _e5)
+            return {"ok": True, "task_id": task_id, "status": "running"}
+    except Exception as _e6:
+        try_err('cleansing', '评估任务降级', _e6)
+        return {"ok": True, "task_id": task_id, "status": "running"}
+
 
 
 @router.post("/cleansing/templates")
