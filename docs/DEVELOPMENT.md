@@ -980,3 +980,24 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **回款矩阵**(按到账时间归属): 仅月度/完整月可用——today/week/custom 前端弱化禁点+hover 提示; month 全亮
 - **回款数据源**: gmv_flows 表(platform+flow_no 去重——表B 资金流水——清洗页「GMV 回款」类型导入); dashboard payout=真实流水优先(无数据→None+pending 前端"待接入资金流水"——算不准宁可不给)
 - **日志收口**: perf_debug/slow_alert 入 dev 白名单(直插日志); execute 响应含 target 字段(部署验证/诊断)
+
+### 15.61 GMV 回款导入链路根治 + 看板联动自然口径收口(2026-10-16 下午——线上 5 次 failed=15 实证闭环)
+- **BOM 双重化根因(用户 5 次 failed=15 真因)**: 上传 bytes 存 TEXT 列→pymysql 读回 str 含 U+FEFF→续跑 `c.encode('utf-8-sig')` 再叠 BOM→`_parse_table` 只剥一个 BOM→首列名 `\ufeff平台` 与映射键失配→platform 全空整批 failed(preview 正常即因此); **修复: 读回分支 `encode('utf-8')`(不追加 BOM)**——写入 utf-8-sig 字节已含 BOM, TEXT 列读回已带 U+FEFF
+- **导入写入防崩四件套**: ①数字列强清洗(amount/settled_amount 去 ¥元逗号→float 非法归 0——1366 整批失败根治; arrived_time 7 格式归一) ②必填 key 缺失留痕(err_details→前端 failed_details 区块——曾只 failed++ 无因) ③列并集+缺失补默认(数字0/文本空——tuple(r[c]) KeyError 整批崩) ④重复提前检测泛化 order+gmv_flow(键 platform|flow_no; order 保留软删排除)+force_new 对称
+- **gmv_flows 唯一键补 channel**: `uq_platform_flow(platform,flow_no)` → `uq_platform_flow_ch(channel,platform,flow_no)`——跨渠道同 platform+flow_no 互阻 1062; 幂等迁移(cleanse_write 写前 SHOW INDEX 检查 ALTER; index.py DDL 同步)
+- **回款数据源隔离(全局主体)**: 表列 channel + 写入强制注入 + 读取 WHERE channel + 重复检测 channel + 唯一键 channel——全链路渠道隔离
+- **看板联动自然口径收口(前端/后端)**: 文本 近7天/近30天→上周/上月(locale 同步); 环比标签 较上周→较上上周/较上月→较上上月(窗口=完整自然周/月, 基准=上上周/上上月——无歧义); periodDays 跟随后端实际天数(自然月 28-31 曾写死 30); 环比跟随维度(总/净/回款分取 prev_gmv/prev_net_gmv/prev_payout——后端 periods 补字段, 无数据不显示); 日均回款去推算兜底(有就有没有就没有); 店铺卡 month 回款按 shop 真值/品牌卡=null(流水无品牌维度)/前端 _g 去 fallback; trend payout 月度真实流水按日覆盖(折线/微条与主值同源, 无流水日=0 不打洞)
+- **接口修复**: quality-logs/files scope 空/all 1064→不过滤降级(注意 % 转义层级: 不经 Python 预格式化的分支用单 %s, 经 `% _in` 的分支用 %%s); 补货无分页裸调 413→过滤后截断 2000; reset 清单补 gmv_flows
+- **写放大教训(06674741→064504ac revert)**: invalidate_all 35 调用点(规则/订单/供应商/商品/采购/清洗/seed 每步)×每次全表 300 天 agg 重建 = RU 爆/并发线程——**固定 3 天原状; 历史缺口(9月差146万)线上手动 rebuild_agg(90) 修复, 后续导入历史订单按需手动 rebuild 或另出有界方案**
+
+### 15.62 协同验证-修复闭环工作流(2026-10-16 下午沉淀——GMV 回款链全程实证)
+- **验证闭环顺序**(用户给验证清单 → 行为验证 → 根因定位 → 修复 → CI → 部署 → 行为复验):
+  1. 生产行为验证: 登录(demo 只读/admin 写操作)→ 逐接口实测(HTTP 码+返回结构)——不依赖部署 API(iSH 沙箱 pages-api 经常 HTTP 000 连不上, 记忆实证)
+  2. 根因定位: diag SQL 直查(admin 专用 SHOW/SELECT——唯一稳的库查询路径)逐日对比(orders 直查 vs agg 表)→ 定位缺口范围; 日志留痕(try_err/窗口计数)找时间线
+  3. 本地单测复现: 同一数据本地 `_parse_table/_clean_rows/_write_rows` 跑一遍, 对比线上行为差异(preview 正常 vs execute 失败 → 定位读源文件路径分支)
+  4. 修复 → 语法门禁 3.10 + local_test 153 → push edgeone(用户确认)→ CI(前端 tsc/prettier/eslint 全绿)
+  5. 部署确认: 行为验证(新代码特征字段/行为)——不依赖 health version(那是数据版本非代码); CI 报红用 GitHub API 拉 run/jobs 详情定位(prettier 格式类错误本地 `npx prettier --check` 先跑)
+- **"有就有没有就没有"铁律**(用户口径): 回款/净维度无真实数据不拿推算兜底(日均/图柱/趋势——主值"待接入资金流水"、图柱 null、趋势按日真值无流水日=0)——宁缺毋滥不误导
+- **自然口径无歧义**: 窗口=完整自然周/月(上周/上月), 环比基准=上上周/上上月——前端标签必须区分(较上上周/较上上月), 不许同名(较上周)制造歧义
+- **写放大审查**: 改任何"全局失效/重建"逻辑前, 先数调用点(rg invalidate_all)——35 处写操作 × 全表重建 = RU 爆; 修复用有界窗口或手动触发
+- **改动纪律**: 改前端/后端前先读相关完整代码(用户强制); 提交粒度=一改一 commit 语义完整; CI 报红立刻修(不得跳过)

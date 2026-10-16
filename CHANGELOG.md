@@ -1,6 +1,20 @@
 ## 2026-10-16: 导入性能根治+评估分离+GMV 自然口径+回款流水
 > commits 8503542c→71400568; CI 绿; 153/153。
 
+### 下午: GMV 回款导入链路根治 + 看板联动自然口径收口(f1ed3643→ce6244d1)
+> 线上 5 次实测导入全 failed=15 无因可查 → 全链路修复闭环 + 看板维度联动
+- **回款导入 1366 根治**: amount/settled_amount 写入前强制数字清洗(¥/元/逗号→float 非法归 0——线上 1366 整批失败); arrived_time 7 格式归一(带 T/斜杠/年月日)
+- **BOM 双重化根因**(用户 5 次 failed=15 真因): 源文件 bytes 存 TEXT 列→读回 str 含 U+FEFF→续跑 c.encode('utf-8-sig') 再叠 BOM→首列名 '\ufeff平台' 映射失配→platform 全空整批 failed(preview 正常即因此); 修: 读回分支 encode('utf-8') 不追加 BOM
+- **必填 key 留痕**: 缺 platform/flow_no 行失败原因进 err_details→前端"失败明细"区块激活(曾只 failed++ 无因可查)
+- **重复提前检测泛化**: order+gmv_flow 对称(键 platform|flow_no; order 保留软删排除); force_new 只写新增泛化; 前端 gmv_flow 必映射校验(平台+流水号)
+- **gmv_flows 唯一键补 channel**: uq_platform_flow→uq_platform_flow_ch(跨渠道同 platform+flow_no 互阻 1062); index.py+cleanse_write DDL 同步+幂等迁移
+- **行间列缺失防崩**: 列并集 + 缺失补默认(数字0/文本空——tuple(r[c]) KeyError 整批崩)
+- **接口修复**: quality-logs/files scope 空/all 1064→不过滤降级(+% 转义层级修正); 补货无分页裸调 413→过滤后截断 2000
+- **看板联动自然口径收口**: 前端文本 近7天/近30天→上周/上月(含锤子菜单 locale); 环比标签 较上周/较上月→较上上周/较上上月(窗口=完整自然周/月, 基准=上上周/上上月无歧义); 日均天数跟随后端 periodMeta.days(自然月 28-31 曾写死 30); 环比跟随维度(总/净/回款分取 prev_gmv/prev_net_gmv/prev_payout——后端 periods 补字段); 日均回款去推算兜底(有就有没有就没有); 店铺/品牌卡回款同口径(_stores_range month 按 shop 真值 / _brands_range month=null / 前端 _g 去 fallback); trend payout 月度真实流水按日覆盖(折线/微条与主值同源, 无流水日=0)
+- **reset 清单补 gmv_flows**(重置连回款流水一起清)
+- **CI 修复**: prettier 换行 + 锤子菜单时间文本同步 locale
+- **坑**: invalidate_all 追平改全范围(06674741)写放大误伤(35 调用点×300 天重建 RU 爆)→ revert 回固定 3 天(064504ac)——历史缺口按需手动 rebuild_agg(90)
+
 ### 导入计数器 bug 根治(4000/1000 假象)
 - **根因**: 窗口5 done 步长(写+联动评估~135s) > 防并发锁 3s——轮询重试抢锁重跑窗口5——唯一索引冲突→批失败降级→failed 覆盖计数
 - **修复链**: 锁 150s 反引入窗间 750s 卡(过度修正) → 锁回 3s + finalizing 标记(防重跑) → done 步事务化(失败回滚) → finalizing 超时恢复(进程死 5min 自动清标记重跑——EE/FF/GG 挂起全恢复)
