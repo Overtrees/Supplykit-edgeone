@@ -994,7 +994,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                         : periodMeta.gmv
                   if (_g == null)
                     return (
-                      <span style={{ color: 'var(--muted2)', fontWeight: 500 }}>回款待接入资金流水</span>
+                      <span style={{ color: 'var(--muted2)', fontWeight: 500 }}>
+                        回款待接入资金流水
+                      </span>
                     )
                   return Math.round((_g || 0) / periodDays).toLocaleString()
                 })()}
