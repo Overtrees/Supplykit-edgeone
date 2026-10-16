@@ -12,6 +12,7 @@ import { api, uploadRawBytes } from '../api/client'
 import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { t } from '../locale'
 
 const INV_FIELDS = [
@@ -638,6 +639,7 @@ export default function CleansingPage() {
     setColMapSaving(false)
   }
   const execLock = useRef(false)
+  const [overlapAsk, setOverlapAsk] = useState<{ message: string } | null>(null)
   const doExecute = async () => {
     if (execLock.current) return
     execLock.current = true
@@ -706,6 +708,13 @@ export default function CleansingPage() {
             setBs('')
             execLock.current = false
             toast.warning(d.message || '文件已导入过，跳过 ' + d.failed + ' 条')
+            return
+          }
+          // 2026-10-16 部分重叠(底部弹窗决策): X 条已存在(新增 Y 条)——确认只写新增?
+          if (d.overlap_partial) {
+            setOverlapAsk({ message: d.message || '存在重复数据' })
+            setBs('')
+            execLock.current = false
             return
           }
           setRes(d)
@@ -835,6 +844,53 @@ export default function CleansingPage() {
     }
   }
 
+  // 部分重叠确认(底部弹窗): 确认→force_new 只写新增; 取消→停
+  const confirmOverlap = async () => {
+    if (!overlapAsk) return
+    setOverlapAsk(null)
+    setBs('执行中')
+    execLock.current = false
+    try {
+      const r = await api.post(
+        '/api/cleansing/execute-async?force_new=1&q_target=' +
+          tt +
+          '&q_channel=' +
+          ch +
+          '&q_conflict=' +
+          hammerCleansingConflict +
+          '&q_mp=' +
+          encodeURIComponent(JSON.stringify(mp)),
+        fBuf ? new Blob([fBuf]) : f,
+      )
+      const d = r.data
+      if (!d.ok) {
+        toast.error(d.error || '提交失败')
+        setBs('')
+        return
+      }
+      if (d.success !== undefined) {
+        setRes(d)
+        goStep(3)
+        setBs('')
+        execLock.current = false
+        toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
+        return
+      }
+      setRes({
+        async: true,
+        taskId: d.task_id,
+        submitted: d.total_rows || d.total || '?',
+        message: '已提交 ' + (d.total_rows || d.total || '?') + ' 条',
+      })
+      goStep(3)
+      setBs('')
+      execLock.current = false
+      toast.success('已提交，后台续跑中')
+    } catch (e) {
+      toast.error('请求异常: ' + (e.message || ''))
+      setBs('')
+    }
+  }
   const quickExecute = async () => {
     setBs('执行中')
     try {
@@ -1829,6 +1885,16 @@ export default function CleansingPage() {
             </div>
           </div>
         </div>
+      )}
+      {overlapAsk && (
+        <ConfirmDialog
+          open={!!overlapAsk}
+          title="检测到重复数据"
+          message={overlapAsk.message}
+          confirmLabel="确认导入新增"
+          onClose={() => setOverlapAsk(null)}
+          onConfirm={confirmOverlap}
+        />
       )}
     </div>
   )

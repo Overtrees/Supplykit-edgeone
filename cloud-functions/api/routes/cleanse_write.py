@@ -285,51 +285,7 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
             rows.append(row)
         if not rows:
             continue
-        # 2026-10-15 已存在跳过(用户记忆机制落地): 同键已在库(非 sum 模式)——跳过该行不覆盖(防白导/防误覆盖)
-        # 语义: 重复导入同表——已存在行跳过(完成页显示跳过 N 条); 冲突按钮 overwrite 仍覆盖?——本实现跳过(贴合'提示已存在重复→跳过')
-        if not sum_mode:
-            _key_rows = []
-            _seen = set()
-            for _r in rows:
-                _key = tuple(str(_r.get(k)) for k in keys)
-                if _key in _seen:
-                    continue
-                _seen.add(_key)
-                _key_rows.append((_key, _r))
-            if _key_rows:
-                _cond = " AND ".join("`%s` IN (%s)" % (k, ",".join(["%s"] * len(_key_rows))) for k in keys)
-                _params = []
-                for _k, _ in _key_rows:
-                    for _v in _k:
-                        _params.append(_v)
-                # 2026-10-15 批量查重优化(逐键 EXISTS 曾 5000 行~277s——性能灾难): CONCAT 键单列 IN 一次查
-                # TiDB 无多列 IN——用 CONCAT(col1,'|',col2) 合成键——IN 500 分片(往返 10 次内)
-                _key2 = [str(_k[0]) + "|" + str(_k[1]) if len(_k) > 1 else str(_k[0]) for _k, _ in _key_rows]
-                _dup = set()
-                _uk2 = list(dict.fromkeys(_key2))
-                # 2026-10-15 查重改 OR 条件(走索引——CONCAT 全表扫描 12 万行曾慢): (col1=%s AND col2=%s) OR ... 500/片
-                for _i in range(0, len(_uk2), 500):
-                    _batch = _uk2[_i:_i + 500]
-                    _parsed = [b.split("|") for b in _batch]
-                    if len(keys) > 1:
-                        # 2026-10-16 精确查重: 查询返回实际存在键集(含 channel)——只标记命中键(曾 one() 任一命中→整片 500 全判 dup 误伤)
-                        _or = " OR ".join("(`%s`=%s AND `%s`=%s)" % (keys[0], "%s", keys[1], "%s") for _ in _parsed)
-                        _params = [channel]
-                        for p in _parsed:
-                            _params += [p[0], p[1] if len(p) > 1 else ""]
-                        _sql = ("SELECT CONCAT(`%s`,'|',`%s`) AS k FROM `%s` WHERE channel=%s AND (%s)"
-                                % (keys[0], keys[1], table, "%s", _or))
-                        for _ex in query(_sql, _params):
-                            _k_p = (_ex.get("k") or "").split("|")
-                            _dup.add((_k_p[0], _k_p[1] if len(_k_p) > 1 else ""))
-                    else:
-                        _ph = ",".join(["%s"] * len(_batch))
-                        for _ex in query("SELECT `%s` AS k FROM `%s` WHERE `%s` IN (%s)" % (keys[0], table, keys[0], _ph), _batch):
-                            _dup.add((_ex.get("k"),))
-                if _dup:
-                    rows = [r for r in rows if tuple(str(r.get(k)) for k in keys) not in _dup]
-                    failed += len(_dup)
-                    continue
+        # 2026-10-16 去写入层查重(前端提前检测已拦截重复——订单号+sku+69码组合——后端纯写入提速回 seed)
         cols = list(rows[0].keys())
         sql = "INSERT INTO `%s` (%s) VALUES (%s)" % (
             table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))

@@ -281,11 +281,20 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                             "AND CONCAT(order_no,'|',sku) IN (%s)" % ("%s", _in_ph))
                     _cnt = one(_sql, [channel] + _batch)
                     _exists += int((_cnt or {}).get("c") or 0)
-                if _keys and _exists >= len(set(_keys)):
-                    # 全部已存在——重复导入——同步返回跳过(不建任务)
-                    return {"ok": True, "task_id": "", "success": 0, "failed": len(_keys),
-                            "total_rows": len(_brows), "duplicate": True,
-                            "message": "文件已导入过（同键全部已存在），已跳过 %d 条" % len(_keys)}
+                _force_new = request.query_params.get("force_new", "")
+                if _keys and not _force_new:
+                    _uk_n = len(set(_keys))
+                    if _exists >= _uk_n:
+                        # 全部已存在——重复导入——同步返回跳过(不建任务)
+                        return {"ok": True, "task_id": "", "success": 0, "failed": len(_keys),
+                                "total_rows": len(_brows), "duplicate": True,
+                                "message": "文件已导入过（同键全部已存在），已跳过 %d 条" % len(_keys)}
+                    if _exists > 0:
+                        # 部分重叠(2026-10-16): 返回 overlap——前端弹窗"X 条已存在(新增 Y 条)——确认只写新增?"
+                        return {"ok": True, "task_id": "", "success": 0, "failed": _exists,
+                                "total_rows": len(_brows), "overlap_partial": True,
+                                "overlap": _exists, "new": _uk_n - _exists,
+                                "message": "%d 条已存在（新增 %d 条）——确认导入新增？" % (_exists, _uk_n - _exists)}
         except Exception:
             pass
     except Exception:
@@ -414,6 +423,22 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                         x["order_status"] = _ncol(channel, "order_status", str(x["order_status"]))
             except Exception as _e:
                     try_err('cleansing', '静默降级', _e)
+        # 2026-10-16 force_new 只写新增: 确认导入后过滤重叠行(unique idx 兜底防重复插入失败)
+        if params.get("force_new") and target == "order" and cleaned:
+            try:
+                _fk = [str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") for r in cleaned if r.get("order_no") and r.get("sku")]
+                _fuk = list(dict.fromkeys(_fk))
+                _fexists = set()
+                for _fi in range(0, len(_fuk), 200):
+                    _fb = _fuk[_fi:_fi+200]
+                    _fp = ",".join(["%s"] * len(_fb))
+                    _frow = query("SELECT CONCAT(order_no,'|',sku) k FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND CONCAT(order_no,'|',sku) IN (%s)" % ("%s", _fp), [channel] + _fb)
+                    for _r2 in _frow:
+                        _fexists.add(_r2.get("k") or "")
+                if _fexists:
+                    cleaned = [r for r in cleaned if not (str(r.get("order_no") or "") + "|" + str(r.get("sku") or "") in _fexists)]
+            except Exception:
+                pass
         w_success, w_failed, err_details = _write_rows(target, channel, conflict_mode, cleaned)
         success += w_success
         failed += w_failed
