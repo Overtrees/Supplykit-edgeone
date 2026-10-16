@@ -224,6 +224,8 @@ _INDEXES = [
 # 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),  # 被 idx_orders_sku_ordered_at(sku,ordered_at,channel) 前缀覆盖
+    ("idx_orders_order_no", "orders"),  # 2026-10-16 被 idx_orders_no_sku(order_no,sku) 唯一索引前缀覆盖——冗余——写放大 11 KV→10 KV
+    ("idx_orders_ch_status", "orders"),  # 2026-10-16 被 idx_orders_ch_ordered_at(channel,order_status,ordered_at) 前缀覆盖——冗余——10 KV→9 KV
 ]
 if os.environ.get("DB_BACKEND", "tidb") == "tidb":
     try:
