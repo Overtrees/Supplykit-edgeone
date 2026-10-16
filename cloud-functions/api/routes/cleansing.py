@@ -391,9 +391,18 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
         params = json.loads(row.get("params") or "{}")
         fname = params.get("fname") or "import.csv"
         # 2026-10-16 done 步中(finalizing=1)→ 返回 running 不重跑(锁已释放但 done 步进行中——防重跑覆盖计数)
+        # 超时恢复: finalizing>5分钟且无更新(updated_at 旧——done 步请求被 Makers 冻结/进程死——连接死 TiDB 自动回滚未落库)
+        # → 清标记允许重跑 done 步(事务幂等——重跑干净——根治进程死永久卡)
         try:
             if params.get("finalizing"):
-                return {"ok": True, "task_id": task_id, "status": "running"}
+                _fs = one("SELECT updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
+                _fu = str((_fs or {}).get("updated_at") or "")[:19].replace("T", " ")
+                if _fu and _fu < (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"):
+                    execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                            [json.dumps({**params, "finalizing": 0}, ensure_ascii=False), task_id])
+                    try_err('cleansing', 'finalizing 超时恢复(>5min——done 步死连接已回滚——重跑)', '')
+                else:
+                    return {"ok": True, "task_id": task_id, "status": "running"}
         except Exception:
             pass
         mp = json.loads(params.get("mp") or "{}")
