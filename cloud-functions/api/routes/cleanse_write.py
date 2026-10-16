@@ -50,7 +50,7 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                     if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
             inv_map = {}
             if skus:
-                for _i in range(0, len(skus), 200):
+                for _i in range(0, len(skus), 500):  # 500/片(曾 200——25 次往返慢)
                     _batch = skus[_i:_i + 200]
                     _ph = ",".join(["%s"] * len(_batch))
                     for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "

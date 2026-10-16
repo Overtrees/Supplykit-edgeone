@@ -222,6 +222,10 @@ _INDEXES = [
     ("idx_snapshot_ch_date_full", "daily_sales_snapshot", "channel, date, sku, warehouse, order_count"),  # 覆盖索引(2026-10-10: 快照查询免回表——digest miss 3.5s 根治)
 ]
 # 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
+_ADD_INDEXES = [
+    ("idx_alerts_status_source", "alerts", "(status, source)"),  # 2026-10-16 evaluate 预载 SELECT status+source 走索引(9.8万行全扫曾慢)
+]
+
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),  # 被 idx_orders_sku_ordered_at(sku,ordered_at,channel) 前缀覆盖
     ("idx_orders_order_no", "orders"),  # 2026-10-16 被 idx_orders_no_sku(order_no,sku) 唯一索引前缀覆盖——冗余——写放大 11 KV→10 KV
@@ -235,6 +239,11 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
             except Exception as _e:
                     try_err('index', '静默降级', _e)
+        for _iname2, _itbl2, _icols2 in _ADD_INDEXES:
+            try:
+                _exec("ALTER TABLE `%s` ADD INDEX `%s` %s" % (_itbl2, _iname2, _icols2))
+            except Exception:
+                pass
         for _iname, _tbl in _DROP_INDEXES:
             try:
                 _exec("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname, _tbl))
