@@ -8,7 +8,7 @@ import ErrorRetry from '../components/ErrorRetry'
 import Chart from '../components/Chart'
 import { t } from '../locale'
 
-const periodLabel = { today: '今日', week: '近7天', month: '近30天' }
+const periodLabel = { today: '今日', week: '上周', month: '上月' }
 
 // 仓库集合标签截断: 后端 warehouse 可能为 "北京仓,上海仓,成都仓" 集合(逗号连接) → 前2仓+等N仓, title 给完整
 const fmtWh = w => {
@@ -532,16 +532,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         ? dashboard?.period_brands?.[periodTab] || dashboard?.brands || []
         : dashboard?.period_stores?.[periodTab] || dashboard?.stores || []
     // GMV 视角切换: 净GMV=总GMV-退款(后端 stores/brands 已带 net_gmv)
-    const _g = i =>
-      gmvView === 'net'
-        ? i.net_gmv != null
-          ? i.net_gmv
-          : i.gmv
-        : gmvView === 'payout'
-          ? i.payout != null
-            ? i.payout
-            : i.gmv
-          : i.gmv
+    // 2026-10-16 去推算兜底: 回款维度无真实流水(payout 缺失)时不 fallback gmv——有就有没有就没有
+    const _g = i => {
+      if (gmvView === 'net')
+        return i.net_gmv != null ? i.net_gmv : Number(i.gmv || 0) - Number(i.refund_amount || 0)
+      if (gmvView === 'payout') return i.payout != null ? i.payout : null
+      return i.gmv != null ? i.gmv : 0
+    }
     return {
       tooltip: {
         trigger: 'axis',
@@ -676,10 +673,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     _acByType2.slow_moving != null
       ? _acByType2.slow_moving
       : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
-  const periodDays =
-    periodTab === 'custom'
-      ? periodMeta?.days || 30
-      : { today: 1, week: 7, month: 30 }[periodTab] || 30
+  // 2026-10-16 自然口径: 后端 periods.days 已是实际窗口天数(上周=7/上月=自然月实际天数 28-31)
+  // —— 曾写死 {month:30} 致自然月 31 天时日均算错; 优先取后端, 兜底按窗口类型
+  const periodDays = periodMeta?.days || { today: 1, week: 7, month: 30 }[periodTab] || 30
   // 濒临断货: 兼容旧数组/新{items,total,critical,warning}结构——卡上大数字/紧急警告用全量计数(完整性)
   // 补货模式联动: bbcc→BC 合计维度(对齐库存卡 bc tab: B+C 按 SKU 合计); traditional→C 仓维度
   // stockRisk 归一化兼容层: 后端可能返回 数组(旧, 仅 items/total) / 对象(新, bc/c/own 维度)
@@ -942,12 +938,29 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             >
               <span>{periodMeta.orders} 单</span>
               {(() => {
-                const last = Number(periodMeta.gmv || 0),
-                  prev = Number(periodMeta.prev_gmv || 0)
-                if (!prev) return null
-                const pct = ((last - prev) / prev) * 100
+                // 2026-10-16 环比跟随维度(总/净/回款分别取各自 last/prev);
+                // 后端 prev_net_gmv/prev_payout 缺失时(净/回款无环比数据源)不显示——有就有没有就没有
+                const _last =
+                  gmvView === 'net'
+                    ? periodMeta.net_gmv != null
+                      ? periodMeta.net_gmv
+                      : periodMeta.gmv || 0
+                    : gmvView === 'payout'
+                      ? periodMeta.payout != null
+                        ? periodMeta.payout
+                        : null
+                      : periodMeta.gmv || 0
+                const _prev =
+                  gmvView === 'net'
+                    ? periodMeta.prev_net_gmv
+                    : gmvView === 'payout'
+                      ? periodMeta.prev_payout
+                      : periodMeta.prev_gmv
+                if (_last == null || _prev == null || !_prev) return null
+                const pct = ((Number(_last) - Number(_prev)) / Number(_prev)) * 100
+                // 2026-10-16 无歧义: 窗口=上周/上月(完整自然周/月), 环比基准=上上周/上上月
                 const _cmpLabel =
-                  periodTab === 'today' ? '较昨日' : periodTab === 'week' ? '较上周' : '较上月'
+                  periodTab === 'today' ? '较昨日' : periodTab === 'week' ? '较上上周' : '较上上月'
                 return (
                   <span
                     style={{
@@ -968,6 +981,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-10)' }}>
                 · 日均 ¥
                 {(() => {
+                  // 2026-10-16 去推算兜底: 回款维度无真实流水时显示待接入(不拿 gmv-refund-subsidy 凑)
                   const _g =
                     gmvView === 'net'
                       ? periodMeta.net_gmv != null
@@ -976,10 +990,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       : gmvView === 'payout'
                         ? periodMeta.payout != null
                           ? periodMeta.payout
-                          : (periodMeta.gmv || 0) -
-                            (dashboard?.summary?.refund_amount || 0) -
-                            (dashboard?.summary?.subsidy_amount || 0)
+                          : null
                         : periodMeta.gmv
+                  if (_g == null)
+                    return (
+                      <span style={{ color: 'var(--muted2)', fontWeight: 500 }}>回款待接入资金流水</span>
+                    )
                   return Math.round((_g || 0) / periodDays).toLocaleString()
                 })()}
               </span>

@@ -451,14 +451,20 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
 
     periods = {
         "today": {"gmv": tg, "orders": to, "days": 1, "prev_gmv": pg, "prev_orders": po,
+                  "prev_net_gmv": round(pg - _refund(d1, d1), 2),
+                  "prev_payout": round(pg - _refund(d1, d1) - _sub(d1, d1), 2),
                   "net_gmv": round(tg - _refund(today_s, today_s), 2), "subsidy_amount": round(_sub(today_s, today_s), 2),
                   "payout": round(tg - _refund(today_s, today_s) - _sub(today_s, today_s), 2)},
         "week": {"gmv": wg, "orders": wo, "days": (_last_sun and 7), "prev_gmv": pwg, "prev_orders": pwo,
-                 "net_gmv": round(wg - _refund(d7, today_s), 2), "subsidy_amount": round(_sub(d7, today_s), 2),
-                 "payout": round(wg - _refund(d7, today_s) - _sub(d7, today_s), 2)},
+                 "prev_net_gmv": round(pwg - _refund(d14, _prev_sun), 2),
+                 "prev_payout": round(pwg - _refund(d14, _prev_sun) - _sub(d14, _prev_sun), 2),
+                 "net_gmv": round(wg - _refund(d7, d8), 2), "subsidy_amount": round(_sub(d7, d8), 2),
+                 "payout": round(wg - _refund(d7, d8) - _sub(d7, d8), 2)},
         "month": {"gmv": mg, "orders": mo, "days": _last_m1 and (_tmp_ld := ((now.replace(day=1) - timedelta(days=1)).day)) or 30, "prev_gmv": pmg, "prev_orders": pmo,
-                  "net_gmv": round(mg - _refund(d30, today_s), 2), "subsidy_amount": round(_sub(d30, today_s), 2),
-                  "payout": round(mg - _refund(d30, today_s) - _sub(d30, today_s), 2)},
+                  "prev_net_gmv": round(pmg - _refund(_prev_m1, _prev_m_end), 2),
+                  "prev_payout": round(pmg - _refund(_prev_m1, _prev_m_end) - _sub(_prev_m1, _prev_m_end), 2),
+                  "net_gmv": round(mg - _refund(d30, d31), 2), "subsidy_amount": round(_sub(d30, d31), 2),
+                  "payout": round(mg - _refund(d30, d31) - _sub(d30, d31), 2)},
     }
 
     health = _health_index(channel, mode, _inv_rows, _ds_map)
@@ -522,9 +528,21 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     }
     # 周期趋势(前端 gmv 小卡图表按今日/本周/本月联动)
     def _trend_range(d0, d1):
-        return [{"日期": x.get("日期"), "GMV": x.get("GMV"), "订单数": x.get("订单数"),
-                 "net_gmv": x.get("net_gmv"), "payout": x.get("payout")}
-                for x in trend_data if d0 <= str(x.get("日期") or "")[:10] <= d1]
+        # 2026-10-16 回款口径: 月度且有真实流水 → 按日真值(无到账日=0, 不打洞);
+        # 无真实流水 → payout=null(前端待接入, 不显示推算)——有就有没有就没有
+        _is_month = d0 == d30 and d1 == d31
+        out = []
+        for x in trend_data:
+            _d = str(x.get("日期") or "")[:10]
+            if d0 <= _d <= d1:
+                _pd = x.get("payout")
+                if _is_month and _flow_day is not None:
+                    _pd = _flow_day.get(_d, 0.0)
+                elif _is_month:
+                    _pd = None
+                out.append({"日期": x.get("日期"), "GMV": x.get("GMV"), "订单数": x.get("订单数"),
+                            "net_gmv": x.get("net_gmv"), "payout": _pd})
+        return out
 
     # 周期店铺(前端店铺 GMV 卡周期联动)
     def _stores_range(d0, d1):
@@ -536,13 +554,25 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                     ssb[s2] = ssb.get(s2, 0) + sb
                 if st == "申请退款":
                     srf[s2] = srf.get(s2, 0) + gv
-        return [{"name": k, "gmv": round(v, 2),
-                 "net_gmv": round(v - srf.get(k, 0), 2),
-                 "payout": round(v - srf.get(k, 0) - ssb.get(k, 0), 2)}
-                for k, v in sorted(sg.items(), key=lambda x: -x[1])]
+        # 2026-10-16 回款口径: 月度且有真实流水 → 按 shop 真值; 无 → null(不显示推算)——
+        # 与 GMV 卡回款维度"有就有没有就没有"同源一致
+        _is_month_st = d0 == d30 and d1 == d31
+        out = []
+        for k, v in sorted(sg.items(), key=lambda x: -x[1]):
+            _pd = round(v - srf.get(k, 0) - ssb.get(k, 0), 2)
+            if _is_month_st and _flow_shop is not None:
+                _pd = _flow_shop.get(k, 0.0)
+            elif _is_month_st:
+                _pd = None
+            out.append({"name": k, "gmv": round(v, 2),
+                        "net_gmv": round(v - srf.get(k, 0), 2),
+                        "payout": _pd})
+        return out
 
-    # 2026-10-16 GMV 回款: 真实资金流水(gmv_flows)优先——月度按到账时间归属; 无数据降级 orders 推算
+    # 2026-10-16 GMV 回款: 优先真实资金流水(gmv_flows——按到账时间月度归属); 无数据降级 orders 推算
     _po_m = None
+    _flow_day = None   # 回款趋势: 真实流水按日净额 {日期: 金额}(有流水才查)
+    _flow_shop = None  # 店铺回款: 真实流水按 shop 聚合(月度有流水才查)
     try:
         from db import query as _qf
         _rr = _qf("SELECT COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
@@ -556,6 +586,25 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     if _po_m is not None:
         periods["month"]["payout"] = _po_m
         periods["month"]["payout_source"] = "flow"   # 真实资金流水
+        # 回款趋势数据源(折线/微条/店铺图柱口径统一): 按日 + 按 shop 聚合真实流水
+        try:
+            from db import query as _qfd
+            _flow_day = {}
+            for _r in _qfd("SELECT DATE(arrived_time) d, COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
+                           "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) v "
+                           "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
+                           "GROUP BY DATE(arrived_time)",
+                           [channel, d30 + " 00:00:00", d31 + " 23:59:59"]):
+                _flow_day[str(_r.get("d") or "")[:10]] = round(float(_r.get("v") or 0), 2)
+            _flow_shop = {}
+            for _r in _qfd("SELECT shop, COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
+                           "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) v "
+                           "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
+                           "GROUP BY shop",
+                           [channel, d30 + " 00:00:00", d31 + " 23:59:59"]):
+                _flow_shop[str(_r.get("shop") or "")] = round(float(_r.get("v") or 0), 2)
+        except Exception as _e:
+                try_err('dashboard', '回款流水按日/店铺聚合降级', _e)
     else:
         periods["month"]["payout"] = None            # 无真实流水——前端弱化提示(不显示推算——v1.0 算不准宁可不给)
         periods["month"]["payout_source"] = "pending"
@@ -612,9 +661,14 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                 _bm[_b] = {"g": round(float(_r2.get("g") or 0), 2),
                            "rf": round(float(_r2.get("rf") or 0), 2),
                            "sb": round(float(_r2.get("sb") or 0), 2)}
-            return [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
-                     "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
-                    for k, v in sorted(_bm.items(), key=lambda x: -x[1]["g"])]
+            # 2026-10-16 回款口径: 品牌维度无真实流水归属(gmv_flows 仅 shop 维度)→ month 回款=null
+            # (不显示推算——与 GMV 卡"有就有没有就没有"同源); 非 month 周期保留 orders 推算
+            _is_month_b = d0 == d30 and (not d1 or d1 == d31)
+            out = []
+            for k, v in sorted(_bm.items(), key=lambda x: -x[1]["g"]):
+                out.append({"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
+                            "payout": None if _is_month_b else round(v["g"] - v["rf"] - v["sb"], 2)})
+            return out
         except Exception:
             return []
     period_brands = {"today": _brands_range(today_s, today_s),
