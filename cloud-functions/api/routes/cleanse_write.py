@@ -304,8 +304,8 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
             pass
         # 批量写入(1000/批 executemany 单语句——TiDB 单语句原子无需事务; 事务(5000行大=持锁慢/500×10小=往返多)均慢——
         # 无事务 + 1000 行/批: 5 批单语句(原子 + 往返少)——5000 行每步 ~5-15s)
-        for _bi in range(0, len(rows), 500):
-            _b = rows[_bi:_bi + 500]  # 500/批(对齐 seed——TiDB serverless 单条 INSERT 上限——1000 批曾 26s/窗慢)
+        for _bi in range(0, len(rows), 1000):
+            _b = rows[_bi:_bi + 1000]
             try:
                 executemany(sql, [tuple(r[c] for c in cols) for r in _b])
                 success += len(_b)
