@@ -309,7 +309,9 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
             try:
                 executemany(sql, [tuple(r[c] for c in cols) for r in _b])
                 success += len(_b)
-            except Exception:
+            except Exception as _be:
+                # 2026-10-16 留痕(曾无痕——批失败被吞——窗口5 计数 4000/1000 无法定位)
+                try_err('cleanse_write', '写入批失败降级: %s (表 %s, 批 %d 行)' % (str(_be)[:120], table, len(_b)), _be)
                 # 批失败(单语句原子——无部分写入)→ 单行降级(精确计数)
                 for r in _b:
                     try:
