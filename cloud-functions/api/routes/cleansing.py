@@ -615,14 +615,65 @@ def cleansing_eval_status(task_id: str = ""):
             for x in cleaned_all:
                 if x.get("order_status"):
                     x["order_status"] = _ncol3(channel, "order_status", str(x["order_status"]))
-        # 一次性: 事务内全量评估+联动(幂等——失败回滚重试)
+        # 2026-10-16 非事务化(对照: 事务写放大 123s 被杀 vs 非事务 evaluate_many 4.67s): 评估非事务(幂等——existing 去重预载)
         try:
-            from db import transaction as _txn3
-            with _txn3():
-                from routes.cleanse_write import _finalize_import
-                adjusted, evaluated, _msg = _finalize_import(target, channel, _mpd, cleaned_all, len(cleaned_all), 0, round(_t.time() - started, 1))
+            from db import query as _q5, execute as _e5, transaction as _txn5
+            from routes.cleanse_write import _adjust_inventory
+            from core.rules import evaluate_many, load_rules_for
+            from collections import defaultdict
+            # ① 评估(非事务——幂等——existing 去重不重复创建)
+            seen = set()
+            skus = [c.get("sku") for c in cleaned_all
+                    if c.get("sku") and not (c.get("sku") in seen or seen.add(c.get("sku")))]
+            inv_map = {}
+            if skus:
+                for _i in range(0, len(skus), 500):
+                    _batch = skus[_i:_i + 500]
+                    _ph = ",".join(["%s"] * len(_batch))
+                    for r in _q5("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+                                 "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
+                                 [channel] + _batch):
+                        inv_map[r.get("sku")] = int(r.get("avail") or 0)
+            o_ctxs = []
+            for c in cleaned_all:
+                sku = c.get("sku")
+                if not sku:
+                    continue
+                oq = int(c.get("quantity") or 0)
+                o_ctxs.append({"sku": sku, "channel": channel,
+                               "order": {"quantity": oq}, "order_qty": oq,
+                               "available_stock": inv_map.get(sku, 0),
+                               "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
+            evaluated = 0
+            if o_ctxs:
+                evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
+                evaluated = len(o_ctxs)
+            # ② 联动(独立短事务——原子——失败回滚不重复扣减)
+            deltas = defaultdict(int)
+            _wht = {}
+            for c in cleaned_all:
+                _sku = c.get("sku")
+                if not _sku:
+                    continue
+                _qty = int(c.get("quantity") or 0)
+                _wh = str(c.get("warehouse") or "")
+                _ds = ((_mpd or {}).get("_meta") or {}).get("data_source", "")
+                _d = _qty if _ds == "jd_po" else -_qty
+                _wt = "platform"
+                if _d:
+                    deltas[(_sku, _wh, _wt)] += _d
+                    _wht[(_sku, _wh, _wt)] = _wt
+            adjusted = 0
+            try:
+                with _txn5():
+                    if deltas:
+                        adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+            except Exception as _e5b:
+                try_err('cleansing', '联动事务异常(回滚可重试)', _e5b)
+                return {"ok": True, "task_id": task_id, "status": "running"}
+            _msg = "评估 %d SKU, 联动 %d" % (evaluated, adjusted)
         except Exception as _e5:
-            try_err('cleansing', '评估任务事务异常(回滚可重试)', _e5)
+            try_err('cleansing', '评估任务异常(可重试)', _e5)
             return {"ok": True, "task_id": task_id, "status": "running"}
         elapsed = round(_t.time() - started, 1)
         _steps = [{"name": "评估联动", "elapsed": elapsed}]
