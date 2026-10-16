@@ -511,7 +511,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             from routes.analysis_cache import invalidate_all
             invalidate_all()
             return {"ok": True, "task_id": task_id, "status": "done",
-                    "success": success, "failed": failed, "message": _msg}
+                    "success": success, "failed": failed,
+                    "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed)}
         # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
         _sq = round(_t.time() - started, 1)
         _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": _sq}]
