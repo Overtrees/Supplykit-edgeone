@@ -605,7 +605,8 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 500):
         else:
             return {"ok": False, "error": "源文件不存在"}
         headers, rows = _parse_table(data, params.get("fname") or "import.csv")
-        cleaned_all = _clean_rows(rows, json.loads(mp))
+        _mpd = mp if isinstance(mp, dict) else json.loads(mp or "{}")  # params 读回 mp 是 dict——容错
+        cleaned_all = _clean_rows(rows, _mpd)
         if target == "order":
             from routes.suppliers import _norm_column_value as _ncol3
             for x in cleaned_all:
@@ -657,7 +658,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 500):
                         continue
                     _qty = int(c.get("quantity") or 0)
                     _wh = str(c.get("warehouse") or "")
-                    _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
+                    _ds = ((_mpd or {}).get("_meta") or {}).get("data_source", "")
                     _d = _qty if _ds == "jd_po" else -_qty
                     if _d:
                         deltas[(_sku2 if (_sku2 := sku) else "", _wh, "platform")] = _d
