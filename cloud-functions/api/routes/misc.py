@@ -117,8 +117,10 @@ def list_log_files(days: int = 30, scope: str = ""):
     # 2026-10-16 修复: scope 空/未知/all 时 _SCOPE_TYPES.get 返回空元组 → IN () 语法错误(1064)
     # —— 降级为不过滤类型(全量明细), 语义=全部视图; user/dev 显式时仍按白名单
     _sc2 = _sc if _sc in _SCOPE_TYPES else ""
+    # 注意 % 转义层级: 空分支不经过 Python % 预格式化 → 用单 %s(直接给 pymysql);
+    # 有 scope 分支先 % _in 预格式化 → 用 %%s(% → %)
     _sql = ("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM quality_logs "
-            "WHERE created_at >= %%s GROUP BY d ORDER BY d DESC")
+            "WHERE created_at >= %s GROUP BY d ORDER BY d DESC")
     _params = [_cut + " 00:00:00"]
     if _sc2:
         _in = ",".join(["%s"] * len(_SCOPE_TYPES[_sc2]))
