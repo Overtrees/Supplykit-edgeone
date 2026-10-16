@@ -316,6 +316,9 @@ d = r.json()
 check("cleansing/execute-async", d.get("ok") is True and bool(d.get("task_id")), r.text[:150])
 r = client.get("/cleansing/task/clean_1", headers=AH)
 check("cleansing/task done", r.json().get("status") == "done", r.text[:120])
+# 2026-10-16 分离: 导入 done 应自动创建评估任务 + 续跑可推进
+_ev = client.get("/cleansing/eval-status?task_id=clean_1_eval", headers=AH)
+check("cleansing eval 任务存在", _ev.status_code == 200, _ev.text[:120])
 r = client.get("/cleansing/templates", headers=AH)
 check("cleansing/templates GET", r.json().get("ok") is True, r.text[:120])
 r = client.post("/cleansing/templates", json={"name": "t1", "doc_type": "order",
