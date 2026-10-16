@@ -646,8 +646,10 @@ def cleansing_eval_status(task_id: str = ""):
                                "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
             evaluated = 0
             if o_ctxs:
+                _te0 = _t.time()
                 evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
                 evaluated = len(o_ctxs)
+                try_err('cleansing', 'eval 评估段耗时: %s (ctx %d)' % (round(_t.time() - _te0, 1), len(o_ctxs)))
             # ② 联动(独立短事务——原子——失败回滚不重复扣减)
             deltas = defaultdict(int)
             _wht = {}
@@ -665,9 +667,11 @@ def cleansing_eval_status(task_id: str = ""):
                     _wht[(_sku, _wh, _wt)] = _wt
             adjusted = 0
             try:
+                _te1 = _t.time()
                 with _txn5():
                     if deltas:
                         adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+                try_err('cleansing', 'eval 联动段耗时: %s (deltas %d)' % (round(_t.time() - _te1, 1), len(deltas)))
             except Exception as _e5b:
                 try_err('cleansing', '联动事务异常(回滚可重试)', _e5b)
                 return {"ok": True, "task_id": task_id, "status": "running"}
