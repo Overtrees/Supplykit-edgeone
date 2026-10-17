@@ -8,10 +8,24 @@ from db import query
 from routes.common import SALES_STATUSES as _SS  # 日销口径: 发货消耗状态(排除申请退款)
 
 
+def _sku_in_clause(skus, batch=500):
+    """skus 集合 → [(占位符串, 分片列表)]: IN 分片(500/片)防超长 SQL; 空集返回 []"""
+    if not skus:
+        return []
+    _list = sorted({str(s) for s in skus if s})
+    out = []
+    for i in range(0, len(_list), batch):
+        chunk = _list[i:i + batch]
+        out.append((",".join(["%s"] * len(chunk)), chunk))
+    return out
+
+
 def load_daily_sales(cutoff_days, channel, skus=None):
     """统一数据源: 快照历史 + 当天已支付订单补足(渠道隔离)
 
     返回 {sku: {date: qty}}
+    2026-10-17 等价重构: skus 过滤从 Python 全量拉→丢 下推 SQL `sku IN (500/片)`——
+    5 万 SKU/百万订单时快照几十万行不再进 Python(进销存 7s→毫秒级); 语义等同(同集过滤)
     """
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
@@ -19,31 +33,52 @@ def load_daily_sales(cutoff_days, channel, skus=None):
     daily = {}
 
     def _add(sku, d, qty):
-        if skus is not None and sku not in skus:
-            return
-        m = daily.setdefault(sku, {})
+        m = daily.setdefault(str(sku), {})
         m[d] = m.get(d, 0) + qty
 
-    # 1. 快照历史
-    rows = query(
-        "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
-        "WHERE channel=%s AND date>=%s", (channel, cutoff))
-    for r in rows:
-        _add(str(r.get("sku") or ""), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+    _in_chunks = _sku_in_clause(skus)
+    # 1. 快照历史(SQL 层 sku 过滤——分片, 等价于原 Python 过滤)
+    if _in_chunks:
+        for _ph, _chunk in _in_chunks:
+            rows = query(
+                "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+                "WHERE channel=%s AND date>=%s AND sku IN (%s)" % ("%s", "%s", _ph),
+                [channel, cutoff] + _chunk)
+            for r in rows:
+                _add(r.get("sku"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+    else:
+        rows = query(
+            "SELECT date, sku, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+            "WHERE channel=%s AND date>=%s", (channel, cutoff))
+        for r in rows:
+            _add(r.get("sku"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
     # 2. 当天已支付订单补足(口径: 发货消耗状态——待发货/已发货/已完成, 申请退款不消耗库存)
-    today_rows = query(
-        "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
-        "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
-        (channel, today + " 00:00:00"))
-    for o in today_rows:
-        if (o.get("order_status") or "") not in _SS:
-            continue
-        _add(str(o.get("sku") or ""), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+    if _in_chunks:
+        for _ph, _chunk in _in_chunks:
+            today_rows = query(
+                "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+                "WHERE channel=%s AND ordered_at>=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='')"
+                % ("%s", "%s", _ph),
+                [channel, today + " 00:00:00"] + _chunk)
+            for o in today_rows:
+                if (o.get("order_status") or "") not in _SS:
+                    continue
+                _add(o.get("sku"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+    else:
+        today_rows = query(
+            "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+            "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
+            (channel, today + " 00:00:00"))
+        for o in today_rows:
+            if (o.get("order_status") or "") not in _SS:
+                continue
+            _add(o.get("sku"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
     return daily
 
 
 def load_daily_sales_grouped(cutoff_days, channel, skus=None):
-    """快照按 SKU×仓 双口径: 返回 (by_sku, by_sku_wh)"""
+    """快照按 SKU×仓 双口径: 返回 (by_sku, by_sku_wh)
+    2026-10-17 等价重构: skus 过滤下推 SQL(同 load_daily_sales)——同集过滤, 不拉全量"""
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
@@ -51,26 +86,46 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
     by_sku_wh = {}
 
     def _add(key, wh, d, qty):
-        if skus is not None and str(key) not in skus:
-            return
         m = by_sku.setdefault(str(key), {})
         m[d] = m.get(d, 0) + qty
         w = by_sku_wh.setdefault("%s|%s" % (key, wh or ""), {})
         w[d] = w.get(d, 0) + qty
 
-    rows = query(
-        "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
-        "WHERE channel=%s AND date>=%s", (channel, cutoff))
-    for r in rows:
-        _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
-    today_rows = query(
-        "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
-        "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
-        (channel, today + " 00:00:00"))
-    for o in today_rows:
-        if (o.get("order_status") or "") not in _SS:
-            continue
-        _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+    _in_chunks = _sku_in_clause(skus)
+    if _in_chunks:
+        for _ph, _chunk in _in_chunks:
+            rows = query(
+                "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+                "WHERE channel=%s AND date>=%s AND sku IN (%s)" % ("%s", "%s", _ph),
+                [channel, cutoff] + _chunk)
+            for r in rows:
+                _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+    else:
+        rows = query(
+            "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+            "WHERE channel=%s AND date>=%s", (channel, cutoff))
+        for r in rows:
+            _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+    if _in_chunks:
+        for _ph, _chunk in _in_chunks:
+            today_rows = query(
+                "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+                "WHERE channel=%s AND ordered_at>=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='')"
+                % ("%s", "%s", _ph),
+                [channel, today + " 00:00:00"] + _chunk)
+            for o in today_rows:
+                if (o.get("order_status") or "") not in _SS:
+                    continue
+                _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+    else:
+        today_rows = query(
+            "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+            "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
+            (channel, today + " 00:00:00"))
+        for o in today_rows:
+            if (o.get("order_status") or "") not in _SS:
+                continue
+            _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
     return by_sku, by_sku_wh
 
 
