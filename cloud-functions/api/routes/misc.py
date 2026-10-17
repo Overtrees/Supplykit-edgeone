@@ -136,7 +136,8 @@ def list_log_files(days: int = 30, scope: str = ""):
         _d = str(r.get("d") or "")[:10]
         _a = arch_map.get(_d)
         items.append({"date": _d,
-                      "count": int((_a.get("count") if _a else None) or r.get("c") or 0),
+                      # 2026-10-17 修复: 曾优先取归档 count(快照落后)——归档后新增日志不显示; 改 max(归档, 实时明细)=实际条数
+                      "count": max(int((_a.get("count") if _a else 0) or 0), int(r.get("c") or 0)),
                       "updated_at": str(_a.get("updated_at") or "")[:19] if _a else "",
                       "archived": bool(_a)})
         seen.add(_d)
