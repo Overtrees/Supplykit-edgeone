@@ -77,6 +77,16 @@ export default function TaskCard({
 
   const filename = String(resultInner?.filename || result?.filename || '')
   const lastStep = steps.length ? steps[steps.length - 1] : null
+  // 2026-10-17 评估联动任务(cleansing_eval)专属: 窗口推进/评估计数/联动库存数——与导入任务同款
+  const isEval = task.task_type === 'cleansing_eval'
+  const evalTotal = Number(params.total || (params.sku_list as unknown[] | undefined)?.length || 0)
+  const evalOff = Number(params.offset || 0)
+  const evalRules = Number(resultInner?.rules_evaluated ?? 0)
+  const evalInv = Number(resultInner?.inventory_adjusted ?? 0)
+  const evalSeg =
+    evalTotal > 0
+      ? Math.min(Math.floor(evalOff / 1000) + 1, Math.max(Math.ceil(evalTotal / 1000), 1))
+      : 0
 
   return (
     <div className={`task-card${st === 'running' ? ' task-running' : ''}`}>
@@ -154,6 +164,26 @@ export default function TaskCard({
               </span>
             )}
             {elapsed > 0 && <span>耗时 {elapsed}s</span>}
+          </div>
+        )}
+        {isEval && (
+          <div className="task-card-meta">
+            {st === 'running' && evalTotal > 0 && (
+              <span>
+                窗口 {evalSeg} · 已评估 {Math.min(evalOff, evalTotal)}/{evalTotal} SKU
+              </span>
+            )}
+            {st === 'done' && (
+              <span>
+                评估 <b>{evalRules}</b> SKU
+                {evalInv > 0 ? (
+                  <span>
+                    {' '}
+                    · 联动 <b>{evalInv}</b> 库存
+                  </span>
+                ) : null}
+              </span>
+            )}
           </div>
         )}
         {st === 'error' && (
