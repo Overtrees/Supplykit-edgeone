@@ -8,11 +8,18 @@ from db import query
 from routes.common import SALES_STATUSES as _SS  # 日销口径: 发货消耗状态(排除申请退款)
 
 
-def _sku_in_clause(skus, batch=500):
-    """skus 集合 → [(占位符串, 分片列表)]: IN 分片(500/片)防超长 SQL; 空集返回 []"""
+def _sku_in_clause(skus, batch=500, max_sql=2000):
+    """skus 集合 → SQL 下推分片列表; 返回 None = 走全量拉 + Python 过滤(大集合防往返爆炸)
+
+    2026-10-17 部署实证: stock_risk 传 5.2 万 skus 全量下推 → 105 片×2 = 210 次 SQL 往返 → 25.6s(比原来更慢);
+    阈值分流: 集合 ≤2000 → IN 分片下推(往返 ≤8 次, 快); >2000 → 一次全量拉 + Python 过滤(1~2 次往返)——
+    同集过滤语义不变, 只是执行路径按集合大小选最优
+    """
     if not skus:
         return []
     _list = sorted({str(s) for s in skus if s})
+    if len(_list) > max_sql:
+        return None  # 大集合: 走 Python 过滤(1 次全量拉, 避免 N/500×2 次往返)
     out = []
     for i in range(0, len(_list), batch):
         chunk = _list[i:i + batch]
@@ -26,17 +33,22 @@ def load_daily_sales(cutoff_days, channel, skus=None):
     返回 {sku: {date: qty}}
     2026-10-17 等价重构: skus 过滤从 Python 全量拉→丢 下推 SQL `sku IN (500/片)`——
     5 万 SKU/百万订单时快照几十万行不再进 Python(进销存 7s→毫秒级); 语义等同(同集过滤)
+    大集合(>2000)回退 Python 过滤(210 次往返反慢——部署实证 25.6s)
     """
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     daily = {}
+    _in_chunks = _sku_in_clause(skus)
+    _py_filter = _in_chunks is None  # 大集合 → 全量拉 + Python 过滤(1~2 次往返)
+    _skuset = {str(s) for s in (skus or [])} if _py_filter else None
 
     def _add(sku, d, qty):
+        if _py_filter and str(sku) not in _skuset:
+            return
         m = daily.setdefault(str(sku), {})
         m[d] = m.get(d, 0) + qty
 
-    _in_chunks = _sku_in_clause(skus)
     # 1. 快照历史(SQL 层 sku 过滤——分片, 等价于原 Python 过滤)
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
@@ -78,20 +90,25 @@ def load_daily_sales(cutoff_days, channel, skus=None):
 
 def load_daily_sales_grouped(cutoff_days, channel, skus=None):
     """快照按 SKU×仓 双口径: 返回 (by_sku, by_sku_wh)
-    2026-10-17 等价重构: skus 过滤下推 SQL(同 load_daily_sales)——同集过滤, 不拉全量"""
+    2026-10-17 等价重构: skus 过滤下推 SQL(同 load_daily_sales)——同集过滤, 不拉全量;
+    大集合(>2000)回退 Python 过滤(210 次往返反慢——部署实证 stock_risk 25.6s)"""
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     by_sku = {}
     by_sku_wh = {}
+    _in_chunks = _sku_in_clause(skus)
+    _py_filter = _in_chunks is None
+    _skuset = {str(s) for s in (skus or [])} if _py_filter else None
 
     def _add(key, wh, d, qty):
+        if _py_filter and str(key) not in _skuset:
+            return
         m = by_sku.setdefault(str(key), {})
         m[d] = m.get(d, 0) + qty
         w = by_sku_wh.setdefault("%s|%s" % (key, wh or ""), {})
         w[d] = w.get(d, 0) + qty
 
-    _in_chunks = _sku_in_clause(skus)
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
             rows = query(
