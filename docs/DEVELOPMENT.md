@@ -1015,4 +1015,6 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **性能(seed 2000 SKU/17.8万单冷算实测)**: 补货 22-30s→1.78s / summary 13.4s→0.88s / stock-risk 16.3s→2.5s / 进销存 15.7s→1.46s(物化+SQL 下推, 非缓存热)
 - **前后端口径核对(全一致)**: 商品 100/页 SQL下推 / 订单 30/页 / 进销存懒加载 100/页 SQL LIMIT(total 独立 COUNT 稳定) / 补货滚动 100/页物化 / 滞销处置 page=1×100 一次拉 / 供应商全量 20 条
 - **日志收口统一**: _SCOPE_TYPES 3 处漂移→模块级 _LOG_SCOPE_TYPES; 补 5 缺口(cache_invalidate/migration=dev, cleansing_eval/config_history/rule_action=user——此前任何维度看不到)
+- **轻量性能验证三件套(零/极低 RU, 不动数据——2026-10-17)**: ①计算层=本地构造 5 万 SKU dict 跑核心函数(5.32s 冷算 vs 283ms 物化读——纯 Python 零 RU) ②TiDB 层=EXPLAIN ANALYZE 抽样 5 个代表性查询拿真实 RU/扫描行数——**发现 orders 分页 TopN 全表扫 428 RU/次**(17.8万行, 百万订单线性涨; 加 idx_orders_ch_id(channel,id) 后 4 RU/13ms——107 倍降, 索引直达不随行数涨) ③Makers 层=连续 5 请求实测冷启动(0.63-0.75s 稳定, 实例池复用无断层) —— 本地模拟测不出执行计划/RU 与无状态特性, 线上抽样个省 6 个量级
+- **RU 预算要点**: 物化读 4.1 RU / summary 10.8 / 进销存 COUNT 10.5 / 快照聚合 78 / orders 分页 4(修复后)——Starter 约 5M RU/月, 高频轮询接口必须索引直达防线性涨
 - **⚠️ 密码安全红线(新教训)**: commit message 写密码已 push → amend+force push 清除; 密码/secret 永不进 git/对话可见处
