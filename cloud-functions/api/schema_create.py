@@ -29,8 +29,7 @@ _TABLES = {
         "data_source VARCHAR(32) DEFAULT '', supplier VARCHAR(64) DEFAULT '', remark VARCHAR(255) DEFAULT '', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
         "KEY idx_orders_channel_ordered (channel, ordered_at), "
-        "KEY idx_orders_sku_ordered_at (sku, ordered_at, channel), "
-        "UNIQUE KEY uq_orders_no_sku (order_no, sku))"
+        "KEY idx_orders_sku_ordered_at (sku, ordered_at, channel))"
     ),
     "inventory": (
         "CREATE TABLE IF NOT EXISTS inventory ("
