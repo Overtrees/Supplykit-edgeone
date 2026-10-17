@@ -227,7 +227,9 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                     st = '已退货'
                 paid_dt = dt + timedelta(days=pool['paid'][_pi])
                 _a = _amt(q, sk['price'], pool['disc'][_pi], pool['freight'][_pi], pool['sub'][_pi])
-                batch.append({'order_no': '%s-%s%03d-%05d' % (label.upper(), ch, d, total % 100000),
+                # 2026-10-17 去重键兼容: order_no 全局唯一(原 total%100000 超10万轮回→撞 uq 键)
+                # ——改为全渠道累计序号不取模(60天≈9.9万单, 7位够), 且保留渠道/天维度信息
+                batch.append({'order_no': '%s-%s%03d-%07d' % (label.upper(), ch, d, total),
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
                               'sku': sk['sku'], 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,

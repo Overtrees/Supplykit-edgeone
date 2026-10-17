@@ -164,6 +164,61 @@ def _detect_columns(fname, data):
 
 
 # ── detect: 识别列名 ────────────────────────────────────────────────────
+@router.post("/cleansing/dup-check")
+@traced
+async def cleansing_dup_check(request: Request, file: UploadFile = File(None),
+                              q_target: str = Query(""), q_channel: str = Query(""),
+                              q_mp: str = Query("")):
+    """2026-10-17 前端提前检测专用(职责: 前端拦截/后端写入): 三键优先(order_no|sku|barcode,
+    空 barcode 落二键 order_no|sku)查库已存在——纯只读 SELECT 秒级, 不写入不建任务不拖导入性能
+    返回 {duplicate:n(全重), overlap:n(部分), new:n}; 前端据此拦截/弹窗 force_new"""
+    try:
+        _t = q_target or "order"
+        if _t not in ("order", "gmv_flow"):
+            return {"ok": True, "duplicate": 0, "overlap": 0, "new": 0}
+        if not file:
+            _raw = await request.body()
+            if _raw:
+                file = _mk_upload(_raw, "file.csv")
+        data, fname = _read_file_bytes(file)
+        _ch = q_channel or "jd"
+        _, _rows = _parse_table(data, fname)
+        if not _rows:
+            return {"ok": True, "duplicate": 0, "overlap": 0, "new": 0}
+        _mp = json.loads(q_mp or "{}")
+        _cb = _clean_rows(_rows, _mp)
+        if _t == "order":
+            _keys = [
+                (str(r.get("order_no") or "") + "|" + str(r.get("sku") or "")
+                 + (("|" + str(r.get("barcode") or "").strip()) if str(r.get("barcode") or "").strip() else ""))
+                for r in _cb if r.get("order_no") and r.get("sku")]
+            _expr = "CONCAT_WS('|', `order_no`, `sku`, NULLIF(`barcode`,''))"
+            _tbl, _soft = "orders", " AND (deleted_at IS NULL OR deleted_at='')"
+        else:
+            _keys = [str(r.get("platform") or "") + "|" + str(r.get("flow_no") or "") for r in _cb
+                     if r.get("platform") and r.get("flow_no")]
+            _expr = "CONCAT(`platform`,'|',`flow_no`)"
+            _tbl, _soft = "gmv_flows", ""
+        _uk = list(dict.fromkeys(_keys))
+        if not _uk:
+            return {"ok": True, "duplicate": 0, "overlap": 0, "new": 0}
+        _exists = 0
+        for _i in range(0, len(_uk), 200):
+            _batch = _uk[_i:_i + 200]
+            _ph = ",".join(["%s"] * len(_batch))
+            _cnt = one("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                       "AND %s IN (%s)" % (_tbl, _soft, _expr, _ph),
+                       [_ch] + _batch)
+            _exists += int((_cnt or {}).get("c") or 0)
+        _n = len(set(_keys))
+        return {"ok": True, "duplicate": 1 if _exists >= _n else 0,
+                "overlap": _exists if 0 < _exists < _n else 0,
+                "new": _n - _exists}
+    except Exception as _e:
+        from routes.common import try_err as _terr
+        _terr('cleansing', 'dup-check 降级(放行由后端二键兜底)', _e)
+        return {"ok": True, "duplicate": 0, "overlap": 0, "new": 0}
+
 @router.post("/cleansing/driver")
 @traced
 def cleansing_driver(task_id: str = "", driver: str = "", channel: str = ""):
@@ -262,6 +317,8 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
     # 2026-10-15 重复提前检测: 同键已存在(全部重复——二次导入同表)→ 同步返回跳过计数(不建任务——秒级拦截——不等异步 4 分钟)
     # 2026-10-16 泛化: order(键=order_no|sku) + gmv_flow(键=platform|flow_no) 对称拦截
     #   —— gmv_flow 此前无提前检测(仅 DB 唯一索引兜底, 二次导入全批 1062 失败无因)——用户实测重复导入痛点
+    # 2026-10-17 职责边界(用户): 前端负责检测拦截(三键优先 order_no+sku+barcode / 二键兜底),
+    #   后端只做二键写入检测(保持性能稳定, 不逐行算三键)
     try:
         from db import query as _qk
         _dr = _mk_upload(data, fname)
@@ -450,6 +507,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                     try_err('cleansing', '静默降级', _e)
         # 2026-10-16 force_new 只写新增: 确认导入后过滤重叠行(unique idx 兜底防重复插入失败)
         #   —— 泛化 2026-10-16: order(键=order_no|sku) + gmv_flow(键=platform|flow_no) 对称
+        # 2026-10-17 职责边界(用户): 前端检测三键优先, 后端 force_new 保持二键(写入性能稳定)
         if params.get("force_new") and target in ("order", "gmv_flow") and cleaned:
             try:
                 _fk_cfg = {"order": ("orders", "order_no", "sku"),

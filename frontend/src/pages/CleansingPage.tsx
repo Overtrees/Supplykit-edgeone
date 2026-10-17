@@ -715,6 +715,49 @@ export default function CleansingPage() {
           return
         }
       }
+      // 2026-10-17 前端提前检测(职责: 检测拦截在前端/后端只写入): 三键优先 order_no|sku|barcode,
+      // 空 barcode 落二键兜底——dup-check 纯只读秒级; 全重→拦截提示, 部分重叠→force_new 弹窗
+      if (tt === 'order') {
+        try {
+          const _dc = await uploadRawBytes(
+            '/api/cleansing/dup-check?q_target=order&q_channel=' +
+              ch +
+              '&q_mp=' +
+              encodeURIComponent(JSON.stringify(mp)),
+            fBuf ? new Blob([fBuf]) : f,
+          )
+          const dd = _dc.data
+          if (dd && dd.ok !== false) {
+            if (dd.duplicate) {
+              setRes({
+                success: 0,
+                failed: dd.new + dd.overlap || 0,
+                message: '文件已导入过（同键全部已存在），已跳过',
+              })
+              goStep(3)
+              setBs('')
+              execLock.current = false
+              toast.warning('文件已导入过（同键全部已存在），已跳过')
+              return
+            }
+            if (dd.overlap) {
+              setOverlapAsk({
+                message:
+                  '部分数据已存在（已存在 ' +
+                  dd.overlap +
+                  ' 条，新增 ' +
+                  dd.new +
+                  ' 条）——确认只写新增？',
+              })
+              setBs('')
+              execLock.current = false
+              return
+            }
+          }
+        } catch (e) {
+          /* dup-check 降级放行——后端二键兜底 */
+        }
+      }
       try {
         const r = await uploadRawBytes(
           '/api/cleansing/execute-async?q_target=' +

@@ -241,4 +241,15 @@ def create_all_tables():
             ok_n += 1
         except Exception as e:
             try_err('schema', '建表失败 %s' % name, e)
+    # 2026-10-17 唯一索引兜底(职责: 前端三键检测拦截, 后端唯一索引兜底防并发/漏网):
+    # orders uq_orders_no_sku——seed 订单号已修全局唯一(不取模), 清洗导入天然唯一, 幂等补建
+    # (早前 seed 冲突源于 total%100000 轮回, 已修——现在补回兜底)
+    try:
+        from db import query as _q
+        _idx = {str(r.get("Key_name") or "") for r in
+                _q("SHOW INDEX FROM orders")}
+        if "uq_orders_no_sku" not in _idx:
+            execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_no_sku (order_no, sku)")
+    except Exception as e:
+        try_err('schema', 'orders 唯一索引兜底降级', e)
     return ok_n
