@@ -583,7 +583,9 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
             try:
                 _ev_skus = []
                 _ev_seen = set()
-                for _ec in cleaned:
+                # 2026-10-17 修复: 曾从 cleaned(最后窗)提取——分窗接力时只有末窗 SKU 漏前面窗(异步1100行 sku_list=100 实测);
+                # 改从 cleaned_all(全量重清洗)提取——所有窗口 SKU 全覆盖
+                for _ec in cleaned_all:
                     _esk = str(_ec.get("sku") or "").strip()
                     if _esk and _esk not in _ev_seen:
                         _ev_seen.add(_esk)
