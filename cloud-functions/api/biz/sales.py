@@ -276,6 +276,35 @@ def get_sales_digest(channel, days=28):
             ["sales_digest|%s|%s" % (channel, days)])
     except Exception:
         pass
+    # 2026-10-17 物化表优先(根治冷算; 表空/未重建 → 降级原直算): 物化行只存三窗口底料,
+    # fused/sigma 现场算(口径与旧 get_sales_digest 完全一致——rolling_predict(plain))
+    try:
+        from biz.sales import get_sku_sales_stats, WH_ALL
+        _rows = get_sku_sales_stats(channel, wh=WH_ALL, days=days)
+        if _rows:
+            fused = {}
+            sigma = {}
+            for _k, _r in _rows.items():
+                _sku = _r.get("sku") or ""
+                fused[_sku] = rolling_predict(float(_r.get("ds7") or 0),
+                                              float(_r.get("ds14") or 0),
+                                              float(_r.get("ds28") or 0))
+                if abs(float(_r.get("sigma") or 0)) > 0:
+                    sigma[_sku] = float(_r.get("sigma") or 0)
+            # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值; 覆盖 __CALC__ 标记为结果)
+            try:
+                from db import execute as _exec
+                _exec("INSERT INTO analysis_cache(`key`, value) VALUES(%s,%s) "
+                      "ON DUPLICATE KEY UPDATE value=VALUES(value)",
+                      ["sales_digest|%s|%s" % (channel, days),
+                       _json.dumps({"fused": fused, "sigma": sigma})])
+            except Exception:
+                pass
+            _SALES_DIGEST_CACHE[_key] = (_now, ({}, fused, sigma))
+            return {}, fused, sigma
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('sales', 'digest 物化读取降级(走直算)', _e)
     by_sku, _ = load_daily_sales_grouped(days, channel)
     _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
     fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}

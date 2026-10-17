@@ -120,15 +120,54 @@ def _stock_risk(channel, full: int = 0):
     wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
     wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                    wh_multi[28].get(k, 0)) for k in by_sku_wh}
+    # 2026-10-17 物化表优先(根治冷算——stock_risk 曾 16s; 表空/失败 → 保留上方直算结果):
+    # WH_ALL 全仓行→fused/sigma / WH_C 全国C行→fused_c / 逐仓行→wh_fused(口径与直算同源 plain)
+    # 物化行只存三窗口底料, 现场 rolling_predict——与直算逐 SKU 等价
+    _has_materialized = False
+    try:
+        from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
+        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
+        if _rws:
+            fused = {}
+            sigma = {}
+            for _k, _r in _rws.items():
+                _sku = _r.get("sku") or ""
+                fused[_sku] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0), float(_r.get("ds28") or 0))
+                if abs(float(_r.get("sigma") or 0)) > 0:
+                    sigma[_sku] = float(_r.get("sigma") or 0)
+            _rws_c = get_sku_sales_stats(channel, wh=WH_C, days=28)
+            if _rws_c:
+                fused_c = {str(_r.get("sku") or ""): _rp(float(_r.get("ds7") or 0),
+                                                          float(_r.get("ds14") or 0),
+                                                          float(_r.get("ds28") or 0))
+                           for _r in _rws_c.values()}
+            _rws_wh = get_sku_sales_stats(channel, days=28)  # 全维度含逐仓行
+            if _rws_wh:
+                wh_fused = {}
+                for _k, _r in _rws_wh.items():
+                    _wh = _r.get("warehouse") or ""
+                    if _wh and _wh not in (WH_ALL, WH_C, "__BC__"):
+                        _wk = "%s|%s" % (_r.get("sku") or "", _wh)
+                        wh_fused[_wk] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
+                                            float(_r.get("ds28") or 0))
+            _has_materialized = True
+    except Exception as _e:
+        from routes.common import try_err as _terr2
+        _terr2('dash_stock', 'stock_risk 物化读取降级(走直算)', _e)
     # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
     # (供应链看概率和波动: 平均日销够不代表明天稳定, σ 高 → 缓冲要求高)
     sigma = {}
-    for _s, _daily in by_sku.items():
-        if len(_daily) >= 7:
-            _vals = list(_daily.values())
-            _m = sum(_vals) / len(_vals)
-            _v = sum((x - _m) ** 2 for x in _vals) / len(_vals)
-            sigma[_s] = _v ** 0.5
+    # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
+    # (供应链看概率和波动: 平均日销够不代表明天稳定, σ 高 → 缓冲要求高)
+    # 2026-10-17 物化已提供 sigma(WH_ALL 行同源)时跳过直算循环(防覆盖物化结果 + 防 5 万 SKU 空转)
+    if not _has_materialized:
+        sigma = {}
+        for _s, _daily in by_sku.items():
+            if len(_daily) >= 7:
+                _vals = list(_daily.values())
+                _m = sum(_vals) / len(_vals)
+                _v = sum((x - _m) ** 2 for x in _vals) / len(_vals)
+                sigma[_s] = _v ** 0.5
 
     def _ss_dyn(sku, lit):
         return ss_z * sigma.get(sku, 0) * (lit ** 0.5) if lit > 0 else 0.0
