@@ -102,34 +102,14 @@ def _stock_risk(channel, full: int = 0):
         try_err("dash", "hourly_accel 计算降级", _e)
         accel = {}
 
-    by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
-    multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
-    fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
-    # 全国 C 仓日销(BBCC)
-    c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}
-    daily_c = {}
-    for wk, wd in by_sku_wh.items():
-        base, wh = wk.rsplit("|", 1)
-        if wh in c_whs:
-            m = daily_c.setdefault(base, {})
-            for d, q in wd.items():
-                m[d] = m.get(d, 0) + q
-    cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
-    fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
-    # 逐仓日销(传统多仓: 断货预警按 SKU×仓 粒度, 与补货建议逐仓口径一致)
-    wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
-    wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
-                                   wh_multi[28].get(k, 0)) for k in by_sku_wh}
-    # 2026-10-17 物化表优先(根治冷算——stock_risk 曾 16s; 表空/失败 → 保留上方直算结果):
-    # WH_ALL 全仓行→fused/sigma / WH_C 全国C行→fused_c / 逐仓行→wh_fused(口径与直算同源 plain)
-    # 物化行只存三窗口底料, 现场 rolling_predict——与直算逐 SKU 等价
-    _has_materialized = False
+    # ── 2026-10-17 物化短路(根治 3.7-5.5s): 物化表有数据 → 直接读 WH_ALL/WH_C/逐仓行现场 rolling_predict,
+    #    跳过 load_daily_sales_grouped + calc_sales_multi ×3 直算(曾直算抢跑——5 万 SKU 白算 3 次);
+    #    物化空/失败 → 降级原直算(数学等价, 零行为变化)。物化行只存三窗口底料, 现场 rolling_predict 与直算逐 SKU 等价
+    fused, fused_c, wh_fused, sigma, _has_materialized = {}, {}, {}, {}, False
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
         _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
         if _rws:
-            fused = {}
-            sigma = {}
             for _k, _r in _rws.items():
                 _sku = _r.get("sku") or ""
                 fused[_sku] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0), float(_r.get("ds28") or 0))
@@ -154,13 +134,25 @@ def _stock_risk(channel, full: int = 0):
     except Exception as _e:
         from routes.common import try_err as _terr2
         _terr2('dash_stock', 'stock_risk 物化读取降级(走直算)', _e)
-    # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
-    # (供应链看概率和波动: 平均日销够不代表明天稳定, σ 高 → 缓冲要求高)
-    sigma = {}
-    # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
-    # (供应链看概率和波动: 平均日销够不代表明天稳定, σ 高 → 缓冲要求高)
-    # 2026-10-17 物化已提供 sigma(WH_ALL 行同源)时跳过直算循环(防覆盖物化结果 + 防 5 万 SKU 空转)
+    # ── 降级直算(仅物化表空/失败——与旧口径完全一致) ──
     if not _has_materialized:
+        by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
+        multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
+        fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
+        c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}
+        daily_c = {}
+        for wk, wd in by_sku_wh.items():
+            base, wh = wk.rsplit("|", 1)
+            if wh in c_whs:
+                m = daily_c.setdefault(base, {})
+                for d, q in wd.items():
+                    m[d] = m.get(d, 0) + q
+        cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
+        fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
+        wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
+        wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
+                                       wh_multi[28].get(k, 0)) for k in by_sku_wh}
+        # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
         sigma = {}
         for _s, _daily in by_sku.items():
             if len(_daily) >= 7:
