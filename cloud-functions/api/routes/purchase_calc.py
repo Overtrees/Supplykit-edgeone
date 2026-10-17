@@ -43,19 +43,39 @@ def _build_purchase(channel, mode, days=28):
         return ok({"suggestions": []})
 
     # 日销 14+28 双窗口 → fused(趋势加权)
-    daily = load_daily_sales(days, channel, skus=set(products.keys()))
-    multi = calc_sales_multi(daily, windows=[14, 28])
-    s14m, s28m = multi[14], multi[28]
+    # 2026-10-17 物化短路: 读物化 plain ds14/ds28 现场算 14/28 自权重(与直算 calc_sales_multi 逐 SKU 等价——
+    # 自权重公式同下; 物化缺失(fused 空)时回退直算, 保证全 SKU 覆盖)——
+    # 曾 load_daily_sales(全 products 2000 SKU 分片拉快照)+calc_sales_multi(14/28) 每次 2s+
     fused = {}
-    for sku in set(list(s14m) + list(s28m)):
-        a, b = s14m.get(sku, 0), s28m.get(sku, 0)
-        if a > b * 1.15:
-            w14, w28 = 0.55, 0.45
-        elif a < b * 0.85:
-            w14, w28 = 0.35, 0.65
-        else:
-            w14, w28 = 0.20, 0.80
-        fused[sku] = round(a * w14 + b * w28, 1)
+    try:
+        from biz.sales import get_sku_sales_stats, WH_ALL
+        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
+        for _r in (_rws or {}).values():
+            _sku = str(_r.get("sku") or "")
+            _d14 = float(_r.get("ds14") or 0)
+            _d28 = float(_r.get("ds28") or 0)
+            if _d14 > _d28 * 1.15:
+                w14, w28 = 0.55, 0.45
+            elif _d14 < _d28 * 0.85:
+                w14, w28 = 0.35, 0.65
+            else:
+                w14, w28 = 0.20, 0.80
+            fused[_sku] = round(_d14 * w14 + _d28 * w28, 1)
+    except Exception as _e:
+        try_err('purchase', '物化读降级(走直算)', _e)
+    if not fused:
+        daily = load_daily_sales(days, channel, skus=set(products.keys()))
+        multi = calc_sales_multi(daily, windows=[14, 28])
+        s14m, s28m = multi[14], multi[28]
+        for sku in set(list(s14m) + list(s28m)):
+            a, b = s14m.get(sku, 0), s28m.get(sku, 0)
+            if a > b * 1.15:
+                w14, w28 = 0.55, 0.45
+            elif a < b * 0.85:
+                w14, w28 = 0.35, 0.65
+            else:
+                w14, w28 = 0.20, 0.80
+            fused[sku] = round(a * w14 + b * w28, 1)
 
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
