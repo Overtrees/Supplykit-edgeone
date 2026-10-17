@@ -252,4 +252,25 @@ def create_all_tables():
             execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_no_sku (order_no, sku)")
     except Exception as e:
         try_err('schema', 'orders 唯一索引兜底降级', e)
+    # 2026-10-17 幂等补列(已建表 vs DDL 差异自愈——CREATE IF NOT EXISTS 不改已存在表):
+    # inventory.safety_days 曾漏(采购建议 SELECT 用, 1054 实证)——SHOW COLUMNS 差异→ALTER ADD
+    try:
+        from db import query as _q2
+        _extra_cols = {
+            "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
+        }
+        for _t, _cols in _extra_cols.items():
+            try:
+                _have = {str(r.get("Field") or "") for r in _q2("SHOW COLUMNS FROM `%s`" % _t)}
+            except Exception:
+                continue
+            for _c, _c_ddl in _cols:
+                if _c not in _have:
+                    try:
+                        execute("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _c, _c_ddl))
+                        try_err('schema', '%s.%s 补列完成' % (_t, _c), '')
+                    except Exception as _e:
+                        try_err('schema', '%s.%s 补列失败' % (_t, _c), _e)
+    except Exception as e:
+        try_err('schema', '补列自愈降级', e)
     return ok_n

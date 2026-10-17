@@ -92,9 +92,18 @@ def _daily_maintenance(channel="jd"):
 def _daily_rules_guard():
     """每日规则应用层兜底(不依赖 schedules——平台实测从未触发):
     maintenance_log(date+'daily_rules' 主键) 抢占, 抢到则后台线程执行 run_daily_rules()(不阻塞 summary);
-    失败回滚抢占标记, 下次 summary 请求重试(多实例安全)"""
+    失败回滚抢占标记, 下次 summary 请求重试(多实例安全)
+    2026-10-17 数据就绪检测: seed 完成后首跑时物化表可能空/快照旧 → 空评估(孤儿0/触发0)
+    却占位挡后续——先查快照有数据才占位, 未就绪不占位(下次 summary 重试)"""
     try:
         _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # 数据就绪检测: 快照有行才评估(seed/reset 后场景——避免空库空评估占位毒化)
+        try:
+            _snap = one("SELECT COUNT(*) c FROM daily_sales_snapshot") or {}
+            if int(_snap.get("c") or 0) <= 0:
+                return  # 数据未就绪——不占位, 下次 summary 重试
+        except Exception:
+            pass  # 查表失败不阻塞(继续尝试)
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
         if not _got:
             return  # 今天已评估(本实例或其他实例)
