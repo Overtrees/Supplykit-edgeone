@@ -37,7 +37,7 @@ _TABLES = {
         "product_name VARCHAR(128) DEFAULT '', store VARCHAR(64) DEFAULT '', "
         "warehouse VARCHAR(64) DEFAULT '', warehouse_type VARCHAR(20) DEFAULT 'own', "
         "available_qty INT DEFAULT 0, in_transit_qty INT DEFAULT 0, c_transit INT DEFAULT 0, "
-        "safety_qty INT DEFAULT 0, locked_qty INT DEFAULT 0, "
+        "safety_qty INT DEFAULT 0, safety_days DECIMAL(10,2) DEFAULT 0, locked_qty INT DEFAULT 0, "
         "beginning_stock INT DEFAULT 0, month_inbound INT DEFAULT 0, month_outbound INT DEFAULT 0, "
         "turnover_days DECIMAL(10,2) DEFAULT 0, weight DECIMAL(10,2) DEFAULT 0, volume DECIMAL(10,4) DEFAULT 0, "
         "barcode VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
