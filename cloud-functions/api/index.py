@@ -217,6 +217,7 @@ app.include_router(cron_router)
 _INDEXES = [
     ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
     ("idx_orders_ch_id", "orders", "channel, id"),  # 2026-10-17 订单分页 ORDER BY id DESC 走索引(曾 TopN 全表扫 428 RU/次; 百万订单线性涨——加索引只读目标行)
+    ("idx_batches_ch_wt_sku", "batches", "channel, warehouse_type, sku"),  # 2026-10-17 进销存批次效期摘要(channel+wh_type+sku IN)——曾全扫 26782 行 121.6 RU
     ("idx_alerts_ch_status_created", "alerts", "channel, status, created_at"),  # 告警分组配额/列表查询(2026-09-11 体检)
     ("idx_rules_ch_active", "rules", "channel, is_active"),  # 规则列表/评估孤儿查询(2026-09-11 体检)
     ("idx_snapshot_ch_date", "daily_sales_snapshot", "channel, date"),  # 日销窗口查询(2026-10-08 建议页 10s→索引)
