@@ -861,8 +861,10 @@ def _build_aux(channel, mode):
 @traced
 def stock_risk(channel: str = "jd", full: int = 0):
     """濒临断货(30s 共享表缓存)+单独无锁路径(2026-10-11: 行锁对 stock-risk 16s/无锁 2s——无锁保留;
-    瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)"""
-    from routes.analysis_cache import _CACHE_V as _CV
+    瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)
+    2026-10-17 修复: 曾裸 REPLACE + except 静默吞异常 → 缓存永不落库 → 每次全量冷算 2.5-14s;
+    改为无锁缓存(命中秒回/未算写回/写入失败 try_err 留痕——不再静默)"""
+    from routes.analysis_cache import _CACHE_V as _CV, _loads as _lds, _FAILED as _FD
     _key = "%s|stock_risk|%s|%s" % (_CV, channel, full)
     try:
         from db import one, execute
@@ -871,12 +873,26 @@ def stock_risk(channel: str = "jd", full: int = 0):
         if row:
             age = row.get("age")
             if age is not None and int(age) < _RISK_TTL:
-                return ok(_loads(row.get("value") or ""))
-        val = _stock_risk(channel, full=full)
-        execute("REPLACE INTO analysis_cache(`key`, value, created_at) VALUES(%s,%s,NOW(6))",
-                (_key, json.dumps(val, ensure_ascii=False, default=str)))
+                _v = _lds(row.get("value") or "")
+                if _v is not None and _v is not _FD:
+                    return ok(_v)
+        # 未命中: 冷算 + 写回(失败仅留痕, 不阻塞返回——2026-10-17 曾静默吞导致缓存永不落)
+        import json as _json
+        try:
+            val = _stock_risk(channel, full=full)
+        except Exception as _e:
+            try_err('dash', 'stock_risk 计算降级', _e)
+            val = _stock_risk(channel, full=full)
+        try:
+            _vjson = _json.dumps(val, ensure_ascii=False, default=str)
+            if _vjson and len(_vjson) < 6 * 1024 * 1024 - 1024:  # 防超 TiDB 单行上限(曾 11.6MB 教训)
+                execute("REPLACE INTO analysis_cache(`key`, value, created_at) VALUES(%s,%s,NOW(6))",
+                        (_key, _vjson))
+        except Exception as _e2:
+            try_err('dash', 'stock_risk 缓存写回降级(冷算结果已返回)', _e2)
         return ok(val)
-    except Exception:
+    except Exception as _e3:
+        try_err('dash', 'stock_risk 端点降级', _e3)
         return ok(_stock_risk(channel, full=full))
 
 
