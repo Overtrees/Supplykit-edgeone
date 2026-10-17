@@ -202,7 +202,11 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "ordered_at", "paid_at", "platform", "channel", "data_source",
                              "freight_amount", "subsidy_amount", "tax_amount", "discount_amount",
                              "actual_amount", "supplier", "remark"],
-                            cleaned, conflict_mode, "order_no", "sku", channel=channel)
+                            cleaned, conflict_mode, "order_no", "sku", channel=channel,
+                            # 2026-10-17 69码三键优先(order_no|sku|barcode, 空barcode落二键): 同单同SKU同69码多行求和(quantity/金额)
+                            agg_key3="barcode",
+                            agg_sum=["quantity", "total_amount", "actual_amount", "discount_amount",
+                                     "freight_amount", "subsidy_amount", "tax_amount"])
     if target == "gmv_flow":
         # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
         try_err('cleanse_write', 'gmv_flow 分支进入 cleaned=%d' % len(cleaned))
@@ -257,7 +261,8 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         return _write_batch("gmv_flows",
                             ["platform", "shop", "flow_no", "related_no", "arrived_time",
                              "amount", "flow_type", "settled_amount", "channel", "data_source"],
-                            cleaned, conflict_mode, "platform", "flow_no")
+                            cleaned, conflict_mode, "platform", "flow_no",
+                            agg_sum=["amount", "settled_amount"])
     if target in ("inventory", "platform_inv", "inventory_b"):
         wt = _TARGET_WH[target]
         for it in cleaned:
@@ -267,24 +272,30 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
                              "beginning_stock", "month_inbound", "month_outbound", "locked_qty",
                              "c_transit", "weight", "volume"],
-                            cleaned, conflict_mode, "sku", "warehouse", channel=channel)
+                            cleaned, conflict_mode, "sku", "warehouse", channel=channel,
+                            agg_key3="barcode",  # 69码三键(sku|warehouse|barcode, 空落二键)
+                            agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
+                                     "beginning_stock", "month_inbound", "month_outbound"])
     if target == "product":
         return _write_batch("products",
                             ["sku", "product_name", "barcode", "store", "category", "price",
                              "box_qty", "unit", "status", "channel", "brand", "weight", "volume"],
-                            cleaned, conflict_mode, "sku", channel=channel)
+                            cleaned, conflict_mode, "sku", channel=channel,
+                            agg_key3="barcode", agg_overwrite=True)  # 同 SKU+69码 覆盖末行档案
     if target == "supplier":
         return _write_batch("suppliers",
                             ["supplier_code", "supplier_name", "contact_person", "contact_phone",
                              "score", "status", "channel", "brand"],
-                            cleaned, conflict_mode, "supplier_code", channel=channel)
+                            cleaned, conflict_mode, "supplier_code", channel=channel,
+                            agg_overwrite=True)  # 同 supplier_code 覆盖末行档案
     if target == "inbound":
         s, f, ed = _write_batch("inbound_records",
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
                              "price", "box_qty", "unit", "weight", "volume", "status"],
-                            cleaned, conflict_mode, "sku", "inbound_date")
+                            cleaned, conflict_mode, "sku", "inbound_date",
+                            agg_key3="barcode", agg_sum=["quantity", "price"])
         # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 维护
         # 更新方式联动导入冲突模式(conflict_mode): overwrite=删旧插新(文件即权威) / sum=同效期 qty 累加
         # (效期管控数据源: 进销存批次效期预警/临期处置建议)
@@ -301,16 +312,62 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
                              "price", "box_qty", "unit", "weight", "volume", "status"],
-                            cleaned, conflict_mode, "sku", "outbound_date", channel=channel)
+                            cleaned, conflict_mode, "sku", "outbound_date", channel=channel,
+                            agg_key3="barcode", agg_sum=["quantity", "price"])
     return 0, len(cleaned), []
 
-def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd"):
+def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd", agg_sum=None, agg_overwrite=False, agg_key3=None):
     """批量写入: 仅保留存在的列; 冲突策略——
     inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
-    其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)"""
+    其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)
+    2026-10-17 文件内同键聚合(新导入数据内部: 同组合键多行 → 合并, 不撞唯一键 1062):
+    agg_sum=求和列集(数量/金额类——order/inventory/gmv_flow/inbound/outbound 同键多行求和一条);
+    agg_overwrite=True(同键覆盖末行——product/supplier 档案类 upsert 语义); None=不聚合
+    agg_key3=69码三键(订单/库存/商品/出入库: 组合键 + 69码 优先, 69码空落二键——用户定)"""
     if not cleaned:
         return 0, 0, []
     keys = list(dict.fromkeys(key_cols))  # 保序 list(曾 set 无序——查重 OR keys[0]/keys[1] 下标崩)
+    # 2026-10-17 分派式文件内聚合(按 target 组合键/字段特殊适配——不能一刀切)
+    if agg_sum is not None and len(keys) >= 1 and len(cleaned) > 1:
+        _agg_sum_cols = [c for c in agg_sum if c in allowed_cols]
+        _agg_map = {}
+        _agg_order = []
+        for it in cleaned:
+            _base = tuple(str(it.get(k) or "") for k in keys)
+            if not all(_base):
+                continue  # 缺键行留 _write_batch 原判失败逻辑
+            # 69码三键优先: barcode 非空 → 键+69码; 空 → 落二键(与 dup-check/force_new 同规则)
+            _b3 = str(it.get(agg_key3) or "").strip() if agg_key3 else ""
+            _k = _base + ((_b3,) if _b3 else ())
+            if _k not in _agg_map:
+                _agg_map[_k] = dict(it)
+                _agg_order.append(_k)
+            else:
+                _cur = _agg_map[_k]
+                for _c in _agg_sum_cols:
+                    try:
+                        _cur[_c] = float(_cur.get(_c) or 0) + float(it.get(_c) or 0)
+                    except Exception:
+                        pass  # 非数字保持原值
+        if _agg_order:
+            cleaned = [_agg_map[k] for k in _agg_order]
+    elif agg_overwrite and len(keys) >= 1 and len(cleaned) > 1:
+        # 档案类(products/suppliers): 同键覆盖末行(upsert 语义——同 SKU 多行取最后一行档案)
+        _agg_map = {}
+        _agg_order = []
+        for it in cleaned:
+            _base = tuple(str(it.get(k) or "") for k in keys)
+            if not all(_base):
+                continue
+            _b3 = str(it.get(agg_key3) or "").strip() if agg_key3 else ""
+            _k = _base + ((_b3,) if _b3 else ())
+            if _k not in _agg_map:
+                _agg_map[_k] = dict(it)
+                _agg_order.append(_k)
+            else:
+                _agg_map[_k] = dict(it)  # 覆盖末行
+        if _agg_order:
+            cleaned = [_agg_map[k] for k in _agg_order]
     success = failed = 0
     err_details = []
     qty_cols = [c for c in ("quantity", "available_qty") if c in allowed_cols]
