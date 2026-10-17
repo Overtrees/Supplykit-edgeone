@@ -313,30 +313,38 @@ def rolling_predict(s7, s14, s28):
 
 
 # ── 2026-10-17 日销三窗口物化表(根治冷算 22s; 不改变输入集合/四维语义) ──────────────
-# 物化只存"慢变的日销派生"(快照+订单派生, 消费方共享); 库存/当天直查永不物化——
-# 动态安全线实时性由库存直查保证, 与现状语义完全一致(物化表=订单聚合的预计算)
-# 补货特有口径(削峰+shrink)用 *_cut 列隔离, 不吞并 digest/看板/规则的 plain 口径
+# 物化只存"慢变日销底料"(快照+订单派生的三窗口日均/σ/nnz); 库存/当天订单直查永不物化——
+# 动态安全线实时性由库存直查保证; 当天订单读时直查补足(物化行覆盖到快照, 当天增量现场合并)
+# 关键: 不固化 fused(rolling_predict)列——采购用 14/28 自权重、看板/断货用 rolling_predict、
+#      补货用削峰+shrink 组合, 各消费方口径不同, 现场 O(1) 计算(三窗口查表+乘加)
+# 行维度显式枚举(无 any 哨兵): '__C__'=全国platform合计 / '__BC__'=platform+platform_b 合计
+#     / '__ALL__'=全仓合计 / 具体仓名=逐仓(own 仓销量近零, 由消费方按 inventory.warehouse_type 现场筛)
 
 _SKU_STATS_DDL = (
     "CREATE TABLE IF NOT EXISTS sku_sales_stats ("
     "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, warehouse VARCHAR(64) DEFAULT '', "
     "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
-    "fused DECIMAL(12,3) DEFAULT 0, sigma DECIMAL(12,3) DEFAULT 0, "
+    "sigma DECIMAL(12,3) DEFAULT 0, "
     "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
-    "fused_cut DECIMAL(12,3) DEFAULT 0, "
     "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
     "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
     "PRIMARY KEY(channel, sku, warehouse))"
 )
 
+# 行维度白名单(防魔法值): 物化行 warehouse 取值枚举
+WH_C = "__C__"      # 全国 platform 合计(bbcc 补货/断货 C)
+WH_BC = "__BC__"    # platform+platform_b 合计(bbcc 断货 BC)
+WH_ALL = "__ALL__"  # 全仓合计(展示/采购兜底)
 
-def _rebuild_sku_sales_stats(channel, days=28, skus=None):
-    """物化表重建(含当天——订单写后 invalidate 触发; 快照+当天订单同 load_daily_sales_grouped)
 
-    - 行粒度: warehouse='__C__'=全国 C 仓合计(bbcc 用); 具体仓名=逐仓(traditional 用)
-    - plain = calc_sales_multi(默认) —— digest/看板/规则/进销存消费
-    - cut   = 削峰(smooth_promo_spikes)+ sparse=shrink —— 补货专属(与 _build_repl 现口径一致)
-    - upsert 幂等 ON DUPLICATE; 失败降级(不阻塞; 消费方读表 miss 时降级直算)
+def _rebuild_sku_sales_stats(channel, days=60, skus=None):
+    """物化表重建(含当天——写操作后限频触发; 快照+当天订单同 load_daily_sales_grouped)
+
+    - 行粒度: __C__/__BC__/__ALL__ 全国聚合三行 + 具体仓名逐仓行
+    - plain = calc_sales_multi(默认三窗口) —— 看板/规则/进销存/断货消费
+    - cut   = 削峰(smooth_promo_spikes)+ sparse=shrink 三窗口 —— 补货专属(与原 _build_repl 口径一致)
+    - 不存 fused: 消费方现场 rolling_predict(own 权重)/滚动融合, 口径零冲突
+    - upsert 幂等 ON DUPLICATE; 失败降级(消费方读表 miss 时降级直算)
     """
     from db import execute as _ex, executemany as _em, query as _q
     try:
@@ -345,24 +353,32 @@ def _rebuild_sku_sales_stats(channel, days=28, skus=None):
         if not by_sku and not by_sku_wh:
             return 0
         now_d = datetime.now(timezone.utc)
-        # C 仓名集合(与补货 bbcc daily_c 同口径: inventory warehouse_type='platform')
+        # 仓型集合(与补货/断货同口径: inventory warehouse_type)
         try:
-            _c_whs = {str(r.get("warehouse") or "") for r in _q(
-                "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
-                "AND warehouse_type='platform' AND warehouse!=''", [channel])}
+            _wh_type = {}
+            for r in _q("SELECT DISTINCT warehouse, warehouse_type FROM inventory "
+                        "WHERE channel=%s AND warehouse!=''", [channel]):
+                _wh_type[str(r.get("warehouse") or "")] = str(r.get("warehouse_type") or "")
         except Exception:
-            _c_whs = set()
-        # 全国 C 仓合计(逐仓行按 C 仓过滤聚合——与 _build_repl daily_c 等价)
-        by_sku_c = {}
-        if _c_whs:
-            for wk, wd in by_sku_wh.items():
-                base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
-                if wh in _c_whs:
-                    m = by_sku_c.setdefault(base, {})
-                    for d, q in wd.items():
-                        m[d] = m.get(d, 0) + q
-        elif by_sku:
-            by_sku_c = by_sku  # 无仓型数据兜底: 全国合计量
+            _wh_type = {}
+        _c_whs = {w for w, t in _wh_type.items() if t == "platform"}
+        _b_whs = {w for w, t in _wh_type.items() if t == "platform_b"}
+
+        # 全国聚合: __C__(platform) / __BC__(platform+platform_b) / __ALL__(全仓)
+        by_all = dict(by_sku)
+        by_c, by_bc = {}, {}
+        for wk, wd in by_sku_wh.items():
+            base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
+            if not base:
+                continue
+            if wh in _c_whs or wh in _b_whs:
+                m = by_bc.setdefault(base, {})
+                for d, q in wd.items():
+                    m[d] = m.get(d, 0) + q
+            if wh in _c_whs:
+                m = by_c.setdefault(base, {})
+                for d, q in wd.items():
+                    m[d] = m.get(d, 0) + q
 
         def _nnz(daily, win):
             n = 0
@@ -374,8 +390,8 @@ def _rebuild_sku_sales_stats(channel, days=28, skus=None):
                     continue
             return n
 
-        def _to_rows(key_daily, is_wh, wh_label=""):
-            """批量三窗口(plain) → 行列表; cut 组单独批量(削峰+shrink)"""
+        def _to_rows(key_daily, wh_label):
+            """批量三窗口(plain+cut) → 行列表; 不存 fused(消费方现场算)"""
             rows_out = []
             if not key_daily:
                 return rows_out
@@ -383,36 +399,38 @@ def _rebuild_sku_sales_stats(channel, days=28, skus=None):
             _cut = {k: smooth_promo_spikes(d) for k, d in key_daily.items()}
             mc = calc_sales_multi(_cut, windows=[7, 14, 28], sparse="shrink")
             for k, daily in key_daily.items():
-                ds7 = m[7].get(k, 0.0); ds14 = m[14].get(k, 0.0); ds28 = m[28].get(k, 0.0)
-                c7 = mc[7].get(k, 0.0); c14 = mc[14].get(k, 0.0); c28 = mc[28].get(k, 0.0)
-                vals = list(daily.values())
                 sigma = 0.0
+                vals = list(daily.values())
                 if len(vals) >= 7:
                     mm = sum(vals) / len(vals)
                     sigma = (sum((x - mm) ** 2 for x in vals) / len(vals)) ** 0.5
-                _sku = str(k).split("|")[0]
-                _wh = (str(k).split("|")[1] if is_wh else "") or wh_label
                 rows_out.append({
-                    "channel": channel, "sku": _sku, "warehouse": _wh,
-                    "ds7": round(ds7, 3), "ds14": round(ds14, 3), "ds28": round(ds28, 3),
-                    "fused": round(rolling_predict(ds7, ds14, ds28), 3), "sigma": round(sigma, 3),
-                    "ds7_cut": round(c7, 3), "ds14_cut": round(c14, 3), "ds28_cut": round(c28, 3),
-                    "fused_cut": round(rolling_predict(c7, c14, c28), 3),
+                    "channel": channel, "sku": str(k), "warehouse": wh_label,
+                    "ds7": round(m[7].get(k, 0.0), 3), "ds14": round(m[14].get(k, 0.0), 3),
+                    "ds28": round(m[28].get(k, 0.0), 3), "sigma": round(sigma, 3),
+                    "ds7_cut": round(mc[7].get(k, 0.0), 3), "ds14_cut": round(mc[14].get(k, 0.0), 3),
+                    "ds28_cut": round(mc[28].get(k, 0.0), 3),
                     "nnz7": _nnz(daily, 7), "nnz14": _nnz(daily, 14), "nnz28": _nnz(daily, 28),
                     "last_sale": max(daily.keys()) if daily else None})
             return rows_out
 
-        rows = (_to_rows(by_sku_c, False, "__C__")
-                + _to_rows(by_sku_wh, True))  # __C__ 全国 C 仓 + 逐仓行
+        rows = (_to_rows(by_c, WH_C)
+                + _to_rows(by_bc, WH_BC)
+                + _to_rows(by_all, WH_ALL)
+                + _to_rows(by_sku_wh, ""))  # 逐仓行(wh_label='' 表示真仓名在 key 内——由调用侧拆分)
+        # 逐仓行 sku 含 |仓名 → 拆分回 sku/warehouse 两列
+        for r in rows:
+            if r["warehouse"] == "" and "|" in r["sku"]:
+                _s, _w = r["sku"].rsplit("|", 1)
+                r["sku"], r["warehouse"] = _s, _w
         if rows:
-            cols = ["channel", "sku", "warehouse", "ds7", "ds14", "ds28", "fused", "sigma",
-                    "ds7_cut", "ds14_cut", "ds28_cut", "fused_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
+            cols = ["channel", "sku", "warehouse", "ds7", "ds14", "ds28", "sigma",
+                    "ds7_cut", "ds14_cut", "ds28_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
             for i in range(0, len(rows), 500):
                 chunk = rows[i:i + 500]
                 _em("INSERT INTO sku_sales_stats(%s) VALUES(%s) ON DUPLICATE KEY UPDATE "
-                    "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), fused=VALUES(fused), "
-                    "sigma=VALUES(sigma), ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), "
-                    "ds28_cut=VALUES(ds28_cut), fused_cut=VALUES(fused_cut), "
+                    "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), sigma=VALUES(sigma), "
+                    "ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), ds28_cut=VALUES(ds28_cut), "
                     "nnz7=VALUES(nnz7), nnz14=VALUES(nnz14), nnz28=VALUES(nnz28), "
                     "last_sale=VALUES(last_sale), updated_at=CURRENT_TIMESTAMP(6)" % (
                         ", ".join("`%s`" % c for c in cols),
@@ -425,11 +443,13 @@ def _rebuild_sku_sales_stats(channel, days=28, skus=None):
         return 0
 
 
-def get_sku_sales_stats(channel, skus=None, warehouse=None, days=28):
-    """读写一体的物化读取(消费方入口):
-    - 表有数据 → 按 sku/warehouse 查行返回 {sku|sku|wh: (fused, fused_cut, ds7..28, sigma, nnz*, last_sale)}
-    - 表空(首启/重建失败)→ 降级直算(与旧逻辑同一函数, 结果等价)
-    - 快照未含当天时, 当天订单直查补足——由 _rebuild 内部 load_daily_sales_grouped 保证(含当天)
+def get_sku_sales_stats(channel, skus=None, wh=None, days=28):
+    """物化读取(消费方入口): 按 sku/wh 查行返回 {wh|sku: {ds7/14/28, sigma, *_cut, nnz*, last_sale}}
+
+    wh 显式枚举(无魔法值): WH_C(__C__ 全国platform) / WH_BC(__BC__ platform+b) /
+    WH_ALL(__ALL__ 全仓) / 具体仓名(逐仓) / None(全部仓维度)
+    - 表空(首启/重建失败)→ 自动重建(含当天); 消费方读表 miss 时降级直算(调用侧)
+    - 不返回 fused——消费方现场 rolling_predict/own 权重, 口径零冲突
     """
     try:
         from db import query as _q, one as _o
@@ -444,24 +464,25 @@ def get_sku_sales_stats(channel, skus=None, warehouse=None, days=28):
             if _ph:
                 where += " AND sku IN (" + _ph + ")"
                 params += list(skus)[:500]
-        if warehouse:
-            where += " AND warehouse=%s" if warehouse != "any" else " AND warehouse!=''"
-            if warehouse != "any":
-                params += [warehouse]
-        rows = _q("SELECT sku, warehouse, ds7, ds14, ds28, fused, sigma, "
-                  "ds7_cut, ds14_cut, ds28_cut, fused_cut, nnz7, nnz14, nnz28, last_sale "
+        if wh is not None:
+            if wh in (WH_C, WH_BC, WH_ALL) or (isinstance(wh, str) and wh):
+                where += " AND warehouse=%s"
+                params += [wh]
+            else:
+                where += " AND warehouse IN (%s,%s,%s)"  # 非法 wh → 查全部聚合行
+                params += [WH_C, WH_BC, WH_ALL]
+        rows = _q("SELECT sku, warehouse, ds7, ds14, ds28, sigma, "
+                  "ds7_cut, ds14_cut, ds28_cut, nnz7, nnz14, nnz28, last_sale "
                   "FROM sku_sales_stats WHERE %s" % where, params)
         out = {}
         for r in rows:
-            wk = str(r.get("sku") or "")
-            if r.get("warehouse"):
-                wk += "|" + str(r.get("warehouse"))
-            out[wk] = {"sku": r.get("sku"), "warehouse": r.get("warehouse") or "",
+            _w = str(r.get("warehouse") or "")
+            wk = str(r.get("sku") or "") + ("|" + _w if _w else "")
+            out[wk] = {"sku": r.get("sku"), "warehouse": _w,
                        "ds7": float(r.get("ds7") or 0), "ds14": float(r.get("ds14") or 0),
-                       "ds28": float(r.get("ds28") or 0), "fused": float(r.get("fused") or 0),
-                       "sigma": float(r.get("sigma") or 0),
+                       "ds28": float(r.get("ds28") or 0), "sigma": float(r.get("sigma") or 0),
                        "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),
-                       "ds28_cut": float(r.get("ds28_cut") or 0), "fused_cut": float(r.get("fused_cut") or 0),
+                       "ds28_cut": float(r.get("ds28_cut") or 0),
                        "nnz7": int(r.get("nnz7") or 0), "nnz14": int(r.get("nnz14") or 0),
                        "nnz28": int(r.get("nnz28") or 0), "last_sale": str(r.get("last_sale") or "")[:10]}
         return out

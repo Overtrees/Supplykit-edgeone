@@ -15,6 +15,12 @@ import json
 
 _registry = {}
 
+# 2026-10-17 物化追平限频(写放大控制——35 个 invalidate 调用点曾全量重建 RU 爆):
+# 重建(agg/日销物化)5 分钟窗口内只跑一次; 非阻塞锁防并发; 窗口内多余写操作合并
+_MAT_LOCK_OBJ = None
+_MAT_LAST = 0.0
+_MAT_WINDOW = 300  # 5 分钟限频窗口(写操作后 5min 内多次 invalidate → 一次重建)
+
 
 def register(clear_fn):
     """兼容旧 API: 内存清理函数已无意义(表缓存), 保留空实现防崩溃"""
@@ -111,30 +117,46 @@ def invalidate_all():
             except Exception as _e:
                     try_err('analysis_cache', '静默降级', _e)
         # 物化追平(异步线程尽力——写操作不阻塞; 兜底链: 每 miss 即时检查续段 + 读路径当天直查保证数据完整)
+        # 2026-10-17 限频: 5 分钟窗口一次(写放大控制——35 调用点 × 全量重建曾 RU 爆)
         try:
             import threading as _thm
-            def _mat():
-                try:
-                    from routes.dashboard import _rebuild_day_agg, _snapshot_step
-                    from db import one as _o1
-                    _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                              "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-                    _dbs = str(_db.get("m") or "")[:10]
-                    _rebuild_day_agg(3)
-                    # 2026-10-17 日销物化表重建(写操作后预重建——60s 限频合并由调用侧 _mat_lock 保证:
-                    # 多次写操作共享同一 invalidate_all → 一个线程重建; 重建本身含当天订单, 消费方读表零重算)
+            import time as _t2
+            global _MAT_LOCK_OBJ, _MAT_LAST
+            if _MAT_LOCK_OBJ is None:
+                _MAT_LOCK_OBJ = _thm.Lock()
+            _now2 = _t2.time()
+            if _now2 - _MAT_LAST < _MAT_WINDOW:
+                pass  # 窗口内已有重建(数据时效由读侧当天直查兜底, 不重复打 RU)
+            elif _MAT_LOCK_OBJ.acquire(blocking=False):
+                _MAT_LAST = _now2
+
+                def _mat():
                     try:
-                        from biz.sales import _rebuild_sku_sales_stats as _rss
-                        _rss("jd")
-                        _rss("other")
-                    except Exception as _e2b:
-                            try_err('analysis_cache', '物化重建降级', _e2b)
-                    if _dbs:
-                        _snapshot_step("jd", _dbs)
-                        _snapshot_step("other", _dbs)
-                except Exception as _e2:
-                        try_err('analysis_cache', '物化追平降级', _e2)
-            _thm.Thread(target=_mat, daemon=True).start()
+                        from routes.dashboard import _rebuild_day_agg, _snapshot_step
+                        from db import one as _o1
+                        _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                                  "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+                        _dbs = str(_db.get("m") or "")[:10]
+                        _rebuild_day_agg(3)
+                        # 2026-10-17 日销物化表重建(写操作后预重建——限频窗口上方已合并;
+                        # 重建含当天订单, 消费方读表零重算; 实时性: 库存仍每次直查, 物化只慢变日销)
+                        try:
+                            from biz.sales import _rebuild_sku_sales_stats as _rss
+                            _rss("jd")
+                            _rss("other")
+                        except Exception as _e2b:
+                                try_err('analysis_cache', '物化重建降级', _e2b)
+                        if _dbs:
+                            _snapshot_step("jd", _dbs)
+                            _snapshot_step("other", _dbs)
+                    except Exception as _e2:
+                            try_err('analysis_cache', '物化追平降级', _e2)
+                    finally:
+                        try:
+                            _MAT_LOCK_OBJ.release()
+                        except Exception:
+                            pass
+                _thm.Thread(target=_mat, daemon=True).start()
         except Exception:
             pass
     except Exception as e:
