@@ -18,12 +18,37 @@ _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每�
 
 
 def _new_conn():
+    """连接 TiDB(库不存在自动建库——2026-10-17 新集群迁移: 空库首连 Unknown database 时
+    无库连接 CREATE DATABASE 后重连; 幂等, 迁移到空集群自动引导)"""
+    _db = os.environ.get("TIDB_DB", "supplykit")
+    try:
+        return _connect_db(_db)
+    except pymysql.err.OperationalError as _e:
+        if "Unknown database" in str(_e) or "1049" in str(_e):
+            try:
+                _c0 = _connect_db(None)
+                try:
+                    cur = _c0.cursor()
+                    cur.execute("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin" % _db)
+                    cur.close()
+                finally:
+                    try:
+                        _c0.close()
+                    except Exception:
+                        pass
+                return _connect_db(_db)
+            except Exception:
+                pass
+        raise
+
+
+def _connect_db(database):
     return pymysql.connect(
         host=os.environ.get("TIDB_HOST"),
         port=int(os.environ.get("TIDB_PORT", "4000")),
         user=os.environ.get("TIDB_USER"),
         password=os.environ.get("TIDB_PASSWORD"),
-        database=os.environ.get("TIDB_DB", "supplykit"),
+        database=database,
         ssl={"ca": None} if os.environ.get("TIDB_SSL", "true").lower() != "false" else None,
         autocommit=True,
         cursorclass=pymysql.cursors.DictCursor,
