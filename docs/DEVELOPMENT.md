@@ -1021,3 +1021,16 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **排查方法(可复用)**: "接口每次都慢且缓存疑似失效"先查端点是否缺 import(裸写 REPLACE 路径 vs cache_get 路径差异); 慢请求持续+summary 对照正常 → 缓存链路断裂而非 SQL; EXPLAIN ANALYZE 点查 0.59 RU/10ms 证明缓存读本身快
 - **全接口 RU 体检(2026-10-17, 22 项 EXPLAIN ANALYZE)**: 修复 2 个 100+ RU 隐患——orders 分页 428→4(idx_orders_ch_id <channel,id>, ORDER BY id DESC 曾 TopN 全表扫)、批次效期摘要 121.6→2.1(idx_batches_ch_wt_sku <channel,warehouse_type,sku>, insights.py:102 进销存批次摘曾全扫 26782 行); 剩余: 快照 60 天 165(仅物化失效降级路径, 低危不优)、inventory 全行 51(补货/断货必拉, 可接受)——**全高频链路口径 ≤51 RU, 与数据量解耦(索引直达), 百万订单免费额度可承受**
 - **⚠️ 密码安全红线(新教训)**: commit message 写密码已 push → amend+force push 清除; 密码/secret 永不进 git/对话可见处
+
+### 15.64 导入链路全达标 + 双渠道四维 + 只读验证栈落地(2026-10-17 晚——7 类导入实测闭环)
+- **采购页无数据根因(fc1e886d)**: purchase_calc 物化短路漏 s14m/s28m——第 175 行展示字段(daily_sales_14/28)引用直算变量, 物化命中时 UnboundLocalError → 采购接口崩 → 采购页/看板采购卡双空; 修=物化行现场补 s14m/s28m(与直算同构); 采购 140 条恢复
+- **看板补货卡被连累根因(46deabea)**: loadProc 用 Promise.all([replenishment,purchase])——purchase 崩→整体 reject→补货卡也空; 修=**allSettled**(多数据源卡片必须 allSettled——单源崩不拖累另一卡)
+- **角标 200 误导(46deabea)**: store 拉 /api/quality-logs 无 scope→全量 200 截断含 dev 排查日志; 修=scope=user(真实用户业务日志); 角标/计数按用户维度而非全量
+- **质量页文件 count 快照落后(28d98ef3)**: 已归档日期曾优先取归档 count(归档后新增日志不显示——10-17 归档 04:59 count=4, 05:27 新增 4 条仍显示 4); 修=max(归档, 实时明细)=实际条数
+- **导入同键多行聚合(179f4463, 用户定义原则)**: 新导入数据内部同组合键多行→**写入前 Python 分派式聚合**(不依赖 DB 唯一键, 曾撞 uq 撞 1062 整批失败实测 success2/failed1)——订单(order_no+sku+69码三键, 69码空落二键)/库存(sku+warehouse+69码)/出入库(sku+日期+69码)/回款(platform+flow_no)=数量金额求和一条; 商品/供应商=同键覆盖末行档案(upsert); **前端 dup-check 查库(三键)与文件内聚合键规则同源, 不冲突**(dup-check 已 dict.fromkeys 去重, new/overlap 按唯一键算)
+- **评估联动 sku_list 漏窗真因(dc347d73)**: done 分支曾从 cleaned(最后窗)提取 SKU——分窗接力只含末窗(异步 1100 行 sku_list=100 实测, 前面窗 SKU 漏评估); 改从 cleaned_all(全量重清洗)提取——修复后 sku_list=1100 全量, rules_evaluated=inventory_adjusted=1100
+- **7 类导入 × 同步/异步双分支全达标(线上实测)**: order/platform_inv/product/supplier/inbound/outbound/gmv_flow 同步(<1000 请求内)+ 异步(1100 行接力 done)→ 落库验证求和/覆盖正确; 评估联动自动建任务→分窗续跑→done(TaskCard 窗口进度/联动计数可视化 86e107a1)
+- **测试数据清理法(只清测试不动 seed)**: order_no 前缀识别(SYNC-O/BIG-O/EVAL-FIX/O-DUP/TL-EVAL 等)→ diag 分页收 id→ /orders/batch 软删(500/批)→ invalidate→孤儿 oversell 告警自动转 inactive(实测 100 条测试触发的全关, 剩余 66 条全部有活跃订单支撑=真实告警); **清理后必验: 告警 active 100% 有订单关联(无孤儿残留), seed 行数不变**
+- **双渠道(jd/other)四维全链路验证(2026-10-17 晚)**: ①准确性=补货(rolling cut)/采购(14/28 自重)/断货(rolling plain)三口径 × 双渠道 6+ SKU 逐 SKU 与物化底料现场算一致; 看板 GMV jd 54611336.61/other 26434882.98 vs orders_day_agg **逐分一致** ②完整性=物化 __ALL__/__C__/__BC__ = 快照(jd 970/other 1000)全覆盖 ③可靠性=双渠道缓存 6 组齐全(summary/aux/repl/purchase/stock_risk/digest/accel)+ 降级路径保留 ④实时性=双渠道当天订单(755/474)直查补足 + 物化 10:27/10:28 写后重建 ⑤16 项 GET 全 OK
+- **只读验证栈三件套(落地)**: ①scripts/ru_diag.sh——EXPLAIN+GET 一键跑(只读零写, 全接口 RU/耗时表, 一次 <300 RU) ②坑沉淀 local_test(153 项, 每次线上坑→本地用例: 同键聚合/漏窗/BOM/% 转义/缺列 等先本地拦) ③EXPLAIN 定位执行层+GET 定位行为层——**反复调不达标用只读栈, 一次循环 100-300 RU 替代写操作验证(省 2-3 个数量级)**
+- **前端验证缺口(待补)**: CI 只跑 lint/prettier/tsc(静态), vitest 配了 CI 没跑, 无组件/UI 测试——153 是后端 local_test, 前端功能/UI 调整缺回归(后续补 vitest CI + 组件测试)

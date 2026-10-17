@@ -740,5 +740,29 @@ try:
 except Exception as _e:
     check("gmv_flow 用例无异常", False, str(_e)[:200])
 
+# ── 2026-10-17 导入同键多行聚合(订单三键求和/商品覆盖末行——文件内聚合, 防撞唯一键 1062) ──
+try:
+    from routes.cleanse_write import _write_batch as _wb, executemany as _cs_em
+    _WROTE = []
+    from routes import cleanse_write as _cs
+    _orig_em = _cs.executemany
+    _cs.executemany = lambda sql, seq: _WROTE.extend(list(seq))
+    # 订单: 同单同SKU同69码两行(2+3) → 求和一条 quantity=5
+    _r1 = _wb("orders", ["order_no","sku","barcode","quantity","total_amount","product_name"],
+              [{"order_no":"T1","sku":"S1","barcode":"69-1","quantity":2,"total_amount":10,"product_name":"p"},
+               {"order_no":"T1","sku":"S1","barcode":"69-1","quantity":3,"total_amount":15,"product_name":"p"}],
+              "sum", "order_no", "sku", agg_key3="barcode", agg_sum=["quantity","total_amount"])
+    # 列并集后顺序: order_no,sku,barcode,quantity,total_amount,product_name → quantity 在 index3
+    check("同键聚合: 订单三键求和(2+3=5)", _r1[0] == 1 and _r1[1] == 0 and _WROTE and _WROTE[0][3] == 5, str(_WROTE[:1]))
+    # 商品: 同SKU两行 → 覆盖末行(档案类走 agg_overwrite 分支)
+    _WROTE.clear()
+    _r2 = _wb("products", ["sku","product_name","price"],
+              [{"sku":"P1","product_name":"旧","price":10.0},{"sku":"P1","product_name":"新","price":20.0}],
+              "sum", "sku", agg_overwrite=True)
+    check("同键聚合: 商品覆盖末行", _r2[0] == 1 and _WROTE and _WROTE[0][1] == "新", str(_WROTE[:1]))
+    _cs.executemany = _orig_em
+except Exception as _e:
+    check("同键聚合用例无异常", False, str(_e)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
