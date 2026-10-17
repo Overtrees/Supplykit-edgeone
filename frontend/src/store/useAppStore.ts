@@ -263,7 +263,7 @@ const initAppStore = (set, get) => ({
             '&status=' +
             encodeURIComponent(st),
         ),
-        api.get('/api/quality-logs'),
+        api.get('/api/quality-logs?scope=user'), // 2026-10-17 角标按用户维度(曾全量 200 截断——含 dev 排查日志误导)
         api.get('/api/alerts'),
       ])
       const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))

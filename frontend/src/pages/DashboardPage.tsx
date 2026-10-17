@@ -203,7 +203,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const loadProc = async () => {
     setProcLoading(true)
     try {
-      const [r, p] = await Promise.all([
+      const [r, p] = await Promise.allSettled([
         api.get(
           '/api/insights/replenishment?days=28&mode=' +
             _replMode +
@@ -221,7 +221,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           { timeout: 90000 },
         ),
       ])
-      const repData = r.data || {}
+      const repData = (r.status === 'fulfilled' ? r.value.data : null) || {}
       const repItems = Array.isArray(repData) ? repData : repData.items || []
       const repNeed = (Array.isArray(repItems) ? repItems : [])
         .filter(x => (x.suggested_qty || 0) > 0 || (x.b_suggested || 0) > 0)
@@ -234,7 +234,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           days_to_empty: x.days_to_empty || 999,
           wh: x.warehouse || '',
         }))
-      const purObj = p.data || {}
+      // 2026-10-17 allSettled: 采购/补货单接口失败不再拖累另一卡(曾 purchase 崩 → Promise.all reject → 双卡空)
+      const purObj = (p.status === 'fulfilled' ? p.value.data : null) || {}
       const purItems = (purObj && purObj.suggestions) || []
       const purNeed = (Array.isArray(purItems) ? purItems : [])
         .filter(x => (x.actual_purchase || 0) > 0)
