@@ -76,6 +76,18 @@ def _build_purchase(channel, mode, days=28):
             else:
                 w14, w28 = 0.20, 0.80
             fused[sku] = round(a * w14 + b * w28, 1)
+    # 2026-10-17 物化短路补 s14m/s28m(第 175 行展示字段引用——曾物化命中时 UnboundLocalError → 采购页无数据):
+    # 从物化行现场取(与直算同构——物化行即三窗口底料)
+    s14m = {}
+    s28m = {}
+    try:
+        from biz.sales import get_sku_sales_stats as _gss2, WH_ALL as _WA2
+        _r2 = _gss2(channel, wh=_WA2, days=28) or {}
+        for _k2, _v2 in _r2.items():
+            s14m[_v2.get("sku") or ""] = float(_v2.get("ds14") or 0)
+            s28m[_v2.get("sku") or ""] = float(_v2.get("ds28") or 0)
+    except Exception:
+        pass  # 物化读取失败时 s14m/s28m 保持空(展示字段兜底 0, 计算用 fused 已就绪)
 
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
