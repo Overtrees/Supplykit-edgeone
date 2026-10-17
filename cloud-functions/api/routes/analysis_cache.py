@@ -121,6 +121,14 @@ def invalidate_all():
                               "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
                     _dbs = str(_db.get("m") or "")[:10]
                     _rebuild_day_agg(3)
+                    # 2026-10-17 日销物化表重建(写操作后预重建——60s 限频合并由调用侧 _mat_lock 保证:
+                    # 多次写操作共享同一 invalidate_all → 一个线程重建; 重建本身含当天订单, 消费方读表零重算)
+                    try:
+                        from biz.sales import _rebuild_sku_sales_stats as _rss
+                        _rss("jd")
+                        _rss("other")
+                    except Exception as _e2b:
+                            try_err('analysis_cache', '物化重建降级', _e2b)
                     if _dbs:
                         _snapshot_step("jd", _dbs)
                         _snapshot_step("other", _dbs)

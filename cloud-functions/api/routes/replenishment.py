@@ -4,7 +4,6 @@ from fastapi import APIRouter, Request
 
 from db import query, one
 from routes.common import ok, fail, traced, try_err
-from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict, smooth_promo_spikes
 
 router = APIRouter(tags=["insights"])
 
@@ -113,44 +112,86 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
 
 
 def _build_repl(channel, mode):
-    """补货建议计算体(共享缓存 builder, 返回全量列表)——2026-10-11 独立查询并行(快照/config/库存/商品/季节——
-    串行 5 查询曾 13s, 并行后 = 最重查询耗时)"""
+    """补货建议计算体(共享缓存 builder, 返回全量列表)
+    2026-10-17 物化重构: 日销三窗口从"每次请求全量重算(22s)"改为读物化表 sku_sales_stats——
+    物化表列: __C__=全国C仓(bbcc)/__ALL__=全国(展示)/逐仓(traditional); cut 列=削峰+shrink(补货口径)
+    表空/重建失败 → 降级直算(与旧逻辑完全一致); 库存/配置仍每次直查(实时性不变)
+    """
+    _stats = {}
+    try:
+        from biz.sales import get_sku_sales_stats
+        _stats = get_sku_sales_stats(channel, days=60) or {}
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('repl', '物化读取降级', _e)
+        _stats = {}
+    # 直算降级(仅物化表空/不可用时——与旧口径一致; 构造同构 _stats 使主循环单一)
+    if not _stats:
+        try:
+            from biz.sales import load_daily_sales_grouped as _ldg, calc_sales_multi as _csm, \
+                smooth_promo_spikes as _sps, rolling_predict as _rp
+            _by, _by_wh = _ldg(60, channel)
+            _c_whs = {r.get("warehouse") for r in query(
+                "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
+                [channel])}
+            _by_c = {}
+            for wk, wd in _by_wh.items():
+                base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
+                if wh in _c_whs:
+                    m = _by_c.setdefault(base, {})
+                    for d, q in wd.items():
+                        m[d] = m.get(d, 0) + q
+            if not _by_c:
+                _by_c = _by
+            _mc = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[7, 14, 28], sparse="shrink")
+            for _k, _v in _mc.get(7, {}).items():
+                _st = _stats.setdefault("%s|__C__" % _k, {})
+                _st["ds7_cut"] = _v
+            _mc14 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[14], sparse="shrink")
+            _mc28 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[28], sparse="shrink")
+            for _k in _mc.get(7, {}):
+                _st = _stats.setdefault("%s|__C__" % _k, {})
+                _st["ds14_cut"] = _mc14[14].get(_k, 0)
+                _st["ds28_cut"] = _mc28[28].get(_k, 0)
+                _st["fused_cut"] = _rp(_st["ds7_cut"], _st["ds14_cut"], _st["ds28_cut"])
+            _ma = _csm({k: _sps(v) for k, v in _by.items()}, windows=[7, 14, 28], sparse="shrink")
+            _ma14 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[14], sparse="shrink")
+            _ma28 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[28], sparse="shrink")
+            for _k in _ma.get(7, {}):
+                _st = _stats.setdefault("%s|__ALL__" % _k, {})
+                _st["ds7_cut"] = _ma[7].get(_k, 0)
+                _st["ds14_cut"] = _ma14[14].get(_k, 0)
+                _st["ds28_cut"] = _ma28[28].get(_k, 0)
+                _st["fused_cut"] = _rp(_st["ds7_cut"], _st["ds14_cut"], _st["ds28_cut"])
+            _mw = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[7, 14, 28], sparse="shrink")
+            _mw14 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[14], sparse="shrink")
+            _mw28 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[28], sparse="shrink")
+            for _k in _mw.get(7, {}):
+                _st = _stats.setdefault(_k, {})
+                _st["ds7_cut"] = _mw[7].get(_k, 0)
+                _st["ds14_cut"] = _mw14[14].get(_k, 0)
+                _st["ds28_cut"] = _mw28[28].get(_k, 0)
+                _st["fused_cut"] = _rp(_st["ds7_cut"], _st["ds14_cut"], _st["ds28_cut"])
+        except Exception as _e2:
+            from routes.common import try_err
+            try_err('repl', '物化直算降级失败', _e2)
+
+    def _rd(sku, wh):
+        """读物化行: wh=__C__(bbcc全国C) / __ALL__(展示) / 具体仓名(传统) / None → {ds*, fused_cut, ...}"""
+        return _stats.get("%s|%s" % (sku, wh)) or {} if wh else (_stats.get(sku) or {})
+
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=3) as _ex:  # 2026-10-11 线程收敛(5→3——连接数降, 快照重查询仍并行)
         _fc = _ex.submit(_config, channel, mode)
         _fp = _ex.submit(_products, channel)
         _fi = _ex.submit(_inventory, channel)
         _fs = _ex.submit(_season_factor, channel, mode)
-        _fd = _ex.submit(load_daily_sales_grouped, 60, channel)
         cfg = _fc.result()
         products = _fp.result()
         inv = _fi.result()
         season = _fs.result()
-        by_sku, by_sku_wh = _fd.result()
     lead = (int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))) if mode == "bbcc" \
         else int(cfg.get("lead_time_days", "0"))
-    if mode == "bbcc":
-        c_whs = {r.get("warehouse") for r in query(
-            "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
-            [channel])}
-        daily_c = {}
-        for wk, wd in by_sku_wh.items():
-            base, wh = wk.rsplit("|", 1)
-            if wh in c_whs:
-                m = daily_c.setdefault(base, {})
-                for d, q in wd.items():
-                    m[d] = m.get(d, 0) + q
-        daily_28 = daily_c
-    else:
-        daily_28 = by_sku
-
-    # 促销尖峰削峰: 近窗口单日峰值 > 5×历史基线(28-60天) → 截断(促销不推高趋势加权/活性门控)
-    daily_28 = {s: smooth_promo_spikes(d) for s, d in daily_28.items()}
-    multi = calc_sales_multi(daily_28, windows=[7, 14, 28], sparse="shrink")
-    s7, s14, s28 = multi[7], multi[14], multi[28]
-    fused = {}
-    for sku in set(list(s7) + list(s14) + list(s28)):
-        fused[sku] = rolling_predict(s7.get(sku, 0), s14.get(sku, 0), s28.get(sku, 0))
 
     suggestions = []
     if mode == "bbcc":
@@ -181,12 +222,13 @@ def _build_repl(channel, mode):
             _c_period = int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))
             _b_period = int(cfg.get("ship_to_b_days", "0")) + int(float(cfg.get("safety_multiplier") or 0))
             _full_period = _c_period + _b_period
-            ds7 = round(s7.get(sku, 0), 1)
-            ds14 = round(s14.get(sku, 0), 1)
-            ds28 = round(s28.get(sku, 0), 1)
+            _st8 = _rd(sku, "__C__")
+            ds7 = round(float(_st8.get("ds7_cut") or 0), 1)
+            ds14 = round(float(_st8.get("ds14_cut") or 0), 1)
+            ds28 = round(float(_st8.get("ds28_cut") or 0), 1)
             # 活性门控: 近 7/14 天有销售=近期活跃(×1); 仅 28 天历史销售=弱化(×0.5); 全零=0
-            _act = 1.0 if (s7.get(sku, 0) > 0 or s14.get(sku, 0) > 0) else (0.5 if s28.get(sku, 0) > 0 else 0.0)
-            ds = round(fused.get(sku, 0) * season * _act, 1)
+            _act = 1.0 if (ds7 > 0 or ds14 > 0) else (0.5 if ds28 > 0 else 0.0)
+            ds = round(float(_st8.get("fused_cut") or 0) * season * _act, 1)
             # 需求门控(与 traditional 对齐): 日销 < 门槛 视为无实际需求, 缺口不触发补货
             has_demand = ds >= _MIN_DS
             # 安全天数(库存行 safety_days 优先, 回退配置)
@@ -300,7 +342,7 @@ def _build_repl(channel, mode):
                 "b_stock": b_available, "c_stock": avail, "b_gap": b_gap,
                 "daily_sales": ds, "daily_sales_7": ds7,
                 "daily_sales_14": ds14, "daily_sales_28": ds28,
-                "daily_sales_60": round(fused.get(sku, 0), 1),
+                "daily_sales_60": round(float((_rd(sku, "__ALL__") or _st8).get("fused_cut") or 0), 1),
                 "raw_suggested": c_gap, "suggested_qty": suggested,
                 "b_suggested": b_box, "b_replenish_raw": b_replenish,
                 "days_to_empty": days_to_empty, "after_turnover": after_turnover,
@@ -310,18 +352,8 @@ def _build_repl(channel, mode):
                 "note": note,
             })
     else:
-        # 传统: 逐仓
-        wh_sales = {}
-        for r in inv:
-            if r.get("warehouse_type") != "platform":
-                continue
-            wh = r.get("warehouse")
-            wk = "%s|%s" % (r.get("sku"), wh)
-            wd = by_sku_wh.get(wk, {})
-            wh_sales[wk] = wd
-        _wh_sm = {k: smooth_promo_spikes(v) for k, v in wh_sales.items() if v}
-        _wm = calc_sales_multi(_wh_sm, windows=[7, 14, 28],
-                               sparse="shrink")
+        # 传统: 逐仓(物化表逐仓行 cut 列——已含削峰+shrink, 与原 _wh_sm+shrink 口径一致)
+        tw90 = int(cfg.get("turnover_warning_90") or 90)
         tw90 = int(cfg.get("turnover_warning_90") or 90)
         # 安全天数口径(与 bbcc 同构): mode_traditional_safety_multiplier → cfg["safety_multiplier"]
         # 静态 inventory.safety_qty 不再参与补货量(早期遗留, 仅看板断货卡/低库存规则作兜底)
@@ -331,13 +363,13 @@ def _build_repl(channel, mode):
                 continue
             sku = r.get("sku")
             wh = r.get("warehouse")
-            wk = "%s|%s" % (sku, wh)
-            w7 = _wm[7].get(wk, 0)
-            w14 = _wm[14].get(wk, 0)
-            w28 = _wm[28].get(wk, 0)
+            _st9 = _rd(sku, wh)
+            w7 = round(float(_st9.get("ds7_cut") or 0), 1)
+            w14 = round(float(_st9.get("ds14_cut") or 0), 1)
+            w28 = round(float(_st9.get("ds28_cut") or 0), 1)
             # 活性门控(逐仓): 近 7/14 天该仓有销售=活跃(×1); 仅 28 天历史=弱化(×0.5)
             _act = 1.0 if (w7 > 0 or w14 > 0) else (0.5 if w28 > 0 else 0.0)
-            ds = rolling_predict(w7, w14, w28) * season * _act
+            ds = round(float(_st9.get("fused_cut") or 0) * season * _act, 1)
             avail = int(r.get("available_qty") or 0)
             transit = int(r.get("in_transit_qty") or 0)
             effective_safety = round(ds * safety_days, 1) if ds > 0 else 0
@@ -366,7 +398,7 @@ def _build_repl(channel, mode):
                 "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
-                "daily_sales_60": round(fused.get(sku, 0), 1),
+                "daily_sales_60": round(float((_rd(sku, "__ALL__") or _st9).get("fused_cut") or 0), 1),
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
                 "note": _trad_note(ds, w7, w14, w28, avail, effective_safety, box_qty, suggested,

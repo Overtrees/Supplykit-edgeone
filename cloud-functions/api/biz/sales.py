@@ -310,3 +310,162 @@ def rolling_predict(s7, s14, s28):
     }
     w7, w14, w28 = weights.get((a7, a14), (0.10, 0.20, 0.70))
     return s7 * w7 + s14 * w14 + s28 * w28
+
+
+# ── 2026-10-17 日销三窗口物化表(根治冷算 22s; 不改变输入集合/四维语义) ──────────────
+# 物化只存"慢变的日销派生"(快照+订单派生, 消费方共享); 库存/当天直查永不物化——
+# 动态安全线实时性由库存直查保证, 与现状语义完全一致(物化表=订单聚合的预计算)
+# 补货特有口径(削峰+shrink)用 *_cut 列隔离, 不吞并 digest/看板/规则的 plain 口径
+
+_SKU_STATS_DDL = (
+    "CREATE TABLE IF NOT EXISTS sku_sales_stats ("
+    "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, warehouse VARCHAR(64) DEFAULT '', "
+    "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
+    "fused DECIMAL(12,3) DEFAULT 0, sigma DECIMAL(12,3) DEFAULT 0, "
+    "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
+    "fused_cut DECIMAL(12,3) DEFAULT 0, "
+    "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
+    "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
+    "PRIMARY KEY(channel, sku, warehouse))"
+)
+
+
+def _rebuild_sku_sales_stats(channel, days=28, skus=None):
+    """物化表重建(含当天——订单写后 invalidate 触发; 快照+当天订单同 load_daily_sales_grouped)
+
+    - 行粒度: warehouse='__C__'=全国 C 仓合计(bbcc 用); 具体仓名=逐仓(traditional 用)
+    - plain = calc_sales_multi(默认) —— digest/看板/规则/进销存消费
+    - cut   = 削峰(smooth_promo_spikes)+ sparse=shrink —— 补货专属(与 _build_repl 现口径一致)
+    - upsert 幂等 ON DUPLICATE; 失败降级(不阻塞; 消费方读表 miss 时降级直算)
+    """
+    from db import execute as _ex, executemany as _em, query as _q
+    try:
+        _ex(_SKU_STATS_DDL)
+        by_sku, by_sku_wh = load_daily_sales_grouped(days, channel, skus=skus)
+        if not by_sku and not by_sku_wh:
+            return 0
+        now_d = datetime.now(timezone.utc)
+        # C 仓名集合(与补货 bbcc daily_c 同口径: inventory warehouse_type='platform')
+        try:
+            _c_whs = {str(r.get("warehouse") or "") for r in _q(
+                "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
+                "AND warehouse_type='platform' AND warehouse!=''", [channel])}
+        except Exception:
+            _c_whs = set()
+        # 全国 C 仓合计(逐仓行按 C 仓过滤聚合——与 _build_repl daily_c 等价)
+        by_sku_c = {}
+        if _c_whs:
+            for wk, wd in by_sku_wh.items():
+                base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
+                if wh in _c_whs:
+                    m = by_sku_c.setdefault(base, {})
+                    for d, q in wd.items():
+                        m[d] = m.get(d, 0) + q
+        elif by_sku:
+            by_sku_c = by_sku  # 无仓型数据兜底: 全国合计量
+
+        def _nnz(daily, win):
+            n = 0
+            for k, v in daily.items():
+                try:
+                    if v > 0 and (now_d - datetime.strptime(str(k)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)).days < win:
+                        n += 1
+                except Exception:
+                    continue
+            return n
+
+        def _to_rows(key_daily, is_wh, wh_label=""):
+            """批量三窗口(plain) → 行列表; cut 组单独批量(削峰+shrink)"""
+            rows_out = []
+            if not key_daily:
+                return rows_out
+            m = calc_sales_multi(key_daily, windows=[7, 14, 28])
+            _cut = {k: smooth_promo_spikes(d) for k, d in key_daily.items()}
+            mc = calc_sales_multi(_cut, windows=[7, 14, 28], sparse="shrink")
+            for k, daily in key_daily.items():
+                ds7 = m[7].get(k, 0.0); ds14 = m[14].get(k, 0.0); ds28 = m[28].get(k, 0.0)
+                c7 = mc[7].get(k, 0.0); c14 = mc[14].get(k, 0.0); c28 = mc[28].get(k, 0.0)
+                vals = list(daily.values())
+                sigma = 0.0
+                if len(vals) >= 7:
+                    mm = sum(vals) / len(vals)
+                    sigma = (sum((x - mm) ** 2 for x in vals) / len(vals)) ** 0.5
+                _sku = str(k).split("|")[0]
+                _wh = (str(k).split("|")[1] if is_wh else "") or wh_label
+                rows_out.append({
+                    "channel": channel, "sku": _sku, "warehouse": _wh,
+                    "ds7": round(ds7, 3), "ds14": round(ds14, 3), "ds28": round(ds28, 3),
+                    "fused": round(rolling_predict(ds7, ds14, ds28), 3), "sigma": round(sigma, 3),
+                    "ds7_cut": round(c7, 3), "ds14_cut": round(c14, 3), "ds28_cut": round(c28, 3),
+                    "fused_cut": round(rolling_predict(c7, c14, c28), 3),
+                    "nnz7": _nnz(daily, 7), "nnz14": _nnz(daily, 14), "nnz28": _nnz(daily, 28),
+                    "last_sale": max(daily.keys()) if daily else None})
+            return rows_out
+
+        rows = (_to_rows(by_sku_c, False, "__C__")
+                + _to_rows(by_sku_wh, True))  # __C__ 全国 C 仓 + 逐仓行
+        if rows:
+            cols = ["channel", "sku", "warehouse", "ds7", "ds14", "ds28", "fused", "sigma",
+                    "ds7_cut", "ds14_cut", "ds28_cut", "fused_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
+            for i in range(0, len(rows), 500):
+                chunk = rows[i:i + 500]
+                _em("INSERT INTO sku_sales_stats(%s) VALUES(%s) ON DUPLICATE KEY UPDATE "
+                    "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), fused=VALUES(fused), "
+                    "sigma=VALUES(sigma), ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), "
+                    "ds28_cut=VALUES(ds28_cut), fused_cut=VALUES(fused_cut), "
+                    "nnz7=VALUES(nnz7), nnz14=VALUES(nnz14), nnz28=VALUES(nnz28), "
+                    "last_sale=VALUES(last_sale), updated_at=CURRENT_TIMESTAMP(6)" % (
+                        ", ".join("`%s`" % c for c in cols),
+                        ", ".join(["%s"] * len(cols))),
+                    [tuple(r[c] for c in cols) for r in chunk])
+        return len(rows)
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('sales', 'sku_sales_stats 重建降级', _e)
+        return 0
+
+
+def get_sku_sales_stats(channel, skus=None, warehouse=None, days=28):
+    """读写一体的物化读取(消费方入口):
+    - 表有数据 → 按 sku/warehouse 查行返回 {sku|sku|wh: (fused, fused_cut, ds7..28, sigma, nnz*, last_sale)}
+    - 表空(首启/重建失败)→ 降级直算(与旧逻辑同一函数, 结果等价)
+    - 快照未含当天时, 当天订单直查补足——由 _rebuild 内部 load_daily_sales_grouped 保证(含当天)
+    """
+    try:
+        from db import query as _q, one as _o
+        _o(_SKU_STATS_DDL)
+        _c = _o("SELECT COUNT(*) c FROM sku_sales_stats WHERE channel=%s", [channel]) or {}
+        if int(_c.get("c") or 0) <= 0:
+            _rebuild_sku_sales_stats(channel, days)
+        where = "channel=%s"
+        params = [channel]
+        if skus:
+            _ph = ",".join(["%s"] * min(len(list(skus)), 500))
+            if _ph:
+                where += " AND sku IN (" + _ph + ")"
+                params += list(skus)[:500]
+        if warehouse:
+            where += " AND warehouse=%s" if warehouse != "any" else " AND warehouse!=''"
+            if warehouse != "any":
+                params += [warehouse]
+        rows = _q("SELECT sku, warehouse, ds7, ds14, ds28, fused, sigma, "
+                  "ds7_cut, ds14_cut, ds28_cut, fused_cut, nnz7, nnz14, nnz28, last_sale "
+                  "FROM sku_sales_stats WHERE %s" % where, params)
+        out = {}
+        for r in rows:
+            wk = str(r.get("sku") or "")
+            if r.get("warehouse"):
+                wk += "|" + str(r.get("warehouse"))
+            out[wk] = {"sku": r.get("sku"), "warehouse": r.get("warehouse") or "",
+                       "ds7": float(r.get("ds7") or 0), "ds14": float(r.get("ds14") or 0),
+                       "ds28": float(r.get("ds28") or 0), "fused": float(r.get("fused") or 0),
+                       "sigma": float(r.get("sigma") or 0),
+                       "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),
+                       "ds28_cut": float(r.get("ds28_cut") or 0), "fused_cut": float(r.get("fused_cut") or 0),
+                       "nnz7": int(r.get("nnz7") or 0), "nnz14": int(r.get("nnz14") or 0),
+                       "nnz28": int(r.get("nnz28") or 0), "last_sale": str(r.get("last_sale") or "")[:10]}
+        return out
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('sales', 'sku_sales_stats 读取降级', _e)
+        return {}
