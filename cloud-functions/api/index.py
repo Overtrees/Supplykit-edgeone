@@ -234,6 +234,12 @@ _DROP_INDEXES = [
 if os.environ.get("DB_BACKEND", "tidb") == "tidb":
     try:
         from db import execute as _exec
+        # 2026-10-17 新集群迁移: 全表 DDL 重建(按现有代码数据逻辑, 幂等——空库自动引导)
+        try:
+            from schema_create import create_all_tables
+            create_all_tables()
+        except Exception as _e:
+                try_err('index', 'schema 全表重建降级', _e)
         for _iname, _tbl, _cols in _INDEXES:
             try:
                 _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
