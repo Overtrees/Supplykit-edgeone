@@ -1017,4 +1017,5 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **日志收口统一**: _SCOPE_TYPES 3 处漂移→模块级 _LOG_SCOPE_TYPES; 补 5 缺口(cache_invalidate/migration=dev, cleansing_eval/config_history/rule_action=user——此前任何维度看不到)
 - **轻量性能验证三件套(零/极低 RU, 不动数据——2026-10-17)**: ①计算层=本地构造 5 万 SKU dict 跑核心函数(5.32s 冷算 vs 283ms 物化读——纯 Python 零 RU) ②TiDB 层=EXPLAIN ANALYZE 抽样 5 个代表性查询拿真实 RU/扫描行数——**发现 orders 分页 TopN 全表扫 428 RU/次**(17.8万行, 百万订单线性涨; 加 idx_orders_ch_id(channel,id) 后 4 RU/13ms——107 倍降, 索引直达不随行数涨) ③Makers 层=连续 5 请求实测冷启动(0.63-0.75s 稳定, 实例池复用无断层) —— 本地模拟测不出执行计划/RU 与无状态特性, 线上抽样个省 6 个量级
 - **RU 预算要点**: 物化读 4.1 RU / summary 10.8 / 进销存 COUNT 10.5 / 快照聚合 78 / orders 分页 4(修复后)——Starter 约 5M RU/月, 高频轮询接口必须索引直达防线性涨
+- **全接口 RU 体检(2026-10-17, 22 项 EXPLAIN ANALYZE)**: 修复 2 个 100+ RU 隐患——orders 分页 428→4(idx_orders_ch_id <channel,id>, ORDER BY id DESC 曾 TopN 全表扫)、批次效期摘要 121.6→2.1(idx_batches_ch_wt_sku <channel,warehouse_type,sku>, insights.py:102 进销存批次摘曾全扫 26782 行); 剩余: 快照 60 天 165(仅物化失效降级路径, 低危不优)、inventory 全行 51(补货/断货必拉, 可接受)——**全高频链路口径 ≤51 RU, 与数据量解耦(索引直达), 百万订单免费额度可承受**
 - **⚠️ 密码安全红线(新教训)**: commit message 写密码已 push → amend+force push 清除; 密码/secret 永不进 git/对话可见处
