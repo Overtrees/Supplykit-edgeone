@@ -38,6 +38,11 @@ def close_orphan_for_skus(skus, channel="jd"):
                  "AND related_sku IN (%s)" % ("%s", _ph), [channel] + _skus)
         _ats = [r.get("alert_type") for r in _al if r.get("alert_type")]
         for _at in _ats:
+            # 2026-10-17 修复: low_stock 不参与删单重评估——safety_qty=0 硬编码 → available<0 恒假 → 全关
+            # (删除测试单涉 1100 seed SKU → 2093 条 low_stock 全 inactive 实证; 安全线=库存维度, 删单不影响库存,
+            #  low_stock 孤儿已在上方 _ls_orphan 分支按无单无档处理——通用重评估再碰 low_stock 属误伤)
+            if _at == "low_stock":
+                continue
             _rl = _q("SELECT event FROM rules WHERE alert_type=%s AND channel=%s AND is_active=1 "
                      "AND (deleted_at IS NULL OR deleted_at='')", [_at, channel])
             if not _rl:
