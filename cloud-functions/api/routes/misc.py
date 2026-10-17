@@ -10,6 +10,19 @@ router = APIRouter(tags=["misc"])
 from routes.debug import router as debug_router
 router.include_router(debug_router)  # 2026-10-13 调试端点统一收口(debug.py)
 
+# ── 日志收口分级白名单(2026-10-17 统一收敛: 曾 3 处重复定义漂移——export 多 detect_debug/business_error,
+#    其余 2 处缺——且 5 个实际产生类型(cache_invalidate/cleansing_eval/config_history/migration/rule_action)
+#    任何维度都看不到) ─────────────────────────────────────
+_LOG_SCOPE_TYPES = {
+    "user": ("risk_summary", "cron", "maint", "cleansing", "cleansing_eval", "task",
+             "duplicate_order", "duplicate_sku", "format_error", "field_warning",
+             "field_error", "mapping_info", "config_history", "rule_action"),
+    "dev": ("api_error", "slow_request", "cache_error", "cache_invalidate", "quiet_error",
+            "perf_debug", "detect_debug", "slow_alert", "frontend_error", "window_error",
+            "unhandled_rejection", "component_error", "api_http_error", "business_error",
+            "migration"),
+}
+
 
 
 
@@ -26,13 +39,7 @@ def export_quality_logs(date: str = "", scope: str = "", level: str = ""):
 def _export_md(date="", scope="", level=""):
     """md 生成体(export/file 共用): 返回 (日期, 条数, markdown 文本)"""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    _SCOPE_TYPES = {
-        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
-                 "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
-                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error",
-                "detect_debug", "business_error"),
-    }
+    _SCOPE_TYPES = _LOG_SCOPE_TYPES  # 2026-10-17 统一收敛(模块级常量)
     _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
     _next = (_dt.strptime(_d, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
     where = " WHERE created_at >= %s AND created_at < %s"
@@ -101,12 +108,7 @@ def list_log_files(days: int = 30, scope: str = ""):
     """日志文件列表(平铺): 归档表(历史保留) + 明细表实时日期(未归档标记 archived=False, 点击懒生成)
     每行 date/count/updated_at/archived —— 明细清理后归档文件仍保留(回溯)"""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    _SCOPE_TYPES = {
-        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
-                 "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
-                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
-    }
+    _SCOPE_TYPES = _LOG_SCOPE_TYPES  # 2026-10-17 统一收敛(模块级常量, 防 3 处漂移)
     _sc = scope or "all"
     _cut = (_dt.now(_tz.utc) - _td(days=days)).strftime("%Y-%m-%d")
     # 1) 归档表(历史文件, 明细清理后仍在)
@@ -153,12 +155,7 @@ def list_quality_logs(channel: str = "", limit: int = 200, page: int = 0, page_s
     """质量日志: 默认返回最近 limit 条(兼容全局 loadAll 数组消费); 带 page/page_size 时分页 {items,total}
     scope: user=用户层(任务/维护/清洗/告警) / dev=开发者层(异常/慢请求/缓存/前端上报) / 空=全部"""
     # 日志收口分级: user=业务可理解 / dev=排查定位用(前后端统一, 2026-09-15)
-    _SCOPE_TYPES = {
-        "user": ("risk_summary", "cron", "maint", "cleansing", "task", "duplicate_order", "duplicate_sku",
-                 "format_error", "field_warning", "field_error", "mapping_info"),
-        "dev": ("api_error", "slow_request", "cache_error", "quiet_error", "perf_debug", "detect_debug", "slow_alert",
-                "frontend_error", "window_error", "unhandled_rejection", "component_error", "api_http_error"),
-    }
+    _SCOPE_TYPES = _LOG_SCOPE_TYPES  # 2026-10-17 统一收敛(模块级常量)
     where = ""
     params = []
     if scope in _SCOPE_TYPES:
