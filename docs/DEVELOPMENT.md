@@ -1001,3 +1001,18 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **自然口径无歧义**: 窗口=完整自然周/月(上周/上月), 环比基准=上上周/上上月——前端标签必须区分(较上上周/较上上月), 不许同名(较上周)制造歧义
 - **写放大审查**: 改任何"全局失效/重建"逻辑前, 先数调用点(rg invalidate_all)——35 处写操作 × 全表重建 = RU 爆; 修复用有界窗口或手动触发
 - **改动纪律**: 改前端/后端前先读相关完整代码(用户强制); 提交粒度=一改一 commit 语义完整; CI 报红立刻修(不得跳过)
+
+### 15.63 新集群迁移 + 日销物化表 + 四维验证(2026-10-17——配额耗尽应对, 全链路实测闭环)
+- **TiDB serverless 配额耗尽(1105)**: 会限流所有请求(登录假 401/health degraded/summary 偶发 13s)——**Starter 免费额度按集群独立, 非按项目共享**(实证: 新建 supplykit-secondary 后 health db=ok, 不受旧集群配额影响)
+- **建集群 API(serverless.tidbapi.com/v1beta1)**: Digest 认证 `--digest -u $TIDB_PUBLIC_KEY:$TIDB_PRIVATE_KEY`(public=用户名/private=密码, 非 Basic; api.tidbcloud.com 全 404); POST /clusters body 需 displayName(≥6字符不能过短)+ region.name 完整形态("regions/alicloud-ap-southeast-1" — 别用 regionId 短格式)+ clusterType=DEVELOPER + rootPassword(创建时设——v1beta1 无改密 API, 只能控制台 Set Root Password); host=endpoints.public.host, user=userPrefix.root
+- **iSH 沙箱 DNS 劫持(198.19.0.3 合成 IP)**: pages-api.cloud.tencent.com 解析失败/HTTP 000 → **DoH(1.1.1.1/dns-query)拿真实 IP(CNAME eo.dnse5.com → 43.159.104.94)→ curl --resolve 域名:443:IP 直连**——固化为标准(09-06 同法, 本次又踩)
+- **Makers env 配置**: 原项目 `ModifyPagesProjectEnvs` 直接改(非新建项目); **env 是部署时快照, 必须重新部署才生效**(改 PORT 判别实证)
+- **db.py 自动建库**: 连接 Unknown database(1049)时无库连接 CREATE DATABASE 后重连(迁移到空集群自动引导)
+- **schema_create.py 全表 DDL**(按现有代码数据逻辑重建, 非 PA 旧版): 列=INSERT/SELECT 权威提取; **建表幂等 CREATE IF NOT EXISTS + 幂等补列 SHOW COLUMNS 差异→ALTER ADD**(曾漏 inventory.safety_days → 1054 实证——CREATE IF NOT EXISTS 不改已建表, 必须补列自愈)+ 唯一索引兜底(orders uq_orders_no_sku——seed 订单号已修全局唯一不取模)
+- **日销三窗口物化表 sku_sales_stats**(根治补货冷算 22s): 只存三窗口底料(ds7/14/28/sigma + *_cut 削峰+shrink 组 + nnz/last_sale)——**不固化 fused**(采购 14/28 自权重≠看板 rolling_predict 口径冲突教训, 消费方现场算); 行维度显式枚举 __C__(全国platform)/__BC__(+platform_b)/__ALL__(全仓)/逐仓(无 any 哨兵); invalidate 重建 **5min 限频**(写放大控制——35 调用点×全量曾 RU 爆); 消费方=补货 cut 行 / digest(规则/看板/健康/低库存)WH_ALL / stock_risk 三组
+- **看板 3 卡空根因**: daily_rules 守卫在 seed 后物化/快照未就绪时空评估 → maintenance_log 占位毒化 → 永不重跑 → 手动 rules/evaluate 补跑即恢复(384 告警); 修=_daily_rules_guard 加**数据就绪检测**(快照有行才占位, 未就绪下次重试); 新集群 seed 后需手动触发一次 rules/evaluate
+- **四维验证方法(可复用)**: ①准确性=接口 vs 同口径 SQL 直查逐数对比(summary gmv 54611336.61 逐分一致; periods.orders=PAID 口径 36356 vs SQL 全状态 41807——口径差异非 bug) ②物化准确性=物化行 vs 快照直算(SKU ds28 19.554 vs 直除 19.036, 差异=3σ+加权合理) ③端到端=补货建议手工核对(ds×lead−avail; SKU red 因 adj_dos 0.54<lit3) ④完整性=关联无幽灵(订单/库存 SKU 全在 products 档案; 物化 970=快照 970) ⑤实时性=写操作→invalidate→物化重建(updated_at 05:12→05:27 实证)
+- **性能(seed 2000 SKU/17.8万单冷算实测)**: 补货 22-30s→1.78s / summary 13.4s→0.88s / stock-risk 16.3s→2.5s / 进销存 15.7s→1.46s(物化+SQL 下推, 非缓存热)
+- **前后端口径核对(全一致)**: 商品 100/页 SQL下推 / 订单 30/页 / 进销存懒加载 100/页 SQL LIMIT(total 独立 COUNT 稳定) / 补货滚动 100/页物化 / 滞销处置 page=1×100 一次拉 / 供应商全量 20 条
+- **日志收口统一**: _SCOPE_TYPES 3 处漂移→模块级 _LOG_SCOPE_TYPES; 补 5 缺口(cache_invalidate/migration=dev, cleansing_eval/config_history/rule_action=user——此前任何维度看不到)
+- **⚠️ 密码安全红线(新教训)**: commit message 写密码已 push → amend+force push 清除; 密码/secret 永不进 git/对话可见处

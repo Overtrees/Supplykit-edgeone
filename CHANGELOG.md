@@ -1,3 +1,28 @@
+## 2026-10-17: 新集群迁移+性能根治+看板恢复+日志收口(配额耗尽应对, 全链路闭环)
+> commits 6768b072→86e107a1; CI 绿; 153/153。
+
+### TiDB 配额耗尽 → 新集群迁移(核心突破)
+- 旧集群 RU 耗尽(1105)全网限流(登录假 401/health degraded/summary 13s)——**Starter 免费额度按集群独立**, 新建 supplykit-secondary 即绕开(health db=ok 实证)
+- 建集群 API(Digest 认证/region.name 完整形态); Makers env 原项目 ModifyPagesProjectEnvs 切换(env 部署快照需重新部署); db.py 自动建库; schema_create 全表 DDL(幂等建表+补列自愈+唯一索引兜底)
+- iSH DNS 劫持绕法固化: DoH 拿真实 IP → curl --resolve 直连(43.159.104.94)
+
+### 日销物化表 sku_sales_stats(补货冷算 22s 根治)
+- 只存三窗口底料(ds7/14/28/sigma/**_cut** 削峰+shrink)——不固化 fused(采购≠看板口径冲突教训); __C__/__BC__/__ALL__/逐仓显式枚举; invalidate 重建 5min 限频(写放大控制)
+- 消费方: 补货(ds22s→1.78s)/digest(规则/看板/健康/低库存)/stock-risk(16s→2.5s); 进销存 SQL 下推(15.7s→1.46s)
+- 四维验证全过: 准确性(接口 vs SQL 逐分一致)/物化等价(3σ+加权合理)/端到端(补货手工核对)/完整性(无幽灵, 物化 970=快照 970)/实时性(写后重建实证)
+
+### 看板 3 卡空根因(daily_rules 占位毒化)
+- seed 后 daily_rules 空评估(物化未就绪)→ maintenance_log 占位→永不重跑 → 手动 rules/evaluate 补跑恢复(384 告警/低库存1769/健康78/断货 bc140)
+- 修: _daily_rules_guard 加数据就绪检测(快照有行才占位)
+
+### 日志收口统一(26564191)
+- _SCOPE_TYPES 3 处漂移 → 模块级 _LOG_SCOPE_TYPES; 补 5 缺口(cache_invalidate/migration=dev, cleansing_eval/config_history/rule_action=user); migration 修复前仅全部视图可见→dev 可见实证
+
+### 其他
+- 去重职责边界(用户定): 前端 dup-check 三键优先拦截/后端纯写入+唯一索引兜底; seed 订单号修全局唯一(撞 uq 键根因 total%100000 轮回)
+- TaskCard 评估联动可视化(窗口进度/联动计数)
+- 密码安全: commit 写密码→amend+force push 清除
+
 ## 2026-10-16: 导入性能根治+评估分离+GMV 自然口径+回款流水
 > commits 8503542c→71400568; CI 绿; 153/153。
 

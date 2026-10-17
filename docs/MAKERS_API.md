@@ -67,3 +67,10 @@ Makers 函数生产域名直连 → **401 `X-EOP-MSG: eo_time missing`**(鉴权�
 - **免签域名**: 自定义域名(CNAME pages.dnsoe6.com)不受 eo_token 保护, 公开访问免签; Area=overseas 免备案(项目创建时固定, 换区=新建项目)
 - **构建配额**: 免费版单日构建数有限(9-06 约 55 次触及); ModifyPagesProject 传同值不触发重建; 恢复需等窗口+空 commit 补触发
 - **RU 实测路径**: POST /api/db/diag(admin, EXPLAIN/SELECT/SHOW 只读)——EXPLAIN ANALYZE 线上输出真实 RU(serverless 新版支持)
+
+## 7. TiDB Cloud API + iSH 沙箱绕 DNS(2026-10-17 增量)
+- **TiDB Cloud Serverless API**: 基地址 **serverless.tidbapi.com/v1beta1**(api.tidbcloud.com 全 404); 认证 **HTTP Digest** `curl --digest -u "$TIDB_PUBLIC_KEY:$TIDB_PRIVATE_KEY"`(public=用户名/private=密码, 非 Basic)
+- **建集群 POST /clusters**: body 需 `displayName`(≥6 字符, 过短报 "Cluster name not allowed")+ `region.name` **完整形态**("regions/alicloud-ap-southeast-1"; regionId/cloudProvider 短格式报 "Invalid region")+ `clusterType=DEVELOPER` + `rootPassword`(8-64 位; **无改密 API**, 只能控制台 Set Root Password)+ `projectId`; 创建即 ACTIVE, host=endpoints.public.host, user=userPrefix.root
+- **环境变量名**: TIDB_PUBLIC_KEY/TIDB_PRIVATE_KEY(TiDB Cloud API 凭据)——与 TIDB_HOST/USER/PASSWORD(连接凭据)分离
+- **iSH 沙箱 DNS 劫持**: pages-api.cloud.tencent.com 本地解析 198.19.0.3 合成 IP → curl HTTP 000; **DoH 拿真实 IP**(CNAME eo.dnse5.com → 43.159.104.94)→ `curl --resolve pages-api.cloud.tencent.com:443:43.159.104.94` 直连(09-06 同法, 固化为标准)
+- **Makers env 修改**: `ModifyPagesProjectEnvs`(原项目 EnvVars:[{Key,Value}])——Code 0 即成功; env 是部署时快照, 改后必须 push 触发重新部署
