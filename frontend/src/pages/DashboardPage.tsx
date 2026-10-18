@@ -674,6 +674,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     _acByType2.slow_moving != null
       ? _acByType2.slow_moving
       : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
+  // 2026-10-17 方案A: 待处理卡大数字 = 真正"待处理"的非例行项(滞销+其他告警——超卖/自定义等),
+  // 不是低库存/采购补货(那些有独立卡)——曾 errCount(质量日志)+active_alerts(2202)跨域硬加误导
+  const pendingTotal = otherTotal + slowMovingTotal
   // 2026-10-16 自然口径: 后端 periods.days 已是实际窗口天数(上周=7/上月=自然月实际天数 28-31)
   // —— 曾写死 {month:30} 致自然月 31 天时日均算错; 优先取后端, 兜底按窗口类型
   const periodDays = periodMeta?.days || { today: 1, week: 7, month: 30 }[periodTab] || 30
@@ -1061,7 +1064,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </div>
             {/* 右上角"紧急 N"移除(2026-10-09): severity=error 是"● 告警 N"子集——包含冗余 */}
           </div>
-          {errCount + (dashboard?.summary?.active_alerts || 0) === 0 ? (
+          {pendingTotal === 0 ? (
             <div
               style={{
                 flex: 1,
@@ -1119,16 +1122,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     fontWeight: 700,
                     lineHeight: 1.15,
                     color:
-                      errCount + (dashboard?.summary?.active_alerts || 0) > 10
+                      pendingTotal > 10
                         ? 'var(--danger)'
-                        : errCount + (dashboard?.summary?.active_alerts || 0) > 5
+                        : pendingTotal > 5
                           ? 'var(--warning)'
                           : 'var(--text)',
                     fontVariantNumeric: 'tabular-nums',
                     marginBottom: 1,
                   }}
                 >
-                  {errCount + (dashboard?.summary?.active_alerts || 0)}
+                  {pendingTotal}
                 </div>
                 <div
                   className="card-sub"
@@ -1146,7 +1149,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
                   }}
                 >
-                  <span style={{ fontWeight: 600, color: 'var(--danger)' }}>● {errCount} 异常</span>
+                  {/* 2026-10-17 修复: 曾用 errCount(质量日志数8)当"异常"且大数字 errCount+告警(2210≠任何真值)——
+                      质量日志≠告警, 跨域硬加误导; 异常=error级告警(by_severity.error=66), 大数字=告警总数(2202) */}
+                  <span style={{ fontWeight: 600, color: 'var(--danger)' }}>
+                    ● {criticalAlerts} 异常
+                  </span>
                   <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
                     ● {dashboard?.summary?.active_alerts || 0} 告警
                   </span>
