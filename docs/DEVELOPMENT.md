@@ -1041,3 +1041,20 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **三卡集合不同的等式关系是设计**: 补货建议=实时计算非告警, 所以"待处理告警 = 补货采购卡+低库存卡"数学上不成立——不是 bug
 - **待处理卡方案A(edbff66b)**: 大数字=pendingTotal=otherTotal+slowMovingTotal(只统计无独立卡项); 异常行=error 级告警(by_severity.error)非质量日志; **禁止 errCount(质量日志)与告警数跨域硬加**(曾 8+2202=2210 误导)与当"异常"
 - **删单联动勿碰 low_stock(f00ee08c)**: close_orphan 通用重评估曾因 ctx safety_qty=0 硬编码 → available<0 恒假 → 全关 low_stock(删测试单涉 1100 seed SKU → 2093 条全 inactive); low_stock 孤儿已由 _ls_orphan 分支按"无单无档"处理, 通用重评估跳过 low_stock(安全线=库存维度, 删单不影响库存)
+
+### 15.66 看板物化 + 导出口径铁律(2026-10-25——锁根除/数据驱动/残留自愈/导出口径)
+- **cache_get 禁 FOR UPDATE 持锁重算(9004 锁超时根治)**: SELECT FOR UPDATE 持锁执行 builder(2-3s) >> TiDB lock_wait_timeout(默认 1s) → 并发请求 9004 降级重算 → 缓存永不命中 → 每次请求全量重算(summary 85-174s 实测); **读命中/miss 重算一律无锁 + REPLACE 幂等**(并发重复算可接受, 最终一致)——与 10-11 弃 stock-risk 悲观锁同源; 若 builder 慢(环境/数据), 持锁设计必 9004, 无"保留锁"可行方案
+- **陈旧检测/追平必须数据驱动(orders MAX 基准, 非时间驱动)**: 曾 now-3 天判 agg 陈旧——数据停更 3 天后误判 → 每次直算 60 天(0.88→3-13s 退化); 基准=orders MAX(与 _track_data 追平同语义, §15.46 在陈旧检测的补全); **重建窗口=查询窗口(60 天)**, 写路径+读追平一致
+- **agg 残留根治(ON DUPLICATE 只 upsert 现存组合)**: 软删使 (date,channel,status,store) 组合消失 → 旧组残留 cnt 多算(gmv 可能掩盖: 测试单 GMV=0 时 GMV 一致 cnt 不一致); **窗口完整性自愈** = 60 天窗口 orders 行数 vs agg cnt 不一致 → 逐日定位缺口(orders 独有/agg 残留双向 LEFT JOIN)→ **单日 DELETE+INSERT 小事务**(全窗口 DELETE 大事务持锁致并发 9004 废弃); 自愈限频 60s/渠道(每 miss 检测不拖请求); %s/%%s 转义再次应验(单日重建 INSERT 未转义→not enough arguments)
+- **agg_dirty 脏标记**: 重建失败置位 → 陈旧检测降级直查(不误用缺数据 agg); 成功清位自愈——封死"补录历史+重建失败"双故障边界(COUNT 一致性检测覆盖不了"同键值修改", 标记兜)
+- **M1 迁移一次性标记原则**: 源头已解决(导入自动查补)→ 补齐(或确认无空值)后才写 migration_log 标记(兼容"不抢注+续跑"原设计); 标记后实例启动零全表扫
+- **导出口径铁律(2026-10-25 全面排查)**:
+  - **数据源必须与页面同源**: 滞销导出曾用 slow_moving(基础 7 字段)而页面用 disposal-suggestions(富字段)——导出与页面展示脱节; **采购导出曾误用补货数据**(get_replenishment_suggestions 组装成采购样式, 缺供应商/MOQ/actual_purchase)——每类导出必须调对应业务接口
+  - **表头中文 + 齐全**: 曾直接 return items(接口英文字段作表头); 补货补周转列/采购补库存箱规/订单补品牌/进销存补批次效期; 导出列应覆盖前端展示主要列
+  - **模式跟随无兜底**: 补货/采购导出 mode 必传(前端传组件内实际模式, 含非 jd→traditional 强制); 禁 window 全局变量兜底(曾 ||'bbcc' 致传统导出变 bbcc)
+  - **按主体/仓型隔离**: 进销存 B-C调拨在途列仅 platform_b 仓型含(own/platform 无——对齐前端 INV_COLS); other 渠道验证 SKU-O 隔离/口径跟随/表头齐全
+  - **文件中文命名**: 中文映射+渠道+年月日_时分秒(补货建议_jd_20261025_143025.csv)
+  - **导出任务卡片与导入同规格**: driver 标签(前端轮询 frontend/后台 continue-tasks backend)+ done 统计(success=行数/failed=0/elapsed=创建到完成耗时)
+- **品牌映射优先级**: COALESCE(69码+channel 优先, sku+channel 兜底)子查询——69码精确匹配优先(sku+69码+channel), 失败兜底 sku+channel; 禁 barcode 单独 join(同商品跨渠道同码歧义)
+- **默认值公共常量防漂移 + 用户配置优先**: 内置默认提为模块常量(如 _DEFAULT_SLOW_CATS——接口与计算同源); 库从未配置→返回默认, **用户保存后一律以用户配置为准**(含删空 []——默认只兜"从未配置")
+- **冷算性能判定方法论**: 组装 Python 慢(1.3s 稳定/2.5 万次操作)而 SQL 查询 0.2s 正常 + 数据/代码全等 + 多独立路径同步慢 + health 基线波动 → **Makers 实例环境 Python 执行慢**(非应用代码); 判定前先分段计时拆解(builder 追平/维护/构建/同步), 勿归咎锁/缓存/自愈

@@ -1,3 +1,38 @@
+## 2026-10-25: 看板性能根治(锁/陈旧检测)+ 导出链路全修复 + 玻璃体系收敛 + 登录态 + 四维验证闭环
+> commits 11eef117→ce298d6b; CI 绿; 155/155。
+
+### 9004 锁超时根治(看板 85-174s 灾难)
+- cache_get 原 SELECT FOR UPDATE 持锁重算(builder 2-3s >> TiDB lock_wait_timeout 1s)→ 并发必 9004 降级重算 → 缓存永不命中 → 每次请求全量重算(summary 85-174s/补货采购 2-3s 实测)
+- 修=去悲观锁: 无锁快读命中/miss 无锁重算+REPLACE 幂等(并发重复算可接受, 最终一致)——对齐 10-11 弃 TiDB 悲观锁先例(stock-risk 80s 教训); 部署后 9004 消失
+
+### agg 陈旧检测数据驱动(修复 10-21 起直算 60 天退化)
+- 曾用 now-3 天(时间驱动): 数据停更 3 天后误判陈旧 → 每次 summary 直算 60 天(0.88s→3-13s, 10-21 08:32 首个慢请求实证)
+- 修=基准改 orders MAX(与 _track_data 追平语义统一——§15.46 数据驱动原则在陈旧检测的补全); 重建窗口 3→60 天(写路径+读追平, 对齐 summary 查询窗口——补录历史也覆盖)
+- agg_dirty 脏标记: 重建失败置位→陈旧检测降级直查, 成功清位自愈(封死"补录+重建失败"边界)
+
+### agg 残留根治(四维验证发现, ON DUPLICATE 只 upsert 现存组合)
+- 软删使 (date,channel,status,store) 组合消失 → 旧组残留 cnt 多算(10-16 实证 2809 vs 当前 1100; 测试单 GMV=0 掩盖 gmv 差异——GMV 一致 cnt 不一致)
+- 修=_track_data 窗口完整性自愈(60s 限频/渠道): 60 天窗口 orders 行数 vs agg cnt 不一致 → 逐日定位缺口(orders 独有/agg 残留双向)→ 单日 DELETE+INSERT 小事务(全窗口 DELETE 大事务曾致并发 9004 废弃; %s/%%s 转义再次应验——单日重建 INSERT 未转义→not enough arguments)
+
+### M1 一次性标记 + 登录态修复 + 玻璃体系
+- M1: 源头已自动查补 barcode(2026-09-15) → 补完(或确认无空值)才写 migration_log 标记(兼容"续跑"设计); 标记后实例启动零全表扫(migration 日志归零)
+- 前端挂机重进: check 网络失败/offline 兜底(200 {ok:false})均清 token 回登录页(曾 .catch 静默吞→卡"加载失败"); client axios 401 全局拦截→auth:expired 事件; sw.js 恢复 clients.claim+CACHE v3(10-14 误 revert 未恢复——旧 SW/旧代码永驻)
+- 玻璃: 消费方内联→全局变量(--glass-filter/-soft/-shadow); 模糊档位 4→3(删 ultra-thin/thick+material-thin/thick 类); --glass-border 并入 var(--border-strong); dark 差异化(饱和 2.5→1.5/亮度 1.15→1.05); @supports 降级网(无 backdrop-filter 关滤镜+提底色); 反光层 .glass-edge+动态光追(useLightTracker, pointermove→rAF→--light-x/y); 4 玻璃圆钮+header 状态胶囊统一立体(border→--border 两端可见+shadow-control 内高光投影)
+
+### 订单品牌列 + 导出链路全修复
+- orders 品牌列: COALESCE(69码+channel 优先, sku+channel 兜底)子查询(防 JOIN 行膨胀/69码跨渠道歧义); OrdersPage 品牌列置于下单日期右侧
+- 导出表头: 补货/采购/滞销曾直接 return items(英文字段作表头)→ 全转中文; 补货补周转列、采购补库存/箱规、订单补品牌、进销存补批次效期; 滞销导出改与页面同源(disposal-suggestions——level/原因/建议 17 列, 曾用 slow_moving 基础 7 字段)
+- 采购导出数据源修正: 曾误用 get_replenishment_suggestions(补货数据组装成采购样式, 缺供应商/MOQ/actual_purchase)→ 改调 purchase_suggestions(channel, mode) 口径跟随模式(bbcc 含 B/传统不含, 实测 sys_total 9 vs 6)
+- 进销存导出: 批次级明细(每批次一行, 批次行"可用"=该批次数量, 无批次主行=汇总); B-C调拨在途列仅 platform_b 仓型含(own/platform 对齐前端 INV_COLS 隔离)
+- 导出 mode 无兜底: 补货/采购导出 mode 必传(曾 window.__hammerReplenMode || 'bbcc' 兜底→传统导出变 bbcc); HammerInsights _mode 用组件内实际模式(含非 jd→traditional 强制)
+- 导出文件中文命名: 曾 exports_<英文type>_<channel>_<ts> → 中文映射+渠道+年月日_时分秒(补货建议_jd_20261025_143025.csv)
+- 导出任务卡片: create_export 初始 driver=frontend + continue-tasks 续跑设 backend(曾无 driver 标签); done result 补 success=导出行数/failed=0/elapsed=创建到完成耗时(曾只显示"完成")
+
+### 滞销品类默认 + 四维验证闭环
+- 内置慢品类默认提为 _DEFAULT_SLOW_CATS 公共常量(get_slow_cats 接口与 disposal 计算同源防漂移); get_slow_cats 库从未配置返回默认(食品/个护家清), 用户保存后以用户配置为准(含删空)
+- 四维终态: 60d GMV agg=直算 50058300.57 逐分一致; 行数 106867=106867; agg_dirty=0; 快照/物化 970 SKU 全覆盖; 导入 3 行→落库→invalidate→物化重建→消费方刷新(+375)→删单→残留→自愈修复 全链路实测闭环; other 渠道验证零串数据(SKU-O 隔离/口径跟随/表头齐全)
+- 冷算 2.5s vs 10-17 0.88s = Makers 环境 Python 慢(组装 1.3s 稳定/2.5 万次操作, 数据代码全等铁证; SQL 查询 0.2s 正常)——非应用代码退化, 应用层已到合理下限, 评估无高收益低风险优化点
+
 ## 2026-10-18: 看板计数四维核对+待处理卡方案A(计数口径收口)
 > commits f00ee08c→edbff66b; CI 绿; 155/155。
 
