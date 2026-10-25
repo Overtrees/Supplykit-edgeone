@@ -164,13 +164,11 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
 
     def _b():
-        _bt0 = _time.time()  # 临时分段计时(排查冷算 2.5s 后移除)
         # 数据追平(每 miss 即时——一次 SQL 三 MAX 合并, 物化跟数据不延迟)
         try:
             _track_data(channel, None)
         except Exception as _e:
                 try_err('dashboard', '数据追平降级', _e)
-        _bt1 = _time.time()
         # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
         try:
             from db import query as _qm
@@ -184,19 +182,8 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                 _daily_rules_guard()
         except Exception as _e:
             try_err('dashboard', '维护守卫降级(仍计算看板)', _e)
-        _bt2 = _time.time()
         _r = _build_summary(channel, start_date, end_date, mode)
-        _bt3 = _time.time()
         _sync_health_snapshot(channel, (_r or {}).get("health_index") if isinstance(_r, dict) else None)
-        _bt4 = _time.time()
-        try:
-            from db import execute as _bt_e
-            _bt_e("INSERT INTO quality_logs(log_type, level, message, source) "
-                  "VALUES('perf_debug','info',%s,'dash')",
-                  ("summary builder 分段: 追平 %.2fs 维护 %.2fs 构建 %.2fs 同步 %.2fs 总 %.2fs"
-                   % (_bt1 - _bt0, _bt2 - _bt1, _bt3 - _bt2, _bt4 - _bt3, _bt4 - _bt0)))
-        except Exception:
-            pass
         return _r
 
     _result = _cache_get(_key, _SUMMARY_TTL, _b)
