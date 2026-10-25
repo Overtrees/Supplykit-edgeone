@@ -88,8 +88,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               fontWeight: 500,
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
               maxWidth: 360,
-              backdropFilter: 'blur(var(--glass-blur))',
-              WebkitBackdropFilter: 'blur(var(--glass-blur))',
+              backdropFilter: 'var(--glass-filter-soft)',
+              WebkitBackdropFilter: 'var(--glass-filter-soft)',
             }}
           >
             <span style={{ flex: 1 }}>{t.title}</span>

@@ -63,19 +63,21 @@ body.sidebar-open {
   --border-light: rgba(255, 255, 255, 0.4);
   --border-medium: rgba(255, 255, 255, 0.5);
   --border-strong: rgba(255, 255, 255, 0.55);
-  --bg-ultra-thin: rgba(255, 255, 255, 0.25);
   --bg-thin: rgba(255, 255, 255, 0.4);
   --bg-regular: rgba(255, 255, 255, 0.55);
-  --bg-thick: rgba(255, 255, 255, 0.7);
   --glass-bg: rgba(255, 255, 255, 0.5);
   --glass-blur: 40px;
   --glass-saturate: 2.5;
   --glass-brightness: 1.15;
-  --glass-border: rgba(255, 255, 255, 0.6);
-  --blur-ultra-thin: blur(8px) saturate(150%);
+  --glass-border: var(--border-strong);
+  --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
+    brightness(var(--glass-brightness));
+  --glass-filter-soft: blur(var(--glass-blur));
+  --glass-shadow: 0 2px 20px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  --light-x: 30%;
+  --light-y: 30%;
   --blur-thin: blur(16px) saturate(160%);
   --blur-regular: blur(24px) saturate(180%);
-  --blur-thick: blur(40px) saturate(200%);
   --shadow-card:
     0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 8px rgba(0, 0, 0, 0.03), 0 12px 24px rgba(0, 0, 0, 0.04);
   --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.08);
@@ -1136,23 +1138,11 @@ input[type='file'] {
 }
 
 /* 材料层级 */
-.material-thin {
-  background: var(--bg-thin);
-  backdrop-filter: var(--blur-thin);
-  -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border-light);
-}
 .material-regular {
   background: var(--bg-regular);
   backdrop-filter: var(--blur-regular);
   -webkit-backdrop-filter: var(--blur-regular);
   border: 0.5px solid var(--border-medium);
-}
-.material-thick {
-  background: var(--bg-thick);
-  backdrop-filter: var(--blur-thick);
-  -webkit-backdrop-filter: var(--blur-thick);
-  border: 0.5px solid var(--border-strong);
 }
 
 /* 锤子菜单布局行 */
@@ -1324,15 +1314,15 @@ input[type='file'] {
     --accent-purple: #a78bfa;
     --glass-bg: rgba(20, 20, 24, 0.45);
     --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-saturate: 1.5;
+    --glass-brightness: 1.05;
     --text-secondary: rgba(255, 255, 255, 0.55);
     --text-tertiary: rgba(255, 255, 255, 0.3);
     --border-light: rgba(255, 255, 255, 0.1);
     --border-medium: rgba(255, 255, 255, 0.1);
     --border-strong: rgba(255, 255, 255, 0.1);
-    --bg-ultra-thin: rgba(30, 30, 30, 0.3);
     --bg-thin: rgba(30, 30, 30, 0.45);
     --bg-regular: rgba(30, 30, 30, 0.6);
-    --bg-thick: rgba(30, 30, 30, 0.75);
     --shadow-card:
       0 1px 2px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.15), 0 12px 24px rgba(0, 0, 0, 0.2);
     --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.3);
@@ -1620,4 +1610,67 @@ input[type='file'] {
 .task-driver-back {
   color: var(--warning);
   background: rgba(245, 158, 11, 0.12);
+}
+
+/* ===== 平台降级: 不支持 backdrop-filter(旧 Android/WebView)时关滤镜+提底色, 防玻璃裸奔 ===== */
+@supports not (backdrop-filter: blur(1px)) {
+  :root {
+    --blur-thin: none;
+    --blur-regular: none;
+    --glass-filter: none;
+    --glass-filter-soft: none;
+    --bg-thin: rgba(255, 255, 255, 0.85);
+    --bg-regular: rgba(255, 255, 255, 0.9);
+    --glass-bg: rgba(255, 255, 255, 0.9);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-thin: rgba(30, 30, 30, 0.85);
+      --bg-regular: rgba(30, 30, 30, 0.9);
+      --glass-bg: rgba(20, 20, 24, 0.92);
+    }
+  }
+}
+
+/* ===== 反光层: 玻璃边缘切割高光(静态光位 30%/30%, 液态玻璃概念稿技法) ===== */
+.menu-btn,
+.back-btn,
+.hammer-icon-btn {
+  position: relative;
+}
+.menu-btn::before,
+.back-btn::before,
+.hammer-icon-btn::before,
+.glass-edge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(
+    circle at var(--light-x) var(--light-y),
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(220, 235, 255, 0.35) 30%,
+    transparent 70%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+@media (prefers-color-scheme: dark) {
+  .menu-btn::before,
+  .back-btn::before,
+  .hammer-icon-btn::before,
+  .glass-edge::before {
+    background: radial-gradient(
+      circle at var(--light-x) var(--light-y),
+      rgba(255, 255, 255, 0.45) 0%,
+      rgba(180, 200, 255, 0.18) 30%,
+      transparent 70%
+    );
+  }
 }

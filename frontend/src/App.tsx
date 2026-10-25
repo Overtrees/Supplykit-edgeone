@@ -31,6 +31,7 @@ import HammerInventory from './components/hammer/HammerInventory'
 import HammerOrders from './components/hammer/HammerOrders'
 import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
+import useLightTracker from './hooks/useLightTracker'
 import { t } from './locale'
 
 export const NAV = [
@@ -47,6 +48,7 @@ export const NAV = [
 ]
 
 export default function App() {
+  useLightTracker()
   const [page, setPage] = useState('dash')
   window.__page = page // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {
@@ -874,6 +876,7 @@ export default function App() {
               <div
                 ref={hammerMenuRef}
                 onPointerDown={e => e.stopPropagation()}
+                className="glass-edge"
                 style={{
                   position: 'fixed',
                   zIndex: 3002,
@@ -881,12 +884,10 @@ export default function App() {
                   top: 'calc(env(safe-area-inset-top, 0px) + 7px + 46px + 6px)',
                   width: 240,
                   background: 'var(--glass-bg)',
-                  backdropFilter:
-                    'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
-                  WebkitBackdropFilter:
-                    'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
+                  backdropFilter: 'var(--glass-filter)',
+                  WebkitBackdropFilter: 'var(--glass-filter)',
                   border: '0.5px solid var(--glass-border)',
-                  boxShadow: '0 2px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25)',
+                  boxShadow: 'var(--glass-shadow)',
                   borderRadius: 26,
                   overflow: 'hidden auto',
                   maxHeight: 'calc(100vh - 120px)',

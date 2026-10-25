@@ -58,6 +58,7 @@ export default function Sidebar({
       <div
         ref={ref}
         onPointerDown={e => e.stopPropagation()}
+        className="glass-edge"
         style={{
           position: 'fixed',
           zIndex: 3002,
@@ -65,12 +66,10 @@ export default function Sidebar({
           top: 'calc(env(safe-area-inset-top) + 7px + 46px + 6px)',
           width: 246,
           background: 'var(--glass-bg)',
-          backdropFilter:
-            'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
-          WebkitBackdropFilter:
-            'blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness))',
+          backdropFilter: 'var(--glass-filter)',
+          WebkitBackdropFilter: 'var(--glass-filter)',
           border: '0.5px solid var(--glass-border)',
-          boxShadow: '0 2px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25)',
+          boxShadow: 'var(--glass-shadow)',
           borderRadius: 26,
           overflow: 'hidden',
           opacity: menuClosing ? 0 : 1,
