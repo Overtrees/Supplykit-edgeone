@@ -44,8 +44,8 @@ def _rebuild_agg_day(channel, day):
                     "SELECT DATE(ordered_at), channel, order_status, store, "
                     "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)), "
                     "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)), COUNT(*) "
-                    "FROM orders WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s "
-                    "AND ordered_at >= %s AND ordered_at < %s "
+                    "FROM orders WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%%s "
+                    "AND ordered_at >= %%s AND ordered_at < %%s "
                     "GROUP BY DATE(ordered_at), channel, order_status, store"
                     % (_status_cond(), _status_cond()),
                     [channel, day + " 00:00:00", _d2 + " 00:00:00"])
