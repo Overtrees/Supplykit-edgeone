@@ -152,7 +152,9 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 out.append({
                     "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
                     "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
-                    "可用": it.get("available_qty", ""), "在途": it.get("in_transit_qty", ""),
+                    # 批次行的"可用"= 该批次数量(多批次明细逐行对齐各自批次——业务合理); 无批次主行 = 汇总可用
+                    "可用": (_rb or {}).get("qty") if _rb else it.get("available_qty", ""),
+                    "在途": it.get("in_transit_qty", ""),
                     "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
                     "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
                     "库存可撑天数": it.get("days_to_empty", ""),
@@ -188,7 +190,8 @@ async def create_export(request: Request):
     execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
             "VALUES(%s,'export','running',%s,'{}',%s)",
             (task_id, json.dumps({"type": exp_type, "mode": mode, "channel": channel,
-                                  "wh_type": wh_type, "page": 0, "parts": []},
+                                  "wh_type": wh_type, "page": 0, "parts": [],
+                                  "driver": "frontend", "start_ts": int(_time.time())},
                                  ensure_ascii=False), channel))
     return {"ok": True, "task_id": task_id}
 
@@ -293,7 +296,9 @@ def export_status(task_id: str = "", page_size: int = 10000):
             realname = "%s_%s_%s.%s" % (_EXPORT_NAMES.get(exp_type, exp_type), channel, now_stamp(),
                                         "csv" if parts[0].endswith(".csv") else "xlsx")
             _r = {"filename": task_id, "name": realname, "type": exp_type, "parts": parts,
-                  "rows": total if exp_type == "orders" else len(rows)}
+                  "rows": total if exp_type == "orders" else len(rows),
+                  "success": total if exp_type == "orders" else len(rows), "failed": 0,
+                  "elapsed": max(round(_ttx.time() - int(params.get("start_ts") or _ttx.time()), 1), 0.1)}
             _sqd = round(_ttx.time() - _t0x, 1)
             _sd = (params.get("steps") or []) + [{"name": "%s 窗%d" % (exp_type, page + 1), "elapsed": _sqd}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",

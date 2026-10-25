@@ -64,6 +64,11 @@ def continue_tasks():
                     done["seed"] += 1
                 elif tt == "export":
                     from .task_export import export_status
+                    _row2 = _qc("SELECT params FROM sync_tasks WHERE task_id=%s", [tid])
+                    if _row2:
+                        _pj = json.loads((_row2[0].get("params") or "{}"))
+                        _ec("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
+                            [json.dumps({**_pj, "driver": "backend"}, ensure_ascii=False), tid])
                     export_status(tid)
                     done["export"] += 1
                 else:
