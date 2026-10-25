@@ -81,7 +81,7 @@ def list_orders(channel: str = "jd", page: int = 1, page_size: int = 30,
     if status:
         where += " AND o.order_status=%s"
         params.append(status)
-    total = one("SELECT COUNT(*) AS c FROM orders WHERE %s" % where, params) or {}
+    total = one("SELECT COUNT(*) AS c %s WHERE %s" % (_OJOIN, where), params) or {}
     total = int(total.get("c") or 0)
     if page > 0 and page_size > 0:
         rows = query("SELECT %s %s WHERE %s ORDER BY o.id DESC LIMIT %s OFFSET %s"
