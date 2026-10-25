@@ -48,54 +48,41 @@ _CALC_INFLIGHT = {}
 
 def cache_get(key, ttl, builder):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
-    2026-10-11 并发根治(行锁): SELECT ... FOR UPDATE 串行化同 key 计算——第一请求持锁算,
-    其余阻塞在 FOR UPDATE(事务内)——释放后读结果共享(跨 Makers 实例可靠——替代轮询判定)"""
+    2026-10-25 去悲观锁(性能根治): 原 SELECT ... FOR UPDATE 持锁重算(10-11 并发根治设计),
+    但 builder 重算 2-3s >> TiDB lock_wait_timeout(默认 1s)→ 并发请求 9004 锁超时 → 降级直算
+    → 缓存从不命中, 每次请求全量重算(summary 85-174s/补货采购 2-3s 实测)——去锁:
+    无锁快读命中返回(miss 无锁重算 + REPLACE 幂等, 并发重复算可接受最终一致)"""
     try:
         from db import one, execute
+        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                  "FROM analysis_cache WHERE `key`=%s", [key])
+        if row:
+            age = row.get("age")
+            v0 = row.get("value")
+            if v0 != "__CALC__" and age is not None and int(age) < ttl:
+                v = _loads(v0 or "")
+                if v is not _FAILED:
+                    return v
+        val = builder()
+        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                "VALUES(%s,%s,NOW(6))",
+                (key, json.dumps(val, ensure_ascii=False, default=str)))
+        return val
+    except Exception as e:
+        # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
+        # 自愈本身也失败才降级直算(保底不阻塞业务)
         try:
-            from db import transaction
-            # 死锁重试(TiDB 1213): builder() 持锁重算 + 并发 invalidate_all DELETE/其他 key FOR UPDATE
-            # → 事务死锁; 1213 时事务已回滚, 重试干净——保留 10-11"行锁串行化同 key 计算"设计
-            for _try in range(3):
-                try:
-                    with transaction():
-                        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                                  "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
-                        if row:
-                            age = row.get("age")
-                            v0 = row.get("value")
-                            if v0 != "__CALC__" and age is not None and int(age) < ttl:
-                                v = _loads(v0 or "")
-                                if v is not _FAILED:
-                                    return v
-                            if v0 == "__CALC__":
-                                execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
-                        val = builder()
-                        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                                "VALUES(%s,%s,NOW(6))",
-                                (key, json.dumps(val, ensure_ascii=False, default=str)))
-                        return val
-                except Exception as _e:
-                    if _try < 2 and ("1213" in str(_e) or "deadlock" in str(_e).lower()):
-                        continue
-                    raise
-        except Exception as _elock:
-            # 锁不可用(连接/环境)降级: 无锁直算(生产正常; 测试/mock 环境兜底)
-            try_err('analysis_cache', '缓存锁降级直算', _elock)
-            row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                      "FROM analysis_cache WHERE `key`=%s", [key])
-            if row:
-                age = row.get("age")
-                v0 = row.get("value")
-                if v0 != "__CALC__" and age is not None and int(age) < ttl:
-                    v = _loads(v0 or "")
-                    if v is not _FAILED:
-                        return v
-            val = builder()
-            execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                    "VALUES(%s,%s,NOW(6))",
-                    (key, json.dumps(val, ensure_ascii=False, default=str)))
-            return val
+            from db import execute as _e3
+            _e3("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+            _e3("CREATE TABLE IF NOT EXISTS analysis_cache ("
+                "`key` VARCHAR(160) PRIMARY KEY, value MEDIUMTEXT, "
+                "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+            _e3("INSERT INTO quality_logs(log_type, level, message, source) "
+                "VALUES('cache_error','error',%s,'api')",
+                ("cache_get 降级直算[%s]: %s" % (str(key)[:80], str(e)[:150]),))
+        except Exception as _e:
+                try_err('analysis_cache', '静默降级', _e)
+        return builder()
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
         # 自愈本身也失败才降级直算(保底不阻塞业务)
