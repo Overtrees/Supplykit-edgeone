@@ -93,7 +93,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
     setExporting(true)
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
-      const _mode = window.__hammerReplenMode || 'bbcc'
+      const _mode = mode // 组件内真实模式(含渠道强制: 非 jd→traditional)——曾用 window.__hammerReplenMode || 'bbcc' 兜底致传统导出变 bbcc
       const _type =
         type === 'slow'
           ? 'slow'

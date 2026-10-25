@@ -60,10 +60,13 @@ from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["orders"])
 
-_FIELDS = "o.id, o.order_no, o.sku, o.barcode, o.product_name, p.brand AS brand, o.store, o.warehouse, " \
-          "o.quantity, o.unit_price, o.total_amount, o.order_status, o.ordered_at, o.paid_at, " \
-          "o.platform, o.channel, o.deleted_at, o.ext_json"
-_OJOIN = "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND p.channel=o.channel"
+_FIELDS = "o.id, o.order_no, o.sku, o.barcode, o.product_name, " \
+          "COALESCE((SELECT pb.brand FROM products pb WHERE pb.channel=o.channel AND o.barcode != '' " \
+          "AND pb.barcode=o.barcode LIMIT 1), " \
+          "(SELECT ps.brand FROM products ps WHERE ps.channel=o.channel AND ps.sku=o.sku LIMIT 1)) AS brand, " \
+          "o.store, o.warehouse, o.quantity, o.unit_price, o.total_amount, o.order_status, " \
+          "o.ordered_at, o.paid_at, o.platform, o.channel, o.deleted_at, o.ext_json"
+_OJOIN = "FROM orders o"
 
 
 @router.get("/orders")

@@ -25,6 +25,28 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
         from routes.replenishment import get_replenishment_suggestions
         r = get_replenishment_suggestions(days=28, mode=mode, channel=channel)
         items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
+        if exp_type != "purchase_suggestions":
+            # 补货导出: 转中文表头(曾直接 return items——接口英文字段作表头; 补周转列齐全)
+            out = []
+            for it in items:
+                out.append({
+                    "SKU": it.get("sku", ""), "69码": it.get("barcode", ""),
+                    "商品名": it.get("product_name", ""), "品牌": it.get("brand", ""),
+                    "店铺": it.get("store", ""), "可用库存": it.get("available_qty", ""),
+                    "安全线": it.get("safety_qty", ""), "在途": it.get("in_transit_qty", ""),
+                    "C仓在途": it.get("c_transit", ""), "B仓在途": it.get("b_transit", ""),
+                    "B仓库存": it.get("b_stock", ""), "C仓库存": it.get("c_stock", ""),
+                    "B缺口": it.get("b_gap", ""), "日销": it.get("daily_sales", ""),
+                    "日销7": it.get("daily_sales_7", ""), "日销14": it.get("daily_sales_14", ""),
+                    "日销28": it.get("daily_sales_28", ""), "日销60": it.get("daily_sales_60", ""),
+                    "库存可撑天数": it.get("days_to_empty", ""),
+                    "C仓周转": it.get("c_turnover", ""), "B-C调拨周转": it.get("transit_turnover", ""),
+                    "当前综转": it.get("combined_turnover_current", it.get("combined_turnover", "")),
+                    "补后综转": it.get("after_turnover", ""),
+                    "建议补货量": it.get("suggested_qty", ""), "B建议补": it.get("b_suggested", ""),
+                    "备注": it.get("note", ""),
+                })
+            return out
         if exp_type == "purchase_suggestions":
             # 采购口径: 以 C 仓缺口为主视图(备注列区分)
             out = []
@@ -32,17 +54,40 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 out.append({
                     "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
                     "69码": it.get("barcode", ""), "品牌": it.get("brand", ""),
+                    "仓库": it.get("warehouse", ""), "供应商": it.get("supplier_code", ""),
                     "日销(融合)": it.get("daily_sales", ""), "日销14": it.get("daily_sales_14", ""),
-                    "日销28": it.get("daily_sales_28", ""), "系统总缺口": it.get("raw_suggested", ""),
-                    "建议采购量": it.get("suggested_qty", ""), "备注": it.get("note", ""),
+                    "日销28": it.get("daily_sales_28", ""),
+                    "系统可用": it.get("sys_available", ""), "系统在途": it.get("sys_transit", ""),
+                    "系统总库存": it.get("sys_total", ""), "自有可用": it.get("own_available", ""),
+                    "平台可用": it.get("plat_available", ""),
+                    "系统总缺口": it.get("raw_suggested", ""), "建议采购量": it.get("purchase_qty", ""),
+                    "建议采购(含箱规)": it.get("actual_purchase", ""), "箱规": it.get("box_qty", ""),
+                    "补后周转": it.get("after_turnover", ""), "目标周转": it.get("target_turnover", ""),
+                    "安全线": it.get("safety_qty", ""), "备注": it.get("note", ""),
                 })
             return out
         return items
     if exp_type == "slow":
-        from routes.insights import slow_moving
-        r = slow_moving(channel=channel)
-        items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
-        return items
+        # 滞销导出: 与页面同源(disposal-suggestions——多因素 level/原因/建议; 曾用 slow_moving 基础7字段表头不全)
+        from routes.purchase import disposal_suggestions
+        r = disposal_suggestions(channel=channel)
+        data = (r.get("data") or {}) if isinstance(r, dict) else (r or [])
+        items = data.get("items") if isinstance(data, dict) else (data or [])
+        out = []
+        for it in items:
+            out.append({
+                "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
+                "品牌": it.get("brand", ""), "仓库": it.get("warehouse", ""),
+                "仓库类型": it.get("warehouse_type", ""), "品类": it.get("category", ""),
+                "库存": it.get("stock", ""), "未售天数": it.get("days_zero", ""),
+                "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
+                "资金占用(元)": it.get("fund_occupied", ""), "品类滞销线": it.get("cat_line", ""),
+                "等级": it.get("level", ""), "原因": "; ".join(it.get("reason") or []),
+                "处置建议": it.get("suggestion", ""),
+                "临期至": str(it.get("best_before") or "")[:10] or "",
+                "B仓超期": "是" if it.get("b_storage") else "",
+            })
+        return out
     if exp_type == "orders":
         # 订单导出(当前渠道, 最多 5 万行)
         from routes.orders import list_orders
@@ -54,7 +99,8 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
             out.append({
                 "订单号": o.get("order_no", ""), "店铺": o.get("store", ""),
                 "仓库": o.get("warehouse", ""), "SKU": o.get("sku", ""),
-                "商品名": o.get("product_name", ""), "69码": o.get("barcode", ""),
+                "商品名": o.get("product_name", ""), "品牌": o.get("brand", ""),
+                "69码": o.get("barcode", ""),
                 "数量": o.get("quantity", ""), "单价": o.get("unit_price", ""),
                 "金额": o.get("total_amount", ""), "状态": o.get("order_status", ""),
                 "下单时间": str(o.get("ordered_at") or "")[:10],
@@ -77,8 +123,14 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "可用": it.get("available_qty", ""), "在途": it.get("in_transit_qty", ""),
                 "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
                 "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
+                "库存可撑天数": it.get("days_to_empty", ""),
                 "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
-                "期初": it.get("beginning_stock", ""), "品牌": it.get("brand", ""),
+                "期初": it.get("beginning_stock", ""), "单价": it.get("price", ""),
+                "品牌": it.get("brand", ""),
+                "生产日期": str(it.get("batch_prod_date") or "")[:10] or "",
+                "截止日期": str(it.get("batch_exp_date") or "")[:10] or "",
+                "总效期/天": it.get("batch_days", ""), "效期状态": it.get("batch_status", ""),
+                "批次消耗%": it.get("batch_pct", ""),
             })
         return out
     return None
@@ -89,9 +141,13 @@ async def create_export(request: Request):
     from urllib.parse import parse_qs
     qs = parse_qs(request.url.query)
     exp_type = (qs.get("type") or ["replen"])[0]
-    mode = (qs.get("mode") or ["bbcc"])[0]
+    mode = (qs.get("mode") or [""])[0]
     channel = (qs.get("channel") or ["jd"])[0]
     wh_type = (qs.get("wh_type") or [""])[0]
+    # 补货/采购导出必须显式传 mode(前端实际选择的当前补货模式)——曾默认 bbcc 兜底
+    # 致传统模式导出变 BBCC(前端漏传时静默错误); 现在缺失显式报错, 无兜底
+    if exp_type in ("replen", "purchase_suggestions", "purchase") and not mode:
+        return fail("导出补货/采购需传 mode 参数(当前补货模式: bbcc / traditional)")
     if _build_export_rows(exp_type, mode, channel, wh_type) is None:
         return fail("未知导出类型: " + str(exp_type))
     from routes.tasks import _new_task_id  # 延迟(防循环: tasks→task_export→tasks)

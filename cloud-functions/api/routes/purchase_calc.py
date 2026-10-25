@@ -11,6 +11,20 @@ from routes.common import ok, fail, traced, try_err
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 
 
+# 内置默认滞销品类线(2026-10-25 抽取公共共享——get_slow_cats 接口与 disposal 计算同源, 防两处漂移)
+_DEFAULT_SLOW_CATS = [
+    {"name": "食品", "slow_days": 30, "shelf_months": 3,
+     "cats": "酱油,酱料,调味汁,食用油,醋,料酒,蚝油,芝麻油,辣椒酱,拌面酱,老抽,生抽,"
+             "陈醋,香醋,白醋,米醋,花椒油,藤椒油,辣椒油,芥末油,番茄酱,甜辣酱,沙拉酱,"
+             "芝麻酱,花生酱,豆瓣酱,豆豉,腐乳,糟卤,鱼露,咖喱块,咖喱粉,五香粉,孜然粉,"
+             "花椒粉,辣椒粉,胡椒粉,十三香,卤料包,炖肉料,鸡精,味精,白糖,冰糖,红糖,"
+             "麦芽糖,蜂蜜,黄酒,米酒,薯片,虾条,爆米花,坚果,瓜子,花生,饼干,威化,"
+             "巧克力,糖果", "enabled": True},
+    {"name": "个护家清", "slow_days": 60, "shelf_months": 6,
+     "cats": "洗衣液,洗洁精,洗手液,消毒液,纸巾,湿巾,垃圾袋,保鲜膜,保鲜袋,收纳盒",
+     "enabled": True},
+]
+
 
 def _build_purchase(channel, mode, days=28):
     """采购建议计算体(共享缓存 builder, 返回全量列表; 缓存命中时跳过 purchase_need 告警评估——与原语义一致)"""
@@ -281,17 +295,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                     try_err('purchase', '静默降级', _e)
         return default
 
-    cat_cfg = _cfg_list("slow_cats", [
-        {"name": "食品", "slow_days": 30, "shelf_months": 3,
-         "cats": "酱油,酱料,调味汁,食用油,醋,料酒,蚝油,芝麻油,辣椒酱,拌面酱,老抽,生抽,"
-                 "陈醋,香醋,白醋,米醋,花椒油,藤椒油,辣椒油,芥末油,番茄酱,甜辣酱,沙拉酱,"
-                 "芝麻酱,花生酱,豆瓣酱,豆豉,腐乳,糟卤,鱼露,咖喱块,咖喱粉,五香粉,孜然粉,"
-                 "花椒粉,辣椒粉,胡椒粉,十三香,卤料包,炖肉料,鸡精,味精,白糖,冰糖,红糖,"
-                 "麦芽糖,蜂蜜,黄酒,米酒,薯片,虾条,爆米花,坚果,瓜子,花生,饼干,威化,"
-                 "巧克力,糖果", "enabled": True},
-        {"name": "个护家清", "slow_days": 60, "shelf_months": 6,
-         "cats": "洗衣液,洗洁精,洗手液,消毒液,纸巾,湿巾,垃圾袋,保鲜膜,保鲜袋,收纳盒",
-         "enabled": True}])
+    cat_cfg = _cfg_list("slow_cats", _DEFAULT_SLOW_CATS)
     b_free = _cfg_number("b_free_days", 15)
     fund_threshold = _cfg_number("slow_fund_threshold", 10000)
 

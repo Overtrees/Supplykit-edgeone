@@ -145,11 +145,17 @@ def config_history(channel: str = "jd", limit: int = 50):
 @router.get("/replenishment-config/slow-cats")
 @traced
 def get_slow_cats(channel: str = "jd"):
+    from routes.purchase_calc import _DEFAULT_SLOW_CATS as _DSC
     row = one("SELECT value FROM replenishment_config WHERE `key`='slow_cats' AND channel=%s", [channel])
+    v = ((row or {}).get("value") or "").strip()
+    # 库从未配置 → 内置默认(此前返回空数组 → 滞销参数页只显示"添加品类", 与 disposal 计算默认不一致)
+    # ⚠️ 原则: 默认只在"从未配置"时兜底; 用户增/改/删保存后一律以用户配置为准(含删光的 [] 如实返回)
+    if not v:
+        return ok(json.loads(json.dumps(_DSC, ensure_ascii=False)))
     try:
-        return ok(json.loads((row or {}).get("value") or "[]"))
+        return ok(json.loads(v))
     except Exception:
-        return ok([])
+        return ok(json.loads(json.dumps(_DSC, ensure_ascii=False)))
 
 
 @router.put("/replenishment-config/slow-cats")
