@@ -10,6 +10,7 @@ import { t } from '../locale'
 
 const COLS = [
   { id: 'date', label: '下单日期' },
+  { id: 'brand', label: '品牌' },
   { id: 'order_no', label: '订单号' },
   { id: 'barcode', label: '69码' },
   { id: 'store', label: '店铺' },
@@ -293,6 +294,12 @@ export default function OrdersPage() {
                           return (
                             <td key={col.id} className="col-store">
                               {x.store || '-'}
+                            </td>
+                          )
+                        if (col.id === 'brand')
+                          return (
+                            <td key={col.id} className="col-store">
+                              {x.brand || '-'}
                             </td>
                           )
                         if (col.id === 'warehouse')

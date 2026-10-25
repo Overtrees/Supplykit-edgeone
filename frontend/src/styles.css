@@ -144,7 +144,8 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border-light);
+  border: 0.5px solid var(--border);
+  box-shadow: var(--shadow-control);
 }
 .back-btn {
   width: 48px;
@@ -163,15 +164,20 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border-light);
+  border: 0.5px solid var(--border);
+  box-shadow: var(--shadow-control);
 }
 .page-btn {
+  position: relative;
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: none;
+  border: 0.5px solid var(--border);
+  box-shadow: var(--shadow-control);
   cursor: pointer;
-  background: var(--card);
+  background: var(--bg-thin);
+  backdrop-filter: var(--blur-thin);
+  -webkit-backdrop-filter: var(--blur-thin);
   color: var(--text);
   display: flex;
   align-items: center;
@@ -203,7 +209,8 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border-light);
+  border: 0.5px solid var(--border);
+  box-shadow: var(--shadow-control);
 }
 .header-title {
   font-size: 18px;
@@ -217,7 +224,8 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border-light);
+  border: 0.5px solid var(--border);
+  box-shadow: var(--shadow-control);
   white-space: nowrap;
   display: flex;
   align-items: center;
@@ -1635,12 +1643,14 @@ input[type='file'] {
 /* ===== 反光层: 玻璃边缘切割高光(静态光位 30%/30%, 液态玻璃概念稿技法) ===== */
 .menu-btn,
 .back-btn,
-.hammer-icon-btn {
+.hammer-icon-btn,
+.page-btn {
   position: relative;
 }
 .menu-btn::before,
 .back-btn::before,
 .hammer-icon-btn::before,
+.page-btn::before,
 .glass-edge::before {
   content: '';
   position: absolute;
@@ -1665,6 +1675,7 @@ input[type='file'] {
   .menu-btn::before,
   .back-btn::before,
   .hammer-icon-btn::before,
+  .page-btn::before,
   .glass-edge::before {
     background: radial-gradient(
       circle at var(--light-x) var(--light-y),

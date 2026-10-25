@@ -38,6 +38,14 @@ def fake_query(sql, params=None):
         return list(_INV)
     if "warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql:
         return [{"healthy": 65, "warning": 10, "out_of_stock": 2, "total": 77}]
+    if "FROM orders o LEFT JOIN products" in sql and "COUNT" not in sql:
+        # 2026-10-25 品牌列: orders JOIN products 取 brand(mock 补 brand 字段)
+        _r = {"id": 1, "order_no": "NO0000000001", "sku": "SKU0001", "barcode": "69-01",
+              "product_name": "禾味调味料1号", "brand": "禾味", "store": "自营旗舰店", "warehouse": "华东C仓",
+              "quantity": 2, "unit_price": 25.0, "total_amount": 50.0, "order_status": "已完成",
+              "ordered_at": "2026-09-04 10:00:00", "paid_at": "2026-09-04 10:01:00",
+              "platform": "jd", "channel": "jd", "deleted_at": ""}
+        return [_r]
     if "FROM orders WHERE" in sql and "COUNT" not in sql:
         return [{"id": 1, "order_no": "NO0000000001", "sku": "SKU0001", "barcode": "69-01",
                  "product_name": "禾味调味料1号", "store": "自营旗舰店", "warehouse": "华东C仓",

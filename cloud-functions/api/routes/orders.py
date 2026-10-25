@@ -60,8 +60,10 @@ from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["orders"])
 
-_FIELDS = "id, order_no, sku, barcode, product_name, store, warehouse, quantity, unit_price, " \
-          "total_amount, order_status, ordered_at, paid_at, platform, channel, deleted_at, ext_json"
+_FIELDS = "o.id, o.order_no, o.sku, o.barcode, o.product_name, p.brand AS brand, o.store, o.warehouse, " \
+          "o.quantity, o.unit_price, o.total_amount, o.order_status, o.ordered_at, o.paid_at, " \
+          "o.platform, o.channel, o.deleted_at, o.ext_json"
+_OJOIN = "FROM orders o LEFT JOIN products p ON o.sku=p.sku AND p.channel=o.channel"
 
 
 @router.get("/orders")
@@ -69,23 +71,23 @@ _FIELDS = "id, order_no, sku, barcode, product_name, store, warehouse, quantity,
 def list_orders(channel: str = "jd", page: int = 1, page_size: int = 30,
                 search: str = "", status: str = "", include_deleted: int = 0):
     if include_deleted:
-        where = "channel=%s"
+        where = "o.channel=%s"
     else:
-        where = "channel=%s AND (deleted_at IS NULL OR deleted_at='')"
+        where = "o.channel=%s AND (o.deleted_at IS NULL OR o.deleted_at='')"
     params = [channel]
     if search:
-        where += " AND (sku LIKE %s OR product_name LIKE %s OR order_no LIKE %s OR barcode LIKE %s)"
+        where += " AND (o.sku LIKE %s OR o.product_name LIKE %s OR o.order_no LIKE %s OR o.barcode LIKE %s)"
         params += ["%%%s%%" % search] * 4
     if status:
-        where += " AND order_status=%s"
+        where += " AND o.order_status=%s"
         params.append(status)
     total = one("SELECT COUNT(*) AS c FROM orders WHERE %s" % where, params) or {}
     total = int(total.get("c") or 0)
     if page > 0 and page_size > 0:
-        rows = query("SELECT %s FROM orders WHERE %s ORDER BY id DESC LIMIT %s OFFSET %s"
-                     % (_FIELDS, where, page_size, (page - 1) * page_size), params)
+        rows = query("SELECT %s %s WHERE %s ORDER BY o.id DESC LIMIT %s OFFSET %s"
+                     % (_FIELDS, _OJOIN, where, page_size, (page - 1) * page_size), params)
         return ok({"items": rows, "total": total, "page": page, "page_size": page_size})
-    rows = query("SELECT %s FROM orders WHERE %s ORDER BY id DESC" % (_FIELDS, where), params)
+    rows = query("SELECT %s %s WHERE %s ORDER BY o.id DESC" % (_FIELDS, _OJOIN, where), params)
     return ok(rows)
 
 
