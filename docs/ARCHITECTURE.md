@@ -6,14 +6,14 @@
 ## 架构
 
 ```
-┌─ 前端 (Cloudflare Pages, 同源部署) ──────────┐
+┌─ 前端 (EdgeOne Makers 同源部署) ────────────┐
 │  React 18 · TypeScript · ECharts 5 · Zustand  │
 │  Axios(30s缓存+在途去重+统一解包) · 版本指纹30s │
 │  看板30s静默刷新 · 事件驱动全链路刷新           │
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 24 路由模块 · local_test 150 项     │
+│  FastAPI · 24 路由模块 · local_test 155 项     │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -68,7 +68,7 @@ cloud-functions/api/
 ├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
 ├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
 ├── routes/ (24个)                业务路由(2026-10-11 模块化: dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed)
-└── local_test.py                 本地回归 150 项（mock db + TestClient）
+└── local_test.py                 本地回归 155 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -111,7 +111,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 150 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出）
+cd cloud-functions/api && python3 local_test.py   # 155 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出）
 ```
 
 ---
@@ -140,3 +140,26 @@ git push edgeone feat/edgeone
   <a href="docs/DEVELOPMENT.md">开发规范</a> ·
   <a href="CHANGELOG.md">变更日志</a>
 </p>
+
+---
+
+## 历史与迁移（2026-10-25 文档治理合并——原 MIGRATION_EDGEONE / EDGEONE_VERIFICATION / TIDB_MIGRATION / PRODUCTION_CHECKLIST 精华)
+
+> 迁移决策、验证结论、平台硬限制、上线防护的历史沉淀——全部并入本文档,原独立文档已删除(教训细节见 DEVELOPMENT §15 系列)。
+
+### 双源码分支与回退
+- `main` = PA+SQLite 备份版(已冻结,可回退);`feat/edgeone` = EdgeOne Makers + TiDB 主线;远程 `edgeone`=Overtrees/Supplykit-edgeone
+- **回退点**: `git checkout backup-pa-sqlite-20260904`(1 小时内恢复 PA 版)
+
+### Makers 迁移验证结论(2026-09-05 实证)
+- 入口检测: 行首 `app =`(构建器正则 /^app\s*=/m);函数包=仅 cloud-functions/;依赖 uv+CPython 3.10;九路由线上全通
+- **生产公开访问**: supplykit.top(CNAME pages.dnsoe6.com, Area=overseas 免备案, 免 eo_token 签名)——与 EO 网站加速二选一(DNS CNAME 互斥)
+- 签名机制/框架规范细节: 见 docs/MAKERS_API.md §3 + DEVELOPMENT §15.19/§15.20
+
+### TiDB 硬限制(实测)与 RU 预算
+- ①单条多值 INSERT ~500 行上限 ②大 DELETE 全表内存取消(8176)→ 分批 LIMIT 10000 ③execute 返回 rowcount(非 lastrowid) ④DATETIME 读出 datetime 对象(比较/展示 str[:10]) ⑤TiDB 异步 DDL(索引并入 CREATE TABLE)
+- **RU 预算**: 免费 5000 万 RU/月(按集群独立——旧集群耗尽不影响新集群);高频接口索引直达后 ≤51 RU/请求;EXPLAIN ANALYZE 实测走控制台用量页观察
+- 迁移决策: SQLite ORM 适配 TiDB 边际成本失控 → **停适配, 方案B 原生重构**(数据层直写 TiDB 方言, 接口契约前端零改动)
+
+### 上线防护清单(切真实数据前必做)
+- 异地备份(GitHub Release, 每日拉取) / 目标版本语法门禁 / 误删防护 / 备份恢复演练(下载→gzip 校验→integrity_check→抽样核对→记录)——事故红线细节见 DEVELOPMENT §15.9/§15.17/§15.18
