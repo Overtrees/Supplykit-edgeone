@@ -11,8 +11,8 @@ from routes.common import try_err, status_cond as _status_cond
 def _rebuild_day_agg(days=90, channel=None):
     """物化日级汇总 orders_day_agg(2026-09-15 看板提速): 同口径聚合历史订单(与 _build_summary 同 SQL)
     幂等(ON DUPLICATE 累加); summary 历史区间读 agg(万级) 替代 19 万行直查
-    2026-10-25 根治残留: 窗口内先 DELETE 再 INSERT(事务原子)——ON DUPLICATE 只 upsert 现存组合,
-    软删/删除使组合消失时旧组残留(cnt/gmv 多算——10-16 实证 cnt 2809 vs 当前 1100, 测试单 GMV=0 掩盖 gmv 差异)
+    注: 仅 upsert 现存组合——软删致组合消失的残留由 _track_data 窗口自愈(单日精准重建)处理,
+    不在全窗口 DELETE(大事务持锁 → 并发 FOR UPDATE 9004 锁超时, 实测 summary 86s)
     返回 bool(成功/失败)——调用方据此置/清 agg_dirty 脏标记(封死重建失败边界)"""
     try:
         _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -26,13 +26,32 @@ def _rebuild_day_agg(days=90, channel=None):
                 "GROUP BY DATE(ordered_at), channel, order_status, store "
                 "ON DUPLICATE KEY UPDATE gmv=VALUES(gmv), subsidy=VALUES(subsidy), cnt=VALUES(cnt)"
                 % (_status_cond(), _status_cond(), _chw))
-        from db import transaction
-        with transaction():
-            execute("DELETE FROM orders_day_agg WHERE `date` >= %s%s", [_start] + _chp)
-            execute(_sql, [_start] + _chp)
+        execute(_sql, [_start] + _chp)
         return True
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
+            return False
+
+def _rebuild_agg_day(channel, day):
+    """单日精准重建(2026-10-25 残留根治): DELETE 该日 agg 行 + INSERT SELECT 该日订单(小事务短锁,
+    不碰全窗口——大事务持锁致并发 9004)——软删使组合消失时 ON DUPLICATE 覆盖不了的残留由这里清"""
+    try:
+        from db import transaction
+        _d2 = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        with transaction():
+            execute("DELETE FROM orders_day_agg WHERE channel=%s AND `date`=%s", [channel, day])
+            execute("INSERT INTO orders_day_agg(`date`, channel, order_status, store, gmv, subsidy, cnt) "
+                    "SELECT DATE(ordered_at), channel, order_status, store, "
+                    "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)), "
+                    "SUM(IF(%s, COALESCE(subsidy_amount,0), 0)), COUNT(*) "
+                    "FROM orders WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s "
+                    "AND ordered_at >= %s AND ordered_at < %s "
+                    "GROUP BY DATE(ordered_at), channel, order_status, store"
+                    % (_status_cond(), _status_cond()),
+                    [channel, day + " 00:00:00", _d2 + " 00:00:00"])
+        return True
+    except Exception as _e:
+            try_err('dashboard', '单日重建降级', _e)
             return False
 
 def _mark_agg_dirty():
@@ -109,7 +128,8 @@ def _track_data(channel, _db2):
             else:
                 _mark_agg_dirty()
         # 窗口完整性自愈(仅行数维度——增删/软删/补录; 值维度由写路径重建+agg_dirty 兜):
-        # 60 天窗口 orders 行数 vs agg cnt 总和, 不一致 → 重建 60 天(一次覆盖全窗口, 幂等)
+        # 60 天窗口 orders 行数 vs agg cnt 总和, 不一致 → 逐日定位缺口(orders 独有/agg 残留)
+        # → 单日精准重建(DELETE 该日+INSERT, 小事务短锁——全窗口重建大事务曾致并发 9004 锁超时)
         try:
             _w60 = (datetime.now(timezone.utc) - timedelta(days=59)).strftime("%Y-%m-%d")
             _oc60 = one("SELECT COUNT(*) AS c FROM orders WHERE channel=%s "
@@ -118,10 +138,32 @@ def _track_data(channel, _db2):
             _ac60 = one("SELECT COALESCE(SUM(cnt),0) AS c FROM orders_day_agg "
                         "WHERE channel=%s AND `date` >= %s", [channel, _w60]) or {}
             if int(_oc60.get("c") or 0) != int(_ac60.get("c") or 0):
-                if _rebuild_day_agg(60):
-                    _clear_agg_dirty()
-                else:
-                    _mark_agg_dirty()
+                _gd = query("SELECT d.d AS d FROM "
+                            "(SELECT DATE(ordered_at) AS d, COUNT(*) AS oc FROM orders "
+                            "WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
+                            "GROUP BY DATE(ordered_at)) d "
+                            "LEFT JOIN (SELECT `date`, SUM(cnt) AS ac FROM orders_day_agg "
+                            "WHERE channel=%s AND `date` >= %s GROUP BY `date`) a ON d.d=a.`date` "
+                            "WHERE d.oc <> COALESCE(a.ac,0) OR a.ac IS NULL", [channel, _w60, channel, _w60])
+                _sd = query("SELECT a.`date` AS d FROM "
+                            "(SELECT `date`, SUM(cnt) AS ac FROM orders_day_agg "
+                            "WHERE channel=%s AND `date` >= %s GROUP BY `date`) a "
+                            "LEFT JOIN (SELECT DATE(ordered_at) AS d, COUNT(*) AS oc FROM orders "
+                            "WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
+                            "GROUP BY DATE(ordered_at)) o ON a.`date`=o.d "
+                            "WHERE o.oc IS NULL OR o.oc=0", [channel, _w60, channel, _w60])
+                _days = list({str((r or {}).get("d") or "")[:10] for r in (_gd or [])} |
+                             {str((r or {}).get("d") or "")[:10] for r in (_sd or [])})
+                _days = [x for x in _days if x]
+                if _days:
+                    _ok = True
+                    for _d in _days:
+                        if not _rebuild_agg_day(channel, _d):
+                            _ok = False
+                    if _ok:
+                        _clear_agg_dirty()
+                    else:
+                        _mark_agg_dirty()
         except Exception as _e:
                 try_err('dashboard', '窗口完整性检测降级', _e)
     except Exception as _e:
