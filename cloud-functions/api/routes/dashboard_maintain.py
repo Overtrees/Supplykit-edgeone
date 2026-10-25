@@ -11,6 +11,8 @@ from routes.common import try_err, status_cond as _status_cond
 def _rebuild_day_agg(days=90, channel=None):
     """物化日级汇总 orders_day_agg(2026-09-15 看板提速): 同口径聚合历史订单(与 _build_summary 同 SQL)
     幂等(ON DUPLICATE 累加); summary 历史区间读 agg(万级) 替代 19 万行直查
+    2026-10-25 根治残留: 窗口内先 DELETE 再 INSERT(事务原子)——ON DUPLICATE 只 upsert 现存组合,
+    软删/删除使组合消失时旧组残留(cnt/gmv 多算——10-16 实证 cnt 2809 vs 当前 1100, 测试单 GMV=0 掩盖 gmv 差异)
     返回 bool(成功/失败)——调用方据此置/清 agg_dirty 脏标记(封死重建失败边界)"""
     try:
         _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -24,7 +26,10 @@ def _rebuild_day_agg(days=90, channel=None):
                 "GROUP BY DATE(ordered_at), channel, order_status, store "
                 "ON DUPLICATE KEY UPDATE gmv=VALUES(gmv), subsidy=VALUES(subsidy), cnt=VALUES(cnt)"
                 % (_status_cond(), _status_cond(), _chw))
-        execute(_sql, [_start] + _chp)
+        from db import transaction
+        with transaction():
+            execute("DELETE FROM orders_day_agg WHERE `date` >= %s%s", [_start] + _chp)
+            execute(_sql, [_start] + _chp)
         return True
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
