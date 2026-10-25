@@ -84,7 +84,10 @@ def _snapshot_step(channel, _db2):
 
 def _track_data(channel, _db2):
     """数据追平(即时): 一次 SQL 合并三 MAX 子查询(orders/快照/agg——3 查询→1 往返)——
-    每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate_all 触发增量"""
+    每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate_all 触发增量
+    2026-10-25 增: 60 天查询窗口行数一致性自愈(接力——每 miss 检测, 不一致则重建 60 天一次,
+    ON DUPLICATE 幂等覆盖; 修复后一致即停)——兜底"非尾部缺口"(软删残留/历史遗留/手动改库:
+    尾部 MAX 检测发现不了中间缺口, 曾 10-16 agg cnt 残留 2809 vs orders 1100)"""
     try:
         _r = one("SELECT (SELECT COALESCE(MAX(DATE(ordered_at)),'') FROM orders "
                  "WHERE (deleted_at IS NULL OR deleted_at='')) AS om, "
@@ -100,5 +103,21 @@ def _track_data(channel, _db2):
                 _clear_agg_dirty()
             else:
                 _mark_agg_dirty()
+        # 窗口完整性自愈(仅行数维度——增删/软删/补录; 值维度由写路径重建+agg_dirty 兜):
+        # 60 天窗口 orders 行数 vs agg cnt 总和, 不一致 → 重建 60 天(一次覆盖全窗口, 幂等)
+        try:
+            _w60 = (datetime.now(timezone.utc) - timedelta(days=59)).strftime("%Y-%m-%d")
+            _oc60 = one("SELECT COUNT(*) AS c FROM orders WHERE channel=%s "
+                        "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s",
+                        [channel, _w60]) or {}
+            _ac60 = one("SELECT COALESCE(SUM(cnt),0) AS c FROM orders_day_agg "
+                        "WHERE channel=%s AND `date` >= %s", [channel, _w60]) or {}
+            if int(_oc60.get("c") or 0) != int(_ac60.get("c") or 0):
+                if _rebuild_day_agg(60):
+                    _clear_agg_dirty()
+                else:
+                    _mark_agg_dirty()
+        except Exception as _e:
+                try_err('dashboard', '窗口完整性检测降级', _e)
     except Exception as _e:
             try_err('dashboard', '数据追平降级', _e)
