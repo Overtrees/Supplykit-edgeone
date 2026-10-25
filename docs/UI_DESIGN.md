@@ -131,3 +131,40 @@
 - 断点：手机竖屏（4 小卡 1-2 列 auto-fit）/ 手机横屏（≤932 密度压缩）/ 平板 640 / 桌面 1024+
 - 安全区：`env(safe-area-inset-top/bottom/left/right)` 全面（container/弹窗/灵动岛）
 - 横屏：小卡 4 卡一行强制（字体 cqi 压缩）；中卡 2 列；不依赖固定高度（防截断）
+
+
+## 十三、玻璃材质体系（2026-10-25 收敛定版）
+
+> 模糊档位从 4 档收敛 3 档（消费实证驱动：ultra-thin/thick 零消费）；玻璃消费方内联统一为全局变量。
+
+### 材质三档（面积→强度映射）
+
+| 档 | 滤镜变量 | 底色 | 边框 | 消费场景 |
+|---|---|---|---|---|
+| 轻 | `--blur-thin`(16px+160%) | `--bg-thin` 0.4 | `--border`(两端可见中性灰) | 玻璃圆钮(menu/back/hammer/page-btn)、状态胶囊 |
+| 中 | `--blur-regular`(24px+180%) | `--bg-regular` 0.55 | `--border-medium` | `.material-regular` 弹层/对话框(12 处主流) |
+| 重 | `--glass-filter`(40px+250%+1.15) | `--glass-bg` 0.5 | `--glass-border`=var(--border-strong) | 浮层菜单(锤子/侧边)、`--glass-filter-soft`=Toast |
+
+### 玻璃钮立体（浅色表现）
+
+- 边框禁白边(`--border-light` 浅色背景不可见)→ **`--border`**(light #e5e7eb/dark #334155 两端可见)
+- **`box-shadow: var(--shadow-control)`**(inset 顶部白高光 0.5px + 外投 2px8px)——立体核心配方
+- 32px 小钮同规格化(page-btn 曾白底扁平漏反光)
+
+### 反光层 + 动态光追
+
+- `.glass-edge::before`：1px 边缘切割高光(`radial-gradient` 光位 + `mask-composite: exclude` 只留边框环)——挂浮层菜单 + 4 玻璃圆钮
+- **动态光追**：`useLightTracker`(pointermove→rAF 节流→写 `--light-x/--light-y`, clamp -50~150%)；默认 30%/30% 静态兜底；dark 弱化(0.45)
+- 禁 contrast 于 blur 滤镜(iOS 颜色断层教训)
+
+### 平台降级 + dark 差异化
+
+- **@supports not (backdrop-filter)**：`--blur-*`/`--glass-filter*` → none + 底色提 0.85~0.92(旧 Android/WebView 不裸奔)；反光层不依赖滤镜自动保留
+- **dark 差异化**：`--glass-saturate 2.5→1.5`、`--glass-brightness 1.15→1.05`(深色防颜色断层)；dark 块须覆盖 glass 三参数(曾只覆盖 bg/border——浮层 dark 下 250% 饱和残留)
+
+### 验收（玻璃相关改动必查）
+
+1. 浅色背景下白边是否不可见(换 `--border` 或给阴影)
+2. 反光/光追是否覆盖目标控件(禁只挂类不挂样式)
+3. dark 下饱和/亮度是否差异化(非默认 250%/1.15)
+4. 无 backdrop-filter 设备是否降级可读
