@@ -19,6 +19,23 @@ router = APIRouter(tags=["task-export"])
 def now_stamp():
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
+# 导出文件名中文映射(2026-10-25: 曾 exports_<英文type>_<channel>_<ts>——改中文+日期+时分秒)
+_EXPORT_NAMES = {
+    "replen": "补货建议", "purchase_suggestions": "采购建议", "purchase": "采购建议",
+    "slow": "滞销处置建议", "orders": "订单明细", "inventory": "进销存明细",
+}
+
+def _batch_pct(prod, exp):
+    """批次消耗% = (今天-生产日)/总效期(与前端 InventoryPage 批次展开同算法)"""
+    try:
+        from datetime import date as _date
+        pd = _date.fromisoformat(str(prod)[:10])
+        ed = _date.fromisoformat(str(exp)[:10])
+        dp = max((ed - pd).days, 1)
+        return max(0, min(100, round(((_date.today() - pd).days / dp) * 100)))
+    except Exception:
+        return 0
+
 def _build_export_rows(exp_type, mode, channel, wh_type=""):
     """按类型生成导出行(复用现有路由逻辑, 均为字典列表)"""
     if exp_type in ("replen", "purchase_suggestions", "purchase"):
@@ -109,29 +126,45 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
             })
         return out
     if exp_type == "inventory":
-        # 进销存导出(当前渠道+仓型, 最多 5 万行)
+        # 进销存导出(当前渠道+仓型, 最多 5 万行)——含批次级明细(每批次一行, 主字段重复;
+        # 曾只导出汇总行(batch_* 摘要)——用户要求"全量明细看多批次对应数量")
         from routes.insights import inventory_with_sales
         r = inventory_with_sales(wh_type=wh_type or "own", channel=channel,
                                  page=1, page_size=50000)
         data = (r.get("data") or {}) if isinstance(r, dict) else (r or [])
         items = data.get("items") if isinstance(data, dict) else (data or [])
+        _bs = {}
+        try:
+            for _rb in query("SELECT sku, warehouse, prod_date, exp_date, qty FROM batches "
+                             "WHERE channel=%s AND warehouse_type=%s ORDER BY exp_date, id",
+                             [channel, wh_type or "own"]):
+                _bs.setdefault(str(_rb.get("sku")) + "|" + str(_rb.get("warehouse")), []).append(_rb)
+        except Exception:
+            _bs = {}
         out = []
         for it in items:
-            out.append({
-                "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
-                "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
-                "可用": it.get("available_qty", ""), "在途": it.get("in_transit_qty", ""),
-                "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
-                "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
-                "库存可撑天数": it.get("days_to_empty", ""),
-                "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
-                "期初": it.get("beginning_stock", ""), "单价": it.get("price", ""),
-                "品牌": it.get("brand", ""),
-                "生产日期": str(it.get("batch_prod_date") or "")[:10] or "",
-                "截止日期": str(it.get("batch_exp_date") or "")[:10] or "",
-                "总效期/天": it.get("batch_days", ""), "效期状态": it.get("batch_status", ""),
-                "批次消耗%": it.get("batch_pct", ""),
-            })
+            _rbs = _bs.get(str(it.get("sku")) + "|" + str(it.get("warehouse"))) or [None]
+            for _rb in _rbs:
+                _pd = str((_rb or {}).get("prod_date") or "")[:10]
+                _ed = str((_rb or {}).get("exp_date") or "")[:10]
+                _pct = _batch_pct(_pd, _ed) if _rb else ""
+                _st = ("已消耗过半" if _pct >= 67 else "消耗中" if _pct >= 40 else "正常") if _rb else ""
+                out.append({
+                    "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
+                    "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
+                    "可用": it.get("available_qty", ""), "在途": it.get("in_transit_qty", ""),
+                    "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
+                    "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
+                    "库存可撑天数": it.get("days_to_empty", ""),
+                    "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
+                    "期初": it.get("beginning_stock", ""), "单价": it.get("price", ""),
+                    "品牌": it.get("brand", ""),
+                    "生产日期(批次)": _pd or "",
+                    "截止日期(批次)": _ed or "",
+                    "批次数量": (_rb or {}).get("qty") if _rb else "",
+                    "批次消耗%": _pct if _rb else "",
+                    "批次效期状态": _st or "",
+                })
         return out
     return None
 
@@ -257,8 +290,8 @@ def export_status(task_id: str = "", page_size: int = 10000):
         if done:
             # 分片不合并(2026-10-09: TiDB 单行 entry 上限 6MB——20MB CSV 单行存不下):
             # result 记分片列表, 下载时按 task 读分片合并返回
-            realname = "exports_%s_%s_%s.%s" % (exp_type, channel, now_stamp(),
-                                                  "csv" if parts[0].endswith(".csv") else "xlsx")
+            realname = "%s_%s_%s.%s" % (_EXPORT_NAMES.get(exp_type, exp_type), channel, now_stamp(),
+                                        "csv" if parts[0].endswith(".csv") else "xlsx")
             _r = {"filename": task_id, "name": realname, "type": exp_type, "parts": parts,
                   "rows": total if exp_type == "orders" else len(rows)}
             _sqd = round(_ttx.time() - _t0x, 1)
