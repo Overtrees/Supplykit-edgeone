@@ -10,7 +10,8 @@ from routes.common import try_err, status_cond as _status_cond
 
 def _rebuild_day_agg(days=90, channel=None):
     """物化日级汇总 orders_day_agg(2026-09-15 看板提速): 同口径聚合历史订单(与 _build_summary 同 SQL)
-    幂等(ON DUPLICATE 累加); summary 历史区间读 agg(万级) 替代 19 万行直查"""
+    幂等(ON DUPLICATE 累加); summary 历史区间读 agg(万级) 替代 19 万行直查
+    返回 bool(成功/失败)——调用方据此置/清 agg_dirty 脏标记(封死重建失败边界)"""
     try:
         _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
         _chw = " AND channel=%s" if channel else ""
@@ -24,8 +25,24 @@ def _rebuild_day_agg(days=90, channel=None):
                 "ON DUPLICATE KEY UPDATE gmv=VALUES(gmv), subsidy=VALUES(subsidy), cnt=VALUES(cnt)"
                 % (_status_cond(), _status_cond(), _chw))
         execute(_sql, [_start] + _chp)
+        return True
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
+            return False
+
+def _mark_agg_dirty():
+    """agg 重建失败置位(幂等, 1 行): summary 陈旧检测读到 → 降级直查, 不误用缺数据 agg"""
+    try:
+        execute("INSERT INTO agg_dirty(id) VALUES(1) ON DUPLICATE KEY UPDATE ts=NOW(6)")
+    except Exception as _e:
+            try_err('dashboard', 'agg_dirty 置位降级', _e)
+
+def _clear_agg_dirty():
+    """agg 重建成功清位(自愈): 下次写操作重建成功 → 恢复 agg 路径"""
+    try:
+        execute("DELETE FROM agg_dirty WHERE id=1")
+    except Exception as _e:
+            try_err('dashboard', 'agg_dirty 清位降级', _e)
 
 def _snapshot_step(channel, _db2):
     try:
@@ -79,6 +96,9 @@ def _track_data(channel, _db2):
             _snapshot_step(channel, _db2)
         _amax = str(_r.get("am") or "")[:10]
         if _db2 and _amax < _db2:
-            _rebuild_day_agg(3)
+            if _rebuild_day_agg(60):
+                _clear_agg_dirty()
+            else:
+                _mark_agg_dirty()
     except Exception as _e:
             try_err('dashboard', '数据追平降级', _e)

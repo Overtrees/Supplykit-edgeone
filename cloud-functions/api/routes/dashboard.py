@@ -284,11 +284,24 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
     try:
         _aggc = one("SELECT COUNT(*) AS c, COALESCE(MAX(`date`),'') AS m FROM orders_day_agg WHERE channel=%s", [channel]) or {}
         _agg_ok = int(_aggc.get("c") or 0) > 0
-        # 陈旧检测: agg 最新日期落后 3 天以上(如重置后旧残留) → 降级直查, 不误用旧数据
+        # 陈旧检测(数据驱动, 非时间驱动): 基准=orders 最新日期——无新数据时 agg 停留不算陈旧
+        # (曾用 now-3天: 数据停更 3 天后误判陈旧 → 每次降级直查 60 天, 看板 0.88s→3-13s 体感退化)
         _aggmx = str(_aggc.get("m") or "")[:10]
-        _agg_cut = (now - timedelta(days=3)).strftime("%Y-%m-%d")
-        if _agg_ok and _aggmx < _agg_cut:
+        _omx = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
+                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+        _omd = str(_omx.get("m") or "")[:10]
+        _agg_cut = ""
+        if _omd:
+            _agg_cut = (datetime.strptime(_omd, "%Y-%m-%d") - timedelta(days=3)).strftime("%Y-%m-%d")
+        if _agg_ok and _aggmx and _agg_cut and _aggmx < _agg_cut:
             _agg_ok = False
+        # 重建失败脏标记 → 降级直查(封死"补录历史+重建失败"边界——补录不改 orders MAX,
+        # 数据驱动检测不到, 标记兜底; 表不存在视为未置位, 安全)
+        try:
+            if _agg_ok and one("SELECT 1 FROM agg_dirty WHERE id=1"):
+                _agg_ok = False
+        except Exception:
+            pass
     except Exception:
         _agg_ok = False
     if _agg_ok:

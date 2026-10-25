@@ -386,6 +386,13 @@ export default function App() {
       return false
     }
   })
+  // 401 全局拦截监听(任意接口 401 → 回登录页, 防挂机重进逐卡报错/反复提示)
+  useEffect(() => {
+    const onExpired = () => setLoggedIn(false)
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
   // 启动时验证 token 有效性（失效则清除并显示登录页）
   useEffect(() => {
     if (!loggedIn) return
@@ -401,15 +408,29 @@ export default function App() {
       return
     }
     fetch(API + '/api/auth/check', { headers: { 'X-Auth-Token': token } })
-      .then(r => {
-        if (r.status === 401) {
+      .then(async r => {
+        // 401/500/SW offline 兜底(200 {ok:false}) 一律按失效处理 → 回登录页
+        let ok = r.ok
+        if (r.status === 200) {
+          try {
+            const d = await r.json()
+            if (d && d.ok === false) ok = false
+          } catch {}
+        }
+        if (!ok) {
           try {
             localStorage.removeItem('c_token')
           } catch {}
           setLoggedIn(false)
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // 网络失败(挂机/后台恢复瞬间)也回登录页——避免卡'加载失败'反复提示
+        try {
+          localStorage.removeItem('c_token')
+        } catch {}
+        setLoggedIn(false)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const loadHistory = useCallback(

@@ -96,6 +96,15 @@ instance.interceptors.response.use(
     console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
     const status = (error.response || {}).status
+    // 401 全局拦截: 清 token + 通知 App 回登录页(防挂机重进逐卡报错/反复提示)
+    if (status === 401) {
+      try {
+        localStorage.removeItem('c_token')
+      } catch {}
+      try {
+        window.dispatchEvent(new Event('auth:expired'))
+      } catch {}
+    }
     // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜
     if (!status || status >= 400) {
       reportError(

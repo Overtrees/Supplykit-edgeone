@@ -54,23 +54,31 @@ def cache_get(key, ttl, builder):
         from db import one, execute
         try:
             from db import transaction
-            with transaction():
-                row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                          "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
-                if row:
-                    age = row.get("age")
-                    v0 = row.get("value")
-                    if v0 != "__CALC__" and age is not None and int(age) < ttl:
-                        v = _loads(v0 or "")
-                        if v is not _FAILED:
-                            return v
-                    if v0 == "__CALC__":
-                        execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
-                val = builder()
-                execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                        "VALUES(%s,%s,NOW(6))",
-                        (key, json.dumps(val, ensure_ascii=False, default=str)))
-                return val
+            # 死锁重试(TiDB 1213): builder() 持锁重算 + 并发 invalidate_all DELETE/其他 key FOR UPDATE
+            # → 事务死锁; 1213 时事务已回滚, 重试干净——保留 10-11"行锁串行化同 key 计算"设计
+            for _try in range(3):
+                try:
+                    with transaction():
+                        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                                  "FROM analysis_cache WHERE `key`=%s FOR UPDATE", [key])
+                        if row:
+                            age = row.get("age")
+                            v0 = row.get("value")
+                            if v0 != "__CALC__" and age is not None and int(age) < ttl:
+                                v = _loads(v0 or "")
+                                if v is not _FAILED:
+                                    return v
+                            if v0 == "__CALC__":
+                                execute("DELETE FROM analysis_cache WHERE `key`=%s", [key])
+                        val = builder()
+                        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
+                                "VALUES(%s,%s,NOW(6))",
+                                (key, json.dumps(val, ensure_ascii=False, default=str)))
+                        return val
+                except Exception as _e:
+                    if _try < 2 and ("1213" in str(_e) or "deadlock" in str(_e).lower()):
+                        continue
+                    raise
         except Exception as _elock:
             # 锁不可用(连接/环境)降级: 无锁直算(生产正常; 测试/mock 环境兜底)
             try_err('analysis_cache', '缓存锁降级直算', _elock)
@@ -133,11 +141,15 @@ def invalidate_all():
                 def _mat():
                     try:
                         from routes.dashboard import _rebuild_day_agg, _snapshot_step
+                        from routes.dashboard_maintain import _mark_agg_dirty as _mk, _clear_agg_dirty as _ck
                         from db import one as _o1
                         _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
                                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
                         _dbs = str(_db.get("m") or "")[:10]
-                        _rebuild_day_agg(3)
+                        if _rebuild_day_agg(60):
+                            _ck()
+                        else:
+                            _mk()
                         # 2026-10-17 日销物化表重建(写操作后预重建——限频窗口上方已合并;
                         # 重建含当天订单, 消费方读表零重算; 实时性: 库存仍每次直查, 物化只慢变日销)
                         try:

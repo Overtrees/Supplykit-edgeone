@@ -272,6 +272,8 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
             # 一次性数据迁移登记表(2026-09-15: barcode 补齐 —— INSERT IGNORE 抢注幂等; M2/M3 已移除)
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            # agg 重建失败脏标记(2026-10-25 封死补录/重建失败边界): 重建失败 → 置位 → summary 降级直查(不误用缺数据 agg); 成功 → 清位自愈
+            _exec("CREATE TABLE IF NOT EXISTS agg_dirty (id TINYINT PRIMARY KEY, ts DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
             _exec("CREATE TABLE IF NOT EXISTS log_archives ("
                   "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
                   "markdown MEDIUMTEXT, `count` INT DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
@@ -298,20 +300,25 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                             _rebuild_day_agg(90)
                     except Exception as _e:
                             try_err('index', '静默降级', _e)
-                    # M1: 订单 69 码补齐(products 全有 barcode, sku 全关联; 分批按 id, WHERE 空值幂等)
-                    try:
-                        _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
-                        _mxn = int(_mx.get("m") or 0)
-                        _m1 = 0
-                        for _lo in range(0, _mxn + 1, 50000):
-                            _m1 += _exec("UPDATE orders o JOIN products p ON o.sku=p.sku SET o.barcode=p.barcode "
-                                         "WHERE o.id BETWEEN %s AND %s AND (o.barcode IS NULL OR o.barcode='') "
-                                         "AND p.barcode IS NOT NULL AND p.barcode != ''", [_lo, _lo + 49999])
-                        _exec("INSERT INTO quality_logs(log_type, level, message, source) "
-                              "VALUES('migration','info',%s,'index')",
-                              ("M1 订单69码补齐完成(补 %d 行)" % _m1,))
-                    except Exception as _e:
-                            try_err('index', '静默降级', _e)
+                    # M1: 订单 69 码补齐(源头已解决: 导入时自动查补, 2026-09-15)
+                    # 设计意图兼容: 原"不抢注+分批续跑"→ 补齐(或确认无空值)后才写标记;
+                    # 标记后实例启动零扫描(不再每次全表 JOIN UPDATE 浪费 RU/竞争冷启动首请求)
+                    if not _oneM("SELECT 1 FROM migration_log WHERE name='m1_69code'"):
+                        _miss = _oneM("SELECT COUNT(*) AS c FROM orders o JOIN products p ON o.sku=p.sku "
+                                      "WHERE (o.barcode IS NULL OR o.barcode='') "
+                                      "AND p.barcode IS NOT NULL AND p.barcode != ''") or {}
+                        if int(_miss.get("c") or 0) > 0:
+                            _mx = _oneM("SELECT COALESCE(MAX(id),0) AS m FROM orders") or {}
+                            _mxn = int(_mx.get("m") or 0)
+                            _m1 = 0
+                            for _lo in range(0, _mxn + 1, 50000):
+                                _m1 += _exec("UPDATE orders o JOIN products p ON o.sku=p.sku SET o.barcode=p.barcode "
+                                             "WHERE o.id BETWEEN %s AND %s AND (o.barcode IS NULL OR o.barcode='') "
+                                             "AND p.barcode IS NOT NULL AND p.barcode != ''", [_lo, _lo + 49999])
+                            _exec("INSERT INTO quality_logs(log_type, level, message, source) "
+                                  "VALUES('migration','info',%s,'index')",
+                                  ("M1 订单69码补齐完成(补 %d 行)" % _m1,))
+                        _exec("INSERT INTO migration_log(name) VALUES('m1_69code')")
                 except Exception as _e:  # 迁移整体降级(M0/M1 已各自兜底)
                         try_err('index', '迁移降级', _e)
             _thM.Thread(target=_run_migrations, daemon=True).start()
