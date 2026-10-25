@@ -38,51 +38,55 @@ def _batch_pct(prod, exp):
 
 def _build_export_rows(exp_type, mode, channel, wh_type=""):
     """按类型生成导出行(复用现有路由逻辑, 均为字典列表)"""
-    if exp_type in ("replen", "purchase_suggestions", "purchase"):
+    if exp_type in ("replen", "purchase"):
+        # 补货导出(采购建议不再走此——曾 purchase_suggestions 误用补货数据组装成采购样式)
         from routes.replenishment import get_replenishment_suggestions
         r = get_replenishment_suggestions(days=28, mode=mode, channel=channel)
         items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
-        if exp_type != "purchase_suggestions":
-            # 补货导出: 转中文表头(曾直接 return items——接口英文字段作表头; 补周转列齐全)
-            out = []
-            for it in items:
-                out.append({
-                    "SKU": it.get("sku", ""), "69码": it.get("barcode", ""),
-                    "商品名": it.get("product_name", ""), "品牌": it.get("brand", ""),
-                    "店铺": it.get("store", ""), "可用库存": it.get("available_qty", ""),
-                    "安全线": it.get("safety_qty", ""), "在途": it.get("in_transit_qty", ""),
-                    "C仓在途": it.get("c_transit", ""), "B仓在途": it.get("b_transit", ""),
-                    "B仓库存": it.get("b_stock", ""), "C仓库存": it.get("c_stock", ""),
-                    "B缺口": it.get("b_gap", ""), "日销": it.get("daily_sales", ""),
-                    "日销7": it.get("daily_sales_7", ""), "日销14": it.get("daily_sales_14", ""),
-                    "日销28": it.get("daily_sales_28", ""), "日销60": it.get("daily_sales_60", ""),
-                    "库存可撑天数": it.get("days_to_empty", ""),
-                    "C仓周转": it.get("c_turnover", ""), "B-C调拨周转": it.get("transit_turnover", ""),
-                    "当前综转": it.get("combined_turnover_current", it.get("combined_turnover", "")),
-                    "补后综转": it.get("after_turnover", ""),
-                    "建议补货量": it.get("suggested_qty", ""), "B建议补": it.get("b_suggested", ""),
-                    "备注": it.get("note", ""),
-                })
-            return out
-        if exp_type == "purchase_suggestions":
-            # 采购口径: 以 C 仓缺口为主视图(备注列区分)
-            out = []
-            for it in items:
-                out.append({
-                    "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
-                    "69码": it.get("barcode", ""), "品牌": it.get("brand", ""),
-                    "仓库": it.get("warehouse", ""), "供应商": it.get("supplier_code", ""),
-                    "日销(融合)": it.get("daily_sales", ""), "日销14": it.get("daily_sales_14", ""),
-                    "日销28": it.get("daily_sales_28", ""),
-                    "系统可用": it.get("sys_available", ""), "系统在途": it.get("sys_transit", ""),
-                    "系统总库存": it.get("sys_total", ""), "自有可用": it.get("own_available", ""),
-                    "平台可用": it.get("plat_available", ""),
-                    "系统总缺口": it.get("raw_suggested", ""), "建议采购量": it.get("purchase_qty", ""),
-                    "建议采购(含箱规)": it.get("actual_purchase", ""), "箱规": it.get("box_qty", ""),
-                    "补后周转": it.get("after_turnover", ""), "目标周转": it.get("target_turnover", ""),
-                    "安全线": it.get("safety_qty", ""), "备注": it.get("note", ""),
-                })
-            return out
+        # 补货导出: 转中文表头(曾直接 return items——接口英文字段作表头; 补周转列齐全)
+        out = []
+        for it in items:
+            out.append({
+                "SKU": it.get("sku", ""), "69码": it.get("barcode", ""),
+                "商品名": it.get("product_name", ""), "品牌": it.get("brand", ""),
+                "店铺": it.get("store", ""), "可用库存": it.get("available_qty", ""),
+                "安全线": it.get("safety_qty", ""), "在途": it.get("in_transit_qty", ""),
+                "C仓在途": it.get("c_transit", ""), "B仓在途": it.get("b_transit", ""),
+                "B仓库存": it.get("b_stock", ""), "C仓库存": it.get("c_stock", ""),
+                "B缺口": it.get("b_gap", ""), "日销": it.get("daily_sales", ""),
+                "日销7": it.get("daily_sales_7", ""), "日销14": it.get("daily_sales_14", ""),
+                "日销28": it.get("daily_sales_28", ""), "日销60": it.get("daily_sales_60", ""),
+                "库存可撑天数": it.get("days_to_empty", ""),
+                "C仓周转": it.get("c_turnover", ""), "B-C调拨周转": it.get("transit_turnover", ""),
+                "当前综转": it.get("combined_turnover_current", it.get("combined_turnover", "")),
+                "补后综转": it.get("after_turnover", ""),
+                "建议补货量": it.get("suggested_qty", ""), "B建议补": it.get("b_suggested", ""),
+                "备注": it.get("note", ""),
+            })
+        return out
+    if exp_type == "purchase_suggestions":
+        # 采购导出: 采购建议接口(供应商级参数/MOQ/actual_purchase——曾误用补货数据组装成采购样式)
+        from routes.purchase import purchase_suggestions
+        r = purchase_suggestions(channel=channel, mode=mode)
+        dd = r.get("data") if isinstance(r, dict) else r
+        items = dd.get("suggestions") if isinstance(dd, dict) else (dd or [])
+        out = []
+        for it in items:
+            out.append({
+                "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
+                "69码": it.get("barcode", ""), "品牌": it.get("brand", ""),
+                "仓库": it.get("warehouse", ""), "供应商": it.get("supplier_code", ""),
+                "日销(融合)": it.get("daily_sales", ""), "日销14": it.get("daily_sales_14", ""),
+                "日销28": it.get("daily_sales_28", ""),
+                "系统可用": it.get("sys_available", ""), "系统在途": it.get("sys_transit", ""),
+                "系统总库存": it.get("sys_total", ""), "自有可用": it.get("own_available", ""),
+                "平台可用": it.get("plat_available", ""),
+                "系统总缺口": it.get("raw_suggested", ""), "建议采购量": it.get("purchase_qty", ""),
+                "建议采购(含箱规)": it.get("actual_purchase", ""), "箱规": it.get("box_qty", ""),
+                "补后周转": it.get("after_turnover", ""), "目标周转": it.get("target_turnover", ""),
+                "安全线": it.get("safety_qty", ""), "备注": it.get("note", ""),
+            })
+        return out
         return items
     if exp_type == "slow":
         # 滞销导出: 与页面同源(disposal-suggestions——多因素 level/原因/建议; 曾用 slow_moving 基础7字段表头不全)
@@ -142,6 +146,8 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
         except Exception:
             _bs = {}
         out = []
+        _wh = wh_type or "own"
+        # B-C 调拨在途是 B 仓(platform_b)维度列——own/platform 导出不含(对齐前端 INV_COLS 按仓型隔离)
         for it in items:
             _rbs = _bs.get(str(it.get("sku")) + "|" + str(it.get("warehouse"))) or [None]
             for _rb in _rbs:
@@ -149,13 +155,17 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 _ed = str((_rb or {}).get("exp_date") or "")[:10]
                 _pct = _batch_pct(_pd, _ed) if _rb else ""
                 _st = ("已消耗过半" if _pct >= 67 else "消耗中" if _pct >= 40 else "正常") if _rb else ""
-                out.append({
+                _row = {
                     "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
                     "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
                     # 批次行的"可用"= 该批次数量(多批次明细逐行对齐各自批次——业务合理); 无批次主行 = 汇总可用
                     "可用": (_rb or {}).get("qty") if _rb else it.get("available_qty", ""),
                     "在途": it.get("in_transit_qty", ""),
-                    "B-C调拨在途": it.get("c_transit", ""), "安全线": it.get("safety_qty", ""),
+                }
+                if _wh == "platform_b":
+                    _row["B-C调拨在途"] = it.get("c_transit", "")
+                _row.update({
+                    "安全线": it.get("safety_qty", ""),
                     "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
                     "库存可撑天数": it.get("days_to_empty", ""),
                     "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
@@ -167,6 +177,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                     "批次消耗%": _pct if _rb else "",
                     "批次效期状态": _st or "",
                 })
+                out.append(_row)
         return out
     return None
 
