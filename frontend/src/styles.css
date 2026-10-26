@@ -1124,9 +1124,10 @@ input[type='file'] {
   min-height: 28px;
   padding: 2px 8px;
   border-radius: 99px;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
   text-align: center;
+  box-shadow: var(--shadow-control);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1141,6 +1142,7 @@ input[type='file'] {
   background: var(--segment-active-bg, var(--card));
   color: var(--segment-active-text, var(--text));
   font-weight: 600;
+  border: 1px solid var(--border);
   box-shadow: var(--segment-active-shadow, var(--shadow-control));
 }
 
