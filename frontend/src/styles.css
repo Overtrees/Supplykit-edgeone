@@ -1648,13 +1648,15 @@ input[type='file'] {
 .menu-btn,
 .back-btn,
 .hammer-icon-btn,
-.page-btn {
+.page-btn,
+.hammer-segment {
   position: relative;
 }
 .menu-btn::before,
 .back-btn::before,
 .hammer-icon-btn::before,
 .page-btn::before,
+.hammer-segment::before,
 .glass-edge::before {
   content: '';
   position: absolute;
@@ -1680,6 +1682,7 @@ input[type='file'] {
   .back-btn::before,
   .hammer-icon-btn::before,
   .page-btn::before,
+  .hammer-segment::before,
   .glass-edge::before {
     background: radial-gradient(
       circle at var(--light-x) var(--light-y),

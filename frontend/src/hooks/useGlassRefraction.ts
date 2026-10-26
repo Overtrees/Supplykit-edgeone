@@ -127,7 +127,7 @@ export default function useGlassRefraction(): void {
     if (!supported) return
     const targets = Array.from(
       document.querySelectorAll<HTMLElement>(
-        '.glass-edge, .menu-btn, .back-btn, .hammer-icon-btn, .page-btn',
+        '.glass-edge, .menu-btn, .back-btn, .hammer-icon-btn, .page-btn, .hammer-segment',
       ),
     ).filter(el => el.getBoundingClientRect().width > 0)
     if (!targets.length) return
