@@ -42,7 +42,11 @@ async def create_purchase_order(request: Request):
             (sku, store, product_name, suggested_qty, channel))
     from routes.analysis_cache import invalidate_all
     invalidate_all()
-    return ok({})
+    # 2026-10-26 根治: 返回真实新行(含 id)——前端乐观项用后端行替换, 消除"无 id 项 → 日期更新 PUT /undefined 422"
+    row = one("SELECT id, sku, store, product_name, suggested_qty, actual_qty, arrival_date, status, channel "
+              "FROM purchase_orders WHERE sku=%s AND store=%s AND channel=%s",
+              [sku, store, channel])
+    return ok(row)
 
 
 @router.delete("/purchase-orders")

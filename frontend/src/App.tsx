@@ -388,11 +388,47 @@ export default function App() {
       return false
     }
   })
-  // 401 全局拦截监听(任意接口 401 → 回登录页, 防挂机重进逐卡报错/反复提示)
+  // 401 确认后再回登录页(10-26: 防偶发 401 误踢——无痕冷实例/慢网络单接口 401 曾直接踢出清空输入;
+  // 任何接口标记 may-expired → check 确认(真失效才 setLoggedIn(false)), 10s 限频防并发风暴)
   useEffect(() => {
-    const onExpired = () => setLoggedIn(false)
-    window.addEventListener('auth:expired', onExpired)
-    return () => window.removeEventListener('auth:expired', onExpired)
+    let _checking = false
+    let _last = 0
+    const onMay = async () => {
+      const now = Date.now()
+      if (_checking || now - _last < 10000) return
+      _checking = true
+      _last = now
+      try {
+        const token = (() => {
+          try {
+            return localStorage.getItem('c_token')
+          } catch {
+            return ''
+          }
+        })()
+        if (!token) return
+        const r = await fetch(API + '/api/auth/check', { headers: { 'X-Auth-Token': token } })
+        let ok = r.ok
+        if (r.status === 200) {
+          try {
+            const d = await r.json()
+            if (d && d.ok === false) ok = false
+          } catch {}
+        }
+        if (!ok) {
+          try {
+            localStorage.removeItem('c_token')
+          } catch {}
+          setLoggedIn(false)
+        }
+      } catch {
+        // check 网络失败不判定(偶发网络——不误踢)
+      } finally {
+        _checking = false
+      }
+    }
+    window.addEventListener('auth:may-expired', onMay)
+    return () => window.removeEventListener('auth:may-expired', onMay)
   }, [])
 
   // 启动时验证 token 有效性（失效则清除并显示登录页）

@@ -96,13 +96,11 @@ instance.interceptors.response.use(
     console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
     const status = (error.response || {}).status
-    // 401 全局拦截: 清 token + 通知 App 回登录页(防挂机重进逐卡报错/反复提示)
+    // 401 先标记, 不立即踢(防偶发: 冷实例/慢网络下单接口 401 误伤——曾直接 auth:expired 踢出登录页清空输入)
+    // App 收 may-expired 后调 /auth/check 确认, 真失效才 setLoggedIn(false)
     if (status === 401) {
       try {
-        localStorage.removeItem('c_token')
-      } catch {}
-      try {
-        window.dispatchEvent(new Event('auth:expired'))
+        window.dispatchEvent(new Event('auth:may-expired'))
       } catch {}
     }
     // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜

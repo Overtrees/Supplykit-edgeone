@@ -495,6 +495,8 @@ export default function InsightsPage() {
       } catch {
         setOrderedKeys([])
       }
+      // 2026-10-26: 拉取失败 → 清空明细(防乐观无 id 项残留 → 日期更新 PUT /undefined 422)
+      setOrderedItems([])
     }
   }
 
@@ -536,6 +538,7 @@ export default function InsightsPage() {
         product_name: product_name || '',
         suggested_qty: suggested_qty || 0,
         arrival_date: '',
+        __tmp: key, // 临时标识——后端返回真实行(含 id)后替换, POST 失败移除
       }
       setOrderedKeys(prev => [...prev, key])
       setOrderedItems(prev => [...prev, newItem])
@@ -552,12 +555,22 @@ export default function InsightsPage() {
             '&channel=' +
             globalChannel,
         )
-        .then(() => {
+        .then(r => {
+          // 用后端真实行(含 id)替换乐观项——彻底消除无 id 项(日期更新 PUT /undefined 422 根因)
+          const real = r?.data
+          if (real && real.id != null) {
+            const { __tmp, ...row } = real
+            setOrderedItems(prev => prev.map(x => (x.__tmp === key ? row : x)))
+          } else {
+            loadOrdered()
+          }
           toast.success('已下单')
           window.dispatchEvent(new Event('insights-refresh'))
         })
         .catch(() => {
           toast.error('下单失败')
+          setOrderedKeys(prev => prev.filter(k => k !== key))
+          setOrderedItems(prev => prev.filter(x => !(x.__tmp === key)))
           loadOrdered()
         })
     }
@@ -565,6 +578,11 @@ export default function InsightsPage() {
 
   // 设置到 B 仓日期（入库批次生效日，用于计算在库天数监控超储）
   const setArrivalDate = async (item, date) => {
+    // 防御: item.id 缺失(乐观下单项且 loadOrdered 失败残留)→ 重拉真实列表, 不发 /undefined PUT
+    if (!item || item.id == null) {
+      loadOrdered()
+      return
+    }
     // 乐观更新
     setOrderedItems(prev => prev.map(x => (x.id === item.id ? { ...x, arrival_date: date } : x)))
     api.put('/api/purchase-orders/' + item.id, { arrival_date: date }).catch(() => loadOrdered())

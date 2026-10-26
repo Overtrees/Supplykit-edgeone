@@ -86,7 +86,6 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               color: (TONE[t.type] || TONE.success).fg,
               fontSize: 14,
               fontWeight: 500,
-              border: '1px solid var(--glass-border)',
               maxWidth: 360,
               backdropFilter: 'var(--glass-filter-soft)',
               WebkitBackdropFilter: 'var(--glass-filter-soft)',

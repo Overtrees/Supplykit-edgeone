@@ -10,17 +10,22 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [error, setError] = useState('')
 
   const doLogin = async () => {
+    if (loading) return // 防重复点击/Enter 并发(慢网络时曾连发两次)
     if (!username || !password) {
       setError('请输入用户名和密码')
       return
     }
     setLoading(true)
     setError('')
+    // fetch 超时(15s): 无痕/弱网下原生 fetch 无超时曾挂起 30s+ 无反馈, 用户重复点击
+    const ctrl = new AbortController()
+    const _to = setTimeout(() => ctrl.abort(), 15000)
     try {
       const r = await fetch(API + '/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
+        signal: ctrl.signal,
       })
       const d = await r.json()
       if (d.ok && d.token) {
@@ -35,7 +40,9 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
         setError(d.detail || '用户名或密码错误')
       }
     } catch {
-      setError('无法连接到服务器')
+      setError('无法连接到服务器，请重试')
+    } finally {
+      clearTimeout(_to)
     }
     setLoading(false)
   }
