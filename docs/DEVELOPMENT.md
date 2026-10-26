@@ -1064,4 +1064,8 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **焦散光(::after 底部光带)仅浮层面板**: 小圆钮(<72px)上 3px 亮带在弧线上突兀——焦散=大表面底座光语义, 组件按尺寸取舍
 - **SVG 折射(useGlassRefraction)**: feDisplacementMap per-元素 lens(边缘弯曲+色差), 注入 --glass-url 进 backdrop-filter——**渐进增强**(不支持 url() 环境静默跳过); 挂按钮+浮层面板, 看板卡片不用; 支持检测用 setProperty 非 getPropertyValue 直接测; svg defs 容器不存在时动态创建(隐藏零尺寸)
 - **"渠道主体切换胶囊"目标核实铁律**: header 渠道切换=**.header-status**(包裹 select 的胶囊), 非 .hammer-segment(规则页/锤子 tab)——**改 UI 组件前先确认真实 DOM 元素与语义**, 曾误加 .hammer-segment 反光/折射/边框后回退
-- **看板数字降维规范**: 金额 fmtBig(≥1亿 x.xx亿/≥10万 x.xx万 **2 位小数**/否则千分位), 计数 fmtInt(≥10万 整数万/否则千分位)——GMV 卡/日均/待处理/断货/低库存计数统一; 图表 tooltip/坐标轴保留完整值(悬浮看细节)
+- **看板数字降维规范**: 金额 fmtBig(≥1亿 x.xx亿/≥10万 x.xx万 **2 位小数**/否则千分位), 计数 fmtInt(≥10万 整数万/否则千分位)——GMV 卡/日均/待处理/断货/低库存计数统一; 图表 tooltip/坐标轴保留完整值(悬浮看细节)### 15.68 登录 401 确认机制 + 乐观项替换(2026-10-26 晚间——无痕首登踢回/422 根治)
+- **401 全局处理必须"先确认再踢"铁律**: 任何接口 401 不要直接清 token+跳登录页(曾"登录后并发+冷实例偶发 401 → 立即踢出 → 登录页重挂载清空输入", 无痕首登必现)——**client 401 仅置标记(may-expired), App 收标记调 /auth/check 确认真失效才踢**(10s 限频, check 网络失败不误判); 偶发 401(冷实例/部署窗口/并发)免疫, 真 token 失效仍防挂机重进卡界面
+- **乐观更新必须能拿到真实 id / 失败回滚**: 列表项的日期/更新类操作 require 后端真实行 id——乐观插入项先带临时标识(__tmp), POST 成功用后端返回行(含 id)替换, 失败移除乐观项+回滚 keys, GET 失败清空明细防残留; 后端 create 类接口**返回真实新行**(ONE 查询)前端替换——杜绝"乐观无 id 项 → PUT /undefined 422"(08:45 日志实锤)
+- **登录体验**: fetch 必须带超时(AbortController, 原生 fetch 无超时—弱网挂起 30s+ 无反馈)+ loading guard 防重复(按钮 disabled 但 Enter onKeyDown 不检查——doLogin 内自检)
+- **日志排查流**: 先分类计数(perf/quiet/slow/api_http/business/api_error)→ 逐条看非巡检异常 → 特征(422 undefined/id 缺失/网络)定位真 bug → 其余(401 时段现象/弱网 timeout/冷算 slow/offline)归已知边界并说明依据

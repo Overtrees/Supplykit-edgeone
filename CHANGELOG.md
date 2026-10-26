@@ -1,5 +1,5 @@
 ## 2026-10-26: 玻璃体系进阶(概念稿映射)+ 全面去投影 + 看板数字降维 + 渠道胶囊修正
-> commits b2f8e35b(用户线上 ARCHITECTURE)→ ea50a46e; CI 绿; 155/155。
+> commits b2f8e35b(用户线上 ARCHITECTURE)→ 12686085; CI 绿; 155/155。
 
 ### 玻璃进阶映射(概念稿: 透明光感玻璃路线部分采纳)
 - **底色统一白 0.4 / 黑 0.4**(概念稿参数)——--bg-thin/--bg-regular/--glass-bg light/dark 全对齐(原 dark 蓝黑 20,20,24/30 灰 0.45-0.6 → 纯黑 0.4)
@@ -22,6 +22,13 @@
 - **金额 fmtBig**: ≥1亿 → x.xx亿 / ≥10万 → x.xx万(**2 位小数**) / 否则千分位——GMV 卡主数字/日均
 - **计数 fmtInt**: ≥10万 → 整数万 / 否则千分位——待处理/断货三级/低库存计数兜底
 - 图表 tooltip/坐标轴保留完整值(悬浮看细节, 卡片清爽)
+
+### 夜间第二轮: 登录 401 误踢根治 + 下单乐观无 id 422 根治 + 日志排查清账(12686085)
+- **登录"第一次点击被踢回+清空输入"根治**: 10-25 加的"401 全局拦截直接清 token+setLoggedIn(false)"过激——登录后 loadAll 并发 + 冷实例/部署窗口某请求偶发 401 → 立即踢出 → LoginPage 卸载重挂载清空输入(无痕首登必现); 修=client 401 仅 dispatch `auth:may-expired`, App 监听调 `/auth/check` **确认真失效才 setLoggedIn(false)+清 token**(10s 限频, check 网络失败不误判)——偶发 401 免疫, 真失效仍防挂机卡界面; 实测 check 8/8 无偶发(401 源=冷实例并发窗口)
+- **下单乐观无 id → PUT /undefined 422 根治**: toggleOrdered 乐观 newItem 无 id + loadOrdered 失败时 orderedItems 残留无 id 项 → 点日期 PUT /purchase-orders/undefined 422(08:45 日志实锤); 修=后端 create 返回真实新行(含 id), 前端 .then 用后端行替换(去 __tmp 临时标识), .catch 移除乐观项+keys 回滚, loadOrdered 失败清空 orderedItems, setArrivalDate 无 id 不发起请求
+- **LoginPage 体验**: loading guard 防重复点击/Enter 并发 + fetch 15s AbortController 超时(无痕弱网原生 fetch 曾挂起 30s+ 无反馈)
+- **Toast 重复 border 属性**(TS1117): 上轮去外投时误加 border 与 TONE.bd 语义边框重复——删除
+- **今日日志清账**: 210 条=perf 128(正常)/quiet_error 45(巡检)/api_http_error 26(登录时段401+弱网timeout)/slow 9(环境冷算)/business_error 1(SW offline 无碍)/api_error 1(即 422)——唯一真 bug 422 已根治, 其余已知边界/现象
 
 ## 2026-10-25: 看板性能根治(锁/陈旧检测)+ 导出链路全修复 + 玻璃体系收敛 + 登录态 + 四维验证闭环
 > commits 11eef117→ce298d6b; CI 绿; 155/155。
