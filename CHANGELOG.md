@@ -1,3 +1,28 @@
+## 2026-10-26: 玻璃体系进阶(概念稿映射)+ 全面去投影 + 看板数字降维 + 渠道胶囊修正
+> commits b2f8e35b(用户线上 ARCHITECTURE)→ ea50a46e; CI 绿; 155/155。
+
+### 玻璃进阶映射(概念稿: 透明光感玻璃路线部分采纳)
+- **底色统一白 0.4 / 黑 0.4**(概念稿参数)——--bg-thin/--bg-regular/--glass-bg light/dark 全对齐(原 dark 蓝黑 20,20,24/30 灰 0.45-0.6 → 纯黑 0.4)
+- **浮层阴影 dark 双内阴影**: --glass-shadow dark = 顶白 inset 0.12 + 底黑 inset -1px 0.45(深色玻璃体积感, 替代纯外投)
+- **底部焦散光**(::after 椭圆光带, light 0.8/dark 0.4)——**仅浮层面板(.glass-edge)保留**; 小圆钮(32-48px)上 3px 亮带突兀已移除(焦散=大表面底座光语义)
+- **SVG 真折射**(hooks/useGlassRefraction): feDisplacementMap 位移图(per 元素 lens 折射, 边缘弯曲+R/B 色差 1.5px screen)注入 --glass-url——按钮/menu/back/hammer/page/header-status + 浮层面板, Chrome/Edge 渐进增强(不支持 backdrop-filter url 静默跳过); 看板卡片不用(数据可读性优先)
+- **dark 浮层 1px 边框**(.glass-edge !important 0.1)
+
+### 全面去投影 + 边框统一 1px(立体靠边缘界定+内高光)
+- --shadow-card/--shadow-sheet/--shadow-alert(light+dark)→ none: 卡片/底部弹窗/告警卡外阴影全去; --shadow-control/--glass-shadow 去外投(保留 inset 内高光)
+- 内联外投清除: DashboardPage 微卡/App 徽章/Toast; Toast 补 1px 玻璃边框
+- 边框 0.5px→1px(light+dark 一致): 4 圆钮/header-status 胶囊/material-regular 弹层/浮层面板/微卡——"白和黑"两端可见界定
+
+### 渠道主体切换胶囊修正(重要: 目标=header-status, 非 hammer-segment)
+- header 渠道切换 = **.header-status 胶囊(包裹 select)**, 不是 .hammer-segment(锤子菜单/规则页 tab)
+- 前一版误加给 .hammer-segment(反光/折射/边框/inset)→ **回退**; 正确挂载 .header-status: position+::before 反光+光追+折射+1px 边框+inset 高光(与返回/菜单按钮同款)
+- 教训: 改前确认"渠道主体切换"的真实 DOM 元素(header-status vs hammer-segment 语义不同)
+
+### 看板数字降维(超 5 位显示问题)
+- **金额 fmtBig**: ≥1亿 → x.xx亿 / ≥10万 → x.xx万(**2 位小数**) / 否则千分位——GMV 卡主数字/日均
+- **计数 fmtInt**: ≥10万 → 整数万 / 否则千分位——待处理/断货三级/低库存计数兜底
+- 图表 tooltip/坐标轴保留完整值(悬浮看细节, 卡片清爽)
+
 ## 2026-10-25: 看板性能根治(锁/陈旧检测)+ 导出链路全修复 + 玻璃体系收敛 + 登录态 + 四维验证闭环
 > commits 11eef117→ce298d6b; CI 绿; 155/155。
 

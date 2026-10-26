@@ -1058,3 +1058,10 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **品牌映射优先级**: COALESCE(69码+channel 优先, sku+channel 兜底)子查询——69码精确匹配优先(sku+69码+channel), 失败兜底 sku+channel; 禁 barcode 单独 join(同商品跨渠道同码歧义)
 - **默认值公共常量防漂移 + 用户配置优先**: 内置默认提为模块常量(如 _DEFAULT_SLOW_CATS——接口与计算同源); 库从未配置→返回默认, **用户保存后一律以用户配置为准**(含删空 []——默认只兜"从未配置")
 - **冷算性能判定方法论**: 组装 Python 慢(1.3s 稳定/2.5 万次操作)而 SQL 查询 0.2s 正常 + 数据/代码全等 + 多独立路径同步慢 + health 基线波动 → **Makers 实例环境 Python 执行慢**(非应用代码); 判定前先分段计时拆解(builder 追平/维护/构建/同步), 勿归咎锁/缓存/自愈
+### 15.67 玻璃进阶 + 去投影 + 数字降维(2026-10-26——概念稿映射/边框立体/渠道目标核实)
+- **玻璃底色统一 0.4(light 白/dark 黑)**: 判断底材强度=概念稿参数(低 alpha 透明光感); 改动须 4 个 token 同步(--bg-thin/--bg-regular/--glass-bg × light/dark)
+- **去投影立体配方**: 外阴影全去(--shadow-card/sheet/alert/control/glass-shadow= none 或纯 inset)——立体靠 **1px 边框(light 灰/dark 深灰两端可见)+ inset 内高光(顶白, dark 加底黑双内)**; 边框 0.5px→1px 全局统一(按钮/胶囊/弹层/浮层/Toast); 分隔线 border-bottom 保留 0.5px(非边框语义)
+- **焦散光(::after 底部光带)仅浮层面板**: 小圆钮(<72px)上 3px 亮带在弧线上突兀——焦散=大表面底座光语义, 组件按尺寸取舍
+- **SVG 折射(useGlassRefraction)**: feDisplacementMap per-元素 lens(边缘弯曲+色差), 注入 --glass-url 进 backdrop-filter——**渐进增强**(不支持 url() 环境静默跳过); 挂按钮+浮层面板, 看板卡片不用; 支持检测用 setProperty 非 getPropertyValue 直接测; svg defs 容器不存在时动态创建(隐藏零尺寸)
+- **"渠道主体切换胶囊"目标核实铁律**: header 渠道切换=**.header-status**(包裹 select 的胶囊), 非 .hammer-segment(规则页/锤子 tab)——**改 UI 组件前先确认真实 DOM 元素与语义**, 曾误加 .hammer-segment 反光/折射/边框后回退
+- **看板数字降维规范**: 金额 fmtBig(≥1亿 x.xx亿/≥10万 x.xx万 **2 位小数**/否则千分位), 计数 fmtInt(≥10万 整数万/否则千分位)——GMV 卡/日均/待处理/断货/低库存计数统一; 图表 tooltip/坐标轴保留完整值(悬浮看细节)
