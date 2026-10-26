@@ -32,6 +32,7 @@ import HammerOrders from './components/hammer/HammerOrders'
 import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
 import useLightTracker from './hooks/useLightTracker'
+import useGlassRefraction from './hooks/useGlassRefraction'
 import { t } from './locale'
 
 export const NAV = [
@@ -49,6 +50,7 @@ export const NAV = [
 
 export default function App() {
   useLightTracker()
+  useGlassRefraction()
   const [page, setPage] = useState('dash')
   window.__page = page // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {

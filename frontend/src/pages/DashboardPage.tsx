@@ -18,6 +18,22 @@ const fmtWh = w => {
   return p.slice(0, 2).join(',') + '等' + p.length + '仓'
 }
 
+// 2026-10-26 数字降维(看板卡片金额/大数字超 5 位显示问题):
+// 金额 fmtBig: ≥1亿 → x.xx亿 / ≥10万(超 5 位) → x.xx万(保留 2 位小数) / 否则千分位
+const fmtBig = (n: number): string => {
+  const v = Number(n || 0)
+  const abs = Math.abs(v)
+  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿'
+  if (abs >= 1e5) return (v / 1e4).toFixed(2) + '万'
+  return v.toLocaleString('zh-CN')
+}
+// 计数值兜底 fmtInt: ≥10万 → 整数万(clsut 防挤爆); 否则原样千分位
+const fmtInt = (n: number): string => {
+  const v = Math.round(Number(n || 0))
+  if (Math.abs(v) >= 1e5) return Math.round(v / 1e4) + '万'
+  return v.toLocaleString('zh-CN')
+}
+
 // 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
 const alertAge = (c: string | null | undefined) => {
   if (!c) return ''
@@ -933,7 +949,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       回款待接入资金流水
                     </span>
                   )
-                return '¥' + Number(_g || 0).toLocaleString()
+                return '¥' + fmtBig(_g || 0)
               })()}
             </div>
             <div
@@ -1002,7 +1018,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                         回款待接入资金流水
                       </span>
                     )
-                  return Math.round((_g || 0) / periodDays).toLocaleString()
+                  return fmtBig((_g || 0) / periodDays)
                 })()}
               </span>
             </div>
@@ -1131,7 +1147,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     marginBottom: 1,
                   }}
                 >
-                  {pendingTotal}
+                  {fmtInt(pendingTotal)}
                 </div>
                 <div
                   className="card-sub"
@@ -1874,7 +1890,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     color: 'var(--text)',
                   }}
                 >
-                  低库存告警 · 共 {lowStockTotal} 条
+                  低库存告警 · 共 {fmtInt(lowStockTotal)} 条
                 </div>
                 {(fullAlerts
                   ? fullAlerts.filter(
@@ -2327,13 +2343,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       : riskFilter === 'yellow'
                         ? '观察'
                         : '全部'}{' '}
-                  {(riskFilter === 'red'
-                    ? riskCritical
-                    : riskFilter === 'orange'
-                      ? riskWarning
-                      : riskFilter === 'yellow'
-                        ? _r.total - riskCritical - riskWarning
-                        : _r.total) || 0}{' '}
+                  {fmtInt(
+                    (riskFilter === 'red'
+                      ? riskCritical
+                      : riskFilter === 'orange'
+                        ? riskWarning
+                        : riskFilter === 'yellow'
+                          ? _r.total - riskCritical - riskWarning
+                          : _r.total) || 0,
+                  )}{' '}
                   条
                 </div>
                 {/* 级别切换 tab(三级 pill 入口联动, 弹窗内可切换) */}
