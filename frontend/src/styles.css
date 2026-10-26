@@ -1690,11 +1690,8 @@ input[type='file'] {
   }
 }
 
-/* 底部焦散光(2026-10-26 映射概念稿: 玻璃底部椭圆光带——体积感, 各尺寸玻璃组件通用) */
-.menu-btn::after,
-.back-btn::after,
-.hammer-icon-btn::after,
-.page-btn::after,
+/* 底部焦散光(2026-10-26 映射概念稿: 玻璃底部椭圆光带——体积感;
+   仅浮层面板保留(大表面底座光语义)——小圆钮(32-48px)上 3px 亮带突兀已移除 */
 .glass-edge::after {
   content: '';
   position: absolute;
@@ -1707,10 +1704,6 @@ input[type='file'] {
   background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
 }
 @media (prefers-color-scheme: dark) {
-  .menu-btn::after,
-  .back-btn::after,
-  .hammer-icon-btn::after,
-  .page-btn::after,
   .glass-edge::after {
     background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.4) 0%, transparent 70%);
   }
