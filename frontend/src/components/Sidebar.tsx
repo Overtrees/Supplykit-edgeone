@@ -68,7 +68,7 @@ export default function Sidebar({
           background: 'var(--glass-bg)',
           backdropFilter: 'var(--glass-filter)',
           WebkitBackdropFilter: 'var(--glass-filter)',
-          border: '0.5px solid var(--glass-border)',
+          border: '1px solid var(--glass-border)',
           boxShadow: 'var(--glass-shadow)',
           borderRadius: 26,
           overflow: 'hidden',

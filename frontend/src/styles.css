@@ -73,16 +73,15 @@ body.sidebar-open {
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
     brightness(var(--glass-brightness));
   --glass-filter-soft: blur(var(--glass-blur));
-  --glass-shadow: 0 2px 20px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
   --light-x: 30%;
   --light-y: 30%;
   --blur-thin: blur(16px) saturate(160%);
   --blur-regular: blur(24px) saturate(180%);
-  --shadow-card:
-    0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 8px rgba(0, 0, 0, 0.03), 0 12px 24px rgba(0, 0, 0, 0.04);
-  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.08);
-  --shadow-alert: 0 4px 16px rgba(0, 0, 0, 0.08), 0 16px 48px rgba(0, 0, 0, 0.12);
-  --shadow-control: inset 0 0.5px 1px rgba(255, 255, 255, 0.3), 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-card: none;
+  --shadow-sheet: none;
+  --shadow-alert: none;
+  --shadow-control: inset 0 0.5px 1px rgba(255, 255, 255, 0.3);
   --highlight-card: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, transparent 100%);
 }
 html,
@@ -144,7 +143,7 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-control);
 }
 .back-btn {
@@ -164,7 +163,7 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-control);
 }
 .page-btn {
@@ -172,7 +171,7 @@ header {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-control);
   cursor: pointer;
   background: var(--bg-thin);
@@ -209,7 +208,7 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-control);
 }
 .header-title {
@@ -224,7 +223,7 @@ header {
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-control);
   white-space: nowrap;
   display: flex;
@@ -1150,7 +1149,7 @@ input[type='file'] {
   background: var(--bg-regular);
   backdrop-filter: var(--blur-regular);
   -webkit-backdrop-filter: var(--blur-regular);
-  border: 0.5px solid var(--border-medium);
+  border: 1px solid var(--border-medium);
 }
 
 /* 锤子菜单布局行 */
@@ -1331,16 +1330,13 @@ input[type='file'] {
     --border-strong: rgba(255, 255, 255, 0.1);
     --bg-thin: rgba(0, 0, 0, 0.4);
     --bg-regular: rgba(0, 0, 0, 0.4);
-    --shadow-card:
-      0 1px 2px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.15), 0 12px 24px rgba(0, 0, 0, 0.2);
-    --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.3);
-    --shadow-alert: 0 4px 16px rgba(0, 0, 0, 0.2), 0 16px 48px rgba(0, 0, 0, 0.3);
-    --shadow-control: inset 0 0.5px 1px rgba(255, 255, 255, 0.1), 0 2px 8px rgba(0, 0, 0, 0.1);
+    --shadow-card: none;
+    --shadow-sheet: none;
+    --shadow-alert: none;
+    --shadow-control: inset 0 0.5px 1px rgba(255, 255, 255, 0.1);
     --highlight-card: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, transparent 100%);
     /* 浮层阴影 dark 差异化(2026-10-26 映射概念稿): 深外投 + 顶白/底黑双内阴影——深色玻璃体积感 */
-    --glass-shadow:
-      0 2px 20px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.12),
-      inset 0 -1px 2px rgba(0, 0, 0, 0.45);
+    --glass-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.12), inset 0 -1px 2px rgba(0, 0, 0, 0.45);
   }
   body {
     background: var(--bg, #000000);

@@ -909,7 +909,7 @@ export default function App() {
                   background: 'var(--glass-bg)',
                   backdropFilter: 'var(--glass-filter)',
                   WebkitBackdropFilter: 'var(--glass-filter)',
-                  border: '0.5px solid var(--glass-border)',
+                  border: '1px solid var(--glass-border)',
                   boxShadow: 'var(--glass-shadow)',
                   borderRadius: 26,
                   overflow: 'hidden auto',
@@ -1076,8 +1076,7 @@ export default function App() {
                           padding: 16,
                           textAlign: 'center',
                           cursor: 'default',
-                          border: '0.5px solid var(--border)',
-                          boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+                          border: '1px solid var(--border)',
                         }}
                       >
                         <div style={{ marginBottom: 8 }}>
