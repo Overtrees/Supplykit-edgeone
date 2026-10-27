@@ -1,3 +1,39 @@
+## 2026-10-27: 玻璃光学定稿(42px 同构)+ 快速切页无感 + 已下单机制 + 订单页根治 + 焦散四维
+> commits caa5fde1→ff16d114; CI 绿; 155/155。
+
+### 建议页顶部白条根治(用户反馈累积)
+- 根因链: 下单成功 → ①明细区 `<details open>` 整块插入(高度突变) ②dispatch insights-refresh → loadReplen 整表重拉(二次高度突变+滚动偏移) ③iOS Safari 地址栏随高度/滚动联动 → 顶部露浏览器 chrome 白条(普通 Safari 顶栏恒白, 仅 PWA 跟 theme-color)
+- 根治: 下单/取消成功**不再 dispatch insights-refresh**(补货列表不依赖已下单状态, 乐观 state 已驱动); 明细区默认折叠(<details> 去 open——插入高度 N 行→1 行); loadReplen page=1 滚动锚点(双 rAF 还原)
+
+### 已下单标记机制定版(用户拍板: 成功成功失败失败)
+- **30s 可见静默轮询** purchase-orders(0.5 RU/次 EXPLAIN 实测, 5人×8h×30天≈7.2万RU/月=额度0.14%/常态耗0.5%; WS/SSE Makers 不可用——skill 实证 EventSource 秒断, 只能轮询)→ 多设备变更 ≤30s 收敛
+- 标记操作: 保留乐观即时; **去掉 loadOrdered GET 兜底**——成功=后端真实行(含 id)替换, 失败=本地回滚+toast; 最终一致由 30s 轮询+进页 GET(SSOT)收敛
+- loadOrdered 失败收敛: silent(轮询)失败保留现值; 仅首载从未成功才用 localStorage fallback; 已有成功值不被旧 fallback 覆盖(防误导角标)
+
+### 玻璃光学定稿(对齐 42px 手稿思路——用户多轮打磨)
+- **去外投核心**: 外投影全 none(0 Npx 无残留), 体积感内化 `--inset-glass`(上亮下暗: light 顶白0.5+底黑0.06 / dark 顶0.14+底黑0.45, 挂 5 组件+浮层+弹窗)
+- **边框分工**: 浅色玻璃件灰边(浮层 glass-border 白0.55→黑0.1→0.16; 弹窗 border-medium 白0.5→黑0.1→0.16 对齐), dark 0.16——分离感归边框(白边浅底隐身=无边界)
+- **焦散 v5 定版**(多轮迭代: 横带平行线→弧带→散化→遮罩→椭圆): **椭圆光斑** inset:0 + radial-gradient(**ellipse 50% 3px** 圆钮/胶囊 / **85% 3px** 浮层/弹窗 at 50% 100%), **bottom 0 贴底与内部暗边融合**(盖倒数第二层, 反光环 1px 弱接触不抢层次), 亮度 `--caustic-a 0.5` → light 1.0 / dark 0.5(opacity .8); **overflow:hidden** 圆钮/胶囊(裁椭圆越出圆的部分→无溢出线, 手稿 .glass-item 同款)
+- 反光环 1.5px→1px(42px 版同构); 弹窗 shadow-sheet = var(--inset-glass)(不再只有顶白); 任务卡片圆角 16→var(--radius-lg)32px(与页面卡片一致)
+- 死变量清理 12 个(-info/-h-btn-xl/-motion-fast/-overlay/-border-light/-space-2,6,8,lg,md,xl,xs); 8 处弹窗内联 boxShadow 收敛 var(--shadow-sheet); 删 glass-edge dark !important 写死
+- 容器单位容器(4.2cqh/44cqw)试错后弃用(等比缩放破坏跨尺寸一致、胶囊 size 塌宽)——改"厚度锁定+跨度随宽+亮度统一"解耦哲学
+
+### 快速切页卡骨架/冷加载根治(层1+层2, 四维无损)
+- **根因**: 切页卸载但请求仍在飞 → 快速切回复用旧页面挂起 promise(接口 30-60s 才超时)→ 新页卡骨架; 且每次进骨架条件 `loading||!dataLoaded` 捂快照
+- **层1 请求生命周期**: api 支持 `config.scope` + AbortController, 新增 `abortScope(scope)`——页面卸载取消该页全部在途(axios abort 静默不上报/不置错, inflight 移出), 切回全新请求不复用旧 promise, 旧请求真正取消(RU 不白跑); axios.isCancel 静默
+- **层2 页面快照**: Insights(replen/purchase/disposals)/Inventory module 快照——**进入先显旧值(无骨架), 后台拉新成功覆盖, 静默更新**; 骨架条件统一加"无旧数据"(全站 6 处: 建议3+进销存2+订单1); 看板/订单 store(zustand)天然持久; **写事件(rules-changed/insights-refresh/orders-changed)立即清快照**——导入/删除/启停后宁骨架不看旧, 与 invalidate+事件联动同链路
+- 实测: 快速切走 300ms 切回建议页 120ms 显快照(无骨架); 后台并发拉新 .then set 覆盖; 快照写回 useEffect 留存
+
+### 订单页每次骨架+慢 1-8s 根治
+- 前端: 骨架条件改"无旧数据才骨架"(原 orderLoading||!dataLoaded 每次进必闪骨架, 即使 store 有旧 orders)
+- 后端: orders 加 **5s 短 TTL 共享表缓存**(key 含 channel/page/search/status/page_size)——冷首次失效后 1.06s(含载体 0.6s+COUNT 442RU 11.8万行)/**热 0.7s**(原先 2.3-7.1s); invalidate_all 清表 → 导入/删单即时失效(实时性不损)
+- products 加 **idx_products_barcode_ch(barcode,channel)** 索引: 品牌子查询双层 Apply 提速(曾 per-row 相关子查询无索引)
+- 四维: 缓存即真实查询结果(准确)/写操作失效(实时)/全量(完整)/降级直查(可靠)
+
+### verified 全量验证结论(10-27 收尾)
+- summary: agg=直查=接口 44310433.92 逐分一致; orders 缓存写入+写操作失效实测; 进销存接口=SQL 聚合(145=145); 补货 fused=物化(3.8=3.8); aux=SQL by_type 自洽(1265+140=1405); 断货 bcTotal=140 基线不变; 快照后台静默更新实测(切回 120ms 无骨架显旧)
+- low_stock 1996→1265 非损伤: 数据停更 8 天窗口滑动 → ds 摊薄 → 安全线降 → 少触发(方向安全保守); 快照重建/每日 daily-rules 日志佐证
+
 ## 2026-10-26: 玻璃体系进阶(概念稿映射)+ 全面去投影 + 看板数字降维 + 渠道胶囊修正
 > commits b2f8e35b(用户线上 ARCHITECTURE)→ 12686085; CI 绿; 155/155。
 

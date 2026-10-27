@@ -1068,4 +1068,24 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **401 全局处理必须"先确认再踢"铁律**: 任何接口 401 不要直接清 token+跳登录页(曾"登录后并发+冷实例偶发 401 → 立即踢出 → 登录页重挂载清空输入", 无痕首登必现)——**client 401 仅置标记(may-expired), App 收标记调 /auth/check 确认真失效才踢**(10s 限频, check 网络失败不误判); 偶发 401(冷实例/部署窗口/并发)免疫, 真 token 失效仍防挂机重进卡界面
 - **乐观更新必须能拿到真实 id / 失败回滚**: 列表项的日期/更新类操作 require 后端真实行 id——乐观插入项先带临时标识(__tmp), POST 成功用后端返回行(含 id)替换, 失败移除乐观项+回滚 keys, GET 失败清空明细防残留; 后端 create 类接口**返回真实新行**(ONE 查询)前端替换——杜绝"乐观无 id 项 → PUT /undefined 422"(08:45 日志实锤)
 - **登录体验**: fetch 必须带超时(AbortController, 原生 fetch 无超时—弱网挂起 30s+ 无反馈)+ loading guard 防重复(按钮 disabled 但 Enter onKeyDown 不检查——doLogin 内自检)
-- **日志排查流**: 先分类计数(perf/quiet/slow/api_http/business/api_error)→ 逐条看非巡检异常 → 特征(422 undefined/id 缺失/网络)定位真 bug → 其余(401 时段现象/弱网 timeout/冷算 slow/offline)归已知边界并说明依据
+- **日志排查流**: 先分类计数(perf/quiet/slow/api_http/business/api_error)→ 逐条看非巡检异常 → 特征(422 undefined/id 缺失/网络)定位真 bug → 其余(401 时段现象/弱网 timeout/冷算 slow/offline)归已知边界并说明依据### 15.70 页面快照静默更新 + 请求生命周期(2026-10-27——快速切页无感/卡骨架根治)
+- **页面快照(module 级, 非全局 store——防跨页污染)**: 高频只读页(建议/进销存)module `_snap` 存上次全量, 进入 `useState(() => _snap.x || [])` 先显旧; 加载完成后 `useEffect` 监听 state 写回快照
+- **骨架条件统一铁律**: `loading && 数据空` 才骨架(曾 `loading||!dataLoaded` 每次进必闪——即使 store/快照有旧值); 全站 6 处同规格
+- **写事件清快照(四维关键)**: 导入/删除/启停等写操作事件(rules-changed/insights-refresh/orders-changed)→ **立即清快照, 宁骨架不看旧**——快照绝不越过写路径(操作后仍显旧=误导, 违反准确性); 与 invalidate+事件联动同链路
+- **abortScope(scope)**: api 支持 config.scope + AbortController; 页面卸载 cleanup 取消该页全部在途(axios.isCancel 静默不上报, inflight 移出)——切回不复用旧 promise(曾复用旧页面挂起 promise 等 30-60s 超时卡骨架), 旧请求真正取消 RU 不白跑
+- **in-flight 复用加等待上限**: 对复用 promise `Promise.race([旧, 剩余TTL超时])`, 超时自动发起新请求替换(旧作废 __dead)——兜底漏调 abortScope 的路径
+- **订单页/看板**: 数据走 store(zustand 持久)即天然快照, 只需同规格骨架条件
+- **四维**: 准确=后台全量收敛最新; 实时=写事件清快照+重拉+30s 兜底; 完整=全量替换; 可靠=拉新失败保留快照(瞬时旧), 写后失败显错误
+
+### 15.71 订单页缓存 + 短 TTL 共享表缓存范式(2026-10-27)
+- **短 TTL 共享表缓存(5s)**: orders 接口 cache_get(key 含全参数)——热态 0.7s / 冷(失效后首拉)1.06s(载体 0.6s+COUNT 442RU); 原先冷 2.3-7.1s
+- **适用条件**: 只读高频列表 + 写操作 invalidate_all 已覆盖(导入/删单即时失效→实时性不损); COUNT 全渠道行数 442RU 是冷算固有(11.8 万行索引范围扫), 物化总数需写失效联动, 收益 0.3s 暂不做
+- **diag 参数化 `%` 陷阱再次应验**: `key LIKE 'orders%'` 被 diag 参数化转义误报 0 行——用 `LEFT(key,6)` 前缀比较真验
+- **索引**: products 加 (barcode,channel)——品牌子查询(双层 Apply)per-row 提速; SKU 已唯一索引
+
+### 15.72 玻璃内外光学定稿(2026-10-27 42px 版同构——去外投/内化体积/焦散椭圆)
+- **去外投核心**: "体积感从外部投射改为内部绘制"——外投影全 none, `--inset-glass`(上亮下暗 inset)承担厚度; 分离感归边框(浅色玻璃灰边/白边=浅底隐身)
+- **焦散迭代教训**: 横带(mask left/right+height)→ 圆上平行线; 弧带 ellipse→ 散化/越圆溢出; **定稿=椭圆光斑** inset:0 + radial-gradient(ellipse 50% 3px 圆钮 / 85% 3px 浮层 at 50%100%)——**椭圆自然衰减无直线边, 圆角裁弧, 底部由 border-radius 裁切**; overflow:hidden 裁越出圆部分(非算弦)
+- **焦散层叠校准**: bottom 0 贴底覆盖内部暗边(盖倒数第二层), 反光环 1px 弱接触不抢层次; 亮度 --caustic-a 0.5 → light calc(×2)=1.0 / dark 0.5
+- **弃容器单位(cqh/cqw)**: 等比缩放(4.2cqh 随高度变厚)破坏跨尺寸一致(72px 与 42px 不同家族); size 容器令内容宽元素(胶囊)塌缩——改"厚度锁定(可见 2px 或 ry3px 固定)+跨度随宽+亮度统一"解耦哲学
+- **UI 验收**: 玻璃件边框/inset/反光/焦散四层齐; 浅色看灰边分离; dark 看边框 0.16
