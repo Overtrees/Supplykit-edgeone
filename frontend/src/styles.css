@@ -57,7 +57,7 @@ body.sidebar-open {
   --glass-blur: 36px;
   --glass-saturate: 2.5;
   --glass-brightness: 1.15;
-  --glass-border: rgba(0, 0, 0, 0.1);
+  --glass-border: rgba(0, 0, 0, 0.16);
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
     brightness(var(--glass-brightness)) contrast(105%);
   --glass-filter-soft: blur(var(--glass-blur));
