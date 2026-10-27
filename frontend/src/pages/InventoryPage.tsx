@@ -230,7 +230,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           </span>
         </span>
       </div>
-      {loading ? (
+      {loading && inventory.length === 0 ? (
         <div>
           {[1, 2, 3, 4].map(i => (
             <div key={i} className="skeleton" style={{ height: 36, marginBottom: 4 }} />
@@ -258,7 +258,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         )
       ) : (
         <div
-          key={loading ? 'skeleton' : 'data'}
+          key={loading && inventory.length === 0 ? 'skeleton' : 'data'}
           className="fade-in"
           style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
         >

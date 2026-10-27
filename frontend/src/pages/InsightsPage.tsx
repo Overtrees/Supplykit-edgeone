@@ -756,7 +756,7 @@ export default function InsightsPage() {
               </span>
             )}
           </div>
-          {replenLoading ? (
+          {replenLoading && replen.length === 0 ? (
             <div>
               <Skeleton height={14} width="30%" style={{ marginBottom: 8 }} />
               {[1, 2, 3, 4, 5].map(i => (
@@ -776,7 +776,7 @@ export default function InsightsPage() {
             </div>
           ) : (
             <div
-              key={replenLoading ? 'skeleton' : 'data'}
+              key={replenLoading && replen.length === 0 ? 'skeleton' : 'data'}
               className="fade-in"
               style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
             >
@@ -1405,7 +1405,7 @@ export default function InsightsPage() {
               {insightSearch ? ` · "${insightSearch}"` : ''}
             </span>
           </div>
-          {purchaseLoading ? (
+          {purchaseLoading && purchase.length === 0 ? (
             <div>
               {[1, 2, 3, 4].map(i => (
                 <Skeleton key={i} height={36} style={{ marginBottom: 4 }} />
@@ -1867,7 +1867,7 @@ export default function InsightsPage() {
               {showDisposed ? '隐藏已处理' : '查看已处理'}
             </span>
           </div>
-          {disposalsLoading ? (
+          {disposalsLoading && disposals.length === 0 ? (
             <div>
               {[1, 2, 3].map(i => (
                 <Skeleton key={i} height={36} style={{ marginBottom: 4 }} />
