@@ -1674,6 +1674,15 @@ input[type='file'] {
   mask-composite: exclude;
 }
 @media (prefers-color-scheme: dark) {
+  /* 玻璃件边框 dark: 概念稿白色 rgba(255,255,255,0.10)——曾用全局 --border #334155(蓝灰)
+     深色下按钮最外圈显冷蓝; 页面普通边框(分隔线/卡片)保持 slate 体系不动 */
+  .menu-btn,
+  .back-btn,
+  .hammer-icon-btn,
+  .page-btn,
+  .header-status {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
   .menu-btn::before,
   .back-btn::before,
   .hammer-icon-btn::before,
