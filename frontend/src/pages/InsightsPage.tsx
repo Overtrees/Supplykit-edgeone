@@ -433,6 +433,9 @@ export default function InsightsPage() {
   const [replenError, setReplenError] = useState('')
   const loadReplen = async (mode, ch, page = 1) => {
     const seq = ++replenSeq.current
+    // 2026-10-27 根治: 整表重拉(page=1)前记滚动锚点, 数据落地后还原——防 iOS Safari
+    // 地址栏随高度突变联动导致"顶部白条/内容错位"(下单→insights-refresh 曾触发整表重拉+滚动偏移)
+    const _sc = page === 1 ? (document.scrollingElement || document.documentElement).scrollTop : 0
     if (page === 1) setReplenLoading(true)
     else setReplenLoadingMore(true)
     setReplenError('')
@@ -466,6 +469,15 @@ export default function InsightsPage() {
       replenPageRef.current = page
       setReplenLoading(false)
       setReplenLoadingMore(false)
+      // 滚动锚点还原(page=1 重拉后, 双 rAF 等布局稳定)
+      if (page === 1 && _sc > 0) {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const _el = document.scrollingElement || document.documentElement
+            _el.scrollTop = _sc
+          }),
+        )
+      }
     } catch (e) {
       console.error('loadReplen:', e)
       if (seq === replenSeq.current) {
@@ -525,7 +537,8 @@ export default function InsightsPage() {
         )
         .then(() => {
           toast.success('已取消下单')
-          window.dispatchEvent(new Event('insights-refresh'))
+          // 2026-10-27 根治: 不再 dispatch insights-refresh 整表重拉(乐观 state 已完整;
+          // 曾触发 loadReplen 高度突变 → iOS 顶部白条)——补货列表不依赖已下单状态
         })
         .catch(() => {
           toast.error('取消失败')
@@ -565,7 +578,8 @@ export default function InsightsPage() {
             loadOrdered()
           }
           toast.success('已下单')
-          window.dispatchEvent(new Event('insights-refresh'))
+          // 2026-10-27 根治: 不再 dispatch insights-refresh 整表重拉(乐观 state 已完整,
+          // 真实行已替换)——曾触发 loadReplen 高度突变 → iOS 顶部白条
         })
         .catch(() => {
           toast.error('下单失败')
@@ -1219,9 +1233,11 @@ export default function InsightsPage() {
               )}
             </div>
           )}
-          {/* 已下单明细（仅BBCC模式）：B 仓入库批次 + 在库天数监控，超储预警用 */}
+          {/* 已下单明细（仅BBCC模式）：B 仓入库批次 + 在库天数监控，超储预警用
+              2026-10-27 根治: 去默认 open(初始折叠)——防下单后明细区整块插入的高度突变
+              (iOS Safari 地址栏联动致顶部白条/错位); 点开才展开 */}
           {replenMode === 'bbcc' && orderedItems.length > 0 && (
-            <details style={{ marginTop: 12 }} open>
+            <details style={{ marginTop: 12 }}>
               <summary
                 className="small muted"
                 style={{ cursor: 'pointer', fontSize: 'var(--font-sm)', fontWeight: 600 }}
