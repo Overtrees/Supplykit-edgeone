@@ -187,7 +187,10 @@ export default function OrdersPage() {
             {t('common.total')} {orderTotal || 0} {t('common.items')}
           </span>
         </div>
-        {orderLoading || !dataLoaded ? (
+        {/* 2026-10-27 无感切回: 有旧数据(store 持久)时先显旧, 后台刷新不闪骨架; 仅无数据可显示才骨架 */}
+        {orderLoading && orders.length === 0 ? (
+          <OrderSkeleton />
+        ) : !dataLoaded && orders.length === 0 ? (
           <OrderSkeleton />
         ) : orders.length === 0 ? (
           orderLoadErr ? (
@@ -211,7 +214,7 @@ export default function OrdersPage() {
           )
         ) : (
           <div
-            key={orderLoading ? 'skeleton' : 'data'}
+            key={orderLoading && orders.length === 0 ? 'skeleton' : 'data'}
             className="fade-in"
             style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
           >

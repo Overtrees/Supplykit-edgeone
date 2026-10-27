@@ -1,5 +1,6 @@
 """原生 orders 路由(方案 B): 分页+搜索+状态筛选+单条软删/恢复/永久删除(契约与旧 backend 一致)"""
 from fastapi import APIRouter, Request
+from routes.analysis_cache import cache_get as _cache_get
 
 def _evaluate_restored(ids):
     """restore 联动(2026-10-15): 恢复订单→order.created 规则重评估(超卖/低库存——恢复后重新生成告警——对称于删单联动关)"""
@@ -84,6 +85,12 @@ def list_orders(channel: str = "jd", page: int = 1, page_size: int = 30,
     if status:
         where += " AND o.order_status=%s"
         params.append(status)
+    # 2026-10-27 订单页提速: 短 TTL 共享表缓存(5s, key 含全参数)——冷请求消峰(进入页面/切回不再每次 1-8s),
+    # 热态 <0.1s; invalidate_all 清 analysis_cache 全表 → 导入/删单等写操作即时失效, 实时性不损
+    _key = "orders|%s|%s|%s|%s|%s" % (channel, page, search, status, page_size)
+    return _cache_get(_key, 5, lambda: _build_orders(where, params, page, page_size, include_deleted))
+
+def _build_orders(where, params, page, page_size, include_deleted):
     total = one("SELECT COUNT(*) AS c %s WHERE %s" % (_OJOIN, where), params) or {}
     total = int(total.get("c") or 0)
     if page > 0 and page_size > 0:
