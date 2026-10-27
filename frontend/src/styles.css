@@ -1698,21 +1698,23 @@ input[type='file'] {
   }
 }
 
-/* 底部焦散光(2026-10-27 对齐概念稿: 全部玻璃组件, opacity 0.8 半透明)
-   圆钮=圆弧形(inset:0 + border-radius:inherit + circle at 50% 100% —— 半圆光罩贴底缘弧线,
-   非水平条; 概念稿 72px 圆钮即此观感); 浮层=大表面椭圆横带 */
+/* 底部焦散光(2026-10-27 对齐手稿 133-141 行原文: left/right 10% + 3px + ellipse@50%100% + opacity .8)
+   圆钮等比缩小(2px 高 + 18% 边距 → 64% 宽)——手稿 72px 圆上 3px×80% 自然, 48px 圆上会压成
+   '平行横线'; 细短弧光贴底缘; 浮层(大表面)保留手稿原参 */
 .menu-btn::after,
 .back-btn::after,
 .hammer-icon-btn::after,
 .page-btn::after {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  left: 18%;
+  right: 18%;
+  bottom: 0;
+  height: 2px;
   pointer-events: none;
   z-index: 1;
   opacity: 0.8;
-  background: radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.55) 0%, transparent 72%);
+  background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
 }
 .glass-edge::after {
   content: '';
@@ -1730,9 +1732,7 @@ input[type='file'] {
   .menu-btn::after,
   .back-btn::after,
   .hammer-icon-btn::after,
-  .page-btn::after {
-    background: radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.28) 0%, transparent 72%);
-  }
+  .page-btn::after,
   .glass-edge::after {
     background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.4) 0%, transparent 70%);
   }
