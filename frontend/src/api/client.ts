@@ -137,12 +137,38 @@ const apiGet = async <T = any>(
   }
 
   // 2) 在途去重(挂起兜底: 超 INFLIGHT_TTL 的旧在途不再复用, 防慢请求卡死后续刷新)
+  // 2026-10-27 根治跨卸载复用卡骨架: 快速切走/切回(数秒内)会复用到旧页面实例的挂起 promise
+  // (旧接口 30-60s 才超时) → 新页卡骨架等旧 promise。对复用 promise 设等待上限: 剩余 TTL 内未完成
+  // → 自动发起新请求替换(旧 promise 作废), 保证"切回最多等~15s 后必成功刷新", 不再无限期挂。
   if (inflight.has(key)) {
     const p: any = inflight.get(key)
     if (p && p.__ts && Date.now() - p.__ts > INFLIGHT_TTL) {
       inflight.delete(key)
-    } else {
-      return p
+    } else if (p) {
+      const remain = INFLIGHT_TTL - (Date.now() - (p.__ts || Date.now()))
+      const waiter = Promise.race([
+        p,
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('INFLIGHT_STALE')), Math.max(remain, 500)),
+        ),
+      ])
+      return waiter.catch(() => {
+        if (!p.__dead && inflight.get(key) === p) {
+          p.__dead = true
+          inflight.delete(key)
+          const np: any = instance.get(url, config).then(r => ({
+            data: r.data,
+            status: r.status,
+            statusText: r.statusText,
+            headers: r.headers,
+            config: r.config,
+          }))
+          np.__ts = Date.now()
+          inflight.set(key, np)
+          return np
+        }
+        return p
+      })
     }
   }
 
