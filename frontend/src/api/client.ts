@@ -90,6 +90,10 @@ instance.interceptors.response.use(
     return response
   },
   error => {
+    // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
+    if (axios.isCancel(error)) {
+      return Promise.reject(error)
+    }
     const cfg = (error.config || {}) as any
     const key = cacheKey(cfg.method || 'get', cfg.url || '', cfg.params)
     inflight.delete(key)
@@ -173,7 +177,8 @@ const apiGet = async <T = any>(
   }
 
   // 3) 发起新请求
-  const promise: any = instance.get(url, config).then(r => ({
+  const ac = new AbortController()
+  const promise: any = instance.get(url, { ...config, signal: ac.signal }).then(r => ({
     data: r.data,
     status: r.status,
     statusText: r.statusText,
@@ -181,8 +186,28 @@ const apiGet = async <T = any>(
     config: r.config,
   }))
   promise.__ts = Date.now()
+  promise.__scope = config.scope || ''
+  promise.__ac = ac
   inflight.set(key, promise)
   return promise
+}
+
+// 2026-10-27 页面卸载取消在途(根治快速切换卡骨架): 切走页面调用 abortScope(scope)
+// → 取消该页面全部在途请求(axios Abort, 不入上报/不报错) + 移出 inflight(切回不再复用旧 promise),
+// 切回即全新请求; RU 不白跑(旧请求被真正取消)
+export function abortScope(scope: string) {
+  if (!scope) return
+  for (const [k, p] of inflight) {
+    const anyp = p as any
+    if (anyp && anyp.__scope === scope) {
+      try {
+        if (anyp.__ac && (anyp.__ac as AbortController).abort) {
+          ;(anyp.__ac as AbortController).abort()
+        }
+      } catch {}
+      inflight.delete(k)
+    }
+  }
 }
 
 // 非 GET 请求后清空缓存（数据变了，缓存失效）

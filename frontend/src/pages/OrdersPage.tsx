@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
-import { clearCache } from '../api/client'
+import { clearCache, abortScope } from '../api/client'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 import { useToast } from '../components/Toast'
@@ -104,6 +104,7 @@ export default function OrdersPage() {
     useAppStore.getState().loadAll()
   }, [hammerSearch, orderStatus])
   const [confirmDel, setConfirmDel] = useState(null)
+  useEffect(() => () => abortScope('orders'), [])
 
   // 删除撤销定时器集合：卸载时统一清理，防止软删订单残留
   const timersRef = useRef([])

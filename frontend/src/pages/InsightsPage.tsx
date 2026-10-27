@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { api } from '../api/client'
+import { api, abortScope } from '../api/client'
 import { useToast } from '../components/Toast'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
@@ -232,19 +232,32 @@ function Skeleton({ height = 16, width = '100%', style }) {
   return <div className="skeleton" style={{ height, width, ...style }} />
 }
 
+// 2026-10-27 页面快照(切回秒显旧值/后台静默更新; 写事件清——不看旧): 建议页三态
+let _snapIns: { replen?: any[]; purchase?: any[]; disposals?: any[] } = {}
+
 export default function InsightsPage() {
   const toast = useToast()
-  const [replen, setReplen] = useState([])
-  const [purchase, setPurchase] = useState([])
+  const [replen, setReplen] = useState(() => _snapIns.replen || [])
+  const [purchase, setPurchase] = useState(() => _snapIns.purchase || [])
   const [slowMoving] = useState([])
   // 滞销处置建议（SKU×仓库粒度 + 批量处置）
-  const [disposals, setDisposals] = useState([])
+  const [disposals, setDisposals] = useState(() => _snapIns.disposals || [])
   const [disposalsLoading, setDisposalsLoading] = useState(true)
   const [slowPage, setSlowPage] = useState(1)
   const [slowTotal, setSlowTotal] = useState(0)
   const [slowLoadingMore, setSlowLoadingMore] = useState(false)
   const slowSentinelRef = useRef(null)
   const slowLoadingRef = useRef(false)
+  // 快照写回(数据每次 set 同步到 module, 切回可先显)
+  useEffect(() => {
+    _snapIns.replen = replen
+  }, [replen])
+  useEffect(() => {
+    _snapIns.purchase = purchase
+  }, [purchase])
+  useEffect(() => {
+    _snapIns.disposals = disposals
+  }, [disposals])
   const [showDisposed, setShowDisposed] = useState(false)
 
   // 各区块加载状态
@@ -388,11 +401,15 @@ export default function InsightsPage() {
         loadReplen(useAppStore.getState().hammerReplenMode || 'bbcc', ch, 1)
       }
     }
+    // 写事件: 数据已变更, 旧快照不可信(清, 宁骨架不旧)
+    _snapIns = {}
     window.addEventListener('rules-changed', h)
     window.addEventListener('insights-refresh', h)
     return () => {
       window.removeEventListener('rules-changed', h)
       window.removeEventListener('insights-refresh', h)
+      // 2026-10-27 切走取消在途(根治快速切换卡骨架): 该页未完成请求 abort, 切回不再复用旧 promise
+      abortScope('insights')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -450,7 +467,7 @@ export default function InsightsPage() {
           page +
           '&page_size=100&search=' +
           encodeURIComponent(insightSearch),
-        { timeout: 90000 },
+        { timeout: 90000, scope: 'insights' },
       )
       if (seq !== replenSeq.current) return
       const data = r.data

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
-import { api, clearCache } from '../api/client'
+import { api, clearCache, abortScope } from '../api/client'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 import { IconLoading } from '../components/Icons'
@@ -23,6 +23,9 @@ interface InventoryPageProps {
   highlightSku?: string
   highlightWarehouse?: string
 }
+
+// 2026-10-27 页面快照(切回秒显旧/后台静默更新; 无写事件场景): 进销存
+let _snapInv: any[] | null = null
 
 export default function InventoryPage({ highlightSku, highlightWarehouse }: InventoryPageProps) {
   const [batchOpen, setBatchOpen] = useState([])
@@ -52,7 +55,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     }
   }
   const toast = useToast()
-  const [inventory, setInventory] = useState([])
+  const [inventory, setInventory] = useState(() => _snapInv || [])
   const [loading, setLoading] = useState(true)
   const [invPage, setInvPage] = useState(1)
   const invPageRef = useRef(1)
@@ -60,6 +63,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadErr, setLoadErr] = useState('')
   const [visCols, setVisCols] = useState([])
+  useEffect(() => {
+    _snapInv = inventory
+  }, [inventory])
+  // 切走取消在途(根治快速切换卡骨架)
+  useEffect(() => () => abortScope('inventory'), [])
   const [confirmDel, setConfirmDel] = useState(null)
   const [monthRange, setMonthRange] = useState('')
   const reqSeq = useRef(0)
