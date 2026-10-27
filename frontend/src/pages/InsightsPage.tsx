@@ -255,6 +255,7 @@ export default function InsightsPage() {
   const [replenTotal, setReplenTotal] = useState(0)
   const [, setReplenPage] = useState(1)
   const replenPageRef = useRef(1)
+  const orderedOkRef = useRef(false) // 本会话已下单是否成功加载过(失败收敛用)
   const [replenLoadingMore, setReplenLoadingMore] = useState(false)
   const [purchaseLimit, setPurchaseLimit] = useState(50)
   const [, setSlowLimit] = useState(50)
@@ -492,25 +493,42 @@ export default function InsightsPage() {
     if (seq === replenSeq.current) setReplenLoading(false)
   }
 
-  // 从后端加载已下单标记（按渠道隔离）
-  const loadOrdered = async () => {
+  // 从后端加载已下单标记（按渠道隔离）——SSOT: 页面进入/操作后/轮询都以 GET 全量为准
+  // 2026-10-27 失败收敛: silent(轮询)失败保留现值; 首载从未成功才用 localStorage fallback(离线首进);
+  // 已有成功值失败 → 保留现值不覆盖(防旧 fallback 误导"已下单"角标)
+  const loadOrdered = async (silent = false) => {
     try {
       const r = await api.get('/api/purchase-orders?channel=' + globalChannel)
       const items = r.data || []
       // 存两份：orderedKeys 用于快速判断，orderedItems 用于展示详情
       setOrderedKeys(items.map(x => x.sku + '|' + x.store))
       setOrderedItems(items)
+      orderedOkRef.current = true
     } catch (e) {
-      try {
-        const fallback = JSON.parse(localStorage.getItem('c_ordered_' + globalChannel) || '[]')
-        setOrderedKeys(fallback)
-      } catch {
-        setOrderedKeys([])
+      if (silent) return // 轮询失败: 保留现值, 下轮再试(不打断当前展示)
+      if (!orderedOkRef.current) {
+        try {
+          const fallback = JSON.parse(localStorage.getItem('c_ordered_' + globalChannel) || '[]')
+          setOrderedKeys(fallback)
+        } catch {
+          setOrderedKeys([])
+        }
+        // 2026-10-26: 拉取失败 → 清空明细(防乐观无 id 项残留 → 日期更新 PUT /undefined 422)
+        setOrderedItems([])
       }
-      // 2026-10-26: 拉取失败 → 清空明细(防乐观无 id 项残留 → 日期更新 PUT /undefined 422)
-      setOrderedItems([])
+      // else: 已有成功值(本会话加载过)→ 保留现值, 不覆盖不误导
     }
   }
+
+  // 2026-10-27 停留期实时: 建议页补货(tab)且京东(BBCC 有已下单)时, 页面可见状态下每 30s 静默轮询
+  // 已下单列表(0.5 RU/次实测, 5人×8h×30天 ≈7.2万RU/月 = 额度0.14%/常态耗0.5%, RU 预算内)——多设备变更 ≤30s 收敛
+  useEffect(() => {
+    if (tab !== 'replen' || globalChannel !== 'jd') return
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') loadOrdered(true)
+    }, 30000)
+    return () => clearInterval(t)
+  }, [tab, globalChannel])
 
   const [orderedKeys, setOrderedKeys] = useState([])
   const [orderedItems, setOrderedItems] = useState([])
@@ -522,7 +540,9 @@ export default function InsightsPage() {
   const toggleOrdered = async (sku, store, product_name?, suggested_qty?) => {
     const key = sku + '|' + store
     const isOrdered = orderedKeys.includes(key)
-    // 乐观更新：立即更新本地状态，不等 API 返回
+    const rowBackup = orderedItems.find(x => x.sku === sku && x.store === store)
+    // 乐观更新(满足即时反馈): 点击立即改 state; 成功 => 后端真实行替换 + 提示;
+    // 失败 => 本地回滚到后端事实 + 提示(不做 loadOrdered GET 兜底——2026-10-27 用户拍板)
     if (isOrdered) {
       setOrderedKeys(prev => prev.filter(k => k !== key))
       setOrderedItems(prev => prev.filter(x => x.sku !== sku || x.store !== store))
@@ -537,12 +557,16 @@ export default function InsightsPage() {
         )
         .then(() => {
           toast.success('已取消下单')
-          // 2026-10-27 根治: 不再 dispatch insights-refresh 整表重拉(乐观 state 已完整;
-          // 曾触发 loadReplen 高度突变 → iOS 顶部白条)——补货列表不依赖已下单状态
         })
         .catch(() => {
+          // 失败: 本地回滚(恢复该行)——状态立即回到后端事实; 不重拉
+          setOrderedKeys(prev => (prev.includes(key) ? prev : [...prev, key]))
+          setOrderedItems(prev =>
+            rowBackup && !prev.some(x => x.sku === sku && x.store === store)
+              ? [...prev, rowBackup]
+              : prev,
+          )
           toast.error('取消失败')
-          loadOrdered()
         })
     } else {
       const newItem = {
@@ -551,7 +575,6 @@ export default function InsightsPage() {
         product_name: product_name || '',
         suggested_qty: suggested_qty || 0,
         arrival_date: '',
-        __tmp: key, // 临时标识——后端返回真实行(含 id)后替换, POST 失败移除
       }
       setOrderedKeys(prev => [...prev, key])
       setOrderedItems(prev => [...prev, newItem])
@@ -569,23 +592,26 @@ export default function InsightsPage() {
             globalChannel,
         )
         .then(r => {
-          // 用后端真实行(含 id)替换乐观项——彻底消除无 id 项(日期更新 PUT /undefined 422 根因)
+          // 后端真实行(含 id)→ 同键替换乐观项(日期更新 PUT 安全)
           const real = r?.data
-          if (real && real.id != null) {
-            const { __tmp, ...row } = real
-            setOrderedItems(prev => prev.map(x => (x.__tmp === key ? row : x)))
-          } else {
-            loadOrdered()
-          }
+          const row =
+            real && real.id != null
+              ? real
+              : {
+                  sku,
+                  store,
+                  product_name: product_name || '',
+                  suggested_qty: suggested_qty || 0,
+                  arrival_date: '',
+                }
+          setOrderedItems(prev => prev.map(x => (x.sku === sku && x.store === store ? row : x)))
           toast.success('已下单')
-          // 2026-10-27 根治: 不再 dispatch insights-refresh 整表重拉(乐观 state 已完整,
-          // 真实行已替换)——曾触发 loadReplen 高度突变 → iOS 顶部白条
         })
         .catch(() => {
-          toast.error('下单失败')
+          // 失败: 本地回滚(移除乐观项)——状态立即回到后端事实; 不重拉
           setOrderedKeys(prev => prev.filter(k => k !== key))
-          setOrderedItems(prev => prev.filter(x => !(x.__tmp === key)))
-          loadOrdered()
+          setOrderedItems(prev => prev.filter(x => !(x.sku === sku && x.store === store)))
+          toast.error('下单失败')
         })
     }
   }
