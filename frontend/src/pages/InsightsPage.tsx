@@ -809,7 +809,10 @@ export default function InsightsPage() {
                 <tbody>
                   {Array.isArray(filteredReplen) &&
                     filteredReplen.map((x, i) => {
-                      const isOrdered = orderedKeys.includes(x.sku + '|' + x.store)
+                      // 已下单压暗仅 BBCC(该 SKU 已在 B 仓入厂批次)——曾未按模式隔离: orderedKeys 渠道级,
+                      // 传统模式同 SKU+store 命中被压暗(视图污染); 传统无此业务列(TRAD_COLS), 不应用标记
+                      const isOrdered =
+                        replenMode === 'bbcc' && orderedKeys.includes(x.sku + '|' + x.store)
                       const rowStyle = isOrdered ? { opacity: 0.55, background: 'var(--bg)' } : {}
                       return (
                         <tr key={i} style={rowStyle}>
