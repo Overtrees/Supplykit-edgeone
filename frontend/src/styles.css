@@ -16,7 +16,6 @@ body.sidebar-open {
   --success: #059669;
   --danger: #e11d48;
   --warning: #f59e0b;
-  --info: #0f766e;
   --sidebar: #ffffff;
   --bg: #f2f2f7;
   --card: #fff;
@@ -25,7 +24,6 @@ body.sidebar-open {
   --text: #0f172a;
   --muted: #64748b;
   --muted2: #94a3b8;
-  --overlay: rgba(0, 0, 0, 0.35);
   --sidebar-active-bg: rgba(0, 122, 255, 0.1);
   --sidebar-active-text: var(--primary);
   --radius-sm: 12px;
@@ -40,15 +38,7 @@ body.sidebar-open {
   --font-13: 13px;
   --font-15: 15px;
   --font-18: 18px;
-  --space-2: 8px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --motion-fast: 0.15s;
-  --space-xs: 4px;
   --space-sm: 10px;
-  --space-md: 12px;
-  --space-lg: 16px;
-  --space-xl: 20px;
   --font-xs: 11px;
   --font-sm: 12px;
   --font-md: 14px;
@@ -57,11 +47,9 @@ body.sidebar-open {
   --accent-yellow: #eab308;
   --accent-purple: #7c3aed;
   --h-btn-lg: 36px;
-  --h-btn-xl: 48px;
   --text-secondary: rgba(0, 0, 0, 0.55);
   --text-tertiary: rgba(0, 0, 0, 0.3);
-  --border-light: rgba(255, 255, 255, 0.4);
-  --border-medium: rgba(255, 255, 255, 0.5);
+  --border-medium: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(255, 255, 255, 0.55);
   --bg-thin: rgba(255, 255, 255, 0.4);
   --bg-regular: rgba(255, 255, 255, 0.4);
@@ -69,21 +57,20 @@ body.sidebar-open {
   --glass-blur: 36px;
   --glass-saturate: 2.5;
   --glass-brightness: 1.15;
-  --glass-border: var(--border-strong);
+  --glass-border: rgba(0, 0, 0, 0.1);
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate))
     brightness(var(--glass-brightness)) contrast(105%);
   --glass-filter-soft: blur(var(--glass-blur));
-  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  --glass-shadow: var(--inset-glass);
+  --inset-glass: inset 0 1px 1px rgba(255, 255, 255, 0.5), inset 0 -1px 1px rgba(0, 0, 0, 0.06);
   --light-x: 30%;
   --light-y: 30%;
   --blur-thin: blur(8px) saturate(160%) contrast(105%);
   --blur-regular: blur(16px) saturate(180%) contrast(105%);
   --shadow-card: none;
-  --shadow-sheet: none;
+  --shadow-sheet: var(--inset-glass);
   --shadow-alert: none;
-  --shadow-control:
-    inset 0 0.5px 1px rgba(255, 255, 255, 0.3), inset 0 -1px 2px rgba(0, 0, 0, 0.05),
-    0 2px 10px rgba(0, 0, 0, 0.1);
+  --shadow-control: none;
   --highlight-card: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, transparent 100%);
 }
 html,
@@ -146,7 +133,7 @@ header {
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--inset-glass);
 }
 .back-btn {
   width: 48px;
@@ -166,7 +153,7 @@ header {
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--inset-glass);
 }
 .page-btn {
   position: relative;
@@ -174,7 +161,7 @@ header {
   height: 32px;
   border-radius: 50%;
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--inset-glass);
   cursor: pointer;
   background: var(--bg-thin);
   backdrop-filter: var(--blur-thin);
@@ -211,7 +198,7 @@ header {
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--inset-glass);
 }
 .header-title {
   font-size: 18px;
@@ -226,7 +213,7 @@ header {
   backdrop-filter: var(--blur-thin);
   -webkit-backdrop-filter: var(--blur-thin);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--inset-glass);
   white-space: nowrap;
   display: flex;
   align-items: center;
@@ -1315,32 +1302,29 @@ input[type='file'] {
     --text: #f1f5f9;
     --muted: #94a3b8;
     --muted2: #64748b;
-    --overlay: rgba(0, 0, 0, 0.55);
     --sidebar: #000000;
     --sidebar-active-bg: rgba(255, 255, 255, 0.15);
     --sidebar-active-text: #fff;
     --accent-yellow: #facc15;
     --accent-purple: #a78bfa;
     --glass-bg: rgba(0, 0, 0, 0.4);
-    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-border: rgba(255, 255, 255, 0.16);
     --glass-saturate: 1.5;
     --glass-brightness: 1.05;
     --text-secondary: rgba(255, 255, 255, 0.55);
     --text-tertiary: rgba(255, 255, 255, 0.3);
-    --border-light: rgba(255, 255, 255, 0.1);
-    --border-medium: rgba(255, 255, 255, 0.1);
+    --border-medium: rgba(255, 255, 255, 0.16);
     --border-strong: rgba(255, 255, 255, 0.1);
     --bg-thin: rgba(0, 0, 0, 0.4);
     --bg-regular: rgba(0, 0, 0, 0.4);
     --shadow-card: none;
-    --shadow-sheet: none;
+    --shadow-sheet: var(--inset-glass);
     --shadow-alert: none;
-    --shadow-control:
-      inset 0 0.5px 1px rgba(255, 255, 255, 0.1), inset 0 -1px 2px rgba(0, 0, 0, 0.45),
-      0 3px 14px rgba(0, 0, 0, 0.45);
+    --shadow-control: none;
     --highlight-card: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, transparent 100%);
-    /* 浮层阴影 dark 差异化(2026-10-26 映射概念稿): 深外投 + 顶白/底黑双内阴影——深色玻璃体积感 */
-    --glass-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.12), inset 0 -1px 2px rgba(0, 0, 0, 0.45);
+    /* 体积感内化(dark): 上亮下暗 inset——深色玻璃厚度 */
+    --inset-glass: inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 -1px 2px rgba(0, 0, 0, 0.45);
+    --glass-shadow: var(--inset-glass);
   }
   body {
     background: var(--bg, #000000);
@@ -1685,7 +1669,7 @@ input[type='file'] {
   .hammer-icon-btn,
   .page-btn,
   .header-status {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.16);
   }
   .menu-btn::before,
   .back-btn::before,
@@ -1702,13 +1686,15 @@ input[type='file'] {
   }
 }
 
-/* 底部焦散光(2026-10-27 定版): 圆钮/胶囊=贴弦椭圆弧带(ellipse 40% 55% at 50% 122%——
-   宽度在圆底弦内, 不越出轮廓带'平行端线', 随尺寸自适应); 浮层=手稿窄带(大表面底座光) */
+/* 底部焦散光 v4(2026-10-27): 椭圆光斑——inset:0 铺满, radial-gradient(ellipse 100% 8px at 50% 100%),
+   底部由元素圆角裁成弧线, 上左右由椭圆自然衰减(无直线边/无 mask 硬截止);
+   厚度=椭圆垂直半径 8px; 亮度 .42(light)/.21(dark) */
 .menu-btn::after,
 .back-btn::after,
 .hammer-icon-btn::after,
 .page-btn::after,
-.header-status::after {
+.header-status::after,
+.glass-edge::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1717,43 +1703,32 @@ input[type='file'] {
   z-index: 1;
   opacity: 0.8;
   background: radial-gradient(
-    ellipse 40% 55% at 50% 122%,
-    rgba(255, 255, 255, 0.6) 0%,
-    transparent 70%
+    ellipse 100% 8px at 50% 100%,
+    rgba(255, 255, 255, 0.42) 0%,
+    transparent 100%
   );
 }
+/* 浮层(大表面)收敛: 椭圆收窄 85% + 纵 5px + 亮度 0.3——全宽 8px 曾几乎占满底部 */
 .glass-edge::after {
-  content: '';
-  position: absolute;
-  left: 10%;
-  right: 10%;
-  bottom: 0;
-  height: 3px;
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0.8;
-  background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
+  background: radial-gradient(
+    ellipse 85% 3px at 50% 100%,
+
+    transparent 100%
+  );
 }
 @media (prefers-color-scheme: dark) {
   .menu-btn::after,
   .back-btn::after,
   .hammer-icon-btn::after,
   .page-btn::after,
-  .header-status::after {
-    background: radial-gradient(
-      ellipse 40% 55% at 50% 122%,
-      rgba(255, 255, 255, 0.3) 0%,
-      transparent 70%
-    );
-  }
+  .header-status::after,
   .glass-edge::after {
-    background: radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.4) 0%, transparent 70%);
+    background: radial-gradient(
+      ellipse 85% 3px at 50% 100%,
+      rgba(255, 255, 255, 0.11) 0%,
+      transparent 100%
+    );
   }
 }
 
-/* dark 浮层面板: 1px 边框(轮廓更实) */
-@media (prefers-color-scheme: dark) {
-  .glass-edge {
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  }
-}
+/* dark 浮层面板边框统一走 --glass-border(dark=白0.1), 无写死 !important——曾双源重叠 */

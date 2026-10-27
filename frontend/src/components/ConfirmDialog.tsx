@@ -62,7 +62,7 @@ export default function ConfirmDialog({
             maxWidth: 600,
             borderRadius: 'var(--radius-lg)',
             padding: '18px 14px calc(14px + env(safe-area-inset-bottom))',
-            boxShadow: 'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)',
+            boxShadow: 'var(--shadow-sheet)',
             pointerEvents: 'auto',
           }}
         >
