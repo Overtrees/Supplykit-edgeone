@@ -1485,6 +1485,112 @@ input[type='file'] {
   border: none;
 }
 
+/* ── 清洗页步骤条(2026-10-27: 曾 .step-indicator/.step 无任何 CSS, 裸露无样式) ── */
+.step-indicator {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  font-size: var(--font-xs);
+}
+.step {
+  padding: 4px 10px;
+  border-radius: 99px;
+  color: var(--muted2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.step.done {
+  color: var(--success);
+}
+.step.active {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--inset-glass);
+}
+
+/* ── 清洗页列映射行(2026-10-27: 去外层框→细分隔线; 竖屏两行堆叠/宽屏三列横排) ── */
+.map-row {
+  display: flex;
+  flex-direction: column; /* 竖屏默认: 堆叠 */
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.map-row:last-child {
+  border-bottom: none;
+}
+.map-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.map-name {
+  font-size: var(--font-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.map-sub {
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.map-tag {
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.map-arrow {
+  font-size: var(--font-sm);
+  color: var(--muted2);
+  flex-shrink: 0;
+  display: none;
+}
+/* 宽屏(容器 > 480): 三列横排(列名+状态 | 箭头+下拉 | 必填/计数) */
+@container (min-width: 480px) {
+  .map-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+  }
+  .map-head {
+    display: block;
+    flex: 0 0 150px;
+  }
+  .map-sub {
+    margin-top: 1px;
+  }
+  .map-controls {
+    flex: 1;
+  }
+  .map-arrow {
+    display: block;
+  }
+}
+
 /* ── 模板管理弹窗(2026-10-27 P3: 内联→全局变量管理 + 间距/交互态统一) ── */
 .tpl-title {
   /* 2026-10-27 收敛: 原整条毛玻璃铺满(覆盖过多) → 仅胶囊包裹标题文本, sticky 吸顶 */

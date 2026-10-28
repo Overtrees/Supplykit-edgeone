@@ -1282,28 +1282,10 @@ export default function CleansingPage() {
             const currentTarget = mp[c.name]?.target
             const isShared = currentTarget && targetCounts[currentTarget] > 1
             return (
-              <div
-                key={c.name}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 14px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-card)',
-                  marginBottom: 8,
-                }}
-              >
-                <div style={{ flex: 1, fontSize: 'var(--font-md)', fontWeight: 500, minWidth: 0 }}>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    {c.name}
+              <div key={c.name} className="map-row">
+                <div className="map-head">
+                  <span className="map-name">{c.name}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     {mp[c.name]?.target ? (
                       <span
                         className="pill success"
@@ -1339,79 +1321,58 @@ export default function CleansingPage() {
                         SYS_FIELDS.find(x => x.t === mp[c.name].target) ||
                         cf.find(x => x.t === mp[c.name].target)
                       return sf2 ? (
-                        <span
-                          className="small muted"
-                          style={{ display: 'block', fontSize: 'var(--font-xs)', marginTop: 1 }}
-                        >
+                        <span className="map-sub">
                           → {sf2.l} ({sf2.t})
                         </span>
                       ) : null
                     })()
                   ) : matched && sf ? (
-                    <span
-                      className="small muted"
-                      style={{ display: 'block', fontSize: 'var(--font-xs)', marginTop: 1 }}
-                    >
+                    <span className="map-sub">
                       智能建议 → {sf.l} ({sf.t})
                     </span>
                   ) : null}
                 </div>
-                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)', flexShrink: 0 }}>
-                  →
-                </div>
-                <select
-                  value={mp[c.name]?.target || ''}
-                  onChange={e => {
-                    const v = e.target.value
-                    setMp(p => ({ ...p, [c.name]: { target: v, type: 'string' } }))
-                    saveAlias(c.name, v)
-                  }}
-                  style={{
-                    fontSize: 'var(--font-md)',
-                    padding: '7px 10px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    flex: 1,
-                    minWidth: 130,
-                    background: 'var(--card)',
-                    minHeight: 36,
-                  }}
-                >
-                  <option value="">-- 不映射 --</option>
-                  {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => (
-                    <option key={f.t} value={f.t}>
-                      {f.l}
-                    </option>
-                  ))}
-                  {cf
-                    .filter(f => f.t && f.l)
-                    .map(f => (
+                <div className="map-arrow">→</div>
+                <div className="map-controls">
+                  <select
+                    value={mp[c.name]?.target || ''}
+                    onChange={e => {
+                      const v = e.target.value
+                      setMp(p => ({ ...p, [c.name]: { target: v, type: 'string' } }))
+                      saveAlias(c.name, v)
+                    }}
+                    className="tpl-field"
+                    style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-13)' }}
+                  >
+                    <option value="">-- 不映射 --</option>
+                    {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => (
                       <option key={f.t} value={f.t}>
                         {f.l}
                       </option>
                     ))}
-                </select>
-                <div
-                  style={{
-                    fontSize: 'var(--font-xs)',
-                    width: 50,
-                    textAlign: 'right',
-                    flexShrink: 0,
-                  }}
-                >
-                  {isShared ? (
-                    <span
-                      className="pill warning"
-                      style={{
-                        fontSize: 'var(--font-9)',
-                        padding: '1px 6px',
-                        minHeight: 'auto',
-                        lineHeight: '16px',
-                      }}
-                    >
-                      ×{targetCounts[currentTarget]}
-                    </span>
-                  ) : null}
+                    {cf
+                      .filter(f => f.t && f.l)
+                      .map(f => (
+                        <option key={f.t} value={f.t}>
+                          {f.l}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="map-tag">
+                    {isShared ? (
+                      <span
+                        className="pill warning"
+                        style={{
+                          fontSize: 'var(--font-9)',
+                          padding: '1px 6px',
+                          minHeight: 'auto',
+                          lineHeight: '16px',
+                        }}
+                      >
+                        ×{targetCounts[currentTarget]}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             )
