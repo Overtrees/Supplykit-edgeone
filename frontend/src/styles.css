@@ -2050,3 +2050,15 @@ input[type='file'] {
     max-height: 60dvh !important;
   }
 }
+/* 2026-10-28 旋转/尺寸变化时滚动条残留(横屏滑表格→转竖屏, 横条滞留在屏幕中间约 1s):
+   iOS 原生滚动条由 WebKit 绘制, 容器尺寸突变时它的淡出动画会滞后。
+   解决: ①隐藏容器滚动条(保留滑动能力) ②orientation/resize 时强制重置滚动位置并重绘 */
+.clean-preview-scroll {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none;
+}
+.clean-preview-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* WebKit(iOS/Chrome): 不绘制横条, 仅保留惯性滑动 */
+}

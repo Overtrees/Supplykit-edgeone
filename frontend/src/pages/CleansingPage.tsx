@@ -505,6 +505,29 @@ export default function CleansingPage() {
       window.removeEventListener('custom-fields-changed', onCfChanged)
     }
   }, [])
+  // 2026-10-28 横竖屏切换: 立即重置表格滚动位置(消除横条滞留视觉)
+  useEffect(() => {
+    const reset = () => {
+      try {
+        document.querySelectorAll<HTMLElement>('.clean-preview-scroll').forEach(el => {
+          el.scrollLeft = 0
+          el.scrollTop = 0
+        })
+      } catch {}
+    }
+    const onOrient = () => {
+      reset()
+      // 旋转动画结束后再兜底一次(iOS 有时在动画中忽略赋值)
+      setTimeout(reset, 60)
+      setTimeout(reset, 300)
+    }
+    window.addEventListener('orientationchange', onOrient)
+    window.addEventListener('resize', onOrient)
+    return () => {
+      window.removeEventListener('orientationchange', onOrient)
+      window.removeEventListener('resize', onOrient)
+    }
+  }, [])
   const [pv, setPv] = useState(null)
   const [res, setRes] = useState(null)
   const [bs, setBs] = useState('')
@@ -1490,7 +1513,6 @@ export default function CleansingPage() {
                     overflowX: 'auto',
                     maxHeight: 'calc(100dvh - 340px)',
                     overflowY: 'auto',
-                    WebkitOverflowScrolling: 'touch',
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                   }}
