@@ -1526,6 +1526,7 @@ input[type='file'] {
   color: var(--text);
   margin-bottom: 8px;
   /* 2026-10-27 去分割线(视觉冗余): 标题胶囊+留白已足够分区 */
+}
 .tpl-field {
   font-size: 15px;
   padding: 9px 12px;
