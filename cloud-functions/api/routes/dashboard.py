@@ -157,7 +157,8 @@ def health_trend(channel: str = "jd", days: int = 14):
 
 @router.get("/dashboard/summary")
 @traced
-def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc"):
+def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc",
+                      part: str = ""):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
     附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
     _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
@@ -187,6 +188,17 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
         return _r
 
     _result = _cache_get(_key, _SUMMARY_TTL, _b)
+    # 2026-10-28 首屏提速: 同一缓存键派生两份视野(同源同快照——四维一致性天然保证, 不跨时刻)
+    # part=main → 主项(卡片数字, 组装轻, 首屏快); part=charts → 图表项(趋势/店铺/品牌/漏斗, 组装重);
+    # 不带 part → 全量(向后兼容, 老客户端/其他调用方不受影响)
+    if part and isinstance(_result, dict):
+        # 实测顶层 10 键: summary/health_index/periods(含 *_trend 趋势) = 主项; 图表 7 键 = charts
+        _MAIN = ("summary", "health_index", "periods")
+        _CHART = ("trend", "stores", "brands", "period_stores", "period_brands",
+                  "funnel", "period_funnel")
+        _keep = _MAIN if part == "main" else _CHART if part == "charts" else None
+        if _keep is not None:
+            return ok({k: v for k, v in _result.items() if k in _keep})
     return ok(_result)
 
 

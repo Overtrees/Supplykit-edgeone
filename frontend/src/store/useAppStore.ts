@@ -261,10 +261,30 @@ const initAppStore = (set, get) => ({
       // 首屏错峰(2026-10-11 三批): summary 先行渲染 → orders/alerts 0.3s 后 → stock-risk 最后——
       // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
       // 2026-10-28 超时分级: summary 重接口 60s(实测偶发 13.9s, 30s 会误杀); 轻接口维持默认 30s
-      const r0 = await Promise.allSettled([api.get(dashUrl, { timeout: 60000 })])
+      // 2026-10-28 两阶段加载(根治组装慢): part=main(卡片数字/健康, 组装轻)先渲染 →
+      // part=charts(趋势/店铺/品牌/漏斗, 组装重)后到合并。同一缓存键派生两份视野(同源同快照, 四维一致)
+      const _sep = dashUrl.includes('?') ? '&' : '?'
+      const r0 = await Promise.allSettled([
+        api.get(dashUrl + _sep + 'part=main', { timeout: 60000 }),
+      ])
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
-      set({ dashboard: dashboard.data, loading: false, dataLoaded: true })
+      // ⚠️ 合并而非替换: part=main 不含 charts —— 若整体替换, 静默刷新时图表会闪空等 charts 回填
+      const _prev: any = get().dashboard || {}
+      set({
+        dashboard: dashboard.data ? { ..._prev, ...dashboard.data } : _prev,
+        loading: false,
+        dataLoaded: true,
+      })
+      // 图表数据并行拉取(不阻塞主项渲染), 到达后合并到 dashboard(同快照键)
+      api
+        .get(dashUrl + _sep + 'part=charts', { timeout: 60000 })
+        .then((rc: any) => {
+          if (_mySeq !== this._loadSeq) return
+          const cur: any = get().dashboard || {}
+          set({ dashboard: { ...cur, ...(rc?.data || {}) } })
+        })
+        .catch(() => {})
       await new Promise<void>(resolve => setTimeout(resolve, 300))
       const r1 = await Promise.allSettled([
         api.get(
