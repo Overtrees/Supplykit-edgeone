@@ -21,6 +21,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
   const [templates, setTemplates] = useState([])
   const [tmplName, setTmplName] = useState('')
   const [selId, setSelId] = useState<string | number>('')
+  const [cfOpen, setCfOpen] = useState(false) // 自定义字段默认收起(与模板语义分离)
   const [cf, setCf] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('c_cf') || '[]')
@@ -48,6 +49,45 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
   const changeCf = next => {
     saveCf(next)
     window.dispatchEvent(new Event('custom-fields-changed'))
+  }
+  // 2026-10-27: 模板应用抽为函数(下拉 + 列表点击共用)
+  const applyTemplate = (tid: any) => {
+    const tpl: any = templates.find((t: any) => t.id == tid)
+    if (!tpl) return
+    try {
+      const m = typeof tpl.mapping === 'string' ? JSON.parse(tpl.mapping) : tpl.mapping
+      if (!m || typeof m !== 'object') return
+      window.dispatchEvent(new CustomEvent('apply-template', { detail: m }))
+      const _cfm = tpl.cf_meta
+      if (Array.isArray(_cfm) && _cfm.length) {
+        const _cur = (() => {
+          try {
+            return JSON.parse(localStorage.getItem('c_cf') || '[]')
+          } catch {
+            return []
+          }
+        })()
+        const _merged = [..._cur]
+        for (const f of _cfm) {
+          if (f?.t && !_merged.some((x: any) => x.t === f.t)) _merged.push(f)
+        }
+        localStorage.setItem('c_cf', JSON.stringify(_merged))
+        window.dispatchEvent(new Event('custom-fields-changed'))
+      }
+      setSelId(tid)
+      toast.success('模板已应用')
+    } catch {}
+  }
+  const delTemplate = async (tid: any, name: string) => {
+    if (!window.confirm(`删除模板「${name}」？`)) return
+    try {
+      await api.delete('/api/cleansing/templates/' + tid)
+      setSelId('')
+      loadTemplates()
+      toast.success('已删除')
+    } catch {
+      toast.error('删除失败')
+    }
   }
   const addField = () =>
     changeCf([...cf, { t: 'field_' + Date.now(), l: '自定义字段', tp: 'string' }])
@@ -118,7 +158,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 600 }}>
-              预设模块-{DOC_TYPE_NAMES[tt] || tt}
+              预设模板-{DOC_TYPE_NAMES[tt] || tt}
             </span>
             <button
               onClick={() => {
@@ -155,7 +195,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 cursor: 'pointer',
               }}
             >
-              下载模板
+              ↓ 下载 CSV
             </button>
           </div>
           {/* 模板区 */}
@@ -174,34 +214,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 value={selId as any}
                 onChange={e => {
                   const v = e.target.value
-                  setSelId(v)
-                  if (v) {
-                    try {
-                      const _tpl = templates.find((t: any) => t.id == v)
-                      const m = _tpl?.mapping
-                      if (m && typeof m === 'object') {
-                        window.dispatchEvent(new CustomEvent('apply-template', { detail: m }))
-                        // 2026-10-27 根治: 模板内嵌 cfMeta → 合并进本机自定义字段(缺失补入)
-                        const _cfm = templates.find((t: any) => t.id == v)?.cf_meta
-                        if (Array.isArray(_cfm) && _cfm.length) {
-                          const _cur = (() => {
-                            try {
-                              return JSON.parse(localStorage.getItem('c_cf') || '[]')
-                            } catch {
-                              return []
-                            }
-                          })()
-                          const _merged = [..._cur]
-                          for (const f of _cfm) {
-                            if (f?.t && !_merged.some((x: any) => x.t === f.t)) _merged.push(f)
-                          }
-                          localStorage.setItem('c_cf', JSON.stringify(_merged))
-                          window.dispatchEvent(new Event('custom-fields-changed'))
-                        }
-                        toast.success('模板已应用')
-                      }
-                    } catch (e2) {}
-                  }
+                  if (v) applyTemplate(v)
                 }}
                 style={{
                   flex: 1,
@@ -230,6 +243,58 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 )}
               </select>
             </div>
+            {/* 2026-10-27 UX: 已存模板列表(点选应用 / 删除)——曾仅下拉, 存多后难管理 */}
+            {(() => {
+              const _mine = templates.filter((t: any) => t.doc_type === tt)
+              if (!_mine.length)
+                return (
+                  <div style={{ fontSize: 11, color: 'var(--muted2)', padding: '4px 2px' }}>
+                    还没有模板：先完成字段映射 → 输入名称保存
+                  </div>
+                )
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {_mine.map((t: any) => (
+                    <div
+                      key={t.id}
+                      className="clickable"
+                      onClick={() => applyTemplate(t.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '8px 12px',
+                        borderRadius: 12,
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: 'var(--text)', flex: 1, minWidth: 0 }}>
+                        {t.name}
+                      </span>
+                      <span
+                        role="button"
+                        aria-label="删除模板"
+                        onClick={e => {
+                          e.stopPropagation()
+                          delTemplate(t.id, t.name)
+                        }}
+                        style={{
+                          color: 'var(--danger)',
+                          fontSize: 13,
+                          padding: '0 4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ✕
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
           </div>
           <div
             style={{
@@ -306,18 +371,43 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             </button>
           </div>
           <div style={{ fontSize: 10, color: 'var(--muted2)', marginBottom: 12 }}>
-            提示：保存前先在映射页完成字段映射，模板会记录当前映射关系
+            <span title="保存前先在映射页完成字段映射，模板会记录当前映射关系">
+              ⓘ 保存当前映射为模板
+            </span>
           </div>
 
           {/* 自定义字段区 */}
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, marginTop: 4 }}>
-            自定义字段{' '}
-            <span className="small muted" style={{ fontSize: 11, fontWeight: 400 }}>
-              可自定义映射目标字段名
+          {/* 2026-10-27 UX: 自定义字段与模板无关(本机偏好), 默认收起避免喧宾夺主 */}
+          <div
+            onClick={() => setCfOpen(v => !v)}
+            className="clickable"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: 13,
+              fontWeight: 600,
+              marginBottom: cfOpen ? 8 : 0,
+              marginTop: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <span>
+              自定义字段
+              <span
+                className="small muted"
+                style={{ fontSize: 11, fontWeight: 400, marginLeft: 6 }}
+              >
+                {cf.length ? `${cf.length} 个` : '可自定义映射目标字段名'}
+              </span>
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--muted2)' }}>
+              {cfOpen ? '收起 ▲' : '展开 ▼'}
             </span>
           </div>
           <div
             style={{
+              display: cfOpen ? 'block' : 'none', // 折叠: 收起时整体隐藏(内容仍在, 不卸载)
               border: '1px solid var(--border)',
               borderRadius: 20,
               padding: 12,
@@ -390,6 +480,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             </button>
           </div>
 
+          {/* 2026-10-27 UX: 关闭降为次要按钮(曾主色蓝底与'保存模板'同级 → 视觉上关闭是主操作) */}
           <div
             onClick={onClose}
             className="clickable"
@@ -397,12 +488,13 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               borderRadius: 22,
               padding: 12,
               marginTop: 10,
-              background: 'var(--primary)',
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
               textAlign: 'center',
               cursor: 'pointer',
             }}
           >
-            <span style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>关闭</span>
           </div>
         </div>
       </div>
