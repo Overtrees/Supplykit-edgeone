@@ -505,28 +505,29 @@ export default function CleansingPage() {
       window.removeEventListener('custom-fields-changed', onCfChanged)
     }
   }, [])
-  // 2026-10-28 横竖屏切换: 立即重置表格滚动位置(消除横条滞留视觉)
+  // 2026-10-28 横竖屏切换: 只重置表格"横向"滚动(消除横条滞留)
+  // ⚠️ 修复: 曾同时监听 resize 并清 scrollTop —— iOS 地址栏展开/收起会触发 resize,
+  //    每次滑动页面都被强制 scrollTop=0 → 内容看起来"不出现, 需再滑一次"
+  // 现在: 仅 orientationchange, 且只清 scrollLeft(保留纵向阅读位置)
   useEffect(() => {
-    const reset = () => {
+    const resetH = () => {
       try {
         document.querySelectorAll<HTMLElement>('.clean-preview-scroll').forEach(el => {
           el.scrollLeft = 0
-          el.scrollTop = 0
         })
       } catch {}
     }
+    let _last = window.innerWidth > window.innerHeight ? 'land' : 'port'
     const onOrient = () => {
-      reset()
-      // 旋转动画结束后再兜底一次(iOS 有时在动画中忽略赋值)
-      setTimeout(reset, 60)
-      setTimeout(reset, 300)
+      const cur = window.innerWidth > window.innerHeight ? 'land' : 'port'
+      if (cur === _last) return // 尺寸微变(地址栏伸缩)不处理, 仅真实横竖切换
+      _last = cur
+      resetH()
+      setTimeout(resetH, 60)
+      setTimeout(resetH, 300)
     }
     window.addEventListener('orientationchange', onOrient)
-    window.addEventListener('resize', onOrient)
-    return () => {
-      window.removeEventListener('orientationchange', onOrient)
-      window.removeEventListener('resize', onOrient)
-    }
+    return () => window.removeEventListener('orientationchange', onOrient)
   }, [])
   const [pv, setPv] = useState(null)
   const [res, setRes] = useState(null)
@@ -1416,6 +1417,13 @@ export default function CleansingPage() {
         </div>
       )}
 
+      {s === 2 && !pv && (
+        <div style={{ padding: 24 }}>
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="skeleton" style={{ height: 32, marginBottom: 6 }} />
+          ))}
+        </div>
+      )}
       {s === 2 && pv && (
         <div>
           <div className="section-title">
@@ -1515,6 +1523,7 @@ export default function CleansingPage() {
                        → calc 成负数 → 表格高度被压 0, 需滑动触发重排才显示
                        → clamp 给下限 240px(计算值异常时兜底), 上限 100dvh 防溢出 */
                     maxHeight: 'clamp(240px, calc(100dvh - 340px), 100dvh)',
+                    minHeight: 240 /* 首帧保底高度: 防 iOS 上 dvh 计算异常导致容器 0 高不绘制 */,
                     overflowY: 'auto',
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
@@ -1523,7 +1532,9 @@ export default function CleansingPage() {
                   <table>
                     <thead>
                       <tr
-                        style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}
+                        /* 2026-10-28 取消 sticky: iOS 上 sticky thead + 祖先 overflow:hidden(.card)
+                           + 动态高度 组合会触发首帧不绘制(页面空白, 滚动才出内容) */
+                        style={{ background: 'var(--card)' }}
                       >
                         {cols.map(col => (
                           <th
