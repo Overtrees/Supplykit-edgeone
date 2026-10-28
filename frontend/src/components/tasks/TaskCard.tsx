@@ -37,6 +37,24 @@ function safeParse<T>(v: string | T | null | undefined, fallback: T): T {
 }
 
 /** 2026-10-15 任务卡片可视化(进度条/步骤耗时/状态)——组件化不膨胀 TaskPage——CSS 全全局(styles.css .task-*) */
+
+// 2026-10-27 相对时间(卡片右上角): 刚刚 / N分钟前 / N小时前 / MM-DD
+const relTime = (iso?: string) => {
+  if (!iso) return ''
+  const t = new Date(
+    String(iso).replace(' ', 'T') + (String(iso).includes('Z') ? '' : 'Z'),
+  ).getTime()
+  if (!t) return ''
+  const diff = Math.max(0, Date.now() - t)
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return '刚刚'
+  if (m < 60) return m + ' 分钟前'
+  const h = Math.floor(m / 60)
+  if (h < 24) return h + ' 小时前'
+  const d = new Date(t)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export default function TaskCard({
   task,
   label,
@@ -104,6 +122,9 @@ export default function TaskCard({
               {params.driver === 'backend' ? '后端推进' : '前端轮询'}
             </span>
           ) : null}
+          {task.created_at ? (
+            <span className="task-reltime">{relTime(task.created_at)}</span>
+          ) : null}
           <span className={'task-status ' + st}>
             {st === 'running' && <IconRefresh size={11} className="task-spin" />}
             {st === 'done' && <IconCheck size={11} />}
@@ -155,7 +176,7 @@ export default function TaskCard({
 
         {/* 结果信息(done/error) */}
         {st === 'done' && (
-          <div className="task-card-meta">
+          <div className="task-card-meta task-num">
             {total > 0 && <span>共 {total} 行</span>}
             {(success > 0 || failed > 0) && (
               <span>
@@ -167,7 +188,7 @@ export default function TaskCard({
           </div>
         )}
         {isEval && (
-          <div className="task-card-meta">
+          <div className="task-card-meta task-num">
             {st === 'running' && evalTotal > 0 && (
               <span>
                 窗口 {evalSeg} · 已评估 {Math.min(evalOff, evalTotal)}/{evalTotal} SKU
@@ -192,7 +213,7 @@ export default function TaskCard({
           </div>
         )}
         {st === 'done' && task.task_type === 'export' && filename && (
-          <div className="task-card-meta">
+          <div className="task-card-meta task-num">
             <button
               className="task-download"
               disabled={downloading}

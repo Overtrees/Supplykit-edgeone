@@ -39,6 +39,7 @@ export default function TaskPage() {
   const [tasks, setTasks] = useState([])
   const [downloading, setDownloading] = useState({})
   const [loading, setLoading] = useState(true)
+  const [showAllDone, setShowAllDone] = useState(false) // 已完��折叠(默认 10 条)
 
   const [loadErr, setLoadErr] = useState('')
   const doneTasks = useRef({}) // 已触发完成提示的任务
@@ -196,43 +197,73 @@ export default function TaskPage() {
             )}
           </div>
         ) : (
-          tasks.map(task => {
-            const type =
-              task.task_type === 'export'
-                ? 'export'
-                : task.task_type === 'seed'
-                  ? 'seed'
-                  : task.task_type === 'reset' || task.task_id.startsWith('reset_')
-                    ? 'reset'
-                    : task.task_type === 'cleansing_eval'
-                      ? 'cleansing_eval'
-                      : 'cleansing'
-            const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
-            const result = task.result
-              ? typeof task.result === 'string'
-                ? safeParse(task.result)
-                : task.result
-              : null
-            const sub =
-              task.task_type === 'export'
-                ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
-                : task.task_type === 'cleansing'
-                  ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
-                  : task.task_type === 'cleansing_eval'
-                    ? '评估联动'
-                    : task.task_id.slice(0, 22)
-            return (
-              <TaskCard
-                key={task.task_id}
-                task={task}
-                label={meta.label}
-                sub={sub}
-                icon={meta.Icon ? <meta.Icon size={18} /> : undefined}
-                downloading={downloading[task.task_id]}
-                onDownload={download}
-              />
+          (() => {
+            /* 2026-10-27 已完成折叠: running/pending 全显, done/error 默认 10 条(列表曾无限增长) */
+            const _active = tasks.filter(
+              (t: any) => t.status === 'running' || t.status === 'pending',
             )
-          })
+            const _finished = tasks.filter(
+              (t: any) => t.status !== 'running' && t.status !== 'pending',
+            )
+            const _shown = showAllDone ? _finished : _finished.slice(0, 10)
+            return (
+              <>
+                {[..._active, ..._shown].map(task => {
+                  const type =
+                    task.task_type === 'export'
+                      ? 'export'
+                      : task.task_type === 'seed'
+                        ? 'seed'
+                        : task.task_type === 'reset' || task.task_id.startsWith('reset_')
+                          ? 'reset'
+                          : task.task_type === 'cleansing_eval'
+                            ? 'cleansing_eval'
+                            : 'cleansing'
+                  const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
+                  const result = task.result
+                    ? typeof task.result === 'string'
+                      ? safeParse(task.result)
+                      : task.result
+                    : null
+                  const sub =
+                    task.task_type === 'export'
+                      ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
+                      : task.task_type === 'cleansing'
+                        ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
+                        : task.task_type === 'cleansing_eval'
+                          ? '评估联动'
+                          : task.task_id.slice(0, 22)
+                  return (
+                    <TaskCard
+                      key={task.task_id}
+                      task={task}
+                      label={meta.label}
+                      sub={sub}
+                      icon={meta.Icon ? <meta.Icon size={18} /> : undefined}
+                      downloading={downloading[task.task_id]}
+                      onDownload={download}
+                    />
+                  )
+                })}
+                {_finished.length > _shown.length && (
+                  <div
+                    className="clickable"
+                    onClick={() => setShowAllDone(true)}
+                    style={{
+                      textAlign: 'center',
+                      padding: '10px 0',
+                      fontSize: 'var(--font-13)',
+                      fontWeight: 600,
+                      color: 'var(--primary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    显示更多（还有 {_finished.length - _shown.length} 条已完成）↓
+                  </div>
+                )}
+              </>
+            )
+          })()
         )}
       </div>
     </div>

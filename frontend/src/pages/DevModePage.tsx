@@ -35,6 +35,7 @@ export default function DevModePage() {
   const [refreshing, setRefreshing] = useState(false)
   const [mon, setMon] = useState<any>(null)
   const [showLogs, setShowLogs] = useState(false)
+  const [todayLogs, setTodayLogs] = useState<number | null>(null) // 2026-10-27 日志分析角标(今日条数)
   // 种子数据(从设置页移入): 填充/重置为数据操作工具, 归开发者维度
   const [confirm, setConfirm] = useState(null) // {type:'fill'|'reset'}
   const [seeding, setSeeding] = useState(() => {
@@ -80,6 +81,17 @@ export default function DevModePage() {
     api
       .get('/api/monitor')
       .then((r: any) => setMon(r.data))
+      .catch(() => {})
+    // 今日开发者日志条数(角标, 提升日志分析可发现性)
+    api
+      .get('/api/quality-logs?scope=dev&limit=200')
+      .then((r: any) => {
+        const _today = new Date().toISOString().slice(0, 10)
+        const _n = (r.data || []).filter(
+          (x: any) => String(x.created_at || '').slice(0, 10) === _today,
+        ).length
+        setTodayLogs(_n)
+      })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -222,98 +234,16 @@ export default function DevModePage() {
         <LastRow label="DB" value="TiDB · EdgeOne Makers" />
       </Group>
 
-      {/* 运行概况(monitor 汇总) */}
+      {/* 运行概况(monitor 汇总) —— 2026-10-27 抽 StatsRow 组件(曾 4×40 行重复内联) */}
       <Group title="运行概况">
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '14px 16px' }}>
-          <div
-            style={{
-              flex: 1,
-              minWidth: 90,
-              background: 'var(--bg)',
-              borderRadius: 'var(--radius-md)',
-              padding: '10px 12px',
-              textAlign: 'center',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'var(--font-18)',
-                fontWeight: 700,
-                color: 'var(--danger)',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {mon ? mon.totals?.error || 0 : '-'}
-            </div>
-            <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>异常总数</div>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              minWidth: 90,
-              background: 'var(--bg)',
-              borderRadius: 'var(--radius-md)',
-              padding: '10px 12px',
-              textAlign: 'center',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'var(--font-18)',
-                fontWeight: 700,
-                color: 'var(--warning)',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {mon ? mon.totals?.slow || 0 : '-'}
-            </div>
-            <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>慢请求总数</div>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              minWidth: 90,
-              background: 'var(--bg)',
-              borderRadius: 'var(--radius-md)',
-              padding: '10px 12px',
-              textAlign: 'center',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'var(--font-18)',
-                fontWeight: 700,
-                color: 'var(--text)',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {mon ? mon.today?.error || 0 : '-'}
-            </div>
-            <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>今日异常</div>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              minWidth: 90,
-              background: 'var(--bg)',
-              borderRadius: 'var(--radius-md)',
-              padding: '10px 12px',
-              textAlign: 'center',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 'var(--font-18)',
-                fontWeight: 700,
-                color: 'var(--text)',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {mon ? mon.today?.slow || 0 : '-'}
-            </div>
-            <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>今日慢请求</div>
-          </div>
-        </div>
+        <StatsRow
+          items={[
+            { n: mon ? mon.totals?.error || 0 : '-', c: '异常总数', color: 'var(--danger)' },
+            { n: mon ? mon.totals?.slow || 0 : '-', c: '慢请求', color: 'var(--warning)' },
+            { n: mon ? mon.today?.error || 0 : '-', c: '今日异常', color: 'var(--text)' },
+            { n: mon ? mon.today?.slow || 0 : '-', c: '今日慢请求', color: 'var(--text)' },
+          ]}
+        />
         <div
           style={{
             padding: '0 16px 14px',
@@ -329,7 +259,7 @@ export default function DevModePage() {
       {/* 日志分析入口 */}
       <Group title="日志分析">
         <LastRow
-          label="日志分析"
+          label={'日志分析' + (todayLogs ? ' · 今日 ' + todayLogs + ' 条' : '')}
           sub="按日日志文件 · 点击预览当日明细"
           onClick={() => setShowLogs(true)}
         />
@@ -424,6 +354,42 @@ export default function DevModePage() {
           onCancel={() => setConfirm(null)}
         />
       )}
+    </div>
+  )
+}
+
+/** 运行概况统计块(2026-10-27 抽离: 数字 24px tabular + 标签 11px, 消除 4 处重复内联) */
+function StatsRow({ items }: { items: { n: any; c: string; color: string }[] }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '10px 16px 12px' }}>
+      {items.map((it, i) => (
+        <div
+          key={i}
+          style={{
+            flex: 1,
+            minWidth: 80,
+            background: 'var(--bg)',
+            borderRadius: 'var(--radius-md)',
+            padding: '10px 8px',
+            textAlign: 'center',
+          }}
+        >
+          <div
+            style={{
+              fontSize: 24,
+              fontWeight: 700,
+              lineHeight: 1.1,
+              color: it.color,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {it.n}
+          </div>
+          <div style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)', marginTop: 3 }}>
+            {it.c}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

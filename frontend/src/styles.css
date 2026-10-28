@@ -854,6 +854,15 @@ input[type='file'] {
   flex-shrink: 0;
   color: var(--primary);
 }
+.task-reltime {
+  font-size: var(--font-9);
+  color: var(--muted2);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.task-num {
+  font-variant-numeric: tabular-nums;
+}
 .task-card-body {
   flex: 1;
   min-width: 0;
@@ -874,16 +883,17 @@ input[type='file'] {
   border-radius: 99px;
 }
 .task-status.done {
-  background: var(--primary);
-  color: #fff;
+  /* 2026-10-27 状态色柔化: 实心填充 → 浅底深字(与项目语义色体系一致) */
+  background: rgba(5, 150, 105, 0.12);
+  color: var(--success);
 }
 .task-status.running {
-  background: var(--orange);
-  color: #fff;
+  background: rgba(249, 115, 22, 0.14);
+  color: var(--orange);
 }
 .task-status.error {
-  background: var(--danger);
-  color: #fff;
+  background: rgba(225, 29, 72, 0.12);
+  color: var(--danger);
 }
 .task-status.pending {
   background: var(--gray);
