@@ -277,13 +277,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   })
                   const msg = r?.data?.message || '模板已保存'
                   setTmplName('')
-                  await loadTemplates()
-                  // 保存后自动选中该模板(按 name+doc_type 定位新 id)
+                  // 一次拉取: 刷新列表 + 自动选中刚保存的模板(name+doc_type 定位)
                   try {
                     const rr = await api.get('/api/cleansing/templates')
-                    const _hit = (rr.data || []).find((t: any) => t.name === n && t.doc_type === tt)
+                    const _list = rr.data || []
+                    setTemplates(_list)
+                    const _hit = _list.find((t: any) => t.name === n && t.doc_type === tt)
                     if (_hit) setSelId(_hit.id)
-                  } catch {}
+                  } catch {
+                    loadTemplates()
+                  }
                   toast.success(msg)
                 } catch (e) {
                   toast.error('模板保存失败: ' + (e.response?.data?.detail || e.message))
