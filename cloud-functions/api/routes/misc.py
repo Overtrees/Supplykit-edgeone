@@ -98,8 +98,10 @@ def get_log_file(date: str = "", scope: str = ""):
             _sc_t = _sc3 if _sc3 in _LOG_SCOPE_TYPES else ""
             if _sc_t:
                 _in3 = ",".join(["%s"] * len(_LOG_SCOPE_TYPES[_sc_t]))
+                # ⚠️ 第二个占位符必须 %%；曾写 %s → 2 个占位符只给 1 个值 → TypeError
+                # 被 except 吞 → _live_cnt 恒 0 → 永远走归档分支(修复形同虚设, 842 vs 664 复现)
                 _r3 = one("SELECT COUNT(*) AS c FROM quality_logs WHERE log_type IN (%s) "
-                          "AND DATE(created_at)=%s" % _in3,
+                          "AND DATE(created_at)=%%s" % _in3,
                           list(_LOG_SCOPE_TYPES[_sc_t]) + [_d])
             else:
                 _r3 = one("SELECT COUNT(*) AS c FROM quality_logs WHERE DATE(created_at)=%s", [_d])
