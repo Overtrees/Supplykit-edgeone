@@ -1485,6 +1485,102 @@ input[type='file'] {
   border: none;
 }
 
+/* ── 模板管理弹窗(2026-10-27 P3: 内联→全局变量管理 + 间距/交互态统一) ── */
+.tpl-title {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -18px -14px 12px;
+  padding: 14px;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text);
+  background: var(--bg-regular);
+  backdrop-filter: var(--blur-regular);
+  -webkit-backdrop-filter: var(--blur-regular);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+}
+.tpl-section {
+  margin-bottom: 14px;
+}
+.tpl-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.tpl-field {
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  outline: none;
+  background: var(--card);
+  color: var(--text);
+  min-height: 40px;
+  box-sizing: border-box;
+}
+.tpl-btn {
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  min-height: 38px;
+  padding: 9px 16px;
+}
+.tpl-btn-primary {
+  background: var(--primary);
+  color: #fff;
+}
+.tpl-btn-ghost {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.tpl-btn-danger {
+  background: rgba(225, 29, 72, 0.12);
+  color: var(--danger);
+  border: none;
+}
+.tpl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.tpl-item:hover {
+  border-color: var(--border-medium);
+}
+.tpl-empty {
+  font-size: 11px;
+  color: var(--muted2);
+  padding: 4px 2px;
+  line-height: 1.5;
+}
+.tpl-hint {
+  font-size: 10px;
+  color: var(--muted2);
+  margin-bottom: 12px;
+}
+.tpl-cf-box {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  background: var(--bg);
+}
+
 /* ── 任务卡片可视化(2026-10-15——进度条/步骤耗时/状态徽标——全局管理) ── */
 .task-running {
   border-color: var(--primary) !important;

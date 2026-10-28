@@ -136,30 +136,11 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             overflowY: 'auto',
           }}
         >
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 700,
-              marginBottom: 12,
-              textAlign: 'center',
-              color: 'var(--text)',
-            }}
-          >
-            模板管理
-          </div>
+          <div className="tpl-title">模板管理</div>
 
           {/* 预设模块(2026-10-27): 单字段源派生——内置预设+下载模板同源, 新列自动同步 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 8,
-            }}
-          >
-            <span style={{ fontSize: 13, fontWeight: 600 }}>
-              预设模板-{DOC_TYPE_NAMES[tt] || tt}
-            </span>
+          <div className="tpl-section-title">
+            <span>预设模板-{DOC_TYPE_NAMES[tt] || tt}</span>
             <button
               onClick={() => {
                 // 表头=预设列(label 全字段, 与内置映射同源)
@@ -184,22 +165,14 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 setTimeout(() => URL.revokeObjectURL(url), 1000)
                 toast.success('模板已下载，按表头填充后导入')
               }}
-              className="clickable"
-              style={{
-                padding: '7px 16px',
-                fontSize: 13,
-                borderRadius: 99,
-                background: 'var(--primary)',
-                color: '#fff',
-                border: 'none',
-                cursor: 'pointer',
-              }}
+              className="clickable tpl-btn tpl-btn-primary"
+              style={{ padding: '7px 14px' }}
             >
               ↓ 下载 CSV
             </button>
           </div>
           {/* 模板区 */}
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>映射模板</div>
+          <div className="tpl-section-title">我的模板</div>
           <div
             style={{
               // 2026-10-27 去冗余背景块: 曾 background:var(--card)+圆角容器包 select 胶囊
@@ -218,14 +191,8 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 }}
                 style={{
                   flex: 1,
-                  fontSize: 14,
-                  padding: '9px 12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 99,
-                  minHeight: 40,
-                  outline: 'none',
-                  background: 'var(--card)',
                 }}
+                className="tpl-field"
               >
                 <option value="">选择映射模板...</option>
                 {templates
@@ -247,46 +214,35 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             {(() => {
               const _mine = templates.filter((t: any) => t.doc_type === tt)
               if (!_mine.length)
-                return (
-                  <div style={{ fontSize: 11, color: 'var(--muted2)', padding: '4px 2px' }}>
-                    还没有模板：先完成字段映射 → 输入名称保存
-                  </div>
-                )
+                return <div className="tpl-empty">还没有模板：先完成字段映射 → 输入名称保存</div>
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {_mine.map((t: any) => (
                     <div
                       key={t.id}
-                      className="clickable"
+                      className="clickable tpl-item"
                       onClick={() => applyTemplate(t.id)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
-                        padding: '8px 12px',
-                        borderRadius: 12,
-                        background: 'var(--bg)',
-                        border: '1px solid var(--border)',
-                        cursor: 'pointer',
-                      }}
                     >
-                      <span style={{ fontSize: 13, color: 'var(--text)', flex: 1, minWidth: 0 }}>
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         {t.name}
                       </span>
                       <span
                         role="button"
                         aria-label="删除模板"
+                        className="clickable"
                         onClick={e => {
                           e.stopPropagation()
                           delTemplate(t.id, t.name)
                         }}
-                        style={{
-                          color: 'var(--danger)',
-                          fontSize: 13,
-                          padding: '0 4px',
-                          cursor: 'pointer',
-                        }}
+                        style={{ color: 'var(--danger)', padding: '0 4px', cursor: 'pointer' }}
                       >
                         ✕
                       </span>
@@ -297,19 +253,15 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             })()}
           </div>
           <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              marginBottom: 4,
-            }}
+            className="tpl-section"
+            style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
           >
             <input
               value={tmplName}
               onChange={e => setTmplName(e.target.value)}
               placeholder="新模板名称"
-              style={{ ...fieldStyle, flex: '1 1 150px', minWidth: 120 }}
+              className="tpl-field"
+              style={{ flex: '1 1 150px', minWidth: 120 }}
             />
             <button
               onClick={async () => {
@@ -357,20 +309,13 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   toast.error('模板保存失败: ' + (e.response?.data?.detail || e.message))
                 }
               }}
-              className="clickable"
-              style={{
-                ...btnG,
-                padding: '10px 18px',
-                background: 'var(--primary)',
-                color: '#fff',
-                border: 'none',
-                flexShrink: 0,
-              }}
+              className="clickable tpl-btn tpl-btn-primary"
+              style={{ padding: '10px 18px', flexShrink: 0 }}
             >
               保存模板
             </button>
           </div>
-          <div style={{ fontSize: 10, color: 'var(--muted2)', marginBottom: 12 }}>
+          <div className="tpl-hint">
             <span title="保存前先在映射页完成字段映射，模板会记录当前映射关系">
               ⓘ 保存当前映射为模板
             </span>
@@ -380,17 +325,8 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           {/* 2026-10-27 UX: 自定义字段与模板无关(本机偏好), 默认收起避免喧宾夺主 */}
           <div
             onClick={() => setCfOpen(v => !v)}
-            className="clickable"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              fontSize: 13,
-              fontWeight: 600,
-              marginBottom: cfOpen ? 8 : 0,
-              marginTop: 4,
-              cursor: 'pointer',
-            }}
+            className="clickable tpl-section-title"
+            style={{ marginBottom: cfOpen ? 8 : 0, marginTop: 4 }}
           >
             <span>
               自定义字段
@@ -405,15 +341,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               {cfOpen ? '收起 ▲' : '展开 ▼'}
             </span>
           </div>
-          <div
-            style={{
-              display: cfOpen ? 'block' : 'none', // 折叠: 收起时整体隐藏(内容仍在, 不卸载)
-              border: '1px solid var(--border)',
-              borderRadius: 20,
-              padding: 12,
-              background: 'var(--bg)',
-            }}
-          >
+          <div className="tpl-cf-box" style={{ display: cfOpen ? 'block' : 'none' }}>
             {cf.map((f, i) => (
               <div
                 key={i}
@@ -431,14 +359,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                     changeCf(cf.map((x, k) => (k === i ? { ...x, l: e.target.value } : x)))
                   }
                   placeholder="字段名"
-                  style={{ ...fieldStyle, flex: '1 1 150px', minWidth: 120 }}
+                  className="tpl-field"
+                  style={{ flex: '1 1 150px', minWidth: 120 }}
                 />
                 <select
                   value={f.tp}
                   onChange={e =>
                     changeCf(cf.map((x, k) => (k === i ? { ...x, tp: e.target.value } : x)))
                   }
-                  style={{ ...fieldStyle, flexShrink: 0, padding: '9px 10px' }}
+                  className="tpl-field"
+                  style={{ flexShrink: 0, padding: '9px 10px' }}
                 >
                   <option value="string">文本</option>
                   <option value="number">数字</option>
@@ -446,17 +376,8 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 </select>
                 <button
                   onClick={() => delField(i)}
-                  className="clickable"
-                  style={{
-                    background: 'rgba(225,29,72,0.12)',
-                    border: 'none',
-                    borderRadius: 99,
-                    cursor: 'pointer',
-                    padding: '9px 14px',
-                    fontSize: 13,
-                    color: 'var(--danger)',
-                    flexShrink: 0,
-                  }}
+                  className="clickable tpl-btn tpl-btn-danger"
+                  style={{ padding: '9px 14px', flexShrink: 0 }}
                 >
                   删除
                 </button>
@@ -464,37 +385,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             ))}
             <button
               onClick={addField}
-              className="clickable"
-              style={{
-                padding: '9px 16px',
-                fontSize: 13,
-                border: '1px dashed var(--muted2)',
-                borderRadius: 99,
-                background: 'var(--card)',
-                cursor: 'pointer',
-                color: 'var(--muted)',
-                width: '100%',
-              }}
+              className="clickable tpl-btn tpl-btn-ghost"
+              style={{ borderStyle: 'dashed', color: 'var(--muted)', width: '100%' }}
             >
               + 添加自定义字段
             </button>
           </div>
 
           {/* 2026-10-27 UX: 关闭降为次要按钮(曾主色蓝底与'保存模板'同级 → 视觉上关闭是主操作) */}
-          <div
-            onClick={onClose}
-            className="clickable"
-            style={{
-              borderRadius: 22,
-              padding: 12,
-              marginTop: 10,
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              textAlign: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>关闭</span>
+          <div onClick={onClose} className="clickable sheet-cancel" style={{ marginTop: 10 }}>
+            关闭
           </div>
         </div>
       </div>
