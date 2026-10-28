@@ -129,7 +129,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [healthTrend, setHealthTrend] = useState([]) // 健康分数趋势(近14天, health-trend 接口)
   const [fullAlerts, setFullAlerts] = useState(null) // 告警弹窗完整数据(点击时拉取)
   const [fullRisk, setFullRisk] = useState<InventoryRow[] | null>(null) // 濒临断货完整列表
-  const [chLoading, setChLoading] = useState(false)
+  // 2026-10-28 首帧骨架: 初始即按'有无旧值'决定(曾 false → 首帧渲染空卡, 用户看到无骨架闪一下)
+  const [chLoading, setChLoading] = useState(() => !useAppStore.getState().dashboard)
   const [dashErr, setDashErr] = useState('')
   const dashFailRef = useRef(0) // 兜底重试失败计数: 连续 >=2 次后提供"刷新页面"强刷兜底(WebView/实例连接异常时重连恢复)
   // 弹窗数据加载(四维完整性): 告警用大 limit 分组配额拿全量; 濒临断货用 full=1; 缺货按维度拉全量

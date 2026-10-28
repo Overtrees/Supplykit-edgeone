@@ -89,8 +89,27 @@ def get_log_file(date: str = "", scope: str = ""):
     _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
     _arch = one("SELECT markdown, `count` FROM log_archives WHERE `date`=%s AND `scope`=%s", [_d, scope or "all"])
     if _arch and _arch.get("markdown"):
-        return ok({"date": _d, "scope": scope or "all", "count": _arch.get("count") or 0,
-                   "markdown": _arch["markdown"], "archived": True})
+        # 2026-10-28 一致性修复: 归档是快照(旧), 明细可能已新增 —— 曾直接返回归档
+        # → 列表显示 max(归档,明细)=842 但弹窗显示归档 664(不一致)
+        # 修: 归档 count < 实时明细 count 时, 用实时内容覆盖(归档只在明细已清空时兜底)
+        _live_cnt = 0
+        try:
+            _sc3 = (scope or "all")
+            _sc_t = _sc3 if _sc3 in _LOG_SCOPE_TYPES else ""
+            if _sc_t:
+                _in3 = ",".join(["%s"] * len(_LOG_SCOPE_TYPES[_sc_t]))
+                _r3 = one("SELECT COUNT(*) AS c FROM quality_logs WHERE log_type IN (%s) "
+                          "AND DATE(created_at)=%s" % _in3,
+                          list(_LOG_SCOPE_TYPES[_sc_t]) + [_d])
+            else:
+                _r3 = one("SELECT COUNT(*) AS c FROM quality_logs WHERE DATE(created_at)=%s", [_d])
+            _live_cnt = int((_r3 or {}).get("c") or 0)
+        except Exception as _e:
+            try_err('misc', '归档新鲜度检测降级', _e)
+        if _live_cnt <= int(_arch.get("count") or 0):
+            return ok({"date": _d, "scope": scope or "all", "count": _arch.get("count") or 0,
+                       "markdown": _arch["markdown"], "archived": True})
+        # 明细有新增 → 继续往下走实时生成, 并回写归档(下方 ON DUPLICATE 会更新)
     _d2, _cnt, _md = _export_md(_d, scope, "")
     try:
         execute("INSERT INTO log_archives(`date`, `scope`, markdown, `count`, updated_at) "
