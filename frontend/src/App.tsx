@@ -103,6 +103,26 @@ export default function App() {
     const t = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
     return () => clearTimeout(t)
   }, [syncing])
+  // 全局同步中徽标(看板页/其他页 header-status 共用——后端拉新/30s 静默时显示, 完成自动消失)
+  const syncBadge =
+    syncing > 0 ? (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 12,
+          color: 'var(--muted)',
+          whiteSpace: 'nowrap',
+          animation: 'spin 0.9s linear infinite',
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+        加载中
+      </span>
+    ) : null
   const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
@@ -948,6 +968,8 @@ export default function App() {
                         <option value="jd">京东渠道</option>
                         <option value="other">其他渠道</option>
                       </select>
+                      {/* 2026-10-27 其他页同步中徽标(与看板页同款, 按本布局 header-status 显示) */}
+                      {syncBadge}
                     </span>
                   </div>
                 </>

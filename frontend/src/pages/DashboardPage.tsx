@@ -301,6 +301,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架, 有旧数据则不骨架(先显示旧值, 后台拉新替换)
     setChLoading(!useAppStore.getState().dashboard)
     const load = () => {
+      useAppStore.getState().setSyncing(1) // 2026-10-27 看板拉新(进入/切回/事件/重试)统一计入同步中
       // 首屏拆流: summary+aux 先渲染(不阻塞骨架屏), stock-risk 后置到达后更新断货卡
       // (stock-risk 含 OTIF/逐仓日销/动态SS/加速判定较重, 首屏先看 GMV/告警/健康, 断货 1-2s 补齐)
       Promise.allSettled([
@@ -397,6 +398,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           }
         })
         .catch(() => setChLoading(false))
+        .finally(() => useAppStore.getState().setSyncing(-1))
       // stock-risk 后置(独立 30s TTL 接口, 不阻塞首屏骨架; 到达后更新断货卡)
       api
         .get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + Date.now(), {
@@ -406,6 +408,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           if (seq === reqSeq.current && r.data) useAppStore.setState({ stockRisk: r.data })
         })
         .catch(() => {})
+        .finally(() => useAppStore.getState().setSyncing(-1))
     }
     load()
   }, [channel, pageVersion])
@@ -438,6 +441,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     const timer = setInterval(async () => {
       if (silentBusy.current) return
       silentBusy.current = true
+      useAppStore.getState().setSyncing(1) // 2026-10-27 30s 静默刷新接入'加载中'提示
       try {
         const _t = 't=' + Date.now()
         const [s, ax, sr] = await Promise.all([
@@ -467,6 +471,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       } catch {
       } finally {
         silentBusy.current = false
+        useAppStore.getState().setSyncing(-1) // 静默刷新完成/失败均消失提示
       }
     }, 30000)
     return () => clearInterval(timer)
