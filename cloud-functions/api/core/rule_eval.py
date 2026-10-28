@@ -291,8 +291,19 @@ def evaluate_stock_skus(channel, limit=100000):
     # 恢复自动关闭(完整性): 每日全量快照下, 该事件规则 alert_type 的 active 告警
     # 若 SKU×仓 未命中(已恢复/不满足) → inactive, 防止库存补足后旧告警残留虚高计数
     try:
+        # 2026-10-28 根治误关: 原 _ats 取自 hits(只含本次评估的 alert_type), 但若某类型本次 0 命中
+        # → 根本不在 hits 里 → 该类型全部 active 告警不被清理(反而是安全的)。
+        # 真正 bug 在下方: _close 判定用 hits 集合, 而 order.created(超卖)事件不在本次评估范围
+        # → 若 hits 里恰好含 oversell? 不会(本函数只评 inventory.changed/scheduled.daily)。
+        # 但历史数据里 oversell 被关——根因是 evaluate_many 对其他类型产生 alert_type 重名。
+        # 修复: 只对"本次实际评估过的事件"产生的 alert_type 做关闭(白名单), 绝不跨事件误关。
+        _evaluated_ats = set()
+        for _rl in list(_daily_rules) + list(_inv_rules):
+            _at0 = _rl.get("alert_type")
+            if _at0:
+                _evaluated_ats.add(_at0)
         if hits:
-            _ats = sorted({h[0] for h in hits})
+            _ats = sorted({h[0] for h in hits} & _evaluated_ats)
             for _at in _ats:
                 _act = query("SELECT id, related_sku, warehouse FROM alerts "
                              "WHERE alert_type=%s AND channel=%s AND status='active' AND source='rules_engine'",

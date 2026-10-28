@@ -734,7 +734,8 @@ export default function RulesPage() {
         },
         body: JSON.stringify({
           ...f,
-          mode: f.mode || (editing && editing.mode) || '',
+          // 2026-10-28 修复: '' 表示'全部'(合法值)——曾用 || 回退成旧 mode, 用户改回'全部'保存后又变 bbcc
+          mode: f.mode ?? '',
           channel: globalChannel,
           condition_json: cj,
           params: rParams,
@@ -753,7 +754,7 @@ export default function RulesPage() {
       // 本地即时更新 mode 显示，不等 API 返回（避免旧 state 渲染导致 mode 显示"全部"）
       if (!isNew)
         setRules(prev =>
-          prev.map(rl => (rl.id === editing.id ? { ...rl, mode: f.mode || '' } : rl)),
+          prev.map(rl => (rl.id === editing.id ? { ...rl, mode: f.mode ?? '' } : rl)),
         )
       // 严谨性校验提示(不阻断, 防静默错): 条件引用 order.* 但事件非订单创建 / params.* 缺失
       const _cj2 =
