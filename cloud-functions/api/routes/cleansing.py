@@ -662,7 +662,7 @@ def cleansing_templates_delete(tid: int):
 @router.get("/cleansing/templates")
 @traced
 def cleansing_templates():
-    rows = query("SELECT id, name, doc_type, mapping FROM cleansing_templates ORDER BY id DESC LIMIT 100")
+    rows = query("SELECT id, name, doc_type, mapping, cf_meta FROM cleansing_templates ORDER BY id DESC LIMIT 100")
     return ok(rows)
 
 
@@ -806,16 +806,22 @@ async def cleansing_templates_save(request: Request):
     mapping = d.get("mapping")
     if isinstance(mapping, dict):
         mapping = json.dumps(mapping, ensure_ascii=False)
+    # 2026-10-27 根治: 模板内嵌自定义字段定义(跨设备/清缓存可还原字段名)
+    cf_meta = d.get("cf_meta") or []
+    if isinstance(cf_meta, (list, dict)):
+        cf_meta = json.dumps(cf_meta, ensure_ascii=False)
     # 同名模板更新覆盖(name + doc_type 同时存在 → UPDATE; 否则 INSERT——防同名重复)
     # 2026-10-27 隔离修复: 曾只按 name 查——不同导入类型同名模板互相覆盖(订单/库存同名=串类型)
     existing = one("SELECT id FROM cleansing_templates WHERE name=%s AND doc_type=%s",
                    [name, doc_type])
     if existing:
-        execute("UPDATE cleansing_templates SET mapping=%s, doc_type=%s, updated_at=NOW() WHERE id=%s",
-                (mapping or "{}", doc_type, existing.get("id")))
+        execute("UPDATE cleansing_templates SET mapping=%s, doc_type=%s, cf_meta=%s, updated_at=NOW() "
+                "WHERE id=%s",
+                (mapping or "{}", doc_type, cf_meta or "[]", existing.get("id")))
     else:
-        execute("INSERT INTO cleansing_templates(name, doc_type, mapping) VALUES(%s,%s,%s)",
-                (name, doc_type, mapping or "{}"))
+        execute("INSERT INTO cleansing_templates(name, doc_type, mapping, cf_meta) "
+                "VALUES(%s,%s,%s,%s)",
+                (name, doc_type, mapping or "{}", cf_meta or "[]"))
     return ok({"message": "模板已保存"})
 
 

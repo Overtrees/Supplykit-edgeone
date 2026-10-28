@@ -168,9 +168,11 @@ _TABLES = {
     "cleansing_templates": (
         "CREATE TABLE IF NOT EXISTS cleansing_templates ("
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(128) NOT NULL, "
-        "doc_type VARCHAR(32) DEFAULT '', mapping TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "doc_type VARCHAR(32) DEFAULT '', mapping MEDIUMTEXT, "
+        "cf_meta TEXT, "
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
         "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
-        "UNIQUE KEY uk_tpl_name (name))"
+        "UNIQUE KEY uk_tpl_name_type (name, doc_type))"
     ),
     "cleansing_errors": (
         "CREATE TABLE IF NOT EXISTS cleansing_errors ("
@@ -252,11 +254,29 @@ def create_all_tables():
             execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_no_sku (order_no, sku)")
     except Exception as e:
         try_err('schema', 'orders 唯一索引兜底降级', e)
+    # 2026-10-27 模板表迁移(幂等): 旧 uk_tpl_name(name 唯一) → uk_tpl_name_type(name, doc_type)
+    # ——曾订单/库存同名模板互相覆盖; 改双键后旧唯一键必须移除(否则同名跨类型保存撞键报错)
+    try:
+        from db import query as _q3
+        _ti = [str(r.get("Key_name") or "") for r in _q3("SHOW INDEX FROM cleansing_templates")]
+        if "uk_tpl_name" in _ti:
+            try:
+                execute("ALTER TABLE cleansing_templates DROP INDEX uk_tpl_name")
+            except Exception as _e3:
+                try_err('schema', '模板旧唯一索引删除(可能被外键/重名占用)', _e3)
+        if "uk_tpl_name_type" not in _ti:
+            try:
+                execute("ALTER TABLE cleansing_templates ADD UNIQUE KEY uk_tpl_name_type (name, doc_type)")
+            except Exception as _e4:
+                try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
+    except Exception as e:
+        try_err('schema', '模板索引迁移降级', e)
     # 2026-10-17 幂等补列(已建表 vs DDL 差异自愈——CREATE IF NOT EXISTS 不改已存在表):
     # inventory.safety_days 曾漏(采购建议 SELECT 用, 1054 实证)——SHOW COLUMNS 差异→ALTER ADD
     try:
         from db import query as _q2
         _extra_cols = {
+            "cleansing_templates": [("cf_meta", "TEXT")],
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
         }
         for _t, _cols in _extra_cols.items():

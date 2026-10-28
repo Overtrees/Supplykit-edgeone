@@ -20,6 +20,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
   const toast = useToast()
   const [templates, setTemplates] = useState([])
   const [tmplName, setTmplName] = useState('')
+  const [selId, setSelId] = useState<string | number>('')
   const [cf, setCf] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('c_cf') || '[]')
@@ -170,14 +171,33 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           >
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <select
-                value=""
+                value={selId as any}
                 onChange={e => {
                   const v = e.target.value
+                  setSelId(v)
                   if (v) {
                     try {
-                      const m = typeof v === 'string' && v.startsWith('{') ? JSON.parse(v) : v
+                      const _tpl = templates.find((t: any) => t.id == v)
+                      const m = _tpl?.mapping
                       if (m && typeof m === 'object') {
                         window.dispatchEvent(new CustomEvent('apply-template', { detail: m }))
+                        // 2026-10-27 根治: 模板内嵌 cfMeta → 合并进本机自定义字段(缺失补入)
+                        const _cfm = templates.find((t: any) => t.id == v)?.cf_meta
+                        if (Array.isArray(_cfm) && _cfm.length) {
+                          const _cur = (() => {
+                            try {
+                              return JSON.parse(localStorage.getItem('c_cf') || '[]')
+                            } catch {
+                              return []
+                            }
+                          })()
+                          const _merged = [..._cur]
+                          for (const f of _cfm) {
+                            if (f?.t && !_merged.some((x: any) => x.t === f.t)) _merged.push(f)
+                          }
+                          localStorage.setItem('c_cf', JSON.stringify(_merged))
+                          window.dispatchEvent(new Event('custom-fields-changed'))
+                        }
                         toast.success('模板已应用')
                       }
                     } catch (e2) {}
@@ -198,7 +218,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 {templates
                   .filter(t => t.doc_type === tt)
                   .map(t => (
-                    <option key={t.id} value={t.mapping}>
+                    <option key={t.id} value={t.id}>
                       {t.name}
                     </option>
                   ))}
@@ -230,11 +250,22 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               onClick={async () => {
                 const n = tmplName.trim()
                 if (!n) return toast.error('请输入模板名称')
+                const _mp = (window as any).__curMp || {}
+                if (!_mp || Object.keys(_mp).length === 0) {
+                  return toast.error('请先完成字段映射再保存模板')
+                }
+                // 2026-10-27 根治: 模板内嵌被引用的自定义字段定义——跨设备/清缓存后仍能还原字段名
+                // (曾只存 mapping, cf 存本机 localStorage, 换设备后 target 无中文名)
+                const _usedTargets = Object.values(_mp)
+                  .map((v: any) => v && v.target)
+                  .filter(Boolean)
+                const cfMeta = cf.filter(f => f.t && _usedTargets.includes(f.t))
                 try {
                   const r = await api.post('/api/cleansing/templates', {
                     name: n,
                     doc_type: tt,
-                    mapping: (window as any).__curMp || {},
+                    mapping: _mp,
+                    cf_meta: cfMeta,
                   })
                   const msg = r?.data?.message || '模板已保存'
                   setTmplName('')
