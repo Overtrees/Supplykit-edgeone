@@ -1757,8 +1757,8 @@ input[type='file'] {
   .glass-edge::before {
     background: radial-gradient(
       circle at var(--light-x) var(--light-y),
-      rgba(255, 255, 255, 0.9) 0%,
-      rgba(255, 255, 255, 0.15) 30%,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.09) 30%,
       transparent 70%
     );
   }
@@ -1810,6 +1810,7 @@ input[type='file'] {
   .header-status::after,
   .glass-edge::after,
   .material-regular::after {
+    --caustic-a: 0.22; /* 2026-10-27 dark 焦散柔和: 0.5→0.22(接近 iOS 27 内光强度, 有效 ≈0.18) */
     background: radial-gradient(
       ellipse 50% 3px at 50% 100%,
       rgba(255, 255, 255, var(--caustic-a)) 0%,

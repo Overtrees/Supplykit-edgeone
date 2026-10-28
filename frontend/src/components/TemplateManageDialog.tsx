@@ -210,47 +210,10 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 )}
               </select>
             </div>
-            {/* 2026-10-27 UX: 已存模板列表(点选应用 / 删除)——曾仅下拉, 存多后难管理 */}
-            {(() => {
-              const _mine = templates.filter((t: any) => t.doc_type === tt)
-              if (!_mine.length)
-                return <div className="tpl-empty">还没有模板：先完成字段映射 → 输入名称保存</div>
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {_mine.map((t: any) => (
-                    <div
-                      key={t.id}
-                      className="clickable tpl-item"
-                      onClick={() => applyTemplate(t.id)}
-                    >
-                      <span
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {t.name}
-                      </span>
-                      <span
-                        role="button"
-                        aria-label="删除模板"
-                        className="clickable"
-                        onClick={e => {
-                          e.stopPropagation()
-                          delTemplate(t.id, t.name)
-                        }}
-                        style={{ color: 'var(--danger)', padding: '0 4px', cursor: 'pointer' }}
-                      >
-                        ✕
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )
-            })()}
+            {/* 2026-10-27: 已存模板列表移除(下拉即选即应用, 列表冗余); 仅保留空态引导 */}
+            {templates.filter((t: any) => t.doc_type === tt).length === 0 && (
+              <div className="tpl-empty">还没有模板：先完成字段映射 → 输入名称保存</div>
+            )}
           </div>
           <div
             className="tpl-section"
