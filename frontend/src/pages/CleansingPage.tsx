@@ -1511,7 +1511,10 @@ export default function CleansingPage() {
                   className="clean-preview-scroll"
                   style={{
                     overflowX: 'auto',
-                    maxHeight: 'calc(100dvh - 340px)',
+                    /* 2026-10-28 根治竖屏首屏空白: iOS 首帧 dvh 可能为 0/异常(地址栏未稳定)
+                       → calc 成负数 → 表格高度被压 0, 需滑动触发重排才显示
+                       → clamp 给下限 240px(计算值异常时兜底), 上限 100dvh 防溢出 */
+                    maxHeight: 'clamp(240px, calc(100dvh - 340px), 100dvh)',
                     overflowY: 'auto',
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',

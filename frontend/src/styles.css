@@ -2047,7 +2047,8 @@ input[type='file'] {
    竖屏/平板/桌面保持 calc(100dvh - 340px) 自适应(扣 header+步骤条+标题+警示条+按钮) */
 @media (max-height: 500px) {
   .clean-preview-scroll {
-    max-height: 60dvh !important;
+    /* clamp 下限同理: 横屏 dvh 首帧异常时保 180px 可读 */
+    max-height: clamp(180px, 60dvh, 78dvh) !important;
   }
 }
 /* 2026-10-28 旋转/尺寸变化时滚动条残留(横屏滑表格→转竖屏, 横条滞留在屏幕中间约 1s):
