@@ -20,18 +20,21 @@ const fmtWh = w => {
 
 // 2026-10-26 数字降维(看板卡片金额/大数字超 5 位显示问题):
 // 金额 fmtBig: ≥1亿 → x.xx亿 / ≥10万(超 5 位) → x.xx万(保留 2 位小数) / 否则千分位
+// 2026-10-27 位数阈值按屏幕: 手机窄屏(≤932, 含竖屏/横屏)≥5位(1e4)即降维(空间紧凑);
+// 非窄屏(桌面/平板)保留 ≥10万(1e5)完整位数; 亿档两模式一致(大数必降)
+const isNarrow = () => typeof window !== 'undefined' && window.innerWidth <= 932
 const fmtBig = (n: number): string => {
   const v = Number(n || 0)
   const abs = Math.abs(v)
   if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (abs >= 1e5) return (v / 1e4).toFixed(2) + '万'
+  if (abs >= (isNarrow() ? 1e4 : 1e5)) return (v / 1e4).toFixed(2) + '万'
   return v.toLocaleString('zh-CN')
 }
-// 计数值兜底 fmtInt: ≥10万 → 整数万(clsut 防挤爆); 否则原样千分位
+// 计数值 fmtInt: 窄屏≥5位/非窄屏≥6位 → 整数万; 否则原样(计数无千分位逗号)
 const fmtInt = (n: number): string => {
   const v = Math.round(Number(n || 0))
-  if (Math.abs(v) >= 1e5) return Math.round(v / 1e4) + '万'
-  return String(v) // 2026-10-27 计数不带千分位逗号(曾 1,513 → 1513); 金额 fmtBig 保留千分位
+  if (Math.abs(v) >= (isNarrow() ? 1e4 : 1e5)) return Math.round(v / 1e4) + '万'
+  return String(v)
 }
 
 // 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
