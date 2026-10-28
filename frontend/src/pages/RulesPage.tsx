@@ -38,6 +38,11 @@ const VARS = {
   order_qty: '订单数',
   store: '店铺',
   warehouse: '仓库',
+  // 2026-10-28 补全(后端模板变量全集: seed_fill.py/core 扫描)——曾缺这些 key 直接显示英文原值
+  health_score: '库存健康分',
+  health_warning: '健康预警档位',
+  adj_dos: '调整后可撑天数',
+  lit: '补货周期',
 }
 const renderTmpl = text => {
   if (!text) return null
@@ -1774,7 +1779,6 @@ export default function RulesPage() {
                         {rule.mode && <span className="rule-mode">{modeLbl}</span>}
                       </div>
                       <div className="rule-cond">
-                        <i className="rule-cond-bar" />
                         <IconScale size={12} style={{ marginTop: 2 }} />
                         <span>{condText}</span>
                       </div>

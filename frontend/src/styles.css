@@ -2042,3 +2042,11 @@ input[type='file'] {
 }
 
 /* dark 浮层面板边框统一走 --glass-border(dark=白0.1), 无写死 !important——曾双源重叠 */
+
+/* 清洗页预览表格(2026-10-28): 横屏手机视口矮(≤500px)时, 按 60dvh 保证至少可看数行;
+   竖屏/平板/桌面保持 calc(100dvh - 340px) 自适应(扣 header+步骤条+标题+警示条+按钮) */
+@media (max-height: 500px) {
+  .clean-preview-scroll {
+    max-height: 60dvh !important;
+  }
+}
