@@ -219,9 +219,6 @@ export default function OrdersPage() {
             className="fade-in"
             style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
           >
-            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginBottom: 4 }}>
-              {t('common.showing')} {visCols.length}/{COLS.length} {t('common.columns')}
-            </div>
             <table>
               <colgroup>
                 {visCols.map(id => {
