@@ -512,7 +512,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           type: 'value',
           axisLabel: {
             fontSize: 9,
-            formatter: v => (v >= 10000 ? (v / 10000).toFixed(0) + 'W' : v),
+            formatter: v => fmtBig(v), // 2026-10-27 统一降维(曾自定义 W 缩写, 无亿档/小数)
           },
           max: v => Math.ceil((v.max * 1.2) / 1000) * 1000,
         },
@@ -607,7 +607,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         type: 'value',
         axisLabel: {
           fontSize: 8,
-          formatter: v => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+          // 2026-10-27 轴标签金额降维(≥10万 万/亿)——曾 toLocaleString 全量百万位挤爆; tooltip 悬浮保留完整值
+          formatter: v => fmtBig(v),
         },
         splitNumber: 4,
         max: v => Math.ceil((v.max * 1.15) / 1000) * 1000,
