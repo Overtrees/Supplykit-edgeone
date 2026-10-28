@@ -209,3 +209,67 @@
 - **弃容器单位**:cqh/cqw 等比缩放破坏跨尺寸一致(厚随高变=72px 与 42px 不同家族); size 容器塌内容宽元素
 - **浅色观感**:灰边(分离)+ top 白高光(最显)+ 底暗/焦散被浅底稀释属本征; 深色:边框 .16 + 焦散 .5 更实
 - **验收清单**:①无任何 box-shadow 外投(0 Npx 残留) ②玻璃件四层齐 ③圆钮底部无溢出线 ④浅色灰边可见 ⑤暗色边框 ≥.16
+## 十六、清洗页四步流程 UX 规范(2026-10-28 定版)
+
+> 从上传到完成的全流程视觉与交互约定；所有页面遵循同一套间距/字号/胶囊尺寸。
+
+### 步骤条(.step-indicator)
+
+```css
+.step-indicator { display:flex; gap:6px; padding:10px 12px; border-radius:var(--radius-lg);
+  background:var(--bg); font-size:var(--font-xs); overflow-x:auto; }
+.step { padding:4px 10px; border-radius:99px; color:var(--muted2); white-space:nowrap; }
+.step.active { background:var(--card); color:var(--text); font-weight:600; box-shadow:var(--inset-glass); }
+.step.done { color:var(--success); }
+```
+- 四步：上传文件 / 映射字段 / 预览确认 / 完成
+- 当前步：白底凸起；已完成：绿色（配 ✓）；窄屏横向滚动不换行
+
+### 四步统一尺寸
+
+| 项 | 值 |
+|---|---|
+| 卡片留白 | 首屏 28px / 其余 16px |
+| 区块标题 | 16px 600 |
+| 说明文字 | 11px `--muted2` + letter-spacing .2 |
+| 主按钮 | 高 48px、胶囊、宽度 260（首屏下拉同宽） |
+| 次操作按钮 | 高 44px 胶囊，左固定 96px |
+| 胶囊控件 | 统一 40px 高（`tpl-field`） |
+| 段间距 | 16px / 块内 12px / 行内 8px |
+
+### 首屏(上传)
+
+**保持居中**（单任务引导，非长表单）：标题 16px → 类型说明 11px → 类型下拉(260×48) → 上传按钮(260×48) → 提示 11px。
+
+### 映射页
+
+- **行去外层胶囊框** → 细分隔线（`map-row`，末行无线）
+- **响应式**（容器查询 480px 断点）：
+  - 竖屏（实测 326px 可用）：两行堆叠 = 列名+状态 pill / 副行(映射目标·智能建议) / 下拉(全宽 40px)+ 必填
+  - 宽屏：三列横排 = 列名区 150px → `→` → 下拉 flex → 计数 32px
+- 色彩：已映射=绿色 pill / 未映射=橙色 pill / 必填=灰字 32px 右置
+
+### 预览页
+
+- 表格**内部限高滚动**，不撑高整页：`max-height: clamp(240px, calc(100dvh - 340px), 100dvh)`；横屏(≤500px 高) `clamp(180px, 60dvh, 78dvh)`
+- 表头 `position: sticky`（保留）；表头下方 10px 副行显示来源列名
+- 脏数据警示条：11px、图标 flex 顶部对齐、`radius-lg`
+- 底部：左「返回」96px(次要) + 右「确认写入 N 条」**主色 primary**（写入不是"成功"，不用绿色）
+
+### 完成页
+
+- 图标 56px 圆形底：异步=蓝 / 成功=绿 / 失败=橙
+- 标题语义化（已提交后台处理 / 导入完成 / 导入未完成），不用后端 message 直出
+- 数字 28px + `tabular-nums`（与看板卡同规）
+- 失败明细分隔线 1px（与其他表格一致）
+- 底部 44px 胶囊：重新开始(ghost, 96px) + 导入相同格式(success, flex)
+
+### 禁忌（踩过的坑）
+
+| ❌ 不要 | 原因 |
+|---|---|
+| 隐藏 `::-webkit-scrollbar` / 移除 `WebkitOverflowScrolling` | iOS 滚动容器首帧不绘制内容 |
+| 监听 `resize` 重置 `scrollTop` | 地址栏伸缩触发 resize → 滚动位置被反复清零 |
+| `max-height` 与 `min-height` 并存 | max 优先，min 失效 |
+| `<option>` 内嵌 SVG | 不支持，改两态 pill |
+| 弹窗内再套一层带背景圆角容器包住胶囊 | 胶囊自身已有视觉边界，外层背景在底部露块 |
