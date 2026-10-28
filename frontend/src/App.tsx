@@ -97,6 +97,12 @@ export default function App() {
     setHammerPanel,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
+  // 2026-10-27 加载中兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防"加载中"永久显示需手动刷新
+  useEffect(() => {
+    if (syncing <= 0) return
+    const t = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
+    return () => clearTimeout(t)
+  }, [syncing])
   const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页

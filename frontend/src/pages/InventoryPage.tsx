@@ -111,6 +111,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         { timeout: 90000 },
       )
       if (seq !== reqSeq.current) {
+        useAppStore.getState().setSyncing(-1) // 竞态丢弃也 settle
         setLoading(false)
         setLoadingMore(false)
         return

@@ -474,7 +474,10 @@ export default function InsightsPage() {
           encodeURIComponent(insightSearch),
         { timeout: 90000, scope: 'insights' },
       )
-      if (seq !== replenSeq.current) return
+      if (seq !== replenSeq.current) {
+        useAppStore.getState().setSyncing(-1) // 竞态丢弃也 settle
+        return
+      }
       const data = r.data
       let total = 0
       let items = []
