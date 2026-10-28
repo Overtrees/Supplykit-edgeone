@@ -698,9 +698,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     _acByType2.slow_moving != null
       ? _acByType2.slow_moving
       : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
-  // 2026-10-17 方案A: 待处理卡大数字 = 真正"待处理"的非例行项(滞销+其他告警——超卖/自定义等),
-  // 不是低库存/采购补货(那些有独立卡)——曾 errCount(质量日志)+active_alerts(2202)跨域硬加误导
-  const pendingTotal = otherTotal + slowMovingTotal
+  // 2026-10-27 总览聚合: 待处理卡大数字 = 全部待处理动作(低库存/采购/补货/其他/滞销)——
+  // 分卡=明细; 采购/补货条数来自实时接口 procList(同"采购&补货"卡源, tag 区分)
+  const procBuyN = (Array.isArray(procList) ? procList : []).filter(x => x.tag === '采购').length
+  const procRepN = (Array.isArray(procList) ? procList : []).filter(x => x.tag === '补货').length
+  const pendingTotal = lowStockTotal + procBuyN + procRepN + otherTotal + slowMovingTotal
   // 2026-10-16 自然口径: 后端 periods.days 已是实际窗口天数(上周=7/上月=自然月实际天数 28-31)
   // —— 曾写死 {month:30} 致自然月 31 天时日均算错; 优先取后端, 兜底按窗口类型
   const periodDays = periodMeta?.days || { today: 1, week: 7, month: 30 }[periodTab] || 30
@@ -1160,7 +1162,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <div
                   className="card-sub"
                   style={{
-                    // 上松下紧(定版): 数字下间距松(6)——异常/告警行
+                    // 总览第二行(采购/补货): 数字下间距 6
                     marginTop: 6,
                     display: 'flex',
                     gap: 8,
@@ -1170,60 +1172,56 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     lineHeight: 1.0,
                     // glyph 度量补偿: 字身 gap 15.6 vs 图柱 16——transform 上移 0.4(静态偏移, flex margin 不可靠)
                     transform: 'translateY(-0.4px)',
-                    // 动态最后行下沉: 无滞销/其他时本行(异常/告警)是最后一行——对齐 GMV 图柱
+                    // 动态最后行下沉(定版铁律, 一比一保留): 当第二行(采购/补货)是最后一行(无第三行细分时),
+                    // 字身底须与 GMV 图柱底对齐——transform 上移 0.4(glyph 度量补偿: 字身 gap 15.6 vs 图柱 16,
+                    // flex margin 不可靠, 静态偏移为浏览器亚像素极限)
                   }}
                 >
-                  {/* 2026-10-17 修复: 曾用 errCount(质量日志数8)当"异常"且大数字 errCount+告警(2210≠任何真值)——
-                      质量日志≠告警, 跨域硬加误导; 异常=error级告警(by_severity.error=66), 大数字=告警总数(2202) */}
-                  <span style={{ fontWeight: 600, color: 'var(--danger)' }}>
-                    ● {criticalAlerts} 异常
-                  </span>
+                  {/* 2026-10-27 总览第二行: 采购/补货条数(实时接口同源) */}
                   <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
-                    ● {dashboard?.summary?.active_alerts || 0} 告警
+                    ● 采购 {procBuyN}
                   </span>
+                  <span style={{ color: 'var(--muted2)' }}>{'·'}</span>
+                  <span style={{ color: 'var(--text)' }}>补货 {procRepN}</span>
                 </div>
               </div>
-              {(slowMovingTotal > 0 || otherTotal > 0) && (
-                <>
-                  <div
-                    style={{
-                      fontSize: detailFont,
-                      display: 'flex',
-                      gap: 10,
-                      marginTop: 4,
-                      flexWrap: 'wrap',
-                      lineHeight: 1.0,
-                      alignItems: 'center',
-                      // glyph 度量补偿: transform 上移 0.4
-                      transform: 'translateY(-0.4px)',
-                      // 本行(滞销/其他)是最后一行时——字身沉底(lineHeight 1.2=16)与图柱底对齐
+              <div
+                style={{
+                  fontSize: detailFont,
+                  display: 'flex',
+                  gap: 10,
+                  marginTop: 4,
+                  flexWrap: 'wrap',
+                  lineHeight: 1.0,
+                  alignItems: 'center',
+                  // glyph 度量补偿: transform 上移 0.4
+                  transform: 'translateY(-0.4px)',
+                }}
+              >
+                {/* 总览第三行: 低库存 + 其他(聚合超卖等规则评估, 点击弹窗明细) */}
+                <span style={{ fontWeight: 600, color: 'var(--danger)' }}>
+                  ● 低库存 {lowStockTotal}
+                </span>
+                <span style={{ color: 'var(--muted2)' }}>{'·'}</span>
+                {otherTotal > 0 ? (
+                  <span
+                    onClick={function (e) {
+                      e.stopPropagation()
+                      loadFullAlerts()
+                      setShowAllOther(true)
                     }}
+                    className="clickable"
+                    style={{ color: '#007AFF', fontWeight: 600, cursor: 'pointer' }}
                   >
-                    {/* 去重(2026-10-09): 低库存/采购补货计数与大卡冗余, 待处理卡只保留唯一信息:
-                        滞销(看板无独立卡) + 其他告警(点击弹窗导航); 低库存/采购补货看对应大卡 */}
-                    {slowMovingTotal > 0 && (
-                      <span style={{ color: 'var(--muted2)' }}>● 滞销 {slowMovingTotal}</span>
-                    )}
-                    {otherTotal > 0 && (
-                      <span
-                        onClick={function (e) {
-                          e.stopPropagation()
-                          loadFullAlerts()
-                          setShowAllOther(true)
-                        }}
-                        className="clickable"
-                        style={{
-                          color: '#007AFF',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ● {otherTotal} 其他
-                      </span>
-                    )}
-                  </div>
-                </>
-              )}
+                    其他 {otherTotal}
+                  </span>
+                ) : (
+                  <span style={{ color: 'var(--muted)' }}>其他 0</span>
+                )}
+                {slowMovingTotal > 0 && (
+                  <span style={{ color: 'var(--muted2)' }}>滞销 {slowMovingTotal}</span>
+                )}
+              </div>
             </div>
           )}
         </div>
