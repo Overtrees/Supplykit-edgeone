@@ -1525,6 +1525,8 @@ export default function CleansingPage() {
                     maxHeight: 'clamp(240px, calc(100dvh - 340px), 100dvh)',
                     minHeight: 240 /* 首帧保底高度: 防 iOS 上 dvh 计算异常导致容器 0 高不绘制 */,
                     overflowY: 'auto',
+                    WebkitOverflowScrolling:
+                      'touch' /* 恢复: 隐藏滚动条+去惯性曾致 iOS 首帧不绘制内容 */,
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                   }}
@@ -1532,9 +1534,7 @@ export default function CleansingPage() {
                   <table>
                     <thead>
                       <tr
-                        /* 2026-10-28 取消 sticky: iOS 上 sticky thead + 祖先 overflow:hidden(.card)
-                           + 动态高度 组合会触发首帧不绘制(页面空白, 滚动才出内容) */
-                        style={{ background: 'var(--card)' }}
+                        style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}
                       >
                         {cols.map(col => (
                           <th
