@@ -1884,17 +1884,20 @@ export default function CleansingPage() {
                 <option value="order_status">订单状态（销量池判定）</option>
               </select>
             </div>
+            {!(colMap[colMapCol] || []).length && (
+              <div className="tpl-empty" style={{ padding: '12px 2px' }}>
+                还没有配置：点击「补全内置默认」快速生成，或「+ 添加值」手动添加
+              </div>
+            )}
             {(colMap[colMapCol] || []).map((s, i) => (
               <div
                 key={i}
                 style={{
-                  // 2026-10-27 UX: 去每行外层胶囊框(冗余嵌套), 改细分隔线行——行内控件自身即胶囊
+                  // 2026-10-27 UX: 去外层胶囊框 + 去行分隔线(视觉冗余)——控件自身胶囊即视觉分区
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '8px 0',
-                  borderBottom:
-                    i < (colMap[colMapCol] || []).length - 1 ? '1px solid var(--border)' : 'none',
+                  padding: '5px 0',
                 }}
               >
                 <input
@@ -1909,7 +1912,20 @@ export default function CleansingPage() {
                   }
                   placeholder="值(如 交易成功)"
                   className="tpl-field"
-                  style={{ flex: 1, minWidth: 100 }}
+                  title={
+                    (colMap[colMapCol] || []).filter(x => x.name && x.name === s.name).length > 1
+                      ? '值重复：导入归一化时后者覆盖前者'
+                      : ''
+                  }
+                  style={{
+                    flex: 1,
+                    minWidth: 100,
+                    // 2026-10-27 重复值校验: 同列表重名红边警示(归一化 dict 后者覆盖, 结果不确定)
+                    borderColor:
+                      s.name && (colMap[colMapCol] || []).filter(x => x.name === s.name).length > 1
+                        ? 'var(--danger)'
+                        : undefined,
+                  }}
                 />
                 <select
                   value={s.group || 'blocked'}
@@ -1924,8 +1940,8 @@ export default function CleansingPage() {
                   className="tpl-field"
                   style={{ fontSize: 'var(--font-13)', flexShrink: 0, maxWidth: 220 }}
                 >
-                  <option value="sale">✅ 计入销量池（日销+GMV）</option>
-                  <option value="blocked">📋 仅订单记录（GMV 按状态·不计日销）</option>
+                  <option value="sale">✅ 销量池（日销+GMV）</option>
+                  <option value="blocked">📋 仅记录（不计日销）</option>
                 </select>
                 <button
                   onClick={() =>
@@ -1956,9 +1972,9 @@ export default function CleansingPage() {
               </button>
               <button
                 onClick={() =>
-                  setColMap(p => ({
-                    ...p,
-                    order_status: [
+                  setColMap(p => {
+                    // 2026-10-27 合并填充(曾整表覆盖——用户手工配置全丢): 保留已有, 仅补缺失内置项
+                    const _def = [
                       { name: '已完成', group: 'sale' },
                       { name: '交易成功', group: 'sale' },
                       { name: '确认收货', group: 'sale' },
@@ -1977,13 +1993,41 @@ export default function CleansingPage() {
                       { name: '已退货', group: 'blocked' },
                       { name: '运输中', group: 'blocked' },
                       { name: '在途', group: 'blocked' },
-                    ],
+                    ]
+                    const _cur: any[] = (p as any).order_status || []
+                    const _names = new Set(_cur.map((x: any) => x.name))
+                    const _merged = [..._cur, ..._def.filter((d: any) => !_names.has(d.name))]
+                    return { ...p, order_status: _merged }
+                  })
+                }
+                className="btn btn-ghost clickable"
+                style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
+              >
+                补全内置默认
+              </button>
+              <button
+                onClick={() =>
+                  setColMap(p => ({
+                    ...p,
+                    [colMapCol]: (p[colMapCol] || []).map((x: any) => ({ ...x, group: 'sale' })),
                   }))
                 }
                 className="btn btn-ghost clickable"
                 style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
               >
-                填充内置默认
+                全部销量池
+              </button>
+              <button
+                onClick={() =>
+                  setColMap(p => ({
+                    ...p,
+                    [colMapCol]: (p[colMapCol] || []).map((x: any) => ({ ...x, group: 'blocked' })),
+                  }))
+                }
+                className="btn btn-ghost clickable"
+                style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
+              >
+                全部仅记录
               </button>
             </div>
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
