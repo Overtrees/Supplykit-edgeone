@@ -212,6 +212,7 @@ header {
 .header-status {
   font-size: 14px;
   padding: 0 16px;
+  transition: padding 0.25s ease;
   border-radius: 99px;
   overflow: hidden;
   background: var(--bg-thin);

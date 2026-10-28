@@ -379,6 +379,7 @@ export default function InsightsPage() {
       const ch = useAppStore.getState().channel || 'jd'
       const t = useAppStore.getState().hammerInsightsTab || 'replen'
       if (t === 'purchase') {
+        useAppStore.getState().setSyncing(1)
         api
           .get(
             '/api/insights/purchase?days=28&mode=' +
@@ -388,7 +389,9 @@ export default function InsightsPage() {
           )
           .then(r => setPurchase(r.data?.suggestions || r.data || []))
           .catch(() => {})
+          .finally(() => useAppStore.getState().setSyncing(-1))
       } else if (t === 'slow') {
+        useAppStore.getState().setSyncing(1)
         api
           .get('/api/insights/disposal-suggestions?channel=' + ch + '&page=1&page_size=100')
           .then(r => {
@@ -397,6 +400,7 @@ export default function InsightsPage() {
             setSlowTotal(d.total || (d.items || []).length || 0)
           })
           .catch(() => {})
+          .finally(() => useAppStore.getState().setSyncing(-1))
       } else {
         loadReplen(useAppStore.getState().hammerReplenMode || 'bbcc', ch, 1)
       }
@@ -451,6 +455,7 @@ export default function InsightsPage() {
   const [replenError, setReplenError] = useState('')
   const loadReplen = async (mode, ch, page = 1) => {
     const seq = ++replenSeq.current
+    useAppStore.getState().setSyncing(1)
     // 2026-10-27 根治: 整表重拉(page=1)前记滚动锚点, 数据落地后还原——防 iOS Safari
     // 地址栏随高度突变联动导致"顶部白条/内容错位"(下单→insights-refresh 曾触发整表重拉+滚动偏移)
     const _sc = page === 1 ? (document.scrollingElement || document.documentElement).scrollTop : 0
@@ -508,6 +513,7 @@ export default function InsightsPage() {
       }
     }
     if (seq === replenSeq.current) setReplenLoading(false)
+    useAppStore.getState().setSyncing(-1)
   }
 
   // 从后端加载已下单标记（按渠道隔离）——SSOT: 页面进入/操作后/轮询都以 GET 全量为准

@@ -91,6 +91,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const s = hammerSearch || ''
   const loadInv = async (p?) => {
     const seq = ++reqSeq.current
+    useAppStore.getState().setSyncing(1)
     if (p === 1) setLoading(true)
     else setLoadingMore(true)
     try {
@@ -136,6 +137,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       setLoading(false)
       setLoadingMore(false)
     }
+    useAppStore.getState().setSyncing(-1)
   }
   useEffect(() => {
     clearCache('with-sales')

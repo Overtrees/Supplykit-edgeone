@@ -96,6 +96,7 @@ export default function App() {
     hammerData,
     setHammerPanel,
   } = useAppStore()
+  const syncing = useAppStore(s => s.syncing)
   const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
@@ -818,6 +819,33 @@ export default function App() {
                         <option value="jd">京东渠道</option>
                         <option value="other">其他渠道</option>
                       </select>
+                      {/* 2026-10-27 快照拉新'加载中'提示: 后台同步时胶囊右侧显示旋转图标, 完成自动消失(胶囊宽度过渡) */}
+                      {syncing > 0 && (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontSize: 12,
+                            color: 'var(--muted)',
+                            whiteSpace: 'nowrap',
+                            animation: 'spin 0.9s linear infinite',
+                          }}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                          >
+                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                          </svg>
+                          加载中
+                        </span>
+                      )}
                     </span>
                     <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
                       <svg

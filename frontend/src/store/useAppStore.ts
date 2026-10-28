@@ -74,6 +74,9 @@ const initAppStore = (set, get) => ({
   orderLoading: false,
   orderLoadErr: '',
   dataLoaded: false,
+  // 2026-10-27 全局同步中计数(header 胶囊'加载中'提示): 快照拉新 start +1 / settle -1
+  syncing: 0,
+  setSyncing: (d: number) => set(s => ({ syncing: Math.max(0, s.syncing + d) })),
   sidebarOpen: false,
   setSidebarOpen: v => set({ sidebarOpen: v }),
   hammerPanel: null,
@@ -232,7 +235,7 @@ const initAppStore = (set, get) => ({
   _loadSeq: 0,
   async loadAll(page?, opts?) {
     const _mySeq = ++this._loadSeq
-    set({ loading: true, orderLoading: true })
+    set({ loading: true, orderLoading: true, syncing: get().syncing + 1 })
     const ch = get().channel
     const s = get().hammerSearch || ''
     const st = get().orderStatus || ''
@@ -283,10 +286,10 @@ const initAppStore = (set, get) => ({
       const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData && _mySeq === this._loadSeq) set({ stockRisk: srData })
-      set({ orderLoading: false })
+      set({ orderLoading: false, syncing: Math.max(0, get().syncing - 1) })
     } catch (e) {
       console.error('loadAll failed:', e)
-      set({ loading: false, orderLoading: false })
+      set({ loading: false, orderLoading: false, syncing: Math.max(0, get().syncing - 1) })
     }
   },
 
