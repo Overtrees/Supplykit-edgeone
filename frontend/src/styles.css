@@ -1525,6 +1525,13 @@ input[type='file'] {
   font-weight: 600;
   color: var(--text);
   margin-bottom: 8px;
+  /* 2026-10-27 业务分区分割线(预设模板/我的模板/自定义字段)——上面一条 --border 线 */
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.tpl-section-title:first-of-type {
+  padding-top: 0;
+  border-top: none;
 }
 .tpl-field {
   font-size: 15px;

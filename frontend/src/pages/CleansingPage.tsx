@@ -1160,7 +1160,7 @@ export default function CleansingPage() {
         <div style={{ textAlign: 'center', padding: '36px 16px' }}>
           <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>选择导入类型</div>
           <div className="small muted" style={{ fontSize: 'var(--font-sm)', marginBottom: 16 }}>
-            订单 / 库存 / 出入库 / 商品 / 供应商
+            订单 / 库存（自有·平台·B仓）/ 出入库 / 商品 / 供应商 / GMV 回款
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 24 }}>
             <select

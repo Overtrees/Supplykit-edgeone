@@ -175,16 +175,8 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           </div>
           {/* 模板区 */}
           <div className="tpl-section-title">我的模板</div>
-          <div
-            style={{
-              // 2026-10-27 去冗余背景块: 曾 background:var(--card)+圆角容器包 select 胶囊
-              // (胶囊本身白底圆角, 外层背景在胶囊底部露块=黑/白背景冗余)
-              borderRadius: 16,
-              padding: 12,
-              marginBottom: 8,
-            }}
-          >
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <select
                 value={selId as any}
                 onChange={e => {
