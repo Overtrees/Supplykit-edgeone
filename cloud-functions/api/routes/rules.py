@@ -283,10 +283,12 @@ async def rules_evaluate(request: Request):
     except Exception as _e:
             try_err('rules', '静默降级', _e)
     channels = d.get("channels") or ["jd", "other"]
+    # 2026-10-28 mode 生效: 前端传当前补货模式(bbcc/traditional), 据此过滤规则
+    mode = d.get("mode") or ""
     out = {}
     for ch in channels:
         try:
-            out[ch] = len(evaluate_stock_skus(ch, limit=100000))
+            out[ch] = len(evaluate_stock_skus(ch, limit=100000, mode=mode or None))
         except Exception as e:
             out[ch] = "error: %s" % str(e)[:80]
     from routes.analysis_cache import invalidate_all

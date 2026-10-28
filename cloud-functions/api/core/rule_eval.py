@@ -110,7 +110,7 @@ def close_oversell_for_skus(skus, channel="jd"):
     except Exception as _e2:
         _terr('core_rules', 'close_oversell 降级', _e2)
 
-def evaluate_stock_skus(channel, limit=100000):
+def evaluate_stock_skus(channel, limit=100000, mode=None):
     from core.rules import evaluate_many, load_rules_for, _CALC_VARS  # 延迟(防循环——_CALC_VARS 常量随迁依赖)
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
@@ -133,8 +133,8 @@ def evaluate_stock_skus(channel, limit=100000):
             return str(ae) != "0"  # 前端存字符串 '0', 统一字符串比较
         except Exception:
             return True
-    _daily_rules = [r for r in load_rules_for("scheduled.daily", channel) if _is_alert_rule(r)]
-    _inv_rules = [r for r in load_rules_for("inventory.changed", channel) if _is_alert_rule(r)]
+    _daily_rules = [r for r in load_rules_for("scheduled.daily", channel, mode) if _is_alert_rule(r)]
+    _inv_rules = [r for r in load_rules_for("inventory.changed", channel, mode) if _is_alert_rule(r)]
     _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
     _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)

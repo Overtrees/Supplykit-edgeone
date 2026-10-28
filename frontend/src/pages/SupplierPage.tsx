@@ -108,7 +108,7 @@ export default function SupplierPage() {
         <span>
           供应商管理{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            已加载 {list.length}/{list.length} 条
+            已加载 {list.length}/{list.length} 条 · 显示 {visCols.length}/{COLS.length} 列
           </span>
         </span>
       </div>

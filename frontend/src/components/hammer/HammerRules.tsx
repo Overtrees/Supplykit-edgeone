@@ -37,7 +37,10 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
   const runEvaluate = async () => {
     setEvaluating(true)
     try {
-      const r = await api.postHeavy('/api/rules/evaluate', {})
+      const r = await api.postHeavy('/api/rules/evaluate', {
+        // 2026-10-28 mode 生效: 按当前补货模式过滤规则(''=全部模式通用规则均生效)
+        mode: useAppStore.getState().hammerReplenMode || '',
+      })
       const ev = (r.data && r.data.evaluated) || {}
       toast.success('评估完成 · jd ' + (ev.jd ?? '-') + ' · other ' + (ev.other ?? '-'))
       window.dispatchEvent(new Event('rules-changed'))

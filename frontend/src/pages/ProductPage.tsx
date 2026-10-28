@@ -166,8 +166,8 @@ export default function ProductPage() {
         <span>
           商品管理{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-            已加载 {Math.min(list.length, pgTotal || list.length)}/{pgTotal || list.length} 条
-            {s ? ` · "${s}"` : ''}
+            已加载 {Math.min(list.length, pgTotal || list.length)}/{pgTotal || list.length} 条 ·
+            显示 {visCols.length}/{COLS.length} 列{s ? ` · "${s}"` : ''}
           </span>
         </span>
       </div>

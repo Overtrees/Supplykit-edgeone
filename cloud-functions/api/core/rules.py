@@ -147,14 +147,23 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
     return list(dict.fromkeys(triggered))
 
 
-def load_rules_for(event, channel=None):
-    """一次性加载某事件的全部 active 规则(性能: evaluate_many 复用)"""
+def load_rules_for(event, channel=None, mode=None):
+    """一次性加载某事件的全部 active 规则(性能: evaluate_many 复用)
+
+    2026-10-28 mode 生效(原只存不读): rules.mode='' 或缺失 = 全部模式通用;
+    指定 mode(bbcc/traditional) 的规则仅在当前补货模式匹配时参与评估。
+    mode=None → 不过滤(向后兼容, 老调用方行为不变)
+    """
     params = [event]
     sql = ("SELECT * FROM rules WHERE is_active=1 AND event=%s "
            "AND (deleted_at IS NULL OR deleted_at='')")
     if channel:
         sql += " AND channel=%s"
         params.append(channel)
+    if mode:
+        # 空串/NULL 表示"全部"→ 始终生效; 否则需与当前模式一致
+        sql += " AND (mode IS NULL OR mode='' OR mode=%s)"
+        params.append(mode)
     return query(sql, params)
 
 

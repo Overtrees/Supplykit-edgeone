@@ -182,7 +182,7 @@ export default function OrdersPage() {
       )}
       <div className="card">
         <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 8 }}>
-          订单 {/* 2026-10-28 统一格式(对齐进销存/商品页): 已加载 N/M 条 · 显示 x/y 列 */}
+          订单 {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
           <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
             已加载 {Math.min(orders.length, orderTotal || orders.length)}/
             {orderTotal || orders.length} 条 · 显示 {visCols.length}/{COLS.length} 列
