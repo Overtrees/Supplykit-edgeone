@@ -264,9 +264,17 @@ const initAppStore = (set, get) => ({
       // 2026-10-28 两阶段加载(根治组装慢): part=main(卡片数字/健康, 组装轻)先渲染 →
       // part=charts(趋势/店铺/品牌/漏斗, 组装重)后到合并。同一缓存键派生两份视野(同源同快照, 四维一致)
       const _sep = dashUrl.includes('?') ? '&' : '?'
-      const r0 = await Promise.allSettled([
-        api.get(dashUrl + _sep + 'part=main', { timeout: 35000 }),
-      ])
+      const _getMain = () => api.get(dashUrl + _sep + 'part=main', { timeout: 35000 })
+      let r0 = await Promise.allSettled([_getMain()])
+      // 2026-10-28 部署窗口冷启动加固: 实例重启期首个请求可能前端超时而后端已算完
+      // (15:58/16:25 两次 35s 超时, 同时刻后端 perf_debug 显示 1.1s 正常)——静默重试 1 次(1.2s 后, 破缓存)
+      if (r0[0].status === 'rejected') {
+        await new Promise<void>(res => setTimeout(res, 1200))
+        if (_mySeq !== this._loadSeq) return
+        r0 = await Promise.allSettled([
+          api.get(dashUrl + _sep + 'part=main&t=' + Date.now(), { timeout: 35000 }),
+        ])
+      }
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
       // ⚠️ 合并而非替换: part=main 不含 charts —— 若整体替换, 静默刷新时图表会闪空等 charts 回填
@@ -277,8 +285,14 @@ const initAppStore = (set, get) => ({
         dataLoaded: true,
       })
       // 图表数据并行拉取(不阻塞主项渲染), 到达后合并到 dashboard(同快照键)
-      api
-        .get(dashUrl + _sep + 'part=charts', { timeout: 60000 })
+      const _getCharts = () => api.get(dashUrl + _sep + 'part=charts', { timeout: 60000 })
+      _getCharts()
+        .catch(() => {
+          // 部署窗口冷启动: 静默重试一次(带 t= 破缓存)
+          return new Promise(res => setTimeout(res, 1200)).then(() =>
+            _getCharts().catch(() => null),
+          )
+        })
         .then((rc: any) => {
           if (_mySeq !== this._loadSeq) return
           const cur: any = get().dashboard || {}
