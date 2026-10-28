@@ -129,14 +129,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             width: '100%',
             maxWidth: 600,
             borderRadius: 32,
-            padding: '18px 14px calc(14px + env(safe-area-inset-bottom))',
+            padding: '18px 16px calc(16px + env(safe-area-inset-bottom))',
             boxShadow: 'var(--shadow-sheet)',
             pointerEvents: 'auto',
             maxHeight: '70vh',
             overflowY: 'auto',
           }}
         >
-          <div className="tpl-title">模板管理</div>
+          <div className="tpl-title">
+            <span>模板管理</span>
+          </div>
 
           {/* 预设模块(2026-10-27): 单字段源派生——内置预设+下载模板同源, 新列自动同步 */}
           <div className="tpl-section-title">

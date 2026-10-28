@@ -1487,19 +1487,32 @@ input[type='file'] {
 
 /* ── 模板管理弹窗(2026-10-27 P3: 内联→全局变量管理 + 间距/交互态统一) ── */
 .tpl-title {
+  /* 2026-10-27 收敛: 原整条毛玻璃铺满(覆盖过多) → 仅胶囊包裹标题文本, sticky 吸顶 */
   position: sticky;
   top: 0;
   z-index: 2;
-  margin: -18px -14px 12px;
-  padding: 14px;
-  font-size: 18px;
+  display: flex;
+  justify-content: center;
+  margin: -18px -16px 12px;
+  padding: 10px 16px;
+  pointer-events: none;
+}
+.tpl-title > span {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 18px;
+  min-height: 34px;
+  border-radius: 99px;
+  font-size: 17px;
   font-weight: 700;
-  text-align: center;
   color: var(--text);
   background: var(--bg-regular);
   backdrop-filter: var(--blur-regular);
   -webkit-backdrop-filter: var(--blur-regular);
-  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--inset-glass);
 }
 .tpl-section {
   margin-bottom: 14px;
@@ -1530,8 +1543,12 @@ input[type='file'] {
   border: none;
   border-radius: 99px;
   cursor: pointer;
-  min-height: 38px;
+  min-height: 40px; /* 2026-10-27 与 field 胶囊统一高 40(曾 38 参差) */
   padding: 9px 16px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tpl-btn-primary {
   background: var(--primary);
@@ -1552,6 +1569,8 @@ input[type='file'] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 40px;
+  box-sizing: border-box;
   padding: 9px 12px;
   border-radius: var(--radius-md);
   background: var(--bg);
