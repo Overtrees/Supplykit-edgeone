@@ -182,9 +182,10 @@ export default function OrdersPage() {
       )}
       <div className="card">
         <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 8 }}>
-          订单{' '}
-          <span className="small muted" style={{ fontWeight: 400 }}>
-            {t('common.total')} {orderTotal || 0} {t('common.items')}
+          订单 {/* 2026-10-28 统一格式(对齐进销存/商品页): 已加载 N/M 条 · 显示 x/y 列 */}
+          <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
+            已加载 {Math.min(orders.length, orderTotal || orders.length)}/
+            {orderTotal || orders.length} 条 · 显示 {visCols.length}/{COLS.length} 列
           </span>
         </div>
         {/* 2026-10-27 无感切回: 有旧数据(store 持久)时先显旧, 后台刷新不闪骨架; 仅无数据可显示才骨架 */}

@@ -107,8 +107,8 @@ export default function SupplierPage() {
       >
         <span>
           供应商管理{' '}
-          <span className="small muted">
-            {t('common.total')} {list.length} {t('common.items')}
+          <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
+            已加载 {list.length}/{list.length} 条
           </span>
         </span>
       </div>
