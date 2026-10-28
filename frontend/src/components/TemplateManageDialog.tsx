@@ -4,7 +4,12 @@ import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
-import { presetMapping, DOC_TYPE_NAMES } from '../pages/CleansingPage'
+import {
+  presetMapping,
+  presetExample,
+  presetRequired,
+  DOC_TYPE_NAMES,
+} from '../pages/CleansingPage'
 
 interface Props {
   tt: string
@@ -118,12 +123,17 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               onClick={() => {
                 // 表头=预设列(label 全字段, 与内置映射同源)
                 const _src = presetMapping(tt) as Record<string, string>
-                const headers = Object.keys(_src)
-                if (!headers.length) return toast.error('该类型暂无预设字段')
-                const csv =
-                  '\uFEFF' + // UTF-8 BOM 防 Excel 乱码
-                  headers.join(',') +
-                  '\n'
+                const _req = presetRequired(tt)
+                const _ex = presetExample(tt)
+                const _cols = Object.entries(_src) // [label, target]
+                if (!_cols.length) return toast.error('该类型暂无预设字段')
+                // 表头: 列名(必)/(选)——必选按业务导入链去重键/汇总必需字段
+                const head = _cols.map(
+                  ([label, target]) => label + (_req.includes(String(target)) ? '(必)' : '(选)'),
+                )
+                // 第二行示例: 仅必选列给样例, 可选列留空
+                const sample = _cols.map(([, target]) => _ex[String(target)] || '')
+                const csv = '\uFEFF' + head.join(',') + '\n' + sample.join(',') + '\n'
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
@@ -185,18 +195,6 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 }}
               >
                 <option value="">选择映射模板...</option>
-                {(() => {
-                  const pm = presetMapping(tt)
-                  const _keys = Object.keys(pm)
-                  return _keys.length ? (
-                    <option
-                      value={JSON.stringify(pm)}
-                      style={{ color: 'var(--primary)', fontWeight: 600 }}
-                    >
-                      预设-{DOC_TYPE_NAMES[tt] || tt}({_keys.length}字段)
-                    </option>
-                  ) : null
-                })()}
                 {templates
                   .filter(t => t.doc_type === tt)
                   .map(t => (

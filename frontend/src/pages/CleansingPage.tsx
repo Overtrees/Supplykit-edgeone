@@ -286,6 +286,46 @@ export const presetMapping = (tt: string): Record<string, string> => {
   for (const f of fields) m[f.l] = f.t
   return m
 }
+
+// 2026-10-27 模板必选字段(按业务导入链: 去重键 + 汇总必需):
+// 订单=order_no|sku(+69码)三键去重, quantity 求和, ordered_at 归期;
+// 库存=sku|warehouse 唯一键 + available_qty; 商品=sku+名称; 供应商=编码+名称;
+// 入库/出库=sku+数量+日期; GMV回款=platform+flow_no 去重键(缺失整批跳过)+amount
+export const PRESET_REQUIRED: Record<string, string[]> = {
+  order: ['order_no', 'sku', 'quantity', 'ordered_at'],
+  inventory: ['sku', 'warehouse', 'available_qty'],
+  platform_inv: ['sku', 'warehouse', 'available_qty'],
+  inventory_b: ['sku', 'warehouse', 'available_qty'],
+  product: ['sku', 'product_name'],
+  supplier: ['supplier_code', 'supplier_name'],
+  inbound: ['sku', 'quantity', 'inbound_date'],
+  outbound: ['sku', 'quantity', 'outbound_date'],
+  gmv_flow: ['platform', 'flow_no', 'amount', 'arrived_time'],
+}
+// 示例行(仅必选列给样例, 可选列留空)——下载模板第二行
+const PRESET_EXAMPLE: Record<string, Record<string, string>> = {
+  order: {
+    order_no: 'JD-20261022-0001',
+    sku: 'SKU-0001-J',
+    quantity: '2',
+    ordered_at: '2026-10-22 10:00:00',
+  },
+  inventory: { sku: 'SKU-0001-J', warehouse: '华东C仓', available_qty: '100' },
+  platform_inv: { sku: 'SKU-0001-J', warehouse: '京东仓', available_qty: '100' },
+  inventory_b: { sku: 'SKU-0001-J', warehouse: 'B仓', available_qty: '100' },
+  product: { sku: 'SKU-0001-J', product_name: '示例商品' },
+  supplier: { supplier_code: 'SUP-001', supplier_name: '示例供应商' },
+  inbound: { sku: 'SKU-0001-J', quantity: '50', inbound_date: '2026-10-22' },
+  outbound: { sku: 'SKU-0001-J', quantity: '10', outbound_date: '2026-10-22' },
+  gmv_flow: {
+    platform: '京东',
+    flow_no: 'FLOW-20261022-001',
+    amount: '99.00',
+    arrived_time: '2026-10-22 10:00:00',
+  },
+}
+export const presetExample = (tt: string): Record<string, string> => PRESET_EXAMPLE[tt] || {}
+export const presetRequired = (tt: string): string[] => PRESET_REQUIRED[tt] || []
 // 导入类型中文名(下载文件名/预设标题)
 export const DOC_TYPE_NAMES: Record<string, string> = {
   order: '订单',
