@@ -380,6 +380,7 @@ export default function InsightsPage() {
       const t = useAppStore.getState().hammerInsightsTab || 'replen'
       if (t === 'purchase') {
         useAppStore.getState().setSyncing(1)
+        useAppStore.getState().setSyncOld(purchase.length > 0)
         api
           .get(
             '/api/insights/purchase?days=28&mode=' +
@@ -392,6 +393,7 @@ export default function InsightsPage() {
           .finally(() => useAppStore.getState().setSyncing(-1))
       } else if (t === 'slow') {
         useAppStore.getState().setSyncing(1)
+        useAppStore.getState().setSyncOld(disposals.length > 0)
         api
           .get('/api/insights/disposal-suggestions?channel=' + ch + '&page=1&page_size=100')
           .then(r => {
@@ -456,6 +458,7 @@ export default function InsightsPage() {
   const loadReplen = async (mode, ch, page = 1) => {
     const seq = ++replenSeq.current
     useAppStore.getState().setSyncing(1)
+    useAppStore.getState().setSyncOld(replen.length > 0) // 有旧值→同步中/首载→加载中
     // 2026-10-27 根治: 整表重拉(page=1)前记滚动锚点, 数据落地后还原——防 iOS Safari
     // 地址栏随高度突变联动导致"顶部白条/内容错位"(下单→insights-refresh 曾触发整表重拉+滚动偏移)
     const _sc = page === 1 ? (document.scrollingElement || document.documentElement).scrollTop : 0

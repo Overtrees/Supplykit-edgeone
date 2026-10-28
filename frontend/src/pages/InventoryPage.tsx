@@ -92,6 +92,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const loadInv = async (p?) => {
     const seq = ++reqSeq.current
     useAppStore.getState().setSyncing(1)
+    useAppStore.getState().setSyncOld(inventory.length > 0) // 有旧值→同步中/首载→加载中
     if (p === 1) setLoading(true)
     else setLoadingMore(true)
     try {

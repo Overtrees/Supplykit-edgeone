@@ -74,9 +74,12 @@ const initAppStore = (set, get) => ({
   orderLoading: false,
   orderLoadErr: '',
   dataLoaded: false,
-  // 2026-10-27 全局同步中计数(header 胶囊'加载中'提示): 快照拉新 start +1 / settle -1
+  // 2026-10-27 全局同步徽标计数(header 胶囊): 任一拉新 start +1 / settle -1; syncOld 决定文案(同步中/加载中)
   syncing: 0,
   setSyncing: (d: number) => set(s => ({ syncing: Math.max(0, s.syncing + d) })),
+  // 2026-10-27 同步场景: true=有旧值渲染后台拉新(徽标'同步中') / false=首载骨架(徽标'加载中')
+  syncOld: false,
+  setSyncOld: (v: boolean) => set({ syncOld: v }),
   sidebarOpen: false,
   setSidebarOpen: v => set({ sidebarOpen: v }),
   hammerPanel: null,
@@ -235,7 +238,12 @@ const initAppStore = (set, get) => ({
   _loadSeq: 0,
   async loadAll(page?, opts?) {
     const _mySeq = ++this._loadSeq
-    set({ loading: true, orderLoading: true, syncing: get().syncing + 1 })
+    set({
+      loading: true,
+      orderLoading: true,
+      syncing: get().syncing + 1,
+      syncOld: Boolean(get().dashboard || (get().orders || []).length), // 看板/订单有旧值→同步中
+    })
     const ch = get().channel
     const s = get().hammerSearch || ''
     const st = get().orderStatus || ''

@@ -97,14 +97,16 @@ export default function App() {
     setHammerPanel,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
-  // 2026-10-27 加载中兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防"加载中"永久显示需手动刷新
+  const syncOld = useAppStore(s => s.syncOld)
+  // 2026-10-27 徽标兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防徽标永久显示需手动刷新
   useEffect(() => {
     if (syncing <= 0) return
     const t = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
     return () => clearTimeout(t)
   }, [syncing])
-  // 全局同步中徽标(看板页/其他页 header-status 共用——后端拉新/30s 静默时显示, 完成自动消失)
-  // 2026-10-27: 仅图标旋转(animation 挂 svg 非包裹 span——文字不转); 字号继承渠道文本(inherit, 非硬编码)
+  // 全局同步徽标(看板页/其他页 header-status 共用——任一拉新/30s 静默进行时显示, 完成自动消失)
+  // 文案按场景: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; syncOld=false(首载无旧值, 骨架)=「加载中」
+  // 仅图标旋转(animation 挂 svg, 文字不转); 字号继承渠道文本(inherit)
   const syncBadge =
     syncing > 0 ? (
       <span
@@ -130,7 +132,7 @@ export default function App() {
         >
           <path d="M21 12a9 9 0 1 1-6.219-8.56" />
         </svg>
-        加载中
+        {syncOld ? '同步中' : '加载中'}
       </span>
     ) : null
   const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
