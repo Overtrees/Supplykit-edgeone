@@ -855,33 +855,8 @@ export default function App() {
                         <option value="jd">京东渠道</option>
                         <option value="other">其他渠道</option>
                       </select>
-                      {/* 2026-10-27 快照拉新'加载中'提示: 后台同步时胶囊右侧显示旋转图标, 完成自动消失(胶囊宽度过渡) */}
-                      {syncing > 0 && (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            fontSize: 12,
-                            color: 'var(--muted)',
-                            whiteSpace: 'nowrap',
-                            animation: 'spin 0.9s linear infinite',
-                          }}
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                          >
-                            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                          </svg>
-                          加载中
-                        </span>
-                      )}
+                      {/* 2026-10-27 同步中徽标(变量 syncBadge 统一, 与渠道文本同字号——曾看板分支残留旧内联 fontSize:12) */}
+                      {syncBadge}
                     </span>
                     <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
                       <svg
