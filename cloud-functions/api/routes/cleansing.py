@@ -806,8 +806,10 @@ async def cleansing_templates_save(request: Request):
     mapping = d.get("mapping")
     if isinstance(mapping, dict):
         mapping = json.dumps(mapping, ensure_ascii=False)
-    # 同名模板更新覆盖(name 存在 → UPDATE; 否则 INSERT——防同名重复)
-    existing = one("SELECT id FROM cleansing_templates WHERE name=%s", [name])
+    # 同名模板更新覆盖(name + doc_type 同时存在 → UPDATE; 否则 INSERT——防同名重复)
+    # 2026-10-27 隔离修复: 曾只按 name 查——不同导入类型同名模板互相覆盖(订单/库存同名=串类型)
+    existing = one("SELECT id FROM cleansing_templates WHERE name=%s AND doc_type=%s",
+                   [name, doc_type])
     if existing:
         execute("UPDATE cleansing_templates SET mapping=%s, doc_type=%s, updated_at=NOW() WHERE id=%s",
                 (mapping or "{}", doc_type, existing.get("id")))

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
+import { presetMapping, DOC_TYPE_NAMES } from '../pages/CleansingPage'
 
 interface Props {
   tt: string
@@ -101,10 +102,61 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             模板管理
           </div>
 
+          {/* 预设模块(2026-10-27): 单字段源派生——内置预设+下载模板同源, 新列自动同步 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600 }}>
+              预设模块-{DOC_TYPE_NAMES[tt] || tt}
+            </span>
+            <button
+              onClick={() => {
+                // 表头=预设列(label 全字段, 与内置映射同源)
+                const _src = presetMapping(tt) as Record<string, string>
+                const headers = Object.keys(_src)
+                if (!headers.length) return toast.error('该类型暂无预设字段')
+                const csv =
+                  '\uFEFF' + // UTF-8 BOM 防 Excel 乱码
+                  headers.join(',') +
+                  '\n'
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = (DOC_TYPE_NAMES[tt] || tt) + '导入模板.csv'
+                a.click()
+                setTimeout(() => URL.revokeObjectURL(url), 1000)
+                toast.success('模板已下载，按表头填充后导入')
+              }}
+              className="clickable"
+              style={{
+                padding: '7px 16px',
+                fontSize: 13,
+                borderRadius: 99,
+                background: 'var(--primary)',
+                color: '#fff',
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              下载模板
+            </button>
+          </div>
           {/* 模板区 */}
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>映射模板</div>
           <div
-            style={{ background: 'var(--card)', borderRadius: 16, padding: 12, marginBottom: 8 }}
+            style={{
+              // 2026-10-27 去冗余背景块: 曾 background:var(--card)+圆角容器包 select 胶囊
+              // (胶囊本身白底圆角, 外层背景在胶囊底部露块=黑/白背景冗余)
+              borderRadius: 16,
+              padding: 12,
+              marginBottom: 8,
+            }}
           >
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <select
@@ -133,6 +185,18 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 }}
               >
                 <option value="">选择映射模板...</option>
+                {(() => {
+                  const pm = presetMapping(tt)
+                  const _keys = Object.keys(pm)
+                  return _keys.length ? (
+                    <option
+                      value={JSON.stringify(pm)}
+                      style={{ color: 'var(--primary)', fontWeight: 600 }}
+                    >
+                      预设-{DOC_TYPE_NAMES[tt] || tt}({_keys.length}字段)
+                    </option>
+                  ) : null
+                })()}
                 {templates
                   .filter(t => t.doc_type === tt)
                   .map(t => (

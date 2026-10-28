@@ -266,7 +266,9 @@ const GMV_FLOW_FIELDS = [
   { t: 'settled_amount', l: '结算金额', tp: 'number' },
   { t: 'data_source', l: '数据来源', tp: 'string' },
 ]
-const TARGET_FIELDS = {
+// 2026-10-27 单一字段源(导出供模板弹窗): 内置预设映射 + 下载模板表头均由此派生——
+// 新列只需加进对应 X_FIELDS, 预设/下载模板自动同步(零漂移)
+export const TARGET_FIELDS = {
   order: ORDER_FIELDS,
   inventory: INV_FIELDS,
   platform_inv: INV_FIELDS,
@@ -276,6 +278,25 @@ const TARGET_FIELDS = {
   inbound: INBOUND_FIELDS,
   outbound: OUTBOUND_FIELDS,
   gmv_flow: GMV_FLOW_FIELDS,
+}
+// 预设映射(内置): label→target 全字段(与下载模板表头同源)
+export const presetMapping = (tt: string): Record<string, string> => {
+  const fields = (TARGET_FIELDS as Record<string, any>)[tt] || []
+  const m: Record<string, string> = {}
+  for (const f of fields) m[f.l] = f.t
+  return m
+}
+// 导入类型中文名(下载文件名/预设标题)
+export const DOC_TYPE_NAMES: Record<string, string> = {
+  order: '订单',
+  inventory: '库存',
+  platform_inv: '平台库存',
+  inventory_b: 'B仓库存',
+  product: '商品',
+  supplier: '供应商',
+  inbound: '入库',
+  outbound: '出库',
+  gmv_flow: 'GMV回款',
 }
 const TARGET_TARGETS = {}
 for (const _k in TARGET_FIELDS) TARGET_TARGETS[_k] = TARGET_FIELDS[_k].map(f => f.t)
