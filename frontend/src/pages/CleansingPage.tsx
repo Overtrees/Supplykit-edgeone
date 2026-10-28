@@ -1160,7 +1160,7 @@ export default function CleansingPage() {
         <div style={{ textAlign: 'center', padding: '36px 16px' }}>
           <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>选择导入类型</div>
           <div className="small muted" style={{ fontSize: 'var(--font-sm)', marginBottom: 16 }}>
-            订单 / 库存（自有·平台·B仓）/ 出入库 / 商品 / 供应商 / GMV 回款
+            订单 / 库存 / 出入库 / 商品 / 供应商 / GMV 回款
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 24 }}>
             <select
@@ -1888,13 +1888,13 @@ export default function CleansingPage() {
               <div
                 key={i}
                 style={{
+                  // 2026-10-27 UX: 去每行外层胶囊框(冗余嵌套), 改细分隔线行——行内控件自身即胶囊
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '8px 12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-lg)',
-                  marginBottom: 6,
+                  padding: '8px 0',
+                  borderBottom:
+                    i < (colMap[colMapCol] || []).length - 1 ? '1px solid var(--border)' : 'none',
                 }}
               >
                 <input
@@ -1908,15 +1908,8 @@ export default function CleansingPage() {
                     }))
                   }
                   placeholder="值(如 交易成功)"
-                  style={{
-                    flex: 1,
-                    minWidth: 100,
-                    fontSize: 'var(--font-15)',
-                    padding: '7px 10px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    outline: 'none',
-                  }}
+                  className="tpl-field"
+                  style={{ flex: 1, minWidth: 100 }}
                 />
                 <select
                   value={s.group || 'blocked'}
@@ -1928,14 +1921,8 @@ export default function CleansingPage() {
                       ),
                     }))
                   }
-                  style={{
-                    fontSize: 'var(--font-13)',
-                    padding: '7px 10px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    background: 'var(--card)',
-                    minHeight: 36,
-                  }}
+                  className="tpl-field"
+                  style={{ fontSize: 'var(--font-13)', flexShrink: 0, maxWidth: 220 }}
                 >
                   <option value="sale">✅ 计入销量池（日销+GMV）</option>
                   <option value="blocked">📋 仅订单记录（GMV 按状态·不计日销）</option>
@@ -1947,17 +1934,8 @@ export default function CleansingPage() {
                       [colMapCol]: (p[colMapCol] || []).filter((_, j) => j !== i),
                     }))
                   }
-                  className="clickable"
-                  style={{
-                    fontSize: 'var(--font-sm)',
-                    color: 'var(--danger)',
-                    cursor: 'pointer',
-                    padding: '9px 12px',
-                    minHeight: 32,
-                    border: 'none',
-                    background: 'transparent',
-                    flexShrink: 0,
-                  }}
+                  className="clickable tpl-btn tpl-btn-ghost"
+                  style={{ color: 'var(--danger)', width: 40, padding: 0, flexShrink: 0 }}
                 >
                   <IconClose size={16} />
                 </button>
