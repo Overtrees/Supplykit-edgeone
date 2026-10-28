@@ -31,7 +31,7 @@ const fmtBig = (n: number): string => {
 const fmtInt = (n: number): string => {
   const v = Math.round(Number(n || 0))
   if (Math.abs(v) >= 1e5) return Math.round(v / 1e4) + '万'
-  return v.toLocaleString('zh-CN')
+  return String(v) // 2026-10-27 计数不带千分位逗号(曾 1,513 → 1513); 金额 fmtBig 保留千分位
 }
 
 // 濒临断货三级(P0): red=击穿补货周期(紧急) / orange=逼近且缓冲破位(预警) / yellow=缓冲破位时间尚够(关注)
@@ -1179,10 +1179,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 >
                   {/* 2026-10-27 总览第二行: 采购/补货条数(实时接口同源) */}
                   <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
-                    ● 采购 {procBuyN}
+                    ● 采购 {fmtInt(procBuyN)}
                   </span>
-                  <span style={{ color: 'var(--muted2)' }}>{'·'}</span>
-                  <span style={{ color: 'var(--text)' }}>补货 {procRepN}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
+                    ● 补货 {fmtInt(procRepN)}
+                  </span>
                 </div>
               </div>
               <div
@@ -1199,10 +1200,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 }}
               >
                 {/* 总览第三行: 低库存 + 其他(聚合超卖等规则评估, 点击弹窗明细) */}
-                <span style={{ fontWeight: 600, color: 'var(--danger)' }}>
-                  ● 低库存 {lowStockTotal}
+                <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
+                  ● 低库存 {fmtInt(lowStockTotal)}
                 </span>
-                <span style={{ color: 'var(--muted2)' }}>{'·'}</span>
                 {otherTotal > 0 ? (
                   <span
                     onClick={function (e) {
@@ -1213,13 +1213,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     className="clickable"
                     style={{ color: '#007AFF', fontWeight: 600, cursor: 'pointer' }}
                   >
-                    其他 {otherTotal}
+                    ● 其他 {fmtInt(otherTotal)}
                   </span>
                 ) : (
                   <span style={{ color: 'var(--muted)' }}>其他 0</span>
                 )}
                 {slowMovingTotal > 0 && (
-                  <span style={{ color: 'var(--muted2)' }}>滞销 {slowMovingTotal}</span>
+                  <span style={{ color: 'var(--muted2)' }}>● 滞销 {fmtInt(slowMovingTotal)}</span>
                 )}
               </div>
             </div>
@@ -1648,7 +1648,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
           <div className="section-title">
             {t('dash.low_stock')}
-            {lowStockTotal > 0 ? ` (${lowStockTotal})` : ''}
+            {lowStockTotal > 0 ? ` (${fmtInt(lowStockTotal)})` : ''}
           </div>
           {lowStockAlerts.length === 0 ? (
             <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
@@ -1727,7 +1727,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 width: 'fit-content',
               }}
             >
-              更多 {lowStockTotal - 5}
+              更多 {fmtInt(lowStockTotal - 5)}
             </div>
           )}
         </div>
@@ -2048,7 +2048,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     color: 'var(--text)',
                   }}
                 >
-                  采购&补货告警 · 共 {procTotal} 条
+                  采购&补货告警 · 共 {fmtInt(procTotal)} 条
                 </div>
                 {(procList || []).map(function (x, i) {
                   return (
@@ -2192,7 +2192,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     color: 'var(--text)',
                   }}
                 >
-                  其他告警 · 共 {otherTotal} 条
+                  其他告警 · 共 {fmtInt(otherTotal)} 条
                 </div>
                 {(fullAlerts
                   ? fullAlerts.filter(
@@ -2564,7 +2564,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     color: 'var(--text)',
                   }}
                 >
-                  缺货 · 共 {(fullOut && fullOut.length ? fullOut : _oosSrc).length} 条
+                  缺货 · 共 {fmtInt((fullOut && fullOut.length ? fullOut : _oosSrc).length)} 条
                 </div>
                 {(fullOut && fullOut.length ? fullOut : _oosSrc).map(function (x, i) {
                   return (
