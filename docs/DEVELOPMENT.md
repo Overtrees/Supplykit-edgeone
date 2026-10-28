@@ -1088,7 +1088,9 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **焦散迭代教训**: 横带(mask left/right+height)→ 圆上平行线; 弧带 ellipse→ 散化/越圆溢出; **定稿=椭圆光斑** inset:0 + radial-gradient(ellipse 50% 3px 圆钮 / 85% 3px 浮层 at 50%100%)——**椭圆自然衰减无直线边, 圆角裁弧, 底部由 border-radius 裁切**; overflow:hidden 裁越出圆部分(非算弦)
 - **焦散层叠校准**: bottom 0 贴底覆盖内部暗边(盖倒数第二层), 反光环 1px 弱接触不抢层次; 亮度 --caustic-a 0.5 → light calc(×2)=1.0 / dark 0.5
 - **弃容器单位(cqh/cqw)**: 等比缩放(4.2cqh 随高度变厚)破坏跨尺寸一致(72px 与 42px 不同家族); size 容器令内容宽元素(胶囊)塌缩——改"厚度锁定(可见 2px 或 ry3px 固定)+跨度随宽+亮度统一"解耦哲学
-- **UI 验收**: 玻璃件边框/inset/反光/焦散四层齐; 浅色看灰边分离; dark 看边框 0.16### 15.73 summary 两阶段加载与实例阻塞根治(2026-10-28)
+- **UI 验收**: 玻璃件边框/inset/反光/焦散四层齐; 浅色看灰边分离; dark 看边框 0.16
+
+### 15.73 summary 两阶段加载与实例阻塞根治(2026-10-28)
 - **中间件同步写库阻塞事件循环(最隐蔽的传染源)**: `slow_log_middleware` 内 `_e("INSERT INTO quality_logs ...")` 是同步调用, 直接阻塞 async 事件循环 → 一次 12s 的 summary 组装后, **同实例所有后续请求(含慢日志自身的写库)串行排队** → 实证 07:40:48 / 07:53:48 前端 orders/alerts/quality-logs **同秒三个 30s 超时**, 而同一实例下一次请求立即恢复(1.14s)。修: `await asyncio.to_thread(_write_slow)` —— DB 写卸载线程, 数据写入语义完全不变
 - **summary 拆分的正确姿势 = 同缓存键派生多视野**: 不要拆成两个独立接口各自算(会跨时刻不一致)。做法: `dashboard_summary(part="main"|"charts"|"")`, 两份视野**均取自同一次 `_cache_get(_key)` 结果**, 只做顶层键裁剪(main=summary/health_index/periods; charts=trend/stores/brands/period_*/funnel) → **四维一致性天然成立, 无需快照机制**。实测 main+charts 合并 vs 全量 **逐键逐值一致**(gmv 42539605.73 三处相同)
 - **首屏两阶段 + 合并式写入**: `part=main` 先渲染卡片(组装轻 ~2s), `part=charts` 并行拉取后**合并进 dashboard(`{...prev, ...charts}`)**, 不能整体替换——否则静默刷新时图表闪空
@@ -1102,7 +1104,7 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **前端 mode 空值被回退 bug**: `mode: f.mode || (editing && editing.mode) || ''` —— **`''` 表示「全部」是合法值, 但 falsy 被 `||` 回退成旧值 bbcc** → 用户改回"全部"保存后几秒又变 bbcc。修: `f.mode ?? ''`(仅 undefined/null 才回退)。**通用教训: 语义化的空值不要用 `||` 兜底**
 - **oversell 跨事件误关**: `evaluate_stock_skus` 只评估 `inventory.changed`/`scheduled.daily`, 但"恢复自动关闭"用 hits 集合判定未命中 → 加 `_evaluated_ats` 白名单(仅本次实际评估规则的 alert_type), 不跨事件关闭其他来源告警
 
-### 15.75 清洗页 UX 重构踩坑集(2026-10-28, 46 commits)
+### 15.75 清洗页 UX 重构踩坑集(2026-10-28~29, 46 commits)
 - **`.step-indicator`/`.step` 曾完全无 CSS 定义** —— tsx 里天天用, 样式表零定义(裸露无样式)。**排查方法: 类名在 tsx 出现但在 css 零命中 = 缺失定义**(顺手脚本化检查)
 - **表格高度 = dvh 减固定值, 横屏必崩**: `calc(100dvh - 340px)` 竖屏(844)得 504px 正常, **横屏(390)得 50px 表格不可见**。正解: `@media (max-height: 500px)` 单独给 `60dvh`, 加 `clamp(240px, calc(...), 100dvh)` 兜底 dvh 首帧异常
 - **CSS `max-height` 与 `min-height` 并存时 max 优先** —— 写过 `maxHeight: max(220px, calc(...))` + `minHeight` 会互相压制, 结果仍是 50px。要么用 clamp 单值, 要么分媒体查询
@@ -1112,7 +1114,7 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
 - **`<option>` 不能内嵌 SVG** —— 图标选项改两态 pill 分段控件
 - **模板弹窗曾双列数显示**: 标题行「已加载 N/M 条 · 显示 x/y 列」+ 表格容器内 `common.showing/common.columns` 旧提示 → 重复。排查时**全局 grep 同类文案**而非只看标题区
 
-### 15.76 日志归档一致性: `%` 转义陷阱再犯(2026-10-28)
+### 15.76 日志归档一致性: `%` 转义陷阱再犯(2026-10-29 凌晨)
 - **现象**: `files` 列表显示 842 条, 但点击文件弹窗只有 664 条
 - **第一层根因**: `files` 用 `max(归档count, 明细count)`, 而 `file` 接口**优先返回归档 markdown**(旧快照) → 修: 归档落后时改用实时生成并回写归档
 - **第二层根因(修复形同虚设)**: 修复代码里写了
@@ -1123,7 +1125,7 @@ feat: 新功能 | fix: Bug | refactor: 重构 | docs: 文档 | test: 测试 | st
   修: 第二个占位符写 `%%s`(预格式化后保留给 pymysql)
 - **判定方法**: 修了没效果时, **先手工复现格式化/构造逻辑**(`python -c "..."` 单跑那行), 别急着怀疑部署。本 skill 已多次记录 `%` 转义, 带预格式化的 SQL 一律 `%%s`
 
-### 15.77 看板首帧骨架(2026-10-28)
+### 15.77 看板首帧骨架(2026-10-29 凌晨)
 - `const [chLoading, setChLoading] = useState(false)` → 首帧渲染**空卡**(dashboard 为 null 但 loading=false), useEffect 跑起来才置 true → 用户看到"骨架闪一下/没有骨架"
 - 修: `useState(() => !useAppStore.getState().dashboard)` —— **构造期就按"有无旧值"决定**, 首帧直接正确
 - 同理适用于任何"loading 初始值"——首帧渲染前应已知道该不该 loading
