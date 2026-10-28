@@ -1502,6 +1502,76 @@ input[type='file'] {
   border: none;
 }
 
+/* ── 规则页卡片(2026-10-28 收敛内联→全局: padding/字号/条件引用式/复选框统一样式) ── */
+.rule-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+.rule-card.is-selected {
+  background: rgba(0, 122, 255, 0.06);
+  border-color: var(--primary);
+}
+.rule-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 16px;
+  font-weight: 600;
+}
+.rule-mode {
+  font-size: var(--font-10);
+  color: var(--muted2);
+  margin-left: auto;
+  font-weight: 400;
+}
+.rule-cond {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--font-13);
+  color: var(--primary);
+  line-height: 1.5;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+.rule-cond-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--primary);
+  opacity: 0.5;
+  flex-shrink: 0;
+  align-self: stretch;
+  margin-top: 2px;
+}
+.rule-desc {
+  font-size: var(--font-sm);
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+.rule-check {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rule-check.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
 /* ── 清洗页步骤条(2026-10-27: 曾 .step-indicator/.step 无任何 CSS, 裸露无样式) ── */
 .step-indicator {
   display: flex;

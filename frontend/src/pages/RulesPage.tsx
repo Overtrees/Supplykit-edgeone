@@ -1722,17 +1722,10 @@ export default function RulesPage() {
                       setCond(c)
                     }
                   }}
-                  style={{
-                    cursor: prodBatch ? 'default' : 'pointer',
-                    padding: '14px 16px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    marginBottom: 8,
-                    background:
-                      prodBatch && selIds.includes(rule.id)
-                        ? 'rgba(29,78,216,0.08)'
-                        : 'transparent',
-                  }}
+                  className={
+                    'rule-card' + (prodBatch && selIds.includes(rule.id) ? ' is-selected' : '')
+                  }
+                  style={{ cursor: prodBatch ? 'default' : 'pointer' }}
                 >
                   {prodBatch && (
                     <span
@@ -1753,23 +1746,7 @@ export default function RulesPage() {
                         marginBottom: 8,
                       }}
                     >
-                      <span
-                        style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: 'var(--radius-xs)',
-                          border: '1.5px solid',
-                          borderColor: selIds.includes(rule.id)
-                            ? 'var(--primary)'
-                            : 'var(--border)',
-                          background: selIds.includes(rule.id) ? 'var(--primary)' : 'transparent',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#fff',
-                          fontSize: 'var(--font-xs)',
-                        }}
-                      >
+                      <span className={'rule-check' + (selIds.includes(rule.id) ? ' on' : '')}>
                         {selIds.includes(rule.id) ? <IconCheck size={12} /> : ''}
                       </span>
                       <span style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
@@ -1786,16 +1763,7 @@ export default function RulesPage() {
                     }}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          fontSize: 'var(--font-15)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          flexWrap: 'wrap',
-                        }}
-                      >
+                      <div className="rule-title">
                         {rule.name}
                         <span className={'pill ' + (rule.is_active ? 'success' : 'warning')}>
                           {rule.is_active ? '启用' : '停用'}
@@ -1803,47 +1771,14 @@ export default function RulesPage() {
                         <span className={'pill ' + sevCls(rule.severity)}>
                           {sevLbl(rule.severity)}
                         </span>
-                        {rule.mode && (
-                          <span
-                            className="pill"
-                            style={{
-                              fontSize: 'var(--font-10)',
-                              color: 'var(--muted2)',
-                              background: 'var(--bg)',
-                            }}
-                          >
-                            {modeLbl}
-                          </span>
-                        )}
+                        {rule.mode && <span className="rule-mode">{modeLbl}</span>}
                       </div>
-                      <div
-                        style={{
-                          marginTop: 6,
-                          padding: '8px 12px',
-                          background: 'var(--bg)',
-                          borderRadius: 'var(--radius-lg)',
-                          fontSize: 'var(--font-13)',
-                          color: 'var(--primary)',
-                          display: 'block',
-                        }}
-                      >
-                        <IconScale
-                          size={12}
-                          style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }}
-                        />{' '}
-                        {condText}
+                      <div className="rule-cond">
+                        <i className="rule-cond-bar" />
+                        <IconScale size={12} style={{ marginTop: 2 }} />
+                        <span>{condText}</span>
                       </div>
-                      <div
-                        style={{
-                          fontSize: 'var(--font-sm)',
-                          color: 'var(--muted)',
-                          marginTop: 4,
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          gap: 3,
-                          alignItems: 'center',
-                        }}
-                      >
+                      <div className="rule-desc">
                         {renderTmpl(rule.alert_title) || (
                           <span className="small muted">无标题</span>
                         )}
@@ -1872,6 +1807,31 @@ export default function RulesPage() {
                   icon="tag"
                   title={
                     rules.length === 0 ? t('rules.empty') : '没有匹配"' + hammerSearch + '"的规则'
+                  }
+                  desc={rules.length === 0 ? '创建规则后可自动监控库存异常' : undefined}
+                  action={
+                    rules.length === 0 ? (
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => {
+                          setEditing({})
+                          setF({
+                            name: '',
+                            event: 'inventory.changed',
+                            alert_type: 'low_stock',
+                            alert_title: '',
+                            alert_desc: '',
+                            severity: 'warning',
+                            mode: '',
+                            condition_json: '{}',
+                          })
+                          setCond({})
+                          setRParams({})
+                        }}
+                      >
+                        + 新建规则
+                      </button>
+                    ) : undefined
                   }
                 />
               ))}

@@ -1487,7 +1487,9 @@ export default function CleansingPage() {
                 <div
                   style={{
                     overflowX: 'auto',
-                    maxHeight: 'calc(100dvh - 320px)',
+                    /* 2026-10-28 横屏修复: 曾 100dvh-320px, 横屏(390高)=70px 表格几乎不可见
+                       → max(220px, 计算值): 竖屏按可视高自适应, 横屏保底 220px 可滚动查看 */
+                    maxHeight: 'max(220px, calc(100dvh - 320px))',
                     overflowY: 'auto',
                     WebkitOverflowScrolling: 'touch',
                     border: '1px solid var(--border)',

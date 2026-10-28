@@ -259,7 +259,7 @@ export default function DevModePage() {
       {/* 日志分析入口 */}
       <Group title="日志分析">
         <LastRow
-          label={'日志分析' + (todayLogs ? ' · 今日 ' + todayLogs + ' 条' : '')}
+          label="日志分析"
           sub="按日日志文件 · 点击预览当日明细"
           onClick={() => setShowLogs(true)}
         />

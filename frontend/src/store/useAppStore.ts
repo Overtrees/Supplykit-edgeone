@@ -260,12 +260,12 @@ const initAppStore = (set, get) => ({
     try {
       // 首屏错峰(2026-10-11 三批): summary 先行渲染 → orders/alerts 0.3s 后 → stock-risk 最后——
       // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
-      // 2026-10-28 超时分级: summary 重接口 60s(实测偶发 13.9s, 30s 会误杀); 轻接口维持默认 30s
+      // 2026-10-28 超时分级: 重接口 35s(实测峰值 13.9s + 余量, 兼顾响应性——60s 过长)
       // 2026-10-28 两阶段加载(根治组装慢): part=main(卡片数字/健康, 组装轻)先渲染 →
       // part=charts(趋势/店铺/品牌/漏斗, 组装重)后到合并。同一缓存键派生两份视野(同源同快照, 四维一致)
       const _sep = dashUrl.includes('?') ? '&' : '?'
       const r0 = await Promise.allSettled([
-        api.get(dashUrl + _sep + 'part=main', { timeout: 60000 }),
+        api.get(dashUrl + _sep + 'part=main', { timeout: 35000 }),
       ])
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
@@ -313,7 +313,7 @@ const initAppStore = (set, get) => ({
       })
       // 最后: stock-risk 断货卡(重接口, 不阻塞; 失败保留旧值不闪空)
       const sr = await Promise.allSettled([
-        api.get('/api/dashboard/stock-risk', { timeout: 60000 }),
+        api.get('/api/dashboard/stock-risk', { timeout: 35000 }),
       ])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData && _mySeq === this._loadSeq) set({ stockRisk: srData })
