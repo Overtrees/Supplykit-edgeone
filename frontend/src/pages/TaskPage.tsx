@@ -185,12 +185,13 @@ export default function TaskPage() {
               <EmptyState
                 icon="package"
                 title="暂无任务"
+                desc="导入数据或导出文件后，处理进度会在���显示"
                 action={
                   <button
                     className="btn btn-primary"
-                    onClick={() => window.__setPage && window.__setPage('settings')}
+                    onClick={() => window.__setPage && window.__setPage('cleansing')}
                   >
-                    去一键填充种子数据 →
+                    去导入数据 →
                   </button>
                 }
               />

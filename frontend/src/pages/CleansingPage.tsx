@@ -1482,10 +1482,14 @@ export default function CleansingPage() {
                 >
                   ← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →
                 </div>
-                {/* 2026-10-27: 去 maxHeight(页面单层滚动, 曾与页面双滚嵌套) */}
+                {/* 2026-10-28 安全区根治: 50 行表格曾把页面撑高 → iOS 地址栏联动 → 顶部露出 chrome 纯色条;
+                    改表格内部限高滚动(避免整页高度突变), 纵向滚 table / 横向滚外层 */}
                 <div
                   style={{
                     overflowX: 'auto',
+                    maxHeight: 'calc(100dvh - 320px)',
+                    overflowY: 'auto',
+                    WebkitOverflowScrolling: 'touch',
                     border: '1px solid var(--border)',
                     borderRadius: 'var(--radius-md)',
                   }}

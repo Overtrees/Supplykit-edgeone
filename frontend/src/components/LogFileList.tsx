@@ -26,18 +26,37 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
     load() /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [scope])
 
-  const openPreview = async (date: string) => {
+  // 2026-10-28 根治'弹窗加载不出需退出重进': dev 大文件(666 条)聚合 2.7s+, 曾撞 30s 超时/挂起 inflight
+  // → ① 超时 90s ② 失败自动重试 1 次(跳过缓存) ③ 错误态可点击重试
+  const openPreview = async (date: string, retry = 0) => {
     setPreview({ date, markdown: '', count: 0, loading: true })
     try {
-      const r = await api.get('/api/quality-logs/file?date=' + date + '&scope=' + scope)
+      const r = await api.get(
+        '/api/quality-logs/file?date=' +
+          date +
+          '&scope=' +
+          scope +
+          (retry ? '&t=' + Date.now() : ''),
+        { timeout: 90000 },
+      )
       setPreview({
         date,
         markdown: r.data?.markdown || '# 无日志\n',
         count: r.data?.count || 0,
         loading: false,
       })
-    } catch {
-      setPreview({ date, markdown: '加载失败', count: 0, loading: false })
+    } catch (e) {
+      if (retry < 1) {
+        setTimeout(() => openPreview(date, retry + 1), 800)
+        return
+      }
+      setPreview({
+        date,
+        markdown: '加载失败，点此重试',
+        count: 0,
+        loading: false,
+        error: true,
+      })
     }
   }
 
@@ -212,6 +231,15 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                     >
                       {preview.markdown}
                     </pre>
+                    {preview.error && (
+                      <button
+                        onClick={() => openPreview(preview.date)}
+                        className="btn btn-primary"
+                        style={{ width: '100%', minHeight: 40, marginBottom: 8 }}
+                      >
+                        重试加载
+                      </button>
+                    )}
                     <button
                       onClick={shareFile}
                       disabled={sharing}

@@ -859,6 +859,13 @@ input[type='file'] {
   color: var(--muted2);
   flex-shrink: 0;
   white-space: nowrap;
+  /* 2026-10-28: 贴近状态标签(right 端) —— 标题 flex:1 撑开, 时间与状态连续排布 */
+  margin-left: auto;
+  margin-right: 2px;
+}
+.task-card-title .ellipsis {
+  flex: 1;
+  min-width: 0;
 }
 .task-num {
   font-variant-numeric: tabular-nums;
