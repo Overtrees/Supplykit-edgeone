@@ -76,18 +76,26 @@ async def slow_log_middleware(request: Request, next):
     _resp = await next(request)
     _el = _t.time() - _t0
     if _el > 3:
+        # 2026-10-28 根治实例传染: 原同步 _e(...) 直接阻塞事件循环 —— 一次 12s 组装后
+        # 同实例所有请求(slow_log 自身写库)串行排队 → orders/alerts/quality-logs 齐 30s 超时
+        # (07:40:48 三请求同秒超时实证); 改 to_thread 卸载, 事件循环不被 DB 写阻塞(数据写入语义不变)
+        import asyncio as _aio
         try:
             from db import execute as _e
-            _e("INSERT INTO quality_logs(log_type, level, message, source) "
-               "VALUES(%s,%s,%s,%s)", ("slow_request","warning",
-               ("%s %s %.1fs" % (request.method, request.url.path, _el)), "api"))
-            if _el > 10:
-                # 严重慢请求(>10s)升级 error + 可选 webhook 告警(env SLOW_WEBHOOK_URL)
+
+            def _write_slow():
                 _e("INSERT INTO quality_logs(log_type, level, message, source) "
-                   "VALUES('slow_alert','error',%s,%s)",
-                   ("严重慢请求: %s %s %.1fs" % (request.method, request.url.path, _el), "api"))
+                   "VALUES(%s,%s,%s,%s)", ("slow_request", "warning",
+                   ("%s %s %.1fs" % (request.method, request.url.path, _el)), "api"))
+                if _el > 10:
+                    # 严重慢请求(>10s)升级 error + 可选 webhook 告警(env SLOW_WEBHOOK_URL)
+                    _e("INSERT INTO quality_logs(log_type, level, message, source) "
+                       "VALUES('slow_alert','error',%s,%s)",
+                       ("严重慢请求: %s %s %.1fs" % (request.method, request.url.path, _el), "api"))
+
+            await _aio.to_thread(_write_slow)
         except Exception as _e:
-                try_err('index', '静默降级', _e)
+            try_err('index', '静默降级', _e)
         if _el > 10:
             try:
                 import os as _os

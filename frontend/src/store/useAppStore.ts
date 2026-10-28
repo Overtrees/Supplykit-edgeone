@@ -260,7 +260,8 @@ const initAppStore = (set, get) => ({
     try {
       // 首屏错峰(2026-10-11 三批): summary 先行渲染 → orders/alerts 0.3s 后 → stock-risk 最后——
       // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
-      const r0 = await Promise.allSettled([api.get(dashUrl)])
+      // 2026-10-28 超时分级: summary 重接口 60s(实测偶发 13.9s, 30s 会误杀); 轻接口维持默认 30s
+      const r0 = await Promise.allSettled([api.get(dashUrl, { timeout: 60000 })])
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
       set({ dashboard: dashboard.data, loading: false, dataLoaded: true })
@@ -291,7 +292,9 @@ const initAppStore = (set, get) => ({
             : '',
       })
       // 最后: stock-risk 断货卡(重接口, 不阻塞; 失败保留旧值不闪空)
-      const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
+      const sr = await Promise.allSettled([
+        api.get('/api/dashboard/stock-risk', { timeout: 60000 }),
+      ])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData && _mySeq === this._loadSeq) set({ stockRisk: srData })
       set({ orderLoading: false })
