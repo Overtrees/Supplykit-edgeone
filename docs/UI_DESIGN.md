@@ -54,7 +54,7 @@
 | 项 | 规范 |
 |---|---|
 | 圆角 | `var(--radius-lg)` = 32px（与任务页外层卡一致；曾 16px 不一致） |
-| 内边距 | `12px 14px`（与规则卡/模板卡同意节奏） |
+| 内边距 | `14px 16px`（实测值；规则卡/模板卡为 `12px 14px`——两者尚未统一，改任一处需同步另一处） |
 | 标题行 | 标题 14px 600 + **相对时间 9px muted2（`margin-left:auto` 紧贴状态）** + 状态标签 |
 | 相对时间 | `刚刚` / `N 分钟前` / `N 小时前` / `MM-DD`（读 `created_at`） |
 | 状态标签 | **浅底深字**（非实心）：done 绿 12% / running 橙 14% / error 红 12% |
@@ -67,6 +67,22 @@
 - 底部间距：`margin-bottom: 12px`（2026-10-09 从 16 调小——卡片整体间距收紧）
 - 结构：`.section-title`（标题）+ `<Chart height={200}>`
 - 图表：纯 opacity 动画、深色自适应（Chart 组件自带 theme）
+
+### 规则卡（`.rule-card`，2026-10-28 定版）
+
+| 项 | 规范 |
+|---|---|
+| 内边距 | `12px 14px`（与任务卡/模板卡统一） |
+| 边框 | `1px solid var(--border)`，`radius: var(--radius-lg)`(32px)，`margin-bottom: 8px` |
+| 背景 | `transparent`（未选中）/ 选中态 `rgba(0,122,255,.06)` + `border-color: var(--primary)` |
+| 标题 `.rule-title` | 16px 600 + flex wrap gap 6（名称 + 启用 pill + 严重度 pill） |
+| 模式 `.rule-mode` | **10px `--muted2` 灰字** + `margin-left:auto` 右置（曾用第三个 pill，视觉噪音） |
+| 条件 `.rule-cond` | 13px `--primary` + `line-height:1.5`，图标 12px 顶部对齐 |
+| 说明 `.rule-desc` | 12px `--muted`（原 `--font-sm`），flex wrap gap 3 |
+| 复选框 `.rule-check` | 18×18 / `radius: var(--radius-xs)` / 选中 `--primary` 底 + 白 ✓ |
+| 空态 | `EmptyState` + 「+ 新建规则」主按钮（**必须有出口**，不能只有文字） |
+
+> 条件块曾用 `var(--bg)` 背景 + 圆角嵌套，2026-10-28 去掉嵌套背景；同一时期曾加的左侧 3px 蓝竖线也按需求移除。
 
 ## 四、大卡规范（chart-row-3）
 
@@ -112,10 +128,35 @@
 ## 八、弹窗体系（底部 sheet）
 
 - **一律 createPortal(document.body)**（防被滚动容器裁剪——嵌套弹窗教训）
-- 定位：`bottom: calc(env(safe-area-inset-bottom) + 14px)`；zIndex 4000（遮罩）/4001（面板）
+- 定位：`bottom: calc(env(safe-area-inset-bottom) + 14px)`；**zIndex 9998（遮罩）/9999（面板）**（实测值，早期文档写 4000/4001 已过时）
 - 动效：纯 opacity（sheetIn 0.22s）+ 遮罩淡入——transform 破坏 fixed 禁止
-- 材料样式：`material-regular`（毛玻璃 + inset 高光 + radius-lg）
-- 标准模板：遮罩 `fixed inset:0 transparent zIndex:9998` + 面板 `fixed left:0 right:0 bottom:calc(safe+14px) zIndex:9999 flex center padding:0 14px pointerEvents:none` + 内 `width:100% maxWidth:600 radius-lg padding:18px 14px+safe boxShadow:'var(--shadow-sheet), inset 0 1px 0 rgba(255,255,255,0.25)' maxHeight:70vh pointerEvents:auto`
+- 材料样式：`material-regular` = `background: var(--bg-regular)` + `backdrop-filter: var(--blur-regular)` + `border: 1px solid var(--border-medium)`
+- **阴影（2026-10-26 去外投后）**：`boxShadow: 'var(--shadow-sheet)'`，而 `--shadow-sheet: var(--inset-glass)` = **上亮下暗双内阴影**（不再有外投影，也不再内联拼 `inset 0 1px 0 白0.25`）
+- 标准模板：遮罩 `fixed inset:0 transparent zIndex:9998` + 面板 `fixed left:0 right:0 bottom:calc(safe+14px) zIndex:9999 flex center padding:0 14px pointerEvents:none` + 内 `width:100% maxWidth:600 var(--radius-lg) padding:16px + env(safe-area-inset-bottom) boxShadow:'var(--shadow-sheet)' maxHeight:70vh pointerEvents:auto`
+
+### 模板管理弹窗（`tpl-*` 类族，2026-10-28 定版）
+
+| 类 | 用途 | 关键值 |
+|---|---|---|
+| `.tpl-title` | sticky 吸顶容器 | `position:sticky top:0` + `display:flex justify-content:center` + **`pointer-events:none`**（不挡交互） |
+| `.tpl-title > span` | 标题胶囊 | `padding:7px 18px / radius 99 / min-height 34` + `--bg-regular` 毛玻璃 + `--inset-glass`（**仅包裹文字，不整条铺满**） |
+| `.tpl-section-title` | 分区标题 | 13px 600 + flex between（**2026-10-28 已去上边框分割线**——标题胶囊+留白已足够分区） |
+| `.tpl-field` | 输入/下拉胶囊 | 15px / `padding 9px 12px` / radius 99 / **`min-height 40`** / `box-sizing:border-box` |
+| `.tpl-btn`(+`-primary`/`-ghost`/`-danger`) | 按钮胶囊 | 13px 600 / radius 99 / **高度 40** |
+| `.tpl-item` | 列表行 | 40px 高 / radius 12 / `--bg` 底 / 1px `--border` |
+| `.tpl-empty` | 空态 | 12px `--muted2` |
+| `.tpl-hint` | 提示行 | 10px `--muted2`，长说明放 `title` tooltip 不占版面 |
+| `.tpl-cf-box` | 自定义字段容器 | 折叠默认收起（`display:none`），保留内容不卸载 |
+
+**三条铁律**：① 弹窗内**不要再套一层带背景的圆角容器**包胶囊（胶囊自身已有边界，外层背景会在底部露块）② 所有胶囊同高 40px ③ `select` 不能内嵌 SVG → 图标选项用两态 pill
+
+### 状态映射弹窗（2026-10-28）
+
+- 行：`display:flex align-items:center gap:8 padding:5px 0` + `overflowX:auto`（窄屏横向滚动，删除按钮不贴边）
+- **无行分隔线、无行胶囊框**（控件自身胶囊即视觉分区）
+- 档位选择：两态 pill（`IconCheck` 销量池 = 绿 / `IconClipboard` 仅记录 = 灰），激活态白底 + `inset-glass`
+- 重复值校验：同列表重名 → 输入框红边 + `title` 提示"导入归一化时后者覆盖前者"
+- 「补全内置默认」= **合并**（保留用户已有项，仅补缺失），不是覆盖
 - 确认弹窗（ConfirmDialog）：标题 + 描述 + 取消/确认按钮（`sheet-close`/`sheet-danger`），`confirming` 态禁用+降透明
 - 级别明细弹窗：标题含级别 + tab 切换（选中高亮：白字 + 级别色底）
 
