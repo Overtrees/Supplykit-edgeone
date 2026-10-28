@@ -6,6 +6,7 @@ import {
   IconFolder,
   IconClose,
   IconWarning,
+  IconClipboard,
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
 import { api, uploadRawBytes } from '../api/client'
@@ -1893,11 +1894,13 @@ export default function CleansingPage() {
               <div
                 key={i}
                 style={{
-                  // 2026-10-27 UX: 去外层胶囊框 + 去行分隔线(视觉冗余)——控件自身胶囊即视觉分区
+                  // 2026-10-27 UX: 去外层胶囊框 + 去行分隔线; 加横向滚动(窄屏控件不挤压删除按钮贴边)
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
                   padding: '5px 0',
+                  overflowX: 'auto',
+                  WebkitOverflowScrolling: 'touch',
                 }}
               >
                 <input
@@ -1918,7 +1921,7 @@ export default function CleansingPage() {
                       : ''
                   }
                   style={{
-                    flex: 1,
+                    flex: '1 0 100px',
                     minWidth: 100,
                     // 2026-10-27 重复值校验: 同列表重名红边警示(归一化 dict 后者覆盖, 结果不确定)
                     borderColor:
@@ -1927,22 +1930,72 @@ export default function CleansingPage() {
                         : undefined,
                   }}
                 />
-                <select
-                  value={s.group || 'blocked'}
-                  onChange={e =>
-                    setColMap(p => ({
-                      ...p,
-                      [colMapCol]: (p[colMapCol] || []).map((x, j) =>
-                        j === i ? { ...x, group: e.target.value } : x,
-                      ),
-                    }))
-                  }
-                  className="tpl-field"
-                  style={{ fontSize: 'var(--font-13)', flexShrink: 0, maxWidth: 220 }}
+                {/* 2026-10-27 emoji→SVG: <option> 无法内嵌 SVG, 改分段控件(两态 pill, 语义图标+文字) */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 2,
+                    padding: 2,
+                    borderRadius: 99,
+                    background: 'var(--bg)',
+                    flexShrink: 0,
+                  }}
                 >
-                  <option value="sale">✅ 销量池（日销+GMV）</option>
-                  <option value="blocked">📋 仅记录（不计日销）</option>
-                </select>
+                  {(
+                    [
+                      {
+                        v: 'sale',
+                        Icon: IconCheck,
+                        label: '销量池',
+                        tip: '计入销量池（日销+GMV）',
+                      },
+                      {
+                        v: 'blocked',
+                        Icon: IconClipboard,
+                        label: '仅记录',
+                        tip: '仅订单记录（GMV 按状态，不计日销）',
+                      },
+                    ] as const
+                  ).map(({ v, Icon, label, tip }) => {
+                    const act = (s.group || 'blocked') === v
+                    return (
+                      <span
+                        key={v}
+                        title={tip}
+                        className="clickable"
+                        onClick={() =>
+                          setColMap(p => ({
+                            ...p,
+                            [colMapCol]: (p[colMapCol] || []).map((x, j) =>
+                              j === i ? { ...x, group: v } : x,
+                            ),
+                          }))
+                        }
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '7px 10px',
+                          borderRadius: 99,
+                          fontSize: 'var(--font-12)',
+                          fontWeight: act ? 600 : 400,
+                          whiteSpace: 'nowrap',
+                          cursor: 'pointer',
+                          background: act ? 'var(--card)' : 'transparent',
+                          color: act
+                            ? v === 'sale'
+                              ? 'var(--success)'
+                              : 'var(--muted)'
+                            : 'var(--muted2)',
+                          boxShadow: act ? 'var(--inset-glass)' : 'none',
+                        }}
+                      >
+                        <Icon size={12} />
+                        {label}
+                      </span>
+                    )
+                  })}
+                </div>
                 <button
                   onClick={() =>
                     setColMap(p => ({
