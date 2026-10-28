@@ -1158,9 +1158,16 @@ export default function CleansingPage() {
       )}
 
       {s === 0 && (
-        <div style={{ textAlign: 'center', padding: '36px 16px' }}>
-          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>选择导入类型</div>
-          <div className="small muted" style={{ fontSize: 'var(--font-sm)', marginBottom: 16 }}>
+        <div style={{ textAlign: 'center', padding: '28px 16px' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>选择导入类型</div>
+          <div
+            style={{
+              fontSize: 'var(--font-xs)',
+              color: 'var(--muted2)',
+              marginBottom: 18,
+              letterSpacing: 0.2,
+            }}
+          >
             订单 / 库存 / 出入库 / 商品 / 供应商 / GMV 回款
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 24 }}>
@@ -1178,8 +1185,8 @@ export default function CleansingPage() {
                 borderRadius: 'var(--radius-full)',
                 outline: 'none',
                 background: 'var(--card)',
-                minWidth: 200,
-                minHeight: 46,
+                width: 260,
+                minHeight: 48,
               }}
             >
               <option value="order">导入订单</option>
@@ -1200,10 +1207,12 @@ export default function CleansingPage() {
           <label
             className="btn btn-primary"
             style={{
-              minHeight: 46,
-              padding: '0 28px',
+              minHeight: 48,
+              width: 260,
+              padding: 0,
               display: 'inline-flex',
               alignItems: 'center',
+              justifyContent: 'center',
               gap: 6,
               borderRadius: 'var(--radius-full)',
               fontSize: 'var(--font-15)',
@@ -1247,8 +1256,12 @@ export default function CleansingPage() {
             </div>
           )}
           <div
-            className="small muted"
-            style={{ marginTop: bs ? 8 : 12, fontSize: 'var(--font-sm)' }}
+            style={{
+              marginTop: bs ? 8 : 14,
+              fontSize: 'var(--font-xs)',
+              color: 'var(--muted2)',
+              letterSpacing: 0.2,
+            }}
           >
             支持 CSV / Excel · 智能识别列名 · 手工映射为主
           </div>
