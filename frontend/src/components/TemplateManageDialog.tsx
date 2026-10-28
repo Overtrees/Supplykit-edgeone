@@ -260,6 +260,14 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   .map((v: any) => v && v.target)
                   .filter(Boolean)
                 const cfMeta = cf.filter(f => f.t && _usedTargets.includes(f.t))
+                // 2026-10-27 同名覆盖二次确认(曾静默覆盖已有模板——手滑改名即改掉别人/自己的模板)
+                const _dup = templates.find((t: any) => t.name === n && t.doc_type === tt)
+                if (_dup) {
+                  const okOverwrite = window.confirm(
+                    `已存在同名模板「${n}」（${DOC_TYPE_NAMES[tt] || tt}），是否覆盖更新？`,
+                  )
+                  if (!okOverwrite) return
+                }
                 try {
                   const r = await api.post('/api/cleansing/templates', {
                     name: n,
@@ -269,7 +277,13 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   })
                   const msg = r?.data?.message || '模板已保存'
                   setTmplName('')
-                  loadTemplates()
+                  await loadTemplates()
+                  // 保存后自动选中该模板(按 name+doc_type 定位新 id)
+                  try {
+                    const rr = await api.get('/api/cleansing/templates')
+                    const _hit = (rr.data || []).find((t: any) => t.name === n && t.doc_type === tt)
+                    if (_hit) setSelId(_hit.id)
+                  } catch {}
                   toast.success(msg)
                 } catch (e) {
                   toast.error('模板保存失败: ' + (e.response?.data?.detail || e.message))
