@@ -254,10 +254,7 @@ const initAppStore = (set, get) => ({
       // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
       const r0 = await Promise.allSettled([api.get(dashUrl)])
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
-      if (_mySeq !== this._loadSeq) {
-        useAppStore.getState().setSyncing(-1) // 2026-10-27 数不泄漏: 竞态丢弃也 settle(曾 return 跳 -1 永久'加载中')
-        return
-      }
+      if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
       set({ dashboard: dashboard.data, loading: false, dataLoaded: true })
       await new Promise<void>(resolve => setTimeout(resolve, 300))
       const r1 = await Promise.allSettled([
@@ -273,10 +270,7 @@ const initAppStore = (set, get) => ({
         api.get('/api/alerts'),
       ])
       const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
-      if (_mySeq !== this._loadSeq) {
-        useAppStore.getState().setSyncing(-1)
-        return
-      }
+      if (_mySeq !== this._loadSeq) return // 旧 loadAll 丢弃
       set({
         orders: arr[0].data?.items || arr[0].data || [],
         orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
@@ -292,10 +286,13 @@ const initAppStore = (set, get) => ({
       const sr = await Promise.allSettled([api.get('/api/dashboard/stock-risk')])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData && _mySeq === this._loadSeq) set({ stockRisk: srData })
-      set({ orderLoading: false, syncing: Math.max(0, get().syncing - 1) })
+      set({ orderLoading: false })
     } catch (e) {
       console.error('loadAll failed:', e)
-      set({ loading: false, orderLoading: false, syncing: Math.max(0, get().syncing - 1) })
+      set({ loading: false, orderLoading: false })
+    } finally {
+      // 2026-10-27 根治: settle 唯一在 finally——无论 return 竞态/abort/catch/正常尾必执行, 数不可能泄漏(曾散点 settle 被 return 跳过 → 永久'加载中')
+      set({ syncing: Math.max(0, get().syncing - 1) })
     }
   },
 

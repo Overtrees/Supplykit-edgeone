@@ -474,10 +474,7 @@ export default function InsightsPage() {
           encodeURIComponent(insightSearch),
         { timeout: 90000, scope: 'insights' },
       )
-      if (seq !== replenSeq.current) {
-        useAppStore.getState().setSyncing(-1) // 竞态丢弃也 settle
-        return
-      }
+      if (seq !== replenSeq.current) return // 竞态丢弃
       const data = r.data
       let total = 0
       let items = []
@@ -514,9 +511,11 @@ export default function InsightsPage() {
           e && (e.message || e.statusText) ? String(e.message || e.statusText) : String(e),
         )
       }
+    } finally {
+      // 2026-10-27 根治: settle 唯一在 finally(return 竞态/abort/catch/正常尾必执行——曾散点被 return 跳过致永久'加载中')
+      useAppStore.getState().setSyncing(-1)
+      if (seq === replenSeq.current) setReplenLoading(false)
     }
-    if (seq === replenSeq.current) setReplenLoading(false)
-    useAppStore.getState().setSyncing(-1)
   }
 
   // 从后端加载已下单标记（按渠道隔离）——SSOT: 页面进入/操作后/轮询都以 GET 全量为准

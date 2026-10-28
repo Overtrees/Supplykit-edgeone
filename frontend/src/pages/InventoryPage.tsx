@@ -111,7 +111,6 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         { timeout: 90000 },
       )
       if (seq !== reqSeq.current) {
-        useAppStore.getState().setSyncing(-1) // 竞态丢弃也 settle
         setLoading(false)
         setLoadingMore(false)
         return
@@ -133,12 +132,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         setInventory([])
         setLoadErr('加载失败')
       }
+    } finally {
+      // 根治: settle 唯一在 finally(return 竞态/abort/catch/正常尾必执行——曾散点被 return 跳过致永久'加载中')
+      useAppStore.getState().setSyncing(-1)
     }
     if (seq === reqSeq.current) {
       setLoading(false)
       setLoadingMore(false)
     }
-    useAppStore.getState().setSyncing(-1)
   }
   useEffect(() => {
     clearCache('with-sales')
