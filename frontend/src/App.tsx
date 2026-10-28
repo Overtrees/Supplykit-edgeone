@@ -104,20 +104,30 @@ export default function App() {
     return () => clearTimeout(t)
   }, [syncing])
   // 全局同步中徽标(看板页/其他页 header-status 共用——后端拉新/30s 静默时显示, 完成自动消失)
+  // 2026-10-27: 仅图标旋转(animation 挂 svg 非包裹 span——文字不转); 字号继承渠道文本(inherit, 非硬编码)
   const syncBadge =
     syncing > 0 ? (
       <span
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 4,
-          fontSize: 12,
+          gap: 5,
+          fontSize: 'inherit',
+          fontWeight: 'inherit',
           color: 'var(--muted)',
           whiteSpace: 'nowrap',
-          animation: 'spin 0.9s linear infinite',
         }}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+        <svg
+          width={12}
+          height={12}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={3}
+          strokeLinecap="round"
+          style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
+        >
           <path d="M21 12a9 9 0 1 1-6.219-8.56" />
         </svg>
         加载中
