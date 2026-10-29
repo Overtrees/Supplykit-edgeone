@@ -456,7 +456,7 @@ def _seed_config():
          None),
         ("超卖保护", "order.created",
          '{"left":"order.total_qty","op":">","right":"inv.available_qty"}',
-         "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error",
+         "oversell", "超卖告警: {sku}", "累计订单量超过可用库存", "error",
          None),
         # 濒临断货预警(参数载体): 断货卡计算参数(params 被 stock-risk 同源读取),
         # alert_enabled=0 不生成告警(断货卡已实时承载展示); 用户可在编辑页开启告警开关
