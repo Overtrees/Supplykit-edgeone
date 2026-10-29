@@ -397,6 +397,39 @@ async def heal_own_inventory(request: Request):
         except Exception as e:
             try_err('misc', '自有仓自愈降级(%s)' % ch, e)
             out[ch] = {"error": str(e)[:200]}
+    # 2026-10-29 顺带: 日销主键迁移 + 物化重建(schema 只在模块加载时跑, 已运行实例不会重跑)
+    try:
+        from db import query as _q5, execute as _e5
+        _pk_changes = {
+            "daily_sales_snapshot": "(`date`, `channel`, `sku`, `barcode`, `warehouse`)",
+            "sku_sales_stats": "(`channel`, `sku`, `barcode`, `warehouse`)",
+        }
+        _mig = {}
+        for _tb, _newpk in _pk_changes.items():
+            try:
+                _idx = _q5("SHOW INDEX FROM `%s`" % _tb)
+                _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
+                if "barcode" in _pk:
+                    _mig[_tb] = "already"
+                    continue
+                _e5("ALTER TABLE `%s` DROP PRIMARY KEY, ADD PRIMARY KEY %s" % (_tb, _newpk))
+                _mig[_tb] = "migrated(old=%s)" % ",".join(_pk)
+            except Exception as _epk:
+                _mig[_tb] = "error: %s" % str(_epk)[:120]
+                try_err('misc', '日销主键迁移失败(%s)' % _tb, _epk)
+        # 物化重建(生成按码行)
+        _reb = {}
+        try:
+            from biz.sales import _rebuild_sku_sales_stats as _rss
+            for _ch2 in chs:
+                _reb[_ch2] = _rss(_ch2, days=60)
+        except Exception as _erb:
+            try_err('misc', '日销物化重建失败', _erb)
+            _reb = {"error": str(_erb)[:160]}
+        out["_pk_migration"] = _mig
+        out["_stats_rebuild"] = _reb
+    except Exception as _em:
+        try_err('misc', '主键迁移/重建降级', _em)
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     return ok(out)
