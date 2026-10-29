@@ -38,7 +38,7 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
     """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
     ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out"""
     rows = _inv_rows if _inv_rows is not None else query(
-        "SELECT sku, warehouse_type, available_qty FROM inventory "
+        "SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, available_qty FROM inventory "
         "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
     # 日销(共享 get_sales_digest, 与规则引擎/低库存卡同源)
     ds_map = _ds_map if _ds_map is not None else {}

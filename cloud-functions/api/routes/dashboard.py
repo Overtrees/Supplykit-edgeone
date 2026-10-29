@@ -224,8 +224,9 @@ def _q_recent(channel, d1):
 
 def _q_inventory(channel):
     # 全量行(health out_of_stock 需 avail<=0 缺货行; 低库存消费方自行过滤 avail>0)
-    return query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                 "WHERE channel=%s", [channel])
+    # 2026-10-29 按码: 补 barcode + warehouse(原只有 sku/仓型/数量, 健康与低库存无法按码/按仓判定)
+    return query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                 "available_qty FROM inventory WHERE channel=%s", [channel])
 
 
 def _q_digest(channel):
@@ -861,7 +862,8 @@ def _build_aux(channel, mode):
         low = {"c": _cnt}
     except Exception as _e:
             try_err('dash', '低库存动态判定降级', _e)
-    so_items = query("SELECT sku, product_name, warehouse, warehouse_type, available_qty, safety_qty "
+    so_items = query("SELECT sku, COALESCE(barcode,'') AS barcode, product_name, warehouse, "
+                     "warehouse_type, available_qty, safety_qty "
                      "FROM inventory WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
     # bc 合计缺货 SKU
     bc_rows = query(

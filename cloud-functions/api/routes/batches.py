@@ -32,8 +32,9 @@ def list_batches(channel: str = "jd", sku: str = "", warehouse: str = "",
         _lim = 0
     if _lim <= 0:
         _lim = 0 if sku else 2000
-    _sql = ("SELECT id, sku, warehouse, warehouse_type, prod_date, exp_date, qty "
-            "FROM batches WHERE %s ORDER BY exp_date ASC, id ASC" % where)
+    # 2026-10-29 按码: 批次唯一键本就含 69码(uq 四维), 展示层必须带出
+    _sql = ("SELECT id, sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+            "prod_date, exp_date, qty FROM batches WHERE %s ORDER BY exp_date ASC, id ASC" % where)
     _p = list(params)
     if _lim > 0:
         _sql += " LIMIT %s"
