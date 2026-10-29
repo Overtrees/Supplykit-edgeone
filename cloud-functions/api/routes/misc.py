@@ -570,6 +570,16 @@ async def heal_own_inventory(request: Request):
             try_err('misc', '快照全量重填充失败', _erf)
             _refill = {"error": str(_erf)[:160]}
         out["_snapshot_refill"] = _refill
+        # 2026-10-30 快照残留自愈(软删订单后 upsert 不会删旧组合) —— 挂到运维接口, 可手动触发
+        #   (每日也会由 _track_data 的 maintenance_log 抢占自动跑一次)
+        _snap_rec = {}
+        try:
+            from routes.dashboard_maintain import _snapshot_reconcile as _sr
+            for _ch4 in chs:
+                _snap_rec[_ch4] = _sr(_ch4)
+        except Exception as _esr:
+            try_err('misc', '快照残留自愈降级', _esr)
+        out["_snapshot_reconcile"] = _snap_rec
         # 物化重建(生成按码行)
         _reb = {}
         try:
