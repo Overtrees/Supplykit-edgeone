@@ -255,28 +255,34 @@ def run_daily_rules() -> dict:
     triggered = []
     for _ch in ("jd", "other"):
         triggered.extend(evaluate_stock_skus(_ch, limit=100000))
-    # 2026-10-29 批次对账(恒等式校验): 自有类仓型 Σ(batches.qty) ≡ inventory.available_qty
-    # 作用: 防未来漂移(导入遗漏/删除记录/手工改库); 偏差只告警不自动修(避免掩盖问题)
+    # 2026-10-29 批次对账(四维逐一, 用户定案): 
+    #   对每个 (仓库类型, SKU, 69码, 仓库) 校验 Σ(batches.qty) ≡ inventory.available_qty
+    #   **不能按 SKU 汇总核对** —— 不同仓/不同码的偏差会互相抵消(A 多 100 与 B 少 100 汇总后为 0),
+    #   掩盖真实错配。四维逐一比对才能定位到具体仓/具体码。
+    #   偏差只告警不自动修(自动修会掩盖导入遗漏/仓名错/批次未填等根因)
     try:
         from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
         _ph = ",".join(["%s"] * len(_SELF))
         for _ch in ("jd", "other"):
             _bad = query(
-                "SELECT i.sku, i.warehouse, SUM(i.available_qty) AS qty, "
+                "SELECT i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
+                "  i.available_qty AS qty, "
                 "  COALESCE((SELECT SUM(b.qty) FROM batches b WHERE b.channel=i.channel "
-                "    AND b.sku=i.sku AND b.warehouse=i.warehouse), 0) AS bq "
+                "    AND b.sku=i.sku AND b.warehouse=i.warehouse "
+                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'')), 0) AS bq "
                 "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
-                "GROUP BY i.sku, i.warehouse HAVING ABS(qty - bq) > 1" % _ph,
+                "HAVING ABS(qty - bq) > 1" % _ph,
                 [_ch] + list(_SELF))
             if _bad:
-                _log("warning", "批次对账偏差 %s: %d 个 SKU×仓 (Σ批次 ≠ 可用)" % (_ch, len(_bad)))
-                # 明细按日限 1 条(避免日志爆炸)
+                _log("warning", "批次对账偏差 %s: %d 项 (Σ批次 ≠ 可用, 按仓库类型+SKU+69码+仓逐一比对)"
+                     % (_ch, len(_bad)))
                 _s0 = _bad[0]
                 execute("INSERT INTO quality_logs(log_type, level, message, source) "
                         "VALUES('quiet_error','warning',%s,'cron')",
-                        ("批次对账: %s 偏差 %d 项, 例 %s/%s 库存%s 批次%s(需重新导入出入库或触发批次重建)"
-                         % (_ch, len(_bad), _s0.get("sku"), _s0.get("warehouse"),
-                            _s0.get("qty"), _s0.get("bq")),))
+                        ("批次对账 %s: %d 项偏差, 例 sku=%s 69码=%s 仓=%s 可用=%s 批次=%s "
+                         "(需补全入库/出库的批次信息后重建)"
+                         % (_ch, len(_bad), _s0.get("sku"), _s0.get("bc") or "-",
+                            _s0.get("warehouse"), _s0.get("qty"), _s0.get("bq")),))
     except Exception as _e_rc:
         try_err('cron', '批次对账降级', _e_rc)
     _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
