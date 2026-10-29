@@ -510,6 +510,9 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         #   传 barcode=X → 读该码行; 传 '' → 显式读合计行
         if barcode is None or barcode == "":
             where += " AND COALESCE(barcode,'')=''"
+        elif barcode == "*":
+            # 2026-10-29 批量读全部按码行(断货/健康一次取全, 避免逐码往返)
+            where += " AND COALESCE(barcode,'')!=''"
         else:
             where += " AND COALESCE(barcode,'')=%s"
             params += [str(barcode)]

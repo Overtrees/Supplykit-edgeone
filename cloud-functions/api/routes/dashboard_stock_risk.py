@@ -106,6 +106,7 @@ def _stock_risk(channel, full: int = 0):
     #    跳过 load_daily_sales_grouped + calc_sales_multi ×3 直算(曾直算抢跑——5 万 SKU 白算 3 次);
     #    物化空/失败 → 降级原直算(数学等价, 零行为变化)。物化行只存三窗口底料, 现场 rolling_predict 与直算逐 SKU 等价
     fused, fused_c, wh_fused, sigma, _has_materialized = {}, {}, {}, {}, False
+    fused_bc = {}  # 2026-10-29 按 69码 日销
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
         _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
@@ -130,13 +131,24 @@ def _stock_risk(channel, full: int = 0):
                         _wk = "%s|%s" % (_r.get("sku") or "", _wh)
                         wh_fused[_wk] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
                                             float(_r.get("ds28") or 0))
+            # 2026-10-29 按 69码: 批量读全部按码行(一次查询), key = "sku|barcode"
+            try:
+                _rws_bc = get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode="*")
+                for _r in (_rws_bc or {}).values():
+                    _bc0 = str(_r.get("barcode") or "")
+                    if _bc0:
+                        fused_bc["%s|%s" % (_r.get("sku") or "", _bc0)] = _rp(
+                            float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
+                            float(_r.get("ds28") or 0))
+            except Exception:
+                pass
             _has_materialized = True
     except Exception as _e:
         from routes.common import try_err as _terr2
         _terr2('dash_stock', 'stock_risk 物化读取降级(走直算)', _e)
     # ── 降级直算(仅物化表空/失败——与旧口径完全一致) ──
     if not _has_materialized:
-        by_sku, by_sku_wh, _ = load_daily_sales_grouped(28, channel, skus=skus)
+        by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(28, channel, skus=skus)
         multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
         fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
         c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}
@@ -149,6 +161,12 @@ def _stock_risk(channel, full: int = 0):
                     m[d] = m.get(d, 0) + q
         cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
         fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
+        # 2026-10-29 按码直算
+        if by_sku_bc:
+            _bcm = calc_sales_multi(by_sku_bc, windows=[7, 14, 28])
+            for _k in by_sku_bc:
+                fused_bc[_k] = rolling_predict(_bcm[7].get(_k, 0), _bcm[14].get(_k, 0),
+                                               _bcm[28].get(_k, 0))
         wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
         wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                        wh_multi[28].get(k, 0)) for k in by_sku_wh}
@@ -173,8 +191,9 @@ def _stock_risk(channel, full: int = 0):
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
         ctt = int(r.get("c_transit") or 0)
+        _bc = str(r.get("barcode") or "").strip()   # 2026-10-29 按 69码(空码降级)
         if wt in ("platform", "platform_b"):
-            st = bc_total.setdefault(sku, {"available": 0, "safety": 0, "transit": 0, "ct": 0})
+            st = bc_total.setdefault((sku, _bc), {"available": 0, "safety": 0, "transit": 0, "ct": 0})
             st["available"] += qty
             st["safety"] += safety
             # 链路: 供应商统一发 B 仓 → B→C 调拨补 C 缺口 → BC 供应的在途仅 B 仓行(供应商→B)
@@ -183,6 +202,14 @@ def _stock_risk(channel, full: int = 0):
                 st["transit"] += tty
             if wt == "platform":
                 st["ct"] += ctt
+
+    def _ds_of(sku, bc):
+        """2026-10-29 日销取值: 有码优先读按码行, 缺失**降级**读 SKU 合计"""
+        if bc:
+            _v = fused_bc.get("%s|%s" % (sku, bc))
+            if _v:
+                return _v
+        return fused.get(sku, 0)
 
     def _otif(sku):
         """该 SKU 供应商置信系数(products.supplier_code → suppliers.score/5)"""
@@ -199,11 +226,12 @@ def _stock_risk(channel, full: int = 0):
             continue
         sku = r.get("sku")
         wh = str(r.get("warehouse") or "")
+        _bc = str(r.get("barcode") or "").strip()   # 2026-10-29 按 69码
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
         ctt = int(r.get("c_transit") or 0)
-        ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
+        ds = _ds_of(sku, _bc) or wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -215,17 +243,20 @@ def _stock_risk(channel, full: int = 0):
         buffer = avail / max(max(safety_line(ds, lit_trad), _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
-            c_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+            c_items.append({"sku": sku, "barcode": _bc or (pmap.get(sku) or {}).get("barcode", ""),
                             "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                             "warehouse": wh or "C仓", "type": "C", "available_qty": avail,
                             "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
                             "level": lv, "accel": (a_rate > 1.1) or None})
     # BC 合计(bbcc 专属: B仓+全国C仓按 SKU 合计, 一盘棋视图 → 标签 BC; 用 bbcc 补货周期)
     bc_items = []
-    for sku, st in bc_total.items():
+    for (sku, _bc), st in bc_total.items():
         avail = st["available"]
         safety = st["safety"]
-        ds = fused_c.get(sku, 0)
+        # 2026-10-29 按 69码: C 维日销按码(缺失降级 SKU 合计)
+        ds = fused_bc.get("%s|%s" % (sku, _bc)) if _bc else 0
+        if not ds:
+            ds = fused_c.get(sku, 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -234,7 +265,7 @@ def _stock_risk(channel, full: int = 0):
         buffer = avail / max(max(safety_line(ds, lit_bbcc), _ss_dyn(sku, lit_bbcc)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_bbcc)
         if inc:
-            bc_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+            bc_items.append({"sku": sku, "barcode": _bc or (pmap.get(sku) or {}).get("barcode", ""),
                              "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                              "warehouse": "BC", "type": "BC", "available_qty": avail,
                              "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
@@ -246,10 +277,11 @@ def _stock_risk(channel, full: int = 0):
             continue
         sku = r.get("sku")
         wh = str(r.get("warehouse") or "")
+        _bc = str(r.get("barcode") or "").strip()   # 2026-10-29 按 69码
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
-        ds = wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
+        ds = _ds_of(sku, _bc) or wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -258,7 +290,7 @@ def _stock_risk(channel, full: int = 0):
         buffer = avail / max(max(safety_line(ds, lit_trad), _ss_dyn(sku, lit_trad)), 1)
         inc, lv = _grade(adj_dos, buffer, lit_trad)
         if inc:
-            own_items.append({"sku": sku, "barcode": (pmap.get(sku) or {}).get("barcode", ""),
+            own_items.append({"sku": sku, "barcode": _bc or (pmap.get(sku) or {}).get("barcode", ""),
                               "product_name": (pmap.get(sku) or {}).get("product_name", sku),
                               "warehouse": wh or "自有", "type": "OWN", "available_qty": avail,
                               "daily_sales": round(ds, 1), "days_to_empty": round(adj_dos, 1),
