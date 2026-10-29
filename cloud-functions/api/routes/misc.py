@@ -433,13 +433,17 @@ def data_freshness(channel: str = "jd"):
         try_err('misc', '新鲜度查询降级', _e)
 
     def _days(s):
+        """天数差: 兼容 'YYYY-MM-DD HH:MM:SS' 与 'YYYY-MM-DDTHH:MM:SS'(MySQL MAX() 返回 T 分隔)"""
         if not s:
             return None
-        try:
-            _d = _dt.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
-            return max(int((_now - _d).total_seconds() // 86400), 0)
-        except Exception:
-            return None
+        _t = str(s)[:19].replace("T", " ")
+        for _fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                _d = _dt.strptime(_t, _fmt).replace(tzinfo=_tz.utc)
+                return max(int((_now - _d).total_seconds() // 86400), 0)
+            except Exception:
+                continue
+        return None
 
     def _lvl(d):
         if d is None:
