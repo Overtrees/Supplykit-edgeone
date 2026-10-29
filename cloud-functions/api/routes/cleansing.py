@@ -592,13 +592,26 @@ def cleansing_status(task_id: str = "", page_size: int = 5000):
                         _ev_skus.append(_esk)
                 from db import execute as _ee2
                 _eval_task = task_id + "_eval"
-                _ee2("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
-                     "VALUES(%s,'cleansing_eval','running',%s,'{}',%s) "
-                     "ON DUPLICATE KEY UPDATE status='running', params=VALUES(params), updated_at=NOW()",
-                     [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
-                                              "mp": mp, "fname": fname, "offset": 0, "success": 0, "failed": 0,
-                                              "sku_list": _ev_skus, "steps": [],
-                                              "cur_step": {"name": "评估联动准备", "started": int(_t.time())}}, ensure_ascii=False), channel])
+                # 2026-10-29 修复: 导入失败(success=0)时 sku_list 为空, 仍创建 running 任务
+                # → 无分片可推进, 任务页永久显示"进行中 0%"(实测卡 64 分钟, 需保活/前端拾起)
+                if not _ev_skus:
+                    _ee2("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                         "VALUES(%s,'cleansing_eval','done',%s,%s,%s) "
+                         "ON DUPLICATE KEY UPDATE status='done', params=VALUES(params), updated_at=NOW()",
+                         [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
+                                                  "sku_list": [], "offset": 0}, ensure_ascii=False),
+                          json.dumps({"result": {"target": target, "success": 0, "failed": 0,
+                                                 "rules_evaluated": 0, "inventory_adjusted": 0,
+                                                 "message": "无可评估 SKU(导入全部失败或映射无 SKU 列)"}},
+                                     ensure_ascii=False), channel])
+                else:
+                    _ee2("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
+                         "VALUES(%s,'cleansing_eval','running',%s,'{}',%s) "
+                         "ON DUPLICATE KEY UPDATE status='running', params=VALUES(params), updated_at=NOW()",
+                         [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
+                                                  "mp": mp, "fname": fname, "offset": 0, "success": 0, "failed": 0,
+                                                  "sku_list": _ev_skus, "steps": [],
+                                                  "cur_step": {"name": "评估联动准备", "started": int(_t.time())}}, ensure_ascii=False), channel])
             except Exception as _e4:
                 try_err('cleansing', '创建评估任务降级', _e4)
             from routes.analysis_cache import invalidate_all

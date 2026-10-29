@@ -271,6 +271,13 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
+    # 2026-10-29 存量文案迁移(幂等): 超卖判定口径由"单笔订单量"改为"累计订单量",
+    # 告警 description 是**生成时快照**, 已存在的告警仍是旧文案 → 一次性同步
+    try:
+        execute("UPDATE alerts SET description='累计订单量超过可用库存' "
+                "WHERE alert_type='oversell' AND description='订单数量超过可用库存'")
+    except Exception as e:
+        try_err('schema', '超卖告警文案迁移降级', e)
     # 2026-10-17 幂等补列(已建表 vs DDL 差异自愈——CREATE IF NOT EXISTS 不改已存在表):
     # inventory.safety_days 曾漏(采购建议 SELECT 用, 1054 实证)——SHOW COLUMNS 差异→ALTER ADD
     try:
