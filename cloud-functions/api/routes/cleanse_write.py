@@ -147,30 +147,42 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
 
 def _rebuild_own_batches(channel, skus):
     """自有仓批次重建(2026-10-29 FIFO): 入库按生产日期升序累加 → 出库量按 FIFO 先扣最早批次
+
     保证 Σ(剩余批次qty) ≡ inventory.available_qty(自有仓恒等式)
     只处理 own 维度; 平台/B 仓批次由库存导入提供, 不在此重算
+
+    仓名策略与 _recalc_own_inventory 一致(2026-10-29 修复):
+      · 单自有仓 → 忽略入库记录的 warehouse, 批次统一落在该仓名下
+        (曾严格匹配 → 入库记录'北京仓' vs 库存'集货仓' → 80%+ SKU 批次重建失败)
+      · 多自有仓 → 严格匹配
     """
     from db import query as _q, execute as _e, executemany as _em
+    _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
+    _whs = [str(r.get("warehouse") or "") for r in
+            _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
+               "AND warehouse_type IN (%s)" % ("%s", _ph_wt),
+               [channel] + list(SELF_WAREHOUSE_TYPES))]
+    _single = len(_whs) <= 1
+    _wh_fixed = _whs[0] if _single else ""
     done = 0
     for i in range(0, len(skus), 100):
         batch_skus = [x for x in skus[i:i + 100] if x]
         if not batch_skus:
             continue
         ph = ",".join(["%s"] * len(batch_skus))
-        # 该 SKU 的自有仓入库明细(含效期), 按生产日期升序(FIFO 基准)
+        _wh_cond = "" if _single else (
+            " AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
+            "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
+        _params = [channel] + batch_skus + ([] if _single else [channel] + list(SELF_WAREHOUSE_TYPES))
         ins = _q("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
-                 "WHERE channel=%s AND sku IN (%s) AND (warehouse='' OR warehouse IN "
-                 "(SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type IN (%s))) "
-                 "ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id"
-                 % ("%s", ph, "%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))),
-                 [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES))
-        # 该 SKU 的自有仓出库总量
+                 "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
+                 " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id"
+                 % ("%s", ph), _params)
         outs = {}
         for r in _q("SELECT sku, SUM(quantity) AS q FROM outbound_records "
                     "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", ph),
                     [channel] + batch_skus):
             outs[str(r.get("sku"))] = int(r.get("q") or 0)
-        # 按 SKU 聚合入库明细 → FIFO 扣除出库量
         by_sku = {}
         for r in ins:
             sk = str(r.get("sku") or "")
@@ -185,14 +197,14 @@ def _rebuild_own_batches(channel, skus):
                     qty -= take
                     out_left -= take
                 if qty > 0:
-                    _insert_rows.append({"sku": sk, "warehouse": str(r.get("warehouse") or ""),
+                    _insert_rows.append({"sku": sk,
+                                         "warehouse": _wh_fixed or str(r.get("warehouse") or ""),
                                          "warehouse_type": "own", "channel": channel,
                                          "prod_date": str(r.get("prod_date") or "")[:10],
                                          "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
             _del_skus.append(sk)
         if not _del_skus:
             continue
-        # 删旧(仅 own) → 插新
         for j in range(0, len(_del_skus), 200):
             d = _del_skus[j:j + 200]
             try:
@@ -209,7 +221,7 @@ def _rebuild_own_batches(channel, skus):
                     % (", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))),
                     [tuple(r[c] for c in cols) for r in chunk])
             except Exception as _ee:
-                pass
+                try_err('cleansing', '自有仓批次插入降级', _ee)
         done += len(_insert_rows)
     return done
 
