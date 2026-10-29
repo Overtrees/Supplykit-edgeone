@@ -122,6 +122,13 @@ def _build_repl(channel, mode):
     try:
         from biz.sales import get_sku_sales_stats
         _stats = get_sku_sales_stats(channel, days=60) or {}
+        # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
+        #   补货建议整条链路退化为 SKU 合计值 —— 多码 SKU 的两码会显示同一份日销/库存)
+        try:
+            _stats.update(get_sku_sales_stats(channel, days=60, barcode="*") or {})
+        except Exception as _ebc:
+            from routes.common import try_err as _te2
+            _te2('repl', '补货按码行加载降级', _ebc)
     except Exception as _e:
         from routes.common import try_err
         try_err('repl', '物化读取降级', _e)
