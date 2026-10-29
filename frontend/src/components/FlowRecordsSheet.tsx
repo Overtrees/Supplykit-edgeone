@@ -205,7 +205,7 @@ export default function FlowRecordsSheet({
                     <th
                       key={i}
                       style={{
-                        textAlign: i === 5 || i === 8 ? 'right' : 'left',
+                        textAlign: 'center',
                         padding: '6px 6px',
                         fontWeight: 600,
                         color: 'var(--muted)',
@@ -221,26 +221,35 @@ export default function FlowRecordsSheet({
               <tbody>
                 {items.map(it => (
                   <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>
+                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                       {String(it.date || '').slice(0, 10)}
                       <span className="muted2" style={{ marginLeft: 3, fontSize: 9 }}>
                         {String(it.date || '').slice(11, 16)}
                       </span>
                     </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>{it.sku}</td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', color: 'var(--muted)' }}>
+                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      {it.sku}
+                    </td>
+                    <td
+                      style={{
+                        padding: '6px 6px',
+                        whiteSpace: 'nowrap',
+                        color: 'var(--muted)',
+                        textAlign: 'center',
+                      }}
+                    >
                       {it.warehouse || WT_LABEL[it.warehouse_type] || '—'}
                     </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>
+                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                       {it.prod_date || '—'}
                     </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>
+                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                       {it.exp_date || '—'}
                     </td>
                     <td
                       style={{
                         padding: '6px 6px',
-                        textAlign: 'right',
+                        textAlign: 'center',
                         fontVariantNumeric: 'tabular-nums',
                       }}
                     >
@@ -253,6 +262,7 @@ export default function FlowRecordsSheet({
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
+                        textAlign: 'center',
                       }}
                     >
                       {it.extra || '—'}
@@ -265,11 +275,12 @@ export default function FlowRecordsSheet({
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                         color: 'var(--muted2)',
+                        textAlign: 'center',
                       }}
                     >
                       {it.remark || '—'}
                     </td>
-                    <td style={{ padding: '2px 4px', textAlign: 'right' }}>
+                    <td style={{ padding: '2px 6px', textAlign: 'center' }}>
                       <button
                         className="tpl-btn-ghost clickable"
                         style={{ width: 28, height: 28, padding: 0, borderRadius: '50%' }}
