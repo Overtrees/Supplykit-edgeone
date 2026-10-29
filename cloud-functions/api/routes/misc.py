@@ -360,7 +360,8 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
         return fail("target 必须为 inbound 或 outbound")
     table = "inbound_records" if target == "inbound" else "outbound_records"
     dcol = "inbound_date" if target == "inbound" else "outbound_date"
-    ecol = "supplier" if target == "inbound" else "target_warehouse"
+    # 2026-10-29 语义: 入库显示供应商 / 出库显示仓库(发生仓); 备注列单独返回
+    ecol = "supplier" if target == "inbound" else "warehouse"
     pg = max(1, int(page or 1))
     ps = min(max(1, int(page_size or 50)), 200)
     where = ["channel=%s"]
@@ -378,7 +379,8 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
     try:
         tot = _o("SELECT COUNT(*) AS c FROM `%s` WHERE %s" % (table, w), params) or {}
         rows = _q("SELECT id, sku, %s AS d, quantity, prod_date, exp_date, warehouse, "
-                  "`%s` AS extra FROM `%s` WHERE %s ORDER BY %s DESC, id DESC LIMIT %%s OFFSET %%s"
+                  "`%s` AS extra, COALESCE(remark,'') AS remark "
+                  "FROM `%s` WHERE %s ORDER BY %s DESC, id DESC LIMIT %%s OFFSET %%s"
                   % (dcol, ecol, table, w, dcol),
                   params + [ps, (pg - 1) * ps])
     except Exception as _e:
@@ -388,7 +390,8 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
               "exp_date": str(r.get("exp_date") or "")[:10],
               "quantity": int(r.get("quantity") or 0),
               "warehouse": str(r.get("warehouse") or ""),
-              "extra": str(r.get("extra") or "")} for r in rows]
+              "extra": str(r.get("extra") or ""),
+              "remark": str(r.get("remark") or "")} for r in rows]
     return ok({"items": items, "total": int((tot or {}).get("c") or 0),
                "page": pg, "page_size": ps, "target": target,
-               "extra_label": "供应商" if target == "inbound" else "目标仓"})
+               "extra_label": "供应商" if target == "inbound" else "仓库"})

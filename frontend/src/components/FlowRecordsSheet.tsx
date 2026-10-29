@@ -150,21 +150,23 @@ export default function FlowRecordsSheet({
             >
               <thead>
                 <tr style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
-                  {['日期', 'SKU', '生产日期', '截止日期', '数量', extraLabel, ''].map((h, i) => (
-                    <th
-                      key={i}
-                      style={{
-                        textAlign: i === 4 || i === 6 ? 'right' : 'left',
-                        padding: '6px 6px',
-                        fontWeight: 600,
-                        color: 'var(--muted)',
-                        whiteSpace: 'nowrap',
-                        borderBottom: '1px solid var(--border)',
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
+                  {['日期', 'SKU', '生产日期', '截止日期', '数量', extraLabel, '备注', ''].map(
+                    (h, i) => (
+                      <th
+                        key={i}
+                        style={{
+                          textAlign: i === 4 || i === 7 ? 'right' : 'left',
+                          padding: '6px 6px',
+                          fontWeight: 600,
+                          color: 'var(--muted)',
+                          whiteSpace: 'nowrap',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ),
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -202,6 +204,18 @@ export default function FlowRecordsSheet({
                       }}
                     >
                       {it.extra || '—'}
+                    </td>
+                    <td
+                      style={{
+                        padding: '6px 6px',
+                        maxWidth: 120,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        color: 'var(--muted2)',
+                      }}
+                    >
+                      {it.remark || '—'}
                     </td>
                     <td style={{ padding: '2px 4px', textAlign: 'right' }}>
                       <button

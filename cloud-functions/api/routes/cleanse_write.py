@@ -423,7 +423,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
-                             "price", "box_qty", "unit", "weight", "volume", "status"],
+                             "price", "box_qty", "unit", "weight", "volume", "status", "remark"],
                             cleaned, conflict_mode, "sku", "inbound_date",
                             agg_key3="barcode", agg_sum=["quantity", "price"])
         # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 维护
@@ -441,7 +441,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             ["sku", "product_name", "quantity", "target_warehouse", "outbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
-                             "price", "box_qty", "unit", "weight", "volume", "status"],
+                             "price", "box_qty", "unit", "weight", "volume", "status", "remark"],
                             cleaned, conflict_mode, "sku", "outbound_date", channel=channel,
                             agg_key3="barcode", agg_sum=["quantity", "price"])
     return 0, len(cleaned), []

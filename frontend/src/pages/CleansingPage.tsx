@@ -300,8 +300,9 @@ export const PRESET_REQUIRED: Record<string, string[]> = {
   inventory_b: ['sku', 'warehouse', 'available_qty'],
   product: ['sku', 'product_name'],
   supplier: ['supplier_code', 'supplier_name'],
-  inbound: ['sku', 'quantity', 'inbound_date'],
-  outbound: ['sku', 'quantity', 'outbound_date'],
+  // 2026-10-29 仓库必选(为多自有仓准备); 效期(prod_date/exp_date)可选——部分品类不做效期管理
+  inbound: ['sku', 'quantity', 'inbound_date', 'warehouse'],
+  outbound: ['sku', 'quantity', 'outbound_date', 'warehouse'],
   gmv_flow: ['platform', 'flow_no', 'amount', 'arrived_time'],
 }
 // 示例行(仅必选列给样例, 可选列留空)——下载模板第二行

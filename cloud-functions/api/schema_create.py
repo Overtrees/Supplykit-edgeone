@@ -284,6 +284,9 @@ def create_all_tables():
         from db import query as _q2
         _extra_cols = {
             "cleansing_templates": [("cf_meta", "TEXT")],
+            # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
+            "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''")],
+            "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''")],
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
         }
         for _t, _cols in _extra_cols.items():
