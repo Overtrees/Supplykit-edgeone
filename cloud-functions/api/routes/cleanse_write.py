@@ -188,10 +188,24 @@ def _rebuild_own_batches(channel, skus):
         for r in ins:
             sk = str(r.get("sku") or "")
             by_sku.setdefault(sk, []).append(r)
+        # 期初库存也要有批次(2026-10-29): 期初是"盘点时已在库", 无入库单据
+        # → 生成"期初批次"(效期未知), 否则 Σ批次 恒比 available 少一个期初值
+        _beg_map = {}
+        for r in _q("SELECT sku, COALESCE(beginning_stock,0) AS b FROM inventory "
+                    "WHERE channel=%s AND sku IN (%s) AND warehouse_type IN (%s)"
+                    % ("%s", ph, _ph_wt), [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
+            _beg_map[str(r.get("sku") or "")] = int(r.get("b") or 0)
+        for sk, _bq in _beg_map.items():
+            if _bq > 0:
+                by_sku.setdefault(sk, [])  # 确保 SKU 进入重建范围(即使无入库记录)
         _del_skus, _insert_rows = [], []
         for sk, rows in by_sku.items():
+            _b0 = _beg_map.get(sk, 0)
+            # 期初批次插到 FIFO 队首(最老, 最先被出库消耗); 效期留空=未知
+            _fifo = ([{"quantity": _b0, "prod_date": "", "exp_date": "", "warehouse": ""}]
+                     if _b0 > 0 else []) + list(rows)
             out_left = outs.get(sk, 0)
-            for r in rows:
+            for r in _fifo:
                 qty = int(r.get("quantity") or 0)
                 if out_left > 0:
                     take = min(qty, out_left)
