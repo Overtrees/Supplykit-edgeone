@@ -146,7 +146,10 @@ async def auth_middleware(request: Request, next):
     try:
         global _LAST_CONT
         _nowc = _ctime.time()
-        if _nowc - _LAST_CONT > 60 and request.url.path.startswith("/api/"):
+        # 2026-10-29 修复: 原条件 `request.url.path.startswith("/api/")` —— Makers 转发时 path 已剥离
+        # root_path(/api), 实际为 "/dashboard/summary" → 条件恒假 → **请求驱动续跑从未触发**
+        # (实证: cleansing_eval 任务 created 后 10 分钟 updated_at 不变, 只能等每天 05:05 的平台 cron)
+        if _nowc - _LAST_CONT > 60:
             _LAST_CONT = _nowc
             import threading as _thc
             def _cont():
