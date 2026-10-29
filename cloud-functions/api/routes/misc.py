@@ -308,10 +308,19 @@ async def flow_records_batch(request: Request):
         return ok({"deleted": 0, "message": "无匹配记录"})
     _skus = sorted({str(r.get("sku") or "") for r in _rows if r.get("sku")})
     _ch = (_rows[0].get("channel") or "jd")
+    # 2026-10-29 架构定案: 删除入/出库流水 → 自有仓必须重算(否则库存停留在旧值)
+    # 由于改成"期初 + Σ流水"重算制, 删除后重算即自动回退(无需手工反向加减)
     try:
         _n = _e("DELETE FROM `%s` WHERE id IN (%s)" % (table, _ph), ids)
     except Exception as _e3:
         return fail("删除失败: %s" % str(_e3)[:120])
+    # 自有仓重算(删除流水后库存随之回退; 幂等, 不依赖增量反向)
+    try:
+        if target in ("inbound", "outbound") and _skus:
+            from routes.cleanse_write import _recalc_own_inventory as _rc
+            _rc(_ch, _skus)
+    except Exception as _erc:
+        try_err('misc', '删除后自有仓重算降级', _erc)
     # 批次同步(仅入库): 该 SKU 已无入库记录 → 清理其 batches(避免效期统计幽灵)
     _b_cleaned = 0
     if target == "inbound" and _skus:

@@ -26,9 +26,9 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                 try:
                     _skus_touch = sorted({c.get("sku") for c in cleaned_all if c.get("sku")})
                     if _skus_touch:
-                        # inventory 导入: 写入期初基线后, 立即按"期初+流水"重算 available
-                        # (保持恒等式 available ≡ beginning_stock + Σ入 − Σ出)
+                        # 库存: 期初 + Σ流水(重算制); 批次: FIFO 重建(Σ批次 ≡ available)
                         _recalc_own_inventory(channel, _skus_touch)
+                        _rebuild_own_batches(channel, _skus_touch)
                 except Exception as _er:
                     try_err('cleansing', '自有仓重算降级', _er)
     except Exception as _e:
@@ -129,6 +129,73 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
     return adjusted, evaluated, _msg
+
+def _rebuild_own_batches(channel, skus):
+    """自有仓批次重建(2026-10-29 FIFO): 入库按生产日期升序累加 → 出库量按 FIFO 先扣最早批次
+    保证 Σ(剩余批次qty) ≡ inventory.available_qty(自有仓恒等式)
+    只处理 own 维度; 平台/B 仓批次由库存导入提供, 不在此重算
+    """
+    from db import query as _q, execute as _e, executemany as _em
+    done = 0
+    for i in range(0, len(skus), 100):
+        batch_skus = [x for x in skus[i:i + 100] if x]
+        if not batch_skus:
+            continue
+        ph = ",".join(["%s"] * len(batch_skus))
+        # 该 SKU 的自有仓入库明细(含效期), 按生产日期升序(FIFO 基准)
+        ins = _q("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
+                 "WHERE channel=%s AND sku IN (%s) AND (warehouse='' OR warehouse IN "
+                 "(SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='own')) "
+                 "ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id"
+                 % ("%s", ph, "%s"), [channel] + batch_skus + [channel])
+        # 该 SKU 的自有仓出库总量
+        outs = {}
+        for r in _q("SELECT sku, SUM(quantity) AS q FROM outbound_records "
+                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", ph),
+                    [channel] + batch_skus):
+            outs[str(r.get("sku"))] = int(r.get("q") or 0)
+        # 按 SKU 聚合入库明细 → FIFO 扣除出库量
+        by_sku = {}
+        for r in ins:
+            sk = str(r.get("sku") or "")
+            by_sku.setdefault(sk, []).append(r)
+        _del_skus, _insert_rows = [], []
+        for sk, rows in by_sku.items():
+            out_left = outs.get(sk, 0)
+            for r in rows:
+                qty = int(r.get("quantity") or 0)
+                if out_left > 0:
+                    take = min(qty, out_left)
+                    qty -= take
+                    out_left -= take
+                if qty > 0:
+                    _insert_rows.append({"sku": sk, "warehouse": str(r.get("warehouse") or ""),
+                                         "warehouse_type": "own", "channel": channel,
+                                         "prod_date": str(r.get("prod_date") or "")[:10],
+                                         "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
+            _del_skus.append(sk)
+        if not _del_skus:
+            continue
+        # 删旧(仅 own) → 插新
+        for j in range(0, len(_del_skus), 200):
+            d = _del_skus[j:j + 200]
+            try:
+                _e("DELETE FROM batches WHERE channel=%s AND warehouse_type='own' AND sku IN (%s)"
+                   % ("%s", ",".join(["%s"] * len(d))), [channel] + d)
+            except Exception as _ed:
+                try_err('cleansing', '自有仓批次删除降级', _ed)
+        for j in range(0, len(_insert_rows), 300):
+            chunk = _insert_rows[j:j + 300]
+            cols = ["sku", "warehouse", "warehouse_type", "channel", "prod_date", "exp_date", "qty"]
+            try:
+                _em("INSERT INTO batches(%s) VALUES(%s)"
+                    % (", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))),
+                    [tuple(r[c] for c in cols) for r in chunk])
+            except Exception as _ee:
+                pass
+        done += len(_insert_rows)
+    return done
+
 
 def _recalc_own_inventory(channel, skus):
     """自有仓库存重算(2026-10-29 架构定案): available = 期初 + Σ入库 − Σ出库

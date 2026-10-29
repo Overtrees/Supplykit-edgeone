@@ -824,8 +824,9 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         try:
             _tgt = str(params.get("target") or "")
             if _tgt in ("inbound", "outbound"):
-                from routes.cleanse_write import _recalc_own_inventory as _rc
+                from routes.cleanse_write import _recalc_own_inventory as _rc, _rebuild_own_batches as _rb
                 adjusted = _rc(channel, list(_batch))
+                _rb(channel, list(_batch))  # FIFO 批次重建(Σ批次 ≡ available)
             # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
         except Exception as _e5b:
             try_err('cleansing', '自有仓重算降级', _e5b)
