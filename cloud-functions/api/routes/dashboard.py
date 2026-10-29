@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one, execute
-from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced, try_err
+from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced, try_err, INVENTORY_COLS as _INV_COLS
 
 router = APIRouter(tags=["dashboard"])
 
@@ -225,8 +225,13 @@ def _q_recent(channel, d1):
 def _q_inventory(channel):
     # 全量行(health out_of_stock 需 avail<=0 缺货行; 低库存消费方自行过滤 avail>0)
     # 2026-10-29 按码: 补 barcode + warehouse(原只有 sku/仓型/数量, 健康与低库存无法按码/按仓判定)
-    return query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                 "available_qty FROM inventory WHERE channel=%s", [channel])
+    _rows = query("SELECT " + _INV_COLS + " FROM inventory WHERE channel=%s", [channel])
+    try:
+        from routes.common import check_cols as _cc
+        _cc(_rows, ("barcode", "warehouse"), "dash", "看板物料")
+    except Exception:
+        pass
+    return _rows
 
 
 def _q_digest(channel):
@@ -862,9 +867,8 @@ def _build_aux(channel, mode):
         low = {"c": _cnt}
     except Exception as _e:
             try_err('dash', '低库存动态判定降级', _e)
-    so_items = query("SELECT sku, COALESCE(barcode,'') AS barcode, product_name, warehouse, "
-                     "warehouse_type, available_qty, safety_qty "
-                     "FROM inventory WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
+    so_items = query("SELECT " + _INV_COLS + " FROM inventory "
+                     "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
     # bc 合计缺货 SKU
     bc_rows = query(
         "SELECT sku, MAX(product_name) AS product_name FROM inventory "

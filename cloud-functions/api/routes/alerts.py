@@ -30,7 +30,7 @@ def _attach_warehouse(alerts, channel):
         for r in query(
                 "SELECT sku, warehouse_type, "
                 "GROUP_CONCAT(DISTINCT warehouse ORDER BY warehouse SEPARATOR ',') AS whs "
-                "FROM inventory WHERE channel=%s AND sku IN (" + _ph + ") "
+                "FROM inventory WHERE channel=%s AND sku IN (" + _ph + ") "  # no-barcode-ok: 库存补充仅拼接仓库名显示
                 "AND warehouse IS NOT NULL AND warehouse!='' "
                 "GROUP BY sku, warehouse_type", [channel] + skus[i:i + 200]):
             wh_map[(str(r.get("sku") or ""), str(r.get("warehouse_type") or ""))] = str(r.get("whs") or "")

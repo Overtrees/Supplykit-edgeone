@@ -396,7 +396,7 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
         # 仓型集合(与补货/断货同口径: inventory warehouse_type)
         try:
             _wh_type = {}
-            for r in _q("SELECT DISTINCT warehouse, warehouse_type FROM inventory "
+            for r in _q("SELECT DISTINCT warehouse, warehouse_type FROM inventory "  # no-barcode-ok: 仓型维度枚举
                         "WHERE channel=%s AND warehouse!=''", [channel]):
                 _wh_type[str(r.get("warehouse") or "")] = str(r.get("warehouse_type") or "")
         except Exception:

@@ -34,9 +34,32 @@ _TE_STATE = {}
 _TE_WINDOW = 10.0
 
 
+# 库存表列单一真源(2026-10-29 根治): 任何 SELECT ... FROM inventory 一律引用本常量
+# 背景: 多处查询手写列清单, 漏 barcode → 消费方 r.get("barcode") 恒空 → 两码合并且被
+#       products.barcode 兜底掩盖, 按码链路"看起来生效"; 同类漏列还会漏 warehouse/in_transit。
+INVENTORY_COLS = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                  "available_qty, in_transit_qty, c_transit, safety_qty, safety_days, "
+                  "locked_qty, product_name, beginning_stock")
+
+
 # 导入目标 → 库存仓型(单一真源; 2026-10-29: 原只在 cleansing.py 定义, cleanse_write.py 引用时报
 # NameError → 平台库存/B仓库存导入 100% 失败; 重构拆分时漏迁移)
 TARGET_WH = {"inventory": "own", "platform_inv": "platform", "inventory_b": "platform_b"}
+
+
+def check_cols(rows, cols, src, what):
+    """运行时字段自检(2026-10-29 根治"SELECT 漏列"): 首行缺列即留痕, 不抛异常
+
+    背景: 本轮两次踩坑(补货/断货 SELECT 漏 barcode) → 消费方 .get("barcode") 恒 None →
+    两码静默合并, 且输出被 products.barcode 兜底掩盖。文本扫描门禁误报率高, 改为数据入口自检。
+    """
+    try:
+        if rows and isinstance(rows[0], dict):
+            _miss = [c for c in cols if c not in rows[0]]
+            if _miss:
+                try_err(src, "%s 查询缺列 %s(按码/按仓链路会静默失效)" % (what, _miss), None)
+    except Exception:
+        pass
 
 
 def mark_driver(task_id, driver):

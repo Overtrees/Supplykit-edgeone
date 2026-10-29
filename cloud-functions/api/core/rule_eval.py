@@ -25,10 +25,10 @@ def close_orphan_for_skus(skus, channel="jd"):
                    "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + _skus)
         _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
         _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
-                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)" % ("%s", _ph, "%s", _ph),
+                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)  -- no-barcode-ok: 存在性判定" % ("%s", _ph, "%s", _ph),
                   [channel] + _skus + [channel] + _skus)
         _infile = {r.get("sku") for r in _inf}
-        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "
+        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "  # no-barcode-ok: SKU 汇总
                   "GROUP BY sku" % ("%s", _ph), [channel] + _skus)
         _avail = {r.get("sku"): r.get("a") or 0 for r in _inv}
         # low_stock 特殊: 无未删订单且无在档(只有订单页有——订单删了孤儿)——关(有在档/真缺货保留)
@@ -91,7 +91,7 @@ def close_oversell_for_skus(skus, channel="jd"):
         _rows = _q("SELECT sku, SUM(quantity) AS q FROM orders WHERE deleted_at IS NULL OR deleted_at='' "
                    "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
         _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
-        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "
+        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "  # no-barcode-ok: SKU 汇总
                   "GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
         _avail = {r.get("sku"): r.get("a") or 0 for r in _inv}
         _close_sku = [s for s in set(skus) if float(_live.get(s, 0) or 0) <= float(_avail.get(s, 0) or 0)]
@@ -103,7 +103,7 @@ def close_oversell_for_skus(skus, channel="jd"):
         # 有在档(商品/进销存有该 SKU——即使 avail 0 真缺货)保留——不误伤
         _ph_in = ",".join(["%s"] * len(set(skus)))
         _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
-                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)" % ("%s", _ph_in, "%s", _ph_in),
+                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)  -- no-barcode-ok: 存在性判定" % ("%s", _ph_in, "%s", _ph_in),
                   [channel] + list(set(skus)) + [channel] + list(set(skus)))
         _infile = {r.get("sku") for r in _inf}
         _ls_orphan = [s for s in set(skus) if not _live.get(s) and s not in _infile]
@@ -135,9 +135,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     """
     from datetime import datetime, timezone
     # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
-    _SEL = ("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-            "product_name, available_qty, safety_qty, in_transit_qty, locked_qty "
-            "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
+    from routes.common import INVENTORY_COLS as _IC
+    _SEL = ("SELECT " + _IC + " FROM inventory "
+            "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
     if skus:
         # 2026-10-29 增量入口: 出入库导入后只评本批 SKU(不全量/不拖慢), 分片防超长 IN
         _sk = [str(x) for x in skus if x]

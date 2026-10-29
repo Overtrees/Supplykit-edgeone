@@ -17,21 +17,22 @@ def out_of_stock(channel: str = "jd", wh: str = "own", limit: int = 0):
     if wh == "bc":
         # bc = B仓+全国C仓按 SKU 合计(bbcc 一盘棋口径); warehouse 列给实际缺货仓集合
         # (前端弹窗/预览按数据 warehouse 列显示实际仓名, 非硬编码 "BC")
+        # 2026-10-29 按 69码: BC 盘缺货按 (sku, 69码) 分组(原按 sku 合并, 两码库存互相抵消)
         rows = query(
-            "SELECT sku, MAX(product_name) AS product_name, 'bc' AS warehouse_type, "
-            "SUM(available_qty) AS available_qty, "
+            "SELECT sku, COALESCE(barcode,'') AS barcode, MAX(product_name) AS product_name, "
+            "'bc' AS warehouse_type, SUM(available_qty) AS available_qty, "
             "GROUP_CONCAT(DISTINCT IF(available_qty<=0, warehouse, NULL) "
             "ORDER BY warehouse SEPARATOR ',') AS warehouse "
             "FROM inventory "
             "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
-            "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku" + _lim, [channel])
+            "GROUP BY sku, COALESCE(barcode,'') HAVING SUM(available_qty) <= 0 ORDER BY sku" + _lim, [channel])
         for _r in rows:
             _r["warehouse"] = str(_r.get("warehouse") or "") or "BC"
     else:
+        from routes.common import INVENTORY_COLS as _IC
         rows = query(
-            "SELECT sku, product_name, warehouse, warehouse_type, available_qty "
-            "FROM inventory WHERE channel=%s AND warehouse_type=%s AND available_qty<=0 "
-            "ORDER BY id DESC" + _lim, [channel, wh])
+            "SELECT " + _IC + " FROM inventory WHERE channel=%s AND warehouse_type=%s "
+            "AND available_qty<=0 ORDER BY id DESC" + _lim, [channel, wh])
     return ok(rows)
 
 

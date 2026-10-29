@@ -197,7 +197,7 @@ def health():
         r = one(
             "SELECT CONCAT_WS('-',"
             "(SELECT COALESCE(MAX(id),0) FROM orders),"
-            "(SELECT COALESCE(MAX(id),0) FROM inventory),"
+            "(SELECT COALESCE(MAX(id),0) FROM inventory),"  # no-barcode-ok: 仅版本指纹
             "(SELECT COALESCE(MAX(id),0) FROM products),"
             "(SELECT COALESCE(MAX(id),0) FROM alerts),"
             "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot),"

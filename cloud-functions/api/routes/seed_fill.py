@@ -314,7 +314,7 @@ def _seed_batches():
     except Exception as _e0:
         try_err('seed_fill', '批次清空失败(继续插入可能翻倍)', _e0)
     today = _dt.now(timezone.utc)
-    rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "
+    rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 低库存判定按 sku×仓(演示数据, 随后由规则评估校正)
                  "WHERE available_qty > 0")
     _pcat = {}
     for r in query("SELECT sku, category, channel FROM products"):
@@ -542,7 +542,7 @@ def _seed_alerts():
             "UPDATE alerts SET status='closed' WHERE source='rules_engine' AND channel=%s "
             "AND status='active' AND alert_type IN ('low_stock','replenish') "
             "AND related_sku IS NOT NULL AND related_sku != '' AND NOT EXISTS ("
-            "SELECT 1 FROM inventory i WHERE i.channel=%s AND i.sku=alerts.related_sku "
+            "SELECT 1 FROM inventory i WHERE i.channel=%s AND i.sku=alerts.related_sku "  # no-barcode-ok: 存在性判断(SELECT 1)
             "AND i.warehouse=alerts.warehouse AND i.available_qty < i.safety_qty)", (ch, ch))
         closed += int(cur or 0)
     existing = set()
@@ -554,7 +554,7 @@ def _seed_alerts():
         rows = query(
             "SELECT sku, warehouse, warehouse_type, MAX(product_name) AS name, "
             "MAX(available_qty) AS avail, MAX(in_transit_qty) AS transit, MAX(safety_qty) AS safety "
-            "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])
+            "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])  # no-barcode-ok: seed 告警按 sku×仓生成(演示数据)
         for r in rows:
             sku, name = r.get('sku'), r.get('name') or r.get('sku')
             avail, safety = int(r.get('avail') or 0), int(r.get('safety') or 0)
@@ -617,7 +617,7 @@ def seed_step(step, today, skus_data):
         try:
             from routes.cleanse_write import _recalc_own_inventory as _rc
             for _ch in ('jd', 'other'):
-                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "
+                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
                                                    "WHERE channel=%s AND warehouse_type='own'", [_ch])]
                 if _sk:
                     _rc(_ch, [x for x in _sk if x])

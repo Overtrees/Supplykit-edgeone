@@ -126,12 +126,15 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         _ph = ",".join(["%s"] * len(skus))
         try:
             _brows = query(
-                "SELECT b.sku AS sku, b.prod_date AS pd, b.exp_date AS ed, cc.cnt AS cnt FROM ("
-                "SELECT sku, prod_date, exp_date, ROW_NUMBER() OVER (PARTITION BY sku ORDER BY exp_date ASC) AS rn "
+                # 2026-10-29 按 69码: 批次效期按 (sku,69码) 分组(原 PARTITION BY sku → 多码共用一条效期)
+                "SELECT b.sku AS sku, b.barcode AS barcode, b.prod_date AS pd, b.exp_date AS ed, cc.cnt AS cnt FROM ("
+                "SELECT sku, COALESCE(barcode,'') AS barcode, prod_date, exp_date, "
+                "ROW_NUMBER() OVER (PARTITION BY sku, COALESCE(barcode,'') ORDER BY exp_date ASC) AS rn "
                 "FROM batches WHERE channel=%s AND warehouse_type=%s AND exp_date IS NOT NULL "
                 "AND sku IN (" + _ph + ")) b "
-                "JOIN (SELECT sku, COUNT(*) AS cnt FROM batches WHERE channel=%s AND warehouse_type=%s "
-                "AND sku IN (" + _ph + ") GROUP BY sku) cc ON b.sku=cc.sku WHERE b.rn=1",
+                "JOIN (SELECT sku, COALESCE(barcode,'') AS barcode, COUNT(*) AS cnt FROM batches "
+                "WHERE channel=%s AND warehouse_type=%s AND sku IN (" + _ph + ") "
+                "GROUP BY sku, COALESCE(barcode,'')) cc ON b.sku=cc.sku AND b.barcode=cc.barcode WHERE b.rn=1",
                 [channel, wh_type] + skus + [channel, wh_type] + skus)
             _transit = 3
             try:
@@ -166,8 +169,14 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                             _st = "ok"
                     except Exception as _e:
                             try_err('insights', '静默降级', _e)
-                batch_map[_sku] = {"pd": _pd, "ed": _ed, "st": _st, "pct": _pct,
-                                   "days": _td if _td > 0 else 0, "cnt": int(_b.get("cnt") or 0)}
+                _val = {"pd": _pd, "ed": _ed, "st": _st, "pct": _pct,
+                        "days": _td if _td > 0 else 0, "cnt": int(_b.get("cnt") or 0)}
+                # 按 (sku,69码) 精确存; 同时维护 SKU 级兜底(取剩余天数最小=最紧急)
+                _bcb = str(_b.get("barcode") or "")
+                batch_map[(_sku, _bcb)] = _val
+                _prev = batch_map.get(_sku)
+                if not isinstance(_prev, dict) or _val["days"] < _prev.get("days", 999):
+                    batch_map[_sku] = _val
         except Exception as _e:
                 try_err('insights', '静默降级', _e)
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
@@ -219,7 +228,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         mo = month_out.get(_k)
         month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
         month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
-        _bm = batch_map.get(sku) or {}
+        _bm = batch_map.get((sku, _bc1)) or batch_map.get(sku) or {}
         _wt3 = str(r.get("warehouse_type") or "")
         _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
         _dyn_safety = round(ds * _per3, 1) if ds > 0 and _per3 > 0 else 0

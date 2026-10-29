@@ -3,7 +3,7 @@ import time as _time
 from fastapi import APIRouter, Request
 
 from db import query, one
-from routes.common import ok, fail, traced, try_err
+from routes.common import ok, fail, traced, try_err, INVENTORY_COLS as _INV_COLS
 from biz.sales import rolling_predict  # 物化 fused 现场计算(降级路径亦用)
 
 router = APIRouter(tags=["insights"])
@@ -497,6 +497,7 @@ def _products(channel):
 def _inventory(channel):
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 主循环 r.get("barcode") 恒 '' →
     #   agg key 退化为 (sku,'') 两码合并, 补货按码从未生效(输出 barcode 只是 products 兜底, 假象)
-    return query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                 "available_qty, in_transit_qty, c_transit, safety_qty "
-                 "FROM inventory WHERE channel=%s", [channel])
+    from routes.common import INVENTORY_COLS as _IC, check_cols as _cc
+    _rows = query("SELECT " + _IC + " FROM inventory WHERE channel=%s", [channel])
+    _cc(_rows, ("barcode", "warehouse"), "repl", "补货物料")
+    return _rows

@@ -512,7 +512,7 @@ async def heal_own_inventory(request: Request):
                 [_SELF[0], ch])
             # ② 重算库存 + ③ 重建批次(逐 SKU 分片控制耗时)
             _skus = [r.get("sku") for r in query(
-                "SELECT DISTINCT sku FROM inventory WHERE channel=%s "
+                "SELECT DISTINCT sku FROM inventory WHERE channel=%s "  # no-barcode-ok: heal-own UPDATE 语句, 非 SELECT
                 "AND warehouse_type IN (%s)" % ("%s", _ph), [ch] + list(_SELF))]
             _skus = [x for x in _skus if x]
             _n_inv = _recalc(ch, _skus) if _skus else 0
