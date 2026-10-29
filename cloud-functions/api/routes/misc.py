@@ -276,3 +276,63 @@ async def db_diag(request: Request):
                    "elapsed_ms": round((_t.time() - t0) * 1000, 1)})
     except Exception as e:
         return fail("执行失败: %s" % str(e)[:200])
+
+
+@router.post("/flow-records/batch")
+@traced
+async def flow_records_batch(request: Request):
+    """入库/出库记录批量删除(2026-10-29): 两张表无 deleted_at(流水只增), 误导入无撤销手段
+    body: {target: "inbound"|"outbound", ids: [int], reason?: str}
+    安全: 上限 500 条/次(大范围删除需分批, 防误操作一次清空); 删除后同步批次(该 SKU 无入库则清 batches)
+    """
+    try:
+        d = await request.json()
+    except Exception:
+        return fail("需 JSON body")
+    target = str(d.get("target") or "")
+    ids = [int(x) for x in (d.get("ids") or []) if str(x).isdigit()]
+    if target not in ("inbound", "outbound"):
+        return fail("target 必须为 inbound 或 outbound")
+    if not ids:
+        return fail("ids 不能为空")
+    if len(ids) > 500:
+        return fail("单次最多 500 条(请分批, 防误删)")
+    from db import execute as _e, query as _q
+    table = "inbound_records" if target == "inbound" else "outbound_records"
+    _ph = ",".join(["%s"] * len(ids))
+    try:
+        _rows = _q("SELECT id, sku, quantity, channel FROM `%s` WHERE id IN (%s)" % (table, _ph), ids)
+    except Exception as _e2:
+        return fail("读取失败: %s" % str(_e2)[:120])
+    if not _rows:
+        return ok({"deleted": 0, "message": "无匹配记录"})
+    _skus = sorted({str(r.get("sku") or "") for r in _rows if r.get("sku")})
+    _ch = (_rows[0].get("channel") or "jd")
+    try:
+        _n = _e("DELETE FROM `%s` WHERE id IN (%s)" % (table, _ph), ids)
+    except Exception as _e3:
+        return fail("删除失败: %s" % str(_e3)[:120])
+    # 批次同步(仅入库): 该 SKU 已无入库记录 → 清理其 batches(避免效期统计幽灵)
+    _b_cleaned = 0
+    if target == "inbound" and _skus:
+        try:
+            for _sk in _skus:
+                _left = _q("SELECT COUNT(*) AS c FROM inbound_records WHERE channel=%s AND sku=%s",
+                           [_ch, _sk])
+                if not (_left and int((_left[0] or {}).get("c") or 0)):
+                    _b_cleaned += int(_e("DELETE FROM batches WHERE channel=%s AND sku=%s",
+                                         [_ch, _sk]) or 0)
+        except Exception as _e4:
+            try_err('misc', '批次清理降级', _e4)
+    # 审计留痕
+    try:
+        _e("INSERT INTO quality_logs(log_type, level, message, source) VALUES('rule_action','warning',%s,'api')",
+           ("删除%s记录 %d 条(ids=%s%s)" % (
+               "入库" if target == "inbound" else "出库", len(_rows), str(ids[:10]),
+               (" reason=" + str(d.get("reason"))) if d.get("reason") else ""),))
+    except Exception as _e5:
+        try_err('misc', '删除审计写入降级', _e5)
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok({"deleted": len(_rows), "batch_cleaned": _b_cleaned,
+               "message": "已删除 %d 条记录" % len(_rows)})
