@@ -110,7 +110,7 @@ def close_oversell_for_skus(skus, channel="jd"):
     except Exception as _e2:
         _terr('core_rules', 'close_oversell 降级', _e2)
 
-def evaluate_stock_skus(channel, limit=100000, mode=None):
+def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     import time as _t
     _t0 = _t.time()
     _o_ctx_n = 0  # 审计用: order ctx 计数(作用域安全)
@@ -123,11 +123,19 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
     """
     from datetime import datetime, timezone
     # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
-    rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                 "product_name, available_qty, safety_qty, in_transit_qty "
-                 "FROM inventory WHERE channel=%s "
-                 "AND warehouse IS NOT NULL AND warehouse!='' "
-                 "ORDER BY id LIMIT %s", [channel, limit])
+    _SEL = ("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+            "product_name, available_qty, safety_qty, in_transit_qty "
+            "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
+    if skus:
+        # 2026-10-29 增量入口: 出入库导入后只评本批 SKU(不全量/不拖慢), 分片防超长 IN
+        _sk = [str(x) for x in skus if x]
+        rows = []
+        for _i0 in range(0, len(_sk), 500):
+            _b0 = _sk[_i0:_i0 + 500]
+            _ph0 = ",".join(["%s"] * len(_b0))
+            rows.extend(query(_SEL + "AND sku IN (%s)" % _ph0, [channel] + _b0))
+    else:
+        rows = query(_SEL + "ORDER BY id LIMIT %s", [channel, limit])
     if not rows:
         return []
     # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
@@ -384,8 +392,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
                 _act = query("SELECT id, related_sku, warehouse FROM alerts "
                              "WHERE alert_type=%s AND channel=%s AND status='active' AND source='rules_engine'",
                              [_at, channel])
+                _only = {str(x) for x in skus} if skus else None  # 增量评估只关本批 SKU(防误关)
                 _close = [a["id"] for a in _act
-                          if (_at, a.get("related_sku"), a.get("warehouse") or "", channel) not in hits]
+                          if (_only is None or str(a.get("related_sku")) in _only)
+                          and (_at, a.get("related_sku"), a.get("warehouse") or "", channel) not in hits]
                 for _i in range(0, len(_close), 200):
                     _b = _close[_i:_i + 200]
                     if _b:

@@ -201,7 +201,16 @@ def health():
             "(SELECT COALESCE(MAX(id),0) FROM rules),"
             "(SELECT COALESCE(MAX(id),0) FROM suppliers),"
             "(SELECT COALESCE(MAX(updated_at),'') FROM replenishment_config)) AS v")
-        out["version"] = str((r or {}).get("v") or "0")
+        # 计数版(2026-10-29): 任何走应用层的写操作都会递增 → UPDATE 也能被前端感知;
+        # 后段保留表指纹(覆盖绕过应用层直接改库的"新增"场景)。前端只做字符串不等比较。
+        _dvz = 0
+        try:
+            _dvr = one("SELECT v FROM data_version WHERE id=1") or {}
+            _dvz = int(_dvr.get("v") or 0)
+        except Exception as _edv:
+            try_err('index', '数据版本读取降级', _edv)
+        out["data_version"] = _dvz
+        out["version"] = "%s|%s" % (_dvz, str((r or {}).get("v") or "0"))
     except Exception as _ev:
         # 静默降级=指纹失效且无人知(本次 bug 正是如此) → 必须留痕
         try_err('index', 'health 版本指纹降级', _ev)
@@ -291,6 +300,9 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
             # agg 重建失败脏标记(2026-10-25 封死补录/重建失败边界): 重建失败 → 置位 → summary 降级直查(不误用缺数据 agg); 成功 → 清位自愈
             _exec("CREATE TABLE IF NOT EXISTS agg_dirty (id TINYINT PRIMARY KEY, ts DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+            # 数据版本计数(2026-10-29): 写操作中央失效点递增, /health 读取 → 感知 UPDATE 类变更
+            _exec("CREATE TABLE IF NOT EXISTS data_version (id TINYINT PRIMARY KEY, v BIGINT DEFAULT 0, "
+                  "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)")
             _exec("CREATE TABLE IF NOT EXISTS log_archives ("
                   "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
                   "markdown MEDIUMTEXT, `count` INT DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "

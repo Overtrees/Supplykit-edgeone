@@ -828,6 +828,17 @@ try:
           "DROP PRIMARY KEY, ADD PRIMARY KEY %s" not in _sc, "schema_create.py")
     check("根治: 代理主键迁移器就绪(影子表 + 原子切换)",
           "def _migrate_surrogate" in _mi and "SURROGATE_CONTRACT" in _mi, "misc.py")
+    _cl = _rf("routes/cleansing.py")
+    check("联动: 出入库先重算再评估(ctx 用新库存)",
+          0 < _cl.find("adjusted = _rc0(") < _cl.find("evaluate_stock_skus"),
+          "cleansing.py")
+    check("联动: 出入库追加库存变更评估(复用 evaluate_stock_skus, 含动态安全线)",
+          "evaluate_stock_skus" in _cl and "skus=list(_batch)" in _cl, "cleansing.py")
+    _ac = _rf("routes/analysis_cache.py")
+    check("版本: 写操作中央失效点递增 data_version",
+          "data_version" in _ac and "v=v+1" in _ac, "analysis_cache.py")
+    check("版本: health 读计数版(覆盖 UPDATE 类变更)",
+          "data_version" in _ix and "_dvz" in _ix, "index.py")
 except Exception as _e2:
     check("口径/静默失败用例无异常", False, str(_e2)[:200])
 

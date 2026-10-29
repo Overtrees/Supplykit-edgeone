@@ -105,6 +105,13 @@ def invalidate_all():
     导入/删单/规则/参数变更后物化立即跟数据, 非轮询延迟——数据实时性根治)"""
     try:
         from db import execute as _e
+        # 2026-10-29 数据版本根治: invalidate_all 是**所有写操作必经的中央失效点** →
+        # 在此递增计数, /health 读它即可感知 UPDATE 类变更(告警关闭/库存重算/参数保存),
+        # 补掉 MAX(id) 指纹"只认新增、不认更新"的盲区。零额外查询(写操作内 +1 次 UPDATE)。
+        try:
+            _e("INSERT INTO data_version(id, v) VALUES(1,1) ON DUPLICATE KEY UPDATE v=v+1")
+        except Exception as _dv:
+            try_err('analysis_cache', '数据版本递增降级', _dv)
         _e("DELETE FROM analysis_cache")
         for fn in list(_registry.values()):
             try:

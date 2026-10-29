@@ -797,6 +797,29 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         # 2026-10-29 SKU 级去重评估(数学等价): 原每行一 ctx, 同 SKU 多行重复评估
         #   等价性: "存在某行 quantity > X" ⟺ max_quantity > X; "< X" ⟺ min_quantity < X
         #   → 提供 max/min/total_qty/line_count 四个字段, 任何单调条件都可精确表达(语义不漂移)
+        # 2026-10-29 顺序修正(实证漏报): 出入库必须**先重算再评估**
+        #   原顺序: 取 inv_map → 评估 → 重算 → ctx.available_qty 是重算前旧值
+        #   实证: 出库 800 后 own 仓 803→3, 但评估仍按 803 判定"库存充足" → 低库存不告警
+        adjusted = 0
+        if str(params.get("target") or "") in ("inbound", "outbound"):
+            try:
+                from routes.cleanse_write import (
+                    _ensure_inventory_rows as _eir0,
+                    _recalc_own_inventory as _rc0,
+                    _rebuild_own_batches as _rb0,
+                )
+                _eir0(channel, _cleaned)          # 仓库以导入表格为准(自动建档)
+                adjusted = _rc0(channel, list(_batch))
+                _rb0(channel, list(_batch))
+                inv_map = {}                       # 刷新: 评估 ctx 必须用重算后的库存
+                for _i2 in range(0, len(_batch), 500):
+                    _ph2b = ",".join(["%s"] * len(_batch[_i2:_i2 + 500]))
+                    for _r2b in _q5("SELECT sku, SUM(available_qty) AS avail FROM inventory "
+                                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph2b),
+                                    [channel] + _batch[_i2:_i2 + 500]):
+                        inv_map[_r2b.get("sku")] = int(_r2b.get("avail") or 0)
+            except Exception as _e5c:
+                try_err('cleansing', '出入库前置重算降级', _e5c)
         _grp = {}
         for c in _cleaned:
             sku = str(c.get("sku") or "").strip()
@@ -856,26 +879,24 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
                     evaluated += len(flow_ctxs)
             except Exception as _fe:
                 try_err('cleansing', '出入库评估降级', _fe)
+        # 2026-10-29 联动补全: 出入库改变了自有仓库存 → 必须评估 inventory.changed
+        #   (低库存规则绑定 inventory.changed; 原只触发 inbound/outbound.created
+        #    → 出库后库存跌破安全线**不亮灯**, 实测 own 仓 803→3 无告警)
+        # 复用 evaluate_stock_skus(skus=本批): 动态安全线/批次效期/供应商/加速全同源,
+        #   且反向关闭收敛到本批 SKU(不会误关其他 SKU 的告警)
+        if _flow_evt and _batch:
+            try:
+                from core.rule_eval import evaluate_stock_skus as _ess
+                _ess(channel, skus=list(_batch))
+                evaluated += len(_batch)
+            except Exception as _ie:
+                try_err('cleansing', '出入库→库存变更评估降级', _ie)
         if o_ctxs:
             evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
             evaluated = len(o_ctxs)
-        # 2026-10-29 架构定案: 订单=纯数据源(不碰库存); 入库/出库=自有仓台账重算(幂等)
-        adjusted = 0
-        try:
-            _tgt = str(params.get("target") or "")
-            if _tgt in ("inbound", "outbound"):
-                from routes.cleanse_write import (
-                    _ensure_inventory_rows as _eir,
-                    _recalc_own_inventory as _rc,
-                    _rebuild_own_batches as _rb,
-                )
-                # 2026-10-29 用户定案: 仓库名以导入表格为准 → 流水中的仓若库存表没有, 自动建档
-                _eir(channel, _cleaned)
-                adjusted = _rc(channel, list(_batch))
-                _rb(channel, list(_batch))  # FIFO 批次重建(Σ批次 ≡ available)
-            # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
-        except Exception as _e5b:
-            try_err('cleansing', '自有仓重算降级', _e5b)
+        # 2026-10-29: 重算已前移到评估之前(见上方 adjusted) —— 此处不再重复执行
+        #   (原顺序导致 ctx.available_qty 用旧值, 且重算两次虽幂等但浪费)
+        # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
         # 推进 offset + 累积 result
         _new_off = offset + len(_batch)
         _rj = json.loads(row.get("result") or "{}") or {}
