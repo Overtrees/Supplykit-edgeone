@@ -179,11 +179,22 @@ def _rebuild_own_batches(channel, skus):
                     "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
                     " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
         ins = _q(_sql_ins % ("%s", ph), _params)
-        outs = {}
-        for r in _q("SELECT sku, SUM(quantity) AS q FROM outbound_records "
-                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", ph),
-                    [channel] + batch_skus):
-            outs[str(r.get("sku"))] = int(r.get("q") or 0)
+        # 2026-10-29 出库扣减口径(用户定案): 以**实际导入的出库记录**为准
+        #   · 出库记录填了 prod_date/exp_date → 精确扣该批次
+        #   · 未填 → 计入 sku 级 FIFO 兜底池
+        outs = {}        # sku → 未指定批次的出库量(FIFO 兜底)
+        outs_exact = {}  # (sku, prod_date, exp_date) → 精确指定批次量
+        for r in _q("SELECT sku, prod_date, exp_date, SUM(quantity) AS q FROM outbound_records "
+                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku, prod_date, exp_date"
+                    % ("%s", ph), [channel] + batch_skus):
+            _sk = str(r.get("sku") or "")
+            _pd = str(r.get("prod_date") or "")[:10]
+            _ed = str(r.get("exp_date") or "")[:10]
+            _qq = int(r.get("q") or 0)
+            if _pd or _ed:
+                outs_exact[(_sk, _pd, _ed)] = outs_exact.get((_sk, _pd, _ed), 0) + _qq
+            else:
+                outs[_sk] = outs.get(_sk, 0) + _qq
         by_sku = {}
         for r in ins:
             sk = str(r.get("sku") or "")
@@ -204,6 +215,24 @@ def _rebuild_own_batches(channel, skus):
             # 期初批次插到 FIFO 队首(最老, 最先被出库消耗); 效期留空=未知
             _fifo = ([{"quantity": _b0, "prod_date": "", "exp_date": "", "warehouse": ""}]
                      if _b0 > 0 else []) + list(rows)
+            # ②a 精确扣: 按出库记录指定的 (prod_date, exp_date) 定位批次
+            _prec = {}
+            for (_psk, _ppd, _ped), _pq in outs_exact.items():
+                if _psk == sk:
+                    _prec[(_ppd, _ped)] = _prec.get((_ppd, _ped), 0) + _pq
+            if _prec:
+                for r in _fifo:
+                    if not _prec:
+                        break
+                    _k = (str(r.get("prod_date") or "")[:10], str(r.get("exp_date") or "")[:10])
+                    if _k in _prec and _prec[_k] > 0:
+                        _q0 = int(r.get("quantity") or 0)
+                        _tk = min(_q0, _prec[_k])
+                        r["quantity"] = _q0 - _tk
+                        _prec[_k] -= _tk
+                # 指定批次未匹配(批次已不存在/日期不符) → 剩余量转 FIFO 兜底
+                outs[sk] = outs.get(sk, 0) + sum(v for v in _prec.values() if v > 0)
+            # ②b FIFO 兜底: 未指定批次的出库量, 按最老批次先扣
             out_left = outs.get(sk, 0)
             for r in _fifo:
                 qty = int(r.get("quantity") or 0)

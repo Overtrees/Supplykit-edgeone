@@ -447,11 +447,10 @@ def _sync_inv_month():
     # 旧月度口径兜底(仅保证 month_inbound 列合理, 不再用于期初推导)
     execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
             "WHERE channel IN ('jd','other') AND warehouse_type='own' AND month_inbound < 0")
-    # 2026-10-29 删除: 原"期初为负则反推"的兜底 —— 期初应等于导入值(available_qty),
-    # 不该由 month_inbound/outbound 倒推(倒推会产生负期初, 且与流水表无关)
-    # 若重算后 available < 0, 由 _recalc_own_inventory 的 max(0, ...) 处理, 期初保持不变
-    execute("UPDATE inventory SET beginning_stock = 0 "
-            "WHERE channel IN ('jd','other') AND warehouse_type='own' AND beginning_stock < 0")
+    # 2026-10-29 删除全部兜底(用户定案): 期初**以实际导入为准**, 不做任何反推或自动修正
+    #   · 原"期初为负则用 month_inbound/outbound 反推" → 已删除(会产生与流水矛盾的数据)
+    #   · 原"负期初归 0" → 一并删除(用户明确: 不要兜底; 负数应视为导入数据本身有问题,
+    #     由每日对账告警暴露, 而非静默改写)
 
 
 def _seed_config():
