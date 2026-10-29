@@ -216,7 +216,7 @@ export default function FlowRecordsSheet({
                     <td>
                       <button
                         className="tpl-btn-ghost clickable flow-del-btn"
-                        onClick={() => onDelete(it.id)}
+                        onClick={() => doDelete(it.id)}
                         title="删除"
                       >
                         <IconTrash size={13} />
