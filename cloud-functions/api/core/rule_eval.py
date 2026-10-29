@@ -2,6 +2,8 @@
 函数: evaluate_stock_skus(每日全量评估+恢复关闭) / close_oversell_for_skus(删单联动 SKU 级孤儿关闭)
 依赖: core.rules(evaluate_many/load_rules_for——函数内延迟 import 防循环) + db + dashboard(已有延迟)
 """
+import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import → NameError 被 except 吞
+             #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
 from db import query, one, execute
 from routes.common import try_err
 
@@ -169,40 +171,21 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
 
     def _ds_of(_sku, _bc, _wh):
-        """日销取值链(2026-10-29 按业务维度优先, 再降级到码):
+        """日销取值: **SKU+69码 优先 → 降级 SKU**(2026-10-29 简化)
 
-            ① 该维 × 该 69码      —— 逐仓(traditional/own) 或 BC盘(bbcc) 的精准值
-            ② 该维 × 合计码        —— 同维度下沉, 保留"这个仓/这盘货"的口径
-            ③ 全国 × 该 69码       —— 维度缺失时保码
-            ④ 全国 × 合计码        —— 维度与码都缺
-            ⑤ get_sales_digest 兜底(物化缺行)
-
-        维度由 ctx.warehouse 决定: traditional/own 传具体仓名, bbcc 传 __BC__(一盘货)。
-        说明: 物化的 __BC__/__C__ 目前只有合计码行(不按码拆分), 因此 bbcc 会停在②,
-        语义即"这盘货的整体日销" —— 与补货建议 CC/BC 合计口径一致。
+        维度(_wh)是既定业务对象, 不是可降级层级: bbcc→__BC__(一盘) / traditional+own→该仓。
+        故只做两级: ①该对象内该码 ②该对象内合计码(SKU 级)；仍缺则 SKU 全国兜底。
+        已删除的跨维兜底(全国该码/全国合计)属冗余, 会把别的维度销量混进来。
         """
-        # ① 该维 × 该码 (bbcc: __BC__ 盘内该码 / traditional+own: 该仓该码)
         if _bc:
             _v = _ds_bc.get((_sku, _bc, _wh))
             if _v is not None:
                 return _v
-        # ② 该维 × 合计码 (降级只降码, **不降维** —— BC 就是一盘, 不是逐仓)
         _v = _ds_agg.get((_sku, _wh))
         if _v is not None:
             return _v
-        # BC 是一盘维度: 到 ② 为止。**不再回退 __ALL__** —— __ALL__ 含自有仓, 会把 own 销量
-        # 算进 BC 盘(口径污染); 缺行属物化异常, 直接走 digest 兜底
-        if _wh == "__BC__":
-            return _fused.get(_sku, 0)
-        # ③④ 仅逐仓(traditional/own)使用: 该维缺行时向上取全国
-        if _bc:
-            _v = _ds_bc.get((_sku, _bc, "__ALL__"))
-            if _v is not None:
-                return _v
-        _v = _ds_agg.get((_sku, "__ALL__"))
-        if _v is not None:
-            return _v
         return _fused.get(_sku, 0)
+
     _sigma = {}
     _otif_map = {}
     _accel = {}
