@@ -884,10 +884,21 @@ input[type='file'] {
   color: var(--text);
 }
 .task-status {
+  /* 2026-10-29 修复: 图标+文字重叠 —— 缺 flex 对齐导致 svg 与文字挤在一起 */
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  line-height: 1.4;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 99px;
+  white-space: nowrap;
+}
+.task-status svg {
+  flex: 0 0 auto;
+  display: block;
 }
 .task-status.done {
   /* 2026-10-27 状态色柔化: 实心填充 → 浅底深字(与项目语义色体系一致) */
