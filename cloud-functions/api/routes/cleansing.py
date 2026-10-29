@@ -830,10 +830,17 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
             if sku not in set(_batch):
                 continue
             _q = int(c.get("quantity") or 0)
-            _g = _grp.setdefault(sku, {"max": _q, "min": _q, "n": 0})
+            _g = _grp.setdefault(sku, {"max": _q, "min": _q, "n": 0, "amt": 0.0, "price": 0.0})
             _g["max"] = max(_g["max"], _q)
             _g["min"] = min(_g["min"], _q)
             _g["n"] += 1
+            # 2026-10-29 规则页字段对齐: order.total_amount / order.unit_price 此前未注入(选了恒空)
+            try:
+                _g["amt"] += float(c.get("total_amount") or 0)
+                if not _g["price"]:
+                    _g["price"] = float(c.get("unit_price") or 0)
+            except Exception:
+                pass
         # 2026-10-29 入库/出库触发新事件(此前完全不评估 —— 到货/出库后库存骤降无法即时预警)
         # 约束(四维): 仅本次导入 SKU(不全量) + try/except 降级(不阻塞) + 异步任务内执行(不拖慢导入)
         _flow_evt = {"inbound": "inbound.created", "outbound": "outbound.created"}.get(
@@ -870,7 +877,9 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                                      "max_quantity": _g["max"],
                                      "min_quantity": _g["min"],
                                      "line_count": _g["n"],
-                                     "total_qty": _cum.get(sku, _g["max"])},
+                                     "total_qty": _cum.get(sku, _g["max"]),
+                                     "total_amount": round(_g["amt"], 2),
+                                     "unit_price": _g["price"]},
                            "order_qty": _cum.get(sku, _g["max"]),
                            "available_stock": inv_map.get(sku, 0),
                            "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})

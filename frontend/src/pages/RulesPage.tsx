@@ -95,8 +95,8 @@ const LF = [
   { l: '可用/动态安全线(比例)', v: 'inv.available_qty / inv.safety_qty' },
   { l: '日销(定时任务提供)', v: 'daily_sales' },
   { l: '可撑天数(可用/日销)', v: 'inv.available_qty / daily_sales' },
-  { l: '距上次销售(天)', v: 'inv.days_since_last' },
-  { l: '库存量', v: 'inv.stock' },
+  { l: '距上次销售(天)', v: 'days_since_last' },
+  { l: '库存量', v: 'stock' },
   { l: '仓库类型', v: 'inv.warehouse_type' },
   { l: '69码', v: 'barcode' },
   { l: '订单数量', v: 'order.quantity' },
@@ -138,6 +138,7 @@ const OPS = [
 const WHS = [
   { l: '全部', v: '' },
   { l: 'B仓', v: 'platform_b' },
+  { l: 'BC合计(BBCC)', v: 'bc' },
   { l: 'C仓', v: 'platform' },
   { l: '自有仓', v: 'own' },
 ]
@@ -229,7 +230,7 @@ const defaultTestInv = condInfo => {
         ? 'safety_qty'
         : e === 'inv.in_transit_qty'
           ? 'in_transit_qty'
-          : e === 'inv.days_since_last' || e === 'days'
+          : e === 'days_since_last' || e === 'days'
             ? 'days_since_last'
             : e === 'order.quantity' || e === 'order_qty'
               ? 'order_quantity'
@@ -442,7 +443,7 @@ export default function RulesPage() {
     slow_moving: {
       event: 'scheduled.daily',
       cond: {
-        left: 'inv.days_since_last',
+        left: 'days_since_last',
         op: '>',
         right: '30',
         rightType: 'number',
@@ -1208,7 +1209,7 @@ export default function RulesPage() {
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {cond.left === 'inv.days_since_last'
+                        {cond.left === 'days_since_last'
                           ? '天'
                           : cond.left === 'inv.available_qty'
                             ? '%（安全库存百分比）'
@@ -1239,7 +1240,7 @@ export default function RulesPage() {
                     <b>{fieldLbl(cond.left)}</b> {opLbl(cond.op)}{' '}
                     <b>
                       {cond.pctValue || 0}
-                      {cond.left === 'inv.days_since_last'
+                      {cond.left === 'days_since_last'
                         ? '天'
                         : cond.left === 'inv.available_qty'
                           ? '%'

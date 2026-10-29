@@ -124,7 +124,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     from datetime import datetime, timezone
     # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
     _SEL = ("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-            "product_name, available_qty, safety_qty, in_transit_qty "
+            "product_name, available_qty, safety_qty, in_transit_qty, locked_qty "
             "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
     if skus:
         # 2026-10-29 增量入口: 出入库导入后只评本批 SKU(不全量/不拖慢), 分片防超长 IN
@@ -328,11 +328,15 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                     # 快速路径(无计算变量引用规则)无 safety_qty 消费者 → 0; 动态值在 _need_calc 分支注入
                     "safety_qty": 0,
                     "in_transit_qty": int(r.get("in_transit_qty") or 0),
+                    "locked_qty": int(r.get("locked_qty") or 0),
                     "warehouse_type": r.get("warehouse_type", ""),
                     "warehouse": r.get("warehouse", ""),
                     "product_name": r.get("product_name") or sku},
             "stock": int(r.get("available_qty") or 0),
             "days_since_last": days,
+            # 2026-10-29 规则页字段对齐: 前端"日销(定时任务提供)"一直为空 → 补 SKU 级日销(逐仓优先)
+            "daily_sales": round(float(_by_wh_ds.get((sku, str(r.get("warehouse") or "")), 0)
+                                       or _fused.get(sku, 0) or 0), 2),
             "product_name": r.get("product_name") or sku,
         }
         # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)

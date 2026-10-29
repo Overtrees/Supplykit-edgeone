@@ -847,6 +847,16 @@ try:
     _ru = _rf("core/rules.py")
     check("告警: 去重/写入均带 barcode", "COALESCE(barcode,'') AS bc" in _ru and "channel, barcode)" in _ru, "rules.py")
     check("采购: 可售不再重复计 own", "_avl_all = sys_total" in _rf("routes/purchase_calc.py"), "purchase_calc.py")
+    _rp = _rf("../../frontend/src/pages/RulesPage.tsx")
+    check("规则页: 字段路径与 ctx 一致(无 inv.days_since_last/inv.stock)",
+          "inv.days_since_last" not in _rp and "inv.stock" not in _rp, "RulesPage.tsx")
+    check("规则页: 仓储选项含 BC 合计", "BC合计(BBCC)" in _rp, "RulesPage.tsx")
+    check("规则 ctx: locked_qty / daily_sales 已注入",
+          "locked_qty\": int(r.get(\"locked_qty\")" in _re.replace("'", '"')
+          or '"locked_qty": int(r.get("locked_qty") or 0)' in _re, "rule_eval.py")
+    check("规则 ctx: order.total_amount/unit_price 已注入",
+          '"total_amount": round(_g[\"amt\"]' in _cl or '"total_amount": round(_g["amt"], 2)' in _cl, "cleansing.py")
+    check("规则字段存量迁移已登记", "rules_field_path_v1" in _sc, "schema_create.py")
 except Exception as _e2:
     check("口径/静默失败用例无异常", False, str(_e2)[:200])
 

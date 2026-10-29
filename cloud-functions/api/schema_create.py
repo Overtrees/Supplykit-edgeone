@@ -290,6 +290,20 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
+    # 2026-10-29 规则字段路径迁移(幂等): 前端旧选项选出的表达式在后端 ctx 里永远取不到
+    #   inv.days_since_last → days_since_last(顶层) / inv.stock → stock(顶层)
+    #   不迁则存量规则静默永不触发(解析缺 key 返回 None → 条件跳过)
+    try:
+        from db import execute as _erf
+        if _erf("INSERT IGNORE INTO migration_log(name) VALUES('rules_field_path_v1')"):
+            _n1 = _erf("UPDATE rules SET condition_json=REPLACE(condition_json,"
+                       "'inv.days_since_last','days_since_last') "
+                       "WHERE condition_json LIKE '%%inv.days_since_last%%'")
+            _n2 = _erf("UPDATE rules SET condition_json=REPLACE(condition_json,"
+                       "'inv.stock','stock') WHERE condition_json LIKE '%%inv[.]stock%%'")
+            try_err('schema', '规则字段路径迁移完成: days_since_last=%s stock=%s' % (_n1, _n2), None)
+    except Exception as _erfx:
+        try_err('schema', '规则字段路径迁移降级', _erfx)
     # 2026-10-29 日销主键契约检测(根治, 不做 DDL):
     #   目标结构 = 代理主键 `id` + 业务唯一键(含 barcode)。
     #   TiDB 聚簇表**不支持 DROP PRIMARY KEY**(主键值编码进 Row Key = 行物理地址),
