@@ -404,6 +404,9 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _cols = {str(r.get("Field") or "") for r in _qry("SHOW COLUMNS FROM alerts")}
             if "warehouse" not in _cols:
                 _exec("ALTER TABLE alerts ADD COLUMN warehouse VARCHAR(64) DEFAULT ''")
+            # 2026-10-29 告警按 69码 去重(SKU×码 各自独立)
+            if "barcode" not in _cols:
+                _exec("ALTER TABLE alerts ADD COLUMN barcode VARCHAR(64) DEFAULT ''")
         except Exception as _e:
                 try_err('index', '静默降级', _e)
         # 启动补列(幂等): rules.params —— 规则携带业务计算参数(断货/健康看板逻辑融合进规则配置)

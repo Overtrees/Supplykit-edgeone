@@ -49,11 +49,12 @@ def _action_create_alert(ctx):
         except Exception:
             title, desc = title_tpl, desc_tpl
         execute("INSERT INTO alerts(alert_type, title, description, severity, status, source, "
-                "related_sku, related_rule_id, warehouse_type, warehouse, channel) "
-                "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s)",
+                "related_sku, related_rule_id, warehouse_type, warehouse, channel, barcode) "
+                "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s,%s)",
                 (rule.get("alert_type", ""), title, desc, rule.get("severity", "warning"),
                  sku, int(rule.get("id") or 0),
-                 (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel))
+                 (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel,
+                 str(ctx.get("barcode") or "")))
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
 
@@ -82,10 +83,11 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
         return ([], set()) if return_hits else []
     # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
     existing = set()
-    for r in query("SELECT alert_type, related_sku, channel, warehouse FROM alerts "
-                   "WHERE status='active' AND source='rules_engine'"):
+    # 2026-10-29 按 69码: 去重键加 barcode(同 SKU 两个码各自独立, 否则互相覆盖/误关)
+    for r in query("SELECT alert_type, related_sku, channel, warehouse, COALESCE(barcode,'') AS bc "
+                   "FROM alerts WHERE status='active' AND source='rules_engine'"):
         existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel"),
-                      r.get("warehouse") or ""))
+                      r.get("warehouse") or "", str(r.get("bc") or "")))
     inserts = []
     triggered = []
     hits = set()
@@ -93,6 +95,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
         sku = ctx.get("sku", "")
         channel_x = ctx.get("channel") or channel or "jd"
         wh = (ctx.get("inv") or {}).get("warehouse", "")
+        bc_x = str(ctx.get("barcode") or "")
         for rule in rules:
             try:
                 cond = json.loads(rule.get("condition_json") or "{}")
@@ -116,8 +119,8 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
-            hits.add((at, sku, wh, channel_x))  # 条件触发即命中(含已存在告警, 反向关闭勿误关)
-            key = (at, sku, channel_x, wh)
+            hits.add((at, sku, wh, channel_x, bc_x))  # 条件触发即命中(含已存在告警, 反向关闭勿误关)
+            key = (at, sku, channel_x, wh, bc_x)
             if key in existing:
                 continue
             existing.add(key)
@@ -130,15 +133,15 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 title, desc = title_tpl, desc_tpl
             inserts.append((at, title, desc, rule.get("severity", "warning"),
                             sku, int(rule.get("id") or 0),
-                            (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x))
+                            (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
             triggered.append(rule.get("name") or str(rule.get("id")))
-            hits.add((at, sku, wh, channel_x))
+            hits.add((at, sku, wh, channel_x, bc_x))
     if inserts:
         for i in range(0, len(inserts), 100):
             try:
                 executemany("INSERT INTO alerts(alert_type, title, description, severity, status, "
-                            "source, related_sku, related_rule_id, warehouse_type, warehouse, channel) "
-                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s)",
+                            "source, related_sku, related_rule_id, warehouse_type, warehouse, channel, barcode) "
+                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s,%s)",
                             inserts[i:i + 100])
             except Exception as _e:
                 try_err("rules", "告警批量写入失败(%d条)" % len(inserts[i:i + 100]), _e)

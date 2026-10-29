@@ -839,6 +839,14 @@ try:
           "data_version" in _ac and "v=v+1" in _ac, "analysis_cache.py")
     check("版本: health 读计数版(覆盖 UPDATE 类变更)",
           "data_version" in _ix and "_dvz" in _ix, "index.py")
+    _re = _rf("core/rule_eval.py")
+    check("低库存: bbcc 按 BC 合计(SKU×码 一条)",
+          "warehouse_type: \"bc\"" in _re or '"warehouse_type": "bc"' in _re, "rule_eval.py")
+    check("低库存: 关闭判定与 hits 同为含码 5 元组",
+          'str(a.get("bc") or "")) not in hits' in _re, "rule_eval.py")
+    _ru = _rf("core/rules.py")
+    check("告警: 去重/写入均带 barcode", "COALESCE(barcode,'') AS bc" in _ru and "channel, barcode)" in _ru, "rules.py")
+    check("采购: 可售不再重复计 own", "_avl_all = sys_total" in _rf("routes/purchase_calc.py"), "purchase_calc.py")
 except Exception as _e2:
     check("口径/静默失败用例无异常", False, str(_e2)[:200])
 

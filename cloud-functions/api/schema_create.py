@@ -82,6 +82,7 @@ _TABLES = {
         "related_sku VARCHAR(64) DEFAULT '', related_order_no VARCHAR(64) DEFAULT '', "
         "related_rule_id BIGINT DEFAULT 0, warehouse_type VARCHAR(20) DEFAULT '', "
         "warehouse VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', pushed INT DEFAULT 0, "
+        "barcode VARCHAR(64) DEFAULT '', "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
         "KEY idx_alerts_ch_status_created (channel, status, created_at), "
         "KEY idx_alerts_status_source (status, source))"

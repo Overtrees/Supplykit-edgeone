@@ -280,6 +280,31 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
             _st["transit"] += int(_r.get("in_transit_qty") or 0)
             _st["safety"] += int(_r.get("safety_qty") or 0)
 
+    # 2026-10-29 模式分流(与补货建议"安全线提示"完全同源):
+    #   bbcc        → BC 合计(C可用+C在途+B可用+B在途) 对 ds×全周期, 粒度 SKU×69码 一条
+    #   traditional → 逐仓(可用+在途) 对 该仓 ds×(lead+safety)
+    #   own(两模式) → 逐仓(可用+在途) 对 该仓 ds×(采购前置+安全)
+    #   原实现: 单仓 avail 对 全国 ds×周期 → 每仓必报(实测 jd 711→3157)
+    _mode_e = str(mode or ("bbcc" if str(channel) == "jd" else "traditional"))
+    if _mode_e == "bbcc":
+        _bc_agg = {}
+        for _r0 in rows:
+            if str(_r0.get("warehouse_type") or "") in ("platform", "platform_b"):
+                _k0 = (str(_r0.get("sku") or ""), str(_r0.get("barcode") or ""))
+                _a0 = _bc_agg.setdefault(_k0, {"avail": 0, "transit": 0, "name": ""})
+                _a0["avail"] += int(_r0.get("available_qty") or 0)
+                _a0["transit"] += int(_r0.get("in_transit_qty") or 0)
+                if not _a0["name"]:
+                    _a0["name"] = str(_r0.get("product_name") or "")
+        # 平台/B 行不再逐行评估(由 BC 合计行代表), own 行保留逐仓
+        rows = [r for r in rows
+                if str(r.get("warehouse_type") or "") not in ("platform", "platform_b")]
+        rows += [{"sku": _k0[0], "barcode": _k0[1], "warehouse": "__BC__",
+                  "warehouse_type": "bc", "product_name": _a0["name"],
+                  "available_qty": _a0["avail"] + _a0["transit"],
+                  "safety_qty": 0, "in_transit_qty": 0}
+                 for _k0, _a0 in _bc_agg.items()]
+
     inv_ctxs, daily_ctxs = [], []
     for r in rows:
         sku = str(r.get("sku") or "")
@@ -325,7 +350,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                 # 动态安全线(替代静态 safety_qty): 按行维度周期——platform=补货周期(jd→bbcc全周期/other→传统),
                 # own=采购周期; ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
                 _wt = str(r.get("warehouse_type") or "")
-                if _wt == "own":
+                if _wt == "bc":
+                    _period = _bbcc_period        # 全周期 C+B(12 天)
+                elif _wt == "own":
                     _period = _purchase_period
                 elif str(channel) == "jd":
                     _period = _bbcc_period
@@ -401,13 +428,14 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         if hits:
             _ats = sorted({h[0] for h in hits} & _evaluated_ats)
             for _at in _ats:
-                _act = query("SELECT id, related_sku, warehouse FROM alerts "
+                _act = query("SELECT id, related_sku, warehouse, COALESCE(barcode,'') AS bc FROM alerts "
                              "WHERE alert_type=%s AND channel=%s AND status='active' AND source='rules_engine'",
                              [_at, channel])
                 _only = {str(x) for x in skus} if skus else None  # 增量评估只关本批 SKU(防误关)
                 _close = [a["id"] for a in _act
                           if (_only is None or str(a.get("related_sku")) in _only)
-                          and (_at, a.get("related_sku"), a.get("warehouse") or "", channel) not in hits]
+                          and (_at, a.get("related_sku"), a.get("warehouse") or "", channel,
+                               str(a.get("bc") or "")) not in hits]
                 for _i in range(0, len(_close), 200):
                     _b = _close[_i:_i + 200]
                     if _b:

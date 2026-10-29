@@ -201,7 +201,9 @@ def _build_purchase(channel, mode, days=28):
         # 动态安全线预警(采购周期, 供应商级参数优先; 可售=系统仓+自有仓; 只提示不参与计算)
         _purchase_period = int(_lead) + int(_safe_days)
         if _purchase_period > 0:
-            _avl_all = sys_total + st["own_avail"] + st["own_transit"]
+            # 2026-10-29 修复: sys_total 已累加所有仓型(含 own), 再加 own 会重复计
+            #   → 可撑天数虚高 → 该报的库存告急反而不报
+            _avl_all = sys_total
             _dl = _avl_all / ds
             if _dl <= _purchase_period:
                 note = "🔴 库存告急：只够卖%s天（采购需%s天），将断货" % (round(_dl), _purchase_period)
