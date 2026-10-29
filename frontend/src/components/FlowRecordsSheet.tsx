@@ -147,27 +147,40 @@ export default function FlowRecordsSheet({
           {/* 表格 */}
           <div style={{ overflow: 'auto', flex: 1, minHeight: 200 }}>
             <table
-              style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-xs)' }}
+              style={{
+                width: '100%',
+                minWidth: 560,
+                borderCollapse: 'collapse',
+                fontSize: 'var(--font-xs)',
+              }}
             >
               <thead>
                 <tr style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
-                  {['日期', 'SKU', '生产日期', '截止日期', '数量', extraLabel, '备注', ''].map(
-                    (h, i) => (
-                      <th
-                        key={i}
-                        style={{
-                          textAlign: i === 5 || i === 8 ? 'right' : 'left',
-                          padding: '6px 6px',
-                          fontWeight: 600,
-                          color: 'var(--muted)',
-                          whiteSpace: 'nowrap',
-                          borderBottom: '1px solid var(--border)',
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ),
-                  )}
+                  {[
+                    '日期',
+                    'SKU',
+                    '仓库',
+                    '生产日期',
+                    '截止日期',
+                    '数量',
+                    extraLabel,
+                    '备注',
+                    '',
+                  ].map((h, i) => (
+                    <th
+                      key={i}
+                      style={{
+                        textAlign: i === 5 || i === 8 ? 'right' : 'left',
+                        padding: '6px 6px',
+                        fontWeight: 600,
+                        color: 'var(--muted)',
+                        whiteSpace: 'nowrap',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -237,7 +250,7 @@ export default function FlowRecordsSheet({
                 {!items.length && !loading && (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={9}
                       style={{ padding: 20, textAlign: 'center', color: 'var(--muted2)' }}
                     >
                       暂无记录
