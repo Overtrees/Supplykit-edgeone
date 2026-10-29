@@ -391,12 +391,14 @@ def _seed_records():
     # 2026-10-29 业务定案: 出入库只属于自有仓 → 批次池只取 warehouse_type='own'
     # (原取全部批次 → 生成出"沈阳仓/上海仓/B仓"的虚假出入库记录)
     _batch_pool = {}
-    # 2026-10-29 按 69码: 批次池带 barcode, 出入库流水才可归属到具体码
-    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, prod_date, exp_date "
-                   "FROM batches WHERE warehouse_type='own'"):
+    # 2026-10-29 按 69码: 批次池**从 inventory 取码**
+    #   原因: seed 顺序为 库存(step5) → 流水(step6) → 批次(step7),
+    #   流水生成时 batches 还不存在 → 原"从 batches 取"导致流水 barcode 全空
+    #   效期沿用 inventory 的批次池(若无则留空, 由 step7 的 _seed_batches 生成)
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse FROM inventory "
+                   "WHERE warehouse_type='own' AND warehouse!=''"):
         _batch_pool.setdefault(str(r.get('sku')), []).append(
-            {'wh': str(r.get('warehouse') or ''), 'pd': str(r.get('prod_date') or '')[:10],
-             'ed': str(r.get('exp_date') or '')[:10], 'bc': str(r.get('bc') or '')})
+            {'wh': str(r.get('warehouse') or ''), 'pd': '', 'ed': '', 'bc': str(r.get('bc') or '')})
     in_rows, out_rows = [], []
     for sku, sk_name, ch in [(r.get('sku'), r.get('product_name'), r.get('channel'))
                              for r in query("SELECT sku, product_name, channel FROM products")]:
@@ -632,7 +634,18 @@ def seed_step(step, today, skus_data):
     if step == 9:
         n_alert = _seed_alerts()
         n_snap = _build_snapshot()
-        return 10, {'alerts': n_alert, 'snapshot': n_snap}
+        # 2026-10-29 补: 日销物化重建(必须跟在快照之后)
+        #   补货/采购/断货/健康全部读 sku_sales_stats; 原 seed 不重建 → 物化为空/残缺
+        #   放在 step9 内(而非新增 step10): status 端点以 nxt>=10 判定完成, step10 永不执行
+        _rb = {}
+        try:
+            from biz.sales import _rebuild_sku_sales_stats as _rss
+            for _ch in ('jd', 'other'):
+                _rb[_ch] = _rss(_ch, days=60)
+        except Exception as _erb:
+            try_err('seed_fill', 'seed 物化重建降级', _erb)
+            _rb = {'error': str(_erb)[:150]}
+        return 10, {'alerts': n_alert, 'snapshot': n_snap, 'sales_stats': _rb}
     return 10, {}
 
 
