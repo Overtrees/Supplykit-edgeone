@@ -61,19 +61,22 @@ def _build_purchase(channel, mode, days=28):
     # 自权重公式同下; 物化缺失(fused 空)时回退直算, 保证全 SKU 覆盖)——
     # 曾 load_daily_sales(全 products 2000 SKU 分片拉快照)+calc_sales_multi(14/28) 每次 2s+
     fused = {}
+    _rws = {}
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL
-        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)   # barcode='' 合计行
+        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28) or {}   # barcode='' 合计行
         # 2026-10-29 按码: 读按码行, key = "sku|barcode"
         _bc_stats = {}
         try:
-            _codes = [str(x.get("bc") or "") for x in query(
-                "SELECT DISTINCT COALESCE(barcode,'') AS bc FROM inventory "
-                "WHERE channel=%s AND COALESCE(barcode,'')!=''", [channel])]
-            for _c0 in _codes:
-                for _r2 in (get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode=_c0) or {}).values():
-                    _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _c0)] = _r2
-        except Exception:
+            # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
+            # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
+            # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
+            for _r2 in (get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode="*") or {}).values():
+                _bc = str(_r2.get("barcode") or "")
+                if _bc:
+                    _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
+        except Exception as _ebc:
+            try_err('purchase', '按码物化读降级', _ebc)
             _bc_stats = {}
         for _r in (_rws or {}).values():
             _sku = str(_r.get("sku") or "")
@@ -105,14 +108,13 @@ def _build_purchase(channel, mode, days=28):
     # 从物化行现场取(与直算同构——物化行即三窗口底料)
     s14m = {}
     s28m = {}
+    # 2026-10-29: 复用上面同一次物化读(原再次 _gss2(...) 全表查一遍, 纯重复往返)
     try:
-        from biz.sales import get_sku_sales_stats as _gss2, WH_ALL as _WA2
-        _r2 = _gss2(channel, wh=_WA2, days=28) or {}
-        for _k2, _v2 in _r2.items():
+        for _v2 in (_rws or {}).values():
             s14m[_v2.get("sku") or ""] = float(_v2.get("ds14") or 0)
             s28m[_v2.get("sku") or ""] = float(_v2.get("ds28") or 0)
-    except Exception:
-        pass  # 物化读取失败时 s14m/s28m 保持空(展示字段兜底 0, 计算用 fused 已就绪)
+    except Exception as _e14:
+        try_err('purchase', 's14/s28 取值降级', _e14)
 
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
