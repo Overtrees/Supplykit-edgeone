@@ -135,6 +135,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
             return True
     _daily_rules = [r for r in load_rules_for("scheduled.daily", channel, mode) if _is_alert_rule(r)]
     _inv_rules = [r for r in load_rules_for("inventory.changed", channel, mode) if _is_alert_rule(r)]
+    # 2026-10-29 每日兜底补 order.created(超卖): 原只评 inventory.changed + scheduled.daily
+    # → 超卖仅靠"订单导入"触发, 不导入就永不生成/不校正(待处理"其他"恒 0 的根因之一)
+    _order_rules = [r for r in load_rules_for("order.created", channel, mode) if _is_alert_rule(r)]
     _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
     _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)
@@ -288,6 +291,38 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
     r2, hits2 = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules, return_hits=True)
     hits = hits1 | hits2
     out = list(dict.fromkeys(r1 + r2))
+    # 2026-10-29 order.created 全量评估(超卖每日校正):
+    # ctx 用**累计未删订单量**(order.total_qty) vs 当前可用库存 —— 与 close_oversell 同口径
+    if _order_rules:
+        try:
+            _cum = {}
+            _skus_all = [str(r.get("sku") or "") for r in rows if r.get("sku")]
+            _skus_u = list(dict.fromkeys(_skus_all))
+            for _i5 in range(0, len(_skus_u), 500):
+                _b5 = _skus_u[_i5:_i5 + 500]
+                _ph5 = ",".join(["%s"] * len(_b5))
+                for _r5 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+                                 "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
+                                 "GROUP BY sku" % ("%s", _ph5), [channel] + _b5):
+                    _cum[str(_r5.get("sku"))] = int(_r5.get("q") or 0)
+            o_ctxs = []
+            _seen = set()
+            for _sk, _v in _cum.items():
+                if _sk in _seen or not _v:
+                    continue  # 无订单的 SKU 不参与超卖(0 > 库存 恒假)
+                _seen.add(_sk)
+                _st = _agg.get(_sk, {}) if isinstance(_agg, dict) else {}
+                _av = int(_st.get("avail") or 0)
+                o_ctxs.append({"sku": _sk, "channel": channel,
+                               "order": {"quantity": _v, "total_qty": _v}, "order_qty": _v,
+                               "available_stock": _av,
+                               "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
+            if o_ctxs:
+                r3, hits3 = evaluate_many("order.created", o_ctxs, channel, _order_rules, return_hits=True)
+                hits = hits | hits3
+                out = list(dict.fromkeys(out + r3))
+        except Exception as _e:
+            try_err('core_rules', '每日超卖评估降级', _e)
     # 恢复自动关闭(完整性): 每日全量快照下, 该事件规则 alert_type 的 active 告警
     # 若 SKU×仓 未命中(已恢复/不满足) → inactive, 防止库存补足后旧告警残留虚高计数
     try:
@@ -298,7 +333,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
         # 但历史数据里 oversell 被关——根因是 evaluate_many 对其他类型产生 alert_type 重名。
         # 修复: 只对"本次实际评估过的事件"产生的 alert_type 做关闭(白名单), 绝不跨事件误关。
         _evaluated_ats = set()
-        for _rl in list(_daily_rules) + list(_inv_rules):
+        for _rl in list(_daily_rules) + list(_inv_rules) + list(_order_rules):
             _at0 = _rl.get("alert_type")
             if _at0:
                 _evaluated_ats.add(_at0)
