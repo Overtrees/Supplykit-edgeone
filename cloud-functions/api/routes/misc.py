@@ -446,10 +446,31 @@ def data_freshness(channel: str = "jd"):
             return 0
         return 0 if d <= 7 else (1 if d <= 30 else 2)
 
+    # 2026-10-29 兜底: data_freshness 无记录(新表/历史数据) → 从业务表 MAX(业务日期) 反推
+    # 仅限有时间列的表: order(ordered_at) / inbound(inbound_date) / outbound(outbound_date)
+    # inventory/product/supplier 无时间列 → 只能靠导入记录(无记录=未知, 不报红)
+    _seen = {str(r.get("doc_type") or "") for r in rows}
+    _FB = {
+        "order": ("orders", "ordered_at", "WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s"),
+        "inbound": ("inbound_records", "inbound_date", "WHERE channel=%s"),
+        "outbound": ("outbound_records", "outbound_date", "WHERE channel=%s"),
+    }
+    for _dtp, (_tbl, _col, _wh) in _FB.items():
+        if _dtp in _seen:
+            continue
+        try:
+            _r = _q("SELECT MAX(%s) AS m FROM %s %s" % (_col, _tbl, _wh), [channel or "jd"])
+            _m = str((_r[0] or {}).get("m") or "")[:19]
+            if _m:
+                rows.append({"doc_type": _dtp, "last_import_at": "", "last_biz_date": _m})
+        except Exception:
+            continue
+
     src = {}
     for r in rows:
         _dtp = str(r.get("doc_type") or "")
-        _d = _days(r.get("last_import_at"))
+        # 优先导入时间; 无则用业务日期(兜底反推) —— 两者都代表"数据截至"
+        _d = _days(r.get("last_import_at")) if r.get("last_import_at") else _days(r.get("last_biz_date"))
         src[_dtp] = {"doc_type": _dtp, "label": _LBL.get(_dtp, _dtp),
                      "last_import_at": str(r.get("last_import_at") or "")[:19],
                      "last_biz_date": str(r.get("last_biz_date") or "")[:10],
