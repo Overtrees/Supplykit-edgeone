@@ -161,7 +161,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
         cols = ['order_no', 'store', 'warehouse', 'sku', 'product_name', 'quantity', 'unit_price',
                 'total_amount', 'discount_amount', 'freight_amount', 'subsidy_amount', 'tax_amount',
                 'actual_amount', 'order_status', 'ordered_at', 'paid_at', 'channel', 'platform',
-                'data_source']
+                'data_source', 'barcode']
         executemany("INSERT INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                            ", ".join(["%s"] * len(cols))),
                     [tuple(o[c] for c in cols) for o in batch])
@@ -211,7 +211,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                     _a = _amt(q, sk['price'], 0, 0, 0)
                     batch.append({'order_no': '%s-L%03d-%s' % (label.upper(), d, lsk[-3:]),
                                   'store': sk['store'], 'warehouse': random.choice(c_whs),
-                                  'sku': sk['sku'], 'product_name': sk['name'], 'quantity': q,
+                                  'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
                                   'unit_price': sk['price'], **_a,
                                   'order_status': random.choices(['已完成', '已发货'], [80, 20])[0],
                                   'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
@@ -231,7 +231,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 # ——改为全渠道累计序号不取模(60天≈9.9万单, 7位够), 且保留渠道/天维度信息
                 batch.append({'order_no': '%s-%s%03d-%07d' % (label.upper(), ch, d, total),
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
-                              'sku': sk['sku'], 'product_name': sk['name'], 'quantity': q,
+                              'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,
                               'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
                               'paid_at': paid_dt.strftime('%Y-%m-%d ') + _rand_hm(),
@@ -273,7 +273,7 @@ def _seed_inventory(skus_data):
                     q = random.randint(0, 8)
                 else:
                     q = random.randint(50, 800)
-                inv.append({'sku': sk['sku'], 'product_name': sk['name'], 'warehouse': wh_name,
+                inv.append({'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'warehouse': wh_name,
                             'warehouse_type': wt, 'available_qty': q,
                             'in_transit_qty': 0 if low else random.randint(0, 200),
                             'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
@@ -288,6 +288,14 @@ def _seed_inventory(skus_data):
 
 
 def _seed_batches():
+    # 2026-10-29 按 69码: 批次从库存行取码(该 SKU+仓 唯一码时归属明确)
+    bc_map = {}
+    try:
+        for _r in query("SELECT sku, warehouse, MAX(barcode) AS bc FROM inventory "
+                        "WHERE COALESCE(barcode,'')!='' GROUP BY sku, warehouse"):
+            bc_map[(str(_r.get('sku') or ''), str(_r.get('warehouse') or ''))] = str(_r.get('bc') or '')
+    except Exception:
+        bc_map = {}
     """批次效期: 按有货库存行 1~3 批, 4% 问题 SKU(过期/临近), 回写 products.best_before
 
     2026-10-29 幂等化: 原纯 INSERT —— 分步 seed(step6) 与一键 seed 都会调用, 重复执行即翻倍
@@ -342,13 +350,14 @@ def _seed_batches():
                 _ago = random.randint(2, max(shelf // 3 - 6, 5))
             prod = today - timedelta(days=_ago)
             exp = prod + timedelta(days=shelf)
-            bdata.append({'sku': sku, 'warehouse': wh, 'warehouse_type': wht, 'channel': ch,
+            bdata.append({'sku': sku, 'barcode': str(bc_map.get((sku, wh), '') or ''),
+                          'warehouse': wh, 'warehouse_type': wht, 'channel': ch,
                           'prod_date': prod.strftime('%Y-%m-%d'), 'exp_date': exp.strftime('%Y-%m-%d'),
                           'qty': bq})
             if sku not in best_map or exp < best_map[sku]:
                 best_map[sku] = exp
     for i in range(0, len(bdata), 500):
-        cols = ['sku', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
+        cols = ['sku', 'barcode', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
         executemany("INSERT INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                             ", ".join(["%s"] * len(cols))),
                     [tuple(b[c] for c in cols) for b in bdata[i:i + 500]])
