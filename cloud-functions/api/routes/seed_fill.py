@@ -164,8 +164,10 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 'total_amount', 'discount_amount', 'freight_amount', 'subsidy_amount', 'tax_amount',
                 'actual_amount', 'order_status', 'ordered_at', 'paid_at', 'channel', 'platform',
                 'data_source', 'barcode']
-        executemany("INSERT INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
-                                                           ", ".join(["%s"] * len(cols))),
+        # 2026-10-29 幂等写入: 曾用普通 INSERT → 任一键冲突则**整批 500 行失败**且任务中断
+        #   改为 INSERT IGNORE: 冲突行跳过(seed 演示数据允许少量缺失), 任务可跑完
+        executemany("INSERT IGNORE INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
+                                                                  ", ".join(["%s"] * len(cols))),
                     [tuple(o[c] for c in cols) for o in batch])
         batch = []
 
@@ -231,7 +233,9 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 _a = _amt(q, sk['price'], pool['disc'][_pi], pool['freight'][_pi], pool['sub'][_pi])
                 # 2026-10-17 去重键兼容: order_no 全局唯一(原 total%100000 超10万轮回→撞 uq 键)
                 # ——改为全渠道累计序号不取模(60天≈9.9万单, 7位够), 且保留渠道/天维度信息
-                batch.append({'order_no': '%s-%s%03d-%08d' % (label.upper(), ch, d, total),
+                # 双保险: 序号 + 4 位随机(防多实例/旧代码导致的 total 重复)
+                batch.append({'order_no': '%s-%s%03d-%08d%04d' % (label.upper(), ch, d, total,
+                                                                   random.randint(0, 9999)),
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
                               'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,
@@ -283,7 +287,7 @@ def _seed_inventory(skus_data):
     for i in range(0, len(inv), 500):
         cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty',
                 'in_transit_qty', 'safety_qty', 'channel', 'barcode']
-        executemany("INSERT INTO inventory(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
+        executemany("INSERT IGNORE INTO inventory(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                               ", ".join(["%s"] * len(cols))),
                     [tuple(x[c] for c in cols) for x in inv[i:i + 500]])
     return len(inv)
@@ -360,7 +364,7 @@ def _seed_batches():
                 best_map[sku] = exp
     for i in range(0, len(bdata), 500):
         cols = ['sku', 'barcode', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
-        executemany("INSERT INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
+        executemany("INSERT IGNORE INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                             ", ".join(["%s"] * len(cols))),
                     [tuple(b[c] for c in cols) for b in bdata[i:i + 500]])
     for sku, exp in best_map.items():
