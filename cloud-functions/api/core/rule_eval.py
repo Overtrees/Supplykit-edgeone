@@ -111,6 +111,9 @@ def close_oversell_for_skus(skus, channel="jd"):
         _terr('core_rules', 'close_oversell 降级', _e2)
 
 def evaluate_stock_skus(channel, limit=100000, mode=None):
+    import time as _t
+    _t0 = _t.time()
+    _o_ctx_n = 0  # 审计用: order ctx 计数(作用域安全)
     from core.rules import evaluate_many, load_rules_for, _CALC_VARS  # 延迟(防循环——_CALC_VARS 常量随迁依赖)
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
@@ -222,6 +225,32 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
                 _prod_sup[_r4.get("sku")] = _r4.get("supplier_code") or ""
         except Exception as _e:
             try_err("rules", "评估加载供应商映射降级", _e)
+        # 2026-10-29 ctx 扩展: 批次效期(最近到期剩余天数) + 供应商评分 + 周转天数
+        # 缺失一律不给键(→ 条件求值返回 None → 规则跳过), 绝不用 0 冒充(避免"剩余0天"误报)
+        _exp_map = {}
+        try:
+            from datetime import datetime as _dtx, timezone as _tzx
+            _nowx = _dtx.now(_tzx.utc)
+            for _rx in query("SELECT sku, MIN(exp_date) AS e FROM batches WHERE channel=%s "
+                             "AND exp_date IS NOT NULL AND exp_date!='' GROUP BY sku", [channel]):
+                _e = str(_rx.get("e") or "")[:10]
+                if _e:
+                    try:
+                        _exp_map[str(_rx.get("sku"))] = (
+                            _dtx.strptime(_e, "%Y-%m-%d").replace(tzinfo=_tzx.utc) - _nowx).days
+                    except Exception:
+                        pass
+        except Exception as _ex:
+            try_err('core_rules', '批次效期加载降级', _ex)
+        _sup_score = {}
+        try:
+            for _rs in query("SELECT supplier_code, MAX(score) AS sc FROM suppliers WHERE channel=%s "
+                             "GROUP BY supplier_code", [channel]):
+                _v = _rs.get("sc")
+                if _v is not None:
+                    _sup_score[str(_rs.get("supplier_code"))] = float(_v)
+        except Exception as _ex2:
+            try_err('core_rules', '供应商评分加载降级', _ex2)
         for _r in rows:
             _sku = str(_r.get("sku") or "")
             _st = _agg.setdefault(_sku, {"avail": 0, "transit": 0, "safety": 0})
@@ -254,6 +283,12 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
             "days_since_last": days,
             "product_name": r.get("product_name") or sku,
         }
+        # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)
+        if sku in _exp_map:
+            base["batch"] = {"days_to_expire": _exp_map[sku]}
+        _supc = _prod_sup.get(sku, "")
+        if _supc and _supc in _sup_score:
+            base["supplier"] = {"score": _sup_score[_supc], "code": _supc}
         if _need_calc and _agg is not None:
             try:
                 _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
@@ -262,6 +297,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
                 _ss_z = float(_rp.get("ss_z", 1.65))
                 _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
                 _adj = (_st["avail"] + _st["transit"] * _otif) / _ds if _ds > 0 else 999.0
+                # 2026-10-29 ctx 扩展: 周转天数(可撑天数, 无日销时不给键——避免 999 误判)
+                if _ds > 0:
+                    base.setdefault("inv", {})["turnover_days"] = round(_adj, 2)
                 # 动态安全线(替代静态 safety_qty): 按行维度周期——platform=补货周期(jd→bbcc全周期/other→传统),
                 # own=采购周期; ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
                 _wt = str(r.get("warehouse_type") or "")
@@ -318,6 +356,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
                                "available_stock": _av,
                                "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
             if o_ctxs:
+                _o_ctx_n = len(o_ctxs)
                 r3, hits3 = evaluate_many("order.created", o_ctxs, channel, _order_rules, return_hits=True)
                 hits = hits | hits3
                 out = list(dict.fromkeys(out + r3))
@@ -352,6 +391,18 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
                                 % ",".join(["%s"] * len(_b)), _b)
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
+    # 2026-10-29 评估审计(只增日志, 零数据影响): 事件数/ctx 数/命中数/耗时
+    # 作用: 漏报/误报排查, 命中数与告警表对账, 评估耗时趋势(替代方案: 不进程内缓存规则——
+    #       收益低(每渠道仅 3-4 次查询)而风险高(多实例规则变更不一致))
+    try:
+        _aud = ("评估审计 %s: inv_ctx=%d daily_ctx=%d order_ctx=%d 命中=%d 耗时=%.1fs"
+                % (channel, len(inv_ctxs), len(daily_ctxs), _o_ctx_n, len(hits),
+                   _t.time() - _t0))
+        if hits or (_t.time() - _t0) > 1.0:
+            execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                    "VALUES('perf_debug','info',%s,'rules')", (_aud,))
+    except Exception as _e:
+        try_err('core_rules', '评估审计降级', _e)
     # P2 动作审计: 规则 params.log=1 → 触发摘要写 quality_logs(追踪规则触发历史, 非仅当前 active 告警)
     try:
         for _rl in list(_daily_rules) + list(_inv_rules):

@@ -190,6 +190,7 @@ _VALID_FIELDS = {
     "flow.quantity", "flow.warehouse", "flow.date",
     "inbound.quantity", "inbound.warehouse", "inbound.date",
     "outbound.quantity", "outbound.warehouse", "outbound.date",
+    "batch.days_to_expire", "supplier.score", "inv.turnover_days",
     "sku", "product_name", "days_since_last", "stock", "avail", "safety",
     "lit_trad", "lit_bbcc", "health", "health_score",
 }

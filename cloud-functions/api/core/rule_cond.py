@@ -16,12 +16,20 @@ def _resolve_single(expr, ctx):
             return float(expr)
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
+    # 2026-10-29 缺失字段语义修正: 原 val.get(p, 0) → 缺数据被当 0
+    # 后果: batch.days_to_expire 缺失 → 0 → "剩余0天" → 临期规则**全部误触发**
+    #       supplier.score 缺失 → 0 → 低分规则误报
+    # 修: 缺失返回 None; 条件判定遇 None 直接跳过(不命中), 日志留痕便于排查
     val = ctx
     for p in expr.split("."):
         if isinstance(val, dict):
-            val = val.get(p, 0)
+            if p not in val:
+                return None
+            val = val.get(p)
         else:
-            return 0
+            return None
+    if val is None:
+        return None
     # 字符串数值化(前端 params 存字符串 '3', 兼容数字比较)
     if isinstance(val, str):
         try:
@@ -114,6 +122,9 @@ def _check_single(cond, ctx):
         else:
             right = right_raw
         left = _resolve_value(left_raw, ctx)
+        # 2026-10-29 字段缺失(未提供数据) → 该条件不成立(不误报), 而非按 0 比较
+        if left is None or right is None:
+            return False
         if op == "<":
             return left < right
         if op == "<=":

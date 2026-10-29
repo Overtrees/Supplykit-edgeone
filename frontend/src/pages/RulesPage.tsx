@@ -110,6 +110,10 @@ const LF = [
   { l: '出入库日期', v: 'flow.date' },
   { l: '入库数量', v: 'inbound.quantity' },
   { l: '出库数量', v: 'outbound.quantity' },
+  // ctx 扩展字段(2026-10-29): 缺失时条件自动跳过(不按 0 误判)
+  { l: '批次剩余效期(天)', v: 'batch.days_to_expire' },
+  { l: '供应商评分', v: 'supplier.score' },
+  { l: '周转天数', v: 'inv.turnover_days' },
   { l: '订单金额', v: 'order.total_amount' },
   { l: '订单数量×单价', v: 'order.quantity * order.unit_price' },
   { l: '单价', v: 'order.unit_price' },
