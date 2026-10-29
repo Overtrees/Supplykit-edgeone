@@ -63,7 +63,18 @@ def _build_purchase(channel, mode, days=28):
     fused = {}
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL
-        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
+        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)   # barcode='' 合计行
+        # 2026-10-29 按码: 读按码行, key = "sku|barcode"
+        _bc_stats = {}
+        try:
+            _codes = [str(x.get("bc") or "") for x in query(
+                "SELECT DISTINCT COALESCE(barcode,'') AS bc FROM inventory "
+                "WHERE channel=%s AND COALESCE(barcode,'')!=''", [channel])]
+            for _c0 in _codes:
+                for _r2 in (get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode=_c0) or {}).values():
+                    _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _c0)] = _r2
+        except Exception:
+            _bc_stats = {}
         for _r in (_rws or {}).values():
             _sku = str(_r.get("sku") or "")
             _d14 = float(_r.get("ds14") or 0)
@@ -105,9 +116,11 @@ def _build_purchase(channel, mode, days=28):
 
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
-    for i in query("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, "
-                   "safety_qty, safety_days FROM inventory WHERE channel=%s", [channel]):
-        s = i.get("sku")
+    # 2026-10-29 按 69码: 库存聚合 key = (sku, barcode), 空码归入 "" 组(降级)
+    for i in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse_type, warehouse, "
+                   "available_qty, in_transit_qty, safety_qty, safety_days "
+                   "FROM inventory WHERE channel=%s", [channel]):
+        s = (i.get("sku"), str(i.get("bc") or "").strip())
         wt = i.get("warehouse_type") or "platform"
         if wt == "platform_b" and (channel != "jd" or mode != "bbcc"):
             continue
@@ -150,8 +163,22 @@ def _build_purchase(channel, mode, days=28):
         return cache[key]
 
     result = []
-    for sku, st in inv.items():
-        ds = round(fused.get(sku, 0) * active_factor, 1)
+    for (sku, _bc), st in inv.items():
+        # 2026-10-29 按 69码: 有码读按码日销, 缺失则**降级**读合计(不含69)
+        _ds_src = _bc_stats.get("%s|%s" % (sku, _bc)) if _bc else None
+        if _ds_src:
+            _d14 = float(_ds_src.get("ds14") or 0)
+            _d28 = float(_ds_src.get("ds28") or 0)
+            if _d14 > _d28 * 1.15:
+                _w14, _w28 = 0.55, 0.45
+            elif _d14 < _d28 * 0.85:
+                _w14, _w28 = 0.35, 0.65
+            else:
+                _w14, _w28 = 0.20, 0.80
+            _base_ds = round(_d14 * _w14 + _d28 * _w28, 1)
+        else:
+            _base_ds = fused.get(sku, 0)   # 无码 / 按码缺失 → 降级合计
+        ds = round(_base_ds * active_factor, 1)
         if ds <= 0:
             continue
         sys_total = st["available"] + st["transit"]
@@ -189,7 +216,7 @@ def _build_purchase(channel, mode, days=28):
                                                 else "<目标%d天" % target_turn)
             note = note + " · " + _buy_note if note else _buy_note
         result.append({
-            "sku": sku, "barcode": prod.get("barcode", ""),
+            "sku": sku, "barcode": _bc or prod.get("barcode", ""),
             "product_name": prod.get("product_name") or sku, "brand": prod.get("brand", ""),
             "store": prod.get("store", ""), "warehouse": st["own_warehouse"],
             "category": prod.get("category", ""),
