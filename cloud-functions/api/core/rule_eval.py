@@ -286,6 +286,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     #   own(两模式) → 逐仓(可用+在途) 对 该仓 ds×(采购前置+安全)
     #   原实现: 单仓 avail 对 全国 ds×周期 → 每仓必报(实测 jd 711→3157)
     _mode_e = str(mode or ("bbcc" if str(channel) == "jd" else "traditional"))
+    if _mode_e != "bbcc":
+        # 2026-10-29 与采购/补货同口径: B 仓(platform_b)只在 jd+bbcc 链路参与,
+        #   传统模式/other 渠道不产生 B 仓维度告警(否则会出现"B 仓单独一条"的伪维度)
+        rows = [r for r in rows if str(r.get("warehouse_type") or "") != "platform_b"]
     if _mode_e == "bbcc":
         _bc_agg = {}
         for _r0 in rows:
@@ -299,6 +303,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         # 平台/B 行不再逐行评估(由 BC 合计行代表), own 行保留逐仓
         rows = [r for r in rows
                 if str(r.get("warehouse_type") or "") not in ("platform", "platform_b")]
+        # bbcc 下 platform_b 已并入 BC 合计, 不再逐行
         rows += [{"sku": _k0[0], "barcode": _k0[1], "warehouse": "__BC__",
                   "warehouse_type": "bc", "product_name": _a0["name"],
                   "available_qty": _a0["avail"] + _a0["transit"],
