@@ -255,6 +255,30 @@ def run_daily_rules() -> dict:
     triggered = []
     for _ch in ("jd", "other"):
         triggered.extend(evaluate_stock_skus(_ch, limit=100000))
+    # 2026-10-29 批次对账(恒等式校验): 自有类仓型 Σ(batches.qty) ≡ inventory.available_qty
+    # 作用: 防未来漂移(导入遗漏/删除记录/手工改库); 偏差只告警不自动修(避免掩盖问题)
+    try:
+        from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
+        _ph = ",".join(["%s"] * len(_SELF))
+        for _ch in ("jd", "other"):
+            _bad = query(
+                "SELECT i.sku, i.warehouse, SUM(i.available_qty) AS qty, "
+                "  COALESCE((SELECT SUM(b.qty) FROM batches b WHERE b.channel=i.channel "
+                "    AND b.sku=i.sku AND b.warehouse=i.warehouse), 0) AS bq "
+                "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
+                "GROUP BY i.sku, i.warehouse HAVING ABS(qty - bq) > 1" % _ph,
+                [_ch] + list(_SELF))
+            if _bad:
+                _log("warning", "批次对账偏差 %s: %d 个 SKU×仓 (Σ批次 ≠ 可用)" % (_ch, len(_bad)))
+                # 明细按日限 1 条(避免日志爆炸)
+                _s0 = _bad[0]
+                execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                        "VALUES('quiet_error','warning',%s,'cron')",
+                        ("批次对账: %s 偏差 %d 项, 例 %s/%s 库存%s 批次%s(需重新导入出入库或触发批次重建)"
+                         % (_ch, len(_bad), _s0.get("sku"), _s0.get("warehouse"),
+                            _s0.get("qty"), _s0.get("bq")),))
+    except Exception as _e_rc:
+        try_err('cron', '批次对账降级', _e_rc)
     _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
         cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
     # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)

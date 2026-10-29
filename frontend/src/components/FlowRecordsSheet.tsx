@@ -25,6 +25,9 @@ export default function FlowRecordsSheet({
   const [err, setErr] = useState('')
   const [extraLabel, setExtraLabel] = useState('供应商')
   const [delId, setDelId] = useState<number | null>(null)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [skuQ, setSkuQ] = useState('')
 
   const PS = 50
   const WT_LABEL: Record<string, string> = { own: '自有仓', platform: '平台仓', platform_b: 'B仓' }
@@ -34,7 +37,11 @@ export default function FlowRecordsSheet({
     setErr('')
     try {
       const r = await api.get(
-        `/api/flow-records/list?target=${t}&page=${p}&page_size=${PS}&channel=${channel}&t=${Date.now()}`,
+        `/api/flow-records/list?target=${t}&page=${p}&page_size=${PS}&channel=${channel}` +
+          (dateFrom ? `&date_from=${dateFrom}` : '') +
+          (dateTo ? `&date_to=${dateTo}` : '') +
+          (skuQ ? `&sku=${encodeURIComponent(skuQ)}` : '') +
+          `&t=${Date.now()}`,
         { timeout: 60000 },
       )
       const d = r.data || {}
@@ -56,7 +63,7 @@ export default function FlowRecordsSheet({
       load(tab, 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, tab, channel])
+  }, [open, tab, channel, dateFrom, dateTo, skuQ])
 
   const doDelete = async (id: number) => {
     setDelId(id)
@@ -136,6 +143,34 @@ export default function FlowRecordsSheet({
             >
               共 {total} 条
             </span>
+          </div>
+
+          {/* 筛选栏: 日期范围 + SKU 模糊(后端已支持, 触发重载) */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="tpl-field"
+              style={{ flex: '0 0 118px', fontSize: 11, padding: '0 8px' }}
+            />
+            <span className="muted2" style={{ fontSize: 10 }}>
+              ~
+            </span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="tpl-field"
+              style={{ flex: '0 0 118px', fontSize: 11, padding: '0 8px' }}
+            />
+            <input
+              placeholder="SKU 搜索"
+              value={skuQ}
+              onChange={e => setSkuQ(e.target.value)}
+              className="tpl-field"
+              style={{ flex: 1, minWidth: 0, fontSize: 11, padding: '0 10px' }}
+            />
           </div>
 
           {err && (
