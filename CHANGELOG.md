@@ -1,3 +1,81 @@
+## 2026-10-29(白天-晚间): 69码四维绑定全链路 + 自有仓重算制定案 + seed 彻底根治(71 commits)
+
+> commits 80a1034c→8342f2b8(北京时区 11:25-21:00); 回归 160/160; CI 绿。
+
+### 一、规则引擎根治(超卖漏报 + 事件覆盖)
+- **超卖系统性漏报**: 规则条件 `order.quantity > inv.available_qty` 中 quantity 是**单笔**,
+  而 close_oversell 用**累计**判定 —— 两口径矛盾 → 累计已超卖(1095件 vs 库存9)但每笔都 <9 时永不触发
+  → ctx 新增 `order.total_qty`(累计未删订单量), 规则默认条件改 `order.total_qty`; 实测 jd 235/other 317 条生成
+- **每日兜底只评 inventory.changed + scheduled.daily**, 不含 order.created → 超卖只在导入时评估
+  → 补 order.created 全量评估(累计量 vs 库存), 恢复关闭白名单按事件隔离(防跨事件误关)
+- **新增 inbound.created / outbound.created 事件**(此前完全不触发): 入库/出库导入 → 评估(异步, 仅本批 SKU)
+- **ctx 字段扩展**: batch.days_to_expire / supplier.score / inv.turnover_days / order.max_quantity/min/line_count
+- **缺失字段 None 语义**(5 处链路): 原 `val.get(p, 0)` → 缺数据当 0 → 临期规则全误报
+  → 缺失返回 None, 条件跳过; 同时补 `float(None)`/`max(None)` 等 5 处 TypeError
+- **订单评估库存取值 MAX→SUM**: 原取最大单仓, 与"累计订单量"对比会低估超卖(库存分散时)
+
+### 二、库存数据源分离(架构定案)
+| 仓型 | 权威来源 |
+|---|---|
+| **own(自有仓)** | **重算制**: available = 期初(库存导入) + Σ入库 − Σ出库 |
+| **platform / platform_b** | **快照制**: 库存导入直接生效(平台后台导出含销售影响) |
+| **订单** | **不碰任何库存**(纯数据源: 日销/GMV/规则) |
+
+- 删除订单扣平台库存(含 jd_po 死代码 —— 前端 0 处设置, 从未触发)
+- 出入库从**增量制改重算制**(幂等: 重复导入/滞后补录结果唯一)
+- 期初**以实际导入为准**, 删除全部反推/归零兜底(负期初视为导入数据问题, 由每日对账暴露)
+- 出入库**只属于自有类仓型**: 导入强制 own(白名单 `SELF_WAREHOUSE_TYPES` 可扩展多自有仓)
+
+### 三、69码四维绑定全链路(15 处)
+绑定键: **仓库类型 + SKU + 69码 + 仓库名**; 匹配规则: **有值精准, 任一方为空则降级(不含69码)**
+- 数据层: 库存重算 / 批次重建 / 批次对账 / 自动建档 / 日销快照 / 日销物化
+- 决策层: 补货 / 采购 / 滞销 / 断货(BC·OWN·C) / 规则ctx / 进销存 / 健康度(逐行) / 临期处置
+- 出库扣减: 按导入记录的 (sku, barcode, prod_date, exp_date) **精确匹配**; 未填批次**不扣**(不做 FIFO 猜测) + 告警
+- 仓库名由**导入表格决定**: 流水出现新仓 → 自动建档(不要求预先配置)
+- 日销表主键重建(D1: TiDB 聚簇索引不可 DROP → SHOW CREATE TABLE 改写主键重建表)
+- 批次对账改**四维逐一比对**(原按 sku×仓汇总会让不同码的偏差互相抵消)
+
+### 四、出入库明细弹窗(新功能)
+- 进销存锤子菜单入口; 入库/出库两态 tab; 列: 日期/SKU/仓库/生产日期/截止/数量/供应商或仓库/备注/删除
+- 日期范围 + SKU 搜索筛选; 滚动到底自动续页; 保留期 180 天; 行内删除(调 /api/flow-records/batch)
+- 新增 `POST /api/flow-records/batch`(入出库记录批量删除, 单次上限 500, 审计留痕)
+
+### 五、数据新鲜度
+- `data_freshness` 表 + 导入时 UPSERT; 看板胶囊左侧圆点(有则显示无则消失, 对齐 syncBadge 机制)
+- 列表页标题圆点(仅超期渲染, ≤7天零布局影响); 弹层改**项目标准底部弹窗范式**(material-regular)
+- 指标级推导(GMV←订单 / 待处理←订单+库存 / 健康·断货←库存+订单, 取最旧)
+
+### 六、UI/UX 修复
+- 明细弹窗: 列错位真根因(**表头 8 列 vs 行内 9 个 td**) / 全居中 / 表格可视区 270→586px / 70vh 回归
+- 任务卡: 状态胶囊缺 inline-flex(图标压文字) + 标题行 space-between 与 margin-left:auto 双重推挤
+- 模板/规则卡规范定版(UI_DESIGN §一/§八/§十六)
+
+### 七、seed 彻底根治(6 轮)
+1. `_seed_records` 幂等(先删后插) + 删期初反推残留
+2. 全写入改 **INSERT IGNORE**(冲突跳过不中断) + order_no 加步偏移/随机后缀
+3. **流水 69码来源修正**: seed 顺序 库存(5)→流水(6)→批次(7), 流水生成时批次不存在
+   → 批次池改从 **inventory** 取码
+4. **物化重建并入 step9**(端点以 nxt>=10 判完成, 新增 step10 永执行)
+5. `_build_snapshot` 补 barcode(主键含码)
+6. **恒等式 998 偏差真因**: `_sync_inv_month` 用 `beginning_stock = available_qty` 覆盖期初
+   → 重算结果被打回; 删除该覆盖 + month_inbound 负数兜底
+7. `load_daily_sales_grouped` 的 **else 分支与当天段漏 barcode** → 物化无按码行
+
+### 八、重置全排查
+- `_TABLES_RESET` 漏 6 表 → 补 **sku_sales_stats(补货/采购/断货数据源)** / data_freshness /
+  export_files / eval_pending / agg_dirty / replenishment_config_history
+- 前端 reset 后不清页面内 state(procList)且不递增 pageVersion → 卡片残留旧数据
+  → 补 pageVersion + 事件广播 + reload 380ms
+- 清理 RENAME 遗留的 _old 兜底表(用户定案: 不留兜底)
+
+### 遗留待验证(下次优先)
+1. **部署 8342f2b8 后跑一次 reset→fill→验证**: 恒等式偏差应归零 / sku_sales_stats 应有按码行
+2. 多码 SKU 在补货/采购/断货是否分别出行(当前演示数据每 SKU 单码)
+3. 健康度数字变化确认(逐行判定 → 数字为库存行数)
+4. inbound/outbound 事件真实触发验证(此前仅代码实现)
+
+---
+
 ## 2026-10-29(凌晨): 日志一致性真根因 + 预览表格空白多轮返工 + summary 冷启动加固(10 commits)
 > commits 5fff4153→89949661(北京时区 00:04-00:58); 回归 155/155。
 
