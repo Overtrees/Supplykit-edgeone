@@ -374,9 +374,11 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     sug = {"black": "临期紧急处理(促销/退供)", "red": "退货供应商/清仓甩卖",
            "yellow": "补货降量/持续跟踪", "observe": "继续观察/补货降量"}
     items = []
-    for r in query("SELECT sku, warehouse, warehouse_type, available_qty FROM inventory "
-                   "WHERE channel=%s", [channel]):
+    # 2026-10-29 按 69码: 库存行已按码拆分 → 处置建议也按 (sku, barcode, 仓) 出
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
+                   "available_qty FROM inventory WHERE channel=%s", [channel]):
         sku = str(r.get("sku") or "")
+        _bc = str(r.get("bc") or "").strip()
         wh = str(r.get("warehouse") or "")
         wht = str(r.get("warehouse_type") or "")
         avail = int(r.get("available_qty") or 0)
@@ -453,14 +455,17 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         if sku in pseudo and level == "red":
             reason.append("近14天有补货建议, 疑似缺货伪滞销, 建议先核实库存")
         items.append({
-            "sku": sku, "product_name": p.get("product_name") or sku, "channel": channel,
+            "sku": sku, "barcode": _bc, "product_name": p.get("product_name") or sku,
+            "channel": channel,
             "warehouse": wh, "warehouse_type": wht, "category": cat,
             "stock": avail, "turnover_days": turnover, "fund_occupied": fund,
             "daily_sales": round(daily, 1), "days_zero": days_zero,
             "cat_line": cat_name, "slow_days": slow_days,
             "level": level, "reason": reason, "suggestion": sug.get(level, ""),
             "b_storage": b_storage, "best_before": bb, "brand": p.get("brand") or "",
-            "disposed": (sku, wh) in disposed, "disposed_action": disposed.get((sku, wh), ""),
+            # 2026-10-29 按码: 先查 (sku,barcode,仓), 缺失降级 (sku,仓) —— 兼容旧标记
+            "disposed": ((sku, _bc, wh) in disposed) or ((sku, wh) in disposed),
+            "disposed_action": disposed.get((sku, _bc, wh)) or disposed.get((sku, wh), ""),
         })
     items.sort(key=lambda x: ({"black": 0, "red": 1, "yellow": 2, "observe": 3}.get(x["level"], 9),
                                -x["days_zero"]))
