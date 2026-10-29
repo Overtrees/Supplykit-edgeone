@@ -877,8 +877,12 @@ input[type='file'] {
 .task-card-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  /* 2026-10-29 修复挤压: 原 space-between + 时间 margin-left:auto 双重推挤 →
+     窄屏时 driver 标签/时间/状态胶囊互相覆盖。改为仅靠 margin-left:auto 分隔,
+     并允许标题收缩(ellipsis), 其余子项不收缩 */
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
@@ -2079,6 +2083,8 @@ input[type='file'] {
 
 /* 任务推进方式标签(2026-10-15——前端轮询/后端保活识别) */
 .task-driver {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 10px;
   font-weight: 600;
   padding: 1px 6px;
