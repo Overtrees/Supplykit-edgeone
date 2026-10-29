@@ -23,7 +23,9 @@ def _parse_single(expr):
             _c = ("num", float(expr))
         else:
             _c = ("path", tuple(p for p in expr.split(".") if p))
-    except Exception:
+    except Exception as _e:
+        # except-pass 红线: 解析异常必须留痕(否则字段名写错也查不出来)
+        try_err('core_rules', '表达式解析降级: %s' % str(expr)[:60], _e)
         _c = ("path", (expr,))
     if len(_SINGLE_CACHE) < 8192:
         _SINGLE_CACHE[expr] = _c
