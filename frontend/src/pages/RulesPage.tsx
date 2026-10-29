@@ -96,6 +96,8 @@ const LF = [
   { l: '库存量', v: 'inv.stock' },
   { l: '仓库类型', v: 'inv.warehouse_type' },
   { l: '订单数量', v: 'order.quantity' },
+  // 2026-10-29 累计订单量(超卖判定应使用此字段: 单笔口径会漏报累计超卖)
+  { l: '累计订单量', v: 'order.total_qty' },
   { l: '订单金额', v: 'order.total_amount' },
   { l: '订单数量×单价', v: 'order.quantity * order.unit_price' },
   { l: '单价', v: 'order.unit_price' },
@@ -411,7 +413,8 @@ export default function RulesPage() {
     oversell: {
       event: 'order.created',
       cond: {
-        left: 'order.quantity',
+        // 2026-10-29 累计口径: 单笔 quantity 会漏报"累计超卖"(历史订单每笔都小于库存)
+        left: 'order.total_qty',
         op: '>',
         right: 'inv.available_qty',
         rightType: 'field',

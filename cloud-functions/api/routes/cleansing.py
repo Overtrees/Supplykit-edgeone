@@ -731,6 +731,16 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         headers, rows = _parse_table(_data, params.get("fname") or "import.csv")
         _cleaned = _clean_rows(rows, _mpd)
         # 该片 SKU 行级评估 ctx(与导入 done 步同口径——每行 ctx——order.created 规则行级判定)
+        # 2026-10-29 超卖口径修复: 原 ctx 只给 order.quantity=本次导入量(单笔) →
+        # 累计已超卖(如 1095 件 vs 库存 9)但单笔都小于库存时**永不报警**(系统性漏报)
+        # → 补 order.total_qty = 该 SKU 累计未删订单量(与 close_oversell 判定口径一致)
+        _cum = {}
+        if _batch:
+            _ph2 = ",".join(["%s"] * len(_batch[:500]))
+            for _r in _q5("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+                          "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
+                          "GROUP BY sku" % ("%s", _ph2), [channel] + _batch[:500]):
+                _cum[_r.get("sku")] = int(_r.get("q") or 0)
         o_ctxs = []
         for c in _cleaned:
             sku = str(c.get("sku") or "").strip()
@@ -738,7 +748,8 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
                 continue
             oq = int(c.get("quantity") or 0)
             o_ctxs.append({"sku": sku, "channel": channel,
-                           "order": {"quantity": oq}, "order_qty": oq,
+                           "order": {"quantity": oq, "total_qty": _cum.get(sku, oq)},
+                           "order_qty": _cum.get(sku, oq),
                            "available_stock": inv_map.get(sku, 0),
                            "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
         evaluated = 0

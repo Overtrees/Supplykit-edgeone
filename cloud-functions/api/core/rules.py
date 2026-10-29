@@ -185,7 +185,8 @@ _VALID_FIELDS = {
     "inv.available_qty", "inv.safety_qty", "inv.in_transit_qty", "inv.warehouse_type",
     "inv.warehouse", "inv.product_name", "inv.adj_dos", "inv.buffer", "inv.otif",
     "inv.ss_dyn", "inv.accel_rate", "inv.days_since_last",
-    "order.quantity", "order.total_amount", "order.order_status", "order.product_name",
+    "order.quantity", "order.total_qty", "order.total_amount", "order.order_status",
+    "order.product_name",
     "sku", "product_name", "days_since_last", "stock", "avail", "safety",
     "lit_trad", "lit_bbcc", "health", "health_score",
 }

@@ -455,7 +455,7 @@ def _seed_config():
          "low_stock", "低库存预警: {product_name}", "可用 {avail} < 动态安全线 {safety}", "warning",
          None),
         ("超卖保护", "order.created",
-         '{"left":"order.quantity","op":">","right":"inv.available_qty"}',
+         '{"left":"order.total_qty","op":">","right":"inv.available_qty"}',
          "oversell", "超卖告警: {sku}", "订单数量超过可用库存", "error",
          None),
         # 濒临断货预警(参数载体): 断货卡计算参数(params 被 stock-risk 同源读取),

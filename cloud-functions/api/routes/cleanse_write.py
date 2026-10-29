@@ -57,6 +57,17 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                                    [channel] + _batch):
                         inv_map[r.get("sku")] = int(r.get("avail") or 0)
+            # 2026-10-29 超卖口径: 补 order.total_qty(累计未删订单量) —— 单笔口径会系统性漏报
+            _cum2 = {}
+            _sku_all = [str(c.get("sku")) for c in cleaned_all if c.get("sku")]
+            if _sku_all:
+                for _i2 in range(0, len(_sku_all), 500):
+                    _b2 = _sku_all[_i2:_i2 + 500]
+                    _ph3 = ",".join(["%s"] * len(_b2))
+                    for _r2 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+                                     "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
+                                     "GROUP BY sku" % ("%s", _ph3), [channel] + _b2):
+                        _cum2[_r2.get("sku")] = int(_r2.get("q") or 0)
             o_ctxs = []
             for c in cleaned_all:
                 sku = c.get("sku")
@@ -64,7 +75,8 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                     continue
                 oq = int(c.get("quantity") or 0)
                 o_ctxs.append({"sku": sku, "channel": channel,
-                               "order": {"quantity": oq}, "order_qty": oq,
+                               "order": {"quantity": oq, "total_qty": _cum2.get(sku, oq)},
+                               "order_qty": _cum2.get(sku, oq),
                                "available_stock": inv_map.get(sku, 0),
                                "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0,
                                        "in_transit_qty": 0}})

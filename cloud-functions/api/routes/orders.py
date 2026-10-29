@@ -23,8 +23,18 @@ def _evaluate_restored(ids):
                             "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph2),
                             [channel] + _b):
                 _inv_map[r2.get("sku")] = int(r2.get("avail") or 0)
+        # 2026-10-29 超卖口径: 用累计订单量(恢复后) —— 与 close_oversell 判定一致
+        _cum3 = {}
+        for _i3 in range(0, len(_skus), 200):
+            _b3 = _skus[_i3:_i3 + 200]
+            _ph4 = ",".join(["%s"] * len(_b3))
+            for _r4 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+                             "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
+                             "GROUP BY sku" % ("%s", _ph4), [channel] + _b3):
+                _cum3[_r4.get("sku")] = int(_r4.get("q") or 0)
         _o_ctxs = [{"sku": sk, "channel": channel,
-                    "order": {"quantity": _qty.get(sk, 0)}, "order_qty": _qty.get(sk, 0),
+                    "order": {"quantity": _qty.get(sk, 0), "total_qty": _cum3.get(sk, 0)},
+                    "order_qty": _cum3.get(sk, 0),
                     "available_stock": _inv_map.get(sk, 0),
                     "inv": {"available_qty": _inv_map.get(sk, 0), "safety_qty": 0, "in_transit_qty": 0}}
                    for sk in _skus]
