@@ -25,22 +25,14 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
             if target in ("inbound", "outbound", "inventory"):
                 try:
                     _skus_touch = sorted({c.get("sku") for c in cleaned_all if c.get("sku")})
-                    # 2026-10-29 仓名校验(暴露而非兜底): 出入库记录的 warehouse 必须存在于
-                    # 该渠道自有仓清单, 否则该记录不会计入重算(数据静默丢失)
-                    if target in ("inbound", "outbound") and _skus_touch:
+                    # 2026-10-29 用户定案: 仓库名以**导入表格**为准 —— 流水里出现的
+                    # (sku, warehouse_type, warehouse) 若库存表没有, 自动建档(期初 0),
+                    # 由下方 _recalc 算出 available。即"导入什么仓, 系统就认什么仓"。
+                    if target in ("inbound", "outbound"):
                         try:
-                            _own_whs = {str(x.get("warehouse") or "") for x in query(
-                                "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
-                                "AND warehouse_type IN (%s)" % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))),
-                                [channel] + list(SELF_WAREHOUSE_TYPES))}
-                            _bad_wh = sorted({str(c.get("warehouse") or "") for c in cleaned_all
-                                              if str(c.get("warehouse") or "") not in _own_whs})
-                            if _bad_wh:
-                                try_err('cleansing', '仓名未匹配自有仓',
-                                        Exception("渠道 %s 的 %s 导入含未知仓: %s (自有仓: %s) —— 这些记录不计入库存重算"
-                                                  % (channel, target, _bad_wh[:5], sorted(_own_whs))))
+                            _ensure_inventory_rows(channel, cleaned_all)
                         except Exception as _ewh:
-                            pass
+                            try_err('cleansing', '库存行补建降级', _ewh)
                     if _skus_touch:
                         # 库存: 期初 + Σ流水(重算制); 批次: FIFO 重建(Σ批次 ≡ available)
                         _recalc_own_inventory(channel, _skus_touch)
@@ -277,6 +269,60 @@ def _rebuild_own_batches(channel, skus):
                 try_err('cleansing', '自有仓批次插入降级', _ee)
         done += len(_insert_rows)
     return done
+
+
+def _ensure_inventory_rows(channel, rows):
+    """按导入数据补齐 inventory 行(2026-10-29 用户定案: 仓库名以导入表格为准)
+
+    业务逻辑: 出入库流水里出现的 (sku, warehouse_type, warehouse) = 该仓确实有业务
+      · 库存表已有该行 → 不动
+      · 没有 → 新建(available_qty=0, beginning_stock=0), 随后由 _recalc_own_inventory 算出可用
+    即"导入里出现什么仓, 系统就认什么仓", 无需事先在库存表配置仓名。
+
+    返回补建行数。
+    """
+    from db import query as _q, executemany as _em
+    combos = {}
+    for c in rows:
+        _sk = str(c.get("sku") or "").strip()
+        if not _sk:
+            continue
+        _wh = str(c.get("warehouse") or "").strip()
+        _wt = str(c.get("warehouse_type") or "").strip() or SELF_WAREHOUSE_TYPES[0]
+        combos[(_sk, _wh, _wt)] = True
+    if not combos:
+        return 0
+    keys = list(combos.keys())
+    existing = set()
+    for i in range(0, len(keys), 200):
+        chunk = keys[i:i + 200]
+        ph = " OR ".join(["(sku=%s AND warehouse=%s AND warehouse_type=%s)"] * len(chunk))
+        pp = []
+        for (_sk, _wh, _wt) in chunk:
+            pp += [_sk, _wh, _wt]
+        try:
+            for r in _q("SELECT sku, warehouse, warehouse_type FROM inventory "
+                        "WHERE channel=%s AND (%s)" % ("%s", ph), [channel] + pp):
+                existing.add((str(r.get("sku")), str(r.get("warehouse") or ""),
+                              str(r.get("warehouse_type") or "")))
+        except Exception as _eq:
+            try_err('cleansing', '库存行查重降级', _eq)
+            return 0
+    params = []
+    for (_sk, _wh, _wt) in keys:
+        if (_sk, _wh, _wt) in existing:
+            continue
+        params.append((_sk, "", _wh, _wt, 0, 0, 0, channel))
+    if not params:
+        return 0
+    try:
+        _em("INSERT INTO inventory(sku, product_name, warehouse, warehouse_type, "
+            "available_qty, beginning_stock, safety_qty, channel) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", params)
+        return len(params)
+    except Exception as _ee:
+        try_err('cleansing', '库存行补建降级', _ee)
+        return 0
 
 
 def _recalc_own_inventory(channel, skus):

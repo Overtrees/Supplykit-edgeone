@@ -824,7 +824,13 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         try:
             _tgt = str(params.get("target") or "")
             if _tgt in ("inbound", "outbound"):
-                from routes.cleanse_write import _recalc_own_inventory as _rc, _rebuild_own_batches as _rb
+                from routes.cleanse_write import (
+                    _ensure_inventory_rows as _eir,
+                    _recalc_own_inventory as _rc,
+                    _rebuild_own_batches as _rb,
+                )
+                # 2026-10-29 用户定案: 仓库名以导入表格为准 → 流水中的仓若库存表没有, 自动建档
+                _eir(channel, _cleaned)
                 adjusted = _rc(channel, list(_batch))
                 _rb(channel, list(_batch))  # FIFO 批次重建(Σ批次 ≡ available)
             # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
