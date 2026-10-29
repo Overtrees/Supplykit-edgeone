@@ -432,26 +432,6 @@ async def heal_own_inventory(request: Request):
             except Exception as _epk:
                 _mig[_tb] = "error: %s" % str(_epk)[:140]
                 try_err('misc', '日销表重建失败(%s)' % _tb, _epk)
-        # 存量修复: 出入库记录 barcode 为空 → 按库存行回填(仅当该 SKU+仓 只有唯一 69码时)
-        #   依据: seed 早期版本未生成流水 69码(数据缺陷); 唯一码时归属明确, 多码时不猜
-        _bc_fill = {}
-        try:
-            from db import execute as _e7
-            for _ch4 in chs:
-                for _tb4, _dcol in (("inbound_records", "inbound_date"), ("outbound_records", "outbound_date")):
-                    _e7("UPDATE `%s` r JOIN (SELECT sku, warehouse, MAX(barcode) AS bc "
-                        "FROM inventory WHERE channel=%%s AND COALESCE(barcode,'')!='' "
-                        "GROUP BY sku, warehouse HAVING COUNT(DISTINCT barcode)=1) x "
-                        "ON x.sku=r.sku AND x.warehouse=r.warehouse "
-                        "SET r.barcode=x.bc WHERE r.channel=%%s AND COALESCE(r.barcode,'')=''"
-                        % _tb4, [_ch4, _ch4])
-                    _n = ((_q5("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s AND COALESCE(barcode,'')!=''" % _tb4,
-                               [_ch4]) or [{}])[0] or {}).get("c")
-                    _bc_fill["%s/%s" % (_ch4, _tb4)] = _n
-        except Exception as _ebf:
-            try_err('misc', '流水69码回填失败', _ebf)
-            _bc_fill = {"error": str(_ebf)[:160]}
-        out["_barcode_backfill"] = _bc_fill
         # 重建后**全量重填充**(表已清空 —— 日销是派生数据, 从订单一次算全)
         _refill = {}
         try:
