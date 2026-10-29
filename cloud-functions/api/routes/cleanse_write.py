@@ -208,13 +208,17 @@ def _recalc_own_inventory(channel, skus):
         batch = skus[i:i + 200]
         ph = ",".join(["%s"] * len(batch))
         # 期初(库存导入写 beginning_stock) + 入库合计 − 出库合计
+        # 2026-10-29 仓名兜底: 出入库记录的 warehouse 为空时视作"该渠道唯一自有仓"
+        # (ERP 导出常省略仓名; 自有仓通常 1 个, 多自有仓时需在文件里明确填写)
         rows = _q(
             "SELECT i.id, i.sku, i.warehouse, "
             "COALESCE(i.beginning_stock, 0) AS beg, "
             "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse), 0) AS in_q, "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku "
+            "  AND (r.warehouse=i.warehouse OR r.warehouse='' OR r.warehouse IS NULL)), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse), 0) AS out_q "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku "
+            "  AND (r.warehouse=i.warehouse OR r.warehouse='' OR r.warehouse IS NULL)), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type='own' "
             "AND i.sku IN (%s)" % ("%s", ph),
             [channel] + batch)
@@ -387,7 +391,12 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             #   available = beginning_stock + Σ入库 − Σ出库(由 _recalc_own_inventory 计算)
             #   平台仓/B仓: 导入即权威快照(available 直接生效, 不重算)
             if wt == "own":
-                it["beginning_stock"] = it.get("available_qty") or 0
+                # own: 导入值作为【期初】(available = 期初 + Σ入 − Σ出, 由重算得出)
+                # 兼容两种列: available_qty(当前可用) 或 beginning_stock(期初库存)
+                _bs = it.get("beginning_stock")
+                if _bs in (None, "", 0):
+                    _bs = it.get("available_qty") or 0
+                it["beginning_stock"] = _bs
         return _write_batch("inventory",
                             ["sku", "product_name", "store", "warehouse", "warehouse_type",
                              "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",

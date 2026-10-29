@@ -24,11 +24,11 @@ const INV_FIELDS = [
   { t: 'channel', l: '平台', tp: 'string' },
   { t: 'brand', l: '品牌', tp: 'string' },
   { t: 'price', l: '单价', tp: 'number' },
-  { t: 'beginning_stock', l: '期初库存', tp: 'number' },
+  { t: 'beginning_stock', l: '期初库存(自有仓)', tp: 'number' },
   { t: 'in_transit_qty', l: '在途', tp: 'number' },
   { t: 'month_inbound', l: '当月采购入库', tp: 'number' },
   { t: 'month_outbound', l: '当月出库', tp: 'number' },
-  { t: 'available_qty', l: '可用', tp: 'number' },
+  { t: 'available_qty', l: '可用(自有仓=期初)', tp: 'number' },
   { t: 'turnover_days', l: '在库周转', tp: 'number' },
   { t: 'c_transit', l: 'B-C调拨在途', tp: 'number' },
   { t: 'locked_qty', l: '锁定库存', tp: 'number' },
@@ -193,7 +193,7 @@ const ORDER_FIELDS = [
   { t: 'shipped_at', l: '发货时间', tp: 'date' },
   { t: 'platform', l: '平台', tp: 'string' },
   { t: 'channel', l: '渠道', tp: 'string' },
-  { t: 'data_source', l: '数据来源', tp: 'string' },
+  { t: 'data_source', l: '数据来源(仅记录)', tp: 'string' },
   { t: 'supplier', l: '供应商', tp: 'string' },
   { t: 'sender', l: '收货人', tp: 'string' },
   { t: 'sender_phone', l: '收货电话', tp: 'string' },
@@ -211,9 +211,9 @@ const INBOUND_FIELDS = [
   { t: 'inbound_date', l: '入库日期', tp: 'date' },
   { t: 'channel', l: '渠道', tp: 'string' },
   { t: 'platform', l: '平台', tp: 'string' },
-  { t: 'warehouse', l: '仓库', tp: 'string' },
-  { t: 'prod_date', l: '生产日期', tp: 'date' },
-  { t: 'exp_date', l: '到期日期', tp: 'date' },
+  { t: 'warehouse', l: '仓库(自有仓名,空=默认)', tp: 'string' },
+  { t: 'prod_date', l: '生产日期(FIFO依据)', tp: 'date' },
+  { t: 'exp_date', l: '到期日期(批次效期)', tp: 'date' },
   { t: 'price', l: '单价', tp: 'number' },
   { t: 'box_qty', l: '箱规', tp: 'number' },
   { t: 'unit', l: '单位', tp: 'string' },
@@ -265,7 +265,7 @@ const GMV_FLOW_FIELDS = [
   { t: 'amount', l: '金额', tp: 'number' },
   { t: 'flow_type', l: '流水类型', tp: 'string' },
   { t: 'settled_amount', l: '结算金额', tp: 'number' },
-  { t: 'data_source', l: '数据来源', tp: 'string' },
+  { t: 'data_source', l: '数据来源(仅记录)', tp: 'string' },
 ]
 // 2026-10-27 单一字段源(导出供模板弹窗): 内置预设映射 + 下载模板表头均由此派生——
 // 新列只需加进对应 X_FIELDS, 预设/下载模板自动同步(零漂移)
@@ -294,7 +294,8 @@ export const presetMapping = (tt: string): Record<string, string> => {
 // 入库/出库=sku+数量+日期; GMV回款=platform+flow_no 去重键(缺失整批跳过)+amount
 export const PRESET_REQUIRED: Record<string, string[]> = {
   order: ['order_no', 'sku', 'quantity', 'ordered_at'],
-  inventory: ['sku', 'warehouse', 'available_qty'],
+  // own: 可用/期初二选一(后端兼容 available_qty / beginning_stock), 故不强制
+  inventory: ['sku', 'warehouse'],
   platform_inv: ['sku', 'warehouse', 'available_qty'],
   inventory_b: ['sku', 'warehouse', 'available_qty'],
   product: ['sku', 'product_name'],
