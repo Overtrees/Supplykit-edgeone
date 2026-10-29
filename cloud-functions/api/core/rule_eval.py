@@ -115,6 +115,14 @@ def close_oversell_for_skus(skus, channel="jd"):
 def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     import time as _t
     _t0 = _t.time()
+    # 2026-10-29 分段计时(仅日志, 零数据影响): 先实测再决定是否下推 SQL
+    _marks = []
+    _tick_last = [_t.time()]
+
+    def _tick(_n):
+        _now = _t.time()
+        _marks.append("%s=%.1f" % (_n, _now - _tick_last[0]))
+        _tick_last[0] = _now
     _o_ctx_n = 0  # 审计用: order ctx 计数(作用域安全)
     from core.rules import evaluate_many, load_rules_for, _CALC_VARS  # 延迟(防循环——_CALC_VARS 常量随迁依赖)
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
@@ -140,6 +148,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         rows = query(_SEL + "ORDER BY id LIMIT %s", [channel, limit])
     if not rows:
         return []
+    _tick("rows")
     # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
     # alert_enabled=0 的参数载体规则(如内置断货/健康)不产生告警 → 不参与评估/注入
     def _is_alert_rule(r):
@@ -157,11 +166,13 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)
     _need_calc = _need_calc_daily or _need_calc_inv
+    _tick("rules")
     last_map = {}
     for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
                    [channel]):
         last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
     now = datetime.now(timezone.utc)
+    _tick("lastmap")
 
     # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
     _agg = None
@@ -338,6 +349,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                   "safety_qty": 0, "in_transit_qty": 0}
                  for _k0, _a0 in _bc_agg.items()]
 
+    _tick("calc_load")
     inv_ctxs, daily_ctxs = [], []
     for r in rows:
         sku = str(r.get("sku") or "")
@@ -411,9 +423,11 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                     try_err('core_rules', '静默降级', _e)
         inv_ctxs.append(base)
         daily_ctxs.append(base)
+    _tick("ctx_build")
     r1, hits1 = evaluate_many("inventory.changed", inv_ctxs, channel, _inv_rules, return_hits=True)
     r2, hits2 = evaluate_many("scheduled.daily", daily_ctxs, channel, _daily_rules, return_hits=True)
     hits = hits1 | hits2
+    _tick("evaluate_many")
     out = list(dict.fromkeys(r1 + r2))
     # 2026-10-29 order.created 全量评估(超卖每日校正):
     # ctx 用**累计未删订单量**(order.total_qty) vs 当前可用库存 —— 与 close_oversell 同口径
@@ -448,6 +462,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                 out = list(dict.fromkeys(out + r3))
         except Exception as _e:
             try_err('core_rules', '每日超卖评估降级', _e)
+    _tick("order_created")
     # 恢复自动关闭(完整性): 每日全量快照下, 该事件规则 alert_type 的 active 告警
     # 若 SKU×仓 未命中(已恢复/不满足) → inactive, 防止库存补足后旧告警残留虚高计数
     try:
@@ -484,9 +499,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     # 作用: 漏报/误报排查, 命中数与告警表对账, 评估耗时趋势(替代方案: 不进程内缓存规则——
     #       收益低(每渠道仅 3-4 次查询)而风险高(多实例规则变更不一致))
     try:
-        _aud = ("评估审计 %s: inv_ctx=%d daily_ctx=%d order_ctx=%d 命中=%d 耗时=%.1fs"
+        _tick("close")
+        _aud = ("评估审计 %s: inv_ctx=%d daily_ctx=%d order_ctx=%d 命中=%d 耗时=%.1fs 分段[%s]"
                 % (channel, len(inv_ctxs), len(daily_ctxs), _o_ctx_n, len(hits),
-                   _t.time() - _t0))
+                   _t.time() - _t0, " ".join(_marks)))
         if hits or (_t.time() - _t0) > 1.0:
             execute("INSERT INTO quality_logs(log_type, level, message, source) "
                     "VALUES('perf_debug','info',%s,'rules')", (_aud,))
