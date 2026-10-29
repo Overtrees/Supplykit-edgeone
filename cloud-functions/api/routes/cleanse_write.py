@@ -167,6 +167,7 @@ def _rebuild_own_batches(channel, skus):
     from db import query as _q, execute as _e, executemany as _em
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
     done = 0
+    _miss = []  # 未指定批次的出库量 [(sku, qty)] —— 不猜, 汇总告警
     for i in range(0, len(skus), 100):
         batch_skus = [x for x in skus[i:i + 100] if x]
         if not batch_skus:
@@ -233,14 +234,18 @@ def _rebuild_own_batches(channel, skus):
                         _prec[_k] -= _tk
                 # 指定批次未匹配(批次已不存在/日期不符) → 剩余量转 FIFO 兜底
                 outs[sk] = outs.get(sk, 0) + sum(v for v in _prec.values() if v > 0)
-            # ②b FIFO 兜底: 未指定批次的出库量, 按最老批次先扣
-            out_left = outs.get(sk, 0)
+            # ②b 未指定批次的出库量: **不猜**(2026-10-29 用户定案)
+            #   原 FIFO 兜底属"猜测扣减", 与"以实际导入为准"冲突——
+            #   实际出库未必是最早批次, 硬扣会让批次与真实不符且无法追溯
+            #   现在: 不扣任何批次, 差额记为未匹配量并告警(提示补全出库记录的批次信息)
+            _unmatched = outs.get(sk, 0)
+            if _unmatched > 0:
+                try:
+                    _miss.append((sk, _unmatched))
+                except Exception:
+                    pass
             for r in _fifo:
                 qty = int(r.get("quantity") or 0)
-                if out_left > 0:
-                    take = min(qty, out_left)
-                    qty -= take
-                    out_left -= take
                 if qty > 0:
                     _insert_rows.append({"sku": sk,
                                          "warehouse": str(r.get("warehouse") or ""),
@@ -268,6 +273,16 @@ def _rebuild_own_batches(channel, skus):
             except Exception as _ee:
                 try_err('cleansing', '自有仓批次插入降级', _ee)
         done += len(_insert_rows)
+    if _miss:
+        try:
+            _tot = sum(x[1] for x in _miss)
+            try_err('cleansing', '出库未指定批次',
+                    Exception("渠道 %s 有 %d 个 SKU 的出库记录未填批次(生产日期/截止日期), "
+                              "合计 %d 件 —— 这些量不扣任何批次(不做 FIFO 猜测), "
+                              "导致 Σ批次 比可用多出该值; 请补全出库记录的批次信息后重新导入"
+                              % (channel, len(_miss), _tot)))
+        except Exception:
+            pass
     return done
 
 
