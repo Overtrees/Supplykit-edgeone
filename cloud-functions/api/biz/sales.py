@@ -89,8 +89,9 @@ def load_daily_sales(cutoff_days, channel, skus=None):
     return daily
 
 
-def load_daily_sales_grouped(cutoff_days, channel, skus=None):
-    """快照按 SKU×仓 双口径: 返回 (by_sku, by_sku_wh)
+def load_daily_sales_grouped(cutoff_days, channel, skus=None, with_bc_wh=False):
+    """快照按 SKU×仓 双口径: 返回 (by_sku, by_sku_wh, by_sku_bc)
+    with_bc_wh=True → 额外返回 by_sku_wh_bc(按码×仓, 供物化生成 __C__/__BC__ 的按码行)
     2026-10-17 等价重构: skus 过滤下推 SQL(同 load_daily_sales)——同集过滤, 不拉全量;
     大集合(>2000)回退 Python 过滤(210 次往返反慢——部署实证 stock_risk 25.6s)"""
     now = datetime.now(timezone.utc)
@@ -99,6 +100,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
     by_sku = {}
     by_sku_wh = {}
     by_sku_bc_wh = {}  # 2026-10-29 按 69码: "sku|barcode" → {date: qty}(跨仓合计)
+    by_sku_wh_bc = {}  # 2026-10-29 按码×仓: "sku|barcode|warehouse" → {date: qty}
     _in_chunks = _sku_in_clause(skus)
     _py_filter = _in_chunks is None
     _skuset = {str(s) for s in (skus or [])} if _py_filter else None
@@ -114,6 +116,8 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
         if bc:
             b = by_sku_bc_wh.setdefault("%s|%s" % (key, bc), {})
             b[d] = b.get(d, 0) + qty
+            wb = by_sku_wh_bc.setdefault("%s|%s|%s" % (key, bc, wh or ""), {})
+            wb[d] = wb.get(d, 0) + qty
 
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
@@ -155,6 +159,8 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
                 continue
             _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10],
                  int(o.get("quantity") or 0), str(o.get("bc") or ""))
+    if with_bc_wh:
+        return by_sku, by_sku_wh, by_sku_bc_wh, by_sku_wh_bc
     return by_sku, by_sku_wh, by_sku_bc_wh
 
 
@@ -382,7 +388,8 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
     from db import execute as _ex, executemany as _em, query as _q
     try:
         _ex(_SKU_STATS_DDL)
-        by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(days, channel, skus=skus)
+        by_sku, by_sku_wh, by_sku_bc, by_sku_wh_bc = load_daily_sales_grouped(
+            days, channel, skus=skus, with_bc_wh=True)
         if not by_sku and not by_sku_wh:
             return 0
         now_d = datetime.now(timezone.utc)
@@ -396,6 +403,23 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
             _wh_type = {}
         _c_whs = {w for w, t in _wh_type.items() if t == "platform"}
         _b_whs = {w for w, t in _wh_type.items() if t == "platform_b"}
+
+        # 2026-10-29 精准: 按码 × 仓型 聚合 → 让 __C__/__BC__ 也有按码行
+        #   (原只有 __ALL__ 有按码行 → bbcc 下多码 SKU 只能共用整盘合计日销)
+        by_c_bc, by_bc_bc = {}, {}
+        for _k, _wd in (by_sku_wh_bc or {}).items():
+            _p = _k.rsplit("|", 2)
+            if len(_p) < 3:
+                continue
+            _key2 = "%s|%s" % (_p[0], _p[1])
+            if _p[2] in _c_whs or _p[2] in _b_whs:
+                _m2 = by_bc_bc.setdefault(_key2, {})
+                for _d, _q in _wd.items():
+                    _m2[_d] = _m2.get(_d, 0) + _q
+            if _p[2] in _c_whs:
+                _m2 = by_c_bc.setdefault(_key2, {})
+                for _d, _q in _wd.items():
+                    _m2[_d] = _m2.get(_d, 0) + _q
 
         # 全国聚合: __C__(platform) / __BC__(platform+platform_b) / __ALL__(全仓)
         by_all = dict(by_sku)
@@ -457,7 +481,8 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
         for _r in rows:
             _r["barcode"] = ""
         if by_sku_bc:
-            _bc_rows = _to_rows(by_sku_bc, WH_ALL)
+            _bc_rows = (_to_rows(by_sku_bc, WH_ALL) + _to_rows(by_c_bc, WH_C)
+                        + _to_rows(by_bc_bc, WH_BC))
             for _r in _bc_rows:
                 _r["barcode"] = str(_r.get("sku") or "").rsplit("|", 1)[-1]
                 _r["sku"] = str(_r.get("sku") or "").rsplit("|", 1)[0]
