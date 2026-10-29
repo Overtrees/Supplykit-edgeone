@@ -325,26 +325,65 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
         _bdata, _bfname = _read_file_bytes(_dr)
         try:
             _bh, _brows = _parse_table(_bdata, _bfname)
-            _dup_cfg = {"order": ("orders", "order_no", "sku"),
-                        "gmv_flow": ("gmv_flows", "platform", "flow_no")}
+            # 2026-10-29 补齐: 库存/入库/出库 也要**写入前查库去重**
+            #   (原只覆盖 order/gmv_flow —— 库存与出入库纯 INSERT, 重复导入会产生重复行)
+            #   三键: 69码有值 → 组合键+69码; 空 → 二键降级(与项目既有约定一致)
+            #   出入库 sum 模式是"累加"语义, 不拦截(重复导入=再入库一次, 合法)
+            _dup_cfg = {"order": ("orders", "order_no", "sku", ""),
+                        "gmv_flow": ("gmv_flows", "platform", "flow_no", ""),
+                        "inventory": ("inventory", "sku", "warehouse", "barcode"),
+                        "platform_inv": ("inventory", "sku", "warehouse", "barcode"),
+                        "inventory_b": ("inventory", "sku", "warehouse", "barcode"),
+                        "inbound": ("inbound_records", "sku", "inbound_date", "barcode"),
+                        "outbound": ("outbound_records", "sku", "outbound_date", "barcode")}
+            # 出入库 sum 模式跳过拦截(累加语义)
+            if target in ("inbound", "outbound") and conflict_mode == "sum":
+                _dup_cfg = {}
             if target in _dup_cfg and _brows:
                 # 2026-10-15 修复: 原始行无目标键(中文列名)——需清洗后取键(否则 _keys 空不拦截——重复仍建任务)
-                _tbl_d, _k1_d, _k2_d = _dup_cfg[target]
+                _tbl_d, _k1_d, _k2_d, _k3_d = _dup_cfg[target]
                 _mapping = json.loads(mapping or "{}")
                 _cb = _clean_rows(_brows, _mapping)
-                _keys = [str(r.get(_k1_d) or "") + "|" + str(r.get(_k2_d) or "") for r in _cb
-                         if r.get(_k1_d) and r.get(_k2_d)]
+                _keys = []
+                for r in _cb:
+                    _v1, _v2 = r.get(_k1_d), r.get(_k2_d)
+                    if not (_v1 and _v2):
+                        continue
+                    _v3 = str(r.get(_k3_d) or "").strip() if _k3_d else ""
+                    # 69码有值 → 三键; 空 → 二键降级
+                    _keys.append("%s|%s|%s" % (_v1, _v2, _v3) if _v3 else "%s|%s" % (_v1, _v2))
                 _uk = list(dict.fromkeys(_keys))
                 _exists = 0
                 for _i in range(0, len(_uk), 200):
                     _batch = _uk[_i:_i+200]
-                    _pairs = [(b.split("|")[0], b.split("|")[1]) for b in _batch]
-                    # 同键 EXISTS——分片查(order 需排除软删——软删单可重导; gmv_flows 无 deleted_at 列)
                     _in_ph = ",".join(["%s"] * len(_batch))
                     _soft = (" AND (deleted_at IS NULL OR deleted_at='')" if _tbl_d == "orders" else "")
-                    _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                            "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _in_ph))
-                    _cnt = one(_sql, [channel] + _batch)
+                    if _k3_d:
+                        # 三键/二键混合: CONCAT 时 69码 为空自动落二键(||'' 不改变键)
+                        _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                                "AND CONCAT(`%s`,'|',`%s`" % (_tbl_d, _soft, _k1_d, _k2_d))
+                        # 有值的用三键、无值的用二键 → 分两次查
+                        _k3 = [b for b in _batch if b.count("|") == 2]
+                        _k2 = [b for b in _batch if b.count("|") == 1]
+                        _cnt_v = {"c": 0}
+                        if _k3:
+                            _ph3 = ",".join(["%s"] * len(_k3))
+                            _sql3 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                                     "AND CONCAT(`%s`,'|',`%s`,'|',COALESCE(`%s`,'')) IN (%s)"
+                                     % (_tbl_d, _soft, _k1_d, _k2_d, _k3_d, _ph3))
+                            _c3 = one(_sql3, [channel] + _k3)
+                            _cnt_v["c"] += int((_c3 or {}).get("c") or 0)
+                        if _k2:
+                            _ph2 = ",".join(["%s"] * len(_k2))
+                            _sql2 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                                     "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _ph2))
+                            _c2 = one(_sql2, [channel] + _k2)
+                            _cnt_v["c"] += int((_c2 or {}).get("c") or 0)
+                        _cnt = _cnt_v
+                    else:
+                        _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                                "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _in_ph))
+                        _cnt = one(_sql, [channel] + _batch)
                     _exists += int((_cnt or {}).get("c") or 0)
                 _force_new = request.query_params.get("force_new", "")
                 if _keys and not _force_new:
