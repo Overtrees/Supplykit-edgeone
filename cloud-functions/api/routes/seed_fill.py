@@ -288,8 +288,17 @@ def _seed_inventory(skus_data):
 
 
 def _seed_batches():
-    """批次效期: 按有货库存行 1~3 批, 4% 问题 SKU(过期/临近), 回写 products.best_before"""
+    """批次效期: 按有货库存行 1~3 批, 4% 问题 SKU(过期/临近), 回写 products.best_before
+
+    2026-10-29 幂等化: 原纯 INSERT —— 分步 seed(step6) 与一键 seed 都会调用, 重复执行即翻倍
+    (实测 jd/platform 批次 4,894,006 vs 库存 2,445,069 = 精确 2.00 倍)
+    现: 先按渠道清空再插入, 保证 Σ批次qty ≡ inventory.available_qty
+    """
     from datetime import datetime as _dt
+    try:
+        execute("DELETE FROM batches WHERE channel IN ('jd','other')")
+    except Exception as _e0:
+        try_err('seed_fill', '批次清空失败(继续插入可能翻倍)', _e0)
     today = _dt.now(timezone.utc)
     rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "
                  "WHERE available_qty > 0")
@@ -420,9 +429,13 @@ def _sync_inv_month():
                          str(r.get('channel') or 'jd')))
             except Exception as _e:
                     try_err('seed_fill', '静默降级', _e)
-    # 期初 = 可用 - 入库 + 出库; 为负则调低入库使期初 >= 0
-    execute("UPDATE inventory SET beginning_stock = available_qty - month_inbound + month_outbound "
+    # 2026-10-29 新模型: own 的 available 即期初基线(库存导入语义)
+    #   之后 available = beginning_stock + Σ入库 − Σ出库(由 _recalc_own_inventory 统一重算)
+    execute("UPDATE inventory SET beginning_stock = available_qty "
             "WHERE channel IN ('jd','other') AND warehouse_type='own'")
+    # 旧月度口径兜底(仅保证 month_inbound 列合理, 不再用于期初推导)
+    execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
+            "WHERE channel IN ('jd','other') AND warehouse_type='own' AND month_inbound < 0")
     execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
             "WHERE channel IN ('jd','other') AND warehouse_type='own' AND beginning_stock < 0")
     execute("UPDATE inventory SET beginning_stock = available_qty - month_inbound + month_outbound "
@@ -567,11 +580,22 @@ def seed_step(step, today, skus_data):
         n = _seed_inventory(skus_data)
         return 6, {'inventory': n}
     if step == 6:
-        n = _seed_batches()
-        return 7, {'batches': n}
-    if step == 7:
+        # 2026-10-29 顺序修正: 先流水(原 step6 生成批次 → 早于流水, 批次基于旧库存)
         a, b = _seed_records()
-        return 8, {'inbound': a, 'outbound': b}
+        return 7, {'inbound': a, 'outbound': b}
+    if step == 7:
+        # 重算自有仓(期初+流水) → 再生成批次(保证 Σ批次 = available)
+        try:
+            from routes.cleanse_write import _recalc_own_inventory as _rc
+            for _ch in ('jd', 'other'):
+                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "
+                                                   "WHERE channel=%s AND warehouse_type='own'", [_ch])]
+                if _sk:
+                    _rc(_ch, [x for x in _sk if x])
+        except Exception as _e_s7:
+            try_err('seed_fill', '分步重算降级', _e_s7)
+        n = _seed_batches()
+        return 8, {'batches': n}
     if step == 8:
         _sync_inv_month()
         _seed_config()
@@ -601,8 +625,19 @@ def run_seed_fill():
         inv_counts[wt] = int(r.get('c') or 0)
     r = one("SELECT COUNT(*) AS c FROM orders") or {}
     orders_db = int(r.get('c') or 0)
-    n_batch = _seed_batches()
+    # 2026-10-29 顺序修正: 流水 → 重算 own available → 再生成批次(批次必须基于最终库存)
+    #   原顺序(批次→流水→重算)会让批次基于重算前的旧库存, 与 available 不齐
     n_in, n_out = _seed_records()
+    try:
+        from routes.cleanse_write import _recalc_own_inventory as _rc
+        for _ch in ('jd', 'other'):
+            _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "
+                                               "WHERE channel=%s AND warehouse_type='own'", [_ch])]
+            if _sk:
+                _rc(_ch, [x for x in _sk if x])
+    except Exception as _e_rec:
+        try_err('seed_fill', '自有仓重算降级(seed)', _e_rec)
+    n_batch = _seed_batches()
     _sync_inv_month()
     _seed_config()
     n_alert = _seed_alerts()

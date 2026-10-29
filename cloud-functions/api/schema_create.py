@@ -271,36 +271,6 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
-    # 2026-10-29 自有仓"重算制"平滑迁移(幂等, 仅一次):
-    # 新公式 available = beginning_stock + Σ入库 − Σ出库
-    # 为让重算后库存**保持不变**(不破坏现状), 反推期初: beginning_stock = available − Σin + Σout
-    # 标记: analysis_cache 的 OWN_RECALC_MIGRATED 键(迁移后写入, 避免重复反推)
-    try:
-        from db import one as _o1, execute as _e1, query as _q1
-        _done = _o1("SELECT 1 AS x FROM analysis_cache WHERE `key`='OWN_RECALC_MIGRATED'")
-        if not _done:
-            _rows = _q1("SELECT i.id, i.sku, i.warehouse, i.channel, i.available_qty, "
-                        "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
-                        "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse),0) AS in_q, "
-                        "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
-                        "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse),0) AS out_q "
-                        "FROM inventory i WHERE i.warehouse_type='own'")
-            _upd = []
-            for _r in _rows:
-                try:
-                    _beg = int(_r.get("available_qty") or 0) - int(_r.get("in_q") or 0) + int(_r.get("out_q") or 0)
-                except Exception:
-                    continue
-                _upd.append((_beg, _r.get("id")))
-            from db import executemany as _em
-            for _i in range(0, len(_upd), 500):
-                _b = _upd[_i:_i + 500]
-                _em("UPDATE inventory SET beginning_stock=%s WHERE id=%s", _b)
-            _e1("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                "VALUES('OWN_RECALC_MIGRATED', %s, NOW(6))",
-                ['{"rows": %d}' % len(_upd)])
-    except Exception as e:
-        try_err('schema', '自有仓期初迁移降级', e)
     # 2026-10-29 存量文案迁移(幂等): 超卖判定口径由"单笔订单量"改为"累计订单量",
     # 告警 description 是**生成时快照**, 已存在的告警仍是旧文案 → 一次性同步
     try:
