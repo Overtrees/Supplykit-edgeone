@@ -111,7 +111,7 @@ export default function FlowRecordsSheet({
             maxWidth: 680,
             borderRadius: 'var(--radius-lg)',
             padding: 16,
-            maxHeight: '88dvh',
+            maxHeight: '70vh',
             display: 'flex',
             flexDirection: 'column',
             pointerEvents: 'auto',
@@ -119,8 +119,8 @@ export default function FlowRecordsSheet({
         >
           {/* 标题 + 两态 tab */}
           <div className="flow-head">
-            <div style={{ fontSize: 16, fontWeight: 700 }}>出入库明细</div>
-            <div className="hammer-segmented" style={{ marginLeft: 4 }}>
+            <div className="flow-head-title">出入库明细</div>
+            <div className="hammer-segmented flow-head-tabs">
               {(
                 [
                   ['inbound', '入库'],
@@ -137,12 +137,7 @@ export default function FlowRecordsSheet({
                 </span>
               ))}
             </div>
-            <span
-              className="muted2"
-              style={{ fontSize: 'var(--font-xs)', marginLeft: 'auto', whiteSpace: 'nowrap' }}
-            >
-              共 {total} 条
-            </span>
+            <span className="flow-head-count">共 {total} 条</span>
           </div>
 
           {/* 筛选栏: 日期范围 + SKU 模糊(后端已支持, 触发重载) */}

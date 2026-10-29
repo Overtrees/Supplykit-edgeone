@@ -115,137 +115,72 @@ export function FreshPopover({
   if (!data) return null
   return createPortal(
     <>
+      {/* 遮罩(项目范式: ConfirmDialog / Dashboard 底部弹窗一致) */}
       <div
         onClick={onClose}
-        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.28)', zIndex: 9998 }}
+        style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'transparent' }}
       />
+      {/* 面板容器 — 底部居中浮起(非贴底全宽) */}
       <div
-        className="material-regular"
         style={{
           position: 'fixed',
           left: 0,
           right: 0,
-          bottom: 0,
-          zIndex: 9999,
-          borderTopLeftRadius: 'var(--radius-lg)',
-          borderTopRightRadius: 'var(--radius-lg)',
-          padding: '16px 16px calc(16px + env(safe-area-inset-bottom))',
-          boxShadow: 'var(--shadow-sheet)',
-          maxHeight: '70dvh',
-          overflowY: 'auto',
+          bottom: 'calc(env(safe-area-inset-bottom) + 14px)',
+          zIndex: 4001,
+          display: 'flex',
+          justifyContent: 'center',
+          padding: '0 14px',
+          pointerEvents: 'none',
         }}
       >
         <div
+          onClick={e => e.stopPropagation()}
+          className="material-regular"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 10,
+            width: '100%',
+            maxWidth: 600,
+            borderRadius: 'var(--radius-lg)',
+            padding: '18px 14px calc(14px + env(safe-area-inset-bottom))',
+            boxShadow: 'var(--shadow-sheet)',
+            pointerEvents: 'auto',
+            maxHeight: '70vh',
+            overflowY: 'auto',
           }}
         >
-          <span style={{ fontSize: 16, fontWeight: 700 }}>数据新鲜度</span>
-          <span
-            className="clickable"
-            onClick={onClose}
-            style={{ fontSize: 13, color: 'var(--muted2)', padding: '4px 6px' }}
-          >
-            关闭
-          </span>
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--muted2)', marginBottom: 12, lineHeight: 1.5 }}>
-          数据来自 ERP / 平台导出快照，超期建议重新导入对应类型
-        </div>
-        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
-          看板指标
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 14 }}>
-          {(data.metrics || []).map(m => (
-            <div
-              key={m.key}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '7px 0',
-                borderBottom: '1px solid var(--border-light)',
-              }}
-            >
-              <span
-                style={{
-                  flex: '1 1 auto',
-                  minWidth: 0,
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {m.label}
-              </span>
-              <span
-                style={{
-                  flex: '0 0 auto',
-                  maxWidth: 160,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: 12,
-                  color: LEVEL_COLOR[m.level] || 'var(--muted2)',
-                }}
-              >
-                {fmtDays(m.days)}
-                {m.from ? ` · ${m.from}` : ''}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
-          原始数据源
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {(data.sources || []).map(s2 => (
-            <div
-              key={s2.doc_type}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '7px 0',
-                borderBottom: '1px solid var(--border-light)',
-              }}
-            >
-              <span
-                style={{
-                  flex: '1 1 auto',
-                  minWidth: 0,
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {s2.label}
-              </span>
-              <span
-                style={{
-                  flex: '0 0 auto',
-                  maxWidth: 160,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: 12,
-                  color: LEVEL_COLOR[s2.level] || 'var(--muted2)',
-                }}
-              >
-                {s2.last_biz_date || '—'} · {fmtDays(s2.days)}
-              </span>
-            </div>
-          ))}
-          {!(data.sources || []).length && (
-            <div style={{ fontSize: 12, color: 'var(--muted2)', padding: '8px 0' }}>
-              暂无导入记录
-            </div>
-          )}
+          <div className="fresh-title">
+            <span>数据新鲜度</span>
+            <span className="fresh-close clickable" onClick={onClose}>
+              关闭
+            </span>
+          </div>
+          <div className="fresh-hint">数据来自 ERP / 平台导出快照，超期建议重新导入对应类型</div>
+
+          <div className="fresh-section">看板指标</div>
+          <div className="fresh-list">
+            {(data.metrics || []).map(m => (
+              <div key={m.key} className="fresh-row">
+                <span className="fresh-label">{m.label}</span>
+                <span className="fresh-value" style={{ color: LEVEL_COLOR[m.level] }}>
+                  {fmtDays(m.days)}
+                  {m.from ? ` · ${m.from}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="fresh-section">原始数据源</div>
+          <div className="fresh-list">
+            {(data.sources || []).map(s2 => (
+              <div key={s2.doc_type} className="fresh-row">
+                <span className="fresh-label">{s2.label}</span>
+                <span className="fresh-value" style={{ color: LEVEL_COLOR[s2.level] }}>
+                  {s2.last_biz_date || '—'} · {fmtDays(s2.days)}
+                </span>
+              </div>
+            ))}
+            {!(data.sources || []).length && <div className="fresh-empty">暂无导入记录</div>}
+          </div>
         </div>
       </div>
     </>,
