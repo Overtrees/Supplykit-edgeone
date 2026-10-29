@@ -131,7 +131,7 @@ def _build_repl(channel, mode):
         try:
             from biz.sales import load_daily_sales_grouped as _ldg, calc_sales_multi as _csm, \
                 smooth_promo_spikes as _sps, rolling_predict as _rp
-            _by, _by_wh = _ldg(60, channel)
+            _by, _by_wh, _by_bc = _ldg(60, channel)
             _c_whs = {r.get("warehouse") for r in query(
                 "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
                 [channel])}
@@ -170,12 +170,34 @@ def _build_repl(channel, mode):
                 _st["ds7_cut"] = _mw[7].get(_k, 0)
                 _st["ds14_cut"] = _mw14[14].get(_k, 0)
                 _st["ds28_cut"] = _mw28[28].get(_k, 0)
+            # 2026-10-29 按 69码 直算(与物化同构: key = "sku|barcode|WH_ALL")
+            try:
+                for _bk, _bd in (_by_bc or {}).items():
+                    _sk, _bc = _bk.rsplit("|", 1) if "|" in _bk else (_bk, "")
+                    if not _bc:
+                        continue
+                    _c7 = _csm({_bk: _sps(_bd)}, windows=[7], sparse="shrink")
+                    _c14 = _csm({_bk: _sps(_bd)}, windows=[14], sparse="shrink")
+                    _c28 = _csm({_bk: _sps(_bd)}, windows=[28], sparse="shrink")
+                    _st = _stats.setdefault("%s|%s|__ALL__" % (_sk, _bc), {})
+                    _st["ds7_cut"] = _c7[7].get(_bk, 0)
+                    _st["ds14_cut"] = _c14[14].get(_bk, 0)
+                    _st["ds28_cut"] = _c28[28].get(_bk, 0)
+            except Exception:
+                pass
         except Exception as _e2:
             from routes.common import try_err
             try_err('repl', '物化直算降级失败', _e2)
 
-    def _rd(sku, wh):
-        """读物化行: wh=WH_C(__C__ bbcc全国C) / WH_ALL(__ALL__ 展示) / 具体仓名(传统)/ None → {ds*_cut, ...}"""
+    def _rd(sku, wh, bc=""):
+        """读物化行(2026-10-29 按码):
+        · 有 69码 → 优先读该码行("sku|barcode|wh"), 无则**降级**读合计行(不含69码)
+        · 无 69码 → 直接读合计行
+        """
+        if bc:
+            _hit = _stats.get("%s|%s|%s" % (sku, bc, wh)) or _stats.get("%s|%s|%s" % (sku, bc, "__ALL__"))
+            if _hit:
+                return _hit
         return _stats.get("%s|%s" % (sku, wh)) or {} if wh else (_stats.get(sku) or {})
 
     def _fused_cut(st, sku=None, wh=None):
@@ -211,24 +233,25 @@ def _build_repl(channel, mode):
             tty = int(r.get("in_transit_qty") or 0)
             ctt = int(r.get("c_transit") or 0)
             saf = int(r.get("safety_qty") or 0)
+            _bc = str(r.get("barcode") or "").strip()   # 2026-10-29 按 69码(空码降级)
             if wt == "platform_b":
-                b_stock[sku] = b_stock.get(sku, 0) + qty
-                b_transit[sku] = b_transit.get(sku, 0) + tty
+                b_stock[(sku, _bc)] = b_stock.get((sku, _bc), 0) + qty
+                b_transit[(sku, _bc)] = b_transit.get((sku, _bc), 0) + tty
             elif wt == "own":
                 pass
             else:
-                a = agg.setdefault(sku, {"avail": 0, "transit": 0, "c_transit": 0, "safety": 0})
+                a = agg.setdefault((sku, _bc), {"avail": 0, "transit": 0, "c_transit": 0, "safety": 0})
                 a["avail"] += qty
                 a["transit"] += tty
                 a["c_transit"] += ctt
                 a["safety"] += saf
-        for sku, st in agg.items():
+        for (sku, _bc), st in agg.items():
             avail, c_transit, transit, safety = st["avail"], st["c_transit"], st["transit"], st["safety"]
             # 动态安全线周期(一盘货): C周期=b_to_c_days+c_safety_days, B周期=ship_to_b_days+safety_multiplier, 全周期=C+B
             _c_period = int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))
             _b_period = int(cfg.get("ship_to_b_days", "0")) + int(float(cfg.get("safety_multiplier") or 0))
             _full_period = _c_period + _b_period
-            _st8 = _rd(sku, "__C__")
+            _st8 = _rd(sku, "__C__", _bc)
             ds7 = round(float(_st8.get("ds7_cut") or 0), 1)
             ds14 = round(float(_st8.get("ds14_cut") or 0), 1)
             ds28 = round(float(_st8.get("ds28_cut") or 0), 1)
@@ -242,8 +265,8 @@ def _build_repl(channel, mode):
             effective_safety = round(ds * safety_days, 1) if has_demand else 0
             # C 缺口 = 日销×lead − C可用 − B→C调拨在途(保留1位小数)
             c_gap = max(round(ds * lead - avail - c_transit, 1), 0) if has_demand else 0
-            b_available = b_stock.get(sku, 0)
-            b_in_transit = b_transit.get(sku, 0)
+            b_available = b_stock.get((sku, _bc), 0)
+            b_in_transit = b_transit.get((sku, _bc), 0)
             b_cover = b_available + b_in_transit
             b_gap = max(round(c_gap - b_cover, 1), 0) if c_gap > 0 else 0
             b_ship_days = int(cfg.get("ship_to_b_days") or 0)
@@ -339,7 +362,8 @@ def _build_repl(channel, mode):
                 parts.insert(0, "🔴 已濒临")
             note = " · ".join(parts)
             suggestions.append({
-                "sku": sku, "barcode": prod.get("barcode", ""),
+                # 2026-10-29 按码: 优先用库存行的 69码(按码分组), 无则回退商品档案
+                "sku": sku, "barcode": _bc or prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "category": prod.get("category", ""),
                 "available_qty": avail, "safety_qty": round(ds * _full_period, 1) if ds > 0 else 0,
@@ -369,7 +393,8 @@ def _build_repl(channel, mode):
                 continue
             sku = r.get("sku")
             wh = r.get("warehouse")
-            _st9 = _rd(sku, wh)
+            _bc = str(r.get("barcode") or "").strip()   # 2026-10-29 按 69码(空码降级)
+            _st9 = _rd(sku, wh, _bc)
             w7 = round(float(_st9.get("ds7_cut") or 0), 1)
             w14 = round(float(_st9.get("ds14_cut") or 0), 1)
             w28 = round(float(_st9.get("ds28_cut") or 0), 1)
@@ -396,7 +421,7 @@ def _build_repl(channel, mode):
             box_qty = ((suggested + box - 1) // box * box) if suggested > 0 else 0
             after_turnover = round((avail + transit + box_qty) / ds, 1) if ds > 0 else 999
             suggestions.append({
-                "sku": sku, "barcode": prod.get("barcode", ""),
+                "sku": sku, "barcode": _bc or prod.get("barcode", ""),
                 "product_name": prod.get("product_name", ""), "brand": prod.get("brand", ""),
                 "store": prod.get("store", ""), "warehouse": wh, "category": prod.get("category", ""),
                 "available_qty": avail, "safety_qty": round(ds * _trad_period, 1) if ds > 0 else 0,
