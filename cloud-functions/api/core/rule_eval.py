@@ -174,8 +174,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         """日销取值: **SKU+69码 优先 → 降级 SKU**(2026-10-29 简化)
 
         维度(_wh)是既定业务对象, 不是可降级层级: bbcc→__BC__(一盘) / traditional+own→该仓。
-        故只做两级: ①该对象内该码 ②该对象内合计码(SKU 级)；仍缺则 SKU 全国兜底。
-        已删除的跨维兜底(全国该码/全国合计)属冗余, 会把别的维度销量混进来。
+        只做两级: ①该对象内该 69码 ②该对象内 SKU 合计(少码)—— 降级只降码, 不换维度。
+        该维度无数据时返回 0(不触发): **绝不拿全国/全国C合计兜底**(会干扰本仓判断)。
         """
         if _bc:
             _v = _ds_bc.get((_sku, _bc, _wh))
@@ -184,7 +184,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         _v = _ds_agg.get((_sku, _wh))
         if _v is not None:
             return _v
-        return _fused.get(_sku, 0)
+        # 2026-10-29 杜绝误导: 该维度(逐仓 / BC 盘)无数据 → 返回 0(不触发), **绝不拿全国/全国C合计兜底**
+        #   —— 用别处销量判断本仓, 会直接放大或压低本仓缺口(误报/漏报都由此而来)
+        return 0.0
 
     _sigma = {}
     _otif_map = {}
