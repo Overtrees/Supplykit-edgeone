@@ -336,3 +336,50 @@ async def flow_records_batch(request: Request):
     invalidate_all()
     return ok({"deleted": len(_rows), "batch_cleaned": _b_cleaned,
                "message": "已删除 %d 条记录" % len(_rows)})
+
+
+@router.get("/flow-records/list")
+@traced
+def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 50,
+                      date_from: str = "", date_to: str = "", sku: str = "",
+                      channel: str = "jd"):
+    """出入库明细(2026-10-29): 进销存页锤子菜单 → 弹窗 tab 切换
+    列: 日期 / SKU / 生产日期 / 截止日期 / 数量 / 备注(入库=供应商, 出库=目标仓)
+    分页 SQL 下推(8061/6057 行, 索引 channel+date)"""
+    from db import query as _q, one as _o
+    if target not in ("inbound", "outbound"):
+        return fail("target 必须为 inbound 或 outbound")
+    table = "inbound_records" if target == "inbound" else "outbound_records"
+    dcol = "inbound_date" if target == "inbound" else "outbound_date"
+    ecol = "supplier" if target == "inbound" else "target_warehouse"
+    pg = max(1, int(page or 1))
+    ps = min(max(1, int(page_size or 50)), 200)
+    where = ["channel=%s"]
+    params = [channel or "jd"]
+    if date_from:
+        where.append("%s >= %%s" % dcol)
+        params.append(date_from + " 00:00:00")
+    if date_to:
+        where.append("%s <= %%s" % dcol)
+        params.append(date_to + " 23:59:59")
+    if sku:
+        where.append("sku LIKE %s")
+        params.append("%" + sku + "%")
+    w = " AND ".join(where)
+    try:
+        tot = _o("SELECT COUNT(*) AS c FROM `%s` WHERE %s" % (table, w), params) or {}
+        rows = _q("SELECT id, sku, %s AS d, quantity, prod_date, exp_date, warehouse, "
+                  "`%s` AS extra FROM `%s` WHERE %s ORDER BY %s DESC, id DESC LIMIT %%s OFFSET %%s"
+                  % (dcol, ecol, table, w, dcol),
+                  params + [ps, (pg - 1) * ps])
+    except Exception as _e:
+        return fail("查询失败: %s" % str(_e)[:150])
+    items = [{"id": r.get("id"), "sku": r.get("sku"), "date": str(r.get("d") or "")[:19],
+              "prod_date": str(r.get("prod_date") or "")[:10],
+              "exp_date": str(r.get("exp_date") or "")[:10],
+              "quantity": int(r.get("quantity") or 0),
+              "warehouse": str(r.get("warehouse") or ""),
+              "extra": str(r.get("extra") or "")} for r in rows]
+    return ok({"items": items, "total": int((tot or {}).get("c") or 0),
+               "page": pg, "page_size": ps, "target": target,
+               "extra_label": "供应商" if target == "inbound" else "目标仓"})

@@ -233,6 +233,9 @@ _INDEXES = [
 ]
 # 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
 _ADD_INDEXES = [
+    # 2026-10-29 出入库明细弹窗(按渠道+日期倒序分页)
+    ("idx_inbound_ch_date", "inbound_records", "(channel, inbound_date)"),
+    ("idx_outbound_ch_date", "outbound_records", "(channel, outbound_date)"),
     ("idx_alerts_status_source", "alerts", "(status, source)"),  # 2026-10-16 evaluate 预载 SELECT status+source 走索引(9.8万行全扫曾慢)
     ("idx_products_barcode_ch", "products", "(barcode, channel)"),  # 2026-10-27 订单品牌子查询(pb.barcode=o.barcode) Apply 提速——曾 per-row 无索引
 ]

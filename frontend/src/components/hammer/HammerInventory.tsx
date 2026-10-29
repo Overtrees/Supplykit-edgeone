@@ -4,7 +4,8 @@ import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
 import { INV_COLS, getInvVis, invColKey, INV_WH_LABEL } from './configs'
-import { IconExport } from '../Icons'
+import { IconExport, IconClipboard } from '../Icons'
+import FlowRecordsSheet from '../FlowRecordsSheet'
 
 interface HammerInventoryProps {
   channel: string
@@ -26,6 +27,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
     () => getInvVis(hammerWhType, channel) || INV_COLS[hammerWhType].map(c => c.id),
   )
   const [exporting, setExporting] = useState(false)
+  const [flowOpen, setFlowOpen] = useState(false) // 2026-10-29 出入库明细弹窗
 
   useEffect(() => {
     const saved = getInvVis(hammerWhType, channel) || INV_COLS[hammerWhType].map(c => c.id)
@@ -120,6 +122,12 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
           >
             {exporting ? <span className="hammer-spinner" /> : <IconExport size={13} />}{' '}
             {exporting ? t('common.exporting') : t('common.export')}
+          </button>
+        </div>
+        {/* 2026-10-29 出入库明细(流水台账, 含效期/数量/供应商或目标仓) */}
+        <div className="hammer-row">
+          <button onClick={() => setFlowOpen(true)} className="hammer-btn btn-ghost">
+            <IconClipboard size={13} /> 出入库明细
           </button>
         </div>
       </div>
@@ -284,6 +292,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
           </div>
         </div>
       )}
+      <FlowRecordsSheet open={flowOpen} onClose={() => setFlowOpen(false)} channel={channel} />
     </div>
   )
 }
