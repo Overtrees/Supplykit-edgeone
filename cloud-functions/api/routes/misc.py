@@ -451,24 +451,26 @@ def data_freshness(channel: str = "jd"):
         return 0 if d <= 7 else (1 if d <= 30 else 2)
 
     # 2026-10-29 兜底: data_freshness 无记录(新表/历史数据) → 从业务表 MAX(业务日期) 反推
-    # 仅限有时间列的表: order(ordered_at) / inbound(inbound_date) / outbound(outbound_date)
-    # inventory/product/supplier 无时间列 → 只能靠导入记录(无记录=未知, 不报红)
+    # 用**预置完整 SQL 字符串**(不做 % 格式化, 避免与 WHERE 内 %s 冲突)
     _seen = {str(r.get("doc_type") or "") for r in rows}
-    _FB = {
-        "order": ("orders", "ordered_at", "WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s"),
-        "inbound": ("inbound_records", "inbound_date", "WHERE channel=%s"),
-        "outbound": ("outbound_records", "outbound_date", "WHERE channel=%s"),
+    _FB_SQL = {
+        "order": ("SELECT MAX(ordered_at) AS m FROM orders "
+                  "WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s"),
+        "inbound": "SELECT MAX(inbound_date) AS m FROM inbound_records WHERE channel=%s",
+        "outbound": "SELECT MAX(outbound_date) AS m FROM outbound_records WHERE channel=%s",
     }
-    for _dtp, (_tbl, _col, _wh) in _FB.items():
+    for _dtp, _sql in _FB_SQL.items():
         if _dtp in _seen:
             continue
         try:
-            _r = _q("SELECT MAX(%s) AS m FROM %s %s" % (_col, _tbl, _wh), [channel or "jd"])
-            _m = str((_r[0] or {}).get("m") or "")[:19]
+            _r = _q(_sql, [channel or "jd"])
+            _m = ""
+            if _r:
+                _m = str((_r[0] or {}).get("m") or "")[:19]
             if _m:
                 rows.append({"doc_type": _dtp, "last_import_at": "", "last_biz_date": _m})
-        except Exception:
-            continue
+        except Exception as _fx:
+            try_err('misc', '新鲜度兜底(%s)降级' % _dtp, _fx)
 
     src = {}
     for r in rows:
