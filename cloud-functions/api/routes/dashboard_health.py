@@ -73,15 +73,8 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
     _z = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
     hw = {"own": dict(_z), "platform": dict(_z), "platform_b": dict(_z)}
     bc_agg = {}
-    # 2026-10-29 按 69码: 库存行已按码拆分 → 先按 (sku, 仓型) **合并**再判定
-    #   否则同 SKU 两个码会算两次, 看板"1000 SKU"变成行数(用户可见数字失真)
-    #   合并后: 无码场景与改造前完全一致; 多码场景保持"SKU 数"语义
-    _agg_rows = {}
-    for r in rows:
-        _k = (str(r.get("sku") or ""), str(r.get("warehouse_type") or ""))
-        _a = _agg_rows.setdefault(_k, {"sku": _k[0], "warehouse_type": _k[1], "available_qty": 0})
-        _a["available_qty"] += int(r.get("available_qty") or 0)
-    rows = list(_agg_rows.values())
+    # 2026-10-29 按 69码(用户定案 A): 库存行按码拆分 → **逐行独立判定与计数**
+    #   同 SKU 不同 69码 各自算一个健康单元(粒度更细, 用户可见数字随之变为"库存行数")
     for r in rows:
         wt = str(r.get("warehouse_type") or "")
         avail = int(r.get("available_qty") or 0)
