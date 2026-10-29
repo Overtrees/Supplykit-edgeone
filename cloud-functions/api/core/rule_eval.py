@@ -169,16 +169,30 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
 
     def _ds_of(_sku, _bc, _wh):
-        """日销取值链: 该码该维 → 该码 __ALL__ → 合计该维 → 合计 __ALL__ → 全国 SKU(最后兜底)"""
+        """日销取值链(2026-10-29 按业务维度优先, 再降级到码):
+
+            ① 该维 × 该 69码      —— 逐仓(traditional/own) 或 BC盘(bbcc) 的精准值
+            ② 该维 × 合计码        —— 同维度下沉, 保留"这个仓/这盘货"的口径
+            ③ 全国 × 该 69码       —— 维度缺失时保码
+            ④ 全国 × 合计码        —— 维度与码都缺
+            ⑤ get_sales_digest 兜底(物化缺行)
+
+        维度由 ctx.warehouse 决定: traditional/own 传具体仓名, bbcc 传 __BC__(一盘货)。
+        说明: 物化的 __BC__/__C__ 目前只有合计码行(不按码拆分), 因此 bbcc 会停在②,
+        语义即"这盘货的整体日销" —— 与补货建议 CC/BC 合计口径一致。
+        """
         if _bc:
             _v = _ds_bc.get((_sku, _bc, _wh))
-            if _v is None and _wh == "__BC__":
-                _v = _ds_bc.get((_sku, _bc, "__ALL__"))
             if _v is not None:
                 return _v
         _v = _ds_agg.get((_sku, _wh))
-        if _v is None and _wh == "__BC__":
-            _v = _ds_agg.get((_sku, "__ALL__"))
+        if _v is not None:
+            return _v
+        if _bc:
+            _v = _ds_bc.get((_sku, _bc, "__ALL__"))
+            if _v is not None:
+                return _v
+        _v = _ds_agg.get((_sku, "__ALL__"))
         if _v is not None:
             return _v
         return _fused.get(_sku, 0)
