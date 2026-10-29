@@ -26,7 +26,7 @@ from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["cleansing"])
 
 # 目标类型 → 表/仓库类型映射
-_TARGET_WH = {"inventory": "own", "platform_inv": "platform", "inventory_b": "platform_b"}
+from routes.common import TARGET_WH as _TARGET_WH  # 单一真源(2026-10-29)
 _NUMS = {"number", "price", "quantity", "score", "safety_qty", "available_qty", "in_transit_qty",
          "month_inbound", "month_outbound", "beginning_stock", "turnover_days", "c_transit",
          "locked_qty", "weight", "volume", "box_qty", "total_amount", "unit_price",

@@ -857,6 +857,9 @@ try:
     check("规则 ctx: order.total_amount/unit_price 已注入",
           '"total_amount": round(_g[\"amt\"]' in _cl or '"total_amount": round(_g["amt"], 2)' in _cl, "cleansing.py")
     check("规则字段存量迁移已登记", "rules_field_path_v1" in _sc, "schema_create.py")
+    check("导入: 仓型映射单一真源(平台库存/B仓导入不再 NameError)",
+          "TARGET_WH =" in _rf("routes/common.py")
+          and "TARGET_WH as _TARGET_WH" in _rf("routes/cleanse_write.py"), "cleanse_write.py")
 except Exception as _e2:
     check("口径/静默失败用例无异常", False, str(_e2)[:200])
 

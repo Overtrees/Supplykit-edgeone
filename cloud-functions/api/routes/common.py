@@ -34,6 +34,11 @@ _TE_STATE = {}
 _TE_WINDOW = 10.0
 
 
+# 导入目标 → 库存仓型(单一真源; 2026-10-29: 原只在 cleansing.py 定义, cleanse_write.py 引用时报
+# NameError → 平台库存/B仓库存导入 100% 失败; 重构拆分时漏迁移)
+TARGET_WH = {"inventory": "own", "platform_inv": "platform", "inventory_b": "platform_b"}
+
+
 def mark_driver(task_id, driver):
     """标记任务推进来源(前端轮询 / 后端保活) —— 2026-10-29 统一
 
