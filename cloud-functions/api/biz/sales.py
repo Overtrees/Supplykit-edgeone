@@ -537,8 +537,11 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         out = {}
         for r in rows:
             _w = str(r.get("warehouse") or "")
-            wk = str(r.get("sku") or "") + ("|" + _w if _w else "")
-            out[wk] = {"sku": r.get("sku"), "warehouse": _w,
+            _b = str(r.get("barcode") or "")
+            # 2026-10-29 按 69码: key 加码(原 sku|wh —— 同 SKU 多码同仓会互相覆盖);
+            #   返回 dict 也带 barcode, 消费方无需再查库
+            wk = "%s|%s|%s" % (r.get("sku") or "", _b, _w)
+            out[wk] = {"sku": r.get("sku"), "barcode": _b, "warehouse": _w,
                        "ds7": float(r.get("ds7") or 0), "ds14": float(r.get("ds14") or 0),
                        "ds28": float(r.get("ds28") or 0), "sigma": float(r.get("sigma") or 0),
                        "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),

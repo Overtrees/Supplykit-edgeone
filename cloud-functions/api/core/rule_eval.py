@@ -164,7 +164,24 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
     _agg = None
     _fused = {}
-    _by_wh_ds = {}   # 逐仓日销: (sku, warehouse) → ds28(2026-10-29 粒度修正用)
+    # 2026-10-29 按 69码: 两套映射 —— ①按码行 ②合计行(空码); 取值按码优先, 再合计, 最后全国兜底
+    _ds_bc = {}    # (sku, barcode, warehouse) → ds28(含 __ALL__/__C__/__BC__ 哨兵)
+    _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
+
+    def _ds_of(_sku, _bc, _wh):
+        """日销取值链: 该码该维 → 该码 __ALL__ → 合计该维 → 合计 __ALL__ → 全国 SKU(最后兜底)"""
+        if _bc:
+            _v = _ds_bc.get((_sku, _bc, _wh))
+            if _v is None and _wh == "__BC__":
+                _v = _ds_bc.get((_sku, _bc, "__ALL__"))
+            if _v is not None:
+                return _v
+        _v = _ds_agg.get((_sku, _wh))
+        if _v is None and _wh == "__BC__":
+            _v = _ds_agg.get((_sku, "__ALL__"))
+        if _v is not None:
+            return _v
+        return _fused.get(_sku, 0)
     _sigma = {}
     _otif_map = {}
     _accel = {}
@@ -217,12 +234,17 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
             #   逐仓行取该仓日销(物化逐仓行), 无逐仓数据回退全国(兼容)
             try:
                 from biz.sales import get_sku_sales_stats as _gwds
+                # 按码行(barcode='*') + 合计行(默认) 各取一次, 供 _ds_of 分级命中
+                for _vwh in (_gwds(channel, days=28, barcode="*") or {}).values():
+                    _b2 = str(_vwh.get("barcode") or "")
+                    if _b2:
+                        _ds_bc[(str(_vwh.get("sku") or ""), _b2,
+                                str(_vwh.get("warehouse") or ""))] = float(_vwh.get("ds28") or 0)
                 for _vwh in (_gwds(channel, days=28) or {}).values():
-                    _w2 = str(_vwh.get("warehouse") or "")
-                    if _w2 and not _w2.startswith("__"):
-                        _by_wh_ds[(str(_vwh.get("sku") or ""), _w2)] = float(_vwh.get("ds28") or 0)
+                    _ds_agg[(str(_vwh.get("sku") or ""),
+                             str(_vwh.get("warehouse") or ""))] = float(_vwh.get("ds28") or 0)
             except Exception as _ewh:
-                try_err('core_rules', '逐仓日销加载降级', _ewh)
+                try_err('core_rules', '日销(按码+逐仓)加载降级', _ewh)
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)
         try:
@@ -335,8 +357,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
             "stock": int(r.get("available_qty") or 0),
             "days_since_last": days,
             # 2026-10-29 规则页字段对齐: 前端"日销(定时任务提供)"一直为空 → 补 SKU 级日销(逐仓优先)
-            "daily_sales": round(float(_by_wh_ds.get((sku, str(r.get("warehouse") or "")), 0)
-                                       or _fused.get(sku, 0) or 0), 2),
+            "daily_sales": round(float(_ds_of(sku, str(r.get("barcode") or ""),
+                                              str(r.get("warehouse") or "")) or 0), 2),
             "product_name": r.get("product_name") or sku,
         }
         # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)
@@ -348,7 +370,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         if _need_calc and _agg is not None:
             try:
                 _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
-                _ds = _by_wh_ds.get((sku, str(r.get("warehouse") or "")), 0) or _fused.get(sku, 0)
+                _ds = _ds_of(sku, str(r.get("barcode") or ""), str(r.get("warehouse") or ""))
                 _otif = _otif_map.get(_prod_sup.get(sku, ""), 1.0)
                 _ss_z = float(_rp.get("ss_z", 1.65))
                 _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)

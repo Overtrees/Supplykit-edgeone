@@ -198,7 +198,8 @@ def _build_repl(channel, mode):
             _hit = _stats.get("%s|%s|%s" % (sku, bc, wh)) or _stats.get("%s|%s|%s" % (sku, bc, "__ALL__"))
             if _hit:
                 return _hit
-        return _stats.get("%s|%s" % (sku, wh)) or {} if wh else (_stats.get(sku) or {})
+        # 2026-10-29 key 统一为 sku|barcode|warehouse(空码即 sku||wh) —— 原 sku|wh 已不存在
+        return _stats.get("%s||%s" % (sku, wh)) or {} if wh else {}
 
     def _fused_cut(st, sku=None, wh=None):
         """现场 rolling_predict(cut)——不固化 fused 列, 消费方口径一致(补货=削峰+shrink 融合)"""
