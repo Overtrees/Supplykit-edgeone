@@ -154,20 +154,23 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
     return adjusted, evaluated, _msg
 
 def _rebuild_own_batches(channel, skus):
-    """自有仓批次重建(2026-10-29 FIFO): 入库按生产日期升序累加 → 出库量按 FIFO 先扣最早批次
+    """自有仓批次重建(2026-10-29 四维): 绑定键 = 仓库类型 + SKU + **69码** + 批次信息
 
-    保证 Σ(剩余批次qty) ≡ inventory.available_qty(自有仓恒等式)
-    只处理 own 维度; 平台/B 仓批次由库存导入提供, 不在此重算
+    批次信息 = (prod_date, exp_date) —— 入库记录里的生产/到期日期即批次标识
+    69码为空时降级三键(sku + warehouse), 与项目既有 "69码三键优先, 空落二键" 约定一致。
 
-    仓名策略与 _recalc_own_inventory 一致(2026-10-29 修复):
-      · 单自有仓 → 忽略入库记录的 warehouse, 批次统一落在该仓名下
-        (曾严格匹配 → 入库记录'北京仓' vs 库存'集货仓' → 80%+ SKU 批次重建失败)
-      · 多自有仓 → 严格匹配
+    算法:
+      · 期初(库存导入给的 beginning_stock)按 (sku, barcode, warehouse) 生成"期初批次"
+        (效期留空=未知, 排 FIFO 队首)
+      · 每行入库记录 = 一个批次(带 prod_date/exp_date/barcode)
+      · 出库扣减: 按出库记录的 (sku, barcode, prod_date, exp_date) **精确匹配**;
+        未填批次的量**不扣**(不做 FIFO 猜测) → 汇总告警
+    只处理 own 维度; 平台/B 仓批次由库存导入提供。
     """
     from db import query as _q, execute as _e, executemany as _em
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
     done = 0
-    _miss = []  # 未指定批次的出库量 [(sku, qty)] —— 不猜, 汇总告警
+    _miss = []  # 未填批次的出库量 [(sku, qty)]
     for i in range(0, len(skus), 100):
         batch_skus = [x for x in skus[i:i + 100] if x]
         if not batch_skus:
@@ -175,88 +178,80 @@ def _rebuild_own_batches(channel, skus):
         ph = ",".join(["%s"] * len(batch_skus))
         _wh_cond = (" AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
                     "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
-        _params = [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES)
-        # 注意 % 优先级高于 +: 必须先拼完整串再格式化(曾因优先级导致 "not all arguments converted")
-        _sql_ins = ("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
-                    "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
+        _sql_ins = ("SELECT id, sku, barcode, warehouse, prod_date, exp_date, quantity "
+                    "FROM inbound_records WHERE channel=%s AND sku IN (%s)" + _wh_cond +
                     " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
-        ins = _q(_sql_ins % ("%s", ph), _params)
-        # 2026-10-29 出库扣减口径(用户定案): 以**实际导入的出库记录**为准
-        #   · 出库记录填了 prod_date/exp_date → 精确扣该批次
-        #   · 未填 → 计入 sku 级 FIFO 兜底池
-        outs = {}        # sku → 未指定批次的出库量(FIFO 兜底)
-        outs_exact = {}  # (sku, prod_date, exp_date) → 精确指定批次量
-        for r in _q("SELECT sku, prod_date, exp_date, SUM(quantity) AS q FROM outbound_records "
-                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku, prod_date, exp_date"
-                    % ("%s", ph), [channel] + batch_skus):
+        ins = _q(_sql_ins % ("%s", ph), [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES))
+        # 出库: 按四维分组
+        outs_exact = {}
+        outs_noexp = {}
+        for r in _q("SELECT sku, barcode, prod_date, exp_date, SUM(quantity) AS q "
+                    "FROM outbound_records WHERE channel=%s AND sku IN (%s) "
+                    "GROUP BY sku, barcode, prod_date, exp_date" % ("%s", ph),
+                    [channel] + batch_skus):
             _sk = str(r.get("sku") or "")
+            _bc = str(r.get("barcode") or "").strip()
             _pd = str(r.get("prod_date") or "")[:10]
             _ed = str(r.get("exp_date") or "")[:10]
             _qq = int(r.get("q") or 0)
             if _pd or _ed:
-                outs_exact[(_sk, _pd, _ed)] = outs_exact.get((_sk, _pd, _ed), 0) + _qq
+                k = (_sk, _bc, _pd, _ed)
+                outs_exact[k] = outs_exact.get(k, 0) + _qq
             else:
-                outs[_sk] = outs.get(_sk, 0) + _qq
-        by_sku = {}
-        for r in ins:
-            sk = str(r.get("sku") or "")
-            by_sku.setdefault(sk, []).append(r)
-        # 期初库存也要有批次(2026-10-29): 期初是"盘点时已在库", 无入库单据
-        # → 生成"期初批次"(效期未知), 否则 Σ批次 恒比 available 少一个期初值
+                k = (_sk, _bc)
+                outs_noexp[k] = outs_noexp.get(k, 0) + _qq
+        # 期初(按 sku+barcode+warehouse)
         _beg_map = {}
-        for r in _q("SELECT sku, COALESCE(beginning_stock,0) AS b FROM inventory "
+        for r in _q("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, "
+                    "COALESCE(beginning_stock,0) AS b FROM inventory "
                     "WHERE channel=%s AND sku IN (%s) AND warehouse_type IN (%s)"
-                    % ("%s", ph, _ph_wt), [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
-            _beg_map[str(r.get("sku") or "")] = int(r.get("b") or 0)
-        for sk, _bq in _beg_map.items():
-            if _bq > 0:
-                by_sku.setdefault(sk, [])  # 确保 SKU 进入重建范围(即使无入库记录)
-        _del_skus, _insert_rows = [], []
-        for sk, rows in by_sku.items():
-            _b0 = _beg_map.get(sk, 0)
-            # 期初批次插到 FIFO 队首(最老, 最先被出库消耗); 效期留空=未知
-            _fifo = ([{"quantity": _b0, "prod_date": "", "exp_date": "", "warehouse": ""}]
-                     if _b0 > 0 else []) + list(rows)
-            # ②a 精确扣: 按出库记录指定的 (prod_date, exp_date) 定位批次
-            _prec = {}
-            for (_psk, _ppd, _ped), _pq in outs_exact.items():
-                if _psk == sk:
-                    _prec[(_ppd, _ped)] = _prec.get((_ppd, _ped), 0) + _pq
-            if _prec:
-                for r in _fifo:
-                    if not _prec:
-                        break
-                    _k = (str(r.get("prod_date") or "")[:10], str(r.get("exp_date") or "")[:10])
-                    if _k in _prec and _prec[_k] > 0:
-                        _q0 = int(r.get("quantity") or 0)
-                        _tk = min(_q0, _prec[_k])
-                        r["quantity"] = _q0 - _tk
-                        _prec[_k] -= _tk
-                # 指定批次未匹配(批次已不存在/日期不符) → 剩余量转 FIFO 兜底
-                outs[sk] = outs.get(sk, 0) + sum(v for v in _prec.values() if v > 0)
-            # ②b 未指定批次的出库量: **不猜**(2026-10-29 用户定案)
-            #   原 FIFO 兜底属"猜测扣减", 与"以实际导入为准"冲突——
-            #   实际出库未必是最早批次, 硬扣会让批次与真实不符且无法追溯
-            #   现在: 不扣任何批次, 差额记为未匹配量并告警(提示补全出库记录的批次信息)
-            _unmatched = outs.get(sk, 0)
-            if _unmatched > 0:
-                try:
-                    _miss.append((sk, _unmatched))
-                except Exception:
-                    pass
+                    % ("%s", ph, _ph_wt),
+                    [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
+            _beg_map[(str(r.get("sku") or ""), str(r.get("bc") or ""),
+                      str(r.get("warehouse") or ""))] = int(r.get("b") or 0)
+        # 按 (sku, barcode, warehouse) 分组入库明细
+        by_key = {}
+        for r in ins:
+            k = (str(r.get("sku") or ""), str(r.get("barcode") or "").strip(),
+                 str(r.get("warehouse") or ""))
+            by_key.setdefault(k, []).append(r)
+        for k, _b0 in _beg_map.items():
+            if _b0 > 0:
+                by_key.setdefault(k, [])
+        _del_keys, _insert_rows = [], []
+        for (sk, bc, wh), rows in by_key.items():
+            _b0 = _beg_map.get((sk, bc, wh), 0)
+            _fifo = ([{"quantity": _b0, "prod_date": "", "exp_date": ""}] if _b0 > 0 else []) + list(rows)
+            # ① 精确扣: 按 (sku, barcode, prod_date, exp_date)
+            for r in _fifo:
+                _pd = str(r.get("prod_date") or "")[:10]
+                _ed = str(r.get("exp_date") or "")[:10]
+                _kk = (sk, bc, _pd, _ed)
+                _need = outs_exact.get(_kk, 0)
+                if _need > 0:
+                    _q0 = int(r.get("quantity") or 0)
+                    _take = min(_q0, _need)
+                    r["quantity"] = _q0 - _take
+                    outs_exact[_kk] = _need - _take
+            # ② 未填批次(无效期)的出库: 不猜, 记未匹配
+            _no = outs_noexp.get((sk, bc), 0)
+            if _no > 0:
+                _miss.append((sk, _no))
+            # ③ 生成本次剩余批次
             for r in _fifo:
                 qty = int(r.get("quantity") or 0)
                 if qty > 0:
-                    _insert_rows.append({"sku": sk,
-                                         "warehouse": str(r.get("warehouse") or ""),
+                    _insert_rows.append({"sku": sk, "barcode": bc, "warehouse": wh,
                                          "warehouse_type": "own", "channel": channel,
                                          "prod_date": str(r.get("prod_date") or "")[:10],
                                          "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
-            _del_skus.append(sk)
-        if not _del_skus:
+            _del_keys.append((sk, bc, wh))
+        if not _del_keys:
             continue
-        for j in range(0, len(_del_skus), 200):
-            d = _del_skus[j:j + 200]
+        # 删旧(按 sku 全删该渠道 own 批次, 再整体重建, 保证幂等)
+        _sk_all = sorted({k[0] for k in _del_keys})
+        for j in range(0, len(_sk_all), 200):
+            d = _sk_all[j:j + 200]
             try:
                 _e("DELETE FROM batches WHERE channel=%s AND warehouse_type IN (%s) AND sku IN (%s)"
                    % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES)), ",".join(["%s"] * len(d))),
@@ -265,7 +260,8 @@ def _rebuild_own_batches(channel, skus):
                 try_err('cleansing', '自有仓批次删除降级', _ed)
         for j in range(0, len(_insert_rows), 300):
             chunk = _insert_rows[j:j + 300]
-            cols = ["sku", "warehouse", "warehouse_type", "channel", "prod_date", "exp_date", "qty"]
+            cols = ["sku", "barcode", "warehouse", "warehouse_type", "channel",
+                    "prod_date", "exp_date", "qty"]
             try:
                 _em("INSERT INTO batches(%s) VALUES(%s)"
                     % (", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))),
@@ -276,10 +272,9 @@ def _rebuild_own_batches(channel, skus):
     if _miss:
         try:
             _tot = sum(x[1] for x in _miss)
-            try_err('cleansing', '出库未指定批次',
-                    Exception("渠道 %s 有 %d 个 SKU 的出库记录未填批次(生产日期/截止日期), "
-                              "合计 %d 件 —— 这些量不扣任何批次(不做 FIFO 猜测), "
-                              "导致 Σ批次 比可用多出该值; 请补全出库记录的批次信息后重新导入"
+            try_err('cleansing', '出库未填批次',
+                    Exception("渠道 %s 有 %d 个 SKU×69码 的出库记录未填批次(生产/截止日期), 合计 %d 件 "
+                              "—— 不做 FIFO 猜测, 这些量不扣批次; 请补全批次信息后重新导入"
                               % (channel, len(_miss), _tot)))
         except Exception:
             pass
@@ -304,36 +299,37 @@ def _ensure_inventory_rows(channel, rows):
             continue
         _wh = str(c.get("warehouse") or "").strip()
         _wt = str(c.get("warehouse_type") or "").strip() or SELF_WAREHOUSE_TYPES[0]
-        combos[(_sk, _wh, _wt)] = True
+        _bc = str(c.get("barcode") or "").strip()   # 2026-10-29 四维: 69码参与
+        combos[(_sk, _bc, _wh, _wt)] = True
     if not combos:
         return 0
     keys = list(combos.keys())
     existing = set()
     for i in range(0, len(keys), 200):
         chunk = keys[i:i + 200]
-        ph = " OR ".join(["(sku=%s AND warehouse=%s AND warehouse_type=%s)"] * len(chunk))
+        ph = " OR ".join(["(sku=%s AND COALESCE(barcode,'')=%s AND warehouse=%s AND warehouse_type=%s)"] * len(chunk))
         pp = []
-        for (_sk, _wh, _wt) in chunk:
-            pp += [_sk, _wh, _wt]
+        for (_sk, _bc, _wh, _wt) in chunk:
+            pp += [_sk, _bc, _wh, _wt]
         try:
-            for r in _q("SELECT sku, warehouse, warehouse_type FROM inventory "
-                        "WHERE channel=%s AND (%s)" % ("%s", ph), [channel] + pp):
-                existing.add((str(r.get("sku")), str(r.get("warehouse") or ""),
-                              str(r.get("warehouse_type") or "")))
+            for r in _q("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type "
+                        "FROM inventory WHERE channel=%s AND (%s)" % ("%s", ph), [channel] + pp):
+                existing.add((str(r.get("sku")), str(r.get("bc") or ""),
+                              str(r.get("warehouse") or ""), str(r.get("warehouse_type") or "")))
         except Exception as _eq:
             try_err('cleansing', '库存行查重降级', _eq)
             return 0
     params = []
-    for (_sk, _wh, _wt) in keys:
-        if (_sk, _wh, _wt) in existing:
+    for (_sk, _bc, _wh, _wt) in keys:
+        if (_sk, _bc, _wh, _wt) in existing:
             continue
-        params.append((_sk, "", _wh, _wt, 0, 0, 0, channel))
+        params.append((_sk, "", _bc, _wh, _wt, 0, 0, 0, channel))
     if not params:
         return 0
     try:
-        _em("INSERT INTO inventory(sku, product_name, warehouse, warehouse_type, "
+        _em("INSERT INTO inventory(sku, product_name, barcode, warehouse, warehouse_type, "
             "available_qty, beginning_stock, safety_qty, channel) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", params)
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)", params)
         return len(params)
     except Exception as _ee:
         try_err('cleansing', '库存行补建降级', _ee)
@@ -341,36 +337,30 @@ def _ensure_inventory_rows(channel, rows):
 
 
 def _recalc_own_inventory(channel, skus):
-    """自有仓库存重算(2026-10-29 架构定案): available = 期初 + Σ入库 − Σ出库
+    """自有仓库存重算(2026-10-29 四维): available = 期初 + Σ入库 − Σ出库
 
-    幂等: 流水与期初确定 → 结果唯一(重复导入/滞后补录/删除重录均自动正确)
-    范围: 仅本次涉及的 SKU(值来自全量流水聚合, 完整性不受影响)
-
-    仓名匹配策略(2026-10-29 修复: 曾严格匹配导致 88% 流水被忽略):
-      · 该渠道自有仓 = 1 个 → **忽略 warehouse**, 流水全部归属它
-        (业务现实: ERP 导出的入库单仓名常是"收货仓/中转仓", 与库存维度仓名不同;
-         单仓时不存在归属歧义)
-      · 自有仓 > 1 个 → **严格匹配 warehouse**, 不匹配的流水不计入并记警告
-        (多仓时仓名是唯一归属依据, 必须准确; 导入侧应校验仓名)
+    绑定键 = 仓库类型 + SKU + **69码** + 仓库名
+      · 有 69码 → 四维匹配
+      · 69码为空 → 降级三维(sku + warehouse), 与项目 "69码三键优先, 空落二键" 约定一致
+    幂等: 流水与期初确定 → 结果唯一; 严格匹配(不做单仓降级等隐式修正)
     """
-    from db import query as _q, execute as _e
+    from db import query as _q, execute as _e, executemany as _em
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
     out = 0
     for i in range(0, len(skus), 200):
         batch = skus[i:i + 200]
         ph = ",".join(["%s"] * len(batch))
-        # 2026-10-29 用户定案: 出入库**以实际导入为准** —— 严格按 warehouse 匹配,
-        # 不做"单仓降级/空仓名兜底"等隐式修正(仓名填错应暴露, 不应被算法掩盖)
-        _cond = " AND r.warehouse = i.warehouse"
         rows = _q(
-            "SELECT i.id, i.sku, i.warehouse, "
+            "SELECT i.id, i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
             "COALESCE(i.beginning_stock, 0) AS beg, "
             "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku" + _cond + "), 0) AS in_q, "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
+            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku" + _cond + "), 0) AS out_q "
-            "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) "
-            "AND i.sku IN (%s)" % ("%s", _ph_wt, ph),
+            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
+            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS out_q "
+            "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
+            % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
         upd = []
         for r in rows:
@@ -380,7 +370,6 @@ def _recalc_own_inventory(channel, skus):
                 continue
             upd.append((max(0, val), r.get("id")))
         if upd:
-            from db import executemany as _em
             _em("UPDATE inventory SET available_qty=%s WHERE id=%s", upd)
             out += len(upd)
     return out

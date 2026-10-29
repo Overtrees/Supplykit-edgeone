@@ -296,6 +296,8 @@ def create_all_tables():
             "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
                                  ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
+            # 2026-10-29 批次四维绑定(仓型+SKU+69码+批次信息): 补 barcode
+            "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
         }
         for _t, _cols in _extra_cols.items():
             try:
