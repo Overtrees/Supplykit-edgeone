@@ -181,13 +181,20 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         说明: 物化的 __BC__/__C__ 目前只有合计码行(不按码拆分), 因此 bbcc 会停在②,
         语义即"这盘货的整体日销" —— 与补货建议 CC/BC 合计口径一致。
         """
+        # ① 该维 × 该码 (bbcc: __BC__ 盘内该码 / traditional+own: 该仓该码)
         if _bc:
             _v = _ds_bc.get((_sku, _bc, _wh))
             if _v is not None:
                 return _v
+        # ② 该维 × 合计码 (降级只降码, **不降维** —— BC 就是一盘, 不是逐仓)
         _v = _ds_agg.get((_sku, _wh))
         if _v is not None:
             return _v
+        # BC 是一盘维度: 到 ② 为止。**不再回退 __ALL__** —— __ALL__ 含自有仓, 会把 own 销量
+        # 算进 BC 盘(口径污染); 缺行属物化异常, 直接走 digest 兜底
+        if _wh == "__BC__":
+            return _fused.get(_sku, 0)
+        # ③④ 仅逐仓(traditional/own)使用: 该维缺行时向上取全国
         if _bc:
             _v = _ds_bc.get((_sku, _bc, "__ALL__"))
             if _v is not None:
