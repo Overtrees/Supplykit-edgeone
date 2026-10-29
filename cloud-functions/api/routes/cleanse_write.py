@@ -68,7 +68,10 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                 for _i in range(0, len(skus), 500):  # 500/片(曾 200——25 次往返慢)
                     _batch = skus[_i:_i + 200]
                     _ph = ",".join(["%s"] * len(_batch))
-                    for r in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+                    # 2026-10-29 修正: 原 MAX(available_qty) 取"最大单仓库存" —— 订单不区分仓,
+                    # 用单仓库存对比累计订单量会**低估超卖风险**(库存分散在多仓时看起来够)
+                    # 改 SUM: 该 SKU 全部仓(含各 69码)合计可用, 与订单口径(全渠道累计量)匹配
+                    for r in query("SELECT sku, SUM(available_qty) AS avail FROM inventory "
                                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                                    [channel] + _batch):
                         inv_map[r.get("sku")] = int(r.get("avail") or 0)

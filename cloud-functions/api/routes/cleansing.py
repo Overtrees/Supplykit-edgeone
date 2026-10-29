@@ -768,7 +768,8 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         inv_map = {}
         for _i in range(0, len(_batch), 500):
             _ph = ",".join(["%s"] * len(_batch[_i:_i + 500]))
-            for r in _q5("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+            # 2026-10-29 修正: MAX 取单仓最大值会低估超卖风险 → SUM 汇总该 SKU 全部仓
+            for r in _q5("SELECT sku, SUM(available_qty) AS avail FROM inventory "
                          "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                          [channel] + _batch[_i:_i + 500]):
                 inv_map[r.get("sku")] = int(r.get("avail") or 0)
