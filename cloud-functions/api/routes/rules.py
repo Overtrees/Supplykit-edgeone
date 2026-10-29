@@ -293,7 +293,11 @@ async def rules_evaluate(request: Request):
             out[ch] = "error: %s" % str(e)[:80]
     from routes.analysis_cache import invalidate_all
     invalidate_all()  # 评估可能生成/变更告警 → 看板/接口缓存即时失效
-    return ok({"evaluated": out})
+    try:
+        from core.rule_eval import LAST_DIAG as _diag
+    except Exception:
+        _diag = {}
+    return ok({"evaluated": out, "diag": _diag})
 
 
 @router.post("/rules/{rid}/test")

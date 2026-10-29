@@ -2,6 +2,8 @@
 函数: evaluate_stock_skus(每日全量评估+恢复关闭) / close_oversell_for_skus(删单联动 SKU 级孤儿关闭)
 依赖: core.rules(evaluate_many/load_rules_for——函数内延迟 import 防循环) + db + dashboard(已有延迟)
 """
+LAST_DIAG = {}   # 2026-10-29 诊断用: 最近一次评估的关键计数(供 /rules/evaluate 返回定位)
+
 import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import → NameError 被 except 吞
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
 from db import query, one, execute
@@ -500,6 +502,14 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     #       收益低(每渠道仅 3-4 次查询)而风险高(多实例规则变更不一致))
     try:
         _tick("close")
+        try:
+            global LAST_DIAG
+            LAST_DIAG = {"rows": len(rows), "inv_rules": len(_inv_rules),
+                         "need_calc": bool(_need_calc), "agg": len(_agg or {}),
+                         "ctx": len(inv_ctxs), "hits": len(hits),
+                         "marks": list(_marks)}
+        except Exception:
+            pass
         _aud = ("评估审计 %s: inv_ctx=%d daily_ctx=%d order_ctx=%d 命中=%d 耗时=%.1fs 分段[%s]"
                 % (channel, len(inv_ctxs), len(daily_ctxs), _o_ctx_n, len(hits),
                    _t.time() - _t0, " ".join(_marks)))
