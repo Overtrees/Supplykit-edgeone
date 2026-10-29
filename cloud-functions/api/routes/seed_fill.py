@@ -571,12 +571,13 @@ def _seed_alerts():
 def _build_snapshot():
     """日销快照: 从订单聚合最近 90 天(幂等 upsert)"""
     start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime('%Y-%m-%d')
+    # 2026-10-29 按 69码: 快照主键含 barcode, 写入必须带码(否则按码日销全空)
     execute(
-        "INSERT INTO daily_sales_snapshot(date, channel, sku, warehouse, order_count) "
-        "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+        "INSERT INTO daily_sales_snapshot(date, channel, sku, barcode, warehouse, order_count) "
+        "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
         "WHERE order_status IN ('已完成') "
         "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
-        "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+        "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [start])
     r = one("SELECT COUNT(*) AS c FROM daily_sales_snapshot") or {}
     return int(r.get('c') or 0)
