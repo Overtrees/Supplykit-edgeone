@@ -183,7 +183,11 @@ export default function FlowRecordsSheet({
             onScroll={e => {
               const el = e.currentTarget
               // 滚动到底 80px 内 → 自动续页(替换原"加载更多"按钮)
-              if (!loading && items.length < total && el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+              if (
+                !loading &&
+                items.length < total &&
+                el.scrollHeight - el.scrollTop - el.clientHeight < 80
+              ) {
                 setPage(pg => pg + 1)
               }
             }}
@@ -247,9 +251,7 @@ export default function FlowRecordsSheet({
           </div>
 
           {/* 底部状态: 滚动到底自动加载(原"加载更多"按钮占 60px 已省出给表格) */}
-          {loading && (
-            <div className="flow-foot">加载中…</div>
-          )}
+          {loading && <div className="flow-foot">加载中…</div>}
           {!loading && items.length >= total && items.length > 0 && (
             <div className="flow-foot">已全部加载（{total} 条）</div>
           )}
