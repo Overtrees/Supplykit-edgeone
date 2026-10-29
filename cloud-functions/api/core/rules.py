@@ -185,6 +185,7 @@ _VALID_FIELDS = {
     "inv.available_qty", "inv.safety_qty", "inv.in_transit_qty", "inv.warehouse_type",
     "inv.warehouse", "inv.product_name", "inv.adj_dos", "inv.buffer", "inv.otif",
     "inv.ss_dyn", "inv.accel_rate", "inv.days_since_last",
+    "barcode",
     "order.quantity", "order.total_qty", "order.total_amount", "order.order_status",
     "order.product_name", "order.max_quantity", "order.min_quantity", "order.line_count",
     "flow.quantity", "flow.warehouse", "flow.date",

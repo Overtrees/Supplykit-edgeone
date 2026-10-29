@@ -122,8 +122,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
     注入断货判定同源的计算值(SKU 聚合粒度)——规则与看板断货/健康计算联动, 否则走快速路径(不加载日销)
     """
     from datetime import datetime, timezone
-    rows = query("SELECT sku, warehouse, warehouse_type, product_name, available_qty, "
-                 "safety_qty, in_transit_qty FROM inventory WHERE channel=%s "
+    # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
+    rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                 "product_name, available_qty, safety_qty, in_transit_qty "
+                 "FROM inventory WHERE channel=%s "
                  "AND warehouse IS NOT NULL AND warehouse!='' "
                  "ORDER BY id LIMIT %s", [channel, limit])
     if not rows:
@@ -271,7 +273,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None):
             except Exception:
                 days = 999
         base = {
-            "sku": sku, "channel": channel,
+            "sku": sku, "barcode": str(r.get("barcode") or ""), "channel": channel,
             "inv": {"available_qty": int(r.get("available_qty") or 0),
                     # 快速路径(无计算变量引用规则)无 safety_qty 消费者 → 0; 动态值在 _need_calc 分支注入
                     "safety_qty": 0,

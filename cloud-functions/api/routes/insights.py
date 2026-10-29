@@ -97,6 +97,20 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     skus = [r.get("sku") for r in rows]
     daily = load_daily_sales(28, channel, skus=set(skus)) if skus else {}
     multi = calc_sales_multi(daily, windows=[7, 14, 28])
+    # 2026-10-29 按 69码: 行级日销优先用该码, 缺失降级 SKU 级(multi)
+    _bc_ds = {}
+    try:
+        _codes = sorted({str(r.get("barcode") or "") for r in rows if str(r.get("barcode") or "")})
+        if _codes:
+            from biz.sales import get_sku_sales_stats as _gss_i, WH_ALL as _WA_i
+            for _r2 in (_gss_i(channel, wh=_WA_i, days=28, barcode="*") or {}).values():
+                _bc0 = str(_r2.get("barcode") or "")
+                _sk0 = str(_r2.get("sku") or "")
+                if _bc0:
+                    _v = float(_r2.get("ds28") or 0) or float(_r2.get("ds7") or 0)
+                    _bc_ds["%s|%s" % (_sk0, _bc0)] = _v
+    except Exception:
+        _bc_ds = {}
     # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)
     batch_map = {}
     if skus:
@@ -187,7 +201,8 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
     for r in rows:
         sku = r.get("sku")
-        ds = multi[28].get(sku, 0) or multi[7].get(sku, 0)
+        _bc1 = str(r.get("barcode") or "")
+        ds = (_bc_ds.get("%s|%s" % (sku, _bc1)) if _bc1 else 0) or multi[28].get(sku, 0) or multi[7].get(sku, 0)
         avail = int(r.get("available_qty") or 0)
         transit = int(r.get("in_transit_qty") or 0)
         _k = (sku, r.get("warehouse") or "")

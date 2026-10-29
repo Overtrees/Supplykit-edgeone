@@ -98,6 +98,7 @@ const LF = [
   { l: '距上次销售(天)', v: 'inv.days_since_last' },
   { l: '库存量', v: 'inv.stock' },
   { l: '仓库类型', v: 'inv.warehouse_type' },
+  { l: '69码', v: 'barcode' },
   { l: '订单数量', v: 'order.quantity' },
   // 2026-10-29 累计订单量(超卖判定应使用此字段: 单笔口径会漏报累计超卖)
   { l: '累计订单量', v: 'order.total_qty' },
