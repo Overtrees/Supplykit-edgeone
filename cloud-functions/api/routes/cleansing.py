@@ -819,26 +819,16 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
         if o_ctxs:
             evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
             evaluated = len(o_ctxs)
-        # 联动(该片 SKU 销售扣减——短事务原子)
-        deltas = defaultdict(int)
-        for c in _cleaned:
-            sku = str(c.get("sku") or "").strip()
-            if sku not in set(_batch):
-                continue
-            _qty = int(c.get("quantity") or 0)
-            _wh = str(c.get("warehouse") or "")
-            _ds = ((_mpd or {}).get("_meta") or {}).get("data_source", "")
-            _d = _qty if _ds == "jd_po" else -_qty
-            if _d:
-                deltas[(sku, _wh, "platform")] += _d
+        # 2026-10-29 架构定案: 订单=纯数据源(不碰库存); 入库/出库=自有仓台账重算(幂等)
         adjusted = 0
         try:
-            with _txn5():
-                if deltas:
-                    adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+            _tgt = str(params.get("target") or "")
+            if _tgt in ("inbound", "outbound"):
+                from routes.cleanse_write import _recalc_own_inventory as _rc
+                adjusted = _rc(channel, list(_batch))
+            # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
         except Exception as _e5b:
-            try_err('cleansing', '联动事务异常(回滚可重试)', _e5b)
-            return {"ok": True, "task_id": task_id, "status": "running"}
+            try_err('cleansing', '自有仓重算降级', _e5b)
         # 推进 offset + 累积 result
         _new_off = offset + len(_batch)
         _rj = json.loads(row.get("result") or "{}") or {}

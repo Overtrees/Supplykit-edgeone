@@ -17,28 +17,20 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
     # 库存联动(A3): inbound+ / outbound- / order(采购单+、销售-)
     try:
         if target in ("inbound", "outbound", "order"):
-            from collections import defaultdict
-            deltas = defaultdict(int)
-            _wht = {}
-            for c in cleaned_all:
-                _sku = c.get("sku")
-                if not _sku:
-                    continue
-                _qty = int(c.get("quantity") or 0)
-                _wh = str(c.get("warehouse") or "")
-                if target == "inbound":
-                    _d, _wt = _qty, "own"
-                elif target == "outbound":
-                    _d, _wt = -_qty, "own"
-                else:
-                    _ds = ((mp or {}).get("_meta") or {}).get("data_source", "")
-                    _d = _qty if _ds == "jd_po" else -_qty
-                    _wt = "platform"
-                if _d:
-                    deltas[(_sku, _wh, _wt)] += _d
-                    _wht[(_sku, _wh, _wt)] = _wt
-            if deltas:
-                adjusted, _ = _adjust_inventory(channel, {k: v for k, v in deltas.items()})
+            # 2026-10-29 架构定案(用户业务模型): 所有数据源=ERP/平台导出的历史快照, 非实时事件流
+            # · 订单: 纯数据源(日销/GMV/规则), **不碰任何库存**(平台库存导出已含销售影响)
+            # · 入库/出库: 自有仓台账 —— 改为【重算制】(幂等), 不再增量加减
+            #   available = beginning_stock(期初, 库存导入写入) + Σ入库 − Σ出库
+            #   增量制缺陷: 重复导入翻倍 / 滞后补录顺序错 / 无法对账
+            if target in ("inbound", "outbound", "inventory"):
+                try:
+                    _skus_touch = sorted({c.get("sku") for c in cleaned_all if c.get("sku")})
+                    if _skus_touch:
+                        # inventory 导入: 写入期初基线后, 立即按"期初+流水"重算 available
+                        # (保持恒等式 available ≡ beginning_stock + Σ入 − Σ出)
+                        _recalc_own_inventory(channel, _skus_touch)
+                except Exception as _er:
+                    try_err('cleansing', '自有仓重算降级', _er)
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
     # 规则引擎评估(批量)
@@ -137,6 +129,41 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
     return adjusted, evaluated, _msg
+
+def _recalc_own_inventory(channel, skus):
+    """自有仓库存重算(2026-10-29 架构定案): available = 期初 + Σ入库 − Σ出库
+    幂等: 无论导入多少次/顺序如何/是否滞后补录, 只要流水与期初确定, 结果唯一
+    范围: 仅本次涉及的 SKU(值来自全量流水聚合, 完整性不受影响)
+    """
+    from db import query as _q, execute as _e
+    out = 0
+    for i in range(0, len(skus), 200):
+        batch = skus[i:i + 200]
+        ph = ",".join(["%s"] * len(batch))
+        # 期初(库存导入写 beginning_stock) + 入库合计 − 出库合计
+        rows = _q(
+            "SELECT i.id, i.sku, i.warehouse, "
+            "COALESCE(i.beginning_stock, 0) AS beg, "
+            "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse), 0) AS in_q, "
+            "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse), 0) AS out_q "
+            "FROM inventory i WHERE i.channel=%s AND i.warehouse_type='own' "
+            "AND i.sku IN (%s)" % ("%s", ph),
+            [channel] + batch)
+        upd = []
+        for r in rows:
+            try:
+                val = int(r.get("beg") or 0) + int(r.get("in_q") or 0) - int(r.get("out_q") or 0)
+            except Exception:
+                continue
+            upd.append((max(0, val), r.get("id")))
+        if upd:
+            from db import executemany as _em
+            _em("UPDATE inventory SET available_qty=%s WHERE id=%s", upd)
+            out += len(upd)
+    return out
+
 
 def _adjust_inventory(channel, deltas, evaluate_skus=None):
     """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则批量评估(全量 SKU)
@@ -289,6 +316,11 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         wt = _TARGET_WH[target]
         for it in cleaned:
             it["warehouse_type"] = wt
+            # 2026-10-29 架构定案: 自有仓库存=重算制 —— 导入的 available_qty 作为【期初基线】
+            #   available = beginning_stock + Σ入库 − Σ出库(由 _recalc_own_inventory 计算)
+            #   平台仓/B仓: 导入即权威快照(available 直接生效, 不重算)
+            if wt == "own":
+                it["beginning_stock"] = it.get("available_qty") or 0
         return _write_batch("inventory",
                             ["sku", "product_name", "store", "warehouse", "warehouse_type",
                              "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
