@@ -844,7 +844,9 @@ export default function App() {
                         days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
                         onClick={() => setFreshOpen(v => !v)}
                       />
-
+                      {freshOpen && (
+                        <FreshPopover data={fresh} onClose={() => setFreshOpen(false)} />
+                      )}
                       <select
                         value={channel}
                         onChange={e => setChannel(e.target.value)}

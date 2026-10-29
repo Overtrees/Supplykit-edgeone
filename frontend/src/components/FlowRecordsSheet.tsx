@@ -219,7 +219,7 @@ export default function FlowRecordsSheet({
                         onClick={() => onDelete(it.id)}
                         title="删除"
                       >
-                        ✕
+                        <IconTrash size={13} />
                       </button>
                     </td>
                   </tr>
