@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute
-from routes.common import ok, fail, traced, try_err
+from routes.common import ok, fail, traced, try_err, SALES_SQL as _SALES_SQL
 
 router = APIRouter(tags=["misc"])
 from routes.debug import router as debug_router
@@ -350,6 +350,127 @@ async def flow_records_batch(request: Request):
 FLOW_RETENTION_DAYS = 180  # 出入库明细默认可见范围(天)
 
 
+def _migrate_pk(table, cols):
+    """主键原子迁移(影子表, 2026-10-29 根治)
+
+    为什么不能原地改: TiDB 聚簇索引表的主键值直接编码进 Row Key, 主键=行的物理地址,
+    `ALTER TABLE ... DROP PRIMARY KEY` 不被支持 → 只能换表。
+
+    旧实现的问题: 「建新表 → DROP 旧表 → RENAME → 靠订单重算回填」——DROP 之后重算失败即空表;
+    且对**已迁移**的表仍无条件全量 INSERT → 恒 1062(回填从未生效)。
+
+    新实现(任一步失败都不动现有表): 建影子表 → 全列迁移 → 行数校验 → RENAME 原子切换 → 删旧表。
+    返回状态字符串。
+    """
+    import re as _re
+    _new = table + "__nb"
+    _old = table + "__old"
+    try:
+        _idx = query("SHOW INDEX FROM `%s`" % table)
+        _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
+        if not [c for c in cols if c not in _pk]:
+            return "already"
+        _ddl = (query("SHOW CREATE TABLE `%s`" % table) or [{}])[0].get("Create Table") or ""
+        if not _ddl:
+            return "error: no ddl"
+        _nddl = _re.sub(r"PRIMARY KEY \([^)]*\)",
+                        "PRIMARY KEY (%s)" % ", ".join("`%s`" % c for c in cols), _ddl, count=1)
+        _nddl = _nddl.replace("CREATE TABLE `%s`" % table, "CREATE TABLE `%s`" % _new, 1)
+        _cs = ", ".join("`%s`" % r.get("Field") for r in query("SHOW COLUMNS FROM `%s`" % table))
+        execute("DROP TABLE IF EXISTS `%s`" % _new)
+        execute(_nddl)
+        _moved = execute("INSERT INTO `%s` (%s) SELECT %s FROM `%s`" % (_new, _cs, _cs, table))
+        _old_n = int((one("SELECT COUNT(*) AS c FROM `%s`" % table) or {}).get("c") or 0)
+        _new_n = int((one("SELECT COUNT(*) AS c FROM `%s`" % _new) or {}).get("c") or 0)
+        if _old_n != _new_n:
+            raise RuntimeError("行数校验失败 old=%d new=%d" % (_old_n, _new_n))
+        if _old_n == 0:
+            raise RuntimeError("旧表为空, 迁移无意义(等数据落库后再迁移)")
+        execute("DROP TABLE IF EXISTS `%s`" % _old)
+        execute("RENAME TABLE `%s` TO `%s`, `%s` TO `%s`" % (table, _old, _new, table))
+        execute("DROP TABLE `%s`" % _old)
+        return "rebuilt(old_pk=%s, moved=%d)" % (",".join(_pk), int(_moved or _new_n))
+    except Exception as e:
+        try_err('misc', '主键迁移失败(%s)' % table, e)
+        try:
+            execute("DROP TABLE IF EXISTS `%s`" % _new)
+        except Exception as _ec:
+            try_err('misc', '影子表清理失败(%s)' % table, _ec)
+        return "error: %s" % str(e)[:140]
+
+
+# 代理主键契约: 表 → (业务唯一键列, 唯一索引名)
+# 目标结构 = id 自增主键(聚簇, 顺序写) + 业务唯一键(含 69码)
+SURROGATE_CONTRACT = {
+    "daily_sales_snapshot": (["date", "channel", "sku", "barcode", "warehouse"], "uq_snapshot_biz"),
+    "sku_sales_stats": (["channel", "sku", "barcode", "warehouse"], "uq_stats_biz"),
+}
+
+
+def _migrate_surrogate(table, biz_cols, uq_name):
+    """业务主键 → 代理主键(**一次性根治**, 之后业务键变化只改唯一索引)
+
+    为什么这是根治: TiDB 聚簇表主键=行物理地址, 不支持 DROP PRIMARY KEY。
+    只要主键里含有业务列(barcode/warehouse), 业务粒度一变就必须整表重建。
+    把业务列降级为 UNIQUE KEY 后:
+      · 主键(id 自增)永不变化, 不会再触发"改主键"
+      · 业务键增删 = ALTER TABLE DROP/ADD UNIQUE INDEX(在线 DDL, 无需重建)
+      · ON DUPLICATE KEY 语义不变(唯一索引同样驱动 upsert)
+
+    安全: 影子表 → 全列迁移 → 行数校验 → RENAME 原子切换 → 删旧表; 任一步失败不动现有表。
+    """
+    import re as _re
+    _new = table + "__nb"
+    _old = table + "__old"
+    try:
+        _idx = query("SHOW INDEX FROM `%s`" % table)
+        _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
+        _has_uq = any(str(r.get("Key_name") or "") == uq_name for r in _idx)
+        if _pk == ["id"] and _has_uq:
+            return "already(id + %s)" % uq_name
+        _cols = [r.get("Field") for r in query("SHOW COLUMNS FROM `%s`" % table)]
+        for _c in biz_cols:  # 旧表可能缺 barcode(补列自愈)
+            if _c not in _cols:
+                execute("ALTER TABLE `%s` ADD COLUMN `%s` VARCHAR(64) NOT NULL DEFAULT ''" % (table, _c))
+                _cols.append(_c)
+        _ddl = (query("SHOW CREATE TABLE `%s`" % table) or [{}])[0].get("Create Table") or ""
+        if not _ddl:
+            return "error: no ddl"
+        # ① 原业务主键 → 唯一索引(含 clustered 注释一并替换, 避免残留)
+        _nddl = _re.sub(r"PRIMARY KEY \([^)]*\)(?: /\*T!\[clustered_index\] \w+ \*/)?",
+                        "UNIQUE KEY `%s` (%s)" % (uq_name, ", ".join("`%s`" % c for c in biz_cols)),
+                        _ddl, count=1)
+        # ② 末尾追加代理主键列(整数单列 → 聚簇, 写入顺序追加)
+        _i = _nddl.rindex("\n) ENGINE")
+        _nddl = _nddl[:_i] + ",\n  `id` BIGINT NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`id`)" + _nddl[_i:]
+        _nddl = _nddl.replace("CREATE TABLE `%s`" % table, "CREATE TABLE `%s`" % _new, 1)
+        _cs = ", ".join("`%s`" % c for c in _cols)
+        execute("DROP TABLE IF EXISTS `%s`" % _new)
+        execute(_nddl)
+        _moved = execute("INSERT INTO `%s` (%s) SELECT %s FROM `%s`" % (_new, _cs, _cs, table))
+        _old_n = int((one("SELECT COUNT(*) AS c FROM `%s`" % table) or {}).get("c") or 0)
+        _new_n = int((one("SELECT COUNT(*) AS c FROM `%s`" % _new) or {}).get("c") or 0)
+        if _old_n != _new_n:
+            raise RuntimeError("行数校验失败 old=%d new=%d" % (_old_n, _new_n))
+        if _old_n == 0:
+            raise RuntimeError("旧表为空, 迁移无意义(等数据落库后再迁移)")
+        execute("DROP TABLE IF EXISTS `%s`" % _old)
+        execute("RENAME TABLE `%s` TO `%s`, `%s` TO `%s`" % (table, _old, _new, table))
+        execute("DROP TABLE `%s`" % _old)
+        try:
+            execute("INSERT IGNORE INTO migration_log(name) VALUES(%s)", ["pk_surrogate:%s" % table])
+        except Exception as _eml:
+            try_err('misc', '迁移登记降级(%s)' % table, _eml)
+        return "rebuilt(surrogate id, moved=%d)" % int(_moved or _new_n)
+    except Exception as e:
+        try_err('misc', '代理主键迁移失败(%s)' % table, e)
+        try:
+            execute("DROP TABLE IF EXISTS `%s`" % _new)
+        except Exception as _ec:
+            try_err('misc', '影子表清理失败(%s)' % table, _ec)
+        return "error: %s" % str(e)[:140]
+
+
 @router.post("/maintenance/heal-own")
 @traced
 async def heal_own_inventory(request: Request):
@@ -367,6 +488,8 @@ async def heal_own_inventory(request: Request):
     except Exception:
         pass
     channel = (d or {}).get("channel") or ""
+    # surrogate=true → 执行「业务主键 → 代理主键」根治迁移(一次性; 默认不做, 避免隐式改表结构)
+    _surrogate = bool((d or {}).get("surrogate"))
     chs = [channel] if channel else ["jd", "other"]
     out = {}
     from routes.cleanse_write import (
@@ -409,30 +532,12 @@ async def heal_own_inventory(request: Request):
             "sku_sales_stats": ["channel", "sku", "barcode", "warehouse"],
         }
         _mig = {}
-        for _tb, _cols in _pk_changes.items():
-            try:
-                _idx = _q5("SHOW INDEX FROM `%s`" % _tb)
-                _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
-                if "barcode" in _pk:
-                    _mig[_tb] = "already"
-                    continue
-                _ddl = (_q5("SHOW CREATE TABLE `%s`" % _tb) or [{}])[0].get("Create Table") or ""
-                if not _ddl:
-                    _mig[_tb] = "error: no ddl"
-                    continue
-                import re as _re
-                _nddl = _re.sub(r"PRIMARY KEY \([^)]*\)",
-                                "PRIMARY KEY (%s)" % ", ".join("`%s`" % c for c in _cols), _ddl, count=1)
-                _nddl = _nddl.replace("CREATE TABLE `%s`" % _tb, "CREATE TABLE `%s`" % (_tb + "_nb"), 1)
-                # 彻底重建: 建新表 → 删旧表 → 换名(旧数据不迁移, 随后由订单全量重算)
-                _e5("DROP TABLE IF EXISTS `%s`" % (_tb + "_nb"))
-                _e5(_nddl)
-                _e5("DROP TABLE `%s`" % _tb)
-                _e5("RENAME TABLE `%s` TO `%s`" % (_tb + "_nb", _tb))
-                _mig[_tb] = "rebuilt(old_pk=%s, 数据将由订单重算)" % ",".join(_pk)
-            except Exception as _epk:
-                _mig[_tb] = "error: %s" % str(_epk)[:140]
-                try_err('misc', '日销表重建失败(%s)' % _tb, _epk)
+        if _surrogate:
+            for _tb, (_bcols, _uq) in SURROGATE_CONTRACT.items():
+                _mig[_tb] = _migrate_surrogate(_tb, _bcols, _uq)
+        else:
+            for _tb, _cols in _pk_changes.items():
+                _mig[_tb] = _migrate_pk(_tb, _cols)
         # 清理历史遗留的兜底表(用户定案: 不留 _old; 彻底重建后无需保留)
         _dropped = []
         try:
@@ -444,16 +549,21 @@ async def heal_own_inventory(request: Request):
         except Exception as _edr:
             try_err('misc', '遗留兜底表清理失败', _edr)
         out["_dropped_legacy_tables"] = _dropped
-        # 重建后**全量重填充**(表已清空 —— 日销是派生数据, 从订单一次算全)
+        # 快照回填(2026-10-29 根治): 90 天窗口 + 幂等 upsert + 统一销量池口径
+        #   旧实现: 全量无窗口 + 无 ON DUPLICATE → 表非空时恒 1062(回填从未生效),
+        #   且口径为 3 状态(与已完成口径差 +72%)。现与 cron._build_snapshot 完全同语义:
+        #   只刷新最近 90 天, 不删任何历史行(归档期日销保留), 重复执行结果唯一。
         _refill = {}
         try:
             from db import execute as _e6
+            _start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
             for _ch3 in chs:
                 _e6("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
                     "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
-                    "FROM orders WHERE channel=%s AND order_status IN ('待发货','已发货','已完成') "
-                    "AND (deleted_at IS NULL OR deleted_at='') "
-                    "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse", [_ch3])
+                    "FROM orders WHERE channel=%s AND order_status IN (" + _SALES_SQL + ") "
+                    "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
+                    "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
+                    "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [_ch3, _start])
                 _cnt = int(((_q5("SELECT COUNT(*) c FROM daily_sales_snapshot WHERE channel=%s", [_ch3]) or [{}])[0] or {}).get("c") or 0)
                 _refill[_ch3] = _cnt
         except Exception as _erf:

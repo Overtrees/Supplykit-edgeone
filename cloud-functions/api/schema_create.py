@@ -63,11 +63,15 @@ _TABLES = {
         "channel VARCHAR(20) DEFAULT 'jd', brand VARCHAR(128) DEFAULT '', ext_json TEXT, "
         "UNIQUE KEY uk_suppliers_code (supplier_code))"
     ),
+    # 2026-10-29 代理主键(根治): 业务键降为唯一索引 → 业务粒度变化(加/换 69码)只改唯一索引,
+    # 永不触碰聚簇主键(TiDB 聚簇表 DROP PRIMARY KEY 不支持, 只能整表重建 → 见 routes/misc._migrate_surrogate)
     "daily_sales_snapshot": (
         "CREATE TABLE IF NOT EXISTS daily_sales_snapshot ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
         "date DATE NOT NULL, channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, "
-        "warehouse VARCHAR(64) DEFAULT '', order_count INT DEFAULT 0, "
-        "PRIMARY KEY(date, channel, sku, warehouse), "
+        "barcode VARCHAR(64) NOT NULL DEFAULT '', warehouse VARCHAR(64) NOT NULL DEFAULT '', "
+        "order_count INT DEFAULT 0, "
+        "UNIQUE KEY uq_snapshot_biz (date, channel, sku, barcode, warehouse), "
         "KEY idx_snapshot_ch_date_full (channel, date, sku, warehouse, order_count))"
     ),
     "alerts": (
@@ -211,13 +215,15 @@ _TABLES = {
     ),
     "sku_sales_stats": (
         "CREATE TABLE IF NOT EXISTS sku_sales_stats ("
-        "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, warehouse VARCHAR(64) DEFAULT '', "
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+        "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(64) NOT NULL DEFAULT '', "
         "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
         "sigma DECIMAL(12,3) DEFAULT 0, "
         "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
         "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
         "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
-        "PRIMARY KEY(channel, sku, warehouse))"
+        "UNIQUE KEY uq_stats_biz (channel, sku, barcode, warehouse))"
     ),
     "custom_fields": (
         "CREATE TABLE IF NOT EXISTS custom_fields ("
@@ -237,6 +243,12 @@ _TABLES = {
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     ),
 }
+
+
+def table_ddl(name):
+    """建表语句单一真源(2026-10-29): 其它模块不要再维护 DDL 副本
+    —— 副本漂移是本轮事故根源之一(biz/sales._SKU_STATS_DDL 缺 barcode/主键不同步)"""
+    return _TABLES.get(name, "")
 
 
 def create_all_tables():
@@ -277,26 +289,40 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
-    # 2026-10-29 日销按 69码 绑定 → 主键必须含 barcode, 否则 ON DUPLICATE 会把
-    # 同 SKU 不同码的日销行互相覆盖(数据丢失)。幂等: 检查主键列, 不含 barcode 才改。
+    # 2026-10-29 日销主键契约检测(根治, 不做 DDL):
+    #   目标结构 = 代理主键 `id` + 业务唯一键(含 barcode)。
+    #   TiDB 聚簇表**不支持 DROP PRIMARY KEY**(主键值编码进 Row Key = 行物理地址),
+    #   旧写法 `ALTER TABLE ... DROP PRIMARY KEY, ADD PRIMARY KEY ...` 必然失败 ——
+    #   每次启动记一条 error, 主键从未迁移成功(实证)。
+    #   现改为: 只检测契约; 未达则登记 migration_log 待办, 由 /maintenance/heal-own
+    #   {"surrogate": true} 走影子表迁移(见 routes/misc._migrate_surrogate)。
     try:
         from db import query as _qk4, execute as _ek4
-        _pk_changes = {
-            "daily_sales_snapshot": ("(`date`, `channel`, `sku`, `barcode`, `warehouse`)", "barcode"),
-            "sku_sales_stats": ("(`channel`, `sku`, `barcode`, `warehouse`)", "barcode"),
+        # 本函数可能在 index.py 建表段之前执行 → 自建登记表(幂等)
+        _ek4("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, "
+             "done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
+        _pk_contract = {
+            "daily_sales_snapshot": ("id", "uq_snapshot_biz"),
+            "sku_sales_stats": ("id", "uq_stats_biz"),
         }
-        for _tb, (_newpk, _need) in _pk_changes.items():
+        for _tb, (_pk_col, _uq) in _pk_contract.items():
             try:
                 _idx = _qk4("SHOW INDEX FROM `%s`" % _tb)
             except Exception:
                 continue
             _pk_cols = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
-            if not _pk_cols or _need in _pk_cols:
-                continue  # 已是新主键 / 表不存在
-            _ek4("ALTER TABLE `%s` DROP PRIMARY KEY, ADD PRIMARY KEY %s" % (_tb, _newpk))
-            try_err('schema', '日销主键迁移完成: %s → 含 barcode' % _tb, None)
+            _has_uq = any(str(r.get("Key_name") or "") == _uq for r in _idx)
+            if _pk_cols == [_pk_col] and _has_uq:
+                continue
+            try:
+                if _ek4("INSERT IGNORE INTO migration_log(name) VALUES(%s)",
+                        ["pk_surrogate:%s" % _tb]):
+                    try_err('schema', '日销主键契约未达(待 surrogate 迁移): %s pk=%s'
+                            % (_tb, ",".join(_pk_cols)), None)
+            except Exception as _el:
+                try_err('schema', '主键契约登记降级', _el)
     except Exception as _epk:
-        try_err('schema', '日销主键迁移降级(需手工 ALTER)', _epk)
+        try_err('schema', '日销主键契约检测降级', _epk)
     # 2026-10-29 存量文案迁移(幂等): 超卖判定口径由"单笔订单量"改为"累计订单量",
     # 告警 description 是**生成时快照**, 已存在的告警仍是旧文案 → 一次性同步
     try:

@@ -795,5 +795,41 @@ try:
 except Exception as _e:
     check("同键聚合用例无异常", False, str(_e)[:200])
 
+# ── 2026-10-29 回归用例: 口径单一真源 + 静默失败类(线上坑沉淀) ────────────
+try:
+    import io as _io, os as _os
+    _HERE = _os.path.dirname(_os.path.abspath(__file__))
+    def _rf(_p):
+        return _io.open(_os.path.join(_HERE, _p), encoding="utf-8").read()
+    from routes.common import SALES_SQL as _SQL1, SALES_STATUSES as _ST1
+    check("口径: 销量池常量唯一(已完成)", _ST1 == ("已完成",) and _SQL1 == "'已完成'", str(_SQL1))
+    _dm = _rf("routes/dashboard_maintain.py")
+    check("口径: 快照续段不再硬编码 3 状态",
+          "'待发货','已发货','已完成'" not in _dm and "_SALES_SQL" in _dm, "dashboard_maintain.py")
+    _ix = _rf("index.py")
+    check("health: 版本指纹不再引用 config.id",
+          "MAX(id),0) FROM replenishment_config" not in _ix and "MAX(updated_at)" in _ix, "index.py")
+    _mi = _rf("routes/misc.py")
+    check("回填: 快照幂等 upsert(不再 1062)",
+          "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)" in _mi and "_SALES_SQL" in _mi, "misc.py")
+    check("迁移: 主键走影子表原子切换",
+          "_migrate_pk" in _mi and "RENAME TABLE" in _mi.split("def _migrate_pk")[1][:3000], "misc.py")
+    _cr = _rf("routes/cron.py")
+    check("对账: 日销断言端点存在且与快照同口径",
+          "def run_reconcile" in _cr and "_PAID_SQL" in _cr.split("def run_reconcile")[1][:2000], "cron.py")
+    check("对账: 应用层每日兜底已挂",
+          "run_reconcile" in _dm and "maintenance_log" in _dm, "dashboard_maintain.py")
+    _sc = _rf("schema_create.py")
+    check("根治: 日销两表用代理主键 + 业务唯一键",
+          "id BIGINT AUTO_INCREMENT PRIMARY KEY" in _sc
+          and "uq_snapshot_biz" in _sc and "uq_stats_biz" in _sc
+          and "PRIMARY KEY(date, channel, sku, warehouse)" not in _sc, "schema_create.py")
+    check("根治: 启动期不再执行必然失败的 DROP PRIMARY KEY",
+          "DROP PRIMARY KEY, ADD PRIMARY KEY %s" not in _sc, "schema_create.py")
+    check("根治: 代理主键迁移器就绪(影子表 + 原子切换)",
+          "def _migrate_surrogate" in _mi and "SURROGATE_CONTRACT" in _mi, "misc.py")
+except Exception as _e2:
+    check("口径/静默失败用例无异常", False, str(_e2)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

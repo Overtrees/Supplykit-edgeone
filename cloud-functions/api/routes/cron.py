@@ -20,6 +20,7 @@ from fastapi import Request
 
 from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
+from routes.common import SALES_SQL as _PAID_SQL  # 2026-10-29 销量池单一真源(原硬编码 已完成)
 
 router = APIRouter(tags=["cron"])
 @router.get("/cron/continue-tasks")
@@ -83,8 +84,6 @@ def continue_tasks():
 
 
 
-PAID = ("已完成",)  # 销量池口径(仅钱货两清且离仓的实销; 待发货走扣减池, 其余状态屏蔽)
-_PAID_SQL = ",".join("'%s'" % s for s in PAID)
 
 
 def _authed(request: Request) -> bool:
@@ -405,3 +404,55 @@ async def cron_push_alerts(request: Request):
     except Exception as e:
         _log("error", "告警推送失败: %s" % str(e)[:200])
         return ok({"pushed": 0, "error": str(e)[:150]})
+
+
+def run_reconcile(days=90):
+    """日销对账核心(同步, 供 cron 端点与应用层兜底共用)
+
+    断言: 同区间 [今-days, 昨] 内 SUM(快照 order_count) == SUM(订单 quantity)
+      · 排除当天: 当天订单仍在增长, 快照可能滞后(差异属正常)
+      · 口径: 销量池 SALES_SQL(=已完成), 与快照写入同源
+    差异 ≠ 0 → error 日志(source=cron), 前端质量页可见。
+    """
+    try:
+        _d = max(1, min(int(days or 90), 365))
+    except Exception:
+        _d = 90
+    _now = datetime.now(timezone.utc)
+    _start = (_now - timedelta(days=_d)).strftime("%Y-%m-%d")
+    _end = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
+    out = {}
+    _bad = 0
+    for _ch in ("jd", "other"):
+        try:
+            _s = one("SELECT COALESCE(SUM(order_count),0) AS q FROM daily_sales_snapshot "
+                     "WHERE channel=%s AND `date`>=%s AND `date`<=%s", [_ch, _start, _end]) or {}
+            _o = one("SELECT COALESCE(SUM(quantity),0) AS q FROM orders "
+                     "WHERE channel=%s AND order_status IN (" + _PAID_SQL + ") "
+                     "AND (deleted_at IS NULL OR deleted_at='') "
+                     "AND ordered_at >= %s AND ordered_at < DATE_ADD(%s, INTERVAL 1 DAY)",
+                     [_ch, _start, _end]) or {}
+            _sq = int(_s.get("q") or 0)
+            _oq = int(_o.get("q") or 0)
+            out[_ch] = {"snapshot": _sq, "orders": _oq, "diff": _sq - _oq}
+            if _sq != _oq:
+                _bad += 1
+                _log("error", "日销对账不一致[%s] %s~%s: 快照=%d 订单=%d 差=%d"
+                     % (_ch, _start, _end, _sq, _oq, _sq - _oq))
+        except Exception as _e:
+            out[_ch] = {"error": str(_e)[:150]}
+            try_err('cron', '日销对账降级(%s)' % _ch, _e)
+    if not _bad:
+        _log("info", "日销对账一致 %s~%s: %s" % (
+            _start, _end,
+            " / ".join("%s=%d" % (k, v.get("snapshot", 0)) for k, v in out.items() if "snapshot" in v)))
+    return {"range": [_start, _end], "channels": out, "mismatch": _bad}
+
+
+@router.api_route("/cron/reconcile", methods=["GET", "POST"])
+@traced
+async def cron_reconcile(request: Request, days: int = 90):
+    """日销对账(cron 入口)——体量与口径见 run_reconcile"""
+    if not _authed(request):
+        return fail("未授权", 401)
+    return ok(run_reconcile(days))

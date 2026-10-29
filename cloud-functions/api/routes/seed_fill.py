@@ -5,7 +5,7 @@
 金额 GMV 明细口径、8 仓库存(18% 低库存)、批次效期(4% 问题批次)、
 当月出入库记录、库存月汇总、补货参数+内置规则、规则引擎告警、日销快照
 """
-from routes.common import try_err
+from routes.common import try_err, SALES_SQL
 import json
 import random
 
@@ -283,7 +283,7 @@ def _seed_inventory(skus_data):
                             'warehouse_type': wt, 'available_qty': q,
                             'in_transit_qty': 0 if low else random.randint(0, 200),
                             'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
-                            'channel': ch, 'barcode': sk['barcode']})
+                            'channel': ch})
     for i in range(0, len(inv), 500):
         cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty',
                 'in_transit_qty', 'safety_qty', 'channel', 'barcode']
@@ -579,7 +579,7 @@ def _build_snapshot():
     execute(
         "INSERT INTO daily_sales_snapshot(date, channel, sku, barcode, warehouse, order_count) "
         "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
-        "WHERE order_status IN ('已完成') "
+        "WHERE order_status IN (" + SALES_SQL + ") "
         "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %s "
         "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [start])

@@ -185,8 +185,11 @@ def health():
         out["snapshot_max"] = (r or {}).get("m") or ""
     except Exception as _e:
             try_err('index', '静默降级', _e)
-    # 数据版本指纹: 关键表 MAX(id)/MAX(date) 拼接, 任何数据变更即变化
+    # 数据版本指纹: 关键表 MAX(id)/MAX(date)/MAX(updated_at) 拼接, 任何数据变更即变化
     # (前端每 15s 轮询 /health 取 version, 变化时 clearCache+loadAll 绕过 30s 前端缓存)
+    # 2026-10-29 修复: replenishment_config 主键是 (key, channel), **无 id 列** →
+    #   原 SQL `MAX(id)` 抛 Unknown column 被吞 → version 恒 "0" → 前端指纹链路全失效。
+    #   该表以 updated_at 表征变更(值改写会刷新时间戳)。
     try:
         r = one(
             "SELECT CONCAT_WS('-',"
@@ -197,9 +200,11 @@ def health():
             "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot),"
             "(SELECT COALESCE(MAX(id),0) FROM rules),"
             "(SELECT COALESCE(MAX(id),0) FROM suppliers),"
-            "(SELECT COALESCE(MAX(id),0) FROM replenishment_config)) AS v")
+            "(SELECT COALESCE(MAX(updated_at),'') FROM replenishment_config)) AS v")
         out["version"] = str((r or {}).get("v") or "0")
-    except Exception:
+    except Exception as _ev:
+        # 静默降级=指纹失效且无人知(本次 bug 正是如此) → 必须留痕
+        try_err('index', 'health 版本指纹降级', _ev)
         out["version"] = "0"
     return out
 

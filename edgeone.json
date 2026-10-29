@@ -38,6 +38,12 @@
       "path": "/api/cron/snapshot"
     },
     {
+      "name": "reconcile-sales",
+      "cron": "10 4 * * *",
+      "timezone": "Asia/Shanghai",
+      "path": "/api/cron/reconcile"
+    },
+    {
       "name": "daily-rules",
       "cron": "5 4 * * *",
       "timezone": "Asia/Shanghai",

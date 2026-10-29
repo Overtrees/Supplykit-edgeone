@@ -4,7 +4,7 @@
 from datetime import datetime, timedelta, timezone
 
 from db import query, one, execute
-from routes.common import try_err, status_cond as _status_cond
+from routes.common import try_err, status_cond as _status_cond, SALES_SQL as _SALES_SQL
 
 # 窗口完整性检测限频(每渠道 60s——多 miss 合并, 不拖每请求)
 _WINDOW_LAST = {}
@@ -94,7 +94,7 @@ def _snapshot_step(channel, _db2):
         execute(
             "INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
             "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
-            "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
+            "WHERE order_status IN (" + _SALES_SQL + ") AND (deleted_at IS NULL OR deleted_at='') "
             "AND ordered_at >= %s AND ordered_at < %s "
             "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
             "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
@@ -176,5 +176,21 @@ def _track_data(channel, _db2):
                             _mark_agg_dirty()
         except Exception as _e:
                 try_err('dashboard', '窗口完整性检测降级', _e)
+        # 2026-10-29 P3: 每日一次日销对账(口径漂移是静默错误, 只有外部断言能发现)
+        # maintenance_log 抢占(与 cron freshness 同法) → 一天只跑一次; 后台线程执行, 不拖慢 summary
+        try:
+            _rc = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,'reconcile')",
+                          [datetime.now(timezone.utc).strftime("%Y-%m-%d")])
+            if _rc:
+                import threading as _th
+                def _rc_run():
+                    try:
+                        from routes.cron import run_reconcile
+                        run_reconcile(90)
+                    except Exception as _erc:
+                        try_err('dashboard', '日销对账执行降级', _erc)
+                _th.Thread(target=_rc_run, daemon=True).start()
+        except Exception as _erc2:
+            try_err('dashboard', '日销对账调度降级', _erc2)
     except Exception as _e:
             try_err('dashboard', '数据追平降级', _e)

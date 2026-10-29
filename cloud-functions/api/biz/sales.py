@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta, timezone
 
 from db import query
+from schema_create import table_ddl as _table_ddl
 from routes.common import SALES_STATUSES as _SS  # 日销口径: 发货消耗状态(排除申请退款)
 
 
@@ -360,16 +361,8 @@ def rolling_predict(s7, s14, s28):
 # 行维度显式枚举(无 any 哨兵): '__C__'=全国platform合计 / '__BC__'=platform+platform_b 合计
 #     / '__ALL__'=全仓合计 / 具体仓名=逐仓(own 仓销量近零, 由消费方按 inventory.warehouse_type 现场筛)
 
-_SKU_STATS_DDL = (
-    "CREATE TABLE IF NOT EXISTS sku_sales_stats ("
-    "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, warehouse VARCHAR(64) DEFAULT '', "
-    "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
-    "sigma DECIMAL(12,3) DEFAULT 0, "
-    "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
-    "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
-    "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
-    "PRIMARY KEY(channel, sku, warehouse))"
-)
+# 2026-10-29: 改为引用 schema_create 单一真源(原为独立副本 → 主键/列与 schema 漂移)
+_SKU_STATS_DDL = _table_ddl("sku_sales_stats")
 
 # 行维度白名单(防魔法值): 物化行 warehouse 取值枚举
 WH_C = "__C__"      # 全国 platform 合计(bbcc 补货/断货 C)
