@@ -58,7 +58,10 @@ def _stock_risk(channel, full: int = 0):
     lit_bbcc = _mc("b_to_c_days", "bbcc", 3) + _mc("c_safety_days", "bbcc", 0)
     lit_trad = _mc("lead_time_days", "traditional", 10)
 
-    inv = _q("SELECT sku, warehouse_type, warehouse, available_qty, in_transit_qty, c_transit, safety_qty, product_name "
+    # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 下方 r.get("barcode") 恒 '' →
+    #   bc_total/c_items 按 (sku,'') 合并, 断货卡按码从未生效
+    inv = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse_type, warehouse, "
+             "available_qty, in_transit_qty, c_transit, safety_qty, product_name "
              "FROM inventory WHERE channel=%s", [channel])
     prods = _q("SELECT sku, barcode, product_name, supplier_code FROM products WHERE channel=%s "
                "AND (deleted_at IS NULL OR deleted_at='')", [channel])
