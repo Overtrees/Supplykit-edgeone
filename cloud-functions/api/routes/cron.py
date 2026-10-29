@@ -116,11 +116,11 @@ def _build_snapshot(rebuild_days=90):
     """增量构建日销快照: 聚合最近 rebuild_days 天已支付订单(幂等 upsert)"""
     start = (datetime.now(timezone.utc) - timedelta(days=rebuild_days)).strftime("%Y-%m-%d")
     execute(
-        "INSERT INTO daily_sales_snapshot(date, channel, sku, warehouse, order_count) "
-        "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+        "INSERT INTO daily_sales_snapshot(date, channel, sku, barcode, warehouse, order_count) "
+        "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
         "WHERE order_status IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
         "AND ordered_at >= %%s "
-        "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+        "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)" % _PAID_SQL, [start])
     r = one("SELECT COUNT(*) AS c FROM daily_sales_snapshot") or {}
     return int(r.get("c") or 0)

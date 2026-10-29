@@ -136,7 +136,7 @@ def _stock_risk(channel, full: int = 0):
         _terr2('dash_stock', 'stock_risk 物化读取降级(走直算)', _e)
     # ── 降级直算(仅物化表空/失败——与旧口径完全一致) ──
     if not _has_materialized:
-        by_sku, by_sku_wh = load_daily_sales_grouped(28, channel, skus=skus)
+        by_sku, by_sku_wh, _ = load_daily_sales_grouped(28, channel, skus=skus)
         multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
         fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
         c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}

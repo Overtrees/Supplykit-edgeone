@@ -688,7 +688,7 @@ _d1 = get_sales_digest("jd")
 check("digest: 缓存命中幂等(同一对象)", _d0 is _d1)
 # 等价性: 缓存结果 vs 直接计算(同一 mock 数据下)
 _b0, _f0, _s0 = _d0
-_bd, _ = load_daily_sales_grouped(28, "jd")
+_bd, _, _ = load_daily_sales_grouped(28, "jd")
 _md = calc_sales_multi(_bd, windows=[7, 14, 28])
 _fd = {s: rolling_predict(_md[7].get(s, 0), _md[14].get(s, 0), _md[28].get(s, 0)) for s in _bd}
 _sd = {}

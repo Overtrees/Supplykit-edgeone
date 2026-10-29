@@ -277,6 +277,26 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
+    # 2026-10-29 日销按 69码 绑定 → 主键必须含 barcode, 否则 ON DUPLICATE 会把
+    # 同 SKU 不同码的日销行互相覆盖(数据丢失)。幂等: 检查主键列, 不含 barcode 才改。
+    try:
+        from db import query as _qk4, execute as _ek4
+        _pk_changes = {
+            "daily_sales_snapshot": ("(`date`, `channel`, `sku`, `barcode`, `warehouse`)", "barcode"),
+            "sku_sales_stats": ("(`channel`, `sku`, `barcode`, `warehouse`)", "barcode"),
+        }
+        for _tb, (_newpk, _need) in _pk_changes.items():
+            try:
+                _idx = _qk4("SHOW INDEX FROM `%s`" % _tb)
+            except Exception:
+                continue
+            _pk_cols = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
+            if not _pk_cols or _need in _pk_cols:
+                continue  # 已是新主键 / 表不存在
+            _ek4("ALTER TABLE `%s` DROP PRIMARY KEY, ADD PRIMARY KEY %s" % (_tb, _newpk))
+            try_err('schema', '日销主键迁移完成: %s → 含 barcode' % _tb, None)
+    except Exception as _epk:
+        try_err('schema', '日销主键迁移降级(需手工 ALTER)', _epk)
     # 2026-10-29 存量文案迁移(幂等): 超卖判定口径由"单笔订单量"改为"累计订单量",
     # 告警 description 是**生成时快照**, 已存在的告警仍是旧文案 → 一次性同步
     try:
@@ -298,6 +318,10 @@ def create_all_tables():
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
             # 2026-10-29 批次四维绑定(仓型+SKU+69码+批次信息): 补 barcode
             "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
+            # 2026-10-29 日销按 69码 精准绑定(用户定案: 补货也按码):
+            # 快照层与物化层都加 barcode, 空码降级(与库存/批次同规则)
+            "daily_sales_snapshot": [("barcode", "VARCHAR(64) DEFAULT ''")],
+            "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''")],
         }
         for _t, _cols in _extra_cols.items():
             try:

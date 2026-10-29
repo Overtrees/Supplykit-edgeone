@@ -97,26 +97,33 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
     today = now.strftime("%Y-%m-%d")
     by_sku = {}
     by_sku_wh = {}
+    by_sku_bc_wh = {}  # 2026-10-29 按 69码: "sku|barcode" → {date: qty}(跨仓合计)
     _in_chunks = _sku_in_clause(skus)
     _py_filter = _in_chunks is None
     _skuset = {str(s) for s in (skus or [])} if _py_filter else None
 
-    def _add(key, wh, d, qty):
+    def _add(key, wh, d, qty, bc=""):
         if _py_filter and str(key) not in _skuset:
             return
         m = by_sku.setdefault(str(key), {})
         m[d] = m.get(d, 0) + qty
         w = by_sku_wh.setdefault("%s|%s" % (key, wh or ""), {})
         w[d] = w.get(d, 0) + qty
+        # 2026-10-29 按 69码 聚合(空码归入 "" 组 —— 与库存/批次同规则: 空码降级)
+        if bc:
+            b = by_sku_bc_wh.setdefault("%s|%s" % (key, bc), {})
+            b[d] = b.get(d, 0) + qty
 
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
             rows = query(
-                "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+                "SELECT date, sku, COALESCE(barcode,'') AS bc, warehouse, order_count "
+                "FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
                 "WHERE channel=%s AND date>=%s AND sku IN (%s)" % ("%s", "%s", _ph),
                 [channel, cutoff] + _chunk)
             for r in rows:
-                _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+                _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10],
+                     int(r.get("order_count") or 0), str(r.get("bc") or ""))
     else:
         rows = query(
             "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
@@ -143,7 +150,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
             if (o.get("order_status") or "") not in _SS:
                 continue
             _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
-    return by_sku, by_sku_wh
+    return by_sku, by_sku_wh, by_sku_bc_wh
 
 
 def smooth_promo_spikes(daily, now=None, max_win=28, hist_days=60, peak_ratio=5.0, cap_ratio=2.0):
@@ -305,7 +312,7 @@ def get_sales_digest(channel, days=28):
     except Exception as _e:
         from routes.common import try_err
         try_err('sales', 'digest 物化读取降级(走直算)', _e)
-    by_sku, _ = load_daily_sales_grouped(days, channel)
+    by_sku, _, _ = load_daily_sales_grouped(days, channel)
     _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
     fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
     sigma = {}
@@ -378,7 +385,7 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
     from db import execute as _ex, executemany as _em, query as _q
     try:
         _ex(_SKU_STATS_DDL)
-        by_sku, by_sku_wh = load_daily_sales_grouped(days, channel, skus=skus)
+        by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(days, channel, skus=skus)
         if not by_sku and not by_sku_wh:
             return 0
         now_d = datetime.now(timezone.utc)
@@ -447,13 +454,24 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
                 + _to_rows(by_bc, WH_BC)
                 + _to_rows(by_all, WH_ALL)
                 + _to_rows(by_sku_wh, ""))  # 逐仓行(wh_label='' 表示真仓名在 key 内——由调用侧拆分)
+        # 2026-10-29 按 69码 行(barcode=X, warehouse=WH_ALL 跨仓合计):
+        #   与 barcode='' 的全码合计行并存 —— 消费方不传 barcode 时只读 '' 行(语义不变),
+        #   传 barcode=X 时读该码行(补货/断货按码)
+        for _r in rows:
+            _r["barcode"] = ""
+        if by_sku_bc:
+            _bc_rows = _to_rows(by_sku_bc, WH_ALL)
+            for _r in _bc_rows:
+                _r["barcode"] = str(_r.get("sku") or "").rsplit("|", 1)[-1]
+                _r["sku"] = str(_r.get("sku") or "").rsplit("|", 1)[0]
+            rows += _bc_rows
         # 逐仓行 sku 含 |仓名 → 拆分回 sku/warehouse 两列
         for r in rows:
             if r["warehouse"] == "" and "|" in r["sku"]:
                 _s, _w = r["sku"].rsplit("|", 1)
                 r["sku"], r["warehouse"] = _s, _w
         if rows:
-            cols = ["channel", "sku", "warehouse", "ds7", "ds14", "ds28", "sigma",
+            cols = ["channel", "sku", "barcode", "warehouse", "ds7", "ds14", "ds28", "sigma",
                     "ds7_cut", "ds14_cut", "ds28_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
             for i in range(0, len(rows), 500):
                 chunk = rows[i:i + 500]
@@ -472,7 +490,7 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
         return 0
 
 
-def get_sku_sales_stats(channel, skus=None, wh=None, days=28):
+def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
     """物化读取(消费方入口): 按 sku/wh 查行返回 {wh|sku: {ds7/14/28, sigma, *_cut, nnz*, last_sale}}
 
     wh 显式枚举(无魔法值): WH_C(__C__ 全国platform) / WH_BC(__BC__ platform+b) /
@@ -488,6 +506,13 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28):
             _rebuild_sku_sales_stats(channel, days)
         where = "channel=%s"
         params = [channel]
+        # 2026-10-29 按 69码: 不传 → 只读全码合计行(barcode='', 语义与改造前一致);
+        #   传 barcode=X → 读该码行; 传 '' → 显式读合计行
+        if barcode is None or barcode == "":
+            where += " AND COALESCE(barcode,'')=''"
+        else:
+            where += " AND COALESCE(barcode,'')=%s"
+            params += [str(barcode)]
         if skus:
             _ph = ",".join(["%s"] * min(len(list(skus)), 500))
             if _ph:
@@ -500,7 +525,7 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28):
             else:
                 where += " AND warehouse IN (%s,%s,%s)"  # 非法 wh → 查全部聚合行
                 params += [WH_C, WH_BC, WH_ALL]
-        rows = _q("SELECT sku, warehouse, ds7, ds14, ds28, sigma, "
+        rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, ds7, ds14, ds28, sigma, "
                   "ds7_cut, ds14_cut, ds28_cut, nnz7, nnz14, nnz28, last_sale "
                   "FROM sku_sales_stats WHERE %s" % where, params)
         out = {}

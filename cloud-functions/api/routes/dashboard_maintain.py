@@ -92,11 +92,11 @@ def _snapshot_step(channel, _db2):
         if _frm >= _to:
             return
         execute(
-            "INSERT INTO daily_sales_snapshot(`date`, channel, sku, warehouse, order_count) "
-            "SELECT DATE(ordered_at), channel, sku, warehouse, SUM(quantity) FROM orders "
+            "INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
+            "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
             "WHERE order_status IN ('待发货','已发货','已完成') AND (deleted_at IS NULL OR deleted_at='') "
             "AND ordered_at >= %s AND ordered_at < %s "
-            "GROUP BY DATE(ordered_at), channel, sku, warehouse "
+            "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse "
             "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)",
             [_frm.strftime("%Y-%m-%d"), _to.strftime("%Y-%m-%d")])
         try:
