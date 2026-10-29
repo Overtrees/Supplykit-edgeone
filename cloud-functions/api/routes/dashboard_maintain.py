@@ -109,6 +109,45 @@ def _snapshot_step(channel, _db2):
     except Exception as _e:
             try_err('dashboard', '快照续段降级', _e)
 
+def _snapshot_reconcile(channel, days=60, limit_days=10):
+    """快照窗口对账自愈(2026-10-29): 软删订单后快照残留组合不会因 upsert 消失
+
+    背景: 快照是"按组合 upsert", 订单软删后对应 (date,sku,码,仓) 组合在快照里仍在 →
+    物化/补货仍读到已删订单的日销(实测: 删单后 SKU 物化残留)。agg 有窗口自愈, 快照没有。
+    做法: 按天比对(快照行数/合计 vs 订单聚合), 不一致的天 **DELETE + 单日 INSERT 重建**——
+      单日小事务(不锁全窗口, 避免曾出现的 9004 锁超时); 单次最多修 limit_days 天, 余下下次续跑。
+    """
+    try:
+        from routes.common import SALES_SQL as _SQL
+        _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        _snap = {str(r.get("d"))[:10]: (int(r.get("c") or 0), int(r.get("q") or 0))
+                 for r in query("SELECT `date` AS d, COUNT(*) AS c, SUM(order_count) AS q "
+                                "FROM daily_sales_snapshot WHERE channel=%s AND `date`>=%s "
+                                "GROUP BY `date`", [channel, _start])}
+        _ord = {str(r.get("d"))[:10]: (int(r.get("c") or 0), int(r.get("q") or 0))
+                for r in query("SELECT DATE(ordered_at) AS d, "
+                               "COUNT(DISTINCT CONCAT_WS('|', sku, COALESCE(barcode,''), warehouse)) AS c, "
+                               "SUM(quantity) AS q FROM orders WHERE channel=%s "
+                               "AND order_status IN (" + _SQL + ") "
+                               "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at>=%s "
+                               "GROUP BY DATE(ordered_at)", [channel, _start])}
+        _bad = sorted(d for d in set(_snap) | set(_ord) if _snap.get(d) != _ord.get(d))
+        for d in _bad[:limit_days]:
+            execute("DELETE FROM daily_sales_snapshot WHERE channel=%s AND `date`=%s", [channel, d])
+            execute("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
+                    "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
+                    "FROM orders WHERE channel=%s AND DATE(ordered_at)=%s AND order_status IN (" + _SQL + ") "
+                    "AND (deleted_at IS NULL OR deleted_at='') "
+                    "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse", [channel, d])
+        if _bad:
+            try_err('dash', '快照残留自愈 %s: 发现 %d 天不一致, 本次修 %d 天'
+                    % (channel, len(_bad), min(len(_bad), limit_days)), None)
+        return len(_bad)
+    except Exception as _e:
+        try_err('dash', '快照对账降级', _e)
+        return 0
+
+
 def _track_data(channel, _db2):
     """数据追平(即时): 一次 SQL 合并三 MAX 子查询(orders/快照/agg——3 查询→1 往返)——
     每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate_all 触发增量
@@ -189,6 +228,10 @@ def _track_data(channel, _db2):
                         run_reconcile(90)
                     except Exception as _erc:
                         try_err('dashboard', '日销对账执行降级', _erc)
+                    try:
+                        _snapshot_reconcile(channel)   # 软删订单后的快照残留自愈
+                    except Exception as _esr:
+                        try_err('dashboard', '快照残留自愈降级', _esr)
                 _th.Thread(target=_rc_run, daemon=True).start()
         except Exception as _erc2:
             try_err('dashboard', '日销对账调度降级', _erc2)

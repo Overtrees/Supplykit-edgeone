@@ -1,3 +1,89 @@
+## 2026-10-29(晚间)-10-30(凌晨): 低库存口径根治 + 69码链路真根因 + 全模块按码统一
+
+> commits 2f69529c→e1863485 + 快照自愈；回归 184/184；生产部署逐项验证。
+
+### 一、低库存口径根治（三模式分流，与补货建议同源）
+- **原状**: 判定 = 单仓 `available_qty` vs 全国 `ds×周期` —— **两端口径错配，每仓必报**
+- **实测代价**: 跑一次全量评估, jd low_stock **711 → 3157**、other 2980；9 个仓各 326–379 条
+- **修复**（`360218b8`/`fb2e13b4`）：按补货模式分维度, 与补货建议的"安全线提示"完全同源
+  | 模式 | 左（可售） | 右（需求） | 粒度 |
+  |---|---|---|---|
+  | bbcc | BC 合计（C可用+C在途+B可用+B在途） | `ds × 全周期(12)` | SKU×69码 一条（warehouse=`__BC__`） |
+  | traditional | 逐仓（可用+在途） | 该仓 `ds × (lead_time+safety_mult)` | SKU×69码×仓 |
+  | own（两模式） | 逐仓（可用+在途） | 该仓 `ds × (采购14+安全3)` | SKU×69码×仓 |
+- **traditional 排除 platform_b**（与 `purchase_calc:127` 同口径：B 仓仅 jd+bbcc 链路）
+- **实测收敛**: jd 3157 → **504**（own 364 + `__BC__` 140, B 仓单独 0）, other 2980 → **1051**
+- `/rules/evaluate` 的 `mode` 从 **JSON body** 读（`{"mode":"bbcc"}`），query 参数无效；默认 jd→bbcc / other→traditional
+
+### 二、69码链路真根因（不是部署问题，是 SELECT 漏列）
+- **补货**: `_inventory()` 的 SELECT **没有 barcode** → 主循环 `r.get("barcode")` 恒 `''` →
+  agg key 退化为 `(sku,'')` 两码合并；输出 barcode 由 `products.barcode` 兜底 → **看起来"有码", 实际按码从未生效**
+- **断货**: `stock_risk` 的 inv 查询同样漏 barcode → `bc_total/c_items` 两码合并
+- **判定法**: 输出字段有兜底 (`_bc or prod.get("barcode")`) 时, 不能以"输出有值"判断链路生效,
+  必须看 **SELECT 列清单** 与 **分组键**
+- **根治**（`e1863485`）:
+  - `routes/common.INVENTORY_COLS` **库存列单一真源**（barcode/warehouse/在途/锁定/期初全含）,
+    补货/断货/看板/健康/规则评估 5 处核心查询统一引用
+  - `routes/common.check_cols` **运行时字段自检**: 数据入口首行缺 barcode/warehouse 即 `try_err` 留痕
+    （文本扫描门禁误报率高、已放弃；运行时自检精准零误报）
+
+### 三、日销取值链收敛（"核心只有一个：SKU+69码 组合优先"）
+- 维度是**既定业务对象**（bbcc=`__BC__` 一盘 / traditional+own=该仓），不是可降级层级
+- 链: ①该维 × 该69码 → ②该维 × SKU（少码）→ ③**该维无数据返回 0, 绝不拿全国/全国C合计兜底**
+- 物化补齐 `__C__`/`__BC__` 的**按码行**（`1a8aca23`，原只有 `__ALL__` 有 → bbcc 多码共用整盘日销）
+  - `load_daily_sales_grouped(..., with_bc_wh=True)` 返回 `(sku,barcode,warehouse)` 维度
+  - 实测: `__ALL__`/`__C__`/`__BC__` 各 972 条按码行（原 `with_code=0`）
+- `get_sku_sales_stats` 返回 key 由 `sku|wh` 改为 `sku|barcode|wh`（原 key 无码 → 同 SKU 多码同仓互相覆盖）
+
+### 四、告警体系按 69码
+- `alerts` 新增 `barcode` 列（schema + 启动自愈 ALTER）
+- `evaluate_many`: 去重键/INSERT/`hits` 全链路含码；**反向关闭同步改为 5 元组**（否则永不关闭）
+- `rule_eval` 缺 `import json` → `_is_alert_rule` 的 json.loads 抛 NameError 被 except 吞 →
+  **所有规则（含 `alert_enabled=0` 的参数载体）都被当告警规则**参与评估（重复产告警噪声）
+
+### 五、异步任务与版本指纹
+- **请求驱动续跑条件恒假**（`b6b6cf5f`）: `request.url.path.startswith("/api/")` —— Makers 转发已剥离 root_path,
+  实际 path 为 `/dashboard/summary` → 续跑**从未触发**（实证: cleansing_eval 任务 10 分钟无进展, 只能等每日 05:05 平台 cron）
+- **driver 标签统一**（`40a19697`）: `common.mark_driver` 四个 status 函数入口打标（前端轮询 frontend / continue_tasks backend）；
+  此前 seed/eval/export **从未写过 driver** → 任务卡「后端推进|前端轮询」标签永不出现
+- **数据版本指纹**（`b1168fe` 系列）: `/health version` 原由各表 `MAX(id)` 组成 → UPDATE 无感；
+  新增 `data_version` 计数表, 在 `invalidate_all()`（所有写操作必经的中央失效点）递增,
+  `version = "<计数>|<表指纹>"` —— 计数覆盖 UPDATE, 指纹覆盖绕过应用层改库
+
+### 六、导入链路
+- **平台库存/B仓库存导入 100% 失败**（`8c27f44b`）: `cleanse_write:554` 用 `_TARGET_WH` 但常量只在
+  `cleansing.py` 定义（模块拆分漏迁移）→ `NameError`；修复: 收敛到 `common.TARGET_WH` 单一真源
+- 平台库存导入实测 `success=2`（两码落库）
+
+### 七、规则字段链路（前端选项 vs 后端 ctx 对齐）
+- 5 处"选了永远不触发"（解析缺 key 返回 None → 条件跳过）:
+  `inv.days_since_last`→顶层 `days_since_last`；`inv.stock`→`stock`；`daily_sales` 后端补（逐仓优先）；
+  `order.total_amount`/`order.unit_price` 补注入（"数量×单价"表达式恢复）；`inv.locked_qty` 补 SELECT+注入
+- 规则页仓储下拉补 `bc`（BC合计(BBCC)）
+- 存量规则幂等迁移 `migration_log('rules_field_path_v1')`（已执行 15:24）
+
+### 八、性能
+- **采购冷启动 46s → 1.98s**（`a52e8747`）: `_build_purchase` 按 barcode 逐个查物化（1000 码 × 3 往返 ≈ 46ms/码）
+  → 改 `barcode="*"` 一次取全部按码行；并复用同一次物化读取 s14m/s28m（原重复全表查）
+- **规则评估 25.5s → 2-3s**: 主因是粒度收敛（BC 合计后 ctx 由 9000 → 2002），不是查询优化；
+  另修 `evaluate_many` 在 ctx×rule 双层循环里 `json.loads`（2.7 万次）→ 规则预解析；表达式解析加缓存
+- `/batches` 裸调 17109 行 3.05s → 无 sku 时默认截断 2000（真实场景带 sku+仓 26ms）
+- `/insights/slow-moving` 10.55s → 1.05s: `last_sale` 相关子查询（每组扫一遍快照 9665ms）
+  → 两个预聚合 JOIN，`GREATEST(精确码组, 空码合计组)` 语义等价
+
+### 九、快照残留自愈（新增）
+- 快照是"按组合 upsert"，**软删订单后残留组合不会消失** → 物化/补货仍读到已删订单的日销
+- `dashboard_maintain._snapshot_reconcile`: 按天比对（快照行数/合计 vs 订单聚合），不一致的天
+  **DELETE + 单日 INSERT 重建**（单日小事务防 9004 锁超时；单次最多修 10 天）；每日一次（maintenance_log 抢占）
+
+### 十、其他口径修正
+- 采购安全线可售原为 `sys_total + own_avail + own_transit` → **own 被算两遍**（sys_total 已含所有仓型）
+  → 改 `sys_total`；采购参数（前置期/安全天数/周转）**独立于补货模式, 不跟随**
+- 缺货清单 BC 盘改 `GROUP BY sku,69码`（原按 sku 合并，两码库存互相抵消）
+- 批次效期摘要 `PARTITION BY sku` → `(sku,69码)`，消费方按 `(sku,码)` 取、SKU 级兜底
+
+---
+
 ## 2026-10-29(白天-晚间): 69码四维绑定全链路 + 自有仓重算制定案 + seed 彻底根治(71 commits)
 
 > commits 80a1034c→8342f2b8(北京时区 11:25-21:00); 回归 160/160; CI 绿。

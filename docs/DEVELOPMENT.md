@@ -1219,3 +1219,109 @@ AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')=''
 1. **`%` 优先级高于 `+`**: `'A' + cond + 'B' % args` 实际只格式化 `'B'` → 写成 `('A'+cond+'B') % args`
 2. **占位符数量**: 给子句加过滤后, 外层 `%` 的参数个数要同步(本轮 4→5 漏改导致 heal 全失败)
 3. **`LIKE '%中文%'` 在 diag 中失效** → 排查日志必须按 `source` 过滤, 不能靠中文 message 匹配
+
+### 15.84 低库存口径: 两端必须同口径同维度(2026-10-30 根治)
+
+**症状**: 跑一次 `/rules/evaluate` 后 jd low_stock 711 → 3157、other 2980, 9 个仓各 326–379 条。
+
+**根因**: 判定链两端口径错配 —— 左「单仓 `available_qty`」vs 右「全国 `ds × 周期`」, 差 7–8 倍,
+每个仓都必然报。这类错误**不报错、不告警**, 只有人工核对才能发现。
+
+**正确口径**（维度是既定业务对象, 不是可降级层级）:
+
+| 模式 | 左（可售, 含在途） | 右（需求） | 粒度 |
+|---|---|---|---|
+| bbcc | C可用+C在途+B可用+B在途 | `ds × 全周期` | SKU×69码 一条（`__BC__`） |
+| traditional | 逐仓 可用+在途 | 该仓 `ds × (lead_time+safety_mult)` | SKU×69码×仓 |
+| own（两模式） | 逐仓 可用+在途 | 该仓 `ds × (采购前置+安全)` | SKU×69码×仓 |
+
+**铁律**:
+1. 告警卡与建议页必须**同源同口径**（§15.22 卡片定位铁律的延伸）——本次就是"建议页用 BC 合计、告警用单仓"
+2. **降级只降码, 不换维度**: 该维无数据 → 返回 0(不触发), **绝不拿全国/全国C合计兜底**
+   （拿别处销量判本仓 → 可撑天数被放大或压低, 误报漏报都由此来）
+3. `traditional` 的 `platform_b` 不参与（与采购 `purchase_calc:127` 同口径: B 仓仅 jd+bbcc 链路）
+
+**实测收敛**: jd 3157 → 504（own 364 + `__BC__` 140, B 仓单独 0）, other 2980 → 1051。
+
+### 15.85 "SELECT 漏列 + 输出兜底" 双重掩盖(2026-10-30 两个真 bug)
+
+**现象**: 补货/断货的 69码 细分一直不生效, 但接口输出 `barcode` 字段一直有值。
+
+**根因链**:
+1. `_inventory()` / `stock_risk` 的 SELECT **没有 `barcode` 列**
+2. 主循环 `_bc = r.get("barcode") or ""` → 恒空 → 分组键退化为 `(sku,'')` → 两码合并
+3. 输出行 `"barcode": _bc or prod.get("barcode","")` → **用商品档案兜底**, 界面永远"有码"
+
+**判定法**（写进排查习惯）:
+- 输出字段存在**兜底赋值**（`x or prod.get(...)` / `x or 默认值`）时, **不能以"输出有值"证明链路生效**
+- 必须看 ①SELECT 列清单 ②分组键 ③中间变量是否为空
+- 这类问题的验证只能靠**多码数据**（同 SKU 两个 69码）——单码数据下两条码合并与正确结果完全一致, 永远测不出来
+
+**修复**: 两处 SELECT 补 `COALESCE(barcode,'') AS barcode`。
+
+### 15.86 库存列单一真源 + 运行时自检(机制层根治)
+
+漏列会反复出现 → 从机制上堵:
+
+1. **`routes/common.INVENTORY_COLS`** —— 库存表列单一真源（barcode/warehouse/在途/锁定/期初全含）,
+   补货/断货/看板/健康/规则评估 5 处核心查询统一 `"SELECT " + INVENTORY_COLS + " FROM inventory"`,
+   不再各写一份列清单
+2. **`routes/common.check_cols(rows, cols, src, what)`** —— 数据入口运行时自检:
+   首行缺列即 `try_err` 留痕（不抛异常）。已接入补货/断货/看板三入口
+3. **放弃文本扫描门禁**: 试过在 local_test 里扫 `FROM inventory` 是否含 barcode —— 误报 6→12→6 处
+   一直在漂（聚合/存在性/UPDATE 全被误判），**文本门禁不可靠, 运行时自检才精准**
+4. 确实不需要码的查询（`SELECT 1`/`COUNT`/`DISTINCT`/`MAX(id)`/UPDATE）统一标注
+   `# no-barcode-ok: 理由`，人工 review 时一眼分辨"不需要"与"忘了"
+
+### 15.87 异步任务续跑与 driver 标签(2026-10-30)
+
+- **请求驱动续跑条件恒假**: `request.url.path.startswith("/api/")` —— Makers 转发已剥离 `root_path(/api)`,
+  实际 path 是 `/dashboard/summary` → 条件永假 → **续跑从未触发**。
+  实证: `cleansing_eval` 任务 created 后 10 分钟 `updated_at` 不变, 只能等每日 05:05 平台 cron。
+  **判定法**: 同一份 path 也用于 slow_request 日志——日志里 `GET /dashboard/summary`（无 /api 前缀）就是证据
+- **driver 标签**: `common.mark_driver(task_id, driver)` 在四个 status 函数入口统一打标
+  （前端轮询默认 frontend / `continue_tasks` 显式 backend）。此前只有 cleansing 有专用接口,
+  seed/eval/export **从未写 driver** → 任务卡标签永不出现
+- **标签只在 `status==='running'` 渲染**: 历史任务看不到推进方式（设计如此, 要展示需放宽前端条件）
+
+### 15.88 数据版本指纹: 计数版 + 表指纹双轨(2026-10-30)
+
+- 原 `/health version` 由各表 `MAX(id)` 拼接 → **只认新增, 不认更新**（告警关闭/库存重算/参数保存全无感）
+- 另有一个隐蔽 bug: `MAX(id) FROM replenishment_config` —— 该表主键是 `(key, channel)` **没有 id 列**,
+  查询抛错被 `except` 吞 → **version 恒 "0"** → 前端"版本变化 → clearCache+loadAll"链路完全失效
+- 修复: 新增 `data_version` 计数表, 在 **`invalidate_all()`（所有写操作必经的中央失效点）** 递增;
+  `version = "<计数>|<表指纹>"` —— 计数覆盖 UPDATE, 指纹覆盖绕过应用层直接改库
+- 成本: 写操作 +1 次 UPDATE; health 读 +1 次 SELECT（高频轮询下约占月 RU 1.7%）
+
+### 15.89 快照残留自愈: 软删订单后快照不会自动回滚(2026-10-30)
+
+- 快照是"按 (date,sku,码,仓) 组合 upsert" → **订单软删后对应组合在快照里仍在** →
+  物化/补货仍读到已删订单的日销（实测: 删单后 SKU 在物化里残留）
+- `orders_day_agg` 早有窗口自愈(§15.66), **快照侧缺失** → 补 `dashboard_maintain._snapshot_reconcile`:
+  按天比对（快照行数/合计 vs 订单聚合）→ 不一致的天 **DELETE + 单日 INSERT 重建**
+  - 单日小事务（防大窗口 DELETE 造成 9004 锁超时）
+  - 单次最多修 10 天, 余下下次续跑
+  - 每日一次（`maintenance_log` 抢占）+ 后台线程, 不拖 summary 响应
+
+### 15.90 性能: 先实测再决定, 别猜(2026-10-30 自我纠偏)
+
+**背景**: `/rules/evaluate` 曾 25.5s, 直觉判断"下推 SQL 能提速" → 实测后否定。
+
+**实测三件套**（本地零 RU + diag 只读）:
+
+| 层 | 实测 | 占比 |
+|---|---|---|
+| SQL（6 段关键查询） | 合计 ≈1.36s | **5%** |
+| Python 解析（json.loads×2.7万 / dict 合并 / 表达式解析） | ≈0.8–1.0s | **4%** |
+| 其余（ctx 构造、规则匹配、订单评估） | ≈23s | 91% |
+
+**结论**: 下推 SQL 顶多优化 5%, 方向错误。真正的收益来自**粒度收敛**:
+BC 合计后 ctx 由 9000 → 2002, 评估自然从 25.5s 降到 **2–3s**（分段埋点证实最大段 `calc_load=0.9s`）。
+
+**沉淀**:
+1. 本地能证的不要上线试（`python3 -c` 直接跑关键函数/key 逻辑）
+2. 必须线上验的用只读栈（diag + GET），批量导入只用于写链路冒烟
+3. 埋点只用于"本地无法复现的平台层问题"（冷启动/多实例），不是首选
+4. **先查部署版本再验行为**: `DescribePagesDeployments` 看 `RepoCommitHash` + `UsedInProd` ——
+   前端静态资源先可访问、函数实例要等 `Status=Success` 且 `UsedInProd=true` 才切换，
+   "看到新文案"≠"后端代码已生效"
