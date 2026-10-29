@@ -176,12 +176,16 @@ def _rebuild_own_batches(channel, skus):
         if not batch_skus:
             continue
         ph = ",".join(["%s"] * len(batch_skus))
-        _wh_cond = (" AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
-                    "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
+        # 2026-10-29 仓型维度: 入库记录必须属于自有类仓型(为多仓/多类型准备)
+        _wh_cond = (" AND (COALESCE(warehouse_type,'')='' OR warehouse_type IN (%s)) "
+                    " AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
+                    "WHERE channel=%%s AND warehouse_type IN (%s))"
+                    % (_ph_wt, "%s"))
         _sql_ins = ("SELECT id, sku, barcode, warehouse, prod_date, exp_date, quantity "
                     "FROM inbound_records WHERE channel=%s AND sku IN (%s)" + _wh_cond +
                     " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
-        ins = _q(_sql_ins % ("%s", ph), [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES))
+        ins = _q(_sql_ins % ("%s", ph),
+                 [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES) + [channel] + list(SELF_WAREHOUSE_TYPES))
         # 出库: 按四维分组
         outs_exact = {}
         outs_noexp = {}
@@ -210,11 +214,13 @@ def _rebuild_own_batches(channel, skus):
             _beg_map[(str(r.get("sku") or ""), str(r.get("bc") or ""),
                       str(r.get("warehouse") or ""))] = int(r.get("b") or 0)
         # 按 (sku, barcode, warehouse) 分组入库明细
+        # 69码规则: 有值则精准归组; 无值则保持无码(不反推/不猜测归属)
         by_key = {}
         for r in ins:
-            k = (str(r.get("sku") or ""), str(r.get("barcode") or "").strip(),
-                 str(r.get("warehouse") or ""))
-            by_key.setdefault(k, []).append(r)
+            _sk = str(r.get("sku") or "")
+            _wh = str(r.get("warehouse") or "")
+            _bc = str(r.get("barcode") or "").strip()
+        by_key.setdefault((_sk, _bc, _wh), []).append(r)
         for k, _b0 in _beg_map.items():
             if _b0 > 0:
                 by_key.setdefault(k, [])
@@ -355,10 +361,16 @@ def _recalc_own_inventory(channel, skus):
             "COALESCE(i.beginning_stock, 0) AS beg, "
             "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
-            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS in_q, "
+            # 2026-10-29 仓型维度: 流水仓型须与库存行仓型一致(为多仓/多类型准备)
+            "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
+            # 69码匹配规则: 有值→精准; **任一方为空→降级(少掉69码比较)**
+            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')='' "
+            "       OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
-            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS out_q "
+            "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
+            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')='' "
+            "       OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
             % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)

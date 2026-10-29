@@ -269,7 +269,10 @@ def run_daily_rules() -> dict:
                 "  i.available_qty AS qty, "
                 "  COALESCE((SELECT SUM(b.qty) FROM batches b WHERE b.channel=i.channel "
                 "    AND b.sku=i.sku AND b.warehouse=i.warehouse "
-                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'')), 0) AS bq "
+                "    AND b.warehouse_type=i.warehouse_type "
+                # 69码匹配: 有值→精准; 任一方为空→降级(少掉69码比较)
+                "    AND (COALESCE(i.barcode,'')='' OR COALESCE(b.barcode,'')='' "
+                "         OR COALESCE(b.barcode,'')=COALESCE(i.barcode,''))), 0) AS bq "
                 "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
                 "HAVING ABS(qty - bq) > 1" % _ph,
                 [_ch] + list(_SELF))
