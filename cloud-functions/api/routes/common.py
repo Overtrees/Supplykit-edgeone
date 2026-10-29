@@ -48,8 +48,9 @@ def mark_driver(task_id, driver):
         from db import execute as _e
         _e("UPDATE sync_tasks SET params=JSON_SET(COALESCE(params,'{}'), '$.driver', %s) "
            "WHERE task_id=%s", [driver, task_id])
-    except Exception:
-        pass
+    except Exception as _e:
+        # 2026-10-29: 原 except: pass 违反 except-pass 红线(纯展示标记也要留痕, 否则同款静默失效无人知)
+        try_err('common', 'driver 标记降级', _e)
 
 
 def try_err(src, what, exc=None, details=""):

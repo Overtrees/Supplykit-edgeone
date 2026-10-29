@@ -164,6 +164,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
     _agg = None
     _fused = {}
+    _by_wh_ds = {}   # 逐仓日销: (sku, warehouse) → ds28(2026-10-29 粒度修正用)
     _sigma = {}
     _otif_map = {}
     _accel = {}
@@ -211,6 +212,17 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         try:
             from biz.sales import get_sales_digest
             _by_sku, _fused, _sigma = get_sales_digest(channel)  # 共享日销(进程内缓存, 与看板同源)
+            # 2026-10-29 粒度修正: 原 _ds 一律取**全国 SKU 日销**, 却与**单仓可用**比较
+            #   → 每个仓都远低于全国安全线 → 低库存全量误报(实测 jd 711→3157, other 2980)
+            #   逐仓行取该仓日销(物化逐仓行), 无逐仓数据回退全国(兼容)
+            try:
+                from biz.sales import get_sku_sales_stats as _gwds
+                for _vwh in (_gwds(channel, days=28) or {}).values():
+                    _w2 = str(_vwh.get("warehouse") or "")
+                    if _w2 and not _w2.startswith("__"):
+                        _by_wh_ds[(str(_vwh.get("sku") or ""), _w2)] = float(_vwh.get("ds28") or 0)
+            except Exception as _ewh:
+                try_err('core_rules', '逐仓日销加载降级', _ewh)
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)
         try:
@@ -302,7 +314,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         if _need_calc and _agg is not None:
             try:
                 _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
-                _ds = _fused.get(sku, 0)
+                _ds = _by_wh_ds.get((sku, str(r.get("warehouse") or "")), 0) or _fused.get(sku, 0)
                 _otif = _otif_map.get(_prod_sup.get(sku, ""), 1.0)
                 _ss_z = float(_rp.get("ss_z", 1.65))
                 _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
