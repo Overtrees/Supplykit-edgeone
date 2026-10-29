@@ -27,11 +27,18 @@ router = APIRouter(tags=["tasks"])
 router.include_router(export_router)  # 导出口/分队(拆分至 task_export 后 include)
 router.include_router(seed_router)  # seed 分队(拆分至 task_seed 后 include)
 
-_TABLES_RESET = ["orders", "inventory", "products", "daily_sales_snapshot", "alerts",
-                 "suppliers", "rules", "replenishment_config", "purchase_orders",
+# 2026-10-29 全排查(用户: 要排查就全排查根治): 原清单漏 6 表 ——
+#   · sku_sales_stats = 日销物化(**补货/采购/断货/健康的数据源**) → 漏清 = 重置后卡片仍有数据
+#   · data_freshness(新鲜度) · export_files(上传缓存) · eval_pending/agg_dirty(脏标记) · replenishment_config_history
+# 保留: users(账号) · migration_log(迁移记录) —— 非业务数据, 不应重置
+_TABLES_RESET = ["orders", "inventory", "products", "daily_sales_snapshot", "sku_sales_stats",
+                 "alerts", "suppliers", "rules", "replenishment_config",
+                 "replenishment_config_history", "purchase_orders",
                  "disposal_records", "batches", "quality_logs", "cleansing_errors",
                  "cleansing_templates", "custom_fields", "events", "inbound_records",
-                 "outbound_records", "daily_stats", "warehouse_registry", "sync_tasks", "orders_day_agg", "health_snapshot", "maintenance_log", "log_archives", "gmv_flows"]
+                 "outbound_records", "daily_stats", "warehouse_registry", "sync_tasks",
+                 "orders_day_agg", "health_snapshot", "maintenance_log", "log_archives",
+                 "gmv_flows", "data_freshness", "export_files", "eval_pending", "agg_dirty"]
 
 _BRANDS_FOOD = ["禾味", "山泉", "椒香", "酱乡", "醋乡", "味源", "禾田", "青禾", "禾风",
                 "谷香", "醇味", "鲜禾", "禾记"]

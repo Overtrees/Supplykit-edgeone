@@ -375,6 +375,7 @@ async def heal_own_inventory(request: Request):
         _rebuild_own_batches as _rebuild,
     )
     _ph = ",".join(["%s"] * len(_SELF))
+    _old_suffix = "_old_20261029"   # 此前 RENAME 遗留的兜底表后缀
     for ch in chs:
         try:
             # ① 回填仓型(历史出入库记录 warehouse_type 为空)
@@ -432,6 +433,17 @@ async def heal_own_inventory(request: Request):
             except Exception as _epk:
                 _mig[_tb] = "error: %s" % str(_epk)[:140]
                 try_err('misc', '日销表重建失败(%s)' % _tb, _epk)
+        # 清理历史遗留的兜底表(用户定案: 不留 _old; 彻底重建后无需保留)
+        _dropped = []
+        try:
+            for _r0 in _q5("SHOW TABLES"):
+                _t0 = str(list(_r0.values())[0])
+                if _old_suffix in _t0:
+                    _e5("DROP TABLE IF EXISTS `%s`" % _t0)
+                    _dropped.append(_t0)
+        except Exception as _edr:
+            try_err('misc', '遗留兜底表清理失败', _edr)
+        out["_dropped_legacy_tables"] = _dropped
         # 重建后**全量重填充**(表已清空 —— 日销是派生数据, 从订单一次算全)
         _refill = {}
         try:
