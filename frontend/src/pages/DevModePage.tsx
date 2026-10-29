@@ -191,9 +191,24 @@ export default function DevModePage() {
               } catch {}
               clearCache()
               clearInflight()
-              useAppStore.setState({ dashboard: null, alerts: [], stockRisk: [] })
-              toast.success('数据已重置，即将刷新')
-              setTimeout(() => window.location.reload(), 1500)
+              // 2026-10-29 修复: 仅清 dashboard/alerts/stockRisk 不够 ——
+              // ・procList(补货采购卡)、replen(建议页)是页面内 state, 不在 store
+              // ・未递增 pageVersion → 页面不会重新拉取 → 显示旧数据(用户需手动刷新)
+              useAppStore.setState({
+                dashboard: null,
+                alerts: [],
+                stockRisk: [],
+                qualityLogs: [],
+                dataLoaded: false,
+                pageVersion: Date.now(), // 触发各页 useEffect 重新拉取
+              })
+              try {
+                // 通知所有页面级快照失效(建议页/进销存的 module 快照)
+                window.dispatchEvent(new CustomEvent('insights-refresh'))
+                window.dispatchEvent(new CustomEvent('orders-changed'))
+              } catch {}
+              toast.success('数据已重置')
+              setTimeout(() => window.location.reload(), 400)
             }
           } catch {
             clearInterval(poll)
