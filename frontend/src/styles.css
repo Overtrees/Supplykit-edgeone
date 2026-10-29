@@ -1755,24 +1755,66 @@ input[type='file'] {
   padding: 0 !important;
   border-radius: 50% !important;
 }
+/* 标题行(2026-10-29): 标题 + tab + 计数同行, 省一行高度 */
+.flow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.flow-table-wrap {
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0; /* 关键: flex 子项默认 min-height:auto 会撑破容器, 导致表格区被压缩 */
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.flow-foot {
+  text-align: center;
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  padding: 8px 0 0;
+  flex: 0 0 auto;
+}
+.flow-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--muted2);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
 .flow-filter-row {
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
   align-items: center;
 }
+/* 筛选胶囊(2026-10-29): 日期与搜索**同一套尺寸**——高度/字号/左右内边距完全一致 */
+.flow-filter-field,
+.flow-filter-field-full {
+  height: 40px;
+  min-height: 40px;
+  font-size: var(--font-sm);
+  padding: 0 12px;
+  box-sizing: border-box;
+  /* iOS date 原生控件高度不受控 → 归一化, 与文本输入对齐 */
+  -webkit-appearance: none;
+  appearance: none;
+  line-height: normal;
+}
 .flow-filter-field {
   flex: 1 1 0;
   min-width: 0;
-  height: 40px;
-  font-size: var(--font-sm);
-  padding: 0 10px;
 }
 .flow-filter-field-full {
   width: 100%;
-  height: 40px;
+}
+/* Safari 日期控件的内部文本不继承 font-size, 需单独指定 */
+.flow-filter-field::-webkit-date-and-time-value {
+  text-align: left;
   font-size: var(--font-sm);
-  padding: 0 12px;
 }
 .flow-filter-tilde {
   flex: 0 0 auto;

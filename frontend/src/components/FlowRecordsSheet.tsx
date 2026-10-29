@@ -111,14 +111,14 @@ export default function FlowRecordsSheet({
             maxWidth: 680,
             borderRadius: 'var(--radius-lg)',
             padding: 16,
-            maxHeight: '70vh',
+            maxHeight: '88dvh',
             display: 'flex',
             flexDirection: 'column',
             pointerEvents: 'auto',
           }}
         >
           {/* 标题 + 两态 tab */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <div className="flow-head">
             <div style={{ fontSize: 16, fontWeight: 700 }}>出入库明细</div>
             <div className="hammer-segmented" style={{ marginLeft: 4 }}>
               {(
@@ -178,7 +178,16 @@ export default function FlowRecordsSheet({
           )}
 
           {/* 表格 */}
-          <div style={{ overflow: 'auto', flex: 1, minHeight: 200 }}>
+          <div
+            className="flow-table-wrap"
+            onScroll={e => {
+              const el = e.currentTarget
+              // 滚动到底 80px 内 → 自动续页(替换原"加载更多"按钮)
+              if (!loading && items.length < total && el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+                setPage(pg => pg + 1)
+              }
+            }}
+          >
             <table className="flow-table">
               <thead>
                 <tr>
@@ -226,8 +235,10 @@ export default function FlowRecordsSheet({
                 ))}
                 {!items.length && !loading && (
                   <tr>
-                    <td colSpan={9} style={{ padding: 20, color: 'var(--muted2)' }}>
-                      暂无记录
+                    <td colSpan={9} className="flow-empty">
+                      {dateFrom || dateTo || skuQ
+                        ? '当前筛选无匹配记录，可调整日期或清空搜索'
+                        : '暂无记录'}
                     </td>
                   </tr>
                 )}
@@ -235,24 +246,13 @@ export default function FlowRecordsSheet({
             </table>
           </div>
 
-          {items.length < total && (
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-              <button
-                className="tpl-btn clickable"
-                onClick={() => setPage(pg => pg + 1)}
-                disabled={loading}
-                style={{ minWidth: 120 }}
-              >
-                {loading ? '加载中…' : `加载更多 (${items.length}/${total})`}
-              </button>
-            </div>
+          {/* 底部状态: 滚动到底自动加载(原"加载更多"按钮占 60px 已省出给表格) */}
+          {loading && (
+            <div className="flow-foot">加载中…</div>
           )}
-
-          <div style={{ display: 'flex', marginTop: 12 }}>
-            <button className="tpl-btn clickable" onClick={onClose} style={{ flex: 1 }}>
-              关闭
-            </button>
-          </div>
+          {!loading && items.length >= total && items.length > 0 && (
+            <div className="flow-foot">已全部加载（{total} 条）</div>
+          )}
         </div>
       </div>
     </>,
