@@ -376,11 +376,12 @@ def _seed_records():
     # 2026-10-29 业务定案: 出入库只属于自有仓 → 批次池只取 warehouse_type='own'
     # (原取全部批次 → 生成出"沈阳仓/上海仓/B仓"的虚假出入库记录)
     _batch_pool = {}
-    for r in query("SELECT sku, warehouse, prod_date, exp_date FROM batches "
-                   "WHERE warehouse_type='own'"):
+    # 2026-10-29 按 69码: 批次池带 barcode, 出入库流水才可归属到具体码
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, prod_date, exp_date "
+                   "FROM batches WHERE warehouse_type='own'"):
         _batch_pool.setdefault(str(r.get('sku')), []).append(
             {'wh': str(r.get('warehouse') or ''), 'pd': str(r.get('prod_date') or '')[:10],
-             'ed': str(r.get('exp_date') or '')[:10]})
+             'ed': str(r.get('exp_date') or '')[:10], 'bc': str(r.get('bc') or '')})
     in_rows, out_rows = [], []
     for sku, sk_name, ch in [(r.get('sku'), r.get('product_name'), r.get('channel'))
                              for r in query("SELECT sku, product_name, channel FROM products")]:
@@ -392,28 +393,29 @@ def _seed_records():
             while days_back in used:
                 days_back = random.randint(0, max_days)
             used.add(days_back)
-            _bp = _be = _wh = ''
+            _bp = _be = _wh = _bc = ''
             if _pool:
                 _b = random.choice(_pool)
-                _bp, _be, _wh = _b['pd'], _b['ed'], _b['wh']
+                _bp, _be, _wh, _bc = _b['pd'], _b['ed'], _b['wh'], _b['bc']
             in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(50, 500),
                             'supplier': '供应商-%s' % sku[-3:],
                             'inbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
-                            'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh})
+                            'channel': ch, 'prod_date': _bp, 'exp_date': _be,
+                            'warehouse': _wh, 'barcode': _bc})
         used = set()
         for _ in range(random.randint(1, min(2, max_days + 1))):
             days_back = random.randint(0, max_days)
             while days_back in used:
                 days_back = random.randint(0, max_days)
             used.add(days_back)
-            _bp = _be = _wh = ''
+            _bp = _be = _wh = _bc = ''
             if _pool:
                 _b = random.choice(_pool)
-                _bp, _be, _wh = _b['pd'], _b['ed'], _b['wh']
+                _bp, _be, _wh, _bc = _b['pd'], _b['ed'], _b['wh'], _b['bc']
             out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(10, 100),
                              'target_warehouse': 'B仓',
                              'outbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
-                             'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh})
+                             'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh, 'barcode': _bc})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
                                   ('outbound_records', out_rows, 'outbound_date')):
         for i in range(0, len(rows), 500):
