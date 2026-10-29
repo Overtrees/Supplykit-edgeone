@@ -844,13 +844,7 @@ export default function App() {
                         days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
                         onClick={() => setFreshOpen(v => !v)}
                       />
-                      {freshOpen && (
-                        <FreshPopover
-                          data={fresh}
-                          onClose={() => setFreshOpen(false)}
-                          anchorTop={30}
-                        />
-                      )}
+
                       <select
                         value={channel}
                         onChange={e => setChannel(e.target.value)}
@@ -949,18 +943,6 @@ export default function App() {
                       </svg>
                     </button>
                     <span className="header-status" style={{ position: 'relative' }}>
-                      <StaleDotInline
-                        level={fresh?.staleLevel || 0}
-                        days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
-                        onClick={() => setFreshOpen(v => !v)}
-                      />
-                      {freshOpen && (
-                        <FreshPopover
-                          data={fresh}
-                          onClose={() => setFreshOpen(false)}
-                          anchorTop={30}
-                        />
-                      )}
                       <select
                         value={channel}
                         onChange={e => setChannel(e.target.value)}

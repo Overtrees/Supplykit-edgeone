@@ -1720,6 +1720,65 @@ input[type='file'] {
   margin-bottom: 8px;
   /* 2026-10-27 去分割线(视觉冗余): 标题胶囊+留白已足够分区 */
 }
+/* 出入库明细表格(2026-10-29): 全居中 + 9 列最小宽度 560 */
+.flow-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: var(--font-xs);
+}
+.flow-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+  padding: 8px 6px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.flow-table td {
+  padding: 7px 6px;
+  text-align: center;
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+.flow-table td.ellip {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-del-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  border-radius: 50% !important;
+}
+.flow-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.flow-filter-field {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 40px;
+  font-size: var(--font-sm);
+  padding: 0 10px;
+}
+.flow-filter-field-full {
+  width: 100%;
+  height: 40px;
+  font-size: var(--font-sm);
+  padding: 0 12px;
+}
+.flow-filter-tilde {
+  flex: 0 0 auto;
+  font-size: var(--font-sm);
+  color: var(--muted2);
+}
 .tpl-field {
   font-size: 15px;
   padding: 9px 12px;

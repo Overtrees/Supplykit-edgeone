@@ -146,30 +146,28 @@ export default function FlowRecordsSheet({
           </div>
 
           {/* 筛选栏: 日期范围 + SKU 模糊(后端已支持, 触发重载) */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+          {/* 筛选栏(2026-10-29): 日期一行 + 搜索独立一行, 样式走全局类 flow-filter-* */}
+          <div className="flow-filter-row">
             <input
               type="date"
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
-              className="tpl-field"
-              style={{ flex: '0 0 118px', fontSize: 11, padding: '0 8px' }}
+              className="tpl-field flow-filter-field"
             />
-            <span className="muted2" style={{ fontSize: 10 }}>
-              ~
-            </span>
+            <span className="flow-filter-tilde">~</span>
             <input
               type="date"
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
-              className="tpl-field"
-              style={{ flex: '0 0 118px', fontSize: 11, padding: '0 8px' }}
+              className="tpl-field flow-filter-field"
             />
+          </div>
+          <div className="flow-filter-row">
             <input
-              placeholder="SKU 搜索"
+              placeholder="搜索 SKU"
               value={skuQ}
               onChange={e => setSkuQ(e.target.value)}
-              className="tpl-field"
-              style={{ flex: 1, minWidth: 0, fontSize: 11, padding: '0 10px' }}
+              className="tpl-field flow-filter-field-full"
             />
           </div>
 
@@ -181,16 +179,9 @@ export default function FlowRecordsSheet({
 
           {/* 表格 */}
           <div style={{ overflow: 'auto', flex: 1, minHeight: 200 }}>
-            <table
-              style={{
-                width: '100%',
-                minWidth: 560,
-                borderCollapse: 'collapse',
-                fontSize: 'var(--font-xs)',
-              }}
-            >
+            <table className="flow-table">
               <thead>
-                <tr style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
+                <tr>
                   {[
                     '日期',
                     'SKU',
@@ -202,103 +193,40 @@ export default function FlowRecordsSheet({
                     '备注',
                     '',
                   ].map((h, i) => (
-                    <th
-                      key={i}
-                      style={{
-                        textAlign: 'center',
-                        padding: '6px 6px',
-                        fontWeight: 600,
-                        color: 'var(--muted)',
-                        whiteSpace: 'nowrap',
-                        borderBottom: '1px solid var(--border)',
-                      }}
-                    >
-                      {h}
-                    </th>
+                    <th key={i}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {items.map(it => (
-                  <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                  <tr key={it.id}>
+                    <td>
                       {String(it.date || '').slice(0, 10)}
-                      <span className="muted2" style={{ marginLeft: 3, fontSize: 9 }}>
+                      <span className="muted2" style={{ marginLeft: 3, fontSize: 'var(--font-9)' }}>
                         {String(it.date || '').slice(11, 16)}
                       </span>
                     </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                      {it.sku}
-                    </td>
-                    <td
-                      style={{
-                        padding: '6px 6px',
-                        whiteSpace: 'nowrap',
-                        color: 'var(--muted)',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {it.warehouse || WT_LABEL[it.warehouse_type] || '—'}
-                    </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                      {it.prod_date || '—'}
-                    </td>
-                    <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                      {it.exp_date || '—'}
-                    </td>
-                    <td
-                      style={{
-                        padding: '6px 6px',
-                        textAlign: 'center',
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
-                      {it.quantity}
-                    </td>
-                    <td
-                      style={{
-                        padding: '6px 6px',
-                        maxWidth: 120,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {it.extra || '—'}
-                    </td>
-                    <td
-                      style={{
-                        padding: '6px 6px',
-                        maxWidth: 120,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        color: 'var(--muted2)',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {it.remark || '—'}
-                    </td>
-                    <td style={{ padding: '2px 6px', textAlign: 'center' }}>
+                    <td>{it.sku}</td>
+                    <td>{it.warehouse || WT_LABEL[it.warehouse_type] || '—'}</td>
+                    <td>{it.prod_date || '—'}</td>
+                    <td>{it.exp_date || '—'}</td>
+                    <td>{it.quantity}</td>
+                    <td className="ellip">{it.extra || '—'}</td>
+                    <td className="ellip">{it.remark || '—'}</td>
+                    <td>
                       <button
-                        className="tpl-btn-ghost clickable"
-                        style={{ width: 28, height: 28, padding: 0, borderRadius: '50%' }}
-                        disabled={delId === it.id}
-                        onClick={() => doDelete(it.id)}
-                        title="删除该记录"
+                        className="tpl-btn-ghost clickable flow-del-btn"
+                        onClick={() => onDelete(it.id)}
+                        title="删除"
                       >
-                        <IconTrash size={12} />
+                        ✕
                       </button>
                     </td>
                   </tr>
                 ))}
                 {!items.length && !loading && (
                   <tr>
-                    <td
-                      colSpan={9}
-                      style={{ padding: 20, textAlign: 'center', color: 'var(--muted2)' }}
-                    >
+                    <td colSpan={9} style={{ padding: 20, color: 'var(--muted2)' }}>
                       暂无记录
                     </td>
                   </tr>
@@ -307,19 +235,21 @@ export default function FlowRecordsSheet({
             </table>
           </div>
 
-          {/* 加载更多 + 关闭 */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            {items.length < total && (
+          {items.length < total && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
               <button
                 className="tpl-btn clickable"
-                style={{ flex: 1 }}
+                onClick={() => setPage(pg => pg + 1)}
                 disabled={loading}
-                onClick={() => load(tab, page + 1, true)}
+                style={{ minWidth: 120 }}
               >
-                {loading ? '加载中…' : `加载更多（${items.length}/${total}）`}
+                {loading ? '加载中…' : `加载更多 (${items.length}/${total})`}
               </button>
-            )}
-            <button className="tpl-btn clickable" style={{ flex: 1 }} onClick={onClose}>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', marginTop: 12 }}>
+            <button className="tpl-btn clickable" onClick={onClose} style={{ flex: 1 }}>
               关闭
             </button>
           </div>

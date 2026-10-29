@@ -347,11 +347,14 @@ async def flow_records_batch(request: Request):
                "message": "已删除 %d 条记录" % len(_rows)})
 
 
+FLOW_RETENTION_DAYS = 180  # 出入库明细默认可见范围(天)
+
+
 @router.get("/flow-records/list")
 @traced
 def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 50,
                       date_from: str = "", date_to: str = "", sku: str = "",
-                      channel: str = "jd", wt: str = ""):
+                      channel: str = "jd", wt: str = "", days: int = 0):
     """出入库明细(2026-10-29): 进销存页锤子菜单 → 弹窗 tab 切换
     列: 日期 / SKU / 生产日期 / 截止日期 / 数量 / 备注(入库=供应商, 出库=目标仓)
     分页 SQL 下推(8061/6057 行, 索引 channel+date)"""
@@ -384,6 +387,15 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
         _ph_wt = ",".join(["%s"] * len(_SELF))
         where.append("(warehouse_type IN (%s) OR warehouse_type = '')" % _ph_wt)
         params.extend(list(_SELF))
+    # 2026-10-29 可见保留范围: 默认最近 180 天(业务上出入库台账需追溯半年;
+    # 更早记录仍在库, 传 days=0 可查全部)
+    try:
+        _keep_days = int(days or FLOW_RETENTION_DAYS)
+    except Exception:
+        _keep_days = FLOW_RETENTION_DAYS
+    if _keep_days > 0:
+        where.append("%s >= DATE_SUB(CURDATE(), INTERVAL %s DAY)" % (dcol, "%s"))
+        params.append(_keep_days)
     w = " AND ".join(where)
     try:
         tot = _o("SELECT COUNT(*) AS c FROM `%s` WHERE %s" % (table, w), params) or {}

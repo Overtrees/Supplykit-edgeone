@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 
 /**
@@ -19,6 +20,13 @@ export type FreshData = {
 }
 
 const DOT_COLOR = ['transparent', 'var(--warning)', 'var(--danger)']
+const LEVEL_COLOR = ['var(--muted2)', 'var(--warning)', 'var(--danger)']
+
+const fmtDays = (d: number | null): string => {
+  if (d === null || d === undefined) return '未知'
+  if (d <= 0) return '今天'
+  return d + ' 天前'
+}
 
 export function useFreshness(channel?: string) {
   const [data, setData] = useState<FreshData | null>(null)
@@ -98,95 +106,149 @@ export function StaleDotInline({
 export function FreshPopover({
   data,
   onClose,
-  anchorTop = 38,
 }: {
   data: FreshData | null
   onClose: () => void
   anchorTop?: number
 }) {
-  const [expanded, setExpanded] = useState(false)
+  // 2026-10-29 改底部弹窗(portal → body): 原 absolute 定位于 header 胶囊内, 被 overflow:hidden 裁断
   if (!data) return null
-  const lineStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 11,
-    padding: '4px 0',
-    borderBottom: '1px solid var(--border)',
-    minWidth: 0,
-  }
-  const nameStyle: React.CSSProperties = {
-    flex: '1 1 auto',
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    color: 'var(--text-secondary)',
-  }
-  const valStyle = (lv: number): React.CSSProperties => ({
-    flex: '0 0 auto',
-    maxWidth: 96,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontVariantNumeric: 'tabular-nums',
-    fontWeight: 600,
-    color: lv === 2 ? 'var(--danger)' : lv === 1 ? 'var(--warning)' : 'var(--success)',
-  })
-  const fmt = (d: number | null) => (d === null ? '—' : d === 0 ? '今天' : `${d} 天`)
-
-  return (
+  return createPortal(
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 9997 }} onClick={onClose} />
       <div
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.28)', zIndex: 9998 }}
+      />
+      <div
+        className="material-regular"
         style={{
-          position: 'absolute',
-          top: anchorTop,
+          position: 'fixed',
           left: 0,
-          zIndex: 9998,
-          width: 232,
-          maxWidth: '82vw',
-          background: 'var(--card)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          padding: '9px 11px',
-          boxShadow: '0 8px 26px rgba(0,0,0,.14)',
+          right: 0,
+          bottom: 0,
+          zIndex: 9999,
+          borderTopLeftRadius: 'var(--radius-lg)',
+          borderTopRightRadius: 'var(--radius-lg)',
+          padding: '16px 16px calc(16px + env(safe-area-inset-bottom))',
+          boxShadow: 'var(--shadow-sheet)',
+          maxHeight: '70dvh',
+          overflowY: 'auto',
         }}
-        onClick={e => e.stopPropagation()}
       >
-        <div style={{ fontSize: 9, color: 'var(--muted2)', fontWeight: 600, marginBottom: 2 }}>
-          看板指标
-        </div>
-        {data.metrics.map(m => (
-          <div key={m.key} style={lineStyle}>
-            <span style={nameStyle}>{m.label}</span>
-            <span style={valStyle(m.level)}>{fmt(m.days)}</span>
-          </div>
-        ))}
         <div
-          onClick={() => setExpanded(v => !v)}
           style={{
-            fontSize: 9,
-            color: 'var(--muted2)',
-            fontWeight: 600,
-            margin: '7px 0 2px',
-            cursor: 'pointer',
-            userSelect: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 10,
           }}
         >
-          原始数据源 {expanded ? '▾' : '▸'}
+          <span style={{ fontSize: 16, fontWeight: 700 }}>数据新鲜度</span>
+          <span
+            className="clickable"
+            onClick={onClose}
+            style={{ fontSize: 13, color: 'var(--muted2)', padding: '4px 6px' }}
+          >
+            关闭
+          </span>
         </div>
-        {expanded &&
-          data.sources.map(s => (
-            <div key={s.doc_type} style={lineStyle}>
-              <span style={nameStyle}>{s.label}</span>
-              <span style={valStyle(s.level)}>{fmt(s.days)}</span>
+        <div style={{ fontSize: 11, color: 'var(--muted2)', marginBottom: 12, lineHeight: 1.5 }}>
+          数据来自 ERP / 平台导出快照，超期建议重新导入对应类型
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
+          看板指标
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 14 }}>
+          {(data.metrics || []).map(m => (
+            <div
+              key={m.key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '7px 0',
+                borderBottom: '1px solid var(--border-light)',
+              }}
+            >
+              <span
+                style={{
+                  flex: '1 1 auto',
+                  minWidth: 0,
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {m.label}
+              </span>
+              <span
+                style={{
+                  flex: '0 0 auto',
+                  maxWidth: 160,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 12,
+                  color: LEVEL_COLOR[m.level] || 'var(--muted2)',
+                }}
+              >
+                {fmtDays(m.days)}
+                {m.from ? ` · ${m.from}` : ''}
+              </span>
             </div>
           ))}
-        <div style={{ fontSize: 9, color: 'var(--muted2)', marginTop: 6, lineHeight: 1.5 }}>
-          超期项建议重新导入
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
+          原始数据源
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {(data.sources || []).map(s2 => (
+            <div
+              key={s2.doc_type}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '7px 0',
+                borderBottom: '1px solid var(--border-light)',
+              }}
+            >
+              <span
+                style={{
+                  flex: '1 1 auto',
+                  minWidth: 0,
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {s2.label}
+              </span>
+              <span
+                style={{
+                  flex: '0 0 auto',
+                  maxWidth: 160,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 12,
+                  color: LEVEL_COLOR[s2.level] || 'var(--muted2)',
+                }}
+              >
+                {s2.last_biz_date || '—'} · {fmtDays(s2.days)}
+              </span>
+            </div>
+          ))}
+          {!(data.sources || []).length && (
+            <div style={{ fontSize: 12, color: 'var(--muted2)', padding: '8px 0' }}>
+              暂无导入记录
+            </div>
+          )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
