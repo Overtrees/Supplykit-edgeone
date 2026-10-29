@@ -375,9 +375,12 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
     if sku:
         where.append("sku LIKE %s")
         params.append("%" + sku + "%")
+    # 2026-10-29 业务定案: 出入库只属于自有仓 → 默认只查 own(平台/B仓无出入库概念)
     if wt:
         where.append("warehouse_type = %s")
         params.append(wt)
+    else:
+        where.append("(warehouse_type = 'own' OR warehouse_type = '' OR warehouse_type IS NULL)")
     w = " AND ".join(where)
     try:
         tot = _o("SELECT COUNT(*) AS c FROM `%s` WHERE %s" % (table, w), params) or {}

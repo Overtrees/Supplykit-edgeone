@@ -25,7 +25,6 @@ export default function FlowRecordsSheet({
   const [err, setErr] = useState('')
   const [extraLabel, setExtraLabel] = useState('供应商')
   const [delId, setDelId] = useState<number | null>(null)
-  const [wtFilter, setWtFilter] = useState('') // 仓型筛选(空=全部)
 
   const PS = 50
   const WT_LABEL: Record<string, string> = { own: '自有仓', platform: '平台仓', platform_b: 'B仓' }
@@ -35,7 +34,7 @@ export default function FlowRecordsSheet({
     setErr('')
     try {
       const r = await api.get(
-        `/api/flow-records/list?target=${t}&page=${p}&page_size=${PS}&channel=${channel}${wtFilter ? '&wt=' + wtFilter : ''}&t=${Date.now()}`,
+        `/api/flow-records/list?target=${t}&page=${p}&page_size=${PS}&channel=${channel}&t=${Date.now()}`,
         { timeout: 60000 },
       )
       const d = r.data || {}
@@ -57,7 +56,7 @@ export default function FlowRecordsSheet({
       load(tab, 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, tab, channel, wtFilter])
+  }, [open, tab, channel])
 
   const doDelete = async (id: number) => {
     setDelId(id)
@@ -131,18 +130,6 @@ export default function FlowRecordsSheet({
                 </span>
               ))}
             </div>
-            <div className="hammer-segmented" style={{ marginLeft: 4 }}>
-              {(['', 'own', 'platform', 'platform_b'] as const).map(k => (
-                <span
-                  key={k || 'all'}
-                  onClick={() => setWtFilter(k)}
-                  className={'hammer-segment' + (wtFilter === k ? ' active' : '')}
-                  style={{ fontSize: 'var(--font-9)', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                >
-                  {k === '' ? '全部' : WT_LABEL[k]}
-                </span>
-              ))}
-            </div>
             <span
               className="muted2"
               style={{ fontSize: 'var(--font-xs)', marginLeft: 'auto', whiteSpace: 'nowrap' }}
@@ -194,7 +181,7 @@ export default function FlowRecordsSheet({
                     </td>
                     <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>{it.sku}</td>
                     <td style={{ padding: '6px 6px', whiteSpace: 'nowrap', color: 'var(--muted)' }}>
-                      {WT_LABEL[it.warehouse_type] || it.warehouse_type || '—'}
+                      {it.warehouse || WT_LABEL[it.warehouse_type] || '—'}
                     </td>
                     <td style={{ padding: '6px 6px', whiteSpace: 'nowrap' }}>
                       {it.prod_date || '—'}

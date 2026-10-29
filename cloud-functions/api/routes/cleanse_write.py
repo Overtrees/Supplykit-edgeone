@@ -451,23 +451,24 @@ def _write_rows(target, channel, conflict_mode, cleaned):
     return 0, len(cleaned), []
 
 def _fill_warehouse_type(channel, cleaned, target):
-    """仓型兜底(2026-10-29): 导入未填 warehouse_type 时, 按 warehouse 反查 inventory
-    多自有仓场景应显式填写(必选); 空缺则按仓名匹配, 仍无则留空(重算时按 own 兜底)"""
-    from db import query as _q
-    need = [c for c in cleaned if not str(c.get("warehouse_type") or "").strip()]
-    if not need:
+    """仓型归属(2026-10-29 业务定案): **出入库只属于自有仓维度**
+
+    业务事实: 平台仓/京东B仓的数据只能从平台后台导出, 没有"出入库单据"概念;
+    它们的在途(供应商→B仓 / B→C调拨)由【库存】类型导入的 in_transit_qty 承载。
+    → 出入库导入一律归 own(未来多自有仓仍为 own, 用 warehouse 区分);
+      文件里填了其它仓型会被纠正并留痕(避免误把平台数据当自有仓台账)
+    """
+    if target in ("inbound", "outbound"):
+        fixed = 0
+        for c in cleaned:
+            wt0 = str(c.get("warehouse_type") or "").strip()
+            if wt0 and wt0 != "own":
+                fixed += 1
+            c["warehouse_type"] = "own"
+        if fixed:
+            try_err('cleansing', '出入库仓型纠正为 own(原填非自有仓 %d 行)' % fixed,
+                    ValueError('warehouse_type corrected'))
         return cleaned
-    try:
-        _map = {}
-        for r in _q("SELECT DISTINCT warehouse, warehouse_type FROM inventory WHERE channel=%s", [channel]):
-            _wh = str(r.get("warehouse") or "")
-            if _wh and r.get("warehouse_type"):
-                _map.setdefault(_wh, r.get("warehouse_type"))
-        for c in need:
-            _wh = str(c.get("warehouse") or "")
-            c["warehouse_type"] = _map.get(_wh, "own" if target in ("inbound", "outbound") else "")
-    except Exception as _e:
-        try_err('cleansing', '仓型反查降级', _e)
     return cleaned
 
 

@@ -365,8 +365,11 @@ def _seed_batches():
 def _seed_records():
     """当月出入库记录(进销存页展示): 按批次池随机, INSERT IGNORE 防唯一冲突"""
     today = datetime.now(timezone.utc)
+    # 2026-10-29 业务定案: 出入库只属于自有仓 → 批次池只取 warehouse_type='own'
+    # (原取全部批次 → 生成出"沈阳仓/上海仓/B仓"的虚假出入库记录)
     _batch_pool = {}
-    for r in query("SELECT sku, warehouse, prod_date, exp_date FROM batches"):
+    for r in query("SELECT sku, warehouse, prod_date, exp_date FROM batches "
+                   "WHERE warehouse_type='own'"):
         _batch_pool.setdefault(str(r.get('sku')), []).append(
             {'wh': str(r.get('warehouse') or ''), 'pd': str(r.get('prod_date') or '')[:10],
              'ed': str(r.get('exp_date') or '')[:10]})
