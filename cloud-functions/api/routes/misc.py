@@ -350,6 +350,58 @@ async def flow_records_batch(request: Request):
 FLOW_RETENTION_DAYS = 180  # 出入库明细默认可见范围(天)
 
 
+@router.post("/maintenance/heal-own")
+@traced
+async def heal_own_inventory(request: Request):
+    """自有仓数据自愈(2026-10-29, 幂等): 回填仓型 → 重算库存 → 重建批次
+
+    场景: 架构定案(自有仓=重算制)后, 历史数据需一次性对齐
+      · 出入库 warehouse_type 回填 'own'
+      · inventory.available_qty = 期初 + Σ入库 − Σ出库
+      · batches 按 FIFO 重建(Σ批次 ≡ available)
+    只动自有仓维度, 平台仓/B仓(快照制)完全不动。
+    """
+    d = {}
+    try:
+        d = await request.json()
+    except Exception:
+        pass
+    channel = (d or {}).get("channel") or ""
+    chs = [channel] if channel else ["jd", "other"]
+    out = {}
+    from routes.cleanse_write import (
+        SELF_WAREHOUSE_TYPES as _SELF,
+        _recalc_own_inventory as _recalc,
+        _rebuild_own_batches as _rebuild,
+    )
+    _ph = ",".join(["%s"] * len(_SELF))
+    for ch in chs:
+        try:
+            # ① 回填仓型(历史出入库记录 warehouse_type 为空)
+            _e1 = execute(
+                "UPDATE inbound_records SET warehouse_type=%s WHERE channel=%s "
+                "AND (warehouse_type IS NULL OR warehouse_type='')",
+                [_SELF[0], ch])
+            _e2 = execute(
+                "UPDATE outbound_records SET warehouse_type=%s WHERE channel=%s "
+                "AND (warehouse_type IS NULL OR warehouse_type='')",
+                [_SELF[0], ch])
+            # ② 重算库存 + ③ 重建批次(逐 SKU 分片控制耗时)
+            _skus = [r.get("sku") for r in query(
+                "SELECT DISTINCT sku FROM inventory WHERE channel=%s "
+                "AND warehouse_type IN (%s)" % ("%s", _ph), [ch] + list(_SELF))]
+            _skus = [x for x in _skus if x]
+            _n_inv = _recalc(ch, _skus) if _skus else 0
+            _n_bat = _rebuild(ch, _skus) if _skus else 0
+            out[ch] = {"bt": [_e1, _e2], "recalc": _n_inv, "batches": _n_bat, "skus": len(_skus)}
+        except Exception as e:
+            try_err('misc', '自有仓自愈降级(%s)' % ch, e)
+            out[ch] = {"error": str(e)[:200]}
+    from routes.analysis_cache import invalidate_all
+    invalidate_all()
+    return ok(out)
+
+
 @router.get("/flow-records/list")
 @traced
 def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 50,

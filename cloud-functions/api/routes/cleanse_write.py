@@ -216,28 +216,44 @@ def _rebuild_own_batches(channel, skus):
 
 def _recalc_own_inventory(channel, skus):
     """自有仓库存重算(2026-10-29 架构定案): available = 期初 + Σ入库 − Σ出库
-    幂等: 无论导入多少次/顺序如何/是否滞后补录, 只要流水与期初确定, 结果唯一
+
+    幂等: 流水与期初确定 → 结果唯一(重复导入/滞后补录/删除重录均自动正确)
     范围: 仅本次涉及的 SKU(值来自全量流水聚合, 完整性不受影响)
+
+    仓名匹配策略(2026-10-29 修复: 曾严格匹配导致 88% 流水被忽略):
+      · 该渠道自有仓 = 1 个 → **忽略 warehouse**, 流水全部归属它
+        (业务现实: ERP 导出的入库单仓名常是"收货仓/中转仓", 与库存维度仓名不同;
+         单仓时不存在归属歧义)
+      · 自有仓 > 1 个 → **严格匹配 warehouse**, 不匹配的流水不计入并记警告
+        (多仓时仓名是唯一归属依据, 必须准确; 导入侧应校验仓名)
     """
     from db import query as _q, execute as _e
+    _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
+    # 该渠道自有仓清单(判断单仓/多仓)
+    _whs = [str(r.get("warehouse") or "") for r in
+            _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
+               "AND warehouse_type IN (%s)" % ("%s", _ph_wt),
+               [channel] + list(SELF_WAREHOUSE_TYPES))]
+    _single = len(_whs) <= 1
     out = 0
     for i in range(0, len(skus), 200):
         batch = skus[i:i + 200]
         ph = ",".join(["%s"] * len(batch))
-        # 期初(库存导入写 beginning_stock) + 入库合计 − 出库合计
-        # 2026-10-29 仓名兜底: 出入库记录的 warehouse 为空时视作"该渠道唯一自有仓"
-        # (ERP 导出常省略仓名; 自有仓通常 1 个, 多自有仓时需在文件里明确填写)
+        if _single:
+            # 单仓: 忽略 warehouse(含空/异名), 全部计入
+            _cond = ""
+        else:
+            # 多仓: 严格匹配(空仓名仍兜底到唯一仓的场景已由 _single 覆盖, 此处不兜底)
+            _cond = " AND r.warehouse = i.warehouse"
         rows = _q(
             "SELECT i.id, i.sku, i.warehouse, "
             "COALESCE(i.beginning_stock, 0) AS beg, "
             "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku "
-            "  AND (r.warehouse=i.warehouse OR r.warehouse='' OR r.warehouse IS NULL)), 0) AS in_q, "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku" + _cond + "), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
-            "  WHERE r.channel=i.channel AND r.sku=i.sku "
-            "  AND (r.warehouse=i.warehouse OR r.warehouse='' OR r.warehouse IS NULL)), 0) AS out_q "
+            "  WHERE r.channel=i.channel AND r.sku=i.sku" + _cond + "), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) "
-            "AND i.sku IN (%s)" % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES)), ph),
+            "AND i.sku IN (%s)" % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
         upd = []
         for r in rows:
