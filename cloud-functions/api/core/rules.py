@@ -79,6 +79,13 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
     # 参数选择(bbcc→b_to_c+c_safety, traditional→lead_time, 跟随补货模式)
     for _rl in rules:
         _rl["_params"] = _rule_params_loaded(_rl)
+        # 2026-10-29 性能: 原在 ctx×rule 双层循环里 json.loads 每次(9000 ctx × 3 规则 ≈ 2.7 万次)
+        try:
+            _rl["_cond"] = json.loads(_rl.get("condition_json") or "{}")
+        except Exception:
+            _rl["_cond"] = None
+    # 参数载体规则(alert_enabled=0)不产告警 → 提前过滤, 循环内不再判断
+    rules = [r for r in rules if str((r.get("_params") or {}).get("alert_enabled")) != "0"]
     if not rules:
         return ([], set()) if return_hits else []
     # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
@@ -96,13 +103,14 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
         channel_x = ctx.get("channel") or channel or "jd"
         wh = (ctx.get("inv") or {}).get("warehouse", "")
         bc_x = str(ctx.get("barcode") or "")
+        _inv_x = ctx.get("inv") or {}
+        _base_ctx = {**ctx, "avail": int(_inv_x.get("available_qty") or 0),
+                     "safety": float(_inv_x.get("safety_qty") or 0),
+                     "product_name": _inv_x.get("product_name", "")}
         for rule in rules:
-            try:
-                cond = json.loads(rule.get("condition_json") or "{}")
-            except Exception:
+            cond = rule.get("_cond")
+            if cond is None:
                 continue
-            if str((rule.get("_params") or {}).get("alert_enabled")) == "0":
-                continue  # 告警开关关闭(兼容字符串/数字): 规则仅作为计算参数载体
             # params.lit 模式 fallback: 规则未设 lit 时按规则 mode 跟随补货周期
             # (bbcc→b_to_c+c_safety, traditional→lead_time; 与断货卡模式双线一致)
             _rp2 = dict(rule.get("_params") or {})
@@ -111,11 +119,7 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 if not _m:
                     _m = "bbcc" if ctx.get("channel") == "jd" else "traditional"  # 未指定=跟随渠道默认模式
                 _rp2["lit"] = ctx.get("lit_bbcc" if _m == "bbcc" else "lit_trad")
-            ctx2 = {**ctx, "rule": rule,
-                    "avail": int((ctx.get("inv") or {}).get("available_qty") or 0),
-                    "safety": float((ctx.get("inv") or {}).get("safety_qty") or 0),
-                    "product_name": (ctx.get("inv") or {}).get("product_name", ""),
-                    "params": _rp2}
+            ctx2 = {**_base_ctx, "rule": rule, "params": _rp2}
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")

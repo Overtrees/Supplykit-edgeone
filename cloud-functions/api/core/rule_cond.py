@@ -8,20 +8,40 @@ from routes.common import try_err
 
 
 
+# 2026-10-29 性能: 表达式 → 解析形态缓存(规则条件种类有限, 无界风险极小)
+#   原每次 ctx×rule 都重新 str.strip + replace + split → 全量评估 9000 ctx 下数万次重复
+_SINGLE_CACHE = {}
+
+
+def _parse_single(expr):
+    """把单个字段表达式解析成 ('num', 值) 或 ('path', 路径元组), 结果缓存"""
+    _c = _SINGLE_CACHE.get(expr)
+    if _c is not None:
+        return _c
+    try:
+        if expr.replace(".", "", 1).isdigit():
+            _c = ("num", float(expr))
+        else:
+            _c = ("path", tuple(p for p in expr.split(".") if p))
+    except Exception:
+        _c = ("path", (expr,))
+    if len(_SINGLE_CACHE) < 8192:
+        _SINGLE_CACHE[expr] = _c
+    return _c
+
+
 def _resolve_single(expr, ctx):
     """单个字段或数字: inv.available_qty → ctx['inv']['available_qty']; '2' → 2"""
     expr = str(expr).strip()
-    try:
-        if expr.replace(".", "", 1).isdigit():
-            return float(expr)
-    except Exception as _e:
-            try_err('core_rules', '静默降级', _e)
+    _p = _parse_single(expr)
+    if _p[0] == "num":
+        return _p[1]
     # 2026-10-29 缺失字段语义修正: 原 val.get(p, 0) → 缺数据被当 0
     # 后果: batch.days_to_expire 缺失 → 0 → "剩余0天" → 临期规则**全部误触发**
     #       supplier.score 缺失 → 0 → 低分规则误报
     # 修: 缺失返回 None; 条件判定遇 None 直接跳过(不命中), 日志留痕便于排查
     val = ctx
-    for p in expr.split("."):
+    for p in _p[1]:
         if isinstance(val, dict):
             if p not in val:
                 return None
