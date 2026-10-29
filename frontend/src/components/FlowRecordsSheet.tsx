@@ -224,7 +224,7 @@ export default function FlowRecordsSheet({
                     <td style={{ padding: '2px 4px', textAlign: 'right' }}>
                       <button
                         className="tpl-btn-ghost clickable"
-                        style={{ width: 28, height: 28, padding: 0 }}
+                        style={{ width: 28, height: 28, padding: 0, borderRadius: '50%' }}
                         disabled={delId === it.id}
                         onClick={() => doDelete(it.id)}
                         title="删除该记录"

@@ -145,9 +145,10 @@ def _rebuild_own_batches(channel, skus):
         # 该 SKU 的自有仓入库明细(含效期), 按生产日期升序(FIFO 基准)
         ins = _q("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
                  "WHERE channel=%s AND sku IN (%s) AND (warehouse='' OR warehouse IN "
-                 "(SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='own')) "
+                 "(SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type IN (%s))) "
                  "ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id"
-                 % ("%s", ph, "%s"), [channel] + batch_skus + [channel])
+                 % ("%s", ph, "%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))),
+                 [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES))
         # 该 SKU 的自有仓出库总量
         outs = {}
         for r in _q("SELECT sku, SUM(quantity) AS q FROM outbound_records "
@@ -180,8 +181,9 @@ def _rebuild_own_batches(channel, skus):
         for j in range(0, len(_del_skus), 200):
             d = _del_skus[j:j + 200]
             try:
-                _e("DELETE FROM batches WHERE channel=%s AND warehouse_type='own' AND sku IN (%s)"
-                   % ("%s", ",".join(["%s"] * len(d))), [channel] + d)
+                _e("DELETE FROM batches WHERE channel=%s AND warehouse_type IN (%s) AND sku IN (%s)"
+                   % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES)), ",".join(["%s"] * len(d))),
+                   [channel] + list(SELF_WAREHOUSE_TYPES) + d)
             except Exception as _ed:
                 try_err('cleansing', '自有仓批次删除降级', _ed)
         for j in range(0, len(_insert_rows), 300):
@@ -219,9 +221,9 @@ def _recalc_own_inventory(channel, skus):
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku "
             "  AND (r.warehouse=i.warehouse OR r.warehouse='' OR r.warehouse IS NULL)), 0) AS out_q "
-            "FROM inventory i WHERE i.channel=%s AND i.warehouse_type='own' "
-            "AND i.sku IN (%s)" % ("%s", ph),
-            [channel] + batch)
+            "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) "
+            "AND i.sku IN (%s)" % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES)), ph),
+            [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
         upd = []
         for r in rows:
             try:
@@ -450,6 +452,15 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             agg_key3="barcode", agg_sum=["quantity", "price"])
     return 0, len(cleaned), []
 
+# 2026-10-29 自有类仓型白名单(可扩展): 出入库只允许这些仓型
+# 未来新增自有仓类型(如区域仓/前置仓)只需在此追加, 其余逻辑自动跟随
+SELF_WAREHOUSE_TYPES = ("own",)
+
+
+def _is_self_wt(wt):
+    return str(wt or "").strip() in SELF_WAREHOUSE_TYPES
+
+
 def _fill_warehouse_type(channel, cleaned, target):
     """仓型归属(2026-10-29 业务定案): **出入库只属于自有仓维度**
 
@@ -462,11 +473,14 @@ def _fill_warehouse_type(channel, cleaned, target):
         fixed = 0
         for c in cleaned:
             wt0 = str(c.get("warehouse_type") or "").strip()
-            if wt0 and wt0 != "own":
+            if wt0 and not _is_self_wt(wt0):
                 fixed += 1
-            c["warehouse_type"] = "own"
+                c["warehouse_type"] = SELF_WAREHOUSE_TYPES[0]  # 非自有类 → 纠正为首个自有仓型
+            elif not wt0:
+                c["warehouse_type"] = SELF_WAREHOUSE_TYPES[0]  # 未填 → 默认自有仓
+            # 已在白名单内(如未来 own_a) → 原样保留
         if fixed:
-            try_err('cleansing', '出入库仓型纠正为 own(原填非自有仓 %d 行)' % fixed,
+            try_err('cleansing', '出入库仓型纠正(非自有类 %d 行 → %s)' % (fixed, SELF_WAREHOUSE_TYPES[0]),
                     ValueError('warehouse_type corrected'))
         return cleaned
     return cleaned
