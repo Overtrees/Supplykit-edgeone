@@ -427,8 +427,9 @@ def data_freshness(channel: str = "jd"):
     _now = _dt.now(_tz.utc)
     rows = []
     try:
-        rows = _q("SELECT doc_type, last_import_at, last_biz_date FROM data_freshness WHERE channel=%s",
-                  [channel or "jd"])
+        # db.query 返回 tuple → 转 list(下方兜底需要 append; 曾 AttributeError: 'tuple' has no append)
+        rows = list(_q("SELECT doc_type, last_import_at, last_biz_date FROM data_freshness WHERE channel=%s",
+                       [channel or "jd"]) or [])
     except Exception as _e:
         try_err('misc', '新鲜度查询降级', _e)
 
