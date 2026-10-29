@@ -39,7 +39,7 @@ export default function TaskPage() {
   const [tasks, setTasks] = useState([])
   const [downloading, setDownloading] = useState({})
   const [loading, setLoading] = useState(true)
-  const [showAllDone, setShowAllDone] = useState(false) // 已完��折叠(默认 10 条)
+  const [showAllDone, setShowAllDone] = useState(false) // 已完成折叠(默认 10 条)
 
   const [loadErr, setLoadErr] = useState('')
   const doneTasks = useRef({}) // 已触发完成提示的任务
@@ -185,7 +185,7 @@ export default function TaskPage() {
               <EmptyState
                 icon="package"
                 title="暂无任务"
-                desc="导入数据或导出文件后，处理进度会在���显示"
+                desc="导入数据或导出文件后，处理进度会在这里显示"
                 action={
                   <button
                     className="btn btn-primary"
