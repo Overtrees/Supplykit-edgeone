@@ -29,11 +29,16 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
                 search: str = "", days_threshold: int = 30):
     """滞销识别: 最后销售日距今 > threshold 且库存>0"""
     now = datetime.now(timezone.utc)
+    # 2026-10-29 按 69码: 分组含 barcode; 最后销售日按码取(无码则降级到 SKU 级)
     rows = query(
-        "SELECT i.sku AS sku, MAX(i.product_name) AS product_name, MAX(i.warehouse_type) AS warehouse_type, "
+        "SELECT i.sku AS sku, COALESCE(i.barcode,'') AS barcode, MAX(i.product_name) AS product_name, "
+        "MAX(i.warehouse_type) AS warehouse_type, "
         "SUM(i.available_qty) AS available_qty, SUM(i.safety_qty) AS safety_qty, "
-        "MAX(IFNULL((SELECT MAX(s.date) FROM daily_sales_snapshot s WHERE s.sku=i.sku AND s.channel=i.channel), '')) AS last_sale "
-        "FROM inventory i WHERE i.channel=%s GROUP BY i.sku", [channel])
+        "MAX(IFNULL((SELECT MAX(s.date) FROM daily_sales_snapshot s "
+        "  WHERE s.sku=i.sku AND s.channel=i.channel "
+        "  AND (COALESCE(i.barcode,'')='' OR COALESCE(s.barcode,'')='' "
+        "       OR s.barcode=i.barcode)), '')) AS last_sale "
+        "FROM inventory i WHERE i.channel=%s GROUP BY i.sku, COALESCE(i.barcode,'')", [channel])
     items = []
     for r in rows:
         avail = int(r.get("available_qty") or 0)
@@ -44,7 +49,8 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
         if days <= days_threshold:
             continue
         items.append({
-            "sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
+            "sku": r.get("sku"), "barcode": r.get("barcode") or "",
+            "product_name": r.get("product_name") or r.get("sku"),
             "warehouse_type": r.get("warehouse_type") or "",
             "available_qty": avail, "safety_qty": int(r.get("safety_qty") or 0),
             "days_since_last": days, "last_sale": last,
