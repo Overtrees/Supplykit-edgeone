@@ -387,6 +387,21 @@ check("rules 表达式解析(加法)", _resolve_value("inv.available_qty + inv.i
       {"inv": {"available_qty": 10, "in_transit_qty": 5}}) == 15.0, "resolve fail")
 check("rules 表达式解析(括号乘除)", _resolve_value("(inv.available_qty + inv.in_transit_qty) / 2",
       {"inv": {"available_qty": 10, "in_transit_qty": 4}}) == 7.0, "resolve fail")
+
+# ── 2026-10-29 缺失字段 None 语义(防"缺失当0"误报) ──
+check("缺失字段不误报(days_to_expire)", not _check_condition(
+      {"left": "batch.days_to_expire", "op": "<", "right": "30"}, {"sku": "S1", "inv": {}}),
+      "missing field should not trigger")
+check("缺失字段表达式返回 None", _resolve_value("inv.aa_x + inv.bb_y", {"inv": {}}) is None,
+      "expr with missing should be None")
+check("缺失字段乘法返回 None", _resolve_value("batch.days_to_expire * 2", {"sku": "S1"}) is None,
+      "muldiv with missing should be None")
+check("字段存在时正常判定", _check_condition(
+      {"left": "batch.days_to_expire", "op": "<", "right": "30"},
+      {"sku": "S1", "batch": {"days_to_expire": 10}}), "present field should trigger")
+check("params 缺失不误判", not _check_condition(
+      {"left": "inv.adj_dos", "op": "<=", "right": "params.lit"},
+      {"inv": {"adj_dos": 5}, "params": {}}), "missing params should not trigger")
 check("rules 条件 avail<safety 触发", _check_condition(
       {"left": "inv.available_qty", "op": "<", "right": "inv.safety_qty"},
       {"inv": {"available_qty": 5, "safety_qty": 10}}), "cond fail")

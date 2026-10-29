@@ -53,7 +53,10 @@ def _resolve_muldiv(expr, ctx):
         if t in "*/":
             op = t
         else:
-            val = float(_resolve_single(t, ctx))
+            _raw = _resolve_single(t, ctx)
+            if _raw is None:
+                return None  # 字段缺失 → 整个表达式缺失(不按 0 计算)
+            val = float(_raw)
             if result is None:
                 result = val
             elif op == "*":
@@ -72,7 +75,10 @@ def _resolve_value(expr, ctx):
         m = re.search(r"\(([^()]+)\)", expr)
         if not m:
             break
-        expr = expr[:m.start()] + str(_resolve_value(m.group(1), ctx)) + expr[m.end():]
+        _sub_v = _resolve_value(m.group(1), ctx)
+        if _sub_v is None:
+            return None  # 括号内字段缺失 → 整体缺失(原 str(None)='None' → 后续 float 崩溃)
+        expr = expr[:m.start()] + str(_sub_v) + expr[m.end():]
     if "+" in expr or "-" in expr:
         tokens = re.split(r"([+-])", expr)
         total, sign = 0.0, 1.0
@@ -85,7 +91,10 @@ def _resolve_value(expr, ctx):
             elif t == "-":
                 sign = -1.0
             else:
-                total += sign * _resolve_muldiv(t, ctx)
+                _mv = _resolve_muldiv(t, ctx)
+                if _mv is None:
+                    return None
+                total += sign * _mv
         return total
     return _resolve_muldiv(expr, ctx)
 
@@ -94,7 +103,10 @@ def _resolve_any(expr, ctx):
     expr = str(expr).strip()
     if "*" in expr:
         a, b = expr.split("*", 1)
-        return float(_resolve_value(a, ctx)) * float(b.strip())
+        _av = _resolve_value(a, ctx)
+        if _av is None:
+            return None
+        return float(_av) * float(b.strip())
     if expr.replace(".", "", 1).isdigit():
         return float(expr)
     return _resolve_value(expr, ctx)
@@ -113,8 +125,11 @@ def _check_single(cond, ctx):
         if str(right_raw).startswith("max("):
             inner = right_raw[4:-1]
             parts = [p.strip() for p in inner.split(",")]
-            right = max(_resolve_any(parts[0], ctx),
-                        _resolve_any(parts[1], ctx) if len(parts) > 1 else 0)
+            _a0 = _resolve_any(parts[0], ctx)
+            _a1 = _resolve_any(parts[1], ctx) if len(parts) > 1 else 0
+            if _a0 is None or _a1 is None:
+                return False  # max() 内含缺失字段 → 条件跳过
+            right = max(_a0, _a1)
         elif str(right_raw).replace(".", "", 1).isdigit():
             right = float(right_raw)
         elif "." in str(right_raw) or str(right_raw).startswith("inv.") or str(right_raw).startswith("order."):
