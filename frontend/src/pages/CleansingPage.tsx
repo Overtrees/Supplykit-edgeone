@@ -211,7 +211,8 @@ const INBOUND_FIELDS = [
   { t: 'inbound_date', l: '入库日期', tp: 'date' },
   { t: 'channel', l: '渠道', tp: 'string' },
   { t: 'platform', l: '平台', tp: 'string' },
-  { t: 'warehouse', l: '仓库(自有仓名,空=默认)', tp: 'string' },
+  { t: 'warehouse', l: '仓库名', tp: 'string' },
+  { t: 'warehouse_type', l: '仓库类型(own/platform/platform_b)', tp: 'string' },
   { t: 'prod_date', l: '生产日期(FIFO依据)', tp: 'date' },
   { t: 'exp_date', l: '到期日期(批次效期)', tp: 'date' },
   { t: 'price', l: '单价', tp: 'number' },
@@ -301,8 +302,8 @@ export const PRESET_REQUIRED: Record<string, string[]> = {
   product: ['sku', 'product_name'],
   supplier: ['supplier_code', 'supplier_name'],
   // 2026-10-29 仓库必选(为多自有仓准备); 效期(prod_date/exp_date)可选——部分品类不做效期管理
-  inbound: ['sku', 'quantity', 'inbound_date', 'warehouse'],
-  outbound: ['sku', 'quantity', 'outbound_date', 'warehouse'],
+  inbound: ['sku', 'quantity', 'inbound_date', 'warehouse', 'warehouse_type'],
+  outbound: ['sku', 'quantity', 'outbound_date', 'warehouse', 'warehouse_type'],
   gmv_flow: ['platform', 'flow_no', 'amount', 'arrived_time'],
 }
 // 示例行(仅必选列给样例, 可选列留空)——下载模板第二行

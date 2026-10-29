@@ -351,7 +351,7 @@ async def flow_records_batch(request: Request):
 @traced
 def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 50,
                       date_from: str = "", date_to: str = "", sku: str = "",
-                      channel: str = "jd"):
+                      channel: str = "jd", wt: str = ""):
     """出入库明细(2026-10-29): 进销存页锤子菜单 → 弹窗 tab 切换
     列: 日期 / SKU / 生产日期 / 截止日期 / 数量 / 备注(入库=供应商, 出库=目标仓)
     分页 SQL 下推(8061/6057 行, 索引 channel+date)"""
@@ -375,11 +375,15 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
     if sku:
         where.append("sku LIKE %s")
         params.append("%" + sku + "%")
+    if wt:
+        where.append("warehouse_type = %s")
+        params.append(wt)
     w = " AND ".join(where)
     try:
         tot = _o("SELECT COUNT(*) AS c FROM `%s` WHERE %s" % (table, w), params) or {}
         rows = _q("SELECT id, sku, %s AS d, quantity, prod_date, exp_date, warehouse, "
-                  "`%s` AS extra, COALESCE(remark,'') AS remark "
+                  "`%s` AS extra, COALESCE(remark,'') AS remark, "
+                  "COALESCE(warehouse_type,'') AS wt "
                   "FROM `%s` WHERE %s ORDER BY %s DESC, id DESC LIMIT %%s OFFSET %%s"
                   % (dcol, ecol, table, w, dcol),
                   params + [ps, (pg - 1) * ps])
@@ -391,7 +395,8 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
               "quantity": int(r.get("quantity") or 0),
               "warehouse": str(r.get("warehouse") or ""),
               "extra": str(r.get("extra") or ""),
-              "remark": str(r.get("remark") or "")} for r in rows]
+              "remark": str(r.get("remark") or ""),
+              "warehouse_type": str(r.get("wt") or "")} for r in rows]
     return ok({"items": items, "total": int((tot or {}).get("c") or 0),
                "page": pg, "page_size": ps, "target": target,
                "extra_label": "供应商" if target == "inbound" else "仓库"})

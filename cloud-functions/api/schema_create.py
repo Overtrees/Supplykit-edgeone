@@ -285,8 +285,10 @@ def create_all_tables():
         _extra_cols = {
             "cleansing_templates": [("cf_meta", "TEXT")],
             # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
-            "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''")],
-            "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''")],
+            "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
+                                ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
+            "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
+                                 ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
         }
         for _t, _cols in _extra_cols.items():

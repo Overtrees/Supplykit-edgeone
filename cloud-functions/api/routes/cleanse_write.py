@@ -419,11 +419,13 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             cleaned, conflict_mode, "supplier_code", channel=channel,
                             agg_overwrite=True)  # 同 supplier_code 覆盖末行档案
     if target == "inbound":
+        cleaned = _fill_warehouse_type(channel, cleaned, "inbound")
         s, f, ed = _write_batch("inbound_records",
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
-                             "price", "box_qty", "unit", "weight", "volume", "status", "remark"],
+                             "price", "box_qty", "unit", "weight", "volume", "status", "remark",
+                             "warehouse_type"],
                             cleaned, conflict_mode, "sku", "inbound_date",
                             agg_key3="barcode", agg_sum=["quantity", "price"])
         # 批次效期同步(batches): 入库记录含 prod_date/exp_date(按映射列抓取) → 按 SKU×仓 维护
@@ -437,14 +439,37 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                 try_err('cleansing', '静默降级', _e)
         return s, f, ed
     if target == "outbound":
+        cleaned = _fill_warehouse_type(channel, cleaned, "outbound")
         return _write_batch("outbound_records",
                             ["sku", "product_name", "quantity", "target_warehouse", "outbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
                              "barcode", "platform", "brand", "store", "category",
-                             "price", "box_qty", "unit", "weight", "volume", "status", "remark"],
+                             "price", "box_qty", "unit", "weight", "volume", "status", "remark",
+                            "warehouse_type"],
                             cleaned, conflict_mode, "sku", "outbound_date", channel=channel,
                             agg_key3="barcode", agg_sum=["quantity", "price"])
     return 0, len(cleaned), []
+
+def _fill_warehouse_type(channel, cleaned, target):
+    """仓型兜底(2026-10-29): 导入未填 warehouse_type 时, 按 warehouse 反查 inventory
+    多自有仓场景应显式填写(必选); 空缺则按仓名匹配, 仍无则留空(重算时按 own 兜底)"""
+    from db import query as _q
+    need = [c for c in cleaned if not str(c.get("warehouse_type") or "").strip()]
+    if not need:
+        return cleaned
+    try:
+        _map = {}
+        for r in _q("SELECT DISTINCT warehouse, warehouse_type FROM inventory WHERE channel=%s", [channel]):
+            _wh = str(r.get("warehouse") or "")
+            if _wh and r.get("warehouse_type"):
+                _map.setdefault(_wh, r.get("warehouse_type"))
+        for c in need:
+            _wh = str(c.get("warehouse") or "")
+            c["warehouse_type"] = _map.get(_wh, "own" if target in ("inbound", "outbound") else "")
+    except Exception as _e:
+        try_err('cleansing', '仓型反查降级', _e)
+    return cleaned
+
 
 def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd", agg_sum=None, agg_overwrite=False, agg_key3=None):
     """批量写入: 仅保留存在的列; 冲突策略——
