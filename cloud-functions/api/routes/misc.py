@@ -400,17 +400,15 @@ async def heal_own_inventory(request: Request):
     # 2026-10-29 顺带: 日销主键迁移 + 物化重建(schema 只在模块加载时跑, 已运行实例不会重跑)
     try:
         from db import query as _q5, execute as _e5
-        # TiDB 聚簇索引主键不可 DROP → **重建表**(DDL 取自 SHOW CREATE TABLE, 改写主键含 barcode)
-        #   原主键 (…, wh) 不含 barcode → 同 SKU 的合计行(barcode='')与按码行会撞主键
-        #   仅加唯一键无效(任一唯一键冲突都会互斥) → 必须让旧主键失效
-        #   数据可由订单重算(物化重建), 但仍走"新表迁移→换名"避免中间态丢数据
+        # TiDB 聚簇索引主键不可 DROP → **彻底重建**(不留旧表):
+        #   日销/快照都是**派生数据**(可完全从订单重算) → 无需迁移旧数据, 直接 DROP 重建
+        #   旧主键不含 barcode 会与按码行冲突, 只能重建; 留 _old 表属冗余包袱(用户定案: 根治)
         _pk_changes = {
-            "daily_sales_snapshot": (["date", "channel", "sku", "barcode", "warehouse"],),
-            "sku_sales_stats": (["channel", "sku", "barcode", "warehouse"],),
+            "daily_sales_snapshot": ["date", "channel", "sku", "barcode", "warehouse"],
+            "sku_sales_stats": ["channel", "sku", "barcode", "warehouse"],
         }
         _mig = {}
-        for _tb, (_cols,) in _pk_changes.items():
-            _newtb = _tb + "_nb"
+        for _tb, _cols in _pk_changes.items():
             try:
                 _idx = _q5("SHOW INDEX FROM `%s`" % _tb)
                 _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
@@ -424,19 +422,32 @@ async def heal_own_inventory(request: Request):
                 import re as _re
                 _nddl = _re.sub(r"PRIMARY KEY \([^)]*\)",
                                 "PRIMARY KEY (%s)" % ", ".join("`%s`" % c for c in _cols), _ddl, count=1)
-                _nddl = _nddl.replace("CREATE TABLE `%s`" % _tb, "CREATE TABLE `%s`" % _newtb, 1)
-                _e5("DROP TABLE IF EXISTS `%s`" % _newtb)
+                _nddl = _nddl.replace("CREATE TABLE `%s`" % _tb, "CREATE TABLE `%s`" % (_tb + "_nb"), 1)
+                # 彻底重建: 建新表 → 删旧表 → 换名(旧数据不迁移, 随后由订单全量重算)
+                _e5("DROP TABLE IF EXISTS `%s`" % (_tb + "_nb"))
                 _e5(_nddl)
-                _cols_common = [r.get("Field") for r in _q5("SHOW COLUMNS FROM `%s`" % _tb)]
-                _e5("INSERT INTO `%s` (%s) SELECT %s FROM `%s`" % (
-                    _newtb, ", ".join("`%s`" % c for c in _cols_common),
-                    ", ".join("`%s`" % c for c in _cols_common), _tb))
-                _cnt_old = int(((_q5("SELECT COUNT(*) c FROM `%s`" % _tb) or [{}])[0] or {}).get("c") or 0)
-                _e5("RENAME TABLE `%s` TO `%s_old_20261029`, `%s` TO `%s`" % (_tb, _tb, _newtb, _tb))
-                _mig[_tb] = "rebuilt(old_pk=%s, rows=%d)" % (",".join(_pk), _cnt_old)
+                _e5("DROP TABLE `%s`" % _tb)
+                _e5("RENAME TABLE `%s` TO `%s`" % (_tb + "_nb", _tb))
+                _mig[_tb] = "rebuilt(old_pk=%s, 数据将由订单重算)" % ",".join(_pk)
             except Exception as _epk:
                 _mig[_tb] = "error: %s" % str(_epk)[:140]
                 try_err('misc', '日销表重建失败(%s)' % _tb, _epk)
+        # 重建后**全量重填充**(表已清空 —— 日销是派生数据, 从订单一次算全)
+        _refill = {}
+        try:
+            from db import execute as _e6
+            for _ch3 in chs:
+                _e6("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
+                    "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
+                    "FROM orders WHERE channel=%s AND order_status IN ('待发货','已发货','已完成') "
+                    "AND (deleted_at IS NULL OR deleted_at='') "
+                    "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse", [_ch3])
+                _cnt = int(((_q5("SELECT COUNT(*) c FROM daily_sales_snapshot WHERE channel=%s", [_ch3]) or [{}])[0] or {}).get("c") or 0)
+                _refill[_ch3] = _cnt
+        except Exception as _erf:
+            try_err('misc', '快照全量重填充失败', _erf)
+            _refill = {"error": str(_erf)[:160]}
+        out["_snapshot_refill"] = _refill
         # 物化重建(生成按码行)
         _reb = {}
         try:
