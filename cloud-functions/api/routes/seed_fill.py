@@ -144,7 +144,9 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     global _DEMO_SLOW, _DEMO_LOW
     if day_from == 0:
         _DEMO_SLOW, _DEMO_LOW = set(), set()
-    total = 0
+    # 2026-10-29 修复跨步重复: 原 total 每步重置为 0 → 分步 seed 时 order_no 可能与前一步撞
+    #   uq_orders_no_sku(实测 step2 报 1062)。改为带步偏移(day_from × 10 万), 全局不重叠
+    total = int(day_from) * 100000
     batch = []
 
     def _amt(q, price, disc_r, freight_r, sub_r):
@@ -229,7 +231,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 _a = _amt(q, sk['price'], pool['disc'][_pi], pool['freight'][_pi], pool['sub'][_pi])
                 # 2026-10-17 去重键兼容: order_no 全局唯一(原 total%100000 超10万轮回→撞 uq 键)
                 # ——改为全渠道累计序号不取模(60天≈9.9万单, 7位够), 且保留渠道/天维度信息
-                batch.append({'order_no': '%s-%s%03d-%07d' % (label.upper(), ch, d, total),
+                batch.append({'order_no': '%s-%s%03d-%08d' % (label.upper(), ch, d, total),
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
                               'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,
