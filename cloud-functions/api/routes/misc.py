@@ -406,3 +406,78 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
     return ok({"items": items, "total": int((tot or {}).get("c") or 0),
                "page": pg, "page_size": ps, "target": target,
                "extra_label": "供应商" if target == "inbound" else "仓库"})
+
+
+@router.get("/data-freshness")
+@traced
+def data_freshness(channel: str = "jd"):
+    """数据新鲜度(2026-10-29): 各导入源最后导入时间 + 看板指标级推导
+
+    背景: 所有数据源=ERP/平台导出快照, 停更时界面无感知(日销摊薄→建议失真)
+    返回:
+      sources: 各源 {doc_type,label,last_import_at,last_biz_date,days,level}
+      staleLevel: 0 正常(≤7天) / 1 橙(8-30) / 2 红(>30)  ← 取最差
+      metrics: 看板指标 → 依赖源的最旧状态
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from db import query as _q
+    _LBL = {"order": "订单", "inventory": "库存", "platform_inv": "平台库存",
+            "inventory_b": "B仓库存", "inbound": "入库", "outbound": "出库",
+            "product": "商品档案", "supplier": "供应商", "gmv_flow": "GMV回款"}
+    _now = _dt.now(_tz.utc)
+    rows = []
+    try:
+        rows = _q("SELECT doc_type, last_import_at, last_biz_date FROM data_freshness WHERE channel=%s",
+                  [channel or "jd"])
+    except Exception as _e:
+        try_err('misc', '新鲜度查询降级', _e)
+
+    def _days(s):
+        if not s:
+            return None
+        try:
+            _d = _dt.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+            return max(int((_now - _d).total_seconds() // 86400), 0)
+        except Exception:
+            return None
+
+    def _lvl(d):
+        if d is None:
+            return 0
+        return 0 if d <= 7 else (1 if d <= 30 else 2)
+
+    src = {}
+    for r in rows:
+        _dtp = str(r.get("doc_type") or "")
+        _d = _days(r.get("last_import_at"))
+        src[_dtp] = {"doc_type": _dtp, "label": _LBL.get(_dtp, _dtp),
+                     "last_import_at": str(r.get("last_import_at") or "")[:19],
+                     "last_biz_date": str(r.get("last_biz_date") or "")[:10],
+                     "days": _d, "level": _lvl(_d)}
+    # 缺记录 = 从未导入 → 视为未知(不报红, 避免新部署全红)
+    def _worse(*keys):
+        """取依赖源中最差(天数最大); 用于指标级推导"""
+        best = None
+        names = []
+        for k in keys:
+            s = src.get(k)
+            if s and s.get("days") is not None:
+                names.append(s["label"])
+                if best is None or s["days"] > best["days"]:
+                    best = s
+        if not best:
+            return {"days": None, "level": 0, "from": ""}
+        return {"days": best["days"], "level": _lvl(best["days"]),
+                "from": "/".join(names[:2])}
+
+    metrics = [
+        {"key": "gmv", "label": "上月 GMV", **_worse("order")},
+        {"key": "pending", "label": "待处理告警", **_worse("order", "inventory")},
+        {"key": "health", "label": "库存健康", **_worse("inventory", "order")},
+        {"key": "risk", "label": "濒临断货", **_worse("inventory", "order")},
+    ]
+    lv = 0
+    for s in src.values():
+        lv = max(lv, s["level"])
+    return ok({"channel": channel or "jd", "sources": list(src.values()),
+               "metrics": metrics, "staleLevel": lv})

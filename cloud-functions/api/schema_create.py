@@ -112,6 +112,12 @@ _TABLES = {
         "exp_date VARCHAR(32) DEFAULT '', qty INT DEFAULT 0, "
         "KEY idx_batches_sku (sku), KEY idx_batches_wh (warehouse_type, sku))"
     ),
+    "data_freshness": (
+        "CREATE TABLE IF NOT EXISTS data_freshness ("
+        "doc_type VARCHAR(32) NOT NULL, channel VARCHAR(20) NOT NULL DEFAULT 'jd', "
+        "last_import_at DATETIME, last_biz_date VARCHAR(32) DEFAULT '', "
+        "rows_imported INT DEFAULT 0, PRIMARY KEY (doc_type, channel))"
+    ),
     "purchase_orders": (
         "CREATE TABLE IF NOT EXISTS purchase_orders ("
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, sku VARCHAR(64) NOT NULL, store VARCHAR(64) DEFAULT '', "

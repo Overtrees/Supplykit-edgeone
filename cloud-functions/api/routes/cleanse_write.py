@@ -33,6 +33,21 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                     try_err('cleansing', '自有仓重算降级', _er)
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
+    # 2026-10-29 数据新鲜度记录(导入完成 → UPSERT; 供界面"数据截至"提示)
+    try:
+        from db import execute as _ef
+        _bizd = ""
+        for _c in cleaned_all[:200]:
+            for _k in ("ordered_at", "inbound_date", "outbound_date", "date", "arrived_time"):
+                _v = str(_c.get(_k) or "")[:10]
+                if _v and _v > _bizd:
+                    _bizd = _v
+        _ef("INSERT INTO data_freshness(doc_type, channel, last_import_at, last_biz_date, rows_imported) "
+            "VALUES(%s,%s,NOW(),%s,%s) ON DUPLICATE KEY UPDATE last_import_at=NOW(), "
+            "last_biz_date=VALUES(last_biz_date), rows_imported=rows_imported+VALUES(rows_imported)",
+            [target, channel, _bizd, len(cleaned_all)])
+    except Exception as _efx:
+        try_err('cleansing', '新鲜度记录降级', _efx)
     # 规则引擎评估(批量)
     try:
         from core.rules import evaluate_many, load_rules_for

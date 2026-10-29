@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, abortScope } from '../api/client'
+import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 import { useToast } from '../components/Toast'
@@ -116,6 +117,7 @@ export default function OrdersPage() {
     [],
   )
   const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
+  const fresh = useFreshness(useAppStore.getState().channel) // 2026-10-29 数据新鲜度
   useEffect(() => {
     if (hammerCols?.orders) setVisCols(hammerCols.orders)
   }, [hammerCols])
@@ -186,6 +188,10 @@ export default function OrdersPage() {
           <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
             已加载 {Math.min(orders.length, orderTotal || orders.length)}/
             {orderTotal || orders.length} 条 · 显示 {visCols.length}/{COLS.length} 列
+            <StaleDot
+              level={fresh?.staleLevel || 0}
+              days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+            />
           </span>
         </div>
         {/* 2026-10-27 无感切回: 有旧数据(store 持久)时先显旧, 后台刷新不闪骨架; 仅无数据可显示才骨架 */}

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { api, clearCache, abortScope } from '../api/client'
+import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 import { IconLoading } from '../components/Icons'
@@ -28,6 +29,7 @@ interface InventoryPageProps {
 let _snapInv: any[] | null = null
 
 export default function InventoryPage({ highlightSku, highlightWarehouse }: InventoryPageProps) {
+  const fresh = useFreshness(useAppStore.getState().channel) // 2026-10-29 新鲜度
   const [batchOpen, setBatchOpen] = useState([])
   const [batchData, setBatchData] = useState({})
   const [batchLoading, setBatchLoading] = useState({})
@@ -232,6 +234,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             已加载 {Math.min(inventory.length, invTotal || inventory.length)}/
             {invTotal || inventory.length} 条 · 显示 {visCols.length}/{INV_COLS[whType].length} 列
             {s ? ` · "${s}"` : ''}
+            <StaleDot
+              level={fresh?.staleLevel || 0}
+              days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+            />
           </span>
         </span>
       </div>

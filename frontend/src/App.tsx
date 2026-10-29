@@ -3,6 +3,7 @@ import { useAppStore } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
+import { useFreshness, StaleDotInline, FreshPopover } from './components/Freshness'
 import ProductPage from './pages/ProductPage'
 import SupplierPage from './pages/SupplierPage'
 import InsightsPage from './pages/InsightsPage'
@@ -97,6 +98,8 @@ export default function App() {
     setHammerPanel,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
+  const fresh = useFreshness(channel) // 2026-10-29 数据新鲜度(看板胶囊左侧圆点)
+  const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
   // 2026-10-27 徽标兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防徽标永久显示需手动刷新
   useEffect(() => {
@@ -835,7 +838,19 @@ export default function App() {
                 /* 看板页：左侧渠道筛选+锤子按钮，右侧菜单按钮 */
                 <>
                   <div className="header-left">
-                    <span className="header-status">
+                    <span className="header-status" style={{ position: 'relative' }}>
+                      <StaleDotInline
+                        level={fresh?.staleLevel || 0}
+                        days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+                        onClick={() => setFreshOpen(v => !v)}
+                      />
+                      {freshOpen && (
+                        <FreshPopover
+                          data={fresh}
+                          onClose={() => setFreshOpen(false)}
+                          anchorTop={30}
+                        />
+                      )}
                       <select
                         value={channel}
                         onChange={e => setChannel(e.target.value)}
@@ -933,7 +948,19 @@ export default function App() {
                         <path d="M12 18v3" />
                       </svg>
                     </button>
-                    <span className="header-status">
+                    <span className="header-status" style={{ position: 'relative' }}>
+                      <StaleDotInline
+                        level={fresh?.staleLevel || 0}
+                        days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+                        onClick={() => setFreshOpen(v => !v)}
+                      />
+                      {freshOpen && (
+                        <FreshPopover
+                          data={fresh}
+                          onClose={() => setFreshOpen(false)}
+                          anchorTop={30}
+                        />
+                      )}
                       <select
                         value={channel}
                         onChange={e => setChannel(e.target.value)}

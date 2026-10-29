@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 
@@ -43,6 +44,7 @@ export default function SupplierPage() {
   const [ld, setLd] = useState(true)
   const [loadErr, setLoadErr] = useState('')
   const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
+  const fresh = useFreshness(useAppStore.getState().channel)
   const { channelVersion, hammerCols, hammerSearch } = useAppStore()
   const loadSuppliers = () => {
     setLd(true)
@@ -109,6 +111,10 @@ export default function SupplierPage() {
           供应商管理{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
             已加载 {list.length}/{list.length} 条 · 显示 {visCols.length}/{COLS.length} 列
+            <StaleDot
+              level={fresh?.staleLevel || 0}
+              days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+            />
           </span>
         </span>
       </div>

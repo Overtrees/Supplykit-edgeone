@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api, abortScope } from '../api/client'
+import { useFreshness, StaleDot } from '../components/Freshness'
 import { useToast } from '../components/Toast'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
@@ -237,6 +238,7 @@ let _snapIns: { replen?: any[]; purchase?: any[]; disposals?: any[] } = {}
 
 export default function InsightsPage() {
   const toast = useToast()
+  const fresh = useFreshness(useAppStore.getState().channel) // 2026-10-29 新鲜度
   const [replen, setReplen] = useState(() => _snapIns.replen || [])
   const [purchase, setPurchase] = useState(() => _snapIns.purchase || [])
   const [slowMoving] = useState([])
@@ -760,6 +762,10 @@ export default function InsightsPage() {
               已加载 {Math.min(replen.length, replenTotal || replen.length)}/
               {replenTotal || replen.length} 条 · 显示 {visCols.length}/{currentCols.length} 列
               {insightSearch ? ` · "${insightSearch}"` : ''}
+              <StaleDot
+                level={fresh?.staleLevel || 0}
+                days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+              />
             </span>
             {replenMode === 'bbcc' && orderedKeys.length > 0 && (
               <span className="pill success" style={{ fontSize: 'var(--font-10)' }}>

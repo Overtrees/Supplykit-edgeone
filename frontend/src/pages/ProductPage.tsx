@@ -1,6 +1,7 @@
 import { IconCheck } from '../components/Icons'
 import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../api/client'
+import { useFreshness, StaleDot } from '../components/Freshness'
 import { useToast } from '../components/Toast'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
@@ -53,6 +54,7 @@ export default function ProductPage() {
   const reqSeq = useRef(0)
   const [loadErr, setLoadErr] = useState('')
   const [visCols, setVisCols] = useState(() => getVis() || COLS.map(c => c.id))
+  const fresh = useFreshness(useAppStore.getState().channel)
   const toast = useToast()
   const {
     channel: globalChannel,
@@ -168,6 +170,10 @@ export default function ProductPage() {
           <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
             已加载 {Math.min(list.length, pgTotal || list.length)}/{pgTotal || list.length} 条 ·
             显示 {visCols.length}/{COLS.length} 列{s ? ` · "${s}"` : ''}
+            <StaleDot
+              level={fresh?.staleLevel || 0}
+              days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
+            />
           </span>
         </span>
       </div>
