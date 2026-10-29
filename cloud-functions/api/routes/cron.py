@@ -53,15 +53,15 @@ def continue_tasks():
                         _pj = json.loads((_row2[0].get("params") or "{}"))
                         _ec("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
                             [json.dumps({**_pj, "driver": "backend"}, ensure_ascii=False), tid])
-                    cleansing_status(tid, page_size=5000)
+                    cleansing_status(tid, page_size=5000, driver="backend")
                     done["cleansing"] += 1
                 elif tt == "cleansing_eval":
                     from .cleansing import cleansing_eval_status
-                    cleansing_eval_status(tid, page_size=500)
+                    cleansing_eval_status(tid, page_size=500, driver="backend")
                     done["cleansing"] += 1
                 elif tt == "seed":
                     from .task_seed import seed_fill_status
-                    seed_fill_status(tid)
+                    seed_fill_status(tid, driver="backend")
                     done["seed"] += 1
                 elif tt == "export":
                     from .task_export import export_status
@@ -70,7 +70,7 @@ def continue_tasks():
                         _pj = json.loads((_row2[0].get("params") or "{}"))
                         _ec("UPDATE sync_tasks SET params=%s WHERE task_id=%s",
                             [json.dumps({**_pj, "driver": "backend"}, ensure_ascii=False), tid])
-                    export_status(tid)
+                    export_status(tid, driver="backend")
                     done["export"] += 1
                 else:
                     done["skipped"] += 1

@@ -462,7 +462,9 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
 
 @router.get("/cleansing/status")
 @traced
-def cleansing_status(task_id: str = "", page_size: int = 5000):
+def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "frontend"):
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     """导入续跑(前端轮询触发): 每步读源文件 → 解析 → 窗口清洗写入(5000 行/步, ≤120s)
     全部完成 → 最后步全量重清洗做库存联动+规则评估+汇总 → done"""
     row = one("SELECT status, params, result, updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
@@ -720,7 +722,9 @@ def cleansing_templates():
 
 @router.get("/cleansing/eval-status")
 @traced
-def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
+def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str = "frontend"):
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     """2026-10-16 评估联动独立任务——分窗接力(每请求 ≤90s 安全——SKU 清单驱动——不重读源)
     读 sku_list → 处理 offset 起 page_size 个 SKU(评估+联动该片——幂等 existing 去重+事务联动) → offset 推进 → done"""
     import time as _t

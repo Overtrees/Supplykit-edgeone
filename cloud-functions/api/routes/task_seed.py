@@ -15,9 +15,11 @@ router = APIRouter(tags=["task-seed"])
 
 @router.get("/seed/fill/status")
 @traced
-def seed_fill_status(task_id: str = ""):
+def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     from routes.tasks import _new_task_id, _log_task  # 延迟(防循环)
     from routes.tasks import _TABLES_RESET  # 延迟(表清单)
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     """任务状态查询(Makers 异步适配: running 时续跑下一步, 客户端轮询推进直到 done)"""
     if not task_id:
         return {"data": {"status": "not_found"}}

@@ -206,7 +206,9 @@ async def create_export(request: Request):
                                  ensure_ascii=False), channel))
     return {"ok": True, "task_id": task_id}
 
-def export_status(task_id: str = "", page_size: int = 10000):
+def export_status(task_id: str = "", page_size: int = 10000, driver: str = "frontend"):
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     """导出续跑(前端轮询触发, 每步查 page_size 行生成 CSV 分片存 export_files; 完成合并→done)
     返回 {ok, task_id, status, filename?, total?, error?}"""
     row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])

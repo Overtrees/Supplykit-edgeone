@@ -34,6 +34,24 @@ _TE_STATE = {}
 _TE_WINDOW = 10.0
 
 
+def mark_driver(task_id, driver):
+    """标记任务推进来源(前端轮询 / 后端保活) —— 2026-10-29 统一
+
+    原现状: 只有 cleansing 有 /cleansing/driver 接口, seed / cleansing_eval / export
+    **从未写过 driver** → 任务卡「后端推进|前端轮询」标签对这三类任务永远不出现。
+    现由各 status 函数入口统一调用(前端轮询默认 frontend; continue_tasks 传 backend)。
+    失败静默(纯展示标记, 不影响任务推进)。
+    """
+    if not task_id or driver not in ("frontend", "backend"):
+        return
+    try:
+        from db import execute as _e
+        _e("UPDATE sync_tasks SET params=JSON_SET(COALESCE(params,'{}'), '$.driver', %s) "
+           "WHERE task_id=%s", [driver, task_id])
+    except Exception:
+        pass
+
+
 def try_err(src, what, exc=None, details=""):
     """静默吞异常纪律(2026-09-11 体检): except 分支统一自记 quality_logs 留痕(不阻断降级流程)
     —— 2026-10-07: details 缺省带 traceback 堆栈(limit 3); 同 source 10s 窗口限频+计数合并:
