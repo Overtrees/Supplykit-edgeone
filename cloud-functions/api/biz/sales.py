@@ -68,7 +68,7 @@ def load_daily_sales(cutoff_days, channel, skus=None):
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
             today_rows = query(
-                "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+                "SELECT sku, COALESCE(barcode,'') AS bc, warehouse, quantity, ordered_at, order_status FROM orders "
                 "WHERE channel=%s AND ordered_at>=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='')"
                 % ("%s", "%s", _ph),
                 [channel, today + " 00:00:00"] + _chunk)
@@ -78,7 +78,7 @@ def load_daily_sales(cutoff_days, channel, skus=None):
                 _add(o.get("sku"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
     else:
         today_rows = query(
-            "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+            "SELECT sku, COALESCE(barcode,'') AS bc, warehouse, quantity, ordered_at, order_status FROM orders "
             "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
             (channel, today + " 00:00:00"))
         for o in today_rows:
@@ -126,10 +126,12 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
                      int(r.get("order_count") or 0), str(r.get("bc") or ""))
     else:
         rows = query(
-            "SELECT date, sku, warehouse, order_count FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
+            "SELECT date, sku, COALESCE(barcode,'') AS bc, warehouse, order_count "
+            "FROM daily_sales_snapshot USE INDEX(idx_snapshot_ch_date_full) "
             "WHERE channel=%s AND date>=%s", (channel, cutoff))
         for r in rows:
-            _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10], int(r.get("order_count") or 0))
+            _add(r.get("sku"), r.get("warehouse"), str(r.get("date") or "")[:10],
+                 int(r.get("order_count") or 0), str(r.get("bc") or ""))
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
             today_rows = query(
@@ -140,7 +142,8 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
             for o in today_rows:
                 if (o.get("order_status") or "") not in _SS:
                     continue
-                _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+                _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10],
+                     int(o.get("quantity") or 0), str(o.get("bc") or ""))
     else:
         today_rows = query(
             "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
@@ -149,7 +152,8 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None):
         for o in today_rows:
             if (o.get("order_status") or "") not in _SS:
                 continue
-            _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10], int(o.get("quantity") or 0))
+            _add(o.get("sku"), o.get("warehouse"), str(o.get("ordered_at") or "")[:10],
+                 int(o.get("quantity") or 0), str(o.get("bc") or ""))
     return by_sku, by_sku_wh, by_sku_bc_wh
 
 

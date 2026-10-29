@@ -459,13 +459,11 @@ def _sync_inv_month():
                          str(r.get('channel') or 'jd')))
             except Exception as _e:
                     try_err('seed_fill', '静默降级', _e)
-    # 2026-10-29 新模型: own 的 available 即期初基线(库存导入语义)
-    #   之后 available = beginning_stock + Σ入库 − Σ出库(由 _recalc_own_inventory 统一重算)
-    execute("UPDATE inventory SET beginning_stock = available_qty "
-            "WHERE channel IN ('jd','other') AND warehouse_type='own'")
-    # 旧月度口径兜底(仅保证 month_inbound 列合理, 不再用于期初推导)
-    execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
-            "WHERE channel IN ('jd','other') AND warehouse_type='own' AND month_inbound < 0")
+    # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
+    #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
+    #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**
+    #   · 删除 beginning_stock 覆盖
+    #   · 删除 month_inbound 负数兜底(同属自动修正, 违反"以导入为准")
     # 2026-10-29 删除全部兜底(用户定案): 期初**以实际导入为准**, 不做任何反推或自动修正
     #   · 原"期初为负则用 month_inbound/outbound 反推" → 已删除(会产生与流水矛盾的数据)
     #   · 原"负期初归 0" → 一并删除(用户明确: 不要兜底; 负数应视为导入数据本身有问题,
