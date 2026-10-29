@@ -174,10 +174,11 @@ def _rebuild_own_batches(channel, skus):
             " AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
             "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
         _params = [channel] + batch_skus + ([] if _single else [channel] + list(SELF_WAREHOUSE_TYPES))
-        ins = _q("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
-                 "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
-                 " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id"
-                 % ("%s", ph), _params)
+        # 注意 % 优先级高于 +: 必须先拼完整串再格式化(曾因优先级导致 "not all arguments converted")
+        _sql_ins = ("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
+                    "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
+                    " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
+        ins = _q(_sql_ins % ("%s", ph), _params)
         outs = {}
         for r in _q("SELECT sku, SUM(quantity) AS q FROM outbound_records "
                     "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", ph),
