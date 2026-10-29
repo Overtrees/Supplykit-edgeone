@@ -365,6 +365,14 @@ def _seed_batches():
 def _seed_records():
     """当月出入库记录(进销存页展示): 按批次池随机, INSERT IGNORE 防唯一冲突"""
     today = datetime.now(timezone.utc)
+    # 2026-10-29 幂等: 先清空该渠道旧出入库记录(原纯 INSERT → 重复执行翻倍,
+    #   实测 8061 条入库中 4029 组同 SKU+日期+仓 重复)
+    try:
+        execute("DELETE FROM inbound_records WHERE channel IN ('jd','other')")
+        execute("DELETE FROM outbound_records WHERE channel IN ('jd','other')")
+    except Exception as _edr:
+        try_err('seed_fill', '出入库记录清理降级', _edr)
+
     # 2026-10-29 业务定案: 出入库只属于自有仓 → 批次池只取 warehouse_type='own'
     # (原取全部批次 → 生成出"沈阳仓/上海仓/B仓"的虚假出入库记录)
     _batch_pool = {}
@@ -439,9 +447,10 @@ def _sync_inv_month():
     # 旧月度口径兜底(仅保证 month_inbound 列合理, 不再用于期初推导)
     execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
             "WHERE channel IN ('jd','other') AND warehouse_type='own' AND month_inbound < 0")
-    execute("UPDATE inventory SET month_inbound = available_qty + month_outbound "
-            "WHERE channel IN ('jd','other') AND warehouse_type='own' AND beginning_stock < 0")
-    execute("UPDATE inventory SET beginning_stock = available_qty - month_inbound + month_outbound "
+    # 2026-10-29 删除: 原"期初为负则反推"的兜底 —— 期初应等于导入值(available_qty),
+    # 不该由 month_inbound/outbound 倒推(倒推会产生负期初, 且与流水表无关)
+    # 若重算后 available < 0, 由 _recalc_own_inventory 的 max(0, ...) 处理, 期初保持不变
+    execute("UPDATE inventory SET beginning_stock = 0 "
             "WHERE channel IN ('jd','other') AND warehouse_type='own' AND beginning_stock < 0")
 
 
