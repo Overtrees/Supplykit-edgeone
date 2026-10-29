@@ -187,7 +187,9 @@ def _rebuild_own_batches(channel, skus):
         _sql_ins = ("SELECT id, sku, barcode, warehouse, prod_date, exp_date, quantity "
                     "FROM inbound_records WHERE channel=%s AND sku IN (%s)" + _wh_cond +
                     " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
-        ins = _q(_sql_ins % ("%s", ph),
+        # _sql_ins 共 4 个 %s: channel + sku IN(...) + _wh_cond 的 warehouse_type IN(...) + 子查询 channel
+        # 曾只给 2 个 → "not enough arguments for format string"(给 _wh_cond 加过滤后引入)
+        ins = _q(_sql_ins % ("%s", ph, "%s", "%s", "%s"),
                  [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES) + [channel] + list(SELF_WAREHOUSE_TYPES))
         # 出库: 按四维分组
         outs_exact = {}

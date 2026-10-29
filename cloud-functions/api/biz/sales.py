@@ -471,6 +471,12 @@ def _rebuild_sku_sales_stats(channel, days=60, skus=None):
                 _s, _w = r["sku"].rsplit("|", 1)
                 r["sku"], r["warehouse"] = _s, _w
         if rows:
+            # 2026-10-29 先删该渠道旧行(替代 ON DUPLICATE —— 旧主键不含 barcode 会与
+            # 含码唯一键冲突, 且同 SKU 不同码的行会被旧主键合并覆盖)
+            try:
+                _ex("DELETE FROM sku_sales_stats WHERE channel=%s", [channel])
+            except Exception as _edel:
+                try_err('sales', '日销旧行清理降级', _edel)
             cols = ["channel", "sku", "barcode", "warehouse", "ds7", "ds14", "ds28", "sigma",
                     "ds7_cut", "ds14_cut", "ds28_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
             for i in range(0, len(rows), 500):

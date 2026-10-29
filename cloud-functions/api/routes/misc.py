@@ -400,23 +400,43 @@ async def heal_own_inventory(request: Request):
     # 2026-10-29 顺带: 日销主键迁移 + 物化重建(schema 只在模块加载时跑, 已运行实例不会重跑)
     try:
         from db import query as _q5, execute as _e5
+        # TiDB 聚簇索引主键不可 DROP → **重建表**(DDL 取自 SHOW CREATE TABLE, 改写主键含 barcode)
+        #   原主键 (…, wh) 不含 barcode → 同 SKU 的合计行(barcode='')与按码行会撞主键
+        #   仅加唯一键无效(任一唯一键冲突都会互斥) → 必须让旧主键失效
+        #   数据可由订单重算(物化重建), 但仍走"新表迁移→换名"避免中间态丢数据
         _pk_changes = {
-            "daily_sales_snapshot": "(`date`, `channel`, `sku`, `barcode`, `warehouse`)",
-            "sku_sales_stats": "(`channel`, `sku`, `barcode`, `warehouse`)",
+            "daily_sales_snapshot": (["date", "channel", "sku", "barcode", "warehouse"],),
+            "sku_sales_stats": (["channel", "sku", "barcode", "warehouse"],),
         }
         _mig = {}
-        for _tb, _newpk in _pk_changes.items():
+        for _tb, (_cols,) in _pk_changes.items():
+            _newtb = _tb + "_nb"
             try:
                 _idx = _q5("SHOW INDEX FROM `%s`" % _tb)
                 _pk = [r.get("Column_name") for r in _idx if r.get("Key_name") == "PRIMARY"]
                 if "barcode" in _pk:
                     _mig[_tb] = "already"
                     continue
-                _e5("ALTER TABLE `%s` DROP PRIMARY KEY, ADD PRIMARY KEY %s" % (_tb, _newpk))
-                _mig[_tb] = "migrated(old=%s)" % ",".join(_pk)
+                _ddl = (_q5("SHOW CREATE TABLE `%s`" % _tb) or [{}])[0].get("Create Table") or ""
+                if not _ddl:
+                    _mig[_tb] = "error: no ddl"
+                    continue
+                import re as _re
+                _nddl = _re.sub(r"PRIMARY KEY \([^)]*\)",
+                                "PRIMARY KEY (%s)" % ", ".join("`%s`" % c for c in _cols), _ddl, count=1)
+                _nddl = _nddl.replace("CREATE TABLE `%s`" % _tb, "CREATE TABLE `%s`" % _newtb, 1)
+                _e5("DROP TABLE IF EXISTS `%s`" % _newtb)
+                _e5(_nddl)
+                _cols_common = [r.get("Field") for r in _q5("SHOW COLUMNS FROM `%s`" % _tb)]
+                _e5("INSERT INTO `%s` (%s) SELECT %s FROM `%s`" % (
+                    _newtb, ", ".join("`%s`" % c for c in _cols_common),
+                    ", ".join("`%s`" % c for c in _cols_common), _tb))
+                _cnt_old = int(((_q5("SELECT COUNT(*) c FROM `%s`" % _tb) or [{}])[0] or {}).get("c") or 0)
+                _e5("RENAME TABLE `%s` TO `%s_old_20261029`, `%s` TO `%s`" % (_tb, _tb, _newtb, _tb))
+                _mig[_tb] = "rebuilt(old_pk=%s, rows=%d)" % (",".join(_pk), _cnt_old)
             except Exception as _epk:
-                _mig[_tb] = "error: %s" % str(_epk)[:120]
-                try_err('misc', '日销主键迁移失败(%s)' % _tb, _epk)
+                _mig[_tb] = "error: %s" % str(_epk)[:140]
+                try_err('misc', '日销表重建失败(%s)' % _tb, _epk)
         # 物化重建(生成按码行)
         _reb = {}
         try:
