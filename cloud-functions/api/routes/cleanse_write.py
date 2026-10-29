@@ -191,8 +191,10 @@ def _rebuild_own_batches(channel, skus):
         outs_noexp = {}
         for r in _q("SELECT sku, barcode, prod_date, exp_date, SUM(quantity) AS q "
                     "FROM outbound_records WHERE channel=%s AND sku IN (%s) "
-                    "GROUP BY sku, barcode, prod_date, exp_date" % ("%s", ph),
-                    [channel] + batch_skus):
+                    # 2026-10-29 仓型维度: 只取自有类流水的出库
+                    "AND (COALESCE(warehouse_type,'')='' OR warehouse_type IN (%s)) "
+                    "GROUP BY sku, barcode, prod_date, exp_date" % ("%s", ph, _ph_wt),
+                    [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _sk = str(r.get("sku") or "")
             _bc = str(r.get("barcode") or "").strip()
             _pd = str(r.get("prod_date") or "")[:10]
@@ -213,6 +215,14 @@ def _rebuild_own_batches(channel, skus):
                     [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _beg_map[(str(r.get("sku") or ""), str(r.get("bc") or ""),
                       str(r.get("warehouse") or ""))] = int(r.get("b") or 0)
+        # 库存行的仓型映射(插入批次时用真实仓型, 而非写死 'own')
+        _wt_map = {}
+        for _r1 in _q("SELECT sku, warehouse, warehouse_type FROM inventory "
+                      "WHERE channel=%s AND sku IN (%s) AND warehouse_type IN (%s)"
+                      % ("%s", ph, _ph_wt),
+                      [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
+            _wt_map[(str(_r1.get("sku") or ""), str(_r1.get("warehouse") or ""))] = str(
+                _r1.get("warehouse_type") or SELF_WAREHOUSE_TYPES[0])
         # 按 (sku, barcode, warehouse) 分组入库明细
         # 69码规则: 有值则精准归组; 无值则保持无码(不反推/不猜测归属)
         by_key = {}
@@ -248,7 +258,8 @@ def _rebuild_own_batches(channel, skus):
                 qty = int(r.get("quantity") or 0)
                 if qty > 0:
                     _insert_rows.append({"sku": sk, "barcode": bc, "warehouse": wh,
-                                         "warehouse_type": "own", "channel": channel,
+                                         "warehouse_type": _wt_map.get((sk, wh), SELF_WAREHOUSE_TYPES[0]),
+                                         "channel": channel,
                                          "prod_date": str(r.get("prod_date") or "")[:10],
                                          "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
             _del_keys.append((sk, bc, wh))
