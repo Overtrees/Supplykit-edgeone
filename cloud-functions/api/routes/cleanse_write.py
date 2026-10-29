@@ -68,14 +68,24 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                                      "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                                      "GROUP BY sku" % ("%s", _ph3), [channel] + _b2):
                         _cum2[_r2.get("sku")] = int(_r2.get("q") or 0)
-            o_ctxs = []
+            # 2026-10-29 SKU 级去重(数学等价: max 覆盖 ">", min 覆盖 "<", total_qty 用于累计超卖)
+            _grp2 = {}
             for c in cleaned_all:
                 sku = c.get("sku")
                 if not sku:
                     continue
-                oq = int(c.get("quantity") or 0)
+                _q2 = int(c.get("quantity") or 0)
+                _g2 = _grp2.setdefault(sku, {"max": _q2, "min": _q2, "n": 0})
+                _g2["max"] = max(_g2["max"], _q2)
+                _g2["min"] = min(_g2["min"], _q2)
+                _g2["n"] += 1
+            o_ctxs = []
+            for sku, _g2 in _grp2.items():
+                oq = _g2["max"]
                 o_ctxs.append({"sku": sku, "channel": channel,
-                               "order": {"quantity": oq, "total_qty": _cum2.get(sku, oq)},
+                               "order": {"quantity": oq, "max_quantity": _g2["max"],
+                                         "min_quantity": _g2["min"], "line_count": _g2["n"],
+                                         "total_qty": _cum2.get(sku, oq)},
                                "order_qty": _cum2.get(sku, oq),
                                "available_stock": inv_map.get(sku, 0),
                                "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0,

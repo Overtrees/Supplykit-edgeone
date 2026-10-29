@@ -741,18 +741,68 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000):
                           "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                           "GROUP BY sku" % ("%s", _ph2), [channel] + _batch[:500]):
                 _cum[_r.get("sku")] = int(_r.get("q") or 0)
-        o_ctxs = []
+        # 2026-10-29 SKU 级去重评估(数学等价): 原每行一 ctx, 同 SKU 多行重复评估
+        #   等价性: "存在某行 quantity > X" ⟺ max_quantity > X; "< X" ⟺ min_quantity < X
+        #   → 提供 max/min/total_qty/line_count 四个字段, 任何单调条件都可精确表达(语义不漂移)
+        _grp = {}
         for c in _cleaned:
             sku = str(c.get("sku") or "").strip()
             if sku not in set(_batch):
                 continue
-            oq = int(c.get("quantity") or 0)
+            _q = int(c.get("quantity") or 0)
+            _g = _grp.setdefault(sku, {"max": _q, "min": _q, "n": 0})
+            _g["max"] = max(_g["max"], _q)
+            _g["min"] = min(_g["min"], _q)
+            _g["n"] += 1
+        # 2026-10-29 入库/出库触发新事件(此前完全不评估 —— 到货/出库后库存骤降无法即时预警)
+        # 约束(四维): 仅本次导入 SKU(不全量) + try/except 降级(不阻塞) + 异步任务内执行(不拖慢导入)
+        _flow_evt = {"inbound": "inbound.created", "outbound": "outbound.created"}.get(
+            str(params.get("target") or ""))
+        flow_ctxs = []
+        if _flow_evt:
+            _fgrp = {}
+            for _fc in _cleaned:
+                _fsku = str(_fc.get("sku") or "").strip()
+                if not _fsku or _fsku not in set(_batch):
+                    continue
+                _fq = int(_fc.get("quantity") or 0)
+                _fg = _fgrp.setdefault(_fsku, {"qty": 0, "wh": "", "date": "", "exp": ""})
+                _fg["qty"] += _fq
+                _fg["wh"] = _fg["wh"] or str(_fc.get("warehouse") or "")
+                _fg["date"] = _fg["date"] or str(
+                    _fc.get("inbound_date") or _fc.get("outbound_date") or "")
+                _fg["exp"] = _fg["exp"] or str(_fc.get("exp_date") or "")
+            for _fs, _fg in _fgrp.items():
+                flow_ctxs.append({"sku": _fs, "channel": channel,
+                                  "flow": {"quantity": _fg["qty"], "warehouse": _fg["wh"],
+                                           "date": _fg["date"]},
+                                  "inbound": {"quantity": _fg["qty"], "warehouse": _fg["wh"],
+                                              "date": _fg["date"]},
+                                  "outbound": {"quantity": _fg["qty"], "warehouse": _fg["wh"],
+                                               "date": _fg["date"]},
+                                  "available_stock": inv_map.get(_fs, 0),
+                                  "inv": {"available_qty": inv_map.get(_fs, 0),
+                                          "safety_qty": 0, "in_transit_qty": 0}})
+        o_ctxs = []
+        for sku, _g in _grp.items():
             o_ctxs.append({"sku": sku, "channel": channel,
-                           "order": {"quantity": oq, "total_qty": _cum.get(sku, oq)},
-                           "order_qty": _cum.get(sku, oq),
+                           "order": {"quantity": _g["max"],
+                                     "max_quantity": _g["max"],
+                                     "min_quantity": _g["min"],
+                                     "line_count": _g["n"],
+                                     "total_qty": _cum.get(sku, _g["max"])},
+                           "order_qty": _cum.get(sku, _g["max"]),
                            "available_stock": inv_map.get(sku, 0),
                            "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0, "in_transit_qty": 0}})
         evaluated = 0
+        if flow_ctxs and _flow_evt:
+            try:
+                _frules = load_rules_for(_flow_evt, channel)
+                if _frules:
+                    evaluate_many(_flow_evt, flow_ctxs, channel, _frules)
+                    evaluated += len(flow_ctxs)
+            except Exception as _fe:
+                try_err('cleansing', '出入库评估降级', _fe)
         if o_ctxs:
             evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
             evaluated = len(o_ctxs)

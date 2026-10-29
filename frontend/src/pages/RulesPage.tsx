@@ -26,6 +26,9 @@ const EVENTS = [
   { value: 'inventory.changed', label: '库存变动' },
   { value: 'order.created', label: '订单创建' },
   { value: 'scheduled.daily', label: '每日定时' },
+  // 2026-10-29 出入库事件(此前完全不触发评估)
+  { value: 'inbound.created', label: '入库记录' },
+  { value: 'outbound.created', label: '出库记录' },
 ]
 
 const VARS = {
@@ -98,6 +101,15 @@ const LF = [
   { l: '订单数量', v: 'order.quantity' },
   // 2026-10-29 累计订单量(超卖判定应使用此字段: 单笔口径会漏报累计超卖)
   { l: '累计订单量', v: 'order.total_qty' },
+  { l: '最大单笔量', v: 'order.max_quantity' },
+  { l: '最小单笔量', v: 'order.min_quantity' },
+  { l: '本批行数', v: 'order.line_count' },
+  // 出入库事件字段
+  { l: '出入库数量', v: 'flow.quantity' },
+  { l: '出入库仓库', v: 'flow.warehouse' },
+  { l: '出入库日期', v: 'flow.date' },
+  { l: '入库数量', v: 'inbound.quantity' },
+  { l: '出库数量', v: 'outbound.quantity' },
   { l: '订单金额', v: 'order.total_amount' },
   { l: '订单数量×单价', v: 'order.quantity * order.unit_price' },
   { l: '单价', v: 'order.unit_price' },
