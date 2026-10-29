@@ -25,6 +25,22 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
             if target in ("inbound", "outbound", "inventory"):
                 try:
                     _skus_touch = sorted({c.get("sku") for c in cleaned_all if c.get("sku")})
+                    # 2026-10-29 仓名校验(暴露而非兜底): 出入库记录的 warehouse 必须存在于
+                    # 该渠道自有仓清单, 否则该记录不会计入重算(数据静默丢失)
+                    if target in ("inbound", "outbound") and _skus_touch:
+                        try:
+                            _own_whs = {str(x.get("warehouse") or "") for x in query(
+                                "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
+                                "AND warehouse_type IN (%s)" % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))),
+                                [channel] + list(SELF_WAREHOUSE_TYPES))}
+                            _bad_wh = sorted({str(c.get("warehouse") or "") for c in cleaned_all
+                                              if str(c.get("warehouse") or "") not in _own_whs})
+                            if _bad_wh:
+                                try_err('cleansing', '仓名未匹配自有仓',
+                                        Exception("渠道 %s 的 %s 导入含未知仓: %s (自有仓: %s) —— 这些记录不计入库存重算"
+                                                  % (channel, target, _bad_wh[:5], sorted(_own_whs))))
+                        except Exception as _ewh:
+                            pass
                     if _skus_touch:
                         # 库存: 期初 + Σ流水(重算制); 批次: FIFO 重建(Σ批次 ≡ available)
                         _recalc_own_inventory(channel, _skus_touch)
@@ -158,22 +174,15 @@ def _rebuild_own_batches(channel, skus):
     """
     from db import query as _q, execute as _e, executemany as _em
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
-    _whs = [str(r.get("warehouse") or "") for r in
-            _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
-               "AND warehouse_type IN (%s)" % ("%s", _ph_wt),
-               [channel] + list(SELF_WAREHOUSE_TYPES))]
-    _single = len(_whs) <= 1
-    _wh_fixed = _whs[0] if _single else ""
     done = 0
     for i in range(0, len(skus), 100):
         batch_skus = [x for x in skus[i:i + 100] if x]
         if not batch_skus:
             continue
         ph = ",".join(["%s"] * len(batch_skus))
-        _wh_cond = "" if _single else (
-            " AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
-            "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
-        _params = [channel] + batch_skus + ([] if _single else [channel] + list(SELF_WAREHOUSE_TYPES))
+        _wh_cond = (" AND warehouse IN (SELECT DISTINCT warehouse FROM inventory "
+                    "WHERE channel=%s AND warehouse_type IN (%s))" % ("%s", _ph_wt))
+        _params = [channel] + batch_skus + [channel] + list(SELF_WAREHOUSE_TYPES)
         # 注意 % 优先级高于 +: 必须先拼完整串再格式化(曾因优先级导致 "not all arguments converted")
         _sql_ins = ("SELECT id, sku, warehouse, prod_date, exp_date, quantity FROM inbound_records "
                     "WHERE channel=%s AND sku IN (%s)" + _wh_cond +
@@ -242,7 +251,7 @@ def _rebuild_own_batches(channel, skus):
                     out_left -= take
                 if qty > 0:
                     _insert_rows.append({"sku": sk,
-                                         "warehouse": _wh_fixed or str(r.get("warehouse") or ""),
+                                         "warehouse": str(r.get("warehouse") or ""),
                                          "warehouse_type": "own", "channel": channel,
                                          "prod_date": str(r.get("prod_date") or "")[:10],
                                          "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
@@ -285,22 +294,13 @@ def _recalc_own_inventory(channel, skus):
     """
     from db import query as _q, execute as _e
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
-    # 该渠道自有仓清单(判断单仓/多仓)
-    _whs = [str(r.get("warehouse") or "") for r in
-            _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s "
-               "AND warehouse_type IN (%s)" % ("%s", _ph_wt),
-               [channel] + list(SELF_WAREHOUSE_TYPES))]
-    _single = len(_whs) <= 1
     out = 0
     for i in range(0, len(skus), 200):
         batch = skus[i:i + 200]
         ph = ",".join(["%s"] * len(batch))
-        if _single:
-            # 单仓: 忽略 warehouse(含空/异名), 全部计入
-            _cond = ""
-        else:
-            # 多仓: 严格匹配(空仓名仍兜底到唯一仓的场景已由 _single 覆盖, 此处不兜底)
-            _cond = " AND r.warehouse = i.warehouse"
+        # 2026-10-29 用户定案: 出入库**以实际导入为准** —— 严格按 warehouse 匹配,
+        # 不做"单仓降级/空仓名兜底"等隐式修正(仓名填错应暴露, 不应被算法掩盖)
+        _cond = " AND r.warehouse = i.warehouse"
         rows = _q(
             "SELECT i.id, i.sku, i.warehouse, "
             "COALESCE(i.beginning_stock, 0) AS beg, "
