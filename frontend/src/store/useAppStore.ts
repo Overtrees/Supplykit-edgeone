@@ -54,8 +54,9 @@ const safeGetJSON = (key, def = null) => {
 const initAppStore = (set, get) => ({
   channel: safeGet('c_channel') || 'jd',
   // 2026-10-30 渠道注册表(数据驱动): 下拉/渠道名/默认模式都读它, 新增渠道无需改代码
-  // 2026-10-30 首屏用本地缓存(channels 接口异步, 空数组会导致文案/下拉闪回兜底值)
-  channels: (safeGetJSON('c_channels') || []) as Channel[],
+  // 2026-10-30 channels 不做本地缓存: 属配置类数据(禁用/改名需即时生效),
+  //   首屏正确性由文案兜底保证(兜底='京东渠道'), 无需用缓存换实时性
+  channels: [] as Channel[],
   setChannels: (list: Channel[]) => set({ channels: Array.isArray(list) ? list : [] }),
   channelVersion: 0,
   pageVersion: 0,

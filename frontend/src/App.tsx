@@ -101,23 +101,40 @@ export default function App() {
     setHammerPanel,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
-  // 2026-10-30 渠道注册表: 挂载时拉一次(失败静默, 下拉有本地兜底)
+  // 2026-10-30 渠道注册表: 走项目既有「同步中/加载中」机制 + 失败重试 2 次 + 留痕
+  //   (配置类数据不缓存 → 禁用/改名即时生效; 首屏文案由 _chLabel 兜底保证正确)
   useEffect(() => {
+    let alive = true
     const _chBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
-    fetch(_chBase + '/api/channels?enabled_only=1', {
-      headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
-    })
-      .then(r => (r.ok ? r.json() : null))
-      .then((d: { data?: Channel[] } | null) => {
+    const load = async (attempt: number) => {
+      useAppStore.getState().setSyncing(1)
+      try {
+        const r = await fetch(_chBase + '/api/channels?enabled_only=1', {
+          headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
+        })
+        if (!r.ok) throw new Error('HTTP ' + r.status)
+        const d: { data?: Channel[] } = await r.json()
         const list: Channel[] = Array.isArray(d && d.data) ? (d as { data: Channel[] }).data : []
-        if (list.length) {
-          setChannels(list)
-          try {
-            localStorage.setItem('c_channels', JSON.stringify(list))
-          } catch (e) {}
+        if (alive && list.length) setChannels(list)
+      } catch (e) {
+        if (alive && attempt < 2) {
+          setTimeout(
+            () => {
+              if (alive) load(attempt + 1)
+            },
+            1500 * (attempt + 1),
+          )
+          return
         }
-      })
-      .catch(() => {})
+        if (alive) reportError('api_http_error', '渠道列表加载失败', '', 'warning')
+      } finally {
+        useAppStore.getState().setSyncing(-1)
+      }
+    }
+    load(0)
+    return () => {
+      alive = false
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // 当前渠道展示名(数据驱动; 未拉到配置时按 code 兜底)
