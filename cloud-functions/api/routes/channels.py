@@ -129,10 +129,23 @@ async def update_channel(code: str, request: Request):
 
 @router.delete("/channels/{code}")
 @traced
-def disable_channel(code: str):
-    """禁用渠道(不物理删: 存量 inventory/orders/rules 仍带该 channel, 删会成孤儿数据)"""
+def disable_channel(code: str, purge: int = 0):
+    """禁用渠道(默认只禁用); purge=1 额外清理该渠道的**配置类**数据
+
+    为什么不默认物理删: inventory/orders/products 等业务数据仍带该 channel,
+    物理删 channels 行会留下孤儿; 而 rules/replenishment_config 属配置, 清了不影响历史业务数据。
+    """
     if not one("SELECT 1 FROM channels WHERE code=%s", [code]):
         return fail("渠道不存在: %s" % code)
     execute("UPDATE channels SET enabled=0 WHERE code=%s", [code])
+    out = {"code": code, "enabled": 0}
+    if purge:
+        try:
+            _r = execute("DELETE FROM rules WHERE channel=%s", [code])
+            _c = execute("DELETE FROM replenishment_config WHERE channel=%s", [code])
+            out["purged"] = {"rules": int(_r or 0), "config": int(_c or 0)}
+        except Exception as _e:
+            try_err('channels', '渠道配置清理降级(%s)' % code, _e)
+            out["purged"] = {"error": str(_e)[:120]}
     ch_list(force=True)
-    return ok({"code": code, "enabled": 0})
+    return ok(out)
