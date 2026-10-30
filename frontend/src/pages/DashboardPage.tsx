@@ -13,7 +13,13 @@ const periodLabel = { today: '今日', week: '上周', month: '上月' }
 // 仓库集合标签截断: 后端 warehouse 可能为 "北京仓,上海仓,成都仓" 集合(逗号连接) → 前2仓+等N仓, title 给完整
 const fmtWh = w => {
   if (!w) return ''
-  const p = String(w).split(',').filter(Boolean)
+  // 2026-10-30 哨兵维度转人话: __BC__(BBCC 一盘 = C+B 合计) / __C__(全国 C 仓) / __ALL__(全仓)
+  //   原样输出会把内部标识直接暴露给用户(低库存弹窗显示 "__BC__")
+  const _sw = String(w)
+  if (_sw === '__BC__') return 'BC'
+  if (_sw === '__C__') return 'C'
+  if (_sw === '__ALL__') return '全国'
+  const p = _sw.split(',').filter(Boolean)
   if (p.length <= 2) return p.join(',')
   return p.slice(0, 2).join(',') + '等' + p.length + '仓'
 }
@@ -829,6 +835,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // 弹窗内 SKU 仓库标签(跟随补货模式): bbcc→BC合并+自有; 传统→C+自有(不涉B)
   const _whTag = wt => {
     if (wt === 'own') return '自有'
+    if (wt === 'bc') return 'BC'
     if (wt === 'platform_b' || wt === 'platform')
       return _replMode === 'bbcc' ? 'BC' : wt === 'platform' ? 'C' : 'B'
     return ''
