@@ -114,19 +114,25 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         if _sk_l:
             from biz.sales import get_sku_sales_stats as _gss_i, rolling_predict as _rp_i
             _SENT = ("__C__", "__ALL__", "__BC__")
+            _c_ds = {}   # 全国 C 仓: sku|barcode → 融合日销(own 维度消耗速度用)
+            _c_agg = {}  # 全国 C 仓: sku → 合计日销(降级)
             for _r2 in (_gss_i(channel, skus=_sk_l, days=28, barcode="*") or {}).values():
                 _bc0 = str(_r2.get("barcode") or "")
                 _w0 = str(_r2.get("warehouse") or "")
-                if _bc0 and _w0 and _w0 not in _SENT:
-                    _wh_bc_ds["%s|%s|%s" % (_r2.get("sku"), _bc0, _w0)] = _rp_i(
-                        float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
-                        float(_r2.get("ds28") or 0))
+                _v2 = _rp_i(float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
+                            float(_r2.get("ds28") or 0))
+                if _w0 == "__C__" and _bc0:
+                    _c_ds["%s|%s" % (_r2.get("sku"), _bc0)] = _v2
+                elif _bc0 and _w0 and _w0 not in _SENT:
+                    _wh_bc_ds["%s|%s|%s" % (_r2.get("sku"), _bc0, _w0)] = _v2
             for _r2 in (_gss_i(channel, skus=_sk_l, days=28) or {}).values():
                 _w0 = str(_r2.get("warehouse") or "")
-                if _w0 and _w0 not in _SENT:
-                    _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _rp_i(
-                        float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
-                        float(_r2.get("ds28") or 0))
+                _v2 = _rp_i(float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
+                            float(_r2.get("ds28") or 0))
+                if _w0 == "__C__":
+                    _c_agg[str(_r2.get("sku"))] = _v2
+                elif _w0 and _w0 not in _SENT:
+                    _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _v2
     except Exception as _ewh2:
         try_err('insights', '逐仓日销(按码)加载降级', _ewh2)
     # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)
@@ -230,10 +236,16 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     for r in rows:
         sku = r.get("sku")
         _bc1 = str(r.get("barcode") or "")
-        # 2026-10-30 逐仓口径: 该仓该码 -> 该仓合计(不跨维)
         _wh1 = str(r.get("warehouse") or "")
-        ds = (_wh_bc_ds.get("%s|%s|%s" % (sku, _bc1, _wh1)) if _bc1 else 0) \
-            or _wh_ds.get("%s||%s" % (sku, _wh1), 0)
+        # 2026-10-30 特殊情况注释: 自有仓只承担调拨出库/采购入库, **不直接销售**(无销售流水) →
+        #   该仓自身日销恒 0, 周转/可撑无意义。其库存的真实消耗速度 = 平台整体销售
+        #   (货最终调拨到 C 仓卖出) → own 维度日销采用**全国 C 仓销量**:
+        #   sku+69码 优先 → 降级 sku 合计; platform/platform_b 维持逐仓口径
+        if str(r.get("warehouse_type") or "") == "own":
+            ds = (_c_ds.get("%s|%s" % (sku, _bc1)) if _bc1 else 0) or _c_agg.get(sku, 0)
+        else:
+            ds = (_wh_bc_ds.get("%s|%s|%s" % (sku, _bc1, _wh1)) if _bc1 else 0) \
+                or _wh_ds.get("%s||%s" % (sku, _wh1), 0)
         avail = int(r.get("available_qty") or 0)
         transit = int(r.get("in_transit_qty") or 0)
         _k = (sku, r.get("warehouse") or "")
