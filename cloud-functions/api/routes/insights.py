@@ -195,8 +195,10 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         except Exception as _e:
                 try_err('insights', '静默降级', _e)
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
+    # 2026-10-30 只对自有仓聚合: 平台仓/B 仓不产生出入库流水(实测 inbound/outbound 全部
+    #   warehouse_type='own'), 原无条件查询 → 每次白跑 2 次聚合(≈2 RU/27ms)
     month_in, month_out = {}, {}
-    if skus:
+    if skus and wh_type == "own":
         _ph = ",".join(["%s"] * len(skus))
         for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM inbound_records "
                         "WHERE channel=%s AND inbound_date>=%s AND sku IN (" + _ph + ") "

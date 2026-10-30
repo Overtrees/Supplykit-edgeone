@@ -167,12 +167,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 if _wh == "platform_b":
                     _row["B-C调拨在途"] = it.get("c_transit", "")
                 _row.update({
-                    "安全线": it.get("safety_qty", ""),
-                    "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
-                    "库存可撑天数": it.get("days_to_empty", ""),
-                    "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
-                    # 2026-10-30 期初取**真实导入值**(方案A), 不是反推的本月期初(对账一致)
-                    "期初": it.get("beginning_stock_raw", ""), "单价": it.get("price", ""),
+                    "安全线": it.get("safety_qty", ""), "单价": it.get("price", ""),
                     "品牌": it.get("brand", ""),
                     "生产日期(批次)": _pd or "",
                     "截止日期(批次)": _ed or "",
@@ -180,6 +175,18 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                     "批次消耗%": _pct if _rb else "",
                     "批次效期状态": _st or "",
                 })
+                # 2026-10-30 仅自有仓导出进销概念列: 平台仓/B 仓无出入库流水 →
+                #   期初/月入/月出/周转/可撑 恒空(周转由建议页承接), 导出不再输出空列
+                if _wh == "own":
+                    _row.update({
+                        "日销": it.get("daily_sales", ""),
+                        "周转天数": it.get("turnover_days", ""),
+                        "库存可撑天数": it.get("days_to_empty", ""),
+                        "当月入库": it.get("month_inbound", ""),
+                        "当月出库": it.get("month_outbound", ""),
+                        # 期初取真实导入值(方案A), 不是反推的本月期初
+                        "期初": it.get("beginning_stock_raw", ""),
+                    })
                 out.append(_row)
         return out
     return None
