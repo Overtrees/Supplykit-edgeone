@@ -780,7 +780,13 @@ def _build_aux(channel, mode):
     """aux 计算体(共享缓存 builder)"""
     from routes.alerts import _FIELDS as _AF
     # 低库存维度过滤(跟随补货模式): bbcc → BC+own; traditional → C+own(白名单拼接)
-    _wh_in = "('own','platform','platform_b')" if mode == "bbcc" else "('own','platform')"
+    # 2026-10-30 修复"低库存卡无数据": 原 Python 判定写成 `wt in "(...)"` —— **字符串子串匹配**,
+    #   新增的 warehouse_type='bc'(BBCC 合计行)不在字面串里 → 140 条低库存告警被静默过滤(列表空);
+    #   同时空 warehouse_type('') 因是任何字符串的子串反而"意外通过"。
+    #   改为**元组**白名单 + 显式包含 bc 与 ''。
+    _wh_types = (("own", "platform", "platform_b", "bc", "")
+                 if mode == "bbcc" else ("own", "platform", "bc", ""))
+    _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
     _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
     alerts = []
@@ -790,7 +796,7 @@ def _build_aux(channel, mode):
     for r in _ar:
         at = r.get("alert_type") or ""
         if at == "low_stock":
-            if _ls_c < 100 and str(r.get("warehouse_type") or "") in _wh_in:
+            if _ls_c < 100 and str(r.get("warehouse_type") or "") in _wh_types:
                 alerts.append(r)
                 _ls_c += 1
         elif at == "replenish":
