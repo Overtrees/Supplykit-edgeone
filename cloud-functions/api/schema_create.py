@@ -319,6 +319,16 @@ def create_all_tables():
             try_err('schema', '低库存口径迁移完成(可用+在途): %s 条' % _n, None)
     except Exception as _elsx:
         try_err('schema', '低库存口径迁移降级', _elsx)
+    # 2026-10-30 低库存文案修正: 上一条迁移只换占位符({avail}→{sellable}), 前缀"可用"未改
+    #   → 现为"可用 {sellable}"(语义矛盾: sellable 是可用+在途)。这里补正为"可售 {sellable}"
+    try:
+        from db import execute as _elw
+        if _elw("INSERT IGNORE INTO migration_log(name) VALUES('lowstock_wording_v2')"):
+            _n2 = _elw("UPDATE rules SET alert_desc=REPLACE(alert_desc, '可用 {sellable}', '可售 {sellable}') "
+                       "WHERE alert_type='low_stock' AND alert_desc LIKE '%%可用 {sellable}%%'")
+            try_err('schema', '低库存文案修正完成: %s 条' % _n2, None)
+    except Exception as _elwx:
+        try_err('schema', '低库存文案修正降级', _elwx)
     # 2026-10-29 日销主键契约检测(根治, 不做 DDL):
     #   目标结构 = 代理主键 `id` + 业务唯一键(含 barcode)。
     #   TiDB 聚簇表**不支持 DROP PRIMARY KEY**(主键值编码进 Row Key = 行物理地址),
