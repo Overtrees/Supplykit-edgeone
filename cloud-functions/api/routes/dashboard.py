@@ -758,6 +758,9 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     if start_date and end_date:
         period_funnel["custom"] = _funnel_range(start_date, end_date)
 
+    # 2026-10-30 口径保护: 趋势图固定最近 60 点(原口径); 取数窗口提前到"上上月1号"只为环比基准,
+    #   不应顺带把趋势点数从 60 拉长到 90
+    trend_data = trend_data[-60:]
     return {"summary": summary, "periods": periods, "trend": trend_data,
             "funnel": funnel_res, "period_funnel": period_funnel, "health_index": health, "stores": stores,
             "brands": brands, "period_stores": period_stores, "period_brands": period_brands}

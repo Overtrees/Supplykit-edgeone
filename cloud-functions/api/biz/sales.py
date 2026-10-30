@@ -459,7 +459,16 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
             mc = calc_sales_multi(_cut, windows=[7, 14, 28], sparse="shrink")
             for k, daily in key_daily.items():
                 sigma = 0.0
-                vals = list(daily.values())
+                # 2026-10-30 口径保护: sigma 固定用**最近 60 天**样本(原口径), 不随取数窗口(days)
+                #   扩大而变 —— 否则数据满 90 天后 sigma 变大 → 动态安全库存 SS 变化 → 断货判定漂移
+                vals = []
+                for _dk, _dv in daily.items():
+                    try:
+                        if (now_d - datetime.strptime(str(_dk)[:10], "%Y-%m-%d")
+                                .replace(tzinfo=timezone.utc)).days < 60:
+                            vals.append(_dv)
+                    except Exception:
+                        continue
                 if len(vals) >= 7:
                     mm = sum(vals) / len(vals)
                     sigma = (sum((x - mm) ** 2 for x in vals) / len(vals)) ** 0.5
