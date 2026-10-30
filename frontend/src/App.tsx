@@ -16,6 +16,7 @@ import InventoryPage from './pages/InventoryPage'
 import QualityPage from './pages/QualityPage'
 import DevModePage from './pages/DevModePage'
 import RecyclePage from './pages/RecyclePage'
+import ChannelsPage from './pages/ChannelsPage'
 import SettingsPage from './pages/SettingsPage'
 import TaskPage from './pages/TaskPage'
 import LoginPage from './pages/LoginPage'
@@ -935,7 +936,11 @@ export default function App() {
                     <button
                       className="back-btn"
                       onClick={() =>
-                        navigateTo(page === 'devmode' || page === 'recycle' ? 'settings' : 'dash')
+                        navigateTo(
+                          page === 'devmode' || page === 'recycle' || page === 'channels'
+                            ? 'settings'
+                            : 'dash',
+                        )
                       }
                     >
                       <svg
@@ -1069,6 +1074,8 @@ export default function App() {
                   <HammerCleansing channel={channel} />
                 ) : page === 'rules' ? (
                   <HammerRules channel={channel} onShowHistory={loadHistory} />
+                ) : page === 'channels' ? (
+                  <ChannelsPage />
                 ) : page === 'recycle' ? (
                   <HammerRecycle />
                 ) : (

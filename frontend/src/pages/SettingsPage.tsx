@@ -84,6 +84,15 @@ export default function SettingsPage() {
               } catch (e) {}
             }}
           />
+          <LastRow
+            label="渠道管理"
+            sub="新增/禁用渠道（无需发版），可复制既有渠道的规则与参数"
+            onClick={() => {
+              try {
+                ;(window as any).__setPage && (window as any).__setPage('channels')
+              } catch (e) {}
+            }}
+          />
           {devMode && (
             <LastRow
               label="开发者模式"
