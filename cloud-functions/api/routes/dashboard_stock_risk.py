@@ -139,7 +139,9 @@ def _stock_risk(channel, full: int = 0):
                                             float(_r.get("ds28") or 0))
             # 2026-10-29 按 69码: 批量读全部按码行(一次查询), key = "sku|barcode"
             try:
-                _rws_bc = get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode="*")
+                # 2026-10-30: BC 判定的日销读 **__C__**(全国 C 仓)—— B 仓不产生销售;
+                #   原用 WH_ALL(全仓)会把自有仓销量混进 BC 盘
+                _rws_bc = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*")
                 for _r in (_rws_bc or {}).values():
                     _bc0 = str(_r.get("barcode") or "")
                     if _bc0:

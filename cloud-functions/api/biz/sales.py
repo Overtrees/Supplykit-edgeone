@@ -408,16 +408,12 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
 
         # 2026-10-29 精准: 按码 × 仓型 聚合 → 让 __C__/__BC__ 也有按码行
         #   (原只有 __ALL__ 有按码行 → bbcc 下多码 SKU 只能共用整盘合计日销)
-        by_c_bc, by_bc_bc = {}, {}
+        by_c_bc = {}
         for _k, _wd in (by_sku_wh_bc or {}).items():
             _p = _k.rsplit("|", 2)
             if len(_p) < 3:
                 continue
             _key2 = "%s|%s" % (_p[0], _p[1])
-            if _p[2] in _c_whs or _p[2] in _b_whs:
-                _m2 = by_bc_bc.setdefault(_key2, {})
-                for _d, _q in _wd.items():
-                    _m2[_d] = _m2.get(_d, 0) + _q
             if _p[2] in _c_whs:
                 _m2 = by_c_bc.setdefault(_key2, {})
                 for _d, _q in _wd.items():
@@ -425,15 +421,12 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
 
         # 全国聚合: __C__(platform) / __BC__(platform+platform_b) / __ALL__(全仓)
         by_all = dict(by_sku)
-        by_c, by_bc = {}, {}
+        # 2026-10-30: 删 by_bc(C+B 日销)——B 仓不产生销售, BC 盘的日销统一读 __C__
+        by_c = {}
         for wk, wd in by_sku_wh.items():
             base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
             if not base:
                 continue
-            if wh in _c_whs or wh in _b_whs:
-                m = by_bc.setdefault(base, {})
-                for d, q in wd.items():
-                    m[d] = m.get(d, 0) + q
             if wh in _c_whs:
                 m = by_c.setdefault(base, {})
                 for d, q in wd.items():
@@ -492,8 +485,10 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         except Exception as _esg:
             try_err('sales', 'sigma 样本天数读取降级(用 60)', _esg)
             _sig_days = 60
+        # 2026-10-30 删除 __BC__ 日销行(用户定案方案B): B 仓是调拨中转, **不产生销售** ——
+        #   BC 盘的"可售"是库存维度(inventory 聚合), 日销一律读 __C__; 保留 __BC__ 日销会让
+        #   B 仓将来出现杂单时把安全线抬高 → 断货漏判
         rows = (_to_rows(by_c, WH_C)
-                + _to_rows(by_bc, WH_BC)
                 + _to_rows(by_all, WH_ALL)
                 + _to_rows(by_sku_wh, ""))  # 逐仓行(wh_label='' 表示真仓名在 key 内——由调用侧拆分)
         # 2026-10-29 按 69码 行(barcode=X, warehouse=WH_ALL 跨仓合计):
@@ -502,8 +497,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         for _r in rows:
             _r["barcode"] = ""
         if by_sku_bc:
-            _bc_rows = (_to_rows(by_sku_bc, WH_ALL) + _to_rows(by_c_bc, WH_C)
-                        + _to_rows(by_bc_bc, WH_BC))
+            _bc_rows = (_to_rows(by_sku_bc, WH_ALL) + _to_rows(by_c_bc, WH_C))
             for _r in _bc_rows:
                 _r["barcode"] = str(_r.get("sku") or "").rsplit("|", 1)[-1]
                 _r["sku"] = str(_r.get("sku") or "").rsplit("|", 1)[0]

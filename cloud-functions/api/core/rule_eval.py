@@ -380,8 +380,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
             "stock": int(r.get("available_qty") or 0),
             "days_since_last": days,
             # 2026-10-29 规则页字段对齐: 前端"日销(定时任务提供)"一直为空 → 补 SKU 级日销(逐仓优先)
-            "daily_sales": round(float(_ds_of(sku, str(r.get("barcode") or ""),
-                                              str(r.get("warehouse") or "")) or 0), 2),
+            "daily_sales": round(float(_ds_of(
+                sku, str(r.get("barcode") or ""),
+                "__C__" if str(r.get("warehouse_type") or "") == "bc"
+                else str(r.get("warehouse") or "")) or 0), 2),
             "product_name": r.get("product_name") or sku,
         }
         # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)
@@ -393,7 +395,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         if _need_calc and _agg is not None:
             try:
                 _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
-                _ds = _ds_of(sku, str(r.get("barcode") or ""), str(r.get("warehouse") or ""))
+                # BC 盘的日销读 __C__(B 仓不产生销售); 其余行按自身维度
+                _ds = _ds_of(sku, str(r.get("barcode") or ""),
+                             "__C__" if str(r.get("warehouse_type") or "") == "bc"
+                             else str(r.get("warehouse") or ""))
                 _otif = _otif_map.get(_prod_sup.get(sku, ""), 1.0)
                 _ss_z = float(_rp.get("ss_z", 1.65))
                 _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
