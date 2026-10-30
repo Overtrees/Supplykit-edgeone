@@ -85,11 +85,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       // 2026-10-30 新增列自动可见: localStorage 里存的是旧列集, 直接用它会让新列(keep_days)永不出现
       const _saved = getVis(whType, globalChannel)
       const _all = INV_COLS[whType].map(c => c.id)
+      // keep_days 仅自有仓维度存在(用户定), 其他维度不追加
+      const _newCol = whType === 'own' ? 'keep_days' : null
       setVisCols(
         _saved && _saved.length
-          ? _saved.includes('keep_days')
-            ? _saved
-            : [..._saved, 'keep_days']
+          ? !_newCol || _saved.includes(_newCol)
+            ? _saved.filter(id => _all.includes(id))
+            : [..._saved.filter(id => _all.includes(id)), _newCol]
           : _all,
       )
       return
