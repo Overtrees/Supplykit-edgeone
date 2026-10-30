@@ -158,6 +158,8 @@ export default function TaskPage() {
         blob = new Blob(chunks, { type: 'text/csv' })
       } else {
         const dl = await fetch(API + '/api/exports/download/' + filename, { headers: auth })
+        // 2026-10-30: 不检查 dl.ok 会静默下载"错误页 HTML"(文件名由前端命名, 内容却是 500 页)
+        if (!dl.ok) throw new Error('导出下载失败(' + dl.status + ')')
         blob = await dl.blob()
       }
       const a = document.createElement('a')

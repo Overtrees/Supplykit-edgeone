@@ -403,8 +403,15 @@ def export_download(filename: str):
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         media = "text/csv; charset=utf-8"
-    return Response(content=data, media_type=media,
-                    headers={"Content-Disposition": "attachment; filename=%s" % filename})
+    # 2026-10-30 修复下载 500: HTTP 响应头必须 latin-1 可编码, 中文文件名(如"进销存明细_*.csv")
+    #   直接放 filename= 会抛 UnicodeEncodeError → EdgeOne 500。改用 RFC 5987:
+    #   ASCII 名放 filename=, 中文名放 filename*=UTF-8''(URL 编码)
+    from urllib.parse import quote as _qfn
+    _fn_ascii = filename if filename.isascii() else "export.csv"
+    _cd = "attachment; filename=%s" % _fn_ascii
+    if not filename.isascii():
+        _cd += "; filename*=UTF-8''" + _qfn(filename, safe="")
+    return Response(content=data, media_type=media, headers={"Content-Disposition": _cd})
 
 # 导出端点注册(2026-10-11: 函数拆分至本模块——router 挂端点, tasks.py include)
 router.post("/exports")(create_export)
