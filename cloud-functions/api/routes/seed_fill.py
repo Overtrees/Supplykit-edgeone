@@ -639,7 +639,7 @@ def seed_step(step, today, skus_data):
         try:
             from biz.sales import _rebuild_sku_sales_stats as _rss
             for _ch in ('jd', 'other'):
-                _rb[_ch] = _rss(_ch, days=60)
+                _rb[_ch] = _rss(_ch, days=90)   # 2026-10-30 窗口统一 90
         except Exception as _erb:
             try_err('seed_fill', 'seed 物化重建降级', _erb)
             _rb = {'error': str(_erb)[:150]}
