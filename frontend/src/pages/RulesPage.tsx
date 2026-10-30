@@ -91,6 +91,11 @@ const LF = [
   { l: '锁定库存', v: 'inv.locked_qty' },
   { l: '可用+在途', v: 'inv.available_qty + inv.in_transit_qty' },
   { l: '可用+在途+锁定', v: 'inv.available_qty + inv.in_transit_qty + inv.locked_qty' },
+  // 2026-10-30 可售口径(与内建低库存/断货/采购同源): 顶层 sellable=可用+在途, transit=在途
+  { l: '可售(可用+在途)', v: 'sellable' },
+  { l: '在途(单列)', v: 'transit' },
+  { l: '可售缺口(安全线−可售)', v: 'safety - sellable' },
+  { l: '可售/安全线(比例)', v: 'sellable / safety' },
   { l: '动态安全线-可用(缺口)', v: 'inv.safety_qty - inv.available_qty' },
   { l: '可用/动态安全线(比例)', v: 'inv.available_qty / inv.safety_qty' },
   { l: '日销(定时任务提供)', v: 'daily_sales' },
