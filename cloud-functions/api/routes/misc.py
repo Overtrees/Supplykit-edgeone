@@ -558,6 +558,15 @@ async def heal_own_inventory(request: Request):
             from db import execute as _e6
             _start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
             for _ch3 in chs:
+                # 2026-10-30 条件化(原无条件全量 90 天回填): 该语句本意是"主键重建后表被清空"的补偿,
+                #   改 ON DUPLICATE 后条件丢失 → 每次 heal-own 都写 13 万行(实测 12 次调用 = 12 次全量,
+                #   RU 翻倍主因)。现仅在**该渠道快照为空**时回填; 平时由 _snapshot_step 增量 +
+                #   _snapshot_reconcile 对账维护。
+                _have = int(((_q5("SELECT COUNT(*) c FROM daily_sales_snapshot WHERE channel=%s",
+                                  [_ch3]) or [{}])[0] or {}).get("c") or 0)
+                if _have > 0:
+                    _refill[_ch3] = "skipped(已有 %d 行)" % _have
+                    continue
                 _e6("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
                     "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
                     "FROM orders WHERE channel=%s AND order_status IN (" + _SALES_SQL + ") "
