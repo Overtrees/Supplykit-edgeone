@@ -168,6 +168,16 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   useEffect(() => {
     if (!highlightSku || locateCheckedRef.current) return
     if (inventory.length === 0) return // 数据未加载完, 等 inventory 变化再触发
+    // 2026-10-30 修复竞态误报: 跳转瞬间 inventory 还是**上一次的列表**(新请求未回) →
+    //   原逻辑立刻判"找不到"并弹「可能不在当前仓库维度」, 几秒后新数据到达才出现高亮。
+    //   现在: ①加载中不做判定 ②列表必须已包含搜索词(说明是本次跳转后的新数据) 才判定
+    if (loading) return
+    const _has = !s || inventory.some(x => String(x.sku || '').includes(s))
+    if (!_has) {
+      locateCheckedRef.current = true
+      toast.error('未找到 ' + highlightSku + '，可能不在当前仓库维度或已无库存')
+      return
+    }
     locateCheckedRef.current = true
     const t = setTimeout(() => {
       try {
@@ -177,11 +187,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         }
         if (!el) el = document.querySelector('[id^="hl-' + highlightSku + '-"]') // 宽匹配: SKU 任意仓行
         if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        else toast.error('未找到 ' + highlightSku + '，可能不在当前仓库维度或已无库存')
       } catch (e) {}
     }, 300)
     return () => clearTimeout(t)
-  }, [highlightSku, highlightWarehouse, inventory, whType])
+  }, [highlightSku, highlightWarehouse, inventory, whType, loading, s])
   const handleScroll = e => {
     const el = e.target
     if (
