@@ -298,7 +298,7 @@ def get_sales_digest(channel, days=28):
     # fused/sigma 现场算(口径与旧 get_sales_digest 完全一致——rolling_predict(plain))
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL
-        _rows = get_sku_sales_stats(channel, wh=WH_ALL, days=days)
+        _rows = get_sku_sales_stats(channel, wh=WH_C, days=days)   # 2026-10-30: 全仓→C仓(__ALL__ 已删)
         if _rows:
             fused = {}
             sigma = {}
@@ -420,8 +420,9 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                     _m2[_d] = _m2.get(_d, 0) + _q
 
         # 全国聚合: __C__(platform) / __BC__(platform+platform_b) / __ALL__(全仓)
-        by_all = dict(by_sku)
-        # 2026-10-30: 删 by_bc(C+B 日销)——B 仓不产生销售, BC 盘的日销统一读 __C__
+        # 2026-10-30 删除 __ALL__(全仓日销维度): 渠道内只有 platform 仓产生销售,
+        #   __ALL__ 与 __C__ 恒等(实测逐 SKU 0 差异); 保留只是多维护一套行。
+        #   消费方(采购/断货兜底/规则兜底/进销存展示/补货)统一读 __C__。
         by_c = {}
         for wk, wd in by_sku_wh.items():
             base, wh = wk.rsplit("|", 1) if "|" in wk else (wk, "")
@@ -489,7 +490,6 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         #   BC 盘的"可售"是库存维度(inventory 聚合), 日销一律读 __C__; 保留 __BC__ 日销会让
         #   B 仓将来出现杂单时把安全线抬高 → 断货漏判
         rows = (_to_rows(by_c, WH_C)
-                + _to_rows(by_all, WH_ALL)
                 + _to_rows(by_sku_wh, ""))  # 逐仓行(wh_label='' 表示真仓名在 key 内——由调用侧拆分)
         # 2026-10-29 按 69码 行(barcode=X, warehouse=WH_ALL 跨仓合计):
         #   与 barcode='' 的全码合计行并存 —— 消费方不传 barcode 时只读 '' 行(语义不变),
@@ -497,7 +497,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         for _r in rows:
             _r["barcode"] = ""
         if by_sku_bc:
-            _bc_rows = (_to_rows(by_sku_bc, WH_ALL) + _to_rows(by_c_bc, WH_C))
+            _bc_rows = _to_rows(by_c_bc, WH_C)   # 2026-10-30 只保留 C 仓按码行(全仓按码随 __ALL__ 一并删除)
             for _r in _bc_rows:
                 _r["barcode"] = str(_r.get("sku") or "").rsplit("|", 1)[-1]
                 _r["sku"] = str(_r.get("sku") or "").rsplit("|", 1)[0]

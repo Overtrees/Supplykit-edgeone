@@ -115,7 +115,8 @@ def _stock_risk(channel, full: int = 0):
     fused_bc = {}  # 2026-10-29 按 69码 日销
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
-        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28)
+        # 2026-10-30 兜底日销读 __C__(__ALL__ 已删; C 仓是唯一销售源)
+        _rws = get_sku_sales_stats(channel, wh=WH_C, days=28)
         if _rws:
             for _k, _r in _rws.items():
                 _sku = _r.get("sku") or ""

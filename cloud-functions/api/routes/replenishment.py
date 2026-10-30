@@ -165,7 +165,7 @@ def _build_repl(channel, mode):
             _ma14 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[14], sparse="shrink")
             _ma28 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[28], sparse="shrink")
             for _k in _ma.get(7, {}):
-                _st = _stats.setdefault("%s|__ALL__" % _k, {})
+                _st = _stats.setdefault("%s|__C__" % _k, {})   # 2026-10-30 全仓→C仓
                 _st["ds7_cut"] = _ma[7].get(_k, 0)
                 _st["ds14_cut"] = _ma14[14].get(_k, 0)
                 _st["ds28_cut"] = _ma28[28].get(_k, 0)
@@ -186,7 +186,7 @@ def _build_repl(channel, mode):
                     _c7 = _csm({_bk: _sps(_bd)}, windows=[7], sparse="shrink")
                     _c14 = _csm({_bk: _sps(_bd)}, windows=[14], sparse="shrink")
                     _c28 = _csm({_bk: _sps(_bd)}, windows=[28], sparse="shrink")
-                    _st = _stats.setdefault("%s|%s|__ALL__" % (_sk, _bc), {})
+                    _st = _stats.setdefault("%s|%s|__C__" % (_sk, _bc), {})
                     _st["ds7_cut"] = _c7[7].get(_bk, 0)
                     _st["ds14_cut"] = _c14[14].get(_bk, 0)
                     _st["ds28_cut"] = _c28[28].get(_bk, 0)
@@ -202,7 +202,7 @@ def _build_repl(channel, mode):
         · 无 69码 → 直接读合计行
         """
         if bc:
-            _hit = _stats.get("%s|%s|%s" % (sku, bc, wh)) or _stats.get("%s|%s|%s" % (sku, bc, "__ALL__"))
+            _hit = _stats.get("%s|%s|%s" % (sku, bc, wh)) or _stats.get("%s|%s|%s" % (sku, bc, "__C__"))
             if _hit:
                 return _hit
         # 2026-10-29 key 统一为 sku|barcode|warehouse(空码即 sku||wh) —— 原 sku|wh 已不存在
@@ -380,7 +380,7 @@ def _build_repl(channel, mode):
                 "b_stock": b_available, "c_stock": avail, "b_gap": b_gap,
                 "daily_sales": ds, "daily_sales_7": ds7,
                 "daily_sales_14": ds14, "daily_sales_28": ds28,
-                "daily_sales_60": round(_fused_cut(_rd(sku, "__ALL__")) or ds, 1),
+                "daily_sales_60": round(_fused_cut(_rd(sku, "__C__")) or ds, 1),
                 "raw_suggested": c_gap, "suggested_qty": suggested,
                 "b_suggested": b_box, "b_replenish_raw": b_replenish,
                 "days_to_empty": days_to_empty, "after_turnover": after_turnover,
@@ -437,7 +437,7 @@ def _build_repl(channel, mode):
                 "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
-                "daily_sales_60": round(_fused_cut(_rd(sku, "__ALL__")) or ds, 1),
+                "daily_sales_60": round(_fused_cut(_rd(sku, "__C__")) or ds, 1),
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
                 "note": _trad_note(ds, w7, w14, w28, avail, effective_safety, box_qty, suggested,

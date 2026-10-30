@@ -132,7 +132,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       }
     } catch (e) {
       if (seq === reqSeq.current) {
-        setInventory([])
+        // 2026-10-30: 失败保留旧数据(仅首载才清空) —— 曾一次 abort/超时就白屏
+        setInventory(prev => (prev && prev.length ? prev : []))
         setLoadErr('加载失败')
       }
     } finally {
@@ -148,7 +149,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     clearCache('with-sales')
     setInvPage(1)
     loadInv(1)
-  }, [whType, globalChannel, s, highlightSku])
+    // 2026-10-30 去掉 highlightSku 依赖: 从告警/断货卡跳转时 highlightSku 与 s 同时变化 →
+    //   原依赖会触发第二次 effect(再 clearCache 会 abort 上一次 in-flight 请求) →
+    //   catch 里 setInventory([]) → 页面空白(用户实证"跳转进销存没数据")
+    //   s(搜索) 变化已能覆盖"按 SKU 定位"场景
+  }, [whType, globalChannel, s])
   // 从告警跳转: 高亮 SKU(可带具体仓)滚动到可视区(等数据渲染后, 多页时也定位);
   // 数据首次到达检查一次, 未命中 → 提示(空 warehouse_type 存量告警/维度不匹配兜底)
   const locateCheckedRef = useRef(false)

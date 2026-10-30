@@ -472,7 +472,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         const aux = ax.data || {}
         useAppStore.setState({
           dashboard: s.data,
-          alerts: aux.alerts || [],
+          // 2026-10-30 抖动修复: aux 偶发失败时不再把 alerts 置空(数字取自 alertCounts 保留值,
+          //   列表却被清空 → 卡片「有数字无明细」); 只在 aux 成功返回时覆盖
+          alerts: aux.alerts || useAppStore.getState().alerts || [],
           stockRisk: (sr && sr.data) || useAppStore.getState().stockRisk || {},
           alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
           bcOutOfStock: aux.bcOutOfStock || [],

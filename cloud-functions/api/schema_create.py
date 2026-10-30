@@ -268,7 +268,7 @@ def create_all_tables():
     # 2026-10-30 渠道种子(幂等): 存量库补登记 jd/other, 语义与旧硬编码完全一致
     try:
         execute("INSERT IGNORE INTO channels(code,name,enabled,supports_b,default_mode,sort) VALUES"
-                "('jd','京东',1,1,'bbcc',1),('other','其他渠道',1,0,'traditional',2)")
+                "('jd','京东渠道',1,1,'bbcc',1),('other','其他渠道',1,0,'traditional',2)")
     except Exception as _ec:
         try_err('schema', '渠道种子写入降级', _ec)
     ok_n = 0
@@ -335,6 +335,14 @@ def create_all_tables():
             try_err('schema', '低库存口径迁移完成(可用+在途): %s 条' % _n, None)
     except Exception as _elsx:
         try_err('schema', '低库存口径迁移降级', _elsx)
+    # 2026-10-30 渠道显示名对齐原 UI: '京东' → '京东渠道'(切主体胶囊/下拉文案与旧版一致)
+    try:
+        from db import execute as _eln
+        if _eln("INSERT IGNORE INTO migration_log(name) VALUES('channel_name_v1')"):
+            _eln("UPDATE channels SET name='京东渠道' WHERE code='jd' AND name='京东'")
+            try_err('schema', '渠道显示名对齐完成', None)
+    except Exception as _elne:
+        try_err('schema', '渠道显示名对齐降级', _elne)
     # 2026-10-30 低库存文案修正: 上一条迁移只换占位符({avail}→{sellable}), 前缀"可用"未改
     #   → 现为"可用 {sellable}"(语义矛盾: sellable 是可用+在途)。这里补正为"可售 {sellable}"
     try:

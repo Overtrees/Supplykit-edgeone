@@ -111,7 +111,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     try:
         _codes = sorted({str(r.get("barcode") or "") for r in rows if str(r.get("barcode") or "")})
         if _codes:
-            from biz.sales import get_sku_sales_stats as _gss_i, WH_ALL as _WA_i
+            from biz.sales import get_sku_sales_stats as _gss_i, WH_C as _WA_i   # 2026-10-30 全仓→C仓
             for _r2 in (_gss_i(channel, wh=_WA_i, days=28, barcode="*") or {}).values():
                 _bc0 = str(_r2.get("barcode") or "")
                 _sk0 = str(_r2.get("sku") or "")

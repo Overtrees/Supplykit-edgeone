@@ -65,15 +65,15 @@ def _build_purchase(channel, mode, days=28):
     fused = {}
     _rws = {}
     try:
-        from biz.sales import get_sku_sales_stats, WH_ALL
-        _rws = get_sku_sales_stats(channel, wh=WH_ALL, days=28) or {}   # barcode='' 合计行
+        from biz.sales import get_sku_sales_stats, WH_C
+        _rws = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}   # 2026-10-30 全仓→C仓(__ALL__ 已删)
         # 2026-10-29 按码: 读按码行, key = "sku|barcode"
         _bc_stats = {}
         try:
             # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
             # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
             # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
-            for _r2 in (get_sku_sales_stats(channel, wh=WH_ALL, days=28, barcode="*") or {}).values():
+            for _r2 in (get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*") or {}).values():
                 _bc = str(_r2.get("barcode") or "")
                 if _bc:
                     _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
