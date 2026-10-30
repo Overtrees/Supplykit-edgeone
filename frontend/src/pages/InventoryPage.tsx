@@ -81,8 +81,19 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const { channel: globalChannel, hammerWhType, hammerCols, hammerSearch } = useAppStore()
   const whType = hammerWhType
   useEffect(() => {
-    if (visCols.length === 0)
-      setVisCols(getVis('own', globalChannel) || INV_COLS['own'].map(c => c.id))
+    if (visCols.length === 0) {
+      // 2026-10-30 新增列自动可见: localStorage 里存的是旧列集, 直接用它会让新列(keep_days)永不出现
+      const _saved = getVis(whType, globalChannel)
+      const _all = INV_COLS[whType].map(c => c.id)
+      setVisCols(
+        _saved && _saved.length
+          ? _saved.includes('keep_days')
+            ? _saved
+            : [..._saved, 'keep_days']
+          : _all,
+      )
+      return
+    }
   }, [globalChannel])
 
   useEffect(() => {
@@ -437,6 +448,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       'td',
                       { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
                       _beg,
+                    )
+                  } else if (col.id === 'keep_days') {
+                    // 库存可撑天数(前瞻): 可用/日销; 后端 ds=0 给 999 → 显示 —
+                    const _kd = x.days_to_empty
+                    el = React.createElement(
+                      'td',
+                      { key: col.id, className: 'col-qty' },
+                      _kd != null && _kd < 999 ? _kd : '—',
                     )
                   } else if (col.id === 'transit')
                     el = React.createElement(
@@ -1004,6 +1023,15 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           return s + (x.available_qty || 0)
                         }, 0),
                       )
+                    if (col.id === 'keep_days') {
+                      const _q = inventory.reduce((acc, x) => acc + (x.available_qty || 0), 0)
+                      const _d = inventory.reduce((acc, x) => acc + (x.daily_sales || 0), 0)
+                      return React.createElement(
+                        'td',
+                        { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
+                        _d > 0 ? (_q / _d).toFixed(1) + ' 天' : '—',
+                      )
+                    }
                     if (col.id === 'turnover')
                       return React.createElement(
                         'td',
