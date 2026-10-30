@@ -110,15 +110,22 @@ export default function App() {
       .then(r => (r.ok ? r.json() : null))
       .then((d: { data?: Channel[] } | null) => {
         const list: Channel[] = Array.isArray(d && d.data) ? (d as { data: Channel[] }).data : []
-        if (list.length) setChannels(list)
+        if (list.length) {
+          setChannels(list)
+          try {
+            localStorage.setItem('c_channels', JSON.stringify(list))
+          } catch (e) {}
+        }
       })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // 当前渠道展示名(数据驱动; 未拉到配置时按 code 兜底)
+  // 2026-10-30 兜底文案必须与 channels 注册表一致: 原兜底写 '京东' → 首屏/接口未返回时
+  //   胶囊显示"京东", 数据到了才变"京东渠道"(用户感知为"有概率变成京东")
   const _chLabel =
     (channels.find(c => c.code === channel) || {}).name ||
-    (channel === 'jd' ? '京东' : channel === 'other' ? '其他' : channel)
+    (channel === 'jd' ? '京东渠道' : channel === 'other' ? '其他渠道' : channel)
   const fresh = useFreshness(channel) // 2026-10-29 数据新鲜度(看板胶囊左侧圆点)
   const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
@@ -891,7 +898,7 @@ export default function App() {
                         {(channels && channels.length
                           ? channels.filter(c => c.enabled !== 0)
                           : [
-                              { code: 'jd', name: '京东' },
+                              { code: 'jd', name: '京东渠道' },
                               { code: 'other', name: '其他渠道' },
                             ]
                         ).map(c => (
@@ -1002,7 +1009,7 @@ export default function App() {
                         {(channels && channels.length
                           ? channels.filter(c => c.enabled !== 0)
                           : [
-                              { code: 'jd', name: '京东' },
+                              { code: 'jd', name: '京东渠道' },
                               { code: 'other', name: '其他渠道' },
                             ]
                         ).map(c => (
