@@ -1397,3 +1397,58 @@ return { data: 'data' in d ? d.data : d, status: resp.status }
 2. bundle 里搜新功能的关键字符串(如 `copy_from`)判断是否真进去了
 3. 都没进去 → 说明构建失败被吞, 需单独排查云端构建(降级方案: `--minify false` 降低内存峰值, 或拆 chunk)
 
+### 15.92 异步拉取三件套：同步中计数 / 重试留痕 / 配置不缓存(2026-10-30, **强制要求**)
+
+任何页面/组件发起**数据拉取**(api.get / fetch / api.post 后轮询)都按下表接入; 缺项视为实现不合格。
+
+#### 一、必须接入「同步中 / 加载中」(syncing 计数)
+
+```tsx
+useAppStore.getState().setSyncing(1)      // 请求开始 +1
+try {
+  const r = await api.get('/api/xxx')
+  ...
+} finally {
+  useAppStore.getState().setSyncing(-1)   // **唯一出口** finally 归零(return/throw/abort 全覆盖)
+}
+```
+
+- 胶囊文案由 `syncOld` 决定: **有旧值 →「同步中」/ 首载 →「加载中」**(`App.tsx` syncBadge)
+- **重试期间只 ±1 一次**: 把重试写成 for 循环包在同一个 try/finally 内;
+  若逐次 `+1/-1`(如 setTimeout 递归), 胶囊会闪一下归零再亮 → 用户以为已完成
+- 禁止裸 `fetch(...)` 绕过该机制(2026-10-30 channels 拉取即此错: 用户完全看不到进度)
+
+#### 二、失败必须重试 + 留痕
+
+```tsx
+for (let attempt = 0; attempt <= 2; attempt += 1) {
+  try { ...; return } catch (e) {
+    if (attempt >= 2) { reportError('api_http_error', 'xxx 加载失败', '', 'warning'); return }
+    await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))   // 1.5s / 3s 退避
+  }
+}
+```
+
+- **禁止 `catch(() => {})` 静默**(本轮同类错误: 渠道列表失败后无限使用兜底值, 无人发现)
+- 失败降级要有可见感: 保留旧数据 + 顶部提示(参考 InventoryPage: `loadErr && inventory.length > 0` 非阻塞提示)
+
+#### 三、配置类数据禁止 localStorage 缓存
+
+| 数据类型 | 缓存策略 | 理由 |
+|---|---|---|
+| **配置**(channels / rules / 补货参数 / 列配置) | **不缓存**(每次挂载拉接口) | 禁用/改名/参数调整需**即时生效**; 缓存会让老客户端长期用过时配置(实时性缺口) |
+| 业务数据(订单/库存/日销) | 走后端表缓存(analysis_cache, TTL + invalidate_all) | 见 §15.27; 前端只管 30s 静默刷新 |
+| 纯 UI 偏好(列显示/排序/主题) | localStorage 可缓存 | 与业务数据无关, 滞后无风险 |
+
+- 首屏正确性**靠兜底文案保证**(如 channels 兜底写 `'京东渠道'`), **不要用缓存换**
+- 兜底值必须与后端默认值一致: 兜底写 `'京东'`、接口返回 `'京东渠道'` → 就会出现
+  "文案有概率变短"(首屏兜底, 拉到后变长)
+
+#### 四、接入检查清单(PR 自检)
+
+1. [ ] 请求开始 `setSyncing(1)`, `finally` 里 `setSyncing(-1)`(唯一出口)
+2. [ ] 重试循环包在同一 try/finally 内, 全程只 ±1
+3. [ ] 失败 ≥2 次后 `reportError(...)` 留痕, 不静默
+4. [ ] 有旧数据时失败 → 保留列表 + 非阻塞提示, 不白屏
+5. [ ] 配置类数据没有 localStorage 缓存
+6. [ ] 首屏兜底值与后端默认值一致(文案/模式/枚举)
