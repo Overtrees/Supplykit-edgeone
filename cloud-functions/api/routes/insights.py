@@ -283,6 +283,26 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "batch_days": _bm.get("days", 0),
         })
     if page > 0 and page_size > 0:
+        # 2026-10-30 全量汇总(底部总计必须是**该维度所有 SKU**, 不是已加载行之和):
+        #   仅 page<=1 且无 search 时算 + 60s 表缓存 → 翻页不重复扫。
+        #   实测 SUM 5 列 ≈51 RU(与"补货拉全量 inventory"同级), 缓存后每次进页面最多一次。
+        _sum = None
+        if int(page or 0) <= 1 and not search:
+            try:
+                from routes.analysis_cache import cache_get as _cg
+                def _build_sum():
+                    _r0 = one("SELECT COUNT(*) AS c, SUM(beginning_stock) AS beg, "
+                              "SUM(month_inbound) AS mi, SUM(month_outbound) AS mo, "
+                              "SUM(available_qty) AS av, SUM(in_transit_qty) AS tr "
+                              "FROM inventory WHERE channel=%s AND warehouse_type=%s",
+                              [channel, wh_type]) or {}
+                    return {"cnt": int(_r0.get("c") or 0), "beg": int(_r0.get("beg") or 0),
+                            "mi": int(_r0.get("mi") or 0), "mo": int(_r0.get("mo") or 0),
+                            "av": int(_r0.get("av") or 0), "tr": int(_r0.get("tr") or 0)}
+                _sum = _cg("inv_sum|%s|%s" % (channel, wh_type), 60, _build_sum)
+            except Exception as _es:
+                try_err('insights', '进销存全量汇总降级', _es)
         return ok({"items": items, "total": total, "page": page, "page_size": page_size,
+                   "summary": _sum,
                    "month_start": month_start, "month_end": month_end})
     return ok(items)

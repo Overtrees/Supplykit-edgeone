@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react'
 import { api, clearCache, abortScope } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
@@ -64,11 +64,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const [invTotal, setInvTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadErr, setLoadErr] = useState('')
+  // 2026-10-30 全量汇总(该维度所有 SKU): 底部总计不用"已加载行之和"
+  const [invSummary, setInvSummary] = useState(null)
   // 2026-10-30 刷新失败: 复用现有 syncing 胶囊 + loadErr(不新造状态机)
   const invLenRef = useRef(0)
   useEffect(() => {
     invLenRef.current = inventory.length
-  }, [inventory])
+  }, [inventory, invSummary])
   const [visCols, setVisCols] = useState([])
   useEffect(() => {
     _snapInv = inventory
@@ -138,6 +140,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       } // 竞态丢弃
       setLoadErr('')
       const d = r.data || {}
+      if (p === 1 && d.summary) setInvSummary(d.summary)
       const items = d.items || d || []
       setInvTotal(d.total || items.length || 0)
       setInvPage(p)
@@ -221,11 +224,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   // 2026-10-30 平均周转与行值同口径(会计): 期间天数 × Σ(期初+当月入库) / Σ当月出库
   //   (原 Σturnover_days/行数 是算术平均, 会被单个大库存行拉爆)
   const totalTurnover = useMemo(() => {
-    const beg = inventory.reduce(
-      (s, x) => s + (x.beginning_stock_raw || 0) + (x.month_inbound || 0),
-      0,
-    )
-    const out = inventory.reduce((s, x) => s + (x.month_outbound || 0), 0)
+    // 优先后端全量汇总(该维度所有 SKU); 无 summary(搜索/翻页)时回退已加载行
+    const beg = invSummary
+      ? (invSummary.beg || 0) + (invSummary.mi || 0)
+      : inventory.reduce((s, x) => s + (x.beginning_stock_raw || 0) + (x.month_inbound || 0), 0)
+    const out = invSummary
+      ? invSummary.mo || 0
+      : inventory.reduce((s, x) => s + (x.month_outbound || 0), 0)
     if (out <= 0 || inventory.length === 0) return null
     const ms = inventory[0].month_start
     const days = ms
@@ -234,6 +239,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     return ((days * beg) / out).toFixed(1)
   }, [inventory])
 
+  // 底部总计取值: 优先后端全量 summary(该维度所有 SKU), 缺失回退已加载行
+  const _sumVal = useCallback(
+    (key, pick, fallback) => {
+      const v = invSummary ? invSummary[key] : null
+      return v != null ? v : inventory.reduce((s, x) => s + (pick(x) || 0), 0)
+    },
+    [invSummary, inventory],
+  )
   const delInv = async () => {
     if (!confirmDel) return
     try {
@@ -997,33 +1010,25 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       return React.createElement(
                         'td',
                         { key: col.id, style: { textAlign: 'right', fontSize: 'var(--font-sm)' } },
-                        inventory.reduce(function (s, x) {
-                          return s + (x.beginning_stock_raw || 0)
-                        }, 0),
+                        _sumVal('beg', x => x.beginning_stock_raw),
                       )
                     if (col.id === 'month_in')
                       return React.createElement(
                         'td',
                         { key: col.id, className: 'col-qty' },
-                        inventory.reduce(function (s, x) {
-                          return s + (x.month_inbound || 0)
-                        }, 0),
+                        _sumVal('mi', x => x.month_inbound),
                       )
                     if (col.id === 'month_out')
                       return React.createElement(
                         'td',
                         { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
-                        inventory.reduce(function (s, x) {
-                          return s + (x.month_outbound || 0)
-                        }, 0),
+                        _sumVal('mo', x => x.month_outbound),
                       )
                     if (col.id === 'avail')
                       return React.createElement(
                         'td',
                         { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
-                        inventory.reduce(function (s, x) {
-                          return s + (x.available_qty || 0)
-                        }, 0),
+                        _sumVal('av', x => x.available_qty),
                       )
                     if (col.id === 'keep_days') {
                       const _q = inventory.reduce((acc, x) => acc + (x.available_qty || 0), 0)
