@@ -990,7 +990,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     : gmvView === 'payout'
                       ? periodMeta.prev_payout
                       : periodMeta.prev_gmv
-                if (_last == null || _prev == null || !_prev) return null
+                if (_last == null || _prev == null) return null
+                // 2026-10-30: 无基准(prev=0/缺失)时明确提示, 不再静默不渲染(曾被误判"环比功能坏了")
+                if (!_prev)
+                  return (
+                    <span style={{ fontSize: 'var(--font-9)', color: 'var(--muted2)' }}>
+                      无可比数据
+                    </span>
+                  )
                 const pct = ((Number(_last) - Number(_prev)) / Number(_prev)) * 100
                 // 2026-10-16 无歧义: 窗口=上周/上月(完整自然周/月), 环比基准=上上周/上上月
                 const _cmpLabel =

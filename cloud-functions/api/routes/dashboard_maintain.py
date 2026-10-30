@@ -165,7 +165,7 @@ def _track_data(channel, _db2):
             _snapshot_step(channel, _db2)
         _amax = str(_r.get("am") or "")[:10]
         if _db2 and _amax < _db2:
-            if _rebuild_day_agg(60):
+            if _rebuild_day_agg(90):   # 2026-10-30 与 summary/物化/对账/回填窗口统一 90
                 _clear_agg_dirty()
             else:
                 _mark_agg_dirty()

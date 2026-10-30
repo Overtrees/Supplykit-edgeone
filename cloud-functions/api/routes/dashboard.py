@@ -297,7 +297,9 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
         return _assemble(rows, channel, start_date, end_date, mode)
 
-    days60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
+    # 2026-10-30 窗口 60 → 90: 环比基准=上上月, 60 天窗口(now-59)在跨月时恰好切掉上上月
+    #   (实测: 数据始于 8-31, now-59=9-01 → 上上月 8 月仅剩的 8-31 落在窗口外 → prev_gmv=0 → 环比永不渲染)
+    days60 = (now - timedelta(days=89)).strftime("%Y-%m-%d")
     # 物化表优先(历史区间读 orders_day_agg 万级, 当天实时直查 orders): agg 不可用降级直查
     try:
         _aggc = one("SELECT COUNT(*) AS c, COALESCE(MAX(`date`),'') AS m FROM orders_day_agg WHERE channel=%s", [channel]) or {}

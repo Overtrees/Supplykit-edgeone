@@ -140,7 +140,7 @@ def invalidate_all():
                         _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
                                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
                         _dbs = str(_db.get("m") or "")[:10]
-                        if _rebuild_day_agg(60):
+                        if _rebuild_day_agg(90):   # 2026-10-30 与 summary/物化/对账窗口统一 90
                             _ck()
                         else:
                             _mk()
