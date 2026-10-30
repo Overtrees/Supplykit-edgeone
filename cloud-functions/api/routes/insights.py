@@ -233,6 +233,10 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         from routes.common import ch_default_mode as _cdm
         mode = _cdm(channel)   # 2026-10-30: 渠道默认模式由 channels 表驱动(原硬编码 jd→bbcc)
     _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
+    # 2026-10-30 周转天数口径(会计/进销存标准): 期间天数 × (期初 + 当期入库) / 当期出库
+    #   分子=当期可供总量, 分母=当期实际流出速度(出库流水), 反映真实周转效率;
+    #   与 days_to_empty(前瞻: 可用/日销, 还能撑多久) 是两回事, 两者并存
+    _period_days = max(1, (now.date() - datetime.strptime(month_start, "%Y-%m-%d").date()).days + 1)
     for r in rows:
         sku = r.get("sku")
         _bc1 = str(r.get("barcode") or "")
@@ -263,7 +267,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "available_qty": avail, "in_transit_qty": transit, "c_transit": int(r.get("c_transit") or 0),
             "safety_qty": _dyn_safety,
             "daily_sales": round(ds, 1),
-            "turnover_days": round((avail + transit) / ds, 1) if ds > 0 else None,
+            # 周转天数 = 期间天数 × (真实期初 + 当月入库) / 当月出库; 出库为 0 → 无定义(None → 前端显示 —)
+            "turnover_days": (round(_period_days * (int(r.get("beginning_stock") or 0) + month_inbound)
+                                    / month_outbound, 1) if month_outbound > 0 else None),
             "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
             "month_start": month_start, "month_end": month_end,
             "month_inbound": month_inbound,

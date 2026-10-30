@@ -205,13 +205,20 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
 
   const fl = useMemo(() => inventory, [inventory])
 
-  // 2026-10-30 平均周转改**加权**(总库存/总日销):
-  //   原 Σturnover_days/行数 是算术平均 —— 一个库存大、销量小的 SKU 就能把均值拉到几千天;
-  //   正解是 (Σ可用+Σ在途) / Σ日销, 即这批货按当前销量整体能撑几天
+  // 2026-10-30 平均周转与行值同口径(会计): 期间天数 × Σ(期初+当月入库) / Σ当月出库
+  //   (原 Σturnover_days/行数 是算术平均, 会被单个大库存行拉爆)
   const totalTurnover = useMemo(() => {
-    const qty = inventory.reduce((s, x) => s + (x.available_qty || 0) + (x.in_transit_qty || 0), 0)
-    const ds = inventory.reduce((s, x) => s + (x.daily_sales || 0), 0)
-    return ds > 0 ? (qty / ds).toFixed(1) : null
+    const beg = inventory.reduce(
+      (s, x) => s + (x.beginning_stock_raw || 0) + (x.month_inbound || 0),
+      0,
+    )
+    const out = inventory.reduce((s, x) => s + (x.month_outbound || 0), 0)
+    if (out <= 0 || inventory.length === 0) return null
+    const ms = inventory[0].month_start
+    const days = ms
+      ? Math.max(1, Math.floor((Date.now() - new Date(ms + 'T00:00:00').getTime()) / 86400000) + 1)
+      : 30
+    return ((days * beg) / out).toFixed(1)
   }, [inventory])
 
   const delInv = async () => {
