@@ -490,6 +490,9 @@ async def heal_own_inventory(request: Request):
     channel = (d or {}).get("channel") or ""
     # surrogate=true → 执行「业务主键 → 代理主键」根治迁移(一次性; 默认不做, 避免隐式改表结构)
     _surrogate = bool((d or {}).get("surrogate"))
+    # 2026-10-30 快照全量回填改为按需: 默认仅在快照为空时自动补(日常靠增量+对账);
+    #   传 {"refill": true} 强制全量 90 天(运维修大缺口时用, 单次 13 万行写入)
+    _force_refill = bool((d or {}).get("refill"))
     chs = [channel] if channel else ["jd", "other"]
     out = {}
     from routes.cleanse_write import (
@@ -564,8 +567,8 @@ async def heal_own_inventory(request: Request):
                 #   _snapshot_reconcile 对账维护。
                 _have = int(((_q5("SELECT COUNT(*) c FROM daily_sales_snapshot WHERE channel=%s",
                                   [_ch3]) or [{}])[0] or {}).get("c") or 0)
-                if _have > 0:
-                    _refill[_ch3] = "skipped(已有 %d 行)" % _have
+                if _have > 0 and not _force_refill:
+                    _refill[_ch3] = "skipped(已有 %d 行, 需要全量请传 refill:true)" % _have
                     continue
                 _e6("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
                     "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
@@ -585,7 +588,7 @@ async def heal_own_inventory(request: Request):
         try:
             from routes.dashboard_maintain import _snapshot_reconcile as _sr
             for _ch4 in chs:
-                _snap_rec[_ch4] = _sr(_ch4)
+                _snap_rec[_ch4] = _sr(_ch4, limit_days=30)   # 运维入口一次最多修 30 天(日常自动跑仍 10 天)
         except Exception as _esr:
             try_err('misc', '快照残留自愈降级', _esr)
         out["_snapshot_reconcile"] = _snap_rec
