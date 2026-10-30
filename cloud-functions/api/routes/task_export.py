@@ -158,8 +158,10 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 _row = {
                     "SKU": it.get("sku", ""), "商品名": it.get("product_name", ""),
                     "仓库": it.get("warehouse", ""), "仓库类型": it.get("warehouse_type", ""),
-                    # 批次行的"可用"= 该批次数量(多批次明细逐行对齐各自批次——业务合理); 无批次主行 = 汇总可用
-                    "可用": (_rb or {}).get("qty") if _rb else it.get("available_qty", ""),
+                    # 2026-10-30 可用列对齐实际情况(用户定): 多批次行每行重复**计算后的可用**
+                    #   (own=期初+入-出 重算值 / platform=导入快照), 不强制=批次数量;
+                    #   批次数量由"批次数量"列单独呈现(每批次一行)
+                    "可用": it.get("available_qty", ""),
                     "在途": it.get("in_transit_qty", ""),
                 }
                 if _wh == "platform_b":
@@ -169,7 +171,8 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                     "日销": it.get("daily_sales", ""), "周转天数": it.get("turnover_days", ""),
                     "库存可撑天数": it.get("days_to_empty", ""),
                     "当月入库": it.get("month_inbound", ""), "当月出库": it.get("month_outbound", ""),
-                    "期初": it.get("beginning_stock", ""), "单价": it.get("price", ""),
+                    # 2026-10-30 期初取**真实导入值**(方案A), 不是反推的本月期初(对账一致)
+                    "期初": it.get("beginning_stock_raw", ""), "单价": it.get("price", ""),
                     "品牌": it.get("brand", ""),
                     "生产日期(批次)": _pd or "",
                     "截止日期(批次)": _ed or "",

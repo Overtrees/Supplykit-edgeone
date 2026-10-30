@@ -269,6 +269,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "month_inbound": month_inbound,
             "month_outbound": month_outbound,
             "beginning_stock": max(avail - month_inbound + month_outbound, 0),
+            "beginning_stock_raw": int(r.get("beginning_stock") or 0),  # 真实导入期初(导出对账用)
             "barcode": r.get("barcode") or "", "brand": r.get("brand") or "",
             "price": r.get("price") or 0, "batch_count": int(r.get("batch_count") or 0),
             "batch_prod_date": _bm.get("pd", ""), "batch_exp_date": _bm.get("ed", ""),

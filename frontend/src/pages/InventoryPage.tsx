@@ -421,8 +421,9 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       x.product_name,
                     )
                   else if (col.id === 'begin') {
-                    const _beg =
-                      (x.available_qty || 0) - (x.month_inbound || 0) + (x.month_outbound || 0)
+                    // 2026-10-30 期初库存改**真实导入值** beginning_stock_raw(后端返回原列值);
+                    //   原前端自算 available − 月入 + 月出 是"本月期初"反推, 与导入单据对不上
+                    const _beg = x.beginning_stock_raw ?? 0
                     el = React.createElement(
                       'td',
                       { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
@@ -967,7 +968,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         'td',
                         { key: col.id, style: { textAlign: 'right', fontSize: 'var(--font-sm)' } },
                         inventory.reduce(function (s, x) {
-                          return s + (x.beginning_stock || 0)
+                          return s + (x.beginning_stock_raw || 0)
                         }, 0),
                       )
                     if (col.id === 'month_in')
