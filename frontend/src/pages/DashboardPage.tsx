@@ -342,7 +342,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             dashboard: dash,
             alerts,
             stockRisk,
-            alertCounts: aux.alertCounts || null,
+            alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
             bcOutOfStock: aux.bcOutOfStock || [],
             inventory: ov.items || [],
             _stockOverview: ov,
@@ -468,7 +468,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           dashboard: s.data,
           alerts: aux.alerts || [],
           stockRisk: (sr && sr.data) || useAppStore.getState().stockRisk || {},
-          alertCounts: aux.alertCounts || null,
+          alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
           bcOutOfStock: aux.bcOutOfStock || [],
           inventory: (aux.stockOverview || {}).items || [],
           loading: false,
