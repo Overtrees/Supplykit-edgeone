@@ -1920,12 +1920,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   ? fullAlerts.filter(
                       x =>
                         x.alert_type === 'low_stock' &&
-                        // 2026-10-30 严格对应各模式评估产物(与后端 aux 白名单一致):
-                        //   bbcc = own 逐仓 + bc 合计; traditional = 逐仓三型(own/platform/platform_b)
-                        (_replMode === 'bbcc'
-                          ? ['own', 'bc']
-                          : ['own', 'platform', 'platform_b']
-                        ).includes(String(x.warehouse_type || '')),
+                        // 2026-10-30 与后端一致: bbcc = own + bc; traditional = own + platform
+                        //   (传统多仓不看 B 仓——B 属 BBCC 调拨体系, 与 purchase_calc:127 同口径)
+                        (_replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']).includes(
+                          String(x.warehouse_type || ''),
+                        ),
                     )
                   : lowStockAlerts
                 ).map(function (x) {

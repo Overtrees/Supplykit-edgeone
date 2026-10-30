@@ -780,7 +780,8 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
     """看板辅助聚合(60s 共享表缓存——TiDB 表跨实例一致): alerts(分组配额, 低库存组按补货模式过滤维度) + alertCounts
     + stockOverview + bcOutOfStock + stockRisk
 
-    模式跟随: bbcc → 低库存显示 BC 盘(platform/platform_b)+own(集货仓=B仓调拨源);
+    模式跟随: bbcc → 低库存显示 BC 合计(bc, 已含 platform+platform_b)+own(集货仓=B仓调拨源);
+    traditional → own + platform 逐仓(不含 B 仓: B 属 BBCC 调拨体系);
     traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
     """
     _key = "dash_aux|%s|%s" % (channel, mode)
@@ -797,11 +798,12 @@ def _build_aux(channel, mode):
     #   改为**元组**白名单 + 显式包含 bc 与 ''。
     # 实测低库存告警 100% 带合法仓型(bc/own/platform), 空仓型 0 条 → 白名单不含 ''(空仓型属数据异常,
     #   应暴露而非静默混入); oversell/purchase_need 等 SKU 级告警走 other 分支, 不受此白名单影响
-    # 2026-10-30 白名单严格对应各模式的评估产物:
-    #   bbcc → 逐仓 own + BC 合计(bc)  ;  traditional → 逐仓 own/platform/platform_b
-    #   (bbcc 评估把 platform/platform_b 合并成一条 bc; traditional 不产生 bc)
+    # 2026-10-30 白名单严格对应各模式的评估产物与业务口径:
+    #   bbcc → own 逐仓 + BC 合计(bc)      (platform/platform_b 已合并成 bc)
+    #   traditional → own + platform 逐仓  —— **不含 platform_b**:
+    #     B 仓是 BBCC 体系(供应商→B→C 调拨), 传统多仓模式不看它(与 purchase_calc:127 同口径)
     _wh_types = (("own", "bc")
-                 if mode == "bbcc" else ("own", "platform", "platform_b"))
+                 if mode == "bbcc" else ("own", "platform"))
     _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
     _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
