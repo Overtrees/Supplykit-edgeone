@@ -5,7 +5,6 @@ from fastapi import APIRouter
 
 from db import query, one
 from routes.common import ok, traced, try_err
-from biz.sales import load_daily_sales, calc_sales_multi
 
 router = APIRouter(tags=["insights"])
 
@@ -104,22 +103,32 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         rows = query((sel + " ORDER BY i.id ASC") % where, params)
 
     skus = [r.get("sku") for r in rows]
-    daily = load_daily_sales(28, channel, skus=set(skus)) if skus else {}
-    multi = calc_sales_multi(daily, windows=[7, 14, 28])
-    # 2026-10-29 按 69码: 行级日销优先用该码, 缺失降级 SKU 级(multi)
-    _bc_ds = {}
+    # 2026-10-30 删除直算(load_daily_sales + calc_sales_multi): 日销已全部改读物化逐仓行,
+    #   原直算每次都要拉 28 天快照+算三窗口, 白耗(实测进销存 0.8-2s, 其中直算占大头)
+    # 2026-10-30 行级日销改**逐仓**口径(进销存本就是逐仓台账, 每行一个仓):
+    #   该仓该 69码 -> 该仓合计 -> 0(不跨维); 原用全仓按码/SKU级 -> 可撑天数分母被放大
+    _wh_bc_ds = {}
+    _wh_ds = {}
     try:
-        _codes = sorted({str(r.get("barcode") or "") for r in rows if str(r.get("barcode") or "")})
-        if _codes:
-            from biz.sales import get_sku_sales_stats as _gss_i, WH_C as _WA_i   # 2026-10-30 全仓→C仓
-            for _r2 in (_gss_i(channel, wh=_WA_i, days=28, barcode="*") or {}).values():
+        _sk_l = [k for k in skus if k][:500]
+        if _sk_l:
+            from biz.sales import get_sku_sales_stats as _gss_i, rolling_predict as _rp_i
+            _SENT = ("__C__", "__ALL__", "__BC__")
+            for _r2 in (_gss_i(channel, skus=_sk_l, days=28, barcode="*") or {}).values():
                 _bc0 = str(_r2.get("barcode") or "")
-                _sk0 = str(_r2.get("sku") or "")
-                if _bc0:
-                    _v = float(_r2.get("ds28") or 0) or float(_r2.get("ds7") or 0)
-                    _bc_ds["%s|%s" % (_sk0, _bc0)] = _v
-    except Exception:
-        _bc_ds = {}
+                _w0 = str(_r2.get("warehouse") or "")
+                if _bc0 and _w0 and _w0 not in _SENT:
+                    _wh_bc_ds["%s|%s|%s" % (_r2.get("sku"), _bc0, _w0)] = _rp_i(
+                        float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
+                        float(_r2.get("ds28") or 0))
+            for _r2 in (_gss_i(channel, skus=_sk_l, days=28) or {}).values():
+                _w0 = str(_r2.get("warehouse") or "")
+                if _w0 and _w0 not in _SENT:
+                    _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _rp_i(
+                        float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
+                        float(_r2.get("ds28") or 0))
+    except Exception as _ewh2:
+        try_err('insights', '逐仓日销(按码)加载降级', _ewh2)
     # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)
     batch_map = {}
     if skus:
@@ -221,7 +230,10 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     for r in rows:
         sku = r.get("sku")
         _bc1 = str(r.get("barcode") or "")
-        ds = (_bc_ds.get("%s|%s" % (sku, _bc1)) if _bc1 else 0) or multi[28].get(sku, 0) or multi[7].get(sku, 0)
+        # 2026-10-30 逐仓口径: 该仓该码 -> 该仓合计(不跨维)
+        _wh1 = str(r.get("warehouse") or "")
+        ds = (_wh_bc_ds.get("%s|%s|%s" % (sku, _bc1, _wh1)) if _bc1 else 0) \
+            or _wh_ds.get("%s||%s" % (sku, _wh1), 0)
         avail = int(r.get("available_qty") or 0)
         transit = int(r.get("in_transit_qty") or 0)
         _k = (sku, r.get("warehouse") or "")
