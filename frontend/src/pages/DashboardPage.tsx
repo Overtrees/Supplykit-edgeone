@@ -1578,12 +1578,17 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           riskWarning={riskWarning}
           riskFont={riskFont}
           onAlert={function (sku, whType, wh) {
-            if (whType === 'own') {
-              useAppStore.getState().setHammerWhType('own')
-            } else {
-              useAppStore.getState().setHammerWhType(wh === 'B' ? 'platform_b' : 'platform')
+            // 2026-10-30 修复串页: 原直调 __setPage('inventory'), 而 App 路由是 page === 'inv'
+            //   → 落到"功能待添加"默认分支(用户实证: 锤子菜单显示「其他 · inventory 暂无数据」);
+            //   且没传 sku, 即使进入也不会高亮。改走父级 onAlert → App.navigate('inv', sku, whType, wh)
+            if (onAlert) {
+              onAlert(sku, whType, wh)
+              return
             }
-            window.__setPage && window.__setPage('inventory')
+            useAppStore
+              .getState()
+              .setHammerWhType(whType === 'own' ? 'own' : wh === 'B' ? 'platform_b' : 'platform')
+            window.__setPage && window.__setPage('inv')
           }}
           onLoadFull={loadFullRisk}
           onShowAllRisk={setShowAllRisk}

@@ -35,11 +35,13 @@ export default function ChannelsPage() {
     api
       .get('/api/channels', { timeout: 20000 })
       .then(r => {
-        const d = (r.data && r.data.data) || []
-        setList(Array.isArray(d) ? d : [])
-        setChannels(Array.isArray(d) ? d : [])
+        // 2026-10-30 注意: apiGet 已解包(`return { data: 'data' in d ? d.data : d }`),
+        //   故 r.data 直接就是数组; 原写 r.data.data 恒 undefined → 列表永远空(用户实证无数据)
+        const d = Array.isArray(r.data) ? r.data : []
+        setList(d)
+        setChannels(d)
       })
-      .catch(() => toast && toast('渠道列表加载失败'))
+      .catch((e: Error) => toast && toast(e && e.message ? e.message : '渠道列表加载失败'))
       .finally(() => setLoading(false))
   }
 
@@ -68,11 +70,7 @@ export default function ChannelsPage() {
         { timeout: 60000 },
       )
       .then(r => {
-        if (r.data && r.data.ok === false) {
-          toast && toast(r.data.error || '创建失败')
-          return
-        }
-        const cp = (r.data && r.data.data && r.data.data.copied) || {}
+        const cp = (r.data && r.data.copied) || {}
         toast &&
           toast(
             cp.rules != null
@@ -89,21 +87,18 @@ export default function ChannelsPage() {
         setShowForm(false)
         load()
       })
-      .catch(() => toast && toast('创建失败'))
+      .catch((e: Error) => toast && toast(e && e.message ? e.message : '创建失败'))
       .finally(() => setSaving(false))
   }
 
   const patch = (code: string, body: Record<string, unknown>) => {
     api
       .put('/api/channels/' + encodeURIComponent(code), body, { timeout: 20000 })
-      .then(r => {
-        if (r.data && r.data.ok === false) toast && toast(r.data.error || '保存失败')
-        else {
-          toast && toast('已保存')
-          load()
-        }
+      .then(() => {
+        toast && toast('已保存')
+        load()
       })
-      .catch(() => toast && toast('保存失败'))
+      .catch((e: Error) => toast && toast(e && e.message ? e.message : '保存失败'))
   }
 
   const disable = (code: string) => {
@@ -117,7 +112,7 @@ export default function ChannelsPage() {
         toast && toast('已禁用')
         load()
       })
-      .catch(() => toast && toast('禁用失败'))
+      .catch((e: Error) => toast && toast(e && e.message ? e.message : '禁用失败'))
   }
 
   return (
