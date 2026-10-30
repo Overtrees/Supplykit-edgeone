@@ -379,7 +379,10 @@ def export_download(filename: str):
                             except Exception as _eb:
                                 try_err('tasks', '分片解码降级(%s)' % p, _eb)
                         else:
-                            merged += c.encode("utf-8-sig")
+                            # 2026-10-30 双 BOM 修复: 存储的文本本身已带 BOM, encode('utf-8-sig')
+                            #   会再加一个 → Excel 首列出现 "ï»¿"。这里保证恰好一个 BOM
+                            _b = c.encode("utf-8")
+                            merged += _b if _b.startswith(b"\xef\xbb\xbf") else b"\xef\xbb\xbf" + _b
                     elif c is not None:
                         merged += bytes(c)
                 filename = res.get("name") or filename  # 下载文件名用正式名(分片模式 filename=task_id)
@@ -394,7 +397,9 @@ def export_download(filename: str):
             import base64 as _b64
             data = _b64.b64decode(content[7:])
         else:
-            data = content.encode("utf-8-sig")  # 兼容 TEXT 列旧数据, 中文 Excel 打开不乱码
+            # 2026-10-30 双 BOM 修复(同上): 仅在缺失时补 BOM
+            _b = content.encode("utf-8")
+            data = _b if _b.startswith(b"\xef\xbb\xbf") else b"\xef\xbb\xbf" + _b
     elif content is None:
         data = b""
     else:
