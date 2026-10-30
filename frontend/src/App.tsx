@@ -106,32 +106,35 @@ export default function App() {
   useEffect(() => {
     let alive = true
     const _chBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
-    const load = async (attempt: number) => {
+    // syncing 只 +1/-1 各一次: 重试期间持续显示"同步中"(原实现逐次加减会导致胶囊闪)
+    const run = async () => {
       useAppStore.getState().setSyncing(1)
       try {
-        const r = await fetch(_chBase + '/api/channels?enabled_only=1', {
-          headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
-        })
-        if (!r.ok) throw new Error('HTTP ' + r.status)
-        const d: { data?: Channel[] } = await r.json()
-        const list: Channel[] = Array.isArray(d && d.data) ? (d as { data: Channel[] }).data : []
-        if (alive && list.length) setChannels(list)
-      } catch (e) {
-        if (alive && attempt < 2) {
-          setTimeout(
-            () => {
-              if (alive) load(attempt + 1)
-            },
-            1500 * (attempt + 1),
-          )
-          return
+        for (let attempt = 0; attempt <= 2; attempt += 1) {
+          try {
+            const r = await fetch(_chBase + '/api/channels?enabled_only=1', {
+              headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
+            })
+            if (!r.ok) throw new Error('HTTP ' + r.status)
+            const d: { data?: Channel[] } = await r.json()
+            const list: Channel[] = Array.isArray(d && d.data)
+              ? (d as { data: Channel[] }).data
+              : []
+            if (alive && list.length) setChannels(list)
+            return
+          } catch (e) {
+            if (attempt >= 2) {
+              if (alive) reportError('api_http_error', '渠道列表加载失败', '', 'warning')
+              return
+            }
+            await new Promise(res => setTimeout(res, 1500 * (attempt + 1)))
+          }
         }
-        if (alive) reportError('api_http_error', '渠道列表加载失败', '', 'warning')
       } finally {
         useAppStore.getState().setSyncing(-1)
       }
     }
-    load(0)
+    run()
     return () => {
       alive = false
     }
