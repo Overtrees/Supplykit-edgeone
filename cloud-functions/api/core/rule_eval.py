@@ -490,12 +490,19 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         if hits:
             _ats = sorted({h[0] for h in hits} & _evaluated_ats)
             for _at in _ats:
-                _act = query("SELECT id, related_sku, warehouse, COALESCE(barcode,'') AS bc FROM alerts "
+                _act = query("SELECT id, related_sku, warehouse, COALESCE(barcode,'') AS bc, "
+                             "COALESCE(warehouse_type,'') AS wt FROM alerts "
                              "WHERE alert_type=%s AND channel=%s AND status='active' AND source='rules_engine'",
                              [_at, channel])
                 _only = {str(x) for x in skus} if skus else None  # 增量评估只关本批 SKU(防误关)
+                # 2026-10-30 跨模式保护: 只关闭**本模式会产出**的仓型 ——
+                #   bbcc 产出 own+bc / traditional 产出 own+platform+platform_b;
+                #   否则跑一次 traditional 评估会把 bbcc 的 bc 告警全部关掉(反之亦然)
+                _close_wt = (("own", "bc") if str(_mode_e) == "bbcc"
+                             else ("own", "platform", "platform_b"))
                 _close = [a["id"] for a in _act
                           if (_only is None or str(a.get("related_sku")) in _only)
+                          and str(a.get("wt") or "") in _close_wt
                           and (_at, a.get("related_sku"), a.get("warehouse") or "", channel,
                                str(a.get("bc") or "")) not in hits]
                 for _i in range(0, len(_close), 200):
