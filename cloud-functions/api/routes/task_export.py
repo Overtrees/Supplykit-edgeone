@@ -355,6 +355,7 @@ def _save_export_part(filename, content):
                 (filename, "base64:" + _b64.b64encode(content).decode("ascii")))
 
 def export_download(filename: str):
+    import base64 as _b64   # 2026-10-30 函数级导入(分片合并/单文件解码都用)
     row = one("SELECT content FROM export_files WHERE filename=%s", [filename])
     if not row:
         # 分片模式: filename 为任务虚拟名(实际分片在 sync_tasks.result.parts) → 读分片合并
@@ -369,7 +370,16 @@ def export_download(filename: str):
                     rp = one("SELECT content FROM export_files WHERE filename=%s", [p])
                     c = rp.get("content") if rp else None
                     if isinstance(c, str):
-                        merged += (c[7:] if c.startswith("base64:") else c.encode("utf-8-sig"))
+                        if c.startswith("base64:"):
+                            # 2026-10-30 修复: 原直接把 c[7:] (仍是 base64 文本) 拼进 merged →
+                            #   合并后无 "base64:" 前缀 → 下游按 UTF-8 编码 → 下载文件是 base64 乱码。
+                            #   这里逐片解码成 bytes 再拼
+                            try:
+                                merged += _b64.b64decode(c[7:])
+                            except Exception as _eb:
+                                try_err('tasks', '分片解码降级(%s)' % p, _eb)
+                        else:
+                            merged += c.encode("utf-8-sig")
                     elif c is not None:
                         merged += bytes(c)
                 filename = res.get("name") or filename  # 下载文件名用正式名(分片模式 filename=task_id)
