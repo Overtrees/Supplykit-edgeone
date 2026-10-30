@@ -502,6 +502,18 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                 _r["barcode"] = str(_r.get("sku") or "").rsplit("|", 1)[-1]
                 _r["sku"] = str(_r.get("sku") or "").rsplit("|", 1)[0]
             rows += _bc_rows
+        # 2026-10-30 逐仓按码行(补全覆盖): key = sku|barcode|warehouse(三段) ——
+        #   原只生成聚合维度(__C__/__ALL__)的按码行, 逐仓缺失 → traditional 的 _rd(sku, 该仓, 码)
+        #   只能跨维降级到 __C__, 违背"降级只降码不降维"
+        if by_sku_wh_bc:
+            _whbc_rows = _to_rows(by_sku_wh_bc, "")
+            for _r in _whbc_rows:
+                _p3 = str(_r.get("sku") or "").rsplit("|", 2)
+                if len(_p3) == 3:
+                    _r["sku"], _r["barcode"], _r["warehouse"] = _p3[0], _p3[1], _p3[2]
+                else:
+                    _r["barcode"] = ""
+            rows += _whbc_rows
         # 逐仓行 sku 含 |仓名 → 拆分回 sku/warehouse 两列
         for r in rows:
             if r["warehouse"] == "" and "|" in r["sku"]:

@@ -202,7 +202,8 @@ def _build_repl(channel, mode):
         · 无 69码 → 直接读合计行
         """
         if bc:
-            _hit = _stats.get("%s|%s|%s" % (sku, bc, wh)) or _stats.get("%s|%s|%s" % (sku, bc, "__C__"))
+            # 2026-10-30 降级只降码, 不跨维(与 rule_eval._ds_of 一致): 该维该码 → 该维合计
+            _hit = _stats.get("%s|%s|%s" % (sku, bc, wh))
             if _hit:
                 return _hit
         # 2026-10-29 key 统一为 sku|barcode|warehouse(空码即 sku||wh) —— 原 sku|wh 已不存在

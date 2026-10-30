@@ -112,6 +112,7 @@ def _stock_risk(channel, full: int = 0):
     #    跳过 load_daily_sales_grouped + calc_sales_multi ×3 直算(曾直算抢跑——5 万 SKU 白算 3 次);
     #    物化空/失败 → 降级原直算(数学等价, 零行为变化)。物化行只存三窗口底料, 现场 rolling_predict 与直算逐 SKU 等价
     fused, fused_c, wh_fused, sigma, _has_materialized = {}, {}, {}, {}, False
+    wh_fused_bc = {}   # 2026-10-30 逐仓按码: sku|barcode|warehouse → fused
     fused_bc = {}  # 2026-10-29 按 69码 日销
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
@@ -138,10 +139,21 @@ def _stock_risk(channel, full: int = 0):
                         _wk = "%s|%s" % (_r.get("sku") or "", _wh)
                         wh_fused[_wk] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
                                             float(_r.get("ds28") or 0))
+            # 2026-10-30 逐仓按码映射(该仓该码) —— 逐仓判定降级只降码不降维
+            wh_fused_bc = {}
+            try:
+                for _r in (get_sku_sales_stats(channel, days=28, barcode="*") or {}).values():
+                    _w2 = _r.get("warehouse") or ""
+                    _b2 = str(_r.get("barcode") or "")
+                    if _w2 and _b2 and _w2 not in (WH_ALL, WH_C, "__BC__"):
+                        wh_fused_bc["%s|%s|%s" % (_r.get("sku") or "", _b2, _w2)] = _rp(
+                            float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
+                            float(_r.get("ds28") or 0))
+            except Exception:
+                pass
             # 2026-10-29 按 69码: 批量读全部按码行(一次查询), key = "sku|barcode"
             try:
-                # 2026-10-30: BC 判定的日销读 **__C__**(全国 C 仓)—— B 仓不产生销售;
-                #   原用 WH_ALL(全仓)会把自有仓销量混进 BC 盘
+                # 2026-10-30: BC 判定的日销读 __C__(全国 C 仓) —— B 仓不产生销售
                 _rws_bc = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*")
                 for _r in (_rws_bc or {}).values():
                     _bc0 = str(_r.get("barcode") or "")
@@ -240,7 +252,9 @@ def _stock_risk(channel, full: int = 0):
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
         ctt = int(r.get("c_transit") or 0)
-        ds = _ds_of(sku, _bc) or wh_fused.get("%s|%s" % (sku, wh), 0) or fused_c.get(sku, 0) or fused.get(sku, 0)
+        # 2026-10-30 逐仓口径: 该仓该码 → 该仓合计 → 0(不跨维)
+        ds = (wh_fused_bc.get("%s|%s|%s" % (sku, _bc, wh)) if _bc else 0) \
+            or wh_fused.get("%s|%s" % (sku, wh), 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -290,7 +304,8 @@ def _stock_risk(channel, full: int = 0):
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
-        ds = _ds_of(sku, _bc) or wh_fused.get("%s|%s" % (sku, wh), 0) or fused.get(sku, 0)
+        ds = (wh_fused_bc.get("%s|%s|%s" % (sku, _bc, wh)) if _bc else 0) \
+            or wh_fused.get("%s|%s" % (sku, wh), 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
