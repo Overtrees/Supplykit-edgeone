@@ -297,9 +297,15 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
             (channel, start_date + " 00:00:00", (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"))
         return _assemble(rows, channel, start_date, end_date, mode)
 
-    # 2026-10-30 窗口 60 → 90: 环比基准=上上月, 60 天窗口(now-59)在跨月时恰好切掉上上月
-    #   (实测: 数据始于 8-31, now-59=9-01 → 上上月 8 月仅剩的 8-31 落在窗口外 → prev_gmv=0 → 环比永不渲染)
-    days60 = (now - timedelta(days=89)).strftime("%Y-%m-%d")
+    # 2026-10-30 取数窗口: **不写死天数, 下界对齐"上上月 1 号"**(自然完整月口径的环比基准)
+    #   环比 = 完整上月 vs 完整上上月; 若窗口用滚动的 now-59, 跨月那天会把上上月最后一天切掉
+    #   (实测: 数据始于 8-31, 10-29 时 now-59=8-31 可算, 10-30 时 now-59=9-01 → 上上月归零)。
+    #   同时仍保留 60 天趋势所需范围: 取 min(上上月1号, now-59) —— 只提前下界, 不改任何口径。
+    _m_start = now.replace(day=1)                                    # 本月1号
+    _prev_m_start = (_m_start - timedelta(days=1)).replace(day=1)    # 上月1号
+    _prev2_m_start = (_prev_m_start - timedelta(days=1)).replace(day=1)  # 上上月1号
+    _win60 = (now - timedelta(days=59)).strftime("%Y-%m-%d")
+    days60 = min(_prev2_m_start.strftime("%Y-%m-%d"), _win60)
     # 物化表优先(历史区间读 orders_day_agg 万级, 当天实时直查 orders): agg 不可用降级直查
     try:
         _aggc = one("SELECT COUNT(*) AS c, COALESCE(MAX(`date`),'') AS m FROM orders_day_agg WHERE channel=%s", [channel]) or {}
