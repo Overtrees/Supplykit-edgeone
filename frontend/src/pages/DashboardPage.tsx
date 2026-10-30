@@ -826,7 +826,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   function _whView(w) {
     w = w || {}
     if (_replMode === 'bbcc') {
-      return { main: (w.b || 0) + (w.c || 0), own: w.own || 0 } // BC合计 + 自有
+      // 2026-10-30: bbcc 评估产出的就是 bc 类型(BC 合计一条); b+c 仅作历史数据兜底
+      return { main: w.bc || (w.b || 0) + (w.c || 0), own: w.own || 0 }
     }
     return { main: w.c || 0, own: w.own || 0 } // C仓 + 自有/三方
   }
@@ -1919,12 +1920,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   ? fullAlerts.filter(
                       x =>
                         x.alert_type === 'low_stock' &&
-                        // 2026-10-30 修复弹窗空列表: 白名单漏了 'bc'(BBCC 合计行)。
-                        //   实测低库存告警 100% 带合法仓型(bc/own/platform), 空仓型为 0 条 ——
-                        //   故**不为 '' 兜底**(空仓型的 low_stock 属数据异常, 应暴露而非混入列表)
+                        // 2026-10-30 严格对应各模式评估产物(与后端 aux 白名单一致):
+                        //   bbcc = own 逐仓 + bc 合计; traditional = 逐仓三型(own/platform/platform_b)
                         (_replMode === 'bbcc'
-                          ? ['own', 'platform', 'platform_b', 'bc']
-                          : ['own', 'platform', 'bc']
+                          ? ['own', 'bc']
+                          : ['own', 'platform', 'platform_b']
                         ).includes(String(x.warehouse_type || '')),
                     )
                   : lowStockAlerts

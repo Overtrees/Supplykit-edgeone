@@ -797,8 +797,11 @@ def _build_aux(channel, mode):
     #   改为**元组**白名单 + 显式包含 bc 与 ''。
     # 实测低库存告警 100% 带合法仓型(bc/own/platform), 空仓型 0 条 → 白名单不含 ''(空仓型属数据异常,
     #   应暴露而非静默混入); oversell/purchase_need 等 SKU 级告警走 other 分支, 不受此白名单影响
-    _wh_types = (("own", "platform", "platform_b", "bc")
-                 if mode == "bbcc" else ("own", "platform", "bc"))
+    # 2026-10-30 白名单严格对应各模式的评估产物:
+    #   bbcc → 逐仓 own + BC 合计(bc)  ;  traditional → 逐仓 own/platform/platform_b
+    #   (bbcc 评估把 platform/platform_b 合并成一条 bc; traditional 不产生 bc)
+    _wh_types = (("own", "bc")
+                 if mode == "bbcc" else ("own", "platform", "platform_b"))
     _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
     _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
