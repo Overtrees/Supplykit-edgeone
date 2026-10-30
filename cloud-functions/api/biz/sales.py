@@ -386,6 +386,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     - upsert 幂等 ON DUPLICATE; 失败降级(消费方读表 miss 时降级直算)
     """
     from db import execute as _ex, executemany as _em, query as _q
+    from routes.common import try_err   # 2026-10-30: 本函数新增日志/参数降级分支需留痕
     import time as _tm
     _t0 = _tm.time()
     try:
@@ -404,7 +405,6 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         except Exception:
             _wh_type = {}
         _c_whs = {w for w, t in _wh_type.items() if t == "platform"}
-        _b_whs = {w for w, t in _wh_type.items() if t == "platform_b"}
 
         # 2026-10-29 精准: 按码 × 仓型 聚合 → 让 __C__/__BC__ 也有按码行
         #   (原只有 __ALL__ 有按码行 → bbcc 下多码 SKU 只能共用整盘合计日销)
