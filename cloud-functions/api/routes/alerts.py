@@ -89,7 +89,12 @@ def alert_counts(channel: str = "jd"):
         b = m.get("platform_b", 0)
         c = m.get("platform", 0)
         o = m.get("own", 0)
-        return {"b": b, "c": c, "own": o, "bc": b + c, "unknown": m.get("", 0)}
+        # 2026-10-30 补 bc 维度: BBCC 合计行的 warehouse_type='bc', 原映射只认
+        #   platform/platform_b/own/'' → bc 类型被整类丢弃(ls_warehouse.bc 恒 0, 140 条 low_stock 失踪)
+        bc = m.get("bc", 0)
+        return {"b": b, "c": c, "own": o,
+                "bc": bc if bc else (b + c),   # 传统模式无 bc 类型 → 用 B+C 兜底
+                "unknown": m.get("", 0)}
 
     rp = by_type.get("replenish", 0)
     return ok({"total": total, "by_type": by_type, "by_severity": by_severity,
