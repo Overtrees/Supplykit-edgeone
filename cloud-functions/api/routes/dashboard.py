@@ -786,8 +786,10 @@ def _build_aux(channel, mode):
     #   新增的 warehouse_type='bc'(BBCC 合计行)不在字面串里 → 140 条低库存告警被静默过滤(列表空);
     #   同时空 warehouse_type('') 因是任何字符串的子串反而"意外通过"。
     #   改为**元组**白名单 + 显式包含 bc 与 ''。
-    _wh_types = (("own", "platform", "platform_b", "bc", "")
-                 if mode == "bbcc" else ("own", "platform", "bc", ""))
+    # 实测低库存告警 100% 带合法仓型(bc/own/platform), 空仓型 0 条 → 白名单不含 ''(空仓型属数据异常,
+    #   应暴露而非静默混入); oversell/purchase_need 等 SKU 级告警走 other 分支, 不受此白名单影响
+    _wh_types = (("own", "platform", "platform_b", "bc")
+                 if mode == "bbcc" else ("own", "platform", "bc"))
     _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
     _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)

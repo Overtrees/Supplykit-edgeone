@@ -1912,12 +1912,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   ? fullAlerts.filter(
                       x =>
                         x.alert_type === 'low_stock' &&
-                        // 2026-10-30 修复弹窗空列表: 白名单漏了 'bc'(BBCC 合计行)与 ''(空仓型) ——
-                        //   与后端 aux 同一个坑(后端已改元组白名单, 前端这份硬编码也要同步)
+                        // 2026-10-30 修复弹窗空列表: 白名单漏了 'bc'(BBCC 合计行)。
+                        //   实测低库存告警 100% 带合法仓型(bc/own/platform), 空仓型为 0 条 ——
+                        //   故**不为 '' 兜底**(空仓型的 low_stock 属数据异常, 应暴露而非混入列表)
                         (_replMode === 'bbcc'
-                          ? ['own', 'platform', 'platform_b', 'bc', '']
-                          : ['own', 'platform', 'bc', '']
-                        ).includes(x.warehouse_type || ''),
+                          ? ['own', 'platform', 'platform_b', 'bc']
+                          : ['own', 'platform', 'bc']
+                        ).includes(String(x.warehouse_type || '')),
                     )
                   : lowStockAlerts
                 ).map(function (x) {
