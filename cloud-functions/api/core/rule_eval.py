@@ -345,10 +345,13 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         rows = [r for r in rows
                 if str(r.get("warehouse_type") or "") not in ("platform", "platform_b")]
         # bbcc 下 platform_b 已并入 BC 合计, 不再逐行
+        # 2026-10-30 语义对齐: BC 行与逐仓行同构 —— available_qty 只放"已到仓可用",
+        #   in_transit_qty 放"C在途+B在途"; 规则要含在途就显式相加(available+in_transit),
+        #   避免同一文案在 bbcc/traditional 下含义不同
         rows += [{"sku": _k0[0], "barcode": _k0[1], "warehouse": "__BC__",
                   "warehouse_type": "bc", "product_name": _a0["name"],
-                  "available_qty": _a0["avail"] + _a0["transit"],
-                  "safety_qty": 0, "in_transit_qty": 0}
+                  "available_qty": _a0["avail"],
+                  "safety_qty": 0, "in_transit_qty": _a0["transit"]}
                  for _k0, _a0 in _bc_agg.items()]
 
     _tick("calc_load")

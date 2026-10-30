@@ -304,6 +304,21 @@ def create_all_tables():
             try_err('schema', '规则字段路径迁移完成: days_since_last=%s stock=%s' % (_n1, _n2), None)
     except Exception as _erfx:
         try_err('schema', '规则字段路径迁移降级', _erfx)
+    # 2026-10-30 低库存口径统一(可用+在途): 内建 low_stock 规则条件补 in_transit, 文案 {avail}→{sellable}
+    #   背景: BC 维度原先把"在途"并入 available_qty, 与逐仓行(纯可用)同模板不同义 → 语义对齐后
+    #   规则条件显式相加; 只影响 alert_type='low_stock' 且尚未含 in_transit 的规则(自定义规则不动)
+    try:
+        from db import execute as _els
+        if _els("INSERT IGNORE INTO migration_log(name) VALUES('lowstock_sellable_v1')"):
+            _n = _els("UPDATE rules SET "
+                      "condition_json=REPLACE(condition_json, '\"inv.available_qty\"', "
+                      "  '\"inv.available_qty + inv.in_transit_qty\"'), "
+                      "alert_desc=REPLACE(alert_desc, '{avail}', '{sellable}') "
+                      "WHERE alert_type='low_stock' AND condition_json LIKE '%%inv.available_qty%%' "
+                      "AND condition_json NOT LIKE '%%in_transit_qty%%'")
+            try_err('schema', '低库存口径迁移完成(可用+在途): %s 条' % _n, None)
+    except Exception as _elsx:
+        try_err('schema', '低库存口径迁移降级', _elsx)
     # 2026-10-29 日销主键契约检测(根治, 不做 DDL):
     #   目标结构 = 代理主键 `id` + 业务唯一键(含 barcode)。
     #   TiDB 聚簇表**不支持 DROP PRIMARY KEY**(主键值编码进 Row Key = 行物理地址),

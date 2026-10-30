@@ -105,6 +105,9 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
         bc_x = str(ctx.get("barcode") or "")
         _inv_x = ctx.get("inv") or {}
         _base_ctx = {**ctx, "avail": int(_inv_x.get("available_qty") or 0),
+                     "transit": int(_inv_x.get("in_transit_qty") or 0),
+                     # sellable = 可售(可用+在途): 条件与文案统一用它, 消除模板歧义
+                     "sellable": int(_inv_x.get("available_qty") or 0) + int(_inv_x.get("in_transit_qty") or 0),
                      "safety": float(_inv_x.get("safety_qty") or 0),
                      "product_name": _inv_x.get("product_name", "")}
         for rule in rules:

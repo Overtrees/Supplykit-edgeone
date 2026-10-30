@@ -272,7 +272,9 @@ def _build_purchase(channel, mode, days=28):
             sku = _r.get("sku")
             if _r.get("purchase_qty", 0) > 0 and _r.get("days_to_empty", 999) < 14 and sku not in existing:
                 ins.append(("需采购: %s" % _r.get("product_name"),
-                            "可用%d件, 建议采购%d件, 可撑%d天" % (_r.get("sys_available") or 0,
+                            # 2026-10-30 口径对齐: 低库存/断货/采购统一用"可售(可用+在途)",
+                            #   原此处只报 sys_available(纯可用) 与另两处口径不一致
+                            "可售%d件, 建议采购%d件, 可撑%d天" % (_r.get("sys_total") or 0,
                                                             _r.get("actual_purchase") or 0,
                                                             _r.get("days_to_empty") or 0),
                             sku, channel))
