@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf dist && npm install --no-save @rollup/rollup-linux-x64-gnu 2>/dev/null && vite build",
+    "build": "npm install --no-save @rollup/rollup-linux-x64-gnu 2>/dev/null; vite build",
     "lint": "eslint src --ext .ts,.tsx --max-warnings 0 --cache",
     "lint:fix": "eslint src --ext .ts,.tsx --fix --cache",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
