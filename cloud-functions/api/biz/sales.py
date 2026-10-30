@@ -465,7 +465,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                 for _dk, _dv in daily.items():
                     try:
                         if (now_d - datetime.strptime(str(_dk)[:10], "%Y-%m-%d")
-                                .replace(tzinfo=timezone.utc)).days < 60:
+                                .replace(tzinfo=timezone.utc)).days < _sig_days:
                             vals.append(_dv)
                     except Exception:
                         continue
@@ -482,6 +482,16 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                     "last_sale": max(daily.keys()) if daily else None})
             return rows_out
 
+        # 2026-10-30 sigma 样本天数参数化: 与看板断货卡/规则引擎同源(规则 params.sigma_days, 默认 60)
+        #   一次读取(不在 _to_rows 内重复查库), 失败回退 60(原口径)
+        try:
+            from routes.dashboard_stock_risk import _rule_params as _rp_sig
+            _sig_days = int(float((_rp_sig("stockout") or {}).get("sigma_days", 60) or 60))
+            if _sig_days < 7:
+                _sig_days = 60      # 样本过小(σ 需 ≥7 个有效销售日) → 回退默认
+        except Exception as _esg:
+            try_err('sales', 'sigma 样本天数读取降级(用 60)', _esg)
+            _sig_days = 60
         rows = (_to_rows(by_c, WH_C)
                 + _to_rows(by_bc, WH_BC)
                 + _to_rows(by_all, WH_ALL)
