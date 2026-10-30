@@ -1325,3 +1325,60 @@ BC 合计后 ctx 由 9000 → 2002, 评估自然从 25.5s 降到 **2–3s**（�
 4. **先查部署版本再验行为**: `DescribePagesDeployments` 看 `RepoCommitHash` + `UsedInProd` ——
    前端静态资源先可访问、函数实例要等 `Status=Success` 且 `UsedInProd=true` 才切换，
    "看到新文案"≠"后端代码已生效"
+
+### 15.91 前端跳转定位三铁律 + 两条渲染链 + 缓存假象(2026-10-30)
+
+本轮 4 个"看起来是后端坏了"的前端问题, 沉淀为可复用排查顺序。
+
+**一、跳转定位铁律(低库存/断货卡 → 进销存 高亮)**
+
+症状: 点卡片跳进销存, 立刻弹「未找到 xxx, 可能不在当前仓库维度」, 几秒后该 SKU 才以高亮出现。
+
+根因: 跳转瞬间 `inventory` 仍是**上一次的列表**(新的 with-sales 请求未回), 定位 effect 只看
+`inventory.length > 0` 就判定并 `locateCheckedRef = true`(锁定不复查) → 误报。
+
+三条铁律:
+1. **加载中不判定** —— `if (loading) return;`
+2. **数据必须已包含本次搜索词**(证明是跳转后的新数据) —— `inventory.some(x => x.sku.includes(s))`
+3. **真找不到才提示** —— 提示只在"数据已就位且确实没有"时出现; 找到元素才滚动高亮, 找不到不弹
+   (原逻辑是"找不到就弹", 必然在旧数据上误报)
+
+**二、App 有两条渲染链, 新页面别插错**
+
+- 主内容区: `switch (page) { case 'inv': return wrap(<InventoryPage/>); ... default: return null }`
+- 锤子菜单: `page === 'inv' ? <HammerInventory/> : ...`(页面内快捷面板)
+
+把新页面插进锤子链 → 主内容区 `<main class="container">` 为空(用户看到整页空白)。
+判定法: `document.querySelector('main.container').innerHTML.length === 0` 即未挂载。
+
+**三、`apiGet` 已解包, 别再写 `r.data.data`**
+
+```js
+// client.ts
+return { data: 'data' in d ? d.data : d, status: resp.status }
+```
+
+`r.data` **就是**后端 `data` 字段。写 `r.data.data` 恒 `undefined` → 列表永远空。
+业务失败(`ok:false`)由 apiGet **throw**, 统一用 `e.message` 提示, 不要在 `.then` 里判 `r.data.ok`。
+
+**四、前端"改了没生效"先排缓存假象**
+
+实证: 硬编码查 `assets/index-DlKxxDYf.js` 返回 **2544 字节**(EdgeOne 404 页), 而首页实际引用
+`assets/index-CQOHMQEP.js`; 浏览器内存缓存仍跑旧 bundle → 新页面/新文案全都不出现,
+看起来像"部署没生效/代码没作用"。
+
+排查顺序:
+1. `document.querySelectorAll('script[src]')` 拿当前页真实加载的 JS
+2. `curl -o /dev/null -w '%{http_code} %{size_download}'` 确认该文件 200 且大小合理(应 ~1.7MB)
+3. 首页 `curl https://站点/ | rg -o 'assets/[^"]+\.js'` 对比是否同一个文件
+4. 不一致 → 浏览器在用旧 HTML/旧 JS → 换 cache-busting URL 强制刷新再验
+
+**五、跳转入入口盘点(避免遗漏同类问题)**
+
+| 入口 | 目标 | 定位方式 | 是否存在竞态 |
+|---|---|---|---|
+| 低库存卡 / 断货卡 / 告警弹窗 → | 进销存 `inv` | 前端定位(DOM 滚动高亮) | **有(本节铁律已修)** |
+| 采购卡 / 补货卡 → | 采购/补货 `insights` | 后端搜索(搜索词随请求下发) | 无 |
+
+商品/供应商/订单页用**前端过滤** `hammerSearch`; 目前没有带搜索词的跳转入口,
+若将来新增, 必须同样"数据到位后再判定"。
