@@ -205,11 +205,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
 
   const fl = useMemo(() => inventory, [inventory])
 
+  // 2026-10-30 平均周转改**加权**(总库存/总日销):
+  //   原 Σturnover_days/行数 是算术平均 —— 一个库存大、销量小的 SKU 就能把均值拉到几千天;
+  //   正解是 (Σ可用+Σ在途) / Σ日销, 即这批货按当前销量整体能撑几天
   const totalTurnover = useMemo(() => {
-    const valid = inventory.filter(x => x.turnover_days != null)
-    return valid.length > 0
-      ? (valid.reduce((s, x) => s + x.turnover_days, 0) / valid.length).toFixed(1)
-      : null
+    const qty = inventory.reduce((s, x) => s + (x.available_qty || 0) + (x.in_transit_qty || 0), 0)
+    const ds = inventory.reduce((s, x) => s + (x.daily_sales || 0), 0)
+    return ds > 0 ? (qty / ds).toFixed(1) : null
   }, [inventory])
 
   const delInv = async () => {
@@ -955,7 +957,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                 ].concat(batchTrs)
               })}
             </tbody>
-            {totalTurnover != null && (
+            {inventory.length > 0 && (
               <tfoot>
                 <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
                   {visCols.map(function (id) {
@@ -999,7 +1001,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       return React.createElement(
                         'td',
                         { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
-                        totalTurnover + ' 天',
+                        totalTurnover != null ? totalTurnover + ' 天' : '—',
                       )
                     if (col.id === 'price')
                       return React.createElement(
