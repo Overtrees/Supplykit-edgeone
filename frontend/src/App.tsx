@@ -824,6 +824,8 @@ export default function App() {
         return wrap(<SettingsPage key={pageId} />)
       case 'devmode':
         return wrap(<DevModePage key={pageId} />)
+      case 'channels':
+        return wrap(<ChannelsPage key={pageId} />)
       case 'recycle':
         return wrap(<RecyclePage key={pageId} />)
       default:
@@ -1074,8 +1076,6 @@ export default function App() {
                   <HammerCleansing channel={channel} />
                 ) : page === 'rules' ? (
                   <HammerRules channel={channel} onShowHistory={loadHistory} />
-                ) : page === 'channels' ? (
-                  <ChannelsPage />
                 ) : page === 'recycle' ? (
                   <HammerRecycle />
                 ) : (
