@@ -1382,3 +1382,18 @@ return { data: 'data' in d ? d.data : d, status: resp.status }
 
 商品/供应商/订单页用**前端过滤** `hammerSearch`; 目前没有带搜索词的跳转入口,
 若将来新增, 必须同样"数据到位后再判定"。
+
+**六、构建脚本 `;` vs `&&` 的陷阱(2026-10-30)**
+
+`frontend/package.json` 的 build 原为 `npm install ... 2>/dev/null; vite build` —— **分号**串联,
+`vite build` 失败时脚本退出码仍是 0 → Makers 判定成功 → 部署**上次遗留的 dist**(新页面没进包,
+表现为"代码明明改了但线上没变")。
+
+改成 `rm -rf dist && npm install ... && vite build` 后, 暴露真问题: 云端 `vite build` 在
+`rendering chunks` 阶段失败 → 构建失败 → **全站 404**(静态资源与函数一起下线)。已 revert 回 `;`。
+
+**当前状态**: 构建失败对我们是不可见的。排查新页面"没上线"时:
+1. 先确认 `script[src]` 指向的 JS 是否 200 且大小合理(正常 ~1.7MB; 若返回 ~2.5KB 是 EdgeOne 404 页)
+2. bundle 里搜新功能的关键字符串(如 `copy_from`)判断是否真进去了
+3. 都没进去 → 说明构建失败被吞, 需单独排查云端构建(降级方案: `--minify false` 降低内存峰值, 或拆 chunk)
+

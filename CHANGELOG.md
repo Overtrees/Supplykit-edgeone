@@ -22,6 +22,37 @@
 - 修 3 个 bug: ①路由插进锤子菜单链(主内容空) ②`r.data.data` 恒 undefined(列表空)
   ③DELETE 支持 purge=1 清理配置类数据
 
+### 告警体系(补遗)
+- **跨模式反向关闭保护**(08d3d386): 告警跨模式持久, 反向关闭原只按 (type,sku,wh,码) 比对 →
+  跑一次 traditional 评估会把 bbcc 的 140 条 bc 告警全关(反之亦然)。修: `_close` 限定本模式仓型
+  (bbcc→own+bc / traditional→own+platform+platform_b)
+- **白名单严格化**(29d04d85 + 00b85531): bbcc = `own` + `bc` 合计; traditional = `own` + `platform`
+  (**不含 platform_b** —— B 仓属 BBCC 调拨体系, 与 purchase_calc:127 同源); 前端弹窗同步
+- **`ls_warehouse` 补 bc**(8976a38c): `_wmap` 只映射 platform_b/platform/own/'' → 140 条 bc 类低库存
+  被整类丢弃(显示 bc:0); 修: 取 `m.get("bc")`
+- **文案补正**(5e30cef9): 迁移只换了占位符 `{avail}→{sellable}`, 前缀"可用"未改 → "可售 {sellable}"
+
+### 口径与参数(补遗)
+- **可售 = 可用 + 在途**(1303f4d9): BC 行不再把在途并入 available_qty, 改为与逐仓行同构
+  (available=纯可用, in_transit=在途); 内置低库存规则条件显式相加 `available + in_transit`;
+  文案「可售 {sellable}」; ctx 新增 sellable/transit(仅库存事件注入, 防订单事件被当 0 误报)
+- **规则字段可售 4 项**(8019c306): 规则编辑页新增 可售/在途/可售缺口/可售安全线比例
+- **日销窗口统一 90 天**(d2f467d6/0818cd42/5375a741): 物化重建/对账/回填/降级直算/seed 五处;
+  替代原 60(环比基准需覆盖上上月完整自然月)
+
+### 可观测与成本(补遗)
+- **物化重建日志 + 次数预警**(dfcc0bf1): 每次重建写 `mat_rebuild`(渠道/行数/耗时/范围);
+  当日 >6 次记 slow_alert —— 先量化再决定是否优化, 不用"放宽限频"拿实时性换 RU
+- **heal-own 快照回填条件化**(3f8c5a6e/4d1b364b): 原每次调用全量写 13.4 万行(RU 翻倍主因) →
+  仅快照为空时回填, `{"refill":true}` 才强制全量; 对账单次上限 30 天
+- **`_rebuild` 补 try_err 导入**(5b071bed): 新增降级分支原为 undefined name, 异常被外层吞
+
+### 构建链路(教训)
+- **build 脚本 `;` 掩盖失败**: 原 `npm install ... 2>/dev/null; vite build` —— vite build 失败时
+  脚本仍返回 0 → 部署"成功"但用的是上次遗留 dist(ChannelsPage 没进包)。改 `&&` + 构建前 `rm -rf dist`
+  后发现云端 vite build 在 rendering chunks 阶段失败导致全站 404, 已 revert 回 `;`。
+  **当前状态: 构建失败不可见**, 需单独排查云端构建(降级方案: `--minify false` 或拆 chunk)
+
 ### 其他
 - 环比窗口下界 = 上上月1号(自然完整月); sigma 样本/trend 点数固定 60(不被窗口膨胀)
 - sigma_days 参数化(规则「断货计算参数」可调, 与断货卡同源)
