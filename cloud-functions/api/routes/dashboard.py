@@ -42,9 +42,10 @@ def _daily_maintenance(channel="jd"):
         # ② digest 预填(每日维护——get_sales_digest 填表缓存——健康/低库存/规则/补货/断货消费方首访命中——首冷降频)
         try:
             from biz.sales import get_sales_digest
-            get_sales_digest(channel)
-            if channel == "jd":
-                get_sales_digest("other")
+            # 2026-10-30 渠道数据驱动: 预填所有启用渠道(原硬编码 jd/other 双渠道)
+            from routes.common import ch_codes as _chc
+            for _c0 in _chc():
+                get_sales_digest(_c0)
         except Exception as _e:
                 try_err('dashboard', 'digest 预填降级', _e)
         # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300

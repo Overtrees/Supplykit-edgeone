@@ -62,6 +62,69 @@ def check_cols(rows, cols, src, what):
         pass
 
 
+_CH_CACHE = {}
+_CH_TS = [0.0]
+_CH_TTL = 60
+
+
+def ch_list(force=False):
+    """渠道配置列表(P0 数据驱动; 进程内 60s 缓存 —— 配置极少变, 不增 RU)"""
+    import time as _t
+    _now = _t.time()
+    if not force and _CH_CACHE and (_now - _CH_TS[0]) < _CH_TTL:
+        return list(_CH_CACHE.values())
+    try:
+        from db import query as _q
+        rows = _q("SELECT code, name, enabled, supports_b, default_mode, sort "
+                  "FROM channels ORDER BY sort, code") or []
+        if rows:
+            _CH_CACHE.clear()
+            for r in rows:
+                _CH_CACHE[str(r.get("code"))] = {
+                    "code": str(r.get("code") or ""),
+                    "name": str(r.get("name") or r.get("code") or ""),
+                    "enabled": int(r.get("enabled") or 0),
+                    "supports_b": int(r.get("supports_b") or 0),
+                    "default_mode": str(r.get("default_mode") or "traditional"),
+                    "sort": int(r.get("sort") or 0)}
+            _CH_TS[0] = _now
+    except Exception:
+        pass
+    if _CH_CACHE:
+        return list(_CH_CACHE.values())
+    # 兜底(表未建/新库): 沿用旧硬编码语义, 保证任何时点可用
+    return [{"code": "jd", "name": "京东", "enabled": 1, "supports_b": 1,
+             "default_mode": "bbcc", "sort": 1},
+            {"code": "other", "name": "其他渠道", "enabled": 1, "supports_b": 0,
+             "default_mode": "traditional", "sort": 2}]
+
+
+def ch_conf(code):
+    """单渠道配置; 未登记渠道按旧规则兜底(jd → bbcc+支持B, 其余 → traditional)"""
+    _code = str(code or "jd")
+    for _c in ch_list():
+        if _c["code"] == _code:
+            return _c
+    return {"code": _code, "name": _code, "enabled": 1,
+            "supports_b": 1 if _code == "jd" else 0,
+            "default_mode": "bbcc" if _code == "jd" else "traditional", "sort": 99}
+
+
+def ch_codes(enabled_only=True):
+    """全部渠道 code 列表(替代硬编码 ["jd","other"])"""
+    return [c["code"] for c in ch_list() if (not enabled_only or c["enabled"])]
+
+
+def ch_supports_b(code):
+    """该渠道是否走 BBCC 体系(B 仓调拨链) —— 替代 `channel == "jd"` 判断"""
+    return bool(ch_conf(code).get("supports_b"))
+
+
+def ch_default_mode(code):
+    """该渠道默认补货模式 —— 替代 `"bbcc" if channel == "jd" else "traditional"`"""
+    return str(ch_conf(code).get("default_mode") or "traditional")
+
+
 def mark_driver(task_id, driver):
     """标记任务推进来源(前端轮询 / 后端保活) —— 2026-10-29 统一
 

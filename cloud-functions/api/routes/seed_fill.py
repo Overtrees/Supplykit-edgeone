@@ -121,7 +121,7 @@ def _seed_products_suppliers(skus_data):
     sup_rows = []
     for s_idx, (code, name, contact, phone, score) in enumerate(SUP):
         _blist = sup_brands[s_idx % 10]
-        for ch in ['jd', 'other']:
+        for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
             sup_rows.append({'supplier_code': '%s-%s' % (code, 'JD' if ch == 'jd' else 'OTHER'),
                              'supplier_name': name, 'contact_person': contact, 'contact_phone': phone,
                              'score': score, 'channel': ch, 'brand': '，'.join(_blist)})
@@ -473,7 +473,7 @@ def _sync_inv_month():
 def _seed_config():
     """补货参数 + 内置规则(原版 4 条, 与实时评估引擎条件一致)"""
     execute("DELETE FROM replenishment_config")
-    for ch in ['jd', 'other']:
+    for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
         configs = [
             ('lead_time_days', '10'), ('safety_multiplier', '1.5'), ('max_turnover_days', '17'),
             ('turnover_warning_15', '15'), ('turnover_warning_90', '90'),
@@ -513,7 +513,7 @@ def _seed_config():
         # 注: 内置规则演进 —— "紧急补货"(replenish)/"滞销识别"(slow_moving) 退役
         #     (采购&补货卡读建议接口 / 处置建议页承载滞销); stockout/health 保留为参数载体(不告警)
     ]
-    for ch in ['jd', 'other']:
+    for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
         for name, ev, cond, at, title, desc, sev, _p in rules:
             if at == "stockout":
                 params = {"lit": 3 if ch == 'jd' else 10, "otif_min": 0.6, "ss_z": 1.65,
@@ -550,7 +550,7 @@ def _seed_alerts():
         existing.add((r.get('alert_type'), r.get('channel') or 'jd', r.get('related_sku'),
                       r.get('warehouse') or '', r.get('source') or ''))
     inserts = []
-    for ch in ['jd', 'other']:
+    for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
         rows = query(
             "SELECT sku, warehouse, warehouse_type, MAX(product_name) AS name, "
             "MAX(available_qty) AS avail, MAX(in_transit_qty) AS transit, MAX(safety_qty) AS safety "

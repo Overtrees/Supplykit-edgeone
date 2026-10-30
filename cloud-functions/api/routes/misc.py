@@ -493,7 +493,8 @@ async def heal_own_inventory(request: Request):
     # 2026-10-30 快照全量回填改为按需: 默认仅在快照为空时自动补(日常靠增量+对账);
     #   传 {"refill": true} 强制全量 90 天(运维修大缺口时用, 单次 13 万行写入)
     _force_refill = bool((d or {}).get("refill"))
-    chs = [channel] if channel else ["jd", "other"]
+    from routes.common import ch_codes as _chc0
+    chs = [channel] if channel else _chc0()   # 2026-10-30 渠道数据驱动
     out = {}
     from routes.cleanse_write import (
         SELF_WAREHOUSE_TYPES as _SELF,

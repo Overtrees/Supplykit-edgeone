@@ -48,6 +48,8 @@ def _build_purchase(channel, mode, days=28):
     except Exception as _e:
             try_err('purchase', '静默降级', _e)
 
+    from routes.common import ch_supports_b as _csb
+    _ch_b = _csb(channel)   # 该渠道是否走 BBCC(B 仓调拨链) —— 原 `channel == "jd"`
     products = {}
     for p in query("SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
                    "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
@@ -124,7 +126,8 @@ def _build_purchase(channel, mode, days=28):
                    "FROM inventory WHERE channel=%s", [channel]):
         s = (i.get("sku"), str(i.get("bc") or "").strip())
         wt = i.get("warehouse_type") or "platform"
-        if wt == "platform_b" and (channel != "jd" or mode != "bbcc"):
+        # 2026-10-30 配置化: B 仓参与条件 = 渠道支持 BBCC 体系 且 当前为 bbcc 模式
+        if wt == "platform_b" and (not _ch_b or mode != "bbcc"):
             continue
         st = inv.setdefault(s, {"available": 0, "transit": 0, "safety": 0, "safety_days": 0,
                                 "own_avail": 0, "own_transit": 0, "plat_avail": 0,
@@ -304,6 +307,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     ③ 滞销主判据(品类滞销线 slow-cats / 观察线) → yellow / observe
     ④ 升级: yellow + (B仓超期 或 资金占用≥阈值) → red
     """
+    from routes.common import ch_supports_b as _csb2
+    _ch_b = _csb2(channel)   # 该渠道是否走 BBCC(B 仓调拨链)
     from biz.sales import load_daily_sales, calc_sales_multi
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -423,7 +428,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             except Exception as _e:
                     try_err('purchase', '静默降级', _e)
         # ② B仓超免费期(仓储费成本)
-        if wht == "platform_b" and channel == "jd":
+        if wht == "platform_b" and _ch_b:
             days_stored = max((now - b_arrival[sku]).days, 0) if sku in b_arrival else 0
             if days_stored > b_free:
                 over = days_stored - b_free

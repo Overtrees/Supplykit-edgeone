@@ -15,6 +15,16 @@ _TABLES = {
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
         "UNIQUE KEY uk_users_username (username))"
     ),
+    # 2026-10-30 渠道注册表(P0 可扩展性): 渠道从"代码常量"变为"数据驱动"
+    #   supports_b  —— 该渠道是否走 BBCC 体系(B 仓调拨链)
+    #   default_mode —— 该渠道默认补货模式(bbcc/traditional)
+    "channels": (
+        "CREATE TABLE IF NOT EXISTS channels ("
+        "code VARCHAR(20) PRIMARY KEY, name VARCHAR(64) NOT NULL DEFAULT '', "
+        "enabled TINYINT DEFAULT 1, supports_b TINYINT DEFAULT 0, "
+        "default_mode VARCHAR(20) DEFAULT 'traditional', sort INT DEFAULT 0, "
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    ),
     "orders": (
         "CREATE TABLE IF NOT EXISTS orders ("
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, order_no VARCHAR(64) DEFAULT '', "
@@ -255,6 +265,12 @@ def table_ddl(name):
 def create_all_tables():
     """幂等建全表(新集群空库引导; 失败单表降级不阻塞)"""
     from routes.common import try_err
+    # 2026-10-30 渠道种子(幂等): 存量库补登记 jd/other, 语义与旧硬编码完全一致
+    try:
+        execute("INSERT IGNORE INTO channels(code,name,enabled,supports_b,default_mode,sort) VALUES"
+                "('jd','京东',1,1,'bbcc',1),('other','其他渠道',1,0,'traditional',2)")
+    except Exception as _ec:
+        try_err('schema', '渠道种子写入降级', _ec)
     ok_n = 0
     for name, ddl in _TABLES.items():
         try:

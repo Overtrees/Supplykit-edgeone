@@ -215,7 +215,8 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     _trad_period = _mc3("lead_time_days", "traditional", 10) + _mc3("safety_multiplier", "traditional", 0)
     # platform 维度周期跟随补货模式(mode 参数; 空=渠道默认 jd→bbcc/other→traditional)
     if not mode:
-        mode = "bbcc" if channel == "jd" else "traditional"
+        from routes.common import ch_default_mode as _cdm
+        mode = _cdm(channel)   # 2026-10-30: 渠道默认模式由 channels 表驱动(原硬编码 jd→bbcc)
     _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
     for r in rows:
         sku = r.get("sku")

@@ -282,7 +282,8 @@ async def rules_evaluate(request: Request):
         d = await request.json()
     except Exception as _e:
             try_err('rules', '静默降级', _e)
-    channels = d.get("channels") or ["jd", "other"]
+    from routes.common import ch_codes as _chc1
+    channels = d.get("channels") or _chc1()   # 2026-10-30 渠道数据驱动
     # 2026-10-28 mode 生效: 前端传当前补货模式(bbcc/traditional), 据此过滤规则
     mode = d.get("mode") or ""
     out = {}

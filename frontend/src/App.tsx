@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useAppStore } from './store/useAppStore'
+import { useAppStore, type Channel } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
@@ -94,10 +94,30 @@ export default function App() {
     stopAll,
     channel,
     setChannel,
+    channels,
+    setChannels,
     hammerData,
     setHammerPanel,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
+  // 2026-10-30 渠道注册表: 挂载时拉一次(失败静默, 下拉有本地兜底)
+  useEffect(() => {
+    const _chBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+    fetch(_chBase + '/api/channels?enabled_only=1', {
+      headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { data?: Channel[] } | null) => {
+        const list: Channel[] = Array.isArray(d && d.data) ? (d as { data: Channel[] }).data : []
+        if (list.length) setChannels(list)
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // 当前渠道展示名(数据驱动; 未拉到配置时按 code 兜底)
+  const _chLabel =
+    (channels.find(c => c.code === channel) || {}).name ||
+    (channel === 'jd' ? '京东' : channel === 'other' ? '其他' : channel)
   const fresh = useFreshness(channel) // 2026-10-29 数据新鲜度(看板胶囊左侧圆点)
   const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
@@ -865,8 +885,17 @@ export default function App() {
                           MozAppearance: 'none',
                         }}
                       >
-                        <option value="jd">京东渠道</option>
-                        <option value="other">其他渠道</option>
+                        {(channels && channels.length
+                          ? channels.filter(c => c.enabled !== 0)
+                          : [
+                              { code: 'jd', name: '京东' },
+                              { code: 'other', name: '其他渠道' },
+                            ]
+                        ).map(c => (
+                          <option key={c.code} value={c.code}>
+                            {c.name}
+                          </option>
+                        ))}
                       </select>
                       {/* 2026-10-27 同步中徽标(变量 syncBadge 统一, 与渠道文本同字号——曾看板分支残留旧内联 fontSize:12) */}
                       {syncBadge}
@@ -963,8 +992,17 @@ export default function App() {
                           MozAppearance: 'none',
                         }}
                       >
-                        <option value="jd">京东渠道</option>
-                        <option value="other">其他渠道</option>
+                        {(channels && channels.length
+                          ? channels.filter(c => c.enabled !== 0)
+                          : [
+                              { code: 'jd', name: '京东' },
+                              { code: 'other', name: '其他渠道' },
+                            ]
+                        ).map(c => (
+                          <option key={c.code} value={c.code}>
+                            {c.name}
+                          </option>
+                        ))}
                       </select>
                       {/* 2026-10-27 其他页同步中徽标(与看板页同款, 按本布局 header-status 显示) */}
                       {syncBadge}
@@ -1048,7 +1086,7 @@ export default function App() {
                         marginBottom: 4,
                       }}
                     >
-                      {channel === 'jd' ? '京东' : '其他'} · {page}
+                      {_chLabel} · {page}
                     </div>
                     <div
                       style={{ fontSize: 'var(--font-13)', color: 'var(--text)', marginBottom: 4 }}

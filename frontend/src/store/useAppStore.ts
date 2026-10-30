@@ -17,6 +17,16 @@ interface OrderItem {
   deleted_at?: string | null
 }
 
+// 渠道注册表条目(2026-10-30 P0: 渠道数据驱动)
+export interface Channel {
+  code: string
+  name: string
+  enabled?: number
+  supports_b?: boolean
+  default_mode?: string
+  sort?: number
+}
+
 import { create } from 'zustand'
 import { api, clearCache, clearInflight } from '../api/client'
 import type { StockRiskShim } from '../api/types'
@@ -43,6 +53,9 @@ const safeGetJSON = (key, def = null) => {
 
 const initAppStore = (set, get) => ({
   channel: safeGet('c_channel') || 'jd',
+  // 2026-10-30 渠道注册表(数据驱动): 下拉/渠道名/默认模式都读它, 新增渠道无需改代码
+  channels: [] as Channel[],
+  setChannels: (list: Channel[]) => set({ channels: Array.isArray(list) ? list : [] }),
   channelVersion: 0,
   pageVersion: 0,
   dashboard: null,
