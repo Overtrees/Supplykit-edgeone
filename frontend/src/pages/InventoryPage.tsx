@@ -64,6 +64,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const [invTotal, setInvTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadErr, setLoadErr] = useState('')
+  // 2026-10-30 刷新失败: 复用现有 syncing 胶囊 + loadErr(不新造状态机)
+  const invLenRef = useRef(0)
+  useEffect(() => {
+    invLenRef.current = inventory.length
+  }, [inventory])
   const [visCols, setVisCols] = useState([])
   useEffect(() => {
     _snapInv = inventory
@@ -131,9 +136,12 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         setMonthRange(`${s}至${e}`)
       }
     } catch (e) {
-      if (seq === reqSeq.current) {
-        // 2026-10-30: 失败保留旧数据(仅首载才清空) —— 曾一次 abort/超时就白屏
-        setInventory(prev => (prev && prev.length ? prev : []))
+      if (seq !== reqSeq.current) return
+      if (invLenRef.current > 0) {
+        // 有旧数据: 保留列表(不清空) + loadErr 作非阻塞提示; syncing 胶囊由 finally 归零
+        setLoadErr('刷新失败，当前显示上次数据')
+      } else {
+        setInventory([])
         setLoadErr('加载失败')
       }
     } finally {
@@ -246,6 +254,30 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           </span>
         </span>
       </div>
+      {loadErr && inventory.length > 0 && (
+        <div
+          style={{
+            fontSize: 'var(--font-xs)',
+            color: 'var(--warning, #b45309)',
+            background: 'var(--bg)',
+            borderRadius: 'var(--radius-md)',
+            padding: '6px 10px',
+            marginBottom: 6,
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}
+        >
+          <span>{loadErr}</span>
+          <span
+            className="clickable"
+            style={{ color: 'var(--muted)', flexShrink: 0 }}
+            onClick={() => loadInv(1)}
+          >
+            立即刷新
+          </span>
+        </div>
+      )}
       {loading && inventory.length === 0 ? (
         <div>
           {[1, 2, 3, 4].map(i => (
