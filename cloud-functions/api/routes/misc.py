@@ -16,7 +16,7 @@ router.include_router(debug_router)  # 2026-10-13 调试端点统一收口(debug
 _LOG_SCOPE_TYPES = {
     "user": ("risk_summary", "cron", "maint", "cleansing", "cleansing_eval", "task",
              "duplicate_order", "duplicate_sku", "format_error", "field_warning",
-             "field_error", "mapping_info", "config_history", "rule_action"),
+             "field_error", "mapping_info", "config_history", "rule_action", "mat_rebuild"),
     "dev": ("api_error", "slow_request", "cache_error", "cache_invalidate", "quiet_error",
             "perf_debug", "detect_debug", "slow_alert", "frontend_error", "window_error",
             "unhandled_rejection", "component_error", "api_http_error", "business_error",

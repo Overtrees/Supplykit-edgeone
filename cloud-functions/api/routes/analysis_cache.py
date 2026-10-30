@@ -152,6 +152,21 @@ def invalidate_all():
                             _rss("other")
                         except Exception as _e2b:
                                 try_err('analysis_cache', '物化重建降级', _e2b)
+                        # 2026-10-30 RU 预警: 物化全量重建单次成本高(5000 SKU ≈ 22 万 RU),
+                        #   当日次数 > 6 时提醒(每日一条, maintenance_log 抢占防刷屏)
+                        try:
+                            from db import one as _oc, execute as _ec
+                            from datetime import datetime as _dtc, timezone as _tzc
+                            _cnt = int((_oc("SELECT COUNT(*) c FROM quality_logs WHERE log_type='mat_rebuild' "
+                                            "AND DATE(created_at)=CURDATE()") or {}).get("c") or 0)
+                            if _cnt > 6:
+                                _td = _dtc.now(_tzc.utc).strftime("%Y-%m-%d")
+                                if _ec("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,'mat_alert')", [_td]):
+                                    _ec("INSERT INTO quality_logs(log_type, level, message, source) "
+                                        "VALUES('slow_alert','error',%s,'sales')",
+                                        ("物化重建次数异常: 今日 %d 次, 单次全量成本随 SKU 数线性增长, 注意 RU 配额" % _cnt,))
+                        except Exception as _ec2:
+                            try_err('analysis_cache', '重建次数预警降级', _ec2)
                         if _dbs:
                             _snapshot_step("jd", _dbs)
                             _snapshot_step("other", _dbs)

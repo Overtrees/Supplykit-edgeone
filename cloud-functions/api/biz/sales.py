@@ -386,6 +386,8 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     - upsert 幂等 ON DUPLICATE; 失败降级(消费方读表 miss 时降级直算)
     """
     from db import execute as _ex, executemany as _em, query as _q
+    import time as _tm
+    _t0 = _tm.time()
     try:
         _ex(_SKU_STATS_DDL)
         by_sku, by_sku_wh, by_sku_bc, by_sku_wh_bc = load_daily_sales_grouped(
@@ -511,6 +513,15 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                         ", ".join("`%s`" % c for c in cols),
                         ", ".join(["%s"] * len(cols))),
                     [tuple(r[c] for c in cols) for r in chunk])
+        # 2026-10-30 可观测: 每次重建落一条(渠道/行数/耗时/范围), 用于评估"一天重建几次"与 RU 风险
+        try:
+            _ex("INSERT INTO quality_logs(log_type, level, message, source) "
+                "VALUES('mat_rebuild','info',%s,'sales')",
+                ("物化重建 %s: rows=%d %.1fs scope=%s" % (
+                    channel, len(rows), _tm.time() - _t0,
+                    ("skus=%d" % len(skus)) if skus else "ALL"),))
+        except Exception as _el:
+            try_err('sales', '物化重建日志降级', _el)
         return len(rows)
     except Exception as _e:
         from routes.common import try_err
