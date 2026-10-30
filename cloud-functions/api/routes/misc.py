@@ -559,9 +559,9 @@ async def heal_own_inventory(request: Request):
         _refill = {}
         try:
             from db import execute as _e6
-            # 2026-10-30 窗口对齐: 与物化重建(_rebuild_sku_sales_stats days=60)与对账(days=60)一致;
+            # 2026-10-30 窗口统一 90: 物化重建 / 对账 / 回填三处一致;
             #   原 90 天会多写 30 天"物化根本不读"的历史行(白耗 RU)
-            _start = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+            _start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
             for _ch3 in chs:
                 # 2026-10-30 条件化(原无条件全量 90 天回填): 该语句本意是"主键重建后表被清空"的补偿,
                 #   改 ON DUPLICATE 后条件丢失 → 每次 heal-own 都写 13 万行(实测 12 次调用 = 12 次全量,
@@ -599,7 +599,7 @@ async def heal_own_inventory(request: Request):
         try:
             from biz.sales import _rebuild_sku_sales_stats as _rss
             for _ch2 in chs:
-                _reb[_ch2] = _rss(_ch2, days=60)
+                _reb[_ch2] = _rss(_ch2, days=90)
         except Exception as _erb:
             try_err('misc', '日销物化重建失败', _erb)
             _reb = {"error": str(_erb)[:160]}

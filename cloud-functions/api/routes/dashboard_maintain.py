@@ -109,7 +109,7 @@ def _snapshot_step(channel, _db2):
     except Exception as _e:
             try_err('dashboard', '快照续段降级', _e)
 
-def _snapshot_reconcile(channel, days=60, limit_days=10):
+def _snapshot_reconcile(channel, days=90, limit_days=10):
     """快照窗口对账自愈(2026-10-29): 软删订单后快照残留组合不会因 upsert 消失
 
     背景: 快照是"按组合 upsert", 订单软删后对应 (date,sku,码,仓) 组合在快照里仍在 →

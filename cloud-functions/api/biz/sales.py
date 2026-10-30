@@ -376,7 +376,7 @@ WH_BC = "__BC__"    # platform+platform_b 合计(bbcc 断货 BC)
 WH_ALL = "__ALL__"  # 全仓合计(展示/采购兜底)
 
 
-def _rebuild_sku_sales_stats(channel, days=60, skus=None):
+def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     """物化表重建(含当天——写操作后限频触发; 快照+当天订单同 load_daily_sales_grouped)
 
     - 行粒度: __C__/__BC__/__ALL__ 全国聚合三行 + 具体仓名逐仓行
@@ -531,7 +531,7 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         _o(_SKU_STATS_DDL)
         _c = _o("SELECT COUNT(*) c FROM sku_sales_stats WHERE channel=%s", [channel]) or {}
         if int(_c.get("c") or 0) <= 0:
-            _rebuild_sku_sales_stats(channel, days)
+            _rebuild_sku_sales_stats(channel, 90)   # 2026-10-30 固定 90(原跟随调用方 days → 窗口不一致)
         where = "channel=%s"
         params = [channel]
         # 2026-10-29 按 69码: 不传 → 只读全码合计行(barcode='', 语义与改造前一致);
