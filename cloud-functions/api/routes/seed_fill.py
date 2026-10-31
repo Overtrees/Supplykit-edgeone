@@ -440,7 +440,8 @@ def _seed_records():
         _pool = _batch_pool.get(_ck, [])
         if not _pool:
             continue  # 无自有仓库存行 → 不造 warehouse='' 的脏流水
-        max_days = max(today.day - 1, 6)
+        # 90 天窗口: 原 max(today.day-1, 6) 让流水全挤在当月 → 周转/库龄/环比全部失真
+        max_days = 90
         for _whm in _pool:
             _cat = _pcat.get(_ck, '')
             _shelf = (random.randint(150, 270) if any(k in _cat for k in _food_kw)
@@ -457,14 +458,10 @@ def _seed_records():
                 _prod = today - timedelta(days=_ago)
                 plan.append({'pd': _prod.strftime('%Y-%m-%d'),
                              'ed': (_prod + timedelta(days=_shelf)).strftime('%Y-%m-%d'),
-                             'left': 0, 'day': 0})
-            used = set()
-            for _b in plan:                     # 入库: 一批一笔, 日期落在当月
+                             'left': 0, 'day': 0, 'ago': _ago})
+            for _b in plan:                     # 入库: 一批一笔, 日期必须 ≥ 生产日(否则出现"未生产先入库")
                 _qty = random.randint(50, 500)
-                _db = random.randint(0, max_days)
-                while _db in used:
-                    _db = random.randint(0, max_days)
-                used.add(_db)
+                _db = random.randint(0, min(max_days, _b['ago']))
                 _b['left'] = _qty
                 _b['day'] = _db
                 in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
@@ -472,24 +469,26 @@ def _seed_records():
                                 'inbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
                                 'channel': ch, 'prod_date': _b['pd'], 'exp_date': _b['ed'],
                                 'warehouse': _whm['wh'], 'barcode': _whm['bc']})
-            used = set()
-            for _ in range(random.randint(1, min(2, max_days + 1))):   # 出库: 只扣有剩余的批次
+            # 出库: 先定目标出库率(55%~70%), 再按 2~4 笔分摊到批次;
+            # 单笔上限 80%(原 60%×最多2笔 → 出库率仅 12%, 库存虚高、补货建议失真)
+            _total_in = sum(b['left'] for b in plan)
+            _target = int(round(_total_in * random.uniform(0.55, 0.70)))
+            _n_out = random.randint(2, 4)
+            for _k in range(_n_out + 6):        # 允许补笔: 单批 80% 上限会挡住均分, 剩余量继续摊
+                if _target <= 0:
+                    break
                 _avail = [b for b in plan if b['left'] > 0]
                 if not _avail:
                     break
                 _b = random.choice(_avail)
-                # 出库不早于该批入库(避免进销存出现"先出后入"); 先定日期再扣量, 避免扣了却写不进去
-                _dmax = min(_b['day'], max_days)
-                _db = random.randint(0, _dmax)
-                _tries = 0
-                while _db in used and _tries < 20:
-                    _db = random.randint(0, _dmax)
-                    _tries += 1
-                if _db in used:
-                    continue
-                _qty = random.randint(1, max(1, min(100, int(_b['left'] * 0.6))))  # 最多吃掉单批 60%, 避免演示库存被打空
+                # 出库不早于该批入库(入库又 ≥ 生产日), 整条因果链闭合
+                _db = random.randint(0, min(_b['day'], max_days))
+                _quota = max(1, _target // max(1, _n_out - min(_k, _n_out - 1)))
+                _qty = min(_quota, max(1, int(_b['left'] * 0.8)), _target)
+                if _qty <= 0:
+                    break
                 _b['left'] -= _qty
-                used.add(_db)
+                _target -= _qty
                 out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
                                  'target_warehouse': 'B仓',
                                  'outbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
