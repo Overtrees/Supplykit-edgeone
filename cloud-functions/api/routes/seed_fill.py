@@ -314,8 +314,8 @@ def _seed_batches():
     except Exception as _e0:
         try_err('seed_fill', '批次清空失败(继续插入可能翻倍)', _e0)
     today = _dt.now(timezone.utc)
-    rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 低库存判定按 sku×仓(演示数据, 随后由规则评估校正)
-                 "WHERE available_qty > 0")
+    rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 平台仓批次按 sku×仓
+                 "WHERE available_qty > 0 AND warehouse_type NOT IN ('own')")
     _pcat = {}
     for r in query("SELECT sku, category, channel FROM products"):
         _pcat[(str(r.get('sku')), str(r.get('channel') or 'jd'))] = str(r.get('category') or '')
@@ -374,6 +374,25 @@ def _seed_batches():
         if sku in best_map:
             execute("UPDATE products SET best_before=%s WHERE sku=%s",
                     (best_map[sku].strftime('%Y-%m-%d'), sku))
+    # 2026-10-31 own 仓批次: 走生产算法(期初 + 入库 − 出库精确扣减), 与真实导入同一条链路。
+    #   原实现按 available_qty 随机拆 → 与 _rebuild_own_batches 两套口径, seed 跑完自洽,
+    #   但任何一次真实导入触发重建就被按"空日期流水"重算而塌缩(本次 65 项偏差的成因之一)。
+    from routes.cleanse_write import _rebuild_own_batches as _rbb
+    for _och in ('jd', 'other'):
+        _osk = [str(x.get('sku') or '') for x in query(
+            "SELECT DISTINCT sku FROM inventory WHERE channel=%s AND warehouse_type='own'", [_och])]  # no-barcode-ok: SKU 枚举
+        _osk = [x for x in _osk if x]
+        if _osk:
+            _rbb(_och, _osk)
+    # best_before 以批次为准(批次 = 期初 + 流水 − 出库, 唯一真源)
+    try:
+        for _r in query("SELECT sku, MIN(exp_date) AS e FROM batches "
+                        "WHERE channel IN ('jd','other') AND COALESCE(exp_date,'')<>'' GROUP BY sku"):
+            if _r.get('e'):
+                execute("UPDATE products SET best_before=%s WHERE sku=%s",
+                        (str(_r.get('e'))[:10], _r.get('sku')))
+    except Exception as _ebf:
+        try_err('seed_fill', 'best_before 回写降级', _ebf)
     return len(bdata)
 
 
@@ -394,45 +413,86 @@ def _seed_records():
     # 2026-10-29 按 69码: 批次池**从 inventory 取码**
     #   原因: seed 顺序为 库存(step5) → 流水(step6) → 批次(step7),
     #   流水生成时 batches 还不存在 → 原"从 batches 取"导致流水 barcode 全空
-    #   效期沿用 inventory 的批次池(若无则留空, 由 step7 的 _seed_batches 生成)
-    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse FROM inventory "
+    # 2026-10-31 修复(批次对账偏差根因): 原 pd/ed 恒为空 → 入库流水 100% 无批次,
+    #   批次重建的精确扣减全部落空, 只能靠"缩进 bug 少算"让总量看似接近。
+    #   现: 每个 (SKU, 渠道, 仓) 先定 1~3 个批次(prod/exp), 入库按批次落笔,
+    #   出库只从"该批次剩余量"里取 → Σ批次 = 期初 + Σ入 − Σ出 恒成立, 且不会卖超。
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, channel FROM inventory "
                    "WHERE warehouse_type='own' AND warehouse!=''"):
-        _batch_pool.setdefault(str(r.get('sku')), []).append(
-            {'wh': str(r.get('warehouse') or ''), 'pd': '', 'ed': '', 'bc': str(r.get('bc') or '')})
+        _batch_pool.setdefault((str(r.get('sku') or ''), str(r.get('channel') or 'jd')), []).append(
+            {'wh': str(r.get('warehouse') or ''), 'bc': str(r.get('bc') or '')})
+    _pcat = {}
+    for r in query("SELECT sku, category, channel FROM products"):
+        _pcat[(str(r.get('sku') or ''), str(r.get('channel') or 'jd'))] = str(r.get('category') or '')
+    _prob = set()
+    for _s in sorted({str(x.get('sku') or '') for x in query(  # no-barcode-ok: seed 按 SKU 枚举
+            "SELECT DISTINCT sku FROM inventory WHERE warehouse_type='own'")}):
+        if _s and random.random() < 0.04:   # 4% 问题批次(过期/临期), 供效期预警演示
+            _prob.add(_s)
+    _food_kw = ['酱油', '酱', '醋', '油', '酒', '糖', '蜂', '咖', '粉',
+                '薯', '坚果', '饼干', '巧克力', '糖果', '麻辣', '椒']
     in_rows, out_rows = [], []
     for sku, sk_name, ch in [(r.get('sku'), r.get('product_name'), r.get('channel'))
                              for r in query("SELECT sku, product_name, channel FROM products")]:
-        _pool = _batch_pool.get(sku, [])
+        _ck = (str(sku or ''), str(ch or 'jd'))
+        _pool = _batch_pool.get(_ck, [])
+        if not _pool:
+            continue  # 无自有仓库存行 → 不造 warehouse='' 的脏流水
         max_days = max(today.day - 1, 6)
-        used = set()
-        for _ in range(random.randint(1, min(3, max_days + 1))):
-            days_back = random.randint(0, max_days)
-            while days_back in used:
-                days_back = random.randint(0, max_days)
-            used.add(days_back)
-            _bp = _be = _wh = _bc = ''
-            if _pool:
-                _b = random.choice(_pool)
-                _bp, _be, _wh, _bc = _b['pd'], _b['ed'], _b['wh'], _b['bc']
-            in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(50, 500),
-                            'supplier': '供应商-%s' % sku[-3:],
-                            'inbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
-                            'channel': ch, 'prod_date': _bp, 'exp_date': _be,
-                            'warehouse': _wh, 'barcode': _bc})
-        used = set()
-        for _ in range(random.randint(1, min(2, max_days + 1))):
-            days_back = random.randint(0, max_days)
-            while days_back in used:
-                days_back = random.randint(0, max_days)
-            used.add(days_back)
-            _bp = _be = _wh = _bc = ''
-            if _pool:
-                _b = random.choice(_pool)
-                _bp, _be, _wh, _bc = _b['pd'], _b['ed'], _b['wh'], _b['bc']
-            out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': random.randint(10, 100),
-                             'target_warehouse': 'B仓',
-                             'outbound_date': (today - timedelta(days=days_back)).strftime('%Y-%m-%d ') + _rand_hm(),
-                             'channel': ch, 'prod_date': _bp, 'exp_date': _be, 'warehouse': _wh, 'barcode': _bc})
+        for _whm in _pool:
+            _cat = _pcat.get(_ck, '')
+            _shelf = (random.randint(150, 270) if any(k in _cat for k in _food_kw)
+                      else random.randint(200, 365))
+            _is_prob = str(sku) in _prob
+            plan = []
+            for _bi in range(random.randint(1, 3)):
+                if _is_prob and _bi == 0 and random.random() < 0.5:
+                    _ago = _shelf + random.randint(3, 15)                                   # 已过期
+                elif _is_prob and _bi == 0:
+                    _ago = random.randint(max(_shelf // 3 - 2, 5), max(_shelf // 3 + 2, 8))  # 临期
+                else:
+                    _ago = random.randint(2, max(_shelf // 3 - 6, 5))
+                _prod = today - timedelta(days=_ago)
+                plan.append({'pd': _prod.strftime('%Y-%m-%d'),
+                             'ed': (_prod + timedelta(days=_shelf)).strftime('%Y-%m-%d'),
+                             'left': 0, 'day': 0})
+            used = set()
+            for _b in plan:                     # 入库: 一批一笔, 日期落在当月
+                _qty = random.randint(50, 500)
+                _db = random.randint(0, max_days)
+                while _db in used:
+                    _db = random.randint(0, max_days)
+                used.add(_db)
+                _b['left'] = _qty
+                _b['day'] = _db
+                in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
+                                'supplier': '供应商-%s' % str(sku or '')[-3:],
+                                'inbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
+                                'channel': ch, 'prod_date': _b['pd'], 'exp_date': _b['ed'],
+                                'warehouse': _whm['wh'], 'barcode': _whm['bc']})
+            used = set()
+            for _ in range(random.randint(1, min(2, max_days + 1))):   # 出库: 只扣有剩余的批次
+                _avail = [b for b in plan if b['left'] > 0]
+                if not _avail:
+                    break
+                _b = random.choice(_avail)
+                # 出库不早于该批入库(避免进销存出现"先出后入"); 先定日期再扣量, 避免扣了却写不进去
+                _dmax = min(_b['day'], max_days)
+                _db = random.randint(0, _dmax)
+                _tries = 0
+                while _db in used and _tries < 20:
+                    _db = random.randint(0, _dmax)
+                    _tries += 1
+                if _db in used:
+                    continue
+                _qty = random.randint(1, max(1, min(100, int(_b['left'] * 0.6))))  # 最多吃掉单批 60%, 避免演示库存被打空
+                _b['left'] -= _qty
+                used.add(_db)
+                out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
+                                 'target_warehouse': 'B仓',
+                                 'outbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
+                                 'channel': ch, 'prod_date': _b['pd'], 'exp_date': _b['ed'],
+                                 'warehouse': _whm['wh'], 'barcode': _whm['bc']})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
                                   ('outbound_records', out_rows, 'outbound_date')):
         for i in range(0, len(rows), 500):

@@ -235,7 +235,9 @@ def _rebuild_own_batches(channel, skus):
             _sk = str(r.get("sku") or "")
             _wh = str(r.get("warehouse") or "")
             _bc = str(r.get("barcode") or "").strip()
-        by_key.setdefault((_sk, _bc, _wh), []).append(r)
+            # 2026-10-31 修复: 本行原缩进在 for 外, 导致整个 ins 只有最后一条进入分组,
+            # 批次重建只保留最后一笔入库 → Σ批次 远小于可用, 触发"批次对账偏差"告警。
+            by_key.setdefault((_sk, _bc, _wh), []).append(r)
         for k, _b0 in _beg_map.items():
             if _b0 > 0:
                 by_key.setdefault(k, [])
