@@ -194,22 +194,27 @@ def _rebuild_own_batches(channel, skus):
         # 出库: 按四维分组
         outs_exact = {}
         outs_noexp = {}
-        for r in _q("SELECT sku, barcode, prod_date, exp_date, SUM(quantity) AS q "
+        for r in _q("SELECT sku, barcode, warehouse, prod_date, exp_date, SUM(quantity) AS q "
                     "FROM outbound_records WHERE channel=%s AND sku IN (%s) "
                     # 2026-10-29 仓型维度: 只取自有类流水的出库
                     "AND (COALESCE(warehouse_type,'')='' OR warehouse_type IN (%s)) "
-                    "GROUP BY sku, barcode, prod_date, exp_date" % ("%s", ph, _ph_wt),
+                    "GROUP BY sku, barcode, warehouse, prod_date, exp_date" % ("%s", ph, _ph_wt),
                     [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _sk = str(r.get("sku") or "")
             _bc = str(r.get("barcode") or "").strip()
+            _wh_o = str(r.get("warehouse") or "").strip()   # 仓名来自出库记录(数据驱动, 非硬编码)
             _pd = str(r.get("prod_date") or "")[:10]
             _ed = str(r.get("exp_date") or "")[:10]
             _qq = int(r.get("q") or 0)
             if _pd or _ed:
+                # 精确扣减键仍为四维批次(sku, 69码, 生产日, 截止日) —— 批次标识不含仓,
+                # 多仓同批号的出库在此累加, 与原"不分组仓"的 SUM 结果等价。
                 k = (_sk, _bc, _pd, _ed)
                 outs_exact[k] = outs_exact.get(k, 0) + _qq
             else:
-                k = (_sk, _bc)
+                # 2026-10-31 告警粒度补齐仓名: 未填批次的出库不参与扣减, 仅告警,
+                # 但多仓时必须能定位到具体仓 → 键补 warehouse(值来自记录, 非硬编码)。
+                k = (_sk, _bc, _wh_o)
                 outs_noexp[k] = outs_noexp.get(k, 0) + _qq
         # 期初(按 sku+barcode+warehouse)
         _beg_map = {}
@@ -256,10 +261,10 @@ def _rebuild_own_batches(channel, skus):
                     _take = min(_q0, _need)
                     r["quantity"] = _q0 - _take
                     outs_exact[_kk] = _need - _take
-            # ② 未填批次(无效期)的出库: 不猜, 记未匹配
-            _no = outs_noexp.get((sk, bc), 0)
+            # ② 未填批次(无效期)的出库: 不猜, 记未匹配(带仓名, 多仓可定位)
+            _no = outs_noexp.get((sk, bc, wh), 0)
             if _no > 0:
-                _miss.append((sk, _no))
+                _miss.append((sk, wh, _no))
             # ③ 生成本次剩余批次
             for r in _fifo:
                 qty = int(r.get("quantity") or 0)
@@ -295,11 +300,13 @@ def _rebuild_own_batches(channel, skus):
         done += len(_insert_rows)
     if _miss:
         try:
-            _tot = sum(x[1] for x in _miss)
+            _tot = sum(x[2] for x in _miss)
+            _s0 = _miss[0]
             try_err('cleansing', '出库未填批次',
-                    Exception("渠道 %s 有 %d 个 SKU×69码 的出库记录未填批次(生产/截止日期), 合计 %d 件 "
+                    Exception("渠道 %s 有 %d 个 SKU×69码×仓 的出库记录未填批次(生产/截止日期), 合计 %d 件 "
+                              "(例 sku=%s 仓=%s 未匹配=%d 件) "
                               "—— 不做 FIFO 猜测, 这些量不扣批次; 请补全批次信息后重新导入"
-                              % (channel, len(_miss), _tot)))
+                              % (channel, len(_miss), _tot, _s0[0], _s0[1] or "-", _s0[2])))
         except Exception:
             pass
     return done
