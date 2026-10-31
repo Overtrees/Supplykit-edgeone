@@ -448,6 +448,7 @@ def _seed_records():
                       else random.randint(200, 365))
             _is_prob = str(sku) in _prob
             plan = []
+            _used_ago = set()
             for _bi in range(random.randint(1, 3)):
                 if _is_prob and _bi == 0 and random.random() < 0.5:
                     _ago = _shelf + random.randint(3, 15)                                   # 已过期
@@ -455,6 +456,13 @@ def _seed_records():
                     _ago = random.randint(max(_shelf // 3 - 2, 5), max(_shelf // 3 + 2, 8))  # 临期
                 else:
                     _ago = random.randint(2, max(_shelf // 3 - 6, 5))
+                # 同 SKU 内生产日必须错开: 撞日会让两条入库共享同一批号,
+                # 出库按批号匹配后可能"早于其中一笔入库"(实测 38 个 SKU / 28 条出库)
+                for _retry in range(20):
+                    if _ago not in _used_ago:
+                        break
+                    _ago = max(2, _ago - 1)
+                _used_ago.add(_ago)
                 _prod = today - timedelta(days=_ago)
                 plan.append({'pd': _prod.strftime('%Y-%m-%d'),
                              'ed': (_prod + timedelta(days=_shelf)).strftime('%Y-%m-%d'),
