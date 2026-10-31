@@ -17,3 +17,8 @@ cloud-functions/vendor/
 # 前端构建产物
 frontend/dist/
 export_files/
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*

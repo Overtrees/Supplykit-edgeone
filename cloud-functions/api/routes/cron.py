@@ -86,14 +86,32 @@ def continue_tasks():
 
 
 
-def _authed(request: Request) -> bool:
-    """CRON_SECRET 校验(2026-10-13 加固: 仅 X-Cron-Secret 头——弃 query secret(URL 落日志); hmac.compare_digest 防 timing; 未配置仍依赖平台签名)"""
+async def _authed(request: Request) -> bool:
+    """CRON_SECRET 校验。
+
+    2026-10-31 加固: 未配置 CRON_SECRET 时 return True(旧行为); 配置后接受两种携带方式——
+      (1) 请求头 X-Cron-Secret(人工/外部/CI 调用);
+      (2) POST body 中的 "_k" 字段(平台 schedules 触发)。
+    为什么需要第 (2) 种: EdgeOne schedules 的配置 schema 仅支持 name/cron/timezone/method/path/payload,
+    无法注入自定义请求头; 而 query(?k=) 会落 URL 与 access log, 已在上版废弃。payload 不进 URL, 是当前唯一可行通道。
+    两者均用 hmac.compare_digest 比较, 防 timing 侧信道。
+    """
     secret = os.environ.get("CRON_SECRET", "")
     if not secret:
-        return True  # 未配置→依赖平台签名保护(q-sign——README 已不公开细节)
-    h = request.headers.get("X-Cron-Secret", "")
+        return True  # 未配置→保持旧行为(线上当前状态)
     import hmac as _hm
-    return bool(h) and _hm.compare_digest(h.encode(), secret.encode())
+    h = request.headers.get("X-Cron-Secret", "")
+    if h and _hm.compare_digest(h.encode(), secret.encode()):
+        return True
+    try:
+        raw = await request.body()
+        if raw:
+            k = str((json.loads(raw) or {}).get("_k", ""))
+            if k and _hm.compare_digest(k.encode(), secret.encode()):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _log(level, message, source="cron"):
@@ -128,7 +146,7 @@ def _build_snapshot(rebuild_days=90):
 @router.api_route("/cron/snapshot", methods=["GET","POST"])
 @traced
 async def cron_snapshot(request: Request):
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     n = _build_snapshot()
     _log("info", "日销快照构建完成, 快照总行数 %d" % n)
@@ -140,7 +158,7 @@ async def cron_snapshot(request: Request):
 async def cron_freshness(request: Request):
     """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建
     maintenance_log(date+'snapshot') 抢占 —— 与应用层自愈互斥, 一天只重建一次"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'snapshot')", [_today])
@@ -160,7 +178,7 @@ async def cron_freshness(request: Request):
 @traced
 async def cron_archive(request: Request):
     """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
     old = query(
@@ -197,7 +215,7 @@ async def cron_archive(request: Request):
 @router.api_route("/cron/cleanup-logs", methods=["GET","POST"])
 @traced
 async def cron_cleanup_logs(request: Request):
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     r = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
     total = int(r.get("c") or 0)
@@ -335,7 +353,7 @@ async def cron_daily_rules(request: Request, force: int = 0):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
     maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行);
     force=1: 运维强制重跑(重置后/数据重建场景, 绕过当天抢占)"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     if not force:
         _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -349,7 +367,7 @@ async def cron_daily_rules(request: Request, force: int = 0):
 @traced
 async def cron_ping(request: Request):
     """调度连通性测试: 无条件写日志 —— 验证 EdgeOne schedules 是否真正触发函数"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     _log("info", "schedules ping 触发(平台调度验证)")
     return ok({"pong": True, "ts": datetime.now(timezone.utc).isoformat()})
@@ -359,7 +377,7 @@ async def cron_ping(request: Request):
 @traced
 async def cron_recycle(request: Request):
     """回收站清理: 软删超过 30 天的订单/规则永久删除(deleted_at != '' 且 < now-30d)"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     n1 = execute("DELETE FROM orders WHERE deleted_at IS NOT NULL AND deleted_at != '' "
                  "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
@@ -375,7 +393,7 @@ async def cron_recycle(request: Request):
 @traced
 async def cron_push_alerts(request: Request):
     """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     try:
         cfg = one("SELECT value FROM replenishment_config WHERE `key`='webhook_url'") or {}
@@ -453,6 +471,6 @@ def run_reconcile(days=90):
 @traced
 async def cron_reconcile(request: Request, days: int = 90):
     """日销对账(cron 入口)——体量与口径见 run_reconcile"""
-    if not _authed(request):
+    if not await _authed(request):
         return fail("未授权", 401)
     return ok(run_reconcile(days))

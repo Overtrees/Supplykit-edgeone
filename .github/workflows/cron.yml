@@ -1,0 +1,80 @@
+# 定时任务调度（替代 EdgeOne Makers schedules）
+#
+# 为什么改成 GitHub Actions：
+#   EdgeOne Makers 的 schedules 配置 schema 只支持 name/cron/timezone/method/path/payload，
+#   无法注入自定义请求头，也无法在 payload 里安全存放密钥（edgeone.json 会进公开仓库）。
+#   因此把调度搬到 Actions：密钥存 Actions Secrets（加密、不进仓库），请求时用 X-Cron-Secret 头。
+#
+# 时区：GitHub Actions 的 cron 是 UTC，下面每条都按 Asia/Shanghai (UTC+8) 换算过。
+#
+# 手动验证：Actions → Cron 调度 → Run workflow，输入某个 schedule 表达式（如 "5 17 * * *"）。
+name: Cron 调度
+
+on:
+  schedule:
+    - cron: '5 17 * * *'    # archive-orders     01:05 CST
+    - cron: '5 19 * * *'    # cleanup-logs       03:05 CST
+    - cron: '10 19 * * *'   # snapshot-freshness 03:10 CST
+    - cron: '35 19 * * *'   # build-snapshot     03:35 CST
+    - cron: '10 20 * * *'   # reconcile-sales    04:10 CST
+    - cron: '5 20 * * *'    # daily-rules        04:05 CST
+    - cron: '35 20 * * *'   # recycle-cleanup    04:35 CST
+    - cron: '30 0 * * *'    # push-alerts        08:30 CST
+    - cron: '55 5 * * *'    # schedule-ping-2    13:55 CST
+    - cron: '5 21 * * *'    # continue-tasks     05:05 CST
+  workflow_dispatch:
+    inputs:
+      cron:
+        description: '要模拟的 schedule 表达式（如 "5 17 * * *"）'
+        required: true
+        type: string
+
+jobs:
+  tick:
+    name: 触发定时任务
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 表达式 → 任务路径
+        id: route
+        run: |
+          set -euo pipefail
+          EXPR="${{ github.event.schedule }}"
+          if [ -z "$EXPR" ]; then EXPR="${{ github.event.inputs.cron }}"; fi
+          case "$EXPR" in
+            "5 17 * * *")  P=/api/cron/archive ;;
+            "5 19 * * *")  P=/api/cron/cleanup-logs ;;
+            "10 19 * * *") P=/api/cron/freshness ;;
+            "35 19 * * *") P=/api/cron/snapshot ;;
+            "10 20 * * *") P=/api/cron/reconcile ;;
+            "5 20 * * *")  P=/api/cron/daily-rules ;;
+            "35 20 * * *") P=/api/cron/recycle ;;
+            "30 0 * * *")  P=/api/cron/push-alerts ;;
+            "55 5 * * *")  P=/api/cron/ping ;;
+            "5 21 * * *")  P=/api/cron/continue-tasks ;;
+            *)             P="" ;;
+          esac
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+          echo "表达式 [$EXPR] → 路径 [$P]"
+
+      - name: 调用接口
+        if: steps.route.outputs.path != ''
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -uo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::secrets.CRON_SECRET 未配置，无法调用"; exit 1
+          fi
+          URL="https://supplykit.top${{ steps.route.outputs.path }}"
+          echo "POST $URL"
+          RESP=$(curl -sS -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            --max-time 180 --retry 2 --retry-delay 15 \
+            "$URL") || { echo "::error::请求失败"; exit 1; }
+          echo "$RESP" | head -c 800; echo
+          if ! echo "$RESP" | grep -q '"ok":true'; then
+            echo "::error::任务返回非 ok，检查服务端日志"; exit 1
+          fi
