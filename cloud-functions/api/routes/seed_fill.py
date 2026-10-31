@@ -385,12 +385,14 @@ def _seed_batches():
         if _osk:
             _rbb(_och, _osk)
     # best_before 以批次为准(批次 = 期初 + 流水 − 出库, 唯一真源)
+    #   2026-10-31: 单条 JOIN UPDATE —— 原逐条 UPDATE 是 2000 次往返(实测线上 200s),
+    #   会撑爆 seed 单步 90s 上限; 单条实测 0.3s。
     try:
-        for _r in query("SELECT sku, MIN(exp_date) AS e FROM batches "
-                        "WHERE channel IN ('jd','other') AND COALESCE(exp_date,'')<>'' GROUP BY sku"):
-            if _r.get('e'):
-                execute("UPDATE products SET best_before=%s WHERE sku=%s",
-                        (str(_r.get('e'))[:10], _r.get('sku')))
+        execute("UPDATE products p JOIN ("
+                "  SELECT sku, MIN(exp_date) AS e FROM batches "
+                "  WHERE channel IN ('jd','other') AND COALESCE(exp_date,'')<>'' GROUP BY sku"
+                ") b ON b.sku=p.sku SET p.best_before=b.e "
+                "WHERE COALESCE(p.best_before,'')<>b.e")
     except Exception as _ebf:
         try_err('seed_fill', 'best_before 回写降级', _ebf)
     return len(bdata)
