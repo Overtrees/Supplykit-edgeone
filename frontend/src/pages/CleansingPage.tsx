@@ -1335,9 +1335,12 @@ export default function CleansingPage() {
           </div>
           {cols.map(c => {
             const matched = ALIAS[c.name]
-            const sf =
-              (TARGET_FIELDS[tt] || []).find(x => x.t === matched) ||
-              SYS_FIELDS.find(x => x.t === matched)
+            // 2026-11-01 智能建议必须限定在当前导入类型内: 原回退全局 SYS_FIELDS
+            //   → 订单文件里的"生产日期/到期日期"列会被提示"建议映射 prod_date/exp_date",
+            //   但订单可选目标(TARGET_TARGETS.order)里没有这两项, 下拉根本选不到,
+            //   自动映射也已按白名单过滤(见上) → 这是一条永远无法采纳的建议,
+            //   只会让人误以为订单也要填效期。订单是销售事实, 不承载批次/效期。
+            const sf = (TARGET_FIELDS[tt] || []).find(x => x.t === matched)
             // 统计每个目标被几个来源列映射
             const targetCounts = {}
             for (const [, cfg] of Object.entries(mp)) {
