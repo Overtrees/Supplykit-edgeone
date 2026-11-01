@@ -186,7 +186,15 @@ const MODES = [
 ]
 const fieldLbl = v => {
   const f = LF.find(x => x.v === v)
-  return f ? f.l : v
+  if (f) return f.l
+  // 2026-11-01 params.* 引用落到"右侧值"位置时(条件 `own.gap > params.transfer_gap_min`),
+  //   原样返回 "params.transfer_gap_min" —— 用户在列表里看到的是英文路径不是人话。
+  //   参数名本身不在 LF 里, 单独查 VARS(后者已含自有仓三个阈值的中文名)。
+  if (typeof v === 'string' && v.indexOf('params.') === 0) {
+    const k = v.split('.')[1]
+    return VARS[k] || k
+  }
+  return v
 }
 const opLbl = v => {
   const o = OPS.find(x => x.v === v)
