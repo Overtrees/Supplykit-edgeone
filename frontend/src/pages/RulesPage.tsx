@@ -59,6 +59,10 @@ const VARS = {
   gap: '调拨缺口',
   cover_days: '可撑天数',
   days_to_expire: '距过期天数',
+  // 参数键(模板里直接引用 {own_overstock_days} 这类扁平名, 后端 flatten params 后可见)
+  transfer_gap_min: '缺口下限',
+  own_overstock_days: '积压天数阈值',
+  own_expiry_buffer_days: '效期缓冲',
 }
 const renderTmpl = text => {
   if (!text) return null
@@ -1925,7 +1929,30 @@ export default function RulesPage() {
               const condInfo = pc(rule.condition_json || '{}')
               const whLbl = WHS.find(w => w.v === condInfo.warehouse)?.l || '全部'
               const modeLbl = MODES.find(m => m.v === (rule.mode || ''))?.l || '全部'
-              const condText = `当 ${whLbl} ${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${condInfo.rightType === 'pct' ? fieldLbl(condInfo.right) + '的' + condInfo.pctValue + '%' : condInfo.rightType === 'field' ? fieldLbl(condInfo.right) : condInfo.right}`
+              // 2026-11-01 条件文案修正两处:
+              //  ① 原固定前缀"当 <仓库> <字段> <op> <值>" —— 自有仓规则的前置是
+              //     `inv.warehouse_type == own`(字段级), 拼出来变成"当 全部 仓库类型 等于 own",
+              //     语义重复且"全部"与"own"自相矛盾。现在字段本身就是仓储维度时不再加仓前缀。
+              //  ② and 子条件原**完全不显示** → 列表里只看得到前置、看不到真正的判据(缺口>阈值);
+              //     现在把 and/or 串进文案, 与编辑区一致。
+              const _isWhField = condInfo.left === 'inv.warehouse_type'
+              const _fmtR = (c: any) =>
+                c.rightType === 'pct'
+                  ? fieldLbl(c.right) + '的' + c.pctValue + '%'
+                  : c.rightType === 'field'
+                    ? fieldLbl(c.right)
+                    : c.right
+              const condText =
+                (condInfo.warehouse && !_isWhField ? `当 ${whLbl} ` : '当 ') +
+                `${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${_fmtR(condInfo)}` +
+                (condInfo.and
+                  ? ` 且 ${fieldLbl(condInfo.and.left)} ${opLbl(condInfo.and.op)} ${_fmtR(condInfo.and)}`
+                  : '') +
+                (Array.isArray(condInfo.or) && condInfo.or.length
+                  ? ` 或 (${condInfo.or
+                      .map(o => `${fieldLbl(o.left)} ${opLbl(o.op)} ${_fmtR(o)}`)
+                      .join(' / ')})`
+                  : '')
               return (
                 <div
                   key={rule.id}
@@ -3194,13 +3221,16 @@ export default function RulesPage() {
                           >
                             条件: 当{' '}
                             <b>
-                              {testResult.detail.warehouse
-                                ? testResult.detail.warehouse === 'platform_b'
-                                  ? 'B仓'
-                                  : testResult.detail.warehouse === 'platform'
-                                    ? 'C仓'
-                                    : '自有仓'
-                                : '全部'}
+                              {testResult.detail.left === 'inv.warehouse_type'
+                                ? // 字段级仓储条件(自有仓规则的固定前置)不再叠仓前缀
+                                  ''
+                                : testResult.detail.warehouse
+                                  ? testResult.detail.warehouse === 'platform_b'
+                                    ? 'B仓'
+                                    : testResult.detail.warehouse === 'platform'
+                                      ? 'C仓'
+                                      : '自有仓'
+                                  : '全部'}
                             </b>{' '}
                             {fieldLbl(testResult.detail.left)} {opLbl(testResult.detail.op)}{' '}
                             {String(testResult.detail.right).includes('.')
