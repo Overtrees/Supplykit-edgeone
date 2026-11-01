@@ -293,6 +293,12 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
         # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)
         try:
             _exec("CREATE TABLE IF NOT EXISTS maintenance_log (`date` DATE NOT NULL, task VARCHAR(32) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(`date`, task))")
+            # 2026-11-01 指纹列(治"一天只评估一次"致看板停旧快照): details 存库存指纹「行数|最大updated_at」,
+            # 指纹变化即允许当天重评估。老表无此列 → 幂等补列(已存在时报错忽略, 与上面 _DROP_INDEXES 同风格)
+            try:
+                _exec("ALTER TABLE maintenance_log ADD COLUMN details VARCHAR(255) DEFAULT NULL")
+            except Exception:
+                pass
             _exec("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))")
             _exec("CREATE TABLE IF NOT EXISTS health_snapshot (`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, score INT DEFAULT 0, own_score INT DEFAULT -1, platform_score INT DEFAULT -1, bc_score INT DEFAULT -1, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date, channel))")
             _exec("CREATE TABLE IF NOT EXISTS analysis_cache ("

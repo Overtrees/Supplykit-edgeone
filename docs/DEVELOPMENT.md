@@ -1830,3 +1830,51 @@ scrollTop"(每次地址栏伸缩都强制回顶, 内容看似不出现)已于 10
 表格容器回 `max-height: clamp(180px, 60dvh, 78dvh)`, hint 隐藏/标题缩小一并撤销。
 另: 首版锁高公式漏扣步骤条占高 38px, 页面恒超视口 18px(注入量测两方向一致),
 竖屏公式修正为 `100svh - 140px(page.top) - safe-top - max(20, safe-bottom)`。
+
+### 15.100 低库存卡"无数据"根因 + 预览页视口再调大(2026-11-01)
+
+#### 一、低库存卡: 不是规则问题, 是"兜底一天只跑一次"锁死了旧快照
+
+**排查路径(避免再走弯路: 两行日志就能定案, 不要逐行读评估引擎)**
+
+| 判据 | 结论 |
+|---|---|
+| 线上 `alert_type` 无 low_stock 键 | 计数为 0, 卡空 |
+| 规则表 `low_stock` 规则 `is_active=1` 存在 | 规则没丢 |
+| 规则条件 `可用+在途 < inv.safety_qty` | **条件是对的** |
+| 手动 `POST /cron/daily-rules` | 立刻产出 160 条 → 规则与评估都正常 |
+| `maintenance_log` 有 `daily_rules` 今天记录 | **兜底 03:33 就跑过了, 当天被锁死** |
+
+**关键洞察**: `rule_eval.py` 在 `_need_calc` 分支里 `base["inv"]["safety_qty"] = _dyn_safety`
+—— 静态 `safety_qty` 在评估时**已被动态安全线(日销×周期)覆盖**。所以「条件写了静态字段」
+不是 bug, 别去改规则右值为 `inv.ss_dyn`(那是统计安全库存 `ss_z×σ×√LT`, 另一回事)。
+
+**真因**: `_daily_rules_guard()` 用 `maintenance_log(date, task='daily_rules')` 主键
+`INSERT IGNORE` 抢占, **一天只评估一次**。实测 03:33 评估时 `inv_ctx=2000`(库存尚未导完),
+之后库存增至 9003 行, 当天再也不会评估 → 看板停在旧快照(用户看到"无数据")。
+GitHub Actions 的 `daily-rules`(04:05 CST)被平台限流跳过, 也补不上。
+
+**修复(指纹感知)**:
+- `maintenance_log` 加 `details VARCHAR(255)`(index.py 幂等 ALTER)
+- 指纹 = `行数|可用>0行数|SUM(可用)`(inventory 无 updated_at 字段, 用业务量替代)
+- 指纹变化 → `UPDATE ... WHERE IFNULL(details,'')=<旧指纹>` 原子抢占重跑; 一致 → 跳过
+- 调用处不再用 `_done` 集合短路 `_daily_rules_guard()`(否则变化了也进不去)
+- 效果: 同一天多次导入, 每次数据变化后看板都会重新评估, 仍串行不重复
+
+**教训**: 「一天一次」类幂等标记, 若依据的是**会变的数据**, 必须把数据指纹一并存下来,
+否则标记会把"数据已更新"这件事永久吞掉。
+
+#### 二、预览页竖屏视口再调大(+40px)
+
+`192` 那个数是错的: CSS 按 `card pb 32` 扣, 注入实测 `card padding-bottom` 只有 **16**,
+白丢 16px。另把预览页自身 `margin-top: -24px` 吃掉容器顶部留白(不用 `:has()`,
+实测该选择器未命中容器仍是 pt70, 且旧 WebKit 不支持)。
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 表格高度 | 511 | **551 (+40)** |
+| page.top | 140 | 116 |
+| 按钮 bottom | 772 | 788(≤844 ✅) |
+
+高度公式 `100svh - 176px - safe-top - max(20, safe-bottom)`, 上移 24 后改扣 **152**。
+**margin-top 与公式必须成对改**。横屏 media 内 `margin-top: 0` 还原, 步骤条/card padding 未动。

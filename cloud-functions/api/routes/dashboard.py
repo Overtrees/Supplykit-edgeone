@@ -95,7 +95,12 @@ def _daily_rules_guard():
     maintenance_log(date+'daily_rules' 主键) 抢占, 抢到则后台线程执行 run_daily_rules()(不阻塞 summary);
     失败回滚抢占标记, 下次 summary 请求重试(多实例安全)
     2026-10-17 数据就绪检测: seed 完成后首跑时物化表可能空/快照旧 → 空评估(孤儿0/触发0)
-    却占位挡后续——先查快照有数据才占位, 未就绪不占位(下次 summary 重试)"""
+    却占位挡后续——先查快照有数据才占位, 未就绪不占位(下次 summary 重试)
+
+    2026-11-01 库存指纹(实测 bug 修复): 原"一天一次"占位, 03:33 评估时库存仅 ~2000 行,
+    之后导入到 9000 行, 当天再也不评估 → 看板低库存卡长期显示旧快照(用户看到"无数据")。
+    现改为: 占位记录同时存库存指纹(行数+最大变更时间), 指纹变化则允许当天重评估(仍串行,
+    靠 UPDATE ... WHERE fingerprint=<旧指纹> 原子抢占, 多实例不重复)。"""
     try:
         _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         # 数据就绪检测: 快照有行才评估(seed/reset 后场景——避免空库空评估占位毒化)
@@ -105,9 +110,33 @@ def _daily_rules_guard():
                 return  # 数据未就绪——不占位, 下次 summary 重试
         except Exception:
             pass  # 查表失败不阻塞(继续尝试)
-        _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
-        if not _got:
-            return  # 今天已评估(本实例或其他实例)
+        # 库存指纹: 行数 + 正可用行数 + 可用量总和(整数) —— 任一变化即视为"评估依据已变"
+        #   inventory 表无 updated_at 列(字段见 SHOW COLUMNS), 故用业务量构造: 导入/改量/删行都会变;
+        #   刻意不做全表 SUM 的浮点比较(用 ROUND 收敛), 避免微小写抖动导致反复重评估
+        try:
+            _fp_row = one("SELECT COUNT(*) AS c, "
+                          "SUM(CASE WHEN available_qty>0 THEN 1 ELSE 0 END) AS p, "
+                          "IFNULL(ROUND(SUM(available_qty)),0) AS s FROM inventory") or {}
+            _fp = "%s|%s|%s" % (int(_fp_row.get("c") or 0), int(_fp_row.get("p") or 0),
+                                int(_fp_row.get("s") or 0))
+        except Exception:
+            _fp = ""
+        _row = one("SELECT task, IFNULL(details,'') AS d FROM maintenance_log "
+                   "WHERE `date`=%s AND task='daily_rules'", [_today])
+        if _row:
+            # 今天已评估过: 指纹一致 → 跳过; 指纹变化 → 抢占重跑(原子: 旧指纹仍未被别人改)
+            if not _fp or str(_row.get("d") or "") == _fp:
+                return
+            _got = execute("UPDATE maintenance_log SET details=%s, created_at=NOW() "
+                           "WHERE `date`=%s AND task='daily_rules' AND IFNULL(details,'')=%s",
+                           [_fp, _today, str(_row.get("d") or "")])
+            if not _got:
+                return  # 另一个实例已抢到
+        else:
+            _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task, details) "
+                           "VALUES(%s, 'daily_rules', %s)", [_today, _fp])
+            if not _got:
+                return  # 今天已评估(本实例或其他实例)
 
         def _run():
             try:
@@ -180,8 +209,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                          [_today])}
             if "daily" not in _done:
                 _daily_maintenance(channel)
-            if "daily_rules" not in _done:
-                _daily_rules_guard()
+            # 2026-11-01: 不再用 _done 短路 daily_rules —— 是否重跑由 _daily_rules_guard 内部
+            # 按库存指纹判定(当天已评估但库存已变化 → 需重跑, 否则看板停留在旧快照)
+            _daily_rules_guard()
         except Exception as _e:
             try_err('dashboard', '维护守卫降级(仍计算看板)', _e)
         _r = _build_summary(channel, start_date, end_date, mode)
