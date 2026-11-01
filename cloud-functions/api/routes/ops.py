@@ -97,7 +97,7 @@ def migrate_snapshot_barcode(channel=None, dry_run=True, day_step=15):
 
 @router.post("/snapshot-barcode")
 @traced
-def ops_snapshot_barcode(request: Request):
+async def ops_snapshot_barcode(request: Request):
     """快照 69码 归一(admin 运维口) —— 不进前端, 不参与业务流程
 
     调用:
@@ -112,11 +112,10 @@ def ops_snapshot_barcode(request: Request):
     if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
         return fail("仅 admin 可用", 403)
     try:
-        d = {}
         try:
-            d = await_json(request)
+            d = await request.json()
         except Exception:
-            d = {}
+            d = {}   # 空 body / 非 JSON: 全部走默认(dry_run=true)
         _ch = (d.get("channel") or "").strip() or None
         _dry = d.get("dry_run")
         _dry = True if _dry is None else bool(_dry)
@@ -133,10 +132,3 @@ def ops_snapshot_barcode(request: Request):
     except Exception as e:
         return fail("快照归码失败: %s" % str(e)[:300])
 
-
-async def await_json(request: Request):
-    """取 JSON body(body 为空时返回 {}) —— FastAPI 的 request.json() 在空 body 上抛错"""
-    try:
-        return await request.json()
-    except Exception:
-        return {}

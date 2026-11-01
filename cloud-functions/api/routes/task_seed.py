@@ -193,11 +193,13 @@ async def seed_step_run(request: Request):
     背景: /seed/fill 要求空库且从 step 0 全跑(实测 36.7 分钟), 只为验证一处派生逻辑
       也要清空重来, RU 开销过大。此口让运维只重算指定步骤。
 
-    白名单: from_step ∈ {6,7,8}, 连续执行到 8
+    白名单: from_step ∈ {5,6,7,8}, 连续执行到 8
       · [8]      只重算月汇总(最快, 前提: 流水已带 warehouse_type)
       · [7,8]    重算自有仓可用 + 重建批次, 再重算月汇总
       · [6,7,8]  重建流水(带仓型) + 重算可用 + 月汇总 —— 验证 _seed_records 新逻辑走这个
-      · 0-5 会写 products/orders/inventory(含期初), 单跑破坏期初/四维 → 拒绝
+      · [5,6,7,8] 先补库存行(含多码拆行) 再走上面三步 —— 验证 _seed_inventory 新逻辑走这个
+        (inventory 有业务唯一键, INSERT IGNORE 只补新键行: 已存在的码行不受影响, 期初不被改写)
+      · 0-4 会写 products/orders → 拒绝; 5 只限 seed 库(orders.data_source='seed' 守卫)
       · 6 不可单独执行: 流水变了而可用未重算 → 可用与流水脱节, 反而破坏四维
         (故强制连续到 8, 不接受 [6] 或 [6,7])
       · 9 重建快照/物化(实测 456s, 超平台单请求时限) → 拒绝
@@ -225,10 +227,17 @@ async def seed_step_run(request: Request):
         from_step = int(d.get("from_step") or d.get("step") or 8)
     except Exception:
         return fail("from_step 必须是整数", 400)
-    if from_step not in (6, 7, 8):
-        return fail("from_step 只支持 6/7/8, 且必须连续执行到 8 —— "
-                    "6 重建流水 / 7 重算可用+批次 / 8 月汇总; "
-                    "0-5 会写期初, 6 单跑会让可用与流水脱节", 400)
+    if from_step not in (5, 6, 7, 8):
+        return fail("from_step 只支持 5/6/7/8, 且必须连续执行到 8 —— "
+                    "5 生成库存行(含多码拆行) / 6 重建流水 / 7 重算可用+批次 / 8 月汇总; "
+                    "0-4 会写商品与订单, 6 单跑会让可用与流水脱节", 400)
+    # from_step=5 会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
+    #   否则等于往真实客户库里塞演示库存。orders.data_source='seed' 是"这是 seed 库"的可靠标记。
+    if from_step <= 5:
+        _sd = one("SELECT COUNT(*) AS c FROM orders WHERE data_source='seed'") or {}
+        if int(_sd.get("c") or 0) <= 0:
+            return fail("from_step=5 会写入演示库存行, 仅限 seed 库"
+                        "(orders 中 data_source='seed' 为空 → 判定为真实库)", 400)
     from routes.seed_fill import _sync_inv_month
     import time as _t
     month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
@@ -251,9 +260,23 @@ async def seed_step_run(request: Request):
         before = _inv_fingerprint()
         bad_before = _month_sum_diff(month_start)
         _steps = []
+        # ── step 5: 生成库存行(新 SKU 才真正插入; 已存在行 INSERT IGNORE 跳过) ──
+        #   from_step=5 是"让 seed 生成器的新逻辑(多码拆行)真正落地"的唯一途径 —— 不跑它,
+        #   inventory 里永远只有旧的单码行, 双码链路无从验证。
+        if from_step <= 5:
+            import random as _rnd
+            from routes.seed_fill import _seed_inventory, _make_skus_json
+            _rnd.seed(42)
+            _t0 = _t.time()
+            _nin = _seed_inventory(_make_skus_json())
+            _steps.append({"step": 5, "name": "库存行生成",
+                           "elapsed_s": round(_t.time() - _t0, 1),
+                           "result": {"rows": _nin}})
         # ── step 6: 重建出入库流水(带 warehouse_type) ──────────────────────
         if from_step <= 6:
+            import random as _rnd
             from routes.seed_fill import _seed_records
+            _rnd.seed(42)   # 与 seed_step(6) 同语义: 每步独立确定性(否则依赖进程随机态)
             _t0 = _t.time()
             _ib, _ob = _seed_records()
             _steps.append({"step": 6, "name": "出入库流水重建",
@@ -298,6 +321,7 @@ async def seed_step_run(request: Request):
             "from_step": from_step, "to_step": 8,
             "total_s": round(_t.time() - _ta, 1),
             "steps": _steps,
+            "rows_delta": after["rows"] - before["rows"],
             "before": before, "after": after,
             "beginning_unchanged": before["beginning"] == after["beginning"],
             "available_unchanged": before["available"] == after["available"],
