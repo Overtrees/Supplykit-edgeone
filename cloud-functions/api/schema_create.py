@@ -443,4 +443,27 @@ def create_all_tables():
             try_err('schema', '效期管理标记推导完成: %d 个 SKU 标 yes' % int(_n_em or 0), '')
     except Exception as _eem:
         try_err('schema', '效期管理标记推导降级', _eem)
+    # 2026-11-01 库存业务唯一键(幂等; 有重复则登记待办, 不阻断启动):
+    #   写入路径一直是"先查后写", 少一层库约束 —— 并发/大小写/空格差异会插出重复行,
+    #   而 inventory 是四维对账的基准: 重复行会让 "Σ批次=可用" 与 "月汇总=流水" 同时失真,
+    #   且每行经 SUM() 汇总后被成倍放大(与月汇总那次根因同类)。
+    #   注意: ALTER 走 TiDB 在线 DDL, 大表(数十万行)会有分钟级等待 —— 只在本键不存在时执行一次。
+    try:
+        from db import query as _qk5, execute as _ek5
+        _idx5 = _qk5("SHOW INDEX FROM inventory") or []
+        if not any(str(r.get("Key_name") or "") == "uq_inventory_biz" for r in _idx5):
+            _d5 = _qk5("SELECT COUNT(*) AS c FROM (SELECT 1 FROM inventory GROUP BY sku, "
+                       "COALESCE(barcode,''), warehouse, channel, warehouse_type "
+                       "HAVING COUNT(*)>1) t") or []
+            _dup5 = int((_d5[0].get("c") if _d5 else 0) or 0)
+            if _dup5:
+                _ek5("INSERT IGNORE INTO migration_log(name) VALUES('uq_inventory_biz_blocked')")
+                try_err('schema', '库存唯一键待办: %d 组重复行, 需先人工合并再建键' % _dup5, None)
+            else:
+                _ek5("UPDATE inventory SET barcode='' WHERE barcode IS NULL")  # NULL 会让唯一键失效
+                _ek5("ALTER TABLE inventory ADD UNIQUE KEY uq_inventory_biz "
+                     "(sku, barcode, warehouse, channel, warehouse_type)")
+                try_err('schema', 'inventory 唯一键 uq_inventory_biz 建立完成', '')
+    except Exception as _eix5:
+        try_err('schema', 'inventory 唯一键迁移降级', _eix5)
     return ok_n

@@ -22,10 +22,12 @@ from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
 from routes.task_export import create_export, export_status, _save_export_part, export_download, _build_export_rows, now_stamp, router as export_router
 from routes.task_seed import seed_fill, seed_reset, seed_fill_status, router as seed_router  # tasks_seed_imported
+from routes.ops import router as ops_router
 
 router = APIRouter(tags=["tasks"])
 router.include_router(export_router)  # 导出口/分队(拆分至 task_export 后 include)
 router.include_router(seed_router)  # seed 分队(拆分至 task_seed 后 include)
+router.include_router(ops_router)  # 运维单次数据治理(admin only, 2026-11-01)
 
 # 2026-10-29 全排查(用户: 要排查就全排查根治): 原清单漏 6 表 ——
 #   · sku_sales_stats = 日销物化(**补货/采购/断货/健康的数据源**) → 漏清 = 重置后卡片仍有数据
