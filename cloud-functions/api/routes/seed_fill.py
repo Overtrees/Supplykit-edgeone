@@ -563,8 +563,11 @@ def _sync_inv_month():
     #   注: 本函数仅 seed 调用(seed_step 8 / run_seed_fill); 生产环境客户导入的月度值
     #   (ERP 口径, cleanse_write 可写 month_* 列)不得被此函数覆盖 —— 导入路径不调这里。
     try:
-        execute("UPDATE inventory SET month_inbound=0, month_outbound=0")
-        _stat['cleared'] = 'all'
+        # 清零范围必须与下面的重算范围**完全一致**(channel IN ('jd','other')):
+        #   清零更宽 → 该渠道被清 0 却永远不重算, 静默丢数据(seed 库现无其他渠道, 但不该靠运气)
+        execute("UPDATE inventory SET month_inbound=0, month_outbound=0 "
+                "WHERE channel IN ('jd','other')")
+        _stat['cleared'] = "channel in (jd,other)"
     except Exception as _e:
         try_err('seed_fill', '月汇总清零', _e)
     for table, date_col, target_col in (('inbound_records', 'inbound_date', 'month_inbound'),
