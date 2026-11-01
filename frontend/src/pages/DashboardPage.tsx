@@ -1607,26 +1607,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           onRiskFilter={setRiskFilter}
           t={t}
         />
-
-        {/* 5. 自有仓健康 — 供给侧口径专属卡(2026-11-01)
-            为什么单独一张卡: 自有仓(集货仓)不产生销售(daily_sales_snapshot 只有平台仓行),
-            逐仓日销 ds=0 → 低库存/断货口径在自有仓维度恒不触发, 属口径错配而非 bug。
-            自有仓真正该判的是「下游要货备不备得出(调拨缺口)」「压得太多(积压)」「会不会过期(效期)」。
-            用户明确否决并入「采购&补货」卡: 那张卡回答"哪些要补/要买", 而积压/过期语义相反, 会形成噪音。 */}
-        <OwnHealthCard
-          data={ownHealth as OwnHealthData | null}
-          onAlert={function (sku, whType, wh) {
-            if (onAlert) {
-              onAlert(sku, 'own', wh)
-              return
-            }
-            useAppStore.getState().setHammerWhType('own')
-            window.__setPage && window.__setPage('inv')
-          }}
-          onShowAll={function () {
-            setShowAllOwn(true)
-          }}
-        />
+        {/* 自有仓健康卡 2026-11-01 由小卡改大卡, 已移至下方 chart-row-3 区
+            (小卡内容区 134~192px 放不下 90 项/300 行明细; 且三类语义不同质不能混排) */}
       </div>
 
       <div className="mid-chart-grid">
@@ -1904,6 +1886,28 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             </div>
           )}
         </div>
+
+        {/* 自有仓健康大卡(2026-11-01 由小卡改大卡) —— 供给侧口径
+            为什么单列一张卡: 自有仓(集货仓)不产生销售(daily_sales_snapshot 只有平台仓行),
+            逐仓日销 ds=0 → 低库存/断货口径在自有仓维度恒不触发, 属口径错配而非 bug。
+            自有仓真正该判的是「下游要货备不备得出(调拨缺口)」「压得太多(积压)」「会不会过期(效期)」。
+            用户明确否决并入「采购&补货」卡: 那张卡回答"哪些要补/要买", 而积压/过期语义相反, 会形成噪音。
+            为什么是大卡而非小卡: 实测 90 项(缺口9/效期46/积压35), 小卡内容区 134~192px
+            扣掉固定开销 80px 只剩 54~112px, 最多 3~8 行且三类混排会互相掩盖。 */}
+        <OwnHealthCard
+          data={ownHealth as OwnHealthData | null}
+          onAlert={function (sku, whType, wh) {
+            if (onAlert) {
+              onAlert(sku, 'own', wh)
+              return
+            }
+            useAppStore.getState().setHammerWhType('own')
+            window.__setPage && window.__setPage('inv')
+          }}
+          onShowAll={function () {
+            setShowAllOwn(true)
+          }}
+        />
       </div>
       {/* 低库存告警弹窗 */}
       {showAllLowStock &&
@@ -2115,83 +2119,111 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 >
                   供给侧口径: 调拨缺口 / 积压 / 效期（自有仓不产生销售，不适用低库存口径）
                 </div>
-                {[
-                  { k: 'own_transfer_gap', t: '调拨覆盖不足', d: '下游要货超出自有仓可发量' },
-                  { k: 'own_expiry_risk', t: '效期风险', d: '批次将过期/已过期，未及调拨消化' },
-                  { k: 'own_overstock', t: '自有仓积压', d: '可撑天数超过阈值，占用资金库位' },
-                ].map(function (g) {
-                  const rows = (((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[])
-                    .filter(function (x) {
-                      return x.alert_type === g.k
+                {/* 2026-11-01 改为**单一全量列表 + 行首标签区分类型**(用户定, 参考「采购&补货」卡):
+                    原按三类分组各带小标题, 与采购补货卡的行标签范式不一致, 且分组标题
+                    占用垂直空间。现在统一按 缺口→效期→积压 排序铺平, 每行行首 pill 标类型。 */}
+                {(() => {
+                  const _OWN_META: Record<string, { tag: string; cls: string; c: string }> = {
+                    own_transfer_gap: { tag: '调拨缺口', cls: 'danger', c: 'var(--danger)' },
+                    own_expiry_risk: { tag: '效期', cls: 'danger', c: 'var(--danger)' },
+                    own_overstock: { tag: '积压', cls: 'warning', c: 'var(--warning)' },
+                  }
+                  const _ORD: Record<string, number> = {
+                    own_transfer_gap: 0,
+                    own_expiry_risk: 1,
+                    own_overstock: 2,
+                  }
+                  const all = (((ownHealth as OwnHealthData | null)?.items ||
+                    []) as OwnHealthItem[])
+                    .slice()
+                    .sort(function (a, b) {
+                      return (_ORD[a.alert_type] ?? 9) - (_ORD[b.alert_type] ?? 9)
                     })
-                    .slice(0, 20)
-                  if (rows.length === 0) return null
-                  return (
-                    <div key={g.k} style={{ marginBottom: 12 }}>
+                    .slice(0, 60)
+                  return all.map(function (x, i) {
+                    const m = _OWN_META[x.alert_type] || {
+                      tag: '预警',
+                      cls: 'warning',
+                      c: 'var(--warning)',
+                    }
+                    const metric =
+                      x.alert_type === 'own_transfer_gap'
+                        ? '缺 ' + fmtInt(x.gap_qty)
+                        : x.alert_type === 'own_expiry_risk'
+                          ? x.days_to_expiry != null && x.days_to_expiry < 0
+                            ? '过期 ' + Math.abs(x.days_to_expiry) + '天'
+                            : '剩 ' + fmtInt(x.days_to_expiry ?? undefined) + '天'
+                          : '撑 ' + Math.round(Number(x.cover_days || 0)) + '天'
+                    return (
                       <div
-                        className="small muted"
-                        style={{
-                          fontSize: 'var(--font-10)',
-                          fontWeight: 600,
-                          marginBottom: 4,
-                          display: 'flex',
-                          justifyContent: 'space-between',
+                        key={x.alert_type + x.sku + i}
+                        onClick={function () {
+                          onAlert && onAlert(x.sku, 'own', x.warehouse || '')
+                          setShowAllOwn(false)
                         }}
+                        className="clickable"
+                        style={{ padding: '7px 0', borderBottom: '1px solid var(--border)' }}
                       >
-                        <span>{g.t}</span>
-                        <span style={{ fontWeight: 400 }}>{g.d}</span>
-                      </div>
-                      {rows.map(function (x, i) {
-                        return (
-                          <div
-                            key={g.k + x.sku + i}
-                            onClick={function () {
-                              onAlert && onAlert(x.sku, 'own', x.warehouse || '')
-                              setShowAllOwn(false)
-                            }}
-                            className="clickable"
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 8,
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          <span
                             style={{
-                              padding: '7px 0',
-                              borderBottom: '1px solid var(--border)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              fontWeight: 600,
+                              fontSize: 'var(--font-sm)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              flex: 1,
+                              minWidth: 0,
                             }}
                           >
-                            <div
+                            <span
+                              className={'pill ' + m.cls}
                               style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                                alignItems: 'flex-start',
+                                flexShrink: 0,
+                                fontSize: 'var(--font-9)',
+                                padding: '1px 6px',
+                                minHeight: 'auto',
+                                lineHeight: '16px',
                               }}
                             >
-                              <span
-                                style={{
-                                  fontWeight: 600,
-                                  fontSize: 'var(--font-sm)',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  flex: 1,
-                                  minWidth: 0,
-                                }}
-                              >
-                                {x.product_name || x.sku}
-                              </span>
-                              <span
-                                className={'pill ' + (x.level === 'error' ? 'danger' : 'warning')}
-                                style={{ flexShrink: 0 }}
-                              >
-                                {x.level === 'error' ? '严重' : '警告'}
-                              </span>
-                            </div>
-                            <div className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-                              {x.description}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                })}
+                              {m.tag}
+                            </span>
+                            {x.product_name || x.sku}
+                          </span>
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              fontWeight: 700,
+                              fontSize: 'var(--font-sm)',
+                              color: m.c,
+                              fontVariantNumeric: 'tabular-nums',
+                            }}
+                          >
+                            {metric}
+                          </span>
+                        </div>
+                        <div
+                          className="small muted"
+                          style={{ fontSize: 'var(--font-xs)', marginTop: 2 }}
+                        >
+                          {x.sku}
+                          {x.warehouse ? ' · ' + x.warehouse : ''}
+                          {x.description ? ' · ' + x.description : ''}
+                        </div>
+                      </div>
+                    )
+                  })
+                })()}
                 <div
                   onClick={function () {
                     setShowAllOwn(false)
