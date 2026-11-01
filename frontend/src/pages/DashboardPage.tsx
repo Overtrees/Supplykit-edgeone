@@ -1,5 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import RiskCard from '../components/dash/RiskCard'
+import OwnHealthCard from '../components/dash/OwnHealthCard'
+import type { OwnHealthData } from '../components/dash/OwnHealthCard'
+import type { OwnHealthItem } from '../components/dash/OwnHealthCard'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import type { InventoryRow, StockRiskShim } from '../api/types'
@@ -73,6 +76,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     alerts,
     stockRisk,
     alertCounts,
+    ownHealth,
     bcOutOfStock,
     channel,
     hammerDashPeriod: periodTab,
@@ -114,6 +118,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const gmvPayoutOk = periodTab === 'month'
   const [bcMenuOpen, setBcMenuOpen] = useState(false)
   const [showAllLowStock, setShowAllLowStock] = useState(false)
+  const [showAllOwn, setShowAllOwn] = useState(false) // 自有仓健康全量弹窗(2026-11-01)
   // 采购&补货告警卡(重构): 补货建议需补(接口) + 采购建议需采(接口), 行标签区分, 跟随补货模式
   const [procList, setProcList] = useState([])
   const [procLoading, setProcLoading] = useState(true)
@@ -349,6 +354,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             alerts,
             stockRisk,
             alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
+            // 自有仓健康(2026-11-01): aux 新增块; 同样抖动兜底保留上次值
+            ownHealth: aux.ownHealth || useAppStore.getState().ownHealth || null,
             bcOutOfStock: aux.bcOutOfStock || [],
             inventory: ov.items || [],
             _stockOverview: ov,
@@ -477,6 +484,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           alerts: aux.alerts || useAppStore.getState().alerts || [],
           stockRisk: (sr && sr.data) || useAppStore.getState().stockRisk || {},
           alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
+          // 自有仓健康(2026-11-01): 供给侧口径块(调拨缺口/积压/效期), 抖动时保留上次值
+          ownHealth: aux.ownHealth || useAppStore.getState().ownHealth || null,
           bcOutOfStock: aux.bcOutOfStock || [],
           inventory: (aux.stockOverview || {}).items || [],
           loading: false,
@@ -1595,6 +1604,26 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           onRiskFilter={setRiskFilter}
           t={t}
         />
+
+        {/* 5. 自有仓健康 — 供给侧口径专属卡(2026-11-01)
+            为什么单独一张卡: 自有仓(集货仓)不产生销售(daily_sales_snapshot 只有平台仓行),
+            逐仓日销 ds=0 → 低库存/断货口径在自有仓维度恒不触发, 属口径错配而非 bug。
+            自有仓真正该判的是「下游要货备不备得出(调拨缺口)」「压得太多(积压)」「会不会过期(效期)」。
+            用户明确否决并入「采购&补货」卡: 那张卡回答"哪些要补/要买", 而积压/过期语义相反, 会形成噪音。 */}
+        <OwnHealthCard
+          data={ownHealth as OwnHealthData | null}
+          onAlert={function (sku, whType, wh) {
+            if (onAlert) {
+              onAlert(sku, 'own', wh)
+              return
+            }
+            useAppStore.getState().setHammerWhType('own')
+            window.__setPage && window.__setPage('inv')
+          }}
+          onShowAll={function () {
+            setShowAllOwn(true)
+          }}
+        />
       </div>
 
       <div className="mid-chart-grid">
@@ -2013,6 +2042,156 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 <div
                   onClick={function () {
                     setShowAllLowStock(false)
+                  }}
+                  className="clickable sheet-close"
+                  style={{ marginTop: 8 }}
+                >
+                  <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+                    关闭
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>,
+          document.body,
+        )}
+
+      {/* 自有仓健康全量弹窗(2026-11-01) —— 沿用低库存/采购弹窗的 sheet 结构, 三类分组展示 */}
+      {showAllOwn &&
+        createPortal(
+          <>
+            <div
+              onClick={function () {
+                setShowAllOwn(false)
+              }}
+              style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }}
+            />
+            <div
+              style={{
+                position: 'fixed',
+                left: 0,
+                right: 0,
+                bottom: 'calc(env(safe-area-inset-bottom) + 14px)',
+                zIndex: 9999,
+                display: 'flex',
+                justifyContent: 'center',
+                padding: '0 14px',
+                pointerEvents: 'none',
+              }}
+            >
+              <div
+                onClick={function (e) {
+                  e.stopPropagation()
+                }}
+                className="material-regular"
+                style={{
+                  width: '100%',
+                  maxWidth: 600,
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '18px 14px calc(14px + env(safe-area-inset-bottom))',
+                  boxShadow: 'var(--shadow-sheet)',
+                  pointerEvents: 'auto',
+                  maxHeight: '70vh',
+                  overflowY: 'auto',
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 'var(--font-18)',
+                    fontWeight: 700,
+                    marginBottom: 4,
+                    textAlign: 'center',
+                    color: 'var(--text)',
+                  }}
+                >
+                  自有仓健康 · 共 {fmtInt((ownHealth as OwnHealthData | null)?.total || 0)} 项
+                </div>
+                <div
+                  className="small muted"
+                  style={{ textAlign: 'center', fontSize: 'var(--font-10)', marginBottom: 12 }}
+                >
+                  供给侧口径: 调拨缺口 / 积压 / 效期（自有仓不产生销售，不适用低库存口径）
+                </div>
+                {[
+                  { k: 'own_transfer_gap', t: '调拨覆盖不足', d: '下游要货超出自有仓可发量' },
+                  { k: 'own_expiry_risk', t: '效期风险', d: '批次将过期/已过期，未及调拨消化' },
+                  { k: 'own_overstock', t: '自有仓积压', d: '可撑天数超过阈值，占用资金库位' },
+                ].map(function (g) {
+                  const rows = (((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[])
+                    .filter(function (x) {
+                      return x.alert_type === g.k
+                    })
+                    .slice(0, 20)
+                  if (rows.length === 0) return null
+                  return (
+                    <div key={g.k} style={{ marginBottom: 12 }}>
+                      <div
+                        className="small muted"
+                        style={{
+                          fontSize: 'var(--font-10)',
+                          fontWeight: 600,
+                          marginBottom: 4,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span>{g.t}</span>
+                        <span style={{ fontWeight: 400 }}>{g.d}</span>
+                      </div>
+                      {rows.map(function (x, i) {
+                        return (
+                          <div
+                            key={g.k + x.sku + i}
+                            onClick={function () {
+                              onAlert && onAlert(x.sku, 'own', x.warehouse || '')
+                              setShowAllOwn(false)
+                            }}
+                            className="clickable"
+                            style={{
+                              padding: '7px 0',
+                              borderBottom: '1px solid var(--border)',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                alignItems: 'flex-start',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontWeight: 600,
+                                  fontSize: 'var(--font-sm)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  flex: 1,
+                                  minWidth: 0,
+                                }}
+                              >
+                                {x.product_name || x.sku}
+                              </span>
+                              <span
+                                className={'pill ' + (x.level === 'error' ? 'danger' : 'warning')}
+                                style={{ flexShrink: 0 }}
+                              >
+                                {x.level === 'error' ? '严重' : '警告'}
+                              </span>
+                            </div>
+                            <div className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
+                              {x.description}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+                <div
+                  onClick={function () {
+                    setShowAllOwn(false)
                   }}
                   className="clickable sheet-close"
                   style={{ marginTop: 8 }}

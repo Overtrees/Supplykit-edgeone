@@ -940,6 +940,17 @@ def _build_aux(channel, mode):
                           "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
         "bcOutOfStock": bc_out,
     }
+    # 自有仓健康(2026-11-01 新增): 自有仓不产生销售, 低库存/断货口径结构性不适用,
+    #   改用供给侧口径(调拨覆盖/积压/效期)。独立成块, 不进 alerts 表也不进"其他告警",
+    #   避免与低库存卡语义互串(用户明确: 补货卡会形成噪音, 需专属卡)。
+    #   失败降级为空结构 —— 不给 aux 整体添故障点。
+    try:
+        from routes.dashboard_own_health import own_health
+        _aux_result["ownHealth"] = own_health(channel, full=1)
+    except Exception as _e:
+        try_err("dash", "自有仓健康计算降级", _e)
+        _aux_result["ownHealth"] = {"items": [], "total": 0, "transferGap": 0, "overstock": 0,
+                                    "expiryRisk": 0, "critical": 0, "warning": 0, "limits": {}}
     return _aux_result
 
 

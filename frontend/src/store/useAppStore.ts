@@ -70,6 +70,8 @@ const initAppStore = (set, get) => ({
   stockRisk: [] as unknown[] | StockRiskShim,
   bcOutOfStock: [],
   _stockOverview: null,
+  // 自有仓健康(2026-11-01): 供给侧口径(调拨缺口/积压/效期) —— 自有仓无销售行, 低库存卡不适用
+  ownHealth: null as unknown,
   alertCounts: null as {
     by_type?: Record<string, number>
     by_severity?: Record<string, number>
