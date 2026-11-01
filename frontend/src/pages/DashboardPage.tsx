@@ -148,9 +148,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const loadFullAlerts = async () => {
     try {
       const r = await api.get('/api/alerts?channel=' + channel + '&limit=20000', { timeout: 60000 })
-      setFullAlerts(r.data || [])
-    } catch (e) {
-      setFullAlerts([])
+      const _d = r.data
+      // 只在拿到**非空数组**时覆盖 —— 请求失败/返回空时保持 null, 让卡面回落 alertsList。
+      // 曾 `catch → setFullAlerts([])`: 网络抖动一次, 卡面(fullAlerts 优先)立刻变空,
+      // 表现为"明细忽然没了", 且不会自愈(直到下次点击「更多」)。
+      if (Array.isArray(_d) && _d.length > 0) setFullAlerts(_d)
+    } catch {
+      // 静默: 保持 fullAlerts 原值(首次为 null → 卡面回落 alertsList)
     }
   }
   const loadFullRisk = async () => {
@@ -293,6 +297,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   useEffect(() => {
     loadProc()
   }, [channel, _replMode])
+  // 2026-11-01 根治「低库存卡明细丢失」: 进入看板即预拉全量告警(limit=20000),
+  //   卡面在此之前吃的是 alertsList —— 那是 `/api/alerts` 每组 200 条的**首屏截断快照**,
+  //   与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200), 且 id DESC 的前 N 条
+  //   可能被同仓同 SKU 占满 → 卡上明细缺失/重复。预拉后卡面与弹窗同源同口径, 不再依赖用户点「更多」。
+  const fullAlertsLoaded = useRef(false)
+  useEffect(() => {
+    if (fullAlertsLoaded.current) return
+    fullAlertsLoaded.current = true
+    loadFullAlerts()
+  }, [channel])
   // 规则/参数保存、任务完成 → 重拉(与 insights-refresh/rules-changed 联动)
   useEffect(() => {
     const h = () => {
@@ -706,12 +720,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   ).length
   const errCount = (qualityLogs || []).length
   const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
-  const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
-  // 2026-11-01 卡面按 SKU 去重 —— 用户反馈"明细呢?"。
-  //   实测: 同一 SKU(番茄酱987)在 5 个仓各有一条 low_stock 告警, 接口按 id DESC 返回时
-  //   前 5 条全是它, 卡上 5 行看起来一模一样(标题只差"可售 0 / 1", 副行全一样),
-  //   视觉上等于"没有明细"。同一 SKU 卡面只留 1 条(取最小可售/最严重的), 其余进弹窗。
-  //   弹窗仍展示全部, 不丢数据。
+  // 2026-11-01 根治: 卡面数据源优先级 —— fullAlerts(点击时拉的全量) > alertsList(首屏截断 200/组)
+  //   截断列表只是"首屏快照", 与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200 条);
+  //   卡面此前直接吃截断列表, 一旦 id DESC 的前 N 条被同类其它仓占满, 卡上明细就会缺失或重复。
+  //   现在: ① 进入页面自动拉一次全量(不用等用户点「更多」) ② 卡面与弹窗同源同口径。
+  const lowStockFull = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : null
+  const lowStockAlerts = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
+  // 卡面按 SKU 去重 —— 同一 SKU 在多仓各有一条 low_stock 告警(「SKU × 仓」粒度),
+  //   按 id DESC 取前 5 条时可能全是同一 SKU 的不同仓, 副行又不带仓库 → 5 行看起来一模一样,
+  //   视觉上等于"没有明细"。卡面同 SKU 只留 1 条, 其余进弹窗(弹窗展示全部, 不丢数据)。
   const lowStockShown = (() => {
     const seen = new Set<string>()
     const out: typeof lowStockAlerts = []
@@ -1984,16 +2001,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 >
                   低库存告警 · 共 {fmtInt(lowStockTotal)} 条
                 </div>
+                {/* 2026-11-01 修复「弹窗明细丢失」根因 —— 原过滤把 platform 排除在 bbcc 之外:
+                    `_replMode === 'bbcc' ? ['own','bc'] : ['own','platform']`
+                    但实测库内 low_stock 200 条 **warehouse_type 全是 'platform'**(B/C 仓行),
+                    从不存在 'bc' 类型的 low_stock 告警 → bbcc 模式下 filter 结果恒为空, 弹窗一条都不显示。
+                    而卡面(lowStockAlerts)没做这个过滤, 所以"卡上有数、弹窗空白"。
+                    现改为: 只按 alert_type 过滤, 不按 warehouse_type 筛 —— 卡面与弹窗同源同口径,
+                    且自有仓(own)本身不产生 low_stock(见 own_health 卡注释), 无需在此排除。 */}
                 {(fullAlerts
-                  ? fullAlerts.filter(
-                      x =>
-                        x.alert_type === 'low_stock' &&
-                        // 2026-10-30 与后端一致: bbcc = own + bc; traditional = own + platform
-                        //   (传统多仓不看 B 仓——B 属 BBCC 调拨体系, 与 purchase_calc:127 同口径)
-                        (_replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']).includes(
-                          String(x.warehouse_type || ''),
-                        ),
-                    )
+                  ? fullAlerts.filter(x => x.alert_type === 'low_stock')
                   : lowStockAlerts
                 ).map(function (x) {
                   return (
@@ -2131,19 +2147,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   style={{
                     fontSize: 'var(--font-18)',
                     fontWeight: 700,
-                    marginBottom: 4,
+                    // 说明行已删除, 由标题自身 marginBottom 提供与首行的间距(原 4 + 说明行 12)
+                    marginBottom: 12,
                     textAlign: 'center',
                     color: 'var(--text)',
                   }}
                 >
                   自有仓健康 · 共 {fmtInt((ownHealth as OwnHealthData | null)?.total || 0)} 项
                 </div>
-                <div
-                  className="small muted"
-                  style={{ textAlign: 'center', fontSize: 'var(--font-10)', marginBottom: 12 }}
-                >
-                  供给侧口径: 调拨缺口 / 积压 / 效期（自有仓不产生销售，不适用低库存口径）
-                </div>
+                {/* 2026-11-01 去掉「供给侧口径: 调拨缺口 / 积压 / 效期（自有仓不产生销售…）」说明行
+                    (用户明确要求去除): 口径解释属实现注释, 不该占弹窗首屏; 行首 pill 已标类型。 */}{' '}
                 {/* 2026-11-01 改为**单一全量列表 + 行首标签区分类型**(用户定, 参考「采购&补货」卡):
                     原按三类分组各带小标题, 与采购补货卡的行标签范式不一致, 且分组标题
                     占用垂直空间。现在统一按 缺口→效期→积压 排序铺平, 每行行首 pill 标类型。 */}
@@ -2158,14 +2171,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   //   直接整体 sort 后 slice(0,60) 时, 缺口 9 条排在最前, 剩下 51 个名额
                   //   全被"效期"吃掉, "积压" 35 条一条都进不来(实测弹窗只剩 积压 5)。
                   //   改为三类各自排序后各取前 20 再拼回, 保证三类都可见。
-                  const _Q = 20
+                  // 2026-11-01 改为**全量展示**(用户裁决: 改全量)。
+                  //   原为分类型配额每类 20(共 49), 导致标题写 (90) 而弹窗只有 49 行, 效期 26 条、
+                  //   积压 15 条在弹窗里看不到 —— 弹窗是唯一能看全的入口, 截断即等于丢数据。
+                  //   仍按 缺口→效期→积压 排序, 便于顺序阅读; 高度由 maxHeight:70vh + 滚动承接。
                   const all = (['own_transfer_gap', 'own_expiry_risk', 'own_overstock'] as string[])
                     .map(function (t) {
-                      return _all
-                        .filter(function (x) {
-                          return x.alert_type === t
-                        })
-                        .slice(0, _Q)
+                      return _all.filter(function (x) {
+                        return x.alert_type === t
+                      })
                     })
                     .reduce(function (a, b) {
                       return a.concat(b)
