@@ -310,7 +310,8 @@ export const presetMapping = (tt: string): Record<string, string> => {
 // 库存=sku|warehouse 唯一键 + available_qty; 商品=sku+名称; 供应商=编码+名称;
 // 入库/出库=sku+数量+日期; GMV回款=platform+flow_no 去重键(缺失整批跳过)+amount
 export const PRESET_REQUIRED: Record<string, string[]> = {
-  order: ['order_no', 'sku', 'quantity', 'ordered_at'],
+  // warehouse 加入必填: 写入侧本就硬拦(传统补货按仓库核算日销), 此前定义漏了 → 两处口径不一
+  order: ['order_no', 'sku', 'quantity', 'ordered_at', 'warehouse'],
   // own: 可用/期初二选一(后端兼容 available_qty / beginning_stock), 故不强制
   inventory: ['sku', 'warehouse'],
   platform_inv: ['sku', 'warehouse', 'available_qty'],
@@ -347,6 +348,19 @@ const PRESET_EXAMPLE: Record<string, Record<string, string>> = {
 }
 export const presetExample = (tt: string): Record<string, string> => PRESET_EXAMPLE[tt] || {}
 export const presetRequired = (tt: string): string[] => PRESET_REQUIRED[tt] || []
+// 2026-11-01 必填列通用检查: PRESET_REQUIRED 此前只被模板下载消费, 导入流程零消费 ——
+// 拦截散落在 doExecute 的 4 个专项检查里, 用户没点"写入"就永远看不到提示(实测反馈:
+// 商品未映射「是否做效期管理」列, 映射页/预览页全程无提示)。preview 入口先 toast 预警
+// (可继续预览数据), 预览页常驻警示条, 写入时硬拦; 专项检查保留(带业务解释的文案优先)。
+export const missingRequired = (tt: string, mp: Record<string, any>): string[] => {
+  const fields = (TARGET_FIELDS as Record<string, any>)[tt] || []
+  const miss: string[] = []
+  for (const t of PRESET_REQUIRED[tt] || []) {
+    const ok = Object.values(mp || {}).some(m => m && (m.target === t || m.t === t))
+    if (!ok) miss.push((fields.find((f: any) => f.t === t) || {}).l || t)
+  }
+  return miss
+}
 // 导入类型中文名(下载文件名/预设标题)
 export const DOC_TYPE_NAMES: Record<string, string> = {
   order: '订单',
@@ -563,6 +577,8 @@ export default function CleansingPage() {
     return () => window.removeEventListener('orientationchange', onOrient)
   }, [])
   const [pv, setPv] = useState(null)
+  // 2026-11-01 预览入口预警的缺失必填列(进预览时常驻警示条; 返回映射补齐后重新预览即消)
+  const [reqMiss, setReqMiss] = useState<string[]>([])
   const [res, setRes] = useState(null)
   const [bs, setBs] = useState('')
   const [cf, setCf] = useState(() => {
@@ -737,7 +753,17 @@ export default function CleansingPage() {
         return
       }
       setPv(d)
+      // 2026-11-01 必填预警前移到预览入口(此前只在"写入"时提示, 不点写入全程静默);
+      // 预览只读无害可放行, 但必须让用户带着"缺必填列"的明确认知进预览
+      const _miss = missingRequired(tt, mp)
+      setReqMiss(_miss)
+      if (_miss.length) {
+        toast.warning('未映射必填列: ' + _miss.join('、') + ' —— 可先预览数据, 写入前必须返回补映射')
+      }
       goStep(2)
+      // 竖屏首屏空白根因之一: 映射页(可能几十列)滚到底才点到"下一步", 切到预览后窗口
+      // 停在旧滚动位置 → 上方是新内容、人在空白区, 要"手动滚动"才见到表格。进预览必回顶。
+      window.scrollTo(0, 0)
     } catch (e) {
       const msg = e.response?.data?.error || e.message || '请求失败'
       toast.error('预览失败: ' + msg)
@@ -784,6 +810,17 @@ export default function CleansingPage() {
     execLock.current = true
     try {
       setBs('清洗中...')
+      // 2026-11-01 通用硬拦: PRESET_REQUIRED 全量必填(此前仅 4 个专项检查, 商品的 sku/名称
+      // 等漏拦——预览入口的预警同源, 两处只维护一份 PRESET_REQUIRED)
+      const _miss = missingRequired(tt, mp)
+      if (_miss.length) {
+        toast.error(
+          '写入前必须映射必填列: ' + _miss.join('、') + '（缺失将导致整批跳过或核算错误），请返回上一步补映射',
+        )
+        setBs('')
+        execLock.current = false
+        return
+      }
       // 库存类型必须映射 warehouse 列（否则传统多仓无法按仓库核算）
       const isInvType = tt === 'inventory' || tt === 'platform_inv' || tt === 'inventory_b'
       if (isInvType) {
@@ -1488,7 +1525,7 @@ export default function CleansingPage() {
         </div>
       )}
       {s === 2 && pv && (
-        <div>
+        <div className="clean-preview-page">
           <div className="section-title">
             清洗预览 · 前 {pv.preview?.length || 0} 行
             {pv.total > 50 ? (
@@ -1503,6 +1540,29 @@ export default function CleansingPage() {
               </span>
             )}
           </div>
+          {reqMiss.length > 0 && (
+            <div
+              style={{
+                fontSize: 'var(--font-xs)',
+                color: 'var(--warning)',
+                background: 'rgba(245,158,11,0.08)',
+                border: '1px solid rgba(245,158,11,0.25)',
+                borderRadius: 'var(--radius-card)',
+                padding: '9px 12px',
+                marginBottom: 10,
+                display: 'flex',
+                gap: 6,
+                alignItems: 'flex-start',
+                lineHeight: 1.5,
+              }}
+            >
+              <IconWarning size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                未映射必填列: <b>{reqMiss.join('、')}</b> —— 预览仅供检查数据,
+                点击「确认写入」会被拦截。请返回上一步补映射后再导入
+              </span>
+            </div>
+          )}
           {(() => {
             // 脏数据预检: 缺SKU/重复SKU 统计(导入前发现)
             const skuCol = Object.entries(mp).find(([, cfg]) => cfg && cfg.target === 'sku')
@@ -1570,8 +1630,9 @@ export default function CleansingPage() {
                 </div>
               )
             return (
-              <div style={{ marginBottom: 12 }}>
+              <div className="clean-preview-body" style={{ marginBottom: 12 }}>
                 <div
+                  className="clean-preview-hint"
                   style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginBottom: 4 }}
                 >
                   ← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →
@@ -1582,11 +1643,10 @@ export default function CleansingPage() {
                   className="clean-preview-scroll"
                   style={{
                     overflowX: 'auto',
-                    /* 2026-10-28 根治竖屏首屏空白: iOS 首帧 dvh 可能为 0/异常(地址栏未稳定)
-                       → calc 成负数 → 表格高度被压 0, 需滑动触发重排才显示
-                       → clamp 给下限 240px(计算值异常时兜底), 上限 100dvh 防溢出 */
-                    maxHeight: 'clamp(240px, calc(100dvh - 340px), 100dvh)',
-                    minHeight: 240 /* 首帧保底高度: 防 iOS 上 dvh 计算异常导致容器 0 高不绘制 */,
+                    /* 2026-11-01 高度不再用 calc(100dvh - 340px)/clamp: 改由 .clean-preview-page
+                       的 flex 分配(表格吃剩余空间, 底部按钮常驻)。dvh 随地址栏变化, iOS 首帧还可能
+                       算出 0/负值 → 竖屏首屏不绘制、横屏与 min-height 打架撑出视口 → 顶部遮挡。 */
+                    minHeight: 0,
                     overflowY: 'auto',
                     WebkitOverflowScrolling:
                       'touch' /* 恢复: 隐藏滚动条+去惯性曾致 iOS 首帧不绘制内容 */,
@@ -1668,7 +1728,7 @@ export default function CleansingPage() {
             )
           })()}
           {/* 2026-10-27: 底部操作对齐其余步骤(左返回固定宽 + 右主操作 primary——写入非'成功'语义) */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <div className="clean-preview-actions" style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <button
               className="clickable"
               onClick={() => {

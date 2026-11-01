@@ -2250,12 +2250,47 @@ input[type='file'] {
 
 /* dark 浮层面板边框统一走 --glass-border(dark=白0.1), 无写死 !important——曾双源重叠 */
 
-/* 清洗页预览表格(2026-10-28): 横屏手机视口矮(≤500px)时, 按 60dvh 保证至少可看数行;
-   竖屏/平板/桌面保持 calc(100dvh - 340px) 自适应(扣 header+步骤条+标题+警示条+按钮) */
+/* 清洗页预览态(2026-11-01 重做): 高度锁在视口内, 表格吃剩余空间, 底部按钮常驻
+   历史两版都栽在"用视口高度算表格高度":
+     ① max-height: calc(100dvh - 340px) —— 横屏(390)算出 50px, 表格不可见;
+     ② 加 @media(max-height:500) clamp(180px,60dvh,78dvh) + 内联 min-height:240 ——
+        横屏 60dvh=234 < min 240(min 优先) → 容器仍 240, 页面总高 525 > 视口 390 →
+        底部按钮被推出屏幕; 页面变成可滚动, 旋转瞬间 fixed 半透明 header 的 backdrop
+        采样缺失 → 顶部露出纯白/纯黑块(用户看到的"物理遮挡")。
+   现在的做法: 只扣 .container 的上下 padding(70+safe-top / max(20,safe-bottom)) 与
+   card padding(32), 用 svh(小视口, 不随地址栏伸缩) → 首帧高度即确定, 旋转只改宽度;
+   表格 flex:1 自动吸收差值, 不再有 magic number 组合, 也不会与 min-height 打架。 */
+.clean-preview-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(
+    100svh - 70px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px)) -
+      32px
+  );
+}
+.clean-preview-page .clean-preview-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.clean-preview-page .clean-preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0 !important; /* 覆盖内联 minHeight(240): 否则 flex 子项拒绝收缩 → 继续溢出 */
+  max-height: none !important;
+}
+.clean-preview-page .clean-preview-actions {
+  flex: 0 0 auto;
+}
+/* 横屏手机竖直空间只有 ~318px(390-72): 步骤条与提示行让位给表格, 按钮必须留在视口内 */
 @media (max-height: 500px) {
-  .clean-preview-scroll {
-    /* clamp 下限同理: 横屏 dvh 首帧异常时保 180px 可读 */
-    max-height: clamp(180px, 60dvh, 78dvh) !important;
+  .clean-preview-page .clean-preview-hint {
+    display: none;
+  }
+  .clean-preview-page > .section-title {
+    margin-bottom: 6px;
+    font-size: var(--font-sm);
   }
 }
 /* 2026-10-28 旋转/尺寸变化时滚动条残留(横屏滑表格→转竖屏, 横条滞留在屏幕中间约 1s):
