@@ -34,10 +34,13 @@ export function useToast() {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([])
+  const remove = (id: number) => setToasts(p => p.filter(x => x.id !== id))
   const add = (t: Omit<ToastItem, 'id'>) => {
     const id = Date.now()
     setToasts(p => [...p, { ...t, id }])
-    setTimeout(() => setToasts(p => p.filter(x => x.id !== id)), t.duration || 3000)
+    // 2026-11-01 duration:0 = 持久提示(如必填未映射的拦截): 不自动消失,
+    // 点条体关闭 / 页面切换 ToastAutoClear 清 / 成功跳转后调用方 clear
+    if (t.duration !== 0) setTimeout(() => remove(id), t.duration || 3000)
   }
   const success = (msg: string) => add({ type: 'success', title: msg })
   const error = (msg: string) => add({ type: 'error', title: msg })
@@ -75,6 +78,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.slice(-3).map(t => (
           <div
             key={t.id}
+            onClick={() => remove(t.id) /* 持久提示(duration:0)靠点击关闭; 普通 toast 点击关也无害 */}
+            className="clickable"
             style={{
               display: 'flex',
               alignItems: 'center',

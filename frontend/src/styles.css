@@ -2285,14 +2285,16 @@ input[type='file'] {
 .clean-preview-page .clean-preview-actions {
   flex: 0 0 auto;
 }
-/* 横屏手机竖直空间只有 ~318px(390-72): 步骤条与提示行让位给表格, 按钮必须留在视口内 */
+/* 横屏恢复 2026-10-28 行为(用户指示 2026-11-01: 横屏回退旧代码, 仅竖屏用 flex+svh):
+   页面回文档流滚动, 表格容器限高 clamp —— 横屏竖直空间太小(390px), 锁高会把表格挤死;
+   竖屏(>500px)保持 .clean-preview-page 的 flex+svh 方案(实测不再需要手动滚动才显示)。 */
 @media (max-height: 500px) {
-  .clean-preview-page .clean-preview-hint {
-    display: none;
+  .clean-preview-page {
+    height: auto; /* 解除竖屏的 100svh 锁高 */
   }
-  .clean-preview-page > .section-title {
-    margin-bottom: 6px;
-    font-size: var(--font-sm);
+  .clean-preview-page .clean-preview-scroll {
+    /* 覆盖竖屏规则的 min-height:0/max-height:none(同为 !important, 靠源码顺序取胜) */
+    max-height: clamp(180px, 60dvh, 78dvh) !important;
   }
 }
 /* 2026-10-28 旋转/尺寸变化时滚动条残留(横屏滑表格→转竖屏, 横条滞留在屏幕中间约 1s):

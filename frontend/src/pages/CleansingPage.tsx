@@ -523,6 +523,8 @@ export default function CleansingPage() {
   const goStep = n => {
     setS(n)
     useAppStore.getState().setHammerCleansingStep(n)
+    // 2026-11-01 持久拦截提示(必填未映射)在离开当前步时清掉(用户流程: 补映射→跳转→提示消失)
+    toast.clear()
   }
   // 列映射条目(导入清洗): target/t 为映射目标字段, 动态列配置走 unknown
   interface ColMapItem {
@@ -577,8 +579,6 @@ export default function CleansingPage() {
     return () => window.removeEventListener('orientationchange', onOrient)
   }, [])
   const [pv, setPv] = useState(null)
-  // 2026-11-01 预览入口预警的缺失必填列(进预览时常驻警示条; 返回映射补齐后重新预览即消)
-  const [reqMiss, setReqMiss] = useState<string[]>([])
   const [res, setRes] = useState(null)
   const [bs, setBs] = useState('')
   const [cf, setCf] = useState(() => {
@@ -752,14 +752,19 @@ export default function CleansingPage() {
         setBs('')
         return
       }
-      setPv(d)
-      // 2026-11-01 必填预警前移到预览入口(此前只在"写入"时提示, 不点写入全程静默);
-      // 预览只读无害可放行, 但必须让用户带着"缺必填列"的明确认知进预览
+      // 2026-11-01 必填未映射 → 持久提示 + 不跳转(用户定案: 拦在映射页, 不放行预览)。
+      // duration:0 不自动消失; 补映射后点「下一步·预览」走 goStep(2) 内 toast.clear() 清掉
       const _miss = missingRequired(tt, mp)
-      setReqMiss(_miss)
       if (_miss.length) {
-        toast.warning('未映射必填列: ' + _miss.join('、') + ' —— 可先预览数据, 写入前必须返回补映射')
+        toast.add({
+          type: 'warning',
+          title: '未映射必填列: ' + _miss.join('、') + ' —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
+          duration: 0,
+        })
+        setBs('')
+        return
       }
+      setPv(d)
       goStep(2)
       // 竖屏首屏空白根因之一: 映射页(可能几十列)滚到底才点到"下一步", 切到预览后窗口
       // 停在旧滚动位置 → 上方是新内容、人在空白区, 要"手动滚动"才见到表格。进预览必回顶。
@@ -1396,17 +1401,6 @@ export default function CleansingPage() {
             }}
           >
             <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>列映射</span>
-            {/* 2026-11-01 缺必选 pill(用户反馈: 必填只在"写入"时拦, 映射页全程静默)。
-                复用现有 pill danger, 不新增样式; 缺哪些列由 missingRequired 与写入硬拦同源 */}
-            {missingRequired(tt, mp).map(m => (
-              <span
-                key={m}
-                className="pill danger"
-                style={{ fontSize: 'var(--font-9)', padding: '1px 6px', minHeight: 'auto', lineHeight: '16px' }}
-              >
-                缺必选: {m}
-              </span>
-            ))}
             <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
               选择文件列对应的目标字段 · 未映射列导入时丢弃
             </span>
@@ -1556,20 +1550,6 @@ export default function CleansingPage() {
               </span>
             )}
           </div>
-          {reqMiss.length > 0 && (
-            /* 2026-11-01 复用现有 pill danger(与映射页同构), 不新造警示条样式 */
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span
-                className="pill danger"
-                style={{ fontSize: 'var(--font-9)', padding: '2px 8px', minHeight: 'auto', lineHeight: '18px' }}
-              >
-                缺必选
-              </span>
-              <span className="small" style={{ color: 'var(--danger)' }}>
-                {reqMiss.join('、')} —— 可预览数据, 「确认写入」会被拦截, 请返回上一步补映射
-              </span>
-            </div>
-          )}
           {(() => {
             // 脏数据预检: 缺SKU/重复SKU 统计(导入前发现)
             const skuCol = Object.entries(mp).find(([, cfg]) => cfg && cfg.target === 'sku')
