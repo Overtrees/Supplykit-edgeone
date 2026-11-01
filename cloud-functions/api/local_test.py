@@ -911,5 +911,59 @@ try:
 except Exception as _e3:
     check("批次分配用例无异常", False, str(_e3)[:200])
 
+# ── 规则字段/口径一致性(2026-11-01 全面梳理——防"可选但静默失效") ──────────
+try:
+    from core.rules import _CALC_VARS, _VALID_FIELDS
+
+    # 1. 白名单里不得有 ctx 永不存在的字段(可选可保存但条件恒 None → 规则静默失效)
+    check("规则字段: 白名单无 inv.days_since_last(实为顶层 days_since_last)", 
+          "inv.days_since_last" not in _VALID_FIELDS, "core/rules.py _VALID_FIELDS")
+
+    # 2. 计算变量白名单必须覆盖 own.* 与 batch.*
+    #    —— 缺 own. → 自有仓规则走快速路径, own 键不注入 → 恒不触发;
+    #    —— 缺 batch. → 纯 batch 条件的效期规则同样静默失效(历史上只因同时引用 params. 才侥幸生效)
+    check("规则字段: _CALC_VARS 含 own.(自有仓供给侧)", "own." in _CALC_VARS, _CALC_VARS)
+    check("规则字段: _CALC_VARS 含 batch.(效期)", "batch." in _CALC_VARS, _CALC_VARS)
+
+    # 3. own.* 字段必须同时在白名单(否则规则页保存被 validate_condition 拦下)
+    _own_need = {"own.available", "own.transit", "own.po_transit", "own.can_ship",
+                 "own.downstream_ds", "own.downstream_avail", "own.b2c_days",
+                 "own.need", "own.gap", "own.cover_days"}
+    check("规则字段: own.* 全部在 _VALID_FIELDS", _own_need <= _VALID_FIELDS,
+          sorted(_own_need - _VALID_FIELDS))
+
+    # 4. 超卖口径必须与 close_oversell 同源: 都是 SUM(available_qty) 跨仓合计
+    #    曾用 MAX → 多仓分散库存被当成单仓库存 → 超卖低估
+    _ord = open("routes/orders.py", encoding="utf-8").read()
+    check("超卖口径: 事件 ctx 用 SUM(available_qty) 而非 MAX",
+          "SUM(available_qty) AS avail FROM inventory" in _ord.replace("\n", " ")
+          or "SELECT sku, SUM(available_qty) AS avail" in _ord,
+          "routes/orders.py 超卖库存口径")
+
+    # 5. order ctx 的金额/批量字段必须注入(规则页可选)
+    _re2 = open("core/rule_eval.py", encoding="utf-8").read()
+    check("规则 ctx: order 金额/批量字段已注入",
+          all(k in _re2 for k in ("total_amount", "max_quantity", "min_quantity",
+                                  "line_count", "unit_price")), "core/rule_eval.py order ctx")
+
+    # 6. 自有仓规则条件必须带 warehouse_type=='own' 前置(own.* 键只对 own 行注入)
+    #    注: 本文件里 _db.query 已被 fake_query 替换(见上), 查真实库拿不到规则 →
+    #    改为**静态校验 seed 源码**: 三条内置规则的定义必须都带该前置。
+    _seed = open("routes/seed_fill.py", encoding="utf-8").read()
+    _own_ats = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
+    _miss_pre = []
+    for _at in _own_ats:
+        _i = _seed.find('"%s"' % _at)
+        if _i < 0:
+            _miss_pre.append(_at + ":缺失")
+            continue
+        # 规则定义块(alert_type 字面量往前 300 字符内应能找到条件串)
+        _blk = _seed[max(0, _i - 400):_i]
+        if "inv.warehouse_type" not in _blk:
+            _miss_pre.append(_at + ":无条件前置")
+    check("自有仓规则: seed 三条均带 warehouse_type 前置", not _miss_pre, _miss_pre)
+except Exception as _e4:
+    check("规则字段/口径用例无异常", False, str(_e4)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

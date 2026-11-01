@@ -19,7 +19,7 @@ def _evaluate_restored(ids):
         for _i in range(0, len(_skus), 200):
             _b = _skus[_i:_i + 200]
             _ph2 = ",".join(["%s"] * len(_b))
-            for r2 in query("SELECT sku, MAX(available_qty) AS avail FROM inventory "
+            for r2 in query("SELECT sku, SUM(available_qty) AS avail FROM inventory "  # no-barcode-ok: 超卖按 SKU 汇总(与 close_oversell 同口径)
                             "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph2),
                             [channel] + _b):
                 _inv_map[r2.get("sku")] = int(r2.get("avail") or 0)
@@ -32,8 +32,27 @@ def _evaluate_restored(ids):
                              "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                              "GROUP BY sku" % ("%s", _ph4), [channel] + _b3):
                 _cum3[_r4.get("sku")] = int(_r4.get("q") or 0)
+        # 2026-11-01 补齐 order ctx 金额/批量字段 —— 规则页一直列着 order.total_amount/unit_price/
+        #   max_quantity/min_quantity/line_count, 但 ctx 从未注入 → 条件选中即 None → 规则静默失效。
+        #   数据在 orders 表里都有, 这里按 SKU 汇总注入(与 total_qty 同一批查询口径)。
+        _agg3 = {}
+        for _i5 in range(0, len(_skus), 200):
+            _b5 = _skus[_i5:_i5 + 200]
+            _ph5 = ",".join(["%s"] * _b5.__len__())
+            for _r5 in query(
+                    "SELECT sku, IFNULL(SUM(quantity),0) AS q, IFNULL(SUM(total_amount),0) AS amt, "
+                    "IFNULL(MAX(quantity),0) AS mx, IFNULL(MIN(quantity),0) AS mn, COUNT(*) AS lc, "
+                    "IFNULL(MAX(unit_price),0) AS up "
+                    "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                    "AND sku IN (%s) GROUP BY sku" % ("%s", _ph5), [channel] + _b5):
+                _agg3[_r5.get("sku")] = _r5
         _o_ctxs = [{"sku": sk, "channel": channel,
-                    "order": {"quantity": _qty.get(sk, 0), "total_qty": _cum3.get(sk, 0)},
+                    "order": {"quantity": _qty.get(sk, 0), "total_qty": _cum3.get(sk, 0),
+                              "total_amount": float((_agg3.get(sk) or {}).get("amt") or 0),
+                              "max_quantity": int((_agg3.get(sk) or {}).get("mx") or 0),
+                              "min_quantity": int((_agg3.get(sk) or {}).get("mn") or 0),
+                              "line_count": int((_agg3.get(sk) or {}).get("lc") or 0),
+                              "unit_price": float((_agg3.get(sk) or {}).get("up") or 0)},
                     "order_qty": _cum3.get(sk, 0),
                     "available_stock": _inv_map.get(sk, 0),
                     "inv": {"available_qty": _inv_map.get(sk, 0), "safety_qty": 0, "in_transit_qty": 0}}

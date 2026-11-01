@@ -1925,3 +1925,136 @@ GitHub Actions 的 schedule 在免费额度下会被**限流跳过**: 实测 11-
 
 **教训**: 「防滥用」和「调度可用」冲突时, 先确认平台能力边界再定方案 —— 不要为了保留密钥
 校验而牺牲调度, 也不要为了调度把密钥明文入库。
+
+### 15.102 自有仓告警: 为什么不能用低库存口径 + 纳入规则引擎(2026-11-01)
+
+#### 一、口径错配(不是 bug)
+
+自有仓(集货仓)是**供给侧**, 不产生销售: `daily_sales_snapshot` 只记平台仓
+(西安仓/成都仓/北京仓/武汉仓/郑州仓/上海仓/沈阳仓), 自有仓名「集货仓」在其中**没有行**。
+于是逐仓日销 `ds=0` → 动态安全线 `ds×period=0` → 低库存条件 `可售 < 0` **恒假**,
+自有仓维度结构性不可能触发低库存/断货告警。
+
+用户曾怀疑"规则条件值没更新", 实测确认**条件本身没错**(`rule_eval.py` 里 safety_qty 在
+评估时被动态安全线覆盖), 真正原因是维度与口径不匹配。
+
+#### 二、自有仓该判什么(三条, 供给侧)
+
+| alert_type | 严重度 | 判据 | 数据来源 |
+|---|---|---|---|
+| `own_transfer_gap` | error | 下游一个调拨周期要货 > 自有可发(在仓+在途+采购在途) | inventory + purchase_orders + 下游日销 |
+| `own_overstock` | warning | 自有可用 ÷ 下游日销 > 阈值天数(默认 90) | inventory + 下游日销 |
+| `own_expiry_risk` | error | 最早到期批次 < 效期缓冲(默认 15 天) | batches.exp_date |
+
+**为什么只到 warning 的只有积压**: 调拨不足会真的断供、过期是直接报废损失, 都是 error;
+积压只压资金, 不构成供给风险。
+
+#### 三、两条实现路径(互补, 不是重复)
+
+1. **看板卡**(`routes/dashboard_own_health.py` → `aux.ownHealth`):
+   按**自有仓批次** + **消耗速度**判效期, 更严 —— 例如剩余 108 天但需 338 天才能吃完,
+   同样报出。实测 46 条。
+2. **规则引擎**(`rules` 表 + `core/rule_eval.py` 的 `own.*` ctx):
+   按**全仓最早批次**做粗筛, 实测 27 条(= 最早批次在 15 天内的 SKU 数, 口径可验证)。
+
+两者数字不同是设计, 不是 bug: 卡是"精细化处置视图", 规则是"可配置的粗筛告警"。
+
+#### 四、规则引擎接入的三个坑(都踩过)
+
+1. **`_CALC_VARS` 白名单**: 引用 `own.*` 的规则若不加进白名单, 引擎走"快速路径"不加载
+   计算 ctx → 条件恒 `None` → 规则**静默失效**。必须同时改 `_CALC_VARS` 和 `_VALID_FIELDS`。
+2. **条件结构是 `{left,op,right,and?,or?}`, 没有 `all`**: 写成 `{"all":[...]}` 会被
+   `_check_condition` 判 False(静默)。多条件要用 `and`。
+3. **模板渲染只取顶层键**: `alert_title/alert_desc` 走 `str.format(**ctx2)`, 取不到
+   `own.gap` / `params.xxx` / `batch.days_to_expire`。已在 `core/rules.py` 把这三组逐个摊平。
+   原 `except` 是静默的 → 模板变量写错会把 `{downstream_ds}` **原样存进告警描述**,
+   现已改 `try_err` 留痕。
+
+#### 五、参数化(可视化可配置)
+
+阈值全部进 `rules.params`(规则 tab 可编辑), 与 `stockout`/`health` 同一套载体:
+
+- `transfer_gap_min`(默认 1)、`transfer_cover_mult`(默认 1.0)
+- `own_overstock_days`(默认 90)
+- `own_expiry_buffer_days`(默认 15)
+
+**实测参数化真实生效**: `own_overstock_days` 90 → 34 条, 改成 150 → 13 条。
+
+调拨周期 `b2c_days` 统一用 `_lit_bbcc`(`b_to_c_days + c_safety_days = 6` 天),
+曾出现看板侧只取 3 天、引擎取 6 天, 导致同一缺口算出两个数 —— 已对齐。
+
+#### 六、避免双重计数
+
+三条自有仓告警**不进** `aux` 的 alerts 其他组, 前端 `otherTotal` 也显式排除
+(`_OWN_TYPES`)。否则同一批货会在「自有仓健康」卡和「其他告警」里各算一次,
+且语义相悖(供给侧 vs 销售侧)。
+
+### 15.103 规则字段/口径全链路梳理(2026-11-01)
+
+用户要求"按业务逻辑和全链路联动分维度(不同仓维度、补货模式口径各自消费口径、库存扣减口径)
+对现有条件/值/可选字段做全面梳理"。方法: 用 spy 拦住 `evaluate_many`,导出各事件 × 各仓型
+的**完整 ctx 路径表**(`/tmp/ctx_paths.json`),再与规则页字段清单逐项比对。
+
+#### 一、实测各口径下的 ctx 形态
+
+| 事件 | bbcc 模式仓型 | traditional 模式仓型 |
+|---|---|---|
+| `inventory.changed` | `own` / `bc` | `own` / `platform` |
+| `scheduled.daily` | `own` / `bc` | `own` / `platform` |
+| `order.created` | 无仓型(按 SKU 汇总) | 同左 |
+
+要点: **bbcc 下没有 `platform` 行**(平台+B 仓已合并成 `bc` 一行)；
+规则条件里写死 `inv.warehouse_type=='platform'` 在 bbcc 模式**永不命中**。
+
+#### 二、发现的实质问题(已修)
+
+1. **`inv.days_since_last` 是死字段** —— 白名单放行,但 ctx 只有**顶层** `days_since_last`。
+   用户可选、可保存,条件求值恒 `None` → 规则静默失效。已从 `_VALID_FIELDS` 删除。
+   (本地测试注释里早就写着"字段路径与 ctx 一致(无 inv.days_since_last)",白名单漏删)
+
+2. **`batch.*` 不在 `_CALC_VARS` 白名单** —— 内置效期规则只因"顺带"引用了 `params.xxx`
+   才侥幸进了计算路径。用户若写一条**纯 `batch.days_to_expire`** 的规则 → 走快速路径 →
+   `batch` 键不注入 → 静默失效。已补进白名单。
+
+3. **超卖口径两处不一致** —— `close_oversell_for_skus` 用 `SUM(available_qty)`(跨仓合计),
+   而 `orders.py` 的事件 ctx 用 `MAX(available_qty)`(单仓最大值)。
+   `MAX` 会把**分散在多个仓的库存当成一个仓的**,导致超卖被低估。
+   已统一为 `SUM`,与 `close_oversell` / `rule_eval` 每日全量评估同源。
+
+4. **order ctx 缺 5 个字段** —— 规则页一直列着 `order.total_amount` / `unit_price` /
+   `max_quantity` / `min_quantity` / `line_count`,但 ctx 从未注入(`orders` 表里**都有**这列)。
+   已按 SKU 聚合注入,`orders.py` 与 `rule_eval.py` 两条路径同步补。
+
+5. **`inv.turnover_days` 在 own 行恒缺失** —— 它只在"该行有日销"时注入,而自有仓结构性无日销。
+   规则页把它当通用字段 → own 维度选中即失效。已用 `own.cover_days`(自有可用÷下游日销)
+   回填,语义等价且口径一致。
+
+#### 三、确认合理、不改动的设计
+
+- **`locked_qty` 恒为 0**: `common.py:12` 明确"待发货锁定扣减/ERP 级联动暂不做"。
+  规则页"可用+在途+锁定"目前等价于"可用+在途" —— 保留字段是为将来接 ERP,不是 bug。
+- **`safety_qty` 静态列全 0**: 评估时被动态安全线 `ds×周期` 覆盖(`rule_eval` 里显式赋值)。
+  快速路径下给 0 是安全的,因为引用它的规则必进 `_CALC_VARS`(含 `safety_qty`)。
+- **自有仓不产生低库存告警**: 见 §15.102 —— 口径错配,不是缺陷。
+- **看板卡(46 条效期)与规则(27 条)数字不同**: 卡按"自有仓批次+消耗速度"更严,
+  规则按"全仓最早批次"粗筛,是两层互补设计。
+
+#### 四、仓维度消费口径对照(全链路)
+
+| 消费方 | bbcc | traditional | 说明 |
+|---|---|---|---|
+| 断货卡 `stockRisk` | `bc` + `own` | `c`(逐仓) + `own` | `platform_b` 并入 bc |
+| 低库存告警白名单 | `own` + `bc` | `own` + `platform` | traditional **不含** `platform_b`(B 属 BBCC 体系) |
+| 补货 `replenishment` | B 仓单列 `b_stock`,own 跳过 | 逐平台仓 | own 不在补货链路(它是调拨源) |
+| 采购 `purchase_calc` | `platform_b` 参与(仅 jd+bbcc) | `platform_b` 跳过 | 按 `_ch_b` 渠道配置 + 模式双判 |
+| 超卖 `order.created` | 无仓型,SKU 汇总 `SUM` | 同左 | 跨仓合计才是真实可售 |
+| 自有仓健康 | own 供给侧三判据 | 同左 | 不随模式变(自有仓与 BBCC 链路正交) |
+
+#### 五、回归护栏
+
+`local_test.py` 新增 7 条(共 200):
+白名单无死字段 / `_CALC_VARS` 含 `own.` 与 `batch.` / `own.*` 全在白名单 /
+超卖用 SUM 非 MAX / order 金额字段已注入 / seed 三条自有仓规则带 `warehouse_type` 前置。
+
+> 注意: 该测试文件里 `_db.query` 被 `fake_query` 替换,涉及"查真实库"的断言不可靠,
+> 本条改用**静态校验 seed 源码**。

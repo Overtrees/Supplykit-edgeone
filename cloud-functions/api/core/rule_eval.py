@@ -471,6 +471,12 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                 # 2026-10-29 ctx 扩展: 周转天数(可撑天数, 无日销时不给键——避免 999 误判)
                 if _ds > 0:
                     base.setdefault("inv", {})["turnover_days"] = round(_adj, 2)
+                elif str(r.get("warehouse_type") or "") == "own" and base.get("own", {}).get("cover_days"):
+                    # 2026-11-01 own 行补 turnover_days: 自有仓结构性无本仓日销(daily_sales_snapshot
+                    #   只记平台仓) → 上面 _ds>0 永远不成立 → 规则页"周转天数"字段在 own 维度恒缺失,
+                    #   用户选中即静默失效。own 的语义等价量 = 自有可用 ÷ 下游日销(= own.cover_days),
+                    #   这里回填到 inv.turnover_days, 让该字段在自有仓维度也可用且口径一致。
+                    base.setdefault("inv", {})["turnover_days"] = float(base["own"]["cover_days"])
                 # 动态安全线(替代静态 safety_qty): 按行维度周期——platform=补货周期(jd→bbcc全周期/other→传统),
                 # own=采购周期; ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
                 _wt = str(r.get("warehouse_type") or "")
@@ -520,14 +526,37 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                     _cum[str(_r5.get("sku"))] = int(_r5.get("q") or 0)
             o_ctxs = []
             _seen = set()
+            # 2026-11-01 补齐 order ctx 金额/批量字段(原只给 quantity/total_qty →
+            #   规则页可选的 total_amount/unit_price/max_quantity/min_quantity/line_count 恒缺失)
+            _oagg = {}
+            try:
+                _oskus = [s for s, v in _cum.items() if v]
+                for _i6 in range(0, len(_oskus), 200):
+                    _b6 = _oskus[_i6:_i6 + 200]
+                    _ph6 = ",".join(["%s"] * len(_b6))
+                    for _r6 in query(
+                            "SELECT sku, IFNULL(SUM(total_amount),0) AS amt, IFNULL(MAX(quantity),0) AS mx, "
+                            "IFNULL(MIN(quantity),0) AS mn, COUNT(*) AS lc, IFNULL(MAX(unit_price),0) AS up "
+                            "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                            "AND sku IN (" + _ph6 + ") GROUP BY sku", [channel] + _b6):
+                        _oagg[str(_r6.get("sku"))] = _r6
+            except Exception as _eoa:
+                try_err('core_rules', '订单金额聚合降级(金额类规则不出数)', _eoa)
             for _sk, _v in _cum.items():
                 if _sk in _seen or not _v:
                     continue  # 无订单的 SKU 不参与超卖(0 > 库存 恒假)
                 _seen.add(_sk)
                 _st = _agg.get(_sk, {}) if isinstance(_agg, dict) else {}
                 _av = int(_st.get("avail") or 0)
+                _oa = _oagg.get(_sk) or {}
                 o_ctxs.append({"sku": _sk, "channel": channel,
-                               "order": {"quantity": _v, "total_qty": _v}, "order_qty": _v,
+                               "order": {"quantity": _v, "total_qty": _v,
+                                         "total_amount": float(_oa.get("amt") or 0),
+                                         "max_quantity": int(_oa.get("mx") or 0),
+                                         "min_quantity": int(_oa.get("mn") or 0),
+                                         "line_count": int(_oa.get("lc") or 0),
+                                         "unit_price": float(_oa.get("up") or 0)},
+                               "order_qty": _v,
                                "available_stock": _av,
                                "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
             if o_ctxs:

@@ -219,7 +219,10 @@ def _rule_params_loaded(rule):
 _VALID_FIELDS = {
     "inv.available_qty", "inv.safety_qty", "inv.in_transit_qty", "inv.warehouse_type",
     "inv.warehouse", "inv.product_name", "inv.adj_dos", "inv.buffer", "inv.otif",
-    "inv.ss_dyn", "inv.accel_rate", "inv.days_since_last",
+    "inv.ss_dyn", "inv.accel_rate",
+    # 2026-11-01 删除 "inv.days_since_last": ctx 里只有**顶层** days_since_last,
+    #   白名单放行它 → 用户可选、可保存, 但条件求值恒 None → 规则静默失效。
+    #   (本地测试早有提示"字段路径与 ctx 一致(无 inv.days_since_last)", 白名单漏删)
     "barcode",
     "order.quantity", "order.total_qty", "order.total_amount", "order.order_status",
     "order.product_name", "order.max_quantity", "order.min_quantity", "order.line_count",
@@ -281,7 +284,12 @@ _CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "p
               # 2026-11-01 自有仓供给侧口径(own_transfer_gap / own_overstock 规则引用)
               #   —— 这些键由 rule_eval 的 _need_calc 分支按需注入; 不进白名单则规则走"快速路径",
               #   ctx 永远没有 own.* → 条件恒 None → 规则静默失效
-              "own.")
+              "own.",
+              # 2026-11-01 batch.(效期): 原白名单没有它 —— 只因内置效期规则恰好还引用了
+              #   params.xxx 才顺带进了计算路径。若用户写一条**纯 batch.days_to_expire** 的规则
+              #   (不带任何 params), 就会走快速路径、batch 键不注入 → 规则静默失效。
+              #   补进白名单后与 ctx 注入点一致(rule_eval 里 _exp_map → base["batch"])。
+              "batch.")
 
 
 
