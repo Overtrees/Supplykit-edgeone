@@ -348,6 +348,52 @@ async def test_rule(rid: int, request: Request):
         "params": params,
         "health": {"score": float((body.get("health") or {}).get("score") or 100)} if "health." in _cj_all else None,
     }
+    # 2026-11-01 自有仓/效期变量组补齐 —— 原测试 ctx 只有 inv/order/health 三组:
+    #   own.* / batch.* 在真实评估里由 rule_eval 的 _need_calc 分支注入, 测试接口没注 →
+    #   `_resolve_single` 取不到键返回 None → 条件判 False → **任何自有仓三级规则怎么试都显示"未触发"**。
+    #   规则页测试弹窗是用户判"规则配对没有"的唯一手段, 恒 False 等于让用户误以为规则写错了。
+    #   入参约定: body.own / body.batch 直接传模拟值; 未传时给一组合乎业务的默认(让用户改数即可观察)。
+    _body_own = body.get("own")
+    _own_sim = dict(_body_own) if isinstance(_body_own, dict) else {}
+    if "own." in _cj_all:
+        # 默认: 下游日销 10/日, 调拨周期取规则参数(缺省 6 天, 与引擎 _lit_bbcc 同源口径)
+        try:
+            _b2c = float(params.get("b2c_days") or 6)
+        except Exception:
+            _b2c = 6.0
+        try:
+            _ds = float(_own_sim.get("downstream_ds") or 10)
+        except Exception:
+            _ds = 10.0
+        _avail = float(inv.get("available_qty") or 0)
+        _tran = float(inv.get("in_transit_qty") or 0)
+        # 关键: 前端留空的项是**不传**的, 所以这里先补基础量, 再按引擎同式推 need/gap/cover
+        _own_sim.setdefault("available", _avail)
+        _own_sim.setdefault("transit", _tran)
+        _own_sim.setdefault("po_transit", 0.0)
+        _own_sim.setdefault("can_ship", _avail + _tran + float(_own_sim["po_transit"]))
+        _own_sim.setdefault("downstream_ds", _ds)
+        _own_sim.setdefault("downstream_avail", 0.0)
+        _own_sim.setdefault("b2c_days", _b2c)
+        # 与引擎 rule_eval 同式: need = 下游日销 × 调拨周期; gap = need − 可发(0.5 件容差前端展示用)
+        _own_sim.setdefault("need", round(float(_own_sim["downstream_ds"]) *
+                                          float(_own_sim["b2c_days"]), 2))
+        if "gap" not in _own_sim:
+            try:
+                _own_sim["gap"] = round(float(_own_sim["need"]) - float(_own_sim["can_ship"]), 2)
+            except Exception as _e:
+                try_err('rules', '测试模式 own.gap 推导失败', _e)
+                _own_sim["gap"] = 0.0
+        if "cover_days" not in _own_sim:
+            _dsn = float(_own_sim["downstream_ds"])
+            _own_sim["cover_days"] = round(float(_own_sim["available"]) / _dsn, 2) if _dsn > 0 else 0.0
+        ctx["own"] = _own_sim
+    _body_batch = body.get("batch")
+    if isinstance(_body_batch, dict) and _body_batch:
+        ctx["batch"] = dict(_body_batch)
+    elif "batch." in _cj_all:
+        # 默认无批次 → days_to_expire 极大(远未临期), 用户改小即可观察触发
+        ctx["batch"] = {"days_to_expire": 365, "qty": float(inv.get("available_qty") or 0)}
     from core.rules import _check_condition, _resolve_value
     triggered = _check_condition(cond, ctx)
     detail = {}
@@ -367,6 +413,32 @@ async def test_rule(rid: int, request: Request):
         else:
             detail["right_value"] = right_raw
         detail["warehouse"] = cond.get("warehouse", "")
+        # 2026-11-01 嵌套子条件逐条回显 —— 原只回顶层那一对比值:
+        #   `A and B` / `A or [B,C]` 结构下, 用户看到 A 命中会以为整条规则该触发,
+        #   实际可能是 B 不命中 → 判"规则坏了"。逐条给 sub_results, 谁拦的清清楚楚。
+        def _sub_row(sub):
+            _row = {"left": sub.get("left", ""), "op": sub.get("op", "<"),
+                    "right": sub.get("right", "")}
+            try:
+                _row["left_value"] = _resolve_value(sub.get("left", ""), ctx)
+                _r = sub.get("right", "")
+                _row["right_value"] = (_resolve_value(_r, ctx)
+                                       if isinstance(_r, str) and not _r.replace(".", "", 1).isdigit()
+                                       else (float(_r) if str(_r).replace(".", "", 1).isdigit() else _r))
+            except Exception as _e:
+                try_err('rules', '测试子条件取值失败', _e)
+            _row["hit"] = bool(_check_condition(sub, ctx))
+            return _row
+
+        _and = cond.get("and")
+        if isinstance(_and, dict) and _and:
+            detail["and"] = _sub_row(_and)
+        _or = cond.get("or")
+        if isinstance(_or, list) and _or:
+            detail["or"] = [_sub_row(s) for s in _or if isinstance(s, dict)]
+        # 组合语义: and 全中 && or 任一命中(与 _check_condition 一致), 便于前端一句话结论
+        _top = _check_condition({k: v for k, v in cond.items() if k not in ("and", "or")}, ctx)
+        detail["base_hit"] = bool(_top)
     except Exception as _e:
             try_err('rules', '静默降级', _e)
     return ok({"triggered": triggered,

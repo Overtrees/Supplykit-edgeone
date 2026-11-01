@@ -962,6 +962,28 @@ try:
         if "inv.warehouse_type" not in _blk:
             _miss_pre.append(_at + ":无条件前置")
     check("自有仓规则: seed 三条均带 warehouse_type 前置", not _miss_pre, _miss_pre)
+
+    # 7. 规则测试接口必须给 own./batch. 注入 ctx(2026-11-01)
+    #    原测试 ctx 只有 inv/order/health → own.* 取不到键 → 条件判 False →
+    #    自有仓三级规则在测试弹窗里**永远显示未触发**, 用户会误判规则写错。
+    _rr = open("routes/rules.py", encoding="utf-8").read()
+    check("测试接口: own./batch. 模拟 ctx 已注入",
+          'ctx["own"]' in _rr and 'ctx["batch"]' in _rr, "routes/rules.py test_rule")
+
+    # 8. 规则保存链路不得丢掉 and 子条件
+    #    内置自有仓规则是 `warehouse_type==own and {own.gap>N}` 结构, 前端原只序列化 or →
+    #    用户一编辑保存 and 就被静默删除, 语义永久变更。
+    _rp = open("../../frontend/src/pages/RulesPage.tsx", encoding="utf-8").read()
+    check("规则保存: 前端保留 and 子条件",
+          "and: cond.and" in _rp and "and: andSub" in _rp, "RulesPage.tsx")
+    # 9. 规则页必须给自有仓三条暴露可编辑阈值(否则只能在测试弹窗临时覆盖)
+    check("规则页: 自有仓阈值可视化可配",
+          all(k in _rp for k in ("own_overstock_days", "own_expiry_buffer_days",
+                                 "transfer_gap_min")), "RulesPage.tsx 参数区")
+    # 10. 测试结果弹窗必须逐条回显 and/or 子条件命中情况
+    check("测试结果: 嵌套子条件逐条回显",
+          'detail["and"]' in _rr and "testResult.detail.and" in _rp,
+          "routes/rules.py + RulesPage.tsx")
 except Exception as _e4:
     check("规则字段/口径用例无异常", False, str(_e4)[:200])
 

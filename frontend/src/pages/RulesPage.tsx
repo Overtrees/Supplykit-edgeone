@@ -46,6 +46,19 @@ const VARS = {
   health_warning: '健康预警档位',
   adj_dos: '调整后可撑天数',
   lit: '补货周期',
+  // 2026-11-01 自有仓供给侧 —— 后端 core/rules.py 渲染前会把 own./params./batch. 三组
+  //   **扁平化**到顶层(模板里只能写 {gap} 不能写 {own.gap}), 故这里按扁平名映射中文
+  available: '自有仓可用',
+  transit: '自有仓在途',
+  po_transit: '采购在途',
+  can_ship: '自有可发',
+  downstream_ds: '下游日销',
+  downstream_avail: '下游在仓',
+  b2c_days: '调拨周期',
+  need: '下游要货量',
+  gap: '调拨缺口',
+  cover_days: '可撑天数',
+  days_to_expire: '距过期天数',
 }
 const renderTmpl = text => {
   if (!text) return null
@@ -208,6 +221,19 @@ const pc = j => {
           pctValue: 100,
         }))
       : []
+    // 2026-11-01 and 子条件原样带出 —— 内置自有仓规则是 `warehouse_type==own and {own.gap>N}` 结构,
+    //   不解析 and 则编辑打开时前置条件视觉缺失, 保存又被丢掉 → 语义静默变更
+    const andSub =
+      c.and && typeof c.and === 'object' && !Array.isArray(c.and)
+        ? {
+            left: (c.and || {}).left || '',
+            op: (c.and || {}).op || '<',
+            right: (c.and || {}).right ?? '',
+            rightType: (c.and || {}).rightType || 'field',
+            warehouse: (c.and || {}).warehouse || '',
+            pctValue: 100,
+          }
+        : undefined
     return {
       left: c.left || 'inv.available_qty',
       op: c.op || '<',
@@ -216,6 +242,7 @@ const pc = j => {
       pctValue: pct,
       warehouse: wh,
       or: orArr,
+      ...(andSub ? { and: andSub } : {}),
     }
   } catch {
     return {
@@ -298,6 +325,20 @@ export default function RulesPage() {
   })
   const [testResult, setTestResult] = useState(null)
   const [testParams, setTestParams] = useState({})
+  // 2026-11-01 自有仓供给侧/效期 模拟值(与后端 body.own / body.batch 对应)
+  const [testOwn, setTestOwn] = useState<Record<string, string | number>>({
+    available: 0,
+    transit: 0,
+    po_transit: 0,
+    can_ship: 0,
+    downstream_ds: 10,
+    downstream_avail: 0,
+    b2c_days: 6,
+    need: '',
+    gap: '',
+    cover_days: '',
+  })
+  const [testBatch, setTestBatch] = useState<Record<string, string | number>>({ days_to_expire: 10 })
   const [testSampleSku, setTestSampleSku] = useState('')
   const [testLoading, setTestLoading] = useState(false)
 
@@ -329,6 +370,24 @@ export default function RulesPage() {
           },
           order: { quantity: Number(testInv.order_quantity) || 0 },
           params: testParams,
+          // 2026-11-01 own./batch. 模拟值透传 —— 不传后端也会给默认, 但用户需要能改数观察触发
+          own: (() => {
+            const o: Record<string, number> = {}
+            for (const k of Object.keys(testOwn)) {
+              const v = testOwn[k]
+              if (v === '' || v === undefined || v === null) continue
+              const n = Number(v)
+              if (!isNaN(n)) o[k] = n
+            }
+            // need/gap/cover_days 留空时由后端按下游日销×周期 / 可用÷日销 推导, 不硬塞 0
+            return o
+          })(),
+          batch: (() => {
+            const v = testBatch.days_to_expire
+            return v === '' || v === undefined || v === null
+              ? undefined
+              : { days_to_expire: Number(v) }
+          })(),
           health: {
             score:
               testInv.health_score === undefined || testInv.health_score === ''
@@ -794,6 +853,12 @@ export default function RulesPage() {
         right: rv,
         rightType: cond.rightType,
         warehouse: cond.warehouse,
+        // 2026-11-01 保住 and 子条件 —— 后端 _check_condition 支持 and/or 两种嵌套,
+        //   而内置自有仓规则(seed_fill)正是 `inv.warehouse_type==own and {own.gap>阈值}` 结构。
+        //   原保存链路只序列化 or, 用户一编辑这类规则 and 就被**静默丢掉** →
+        //   前半段 warehouse_type 前置没了 → 规则对所有仓型求值(own.* 只在 own 行注入,
+        //   其他行恒 None 倒不误报, 但语义已被破坏), 且再保存一次就永久丢失。
+        ...(cond.and ? { and: cond.and } : {}),
         or: (cond.or || []).map(o => ({
           left: o.left,
           op: o.op,
@@ -1704,6 +1769,71 @@ export default function RulesPage() {
                             ['health_warning', '预警档位线(默认60)'],
                             ['log', '审计日志 1/0(触发写 quality_logs)'],
                           ]
+                      ).map(([k, l]) => (
+                        <label key={k} style={{ fontSize: 'var(--font-sm)' }}>
+                          {l}
+                          <input
+                            type="number"
+                            step="any"
+                            value={rParams[k] ?? ''}
+                            onChange={e => setRParams({ ...rParams, [k]: e.target.value })}
+                            style={{
+                              ...IS,
+                              fontSize: 'var(--font-13)',
+                              marginTop: 2,
+                              padding: '6px 10px',
+                            }}
+                            placeholder="默认值"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2026-11-01 自有仓供给侧参数(看板「自有仓健康」卡同源) ——
+                    原只写进 rules.params 的默认值, 表单里没有输入框 = 用户改不了阈值,
+                    只能在"测试"弹窗里临时覆盖。三条规则各暴露自己的口径参数。 */}
+                {(f.alert_type === 'own_transfer_gap' ||
+                  f.alert_type === 'own_overstock' ||
+                  f.alert_type === 'own_expiry_risk') && (
+                  <div
+                    style={{
+                      background: 'var(--card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-lg)',
+                      padding: 14,
+                      marginTop: 14,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 'var(--font-13)',
+                        marginBottom: 4,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <IconGear size={13} style={{ verticalAlign: -2 }} /> 自有仓口径参数(看板同源)
+                    </div>
+                    <div className="muted2" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>
+                      {f.alert_type === 'own_transfer_gap'
+                        ? '缺口 = 下游日销 × 调拨周期 − 自有可发(在仓+在途+采购在途)；小于阈值不报，避免零头噪音'
+                        : f.alert_type === 'own_overstock'
+                          ? '可撑天数 = 自有可用 ÷ 下游日销；超过阈值判积压(占用资金与库位)'
+                          : '距过期天数低于缓冲即报；另含"按当前消化速度赶不上效期"的加速预警'}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      {(f.alert_type === 'own_transfer_gap'
+                        ? [
+                            ['transfer_gap_min', '缺口下限(件, 低于不报, 默认1)'],
+                            ['b2c_days', '调拨周期(天, 留空=按补货模式取 B→C+缓冲)'],
+                          ]
+                        : f.alert_type === 'own_overstock'
+                          ? [['own_overstock_days', '积压天数阈值(默认90)']]
+                          : [['own_expiry_buffer_days', '效期缓冲(天, 默认15)']]
                       ).map(([k, l]) => (
                         <label key={k} style={{ fontSize: 'var(--font-sm)' }}>
                           {l}
@@ -2813,9 +2943,22 @@ export default function RulesPage() {
                       const _needAdj = _cj.includes('adj_dos')
                       const _needBuf = _cj.includes('buffer')
                       const _needHealth = _cj.includes('health.')
+                      // 2026-11-01 自有仓/效期变量组可调 —— 原测试弹窗对 own.*/batch.* 无任何输入项,
+                      //   后端也无默认值 → 条件恒 None → 自有仓三级规则在测试里永远"未触发",
+                      //   用户会误判"规则配对没有"。现在按需出现输入框并透传 body.own / body.batch。
+                      const _needOwn = _cj.includes('own.')
+                      const _needBatch = _cj.includes('batch.')
                       const _needParams =
                         _cj.includes('params.') && testParams && Object.keys(testParams).length > 0
-                      if (!_needAdj && !_needBuf && !_needHealth && !_needParams) return null
+                      if (
+                        !_needAdj &&
+                        !_needBuf &&
+                        !_needHealth &&
+                        !_needOwn &&
+                        !_needBatch &&
+                        !_needParams
+                      )
+                        return null
                       return (
                         <div
                           style={{
@@ -2875,6 +3018,77 @@ export default function RulesPage() {
                                   }
                                   style={IS}
                                   placeholder="例 60"
+                                />
+                              </label>
+                            )}
+                            {_needOwn && (
+                              <>
+                                <label style={{ fontSize: 'var(--font-sm)' }}>
+                                  下游日销(件/天)
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={testOwn.downstream_ds}
+                                    onChange={e =>
+                                      setTestOwn(p => ({ ...p, downstream_ds: e.target.value }))
+                                    }
+                                    style={IS}
+                                    placeholder="例 10"
+                                  />
+                                </label>
+                                <label style={{ fontSize: 'var(--font-sm)' }}>
+                                  自有可发(在仓+在途+采购在途)
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={testOwn.can_ship}
+                                    onChange={e =>
+                                      setTestOwn(p => ({ ...p, can_ship: e.target.value }))
+                                    }
+                                    style={IS}
+                                    placeholder="例 40"
+                                  />
+                                </label>
+                                <label style={{ fontSize: 'var(--font-sm)' }}>
+                                  调拨周期(天)
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={testOwn.b2c_days}
+                                    onChange={e =>
+                                      setTestOwn(p => ({ ...p, b2c_days: e.target.value }))
+                                    }
+                                    style={IS}
+                                    placeholder="例 6"
+                                  />
+                                </label>
+                                <label style={{ fontSize: 'var(--font-sm)' }}>
+                                  自有可撑天数(留空=按可用/日销推)
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={testOwn.cover_days}
+                                    onChange={e =>
+                                      setTestOwn(p => ({ ...p, cover_days: e.target.value }))
+                                    }
+                                    style={IS}
+                                    placeholder="例 120"
+                                  />
+                                </label>
+                              </>
+                            )}
+                            {_needBatch && (
+                              <label style={{ fontSize: 'var(--font-sm)' }}>
+                                距过期天数(负=已过期)
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={testBatch.days_to_expire}
+                                  onChange={e =>
+                                    setTestBatch(p => ({ ...p, days_to_expire: e.target.value }))
+                                  }
+                                  style={IS}
+                                  placeholder="例 10"
                                 />
                               </label>
                             )}
@@ -2999,6 +3213,55 @@ export default function RulesPage() {
                             ) : (
                               <>，右侧值 = {String(testResult.detail.right_value)}</>
                             )}
+                            {/* 2026-11-01 嵌套子条件逐条回显(仅 and/or 规则有) —— 顶层那对比值命中
+                                不代表整条命中, 用户需看到被哪个子条件拦住 */}
+                            {testResult.detail.and && (
+                              <div style={{ marginTop: 6 }}>
+                                <b style={{ color: 'var(--muted)' }}>且</b>{' '}
+                                {fieldLbl(testResult.detail.and.left)}{' '}
+                                {opLbl(testResult.detail.and.op)}{' '}
+                                {String(testResult.detail.and.right).includes('.')
+                                  ? fieldLbl(testResult.detail.and.right)
+                                  : testResult.detail.and.right}{' '}
+                                <span
+                                  style={{
+                                    color: testResult.detail.and.hit
+                                      ? 'var(--success)'
+                                      : 'var(--danger)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {testResult.detail.and.hit ? '命中' : '未命中'}
+                                </span>
+                                <span className="muted">
+                                  {' '}
+                                  ({String(testResult.detail.and.left_value)} vs{' '}
+                                  {String(testResult.detail.and.right_value)})
+                                </span>
+                              </div>
+                            )}
+                            {Array.isArray(testResult.detail.or) &&
+                              testResult.detail.or.length > 0 && (
+                                <div style={{ marginTop: 6 }}>
+                                  <b style={{ color: 'var(--muted)' }}>或(任一)</b>
+                                  {testResult.detail.or.map((o, oi) => (
+                                    <div key={oi} style={{ paddingLeft: 8 }}>
+                                      · {fieldLbl(o.left)} {opLbl(o.op)}{' '}
+                                      {String(o.right).includes('.')
+                                        ? fieldLbl(o.right)
+                                        : o.right}{' '}
+                                      <span
+                                        style={{
+                                          color: o.hit ? 'var(--success)' : 'var(--danger)',
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        {o.hit ? '命中' : '未命中'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                           </div>
                         )}
                       </div>
