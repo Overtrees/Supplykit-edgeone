@@ -705,7 +705,9 @@ def _fill_barcode_from_products(channel, cleaned):
             if not _own:
                 continue
             if _k in _multi:
-                _held.append((_k, "档案缺码且存在多个69码"))   # 回写哪个? 不猜
+                _why = "档案缺码且存在多个69码"
+                _held.append((_k, _why))   # 回写哪个? 不猜
+                r["_bc_held"] = _why
             else:
                 _writeback[_k] = _own      # 档案缺码 + 流水有码 + 唯一码 → 回写档案
             continue
@@ -718,8 +720,11 @@ def _fill_barcode_from_products(channel, cleaned):
                 r["barcode"] = _arc
                 _filled += 1
             else:
-                _held.append((_k, "效期管理=%s/多码=%s" % (_expmap.get(_k) or "未标注",
-                                                          "是" if _k in _multi else "否")))
+                _why = "效期管理=%s/多码=%s" % (_expmap.get(_k) or "未标注",
+                                               "是" if _k in _multi else "否")
+                _held.append((_k, _why))
+                # 行级标记: 快照类(inventory)必须据此**拒写** —— 见 inventory 分支
+                r["_bc_held"] = _why
         elif _own != _arc:
             # 一手数据优先: 订单/出入库是实际发生的交易, 码以流水为准; 只告警不改写
             _mismatch.append((_k, _arc, _own))
@@ -865,6 +870,18 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             _fill_barcode_from_products(channel, cleaned)
         except Exception as _e:
             try_err('cleansing', '69码入口对齐降级(inventory)', _e)
+        # 2026-11-01 快照类必须**拒写**"未归码"行:
+        #   inventory 的唯一行是 (sku,码,仓,渠道,仓型)。档案有码、本行缺码、又不满足补码条件时,
+        #   若照写会新增一行空码库存, 与既有有码行**并存** → 同一批货被算两次(可用量翻倍)。
+        #   留空是错账, 补码是猜测, 拒写至少是"看得见的失败"。订单/出入库是流水, 空码不翻倍, 不在此列。
+        _held_rows, _keep = [], []
+        for it in cleaned:
+            _why = it.pop("_bc_held", None)
+            if _why:
+                _held_rows.append((it, _why))
+            else:
+                _keep.append(it)
+        cleaned = _keep
         for it in cleaned:
             it["warehouse_type"] = wt
             # 2026-10-29 架构定案: 自有仓库存=重算制 —— 导入的 available_qty 作为【期初基线】
@@ -877,15 +894,29 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                 if _bs in (None, "", 0):
                     _bs = it.get("available_qty") or 0
                 it["beginning_stock"] = _bs
-        return _write_batch("inventory",
-                            ["sku", "product_name", "store", "warehouse", "warehouse_type",
-                             "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
-                             "beginning_stock", "month_inbound", "month_outbound", "locked_qty",
-                             "c_transit", "weight", "volume"],
-                            cleaned, conflict_mode, "sku", "warehouse", channel=channel,
-                            agg_key3="barcode",  # 69码三键(sku|warehouse|barcode, 空落二键)
-                            agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
-                                     "beginning_stock", "month_inbound", "month_outbound"])
+        _s, _f, _ed = _write_batch("inventory",
+                                   ["sku", "product_name", "store", "warehouse", "warehouse_type",
+                                    "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
+                                    "beginning_stock", "month_inbound", "month_outbound", "locked_qty",
+                                    "c_transit", "weight", "volume"],
+                                   cleaned, conflict_mode, "sku", "warehouse", channel=channel,
+                                   agg_key3="barcode",  # 69码三键(sku|warehouse|barcode, 空落二键)
+                                   agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
+                                            "beginning_stock", "month_inbound", "month_outbound"])
+        if _held_rows:
+            _f += len(_held_rows)
+            for _it, _why in _held_rows[:40]:
+                _ed.append({
+                    "sku": str(_it.get("sku") or "")[:40],
+                    "reason": "未归码已拒写(%s): 该商品做效期管理或存在多个69码, 缺69码会与"
+                              "有码行并存导致可用量翻倍。请补69码列后重导" % _why,
+                    "row": str({k: _it.get(k) for k in ("sku", "warehouse", "barcode")})[:160]})
+            try:
+                try_err('cleansing', '库存行拒写 %d 行(未归码, 防可用量翻倍)' % len(_held_rows),
+                        ValueError('首行原因: %s' % _held_rows[0][1]))
+            except Exception:
+                pass
+        return _s, _f, _ed
     if target == "product":
         # 2026-11-01 效期管理标记归一(是/否 → yes/no); 非法值留痕并留空,
         #   不阻断写入(列必填拦在前端; 值非法由 cleansing.py done 步回显到结果 message, 见 §15.94)
