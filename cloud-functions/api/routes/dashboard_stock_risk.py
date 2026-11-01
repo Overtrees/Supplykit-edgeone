@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from db import query, one, execute
 from routes.common import try_err, INVENTORY_COLS as _INV_COLS
+from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛; 顶层 import 无环)
 
 
 
@@ -126,7 +127,7 @@ def _stock_risk(channel, full: int = 0):
                     sigma[_sku] = float(_r.get("sigma") or 0)
             _rws_c = get_sku_sales_stats(channel, wh=WH_C, days=28)
             if _rws_c:
-                fused_c = {str(_r.get("sku") or ""): _rp(float(_r.get("ds7") or 0),
+                fused_c = {(str(_r.get("sku") or ""), WH_C): _rp(float(_r.get("ds7") or 0),
                                                           float(_r.get("ds14") or 0),
                                                           float(_r.get("ds28") or 0))
                            for _r in _rws_c.values()}
@@ -136,7 +137,7 @@ def _stock_risk(channel, full: int = 0):
                 for _k, _r in _rws_wh.items():
                     _wh = _r.get("warehouse") or ""
                     if _wh and _wh not in (WH_ALL, WH_C, "__BC__"):
-                        _wk = "%s|%s" % (_r.get("sku") or "", _wh)
+                        _wk = (_r.get("sku") or "", _wh)
                         wh_fused[_wk] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
                                             float(_r.get("ds28") or 0))
             # 2026-10-30 逐仓按码映射(该仓该码) —— 逐仓判定降级只降码不降维
@@ -146,7 +147,7 @@ def _stock_risk(channel, full: int = 0):
                     _w2 = _r.get("warehouse") or ""
                     _b2 = str(_r.get("barcode") or "")
                     if _w2 and _b2 and _w2 not in (WH_ALL, WH_C, "__BC__"):
-                        wh_fused_bc["%s|%s|%s" % (_r.get("sku") or "", _b2, _w2)] = _rp(
+                        wh_fused_bc[(_r.get("sku") or "", _b2, _w2)] = _rp(
                             float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
                             float(_r.get("ds28") or 0))
             except Exception:
@@ -158,7 +159,7 @@ def _stock_risk(channel, full: int = 0):
                 for _r in (_rws_bc or {}).values():
                     _bc0 = str(_r.get("barcode") or "")
                     if _bc0:
-                        fused_bc["%s|%s" % (_r.get("sku") or "", _bc0)] = _rp(
+                        fused_bc[(_r.get("sku") or "", _bc0)] = _rp(
                             float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
                             float(_r.get("ds28") or 0))
             except Exception:
@@ -181,15 +182,15 @@ def _stock_risk(channel, full: int = 0):
                 for d, q in wd.items():
                     m[d] = m.get(d, 0) + q
         cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
-        fused_c = {s: rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
+        fused_c = {(s, WH_C): rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
         # 2026-10-29 按码直算
         if by_sku_bc:
             _bcm = calc_sales_multi(by_sku_bc, windows=[7, 14, 28])
             for _k in by_sku_bc:
-                fused_bc[_k] = rolling_predict(_bcm[7].get(_k, 0), _bcm[14].get(_k, 0),
+                fused_bc[tuple(str(_k).rsplit("|", 1))] = rolling_predict(_bcm[7].get(_k, 0), _bcm[14].get(_k, 0),
                                                _bcm[28].get(_k, 0))
         wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
-        wh_fused = {k: rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
+        wh_fused = {tuple(str(k).rsplit("|", 1)): rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                        wh_multi[28].get(k, 0)) for k in by_sku_wh}
         # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临
         sigma = {}
@@ -224,13 +225,8 @@ def _stock_risk(channel, full: int = 0):
             if wt == "platform":
                 st["ct"] += ctt
 
-    def _ds_of(sku, bc):
-        """2026-10-29 日销取值: 有码优先读按码行, 缺失**降级**读 SKU 合计"""
-        if bc:
-            _v = fused_bc.get("%s|%s" % (sku, bc))
-            if _v:
-                return _v
-        return fused.get(sku, 0)
+    # 2026-11-01 删除本文件内的 _ds_of: 它把"降级"写成 `or`(0.0 也会被合计顶上),
+    #   且从未被调用(grep 零调用点)。取值规则现统一走 biz.sales.pick_ds。
 
     def _otif(sku):
         """该 SKU 供应商置信系数(products.supplier_code → suppliers.score/5)"""
@@ -252,9 +248,8 @@ def _stock_risk(channel, full: int = 0):
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
         ctt = int(r.get("c_transit") or 0)
-        # 2026-10-30 逐仓口径: 该仓该码 → 该仓合计 → 0(不跨维)
-        ds = (wh_fused_bc.get("%s|%s|%s" % (sku, _bc, wh)) if _bc else 0) \
-            or wh_fused.get("%s|%s" % (sku, wh), 0)
+        # 逐仓口径: 该仓该码 → 该仓合计 → 0(不跨维) —— 规则见 biz/sales.pick_ds
+        ds = pick_ds(wh_fused_bc, wh_fused, sku, _bc, wh)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -276,10 +271,11 @@ def _stock_risk(channel, full: int = 0):
     for (sku, _bc), st in bc_total.items():
         avail = st["available"]
         safety = st["safety"]
-        # 2026-10-29 按 69码: C 维日销按码(缺失降级 SKU 合计)
-        ds = fused_bc.get("%s|%s" % (sku, _bc)) if _bc else 0
+        # C 维日销: 该码(降级 SKU 合计) —— 规则见 biz/sales.pick_ds
+        ds = pick_ds(fused_bc, fused_c, sku, _bc, WH_C)
         if not ds:
-            ds = fused_c.get(sku, 0) or fused.get(sku, 0)
+            # 直算降级分支的 fused 是全仓合计(与物化分支的 __C__ 语义不同), 仅作最后兜底
+            ds = fused.get(sku, 0)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:
@@ -304,8 +300,7 @@ def _stock_risk(channel, full: int = 0):
         avail = int(r.get("available_qty") or 0)
         safety = int(r.get("safety_qty") or 0)
         tty = int(r.get("in_transit_qty") or 0)
-        ds = (wh_fused_bc.get("%s|%s|%s" % (sku, _bc, wh)) if _bc else 0) \
-            or wh_fused.get("%s|%s" % (sku, wh), 0)
+        ds = pick_ds(wh_fused_bc, wh_fused, sku, _bc, wh)
         if ds <= 0:
             continue
         if avail <= 0 and not include_avail_zero:

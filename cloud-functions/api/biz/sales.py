@@ -376,6 +376,32 @@ WH_BC = "__BC__"    # platform+platform_b 合计(bbcc 断货 BC)
 WH_ALL = "__ALL__"  # 全仓合计(展示/采购兜底)
 
 
+def pick_ds(bc_map, agg_map, sku, barcode, dim, default=0.0):
+    """日销取值**单一真源**(2026-11-01 收敛): ①该维该 69码 → ②该维 SKU 合计 → ③default
+
+    为什么需要它: 同一件事("这个维度上这个 SKU 卖多快")原先在 rule_eval / stock_risk /
+    insights / purchase_calc / replenishment 各写一遍, 签名与降级深度都不一样 ——
+    口径漂移不会报错, 只会在某个页面悄悄偏掉。
+
+    规则(业务定案):
+      · **维度是既定业务对象, 不参与降级**。bbcc→__BC__(一盘) / traditional→该仓 /
+        采购→__C__(C 是唯一销售源)。换维 = 换了一个问题, 不是"少一点精度"。
+      · **只有 69码 可降级**。"少码"(数据没细分到码)是缺失, 用该维合计顶上是对的。
+      · 该维无数据 → default(默认 0.0, 即"不触发"), **绝不拿全国/全国C合计兜底**。
+
+    判 "is not None" 而非 "truthy": 该码确有记录但销量为 0, 就是 0, 不该被合计顶上来
+    (原 stock_risk 用 `or` 串联, 0.0 会被静默降级 —— 这是收敛带来的唯一行为变化)。
+
+    key 约定: bc_map[(sku, barcode, dim)] / agg_map[(sku, dim)]。
+    """
+    if barcode:
+        v = bc_map.get((sku, barcode, dim))
+        if v is not None:
+            return v
+    v = agg_map.get((sku, dim))
+    return default if v is None else v
+
+
 def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     """物化表重建(含当天——写操作后限频触发; 快照+当天订单同 load_daily_sales_grouped)
 

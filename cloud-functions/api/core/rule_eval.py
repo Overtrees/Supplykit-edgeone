@@ -8,6 +8,7 @@ import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
 from db import query, one, execute
 from routes.common import try_err
+from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛)
 
 
 def close_orphan_for_skus(skus, channel="jd"):
@@ -184,22 +185,13 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
 
     def _ds_of(_sku, _bc, _wh):
-        """日销取值: **SKU+69码 优先 → 降级 SKU**(2026-10-29 简化)
+        """日销取值: 该维该 69码 → 该维 SKU 合计 → 0(2026-11-01 收敛到 biz.sales.pick_ds)
 
         维度(_wh)是既定业务对象, 不是可降级层级: bbcc→__BC__(一盘) / traditional+own→该仓。
         只做两级: ①该对象内该 69码 ②该对象内 SKU 合计(少码)—— 降级只降码, 不换维度。
         该维度无数据时返回 0(不触发): **绝不拿全国/全国C合计兜底**(会干扰本仓判断)。
         """
-        if _bc:
-            _v = _ds_bc.get((_sku, _bc, _wh))
-            if _v is not None:
-                return _v
-        _v = _ds_agg.get((_sku, _wh))
-        if _v is not None:
-            return _v
-        # 2026-10-29 杜绝误导: 该维度(逐仓 / BC 盘)无数据 → 返回 0(不触发), **绝不拿全国/全国C合计兜底**
-        #   —— 用别处销量判断本仓, 会直接放大或压低本仓缺口(误报/漏报都由此而来)
-        return 0.0
+        return pick_ds(_ds_bc, _ds_agg, _sku, _bc, _wh)
 
     _sigma = {}
     _otif_map = {}
