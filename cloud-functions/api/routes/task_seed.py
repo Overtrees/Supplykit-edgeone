@@ -265,10 +265,10 @@ async def seed_step_run(request: Request):
         #   inventory 里永远只有旧的单码行, 双码链路无从验证。
         if from_step <= 5:
             import random as _rnd
-            from routes.seed_fill import _seed_inventory, _make_skus_json
+            from routes.seed_fill import _seed_inventory, prepare_skus
             _rnd.seed(42)
             _t0 = _t.time()
-            _nin = _seed_inventory(_make_skus_json())
+            _nin = _seed_inventory(prepare_skus())
             _steps.append({"step": 5, "name": "库存行生成",
                            "elapsed_s": round(_t.time() - _t0, 1),
                            "result": {"rows": _nin}})
