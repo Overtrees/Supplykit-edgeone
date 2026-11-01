@@ -2257,16 +2257,18 @@ input[type='file'] {
         横屏 60dvh=234 < min 240(min 优先) → 容器仍 240, 页面总高 525 > 视口 390 →
         底部按钮被推出屏幕; 页面变成可滚动, 旋转瞬间 fixed 半透明 header 的 backdrop
         采样缺失 → 顶部露出纯白/纯黑块(用户看到的"物理遮挡")。
-   现在的做法: 只扣 .container 的上下 padding(70+safe-top / max(20,safe-bottom)) 与
-   card padding(32), 用 svh(小视口, 不随地址栏伸缩) → 首帧高度即确定, 旋转只改宽度;
-   表格 flex:1 自动吸收差值, 不再有 magic number 组合, 也不会与 min-height 打架。 */
+   现在的做法: 用 svh(小视口, 不随地址栏伸缩) → 首帧高度即确定, 旋转只改宽度;
+   表格 flex:1 自动吸收差值, 不再有 magic number 组合, 也不会与 min-height 打架。
+   2026-11-01 注入量测定案(竖屏/横屏 page.top 均=140): 首版只扣 70+32 漏了步骤条
+   占高 38 → 页面恒超视口 18px, 底部「确认写入」被推出屏幕(两方向一致)。
+   扣项 = page.top(140 = container pt70 + card pt32 + 步骤条 38, 均不含 safe-top)
+        + container 底 padding max(20, safe-bottom) + safe-top(进 container pt 一次)。 */
 .clean-preview-page {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: calc(
-    100svh - 70px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px)) -
-      32px
+    100svh - 140px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
   );
 }
 .clean-preview-page .clean-preview-body {

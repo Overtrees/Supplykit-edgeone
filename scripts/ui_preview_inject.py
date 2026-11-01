@@ -14,8 +14,8 @@ def geo(page):
     return page.evaluate("""() => {
       const sc = document.querySelector('.clean-preview-scroll')
       const act = document.querySelector('.clean-preview-actions')
-      const bar = [...document.querySelectorAll('div')].find(d =>
-        d.textContent && d.textContent.includes('未映射必填列'))
+      const bar = [...document.querySelectorAll('.pill.danger')].find(d =>
+        d.textContent && d.textContent.includes('缺必选'))
       const tb = document.querySelector('.clean-preview-scroll table, .clean-preview-scroll tbody')
       const r = e => e ? JSON.parse(JSON.stringify(e.getBoundingClientRect())) : null
       return { scroll: r(sc), actions: r(act), warnBar: r(bar), table: r(tb),
@@ -42,41 +42,36 @@ with sync_playwright() as p:
     assert "选择导入类型" in page.inner_text("body"), "未进入清洗页"
     page.select_option("select >> nth=1", value="product")
     page.wait_for_timeout(600)
-    # 监听 toast(react-toastify)
-    page.evaluate("""() => {
-      window.__toasts = []
-      new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => {
-        if (n.nodeType===1 && n.classList && (n.classList+'').includes('Toastify'))
-          window.__toasts.push(n.innerText)
-      }))).observe(document.body, {childList: true, subtree: true})
-    }""")
+    # 自研 Toast(fixed 定位普通 div), 用 innerText 抓取
+    def toasts_now():
+        return page.inner_text('body')
     page.set_input_files("input[type='file']", {"name": "ui_test.csv", "mimeType": "text/csv",
                                                 "buffer": CSV.encode("utf-8")})
     page.wait_for_timeout(2000)
     page.click("button:has-text('下一步 · 预览')", timeout=6000)
     page.wait_for_timeout(4500)
     g = geo(page)
-    print("[竖屏 390x844]", json.dumps(g, ensure_ascii=False)[:400])
-    toasts = page.evaluate("() => window.__toasts || []")
-    print("toasts:", toasts)
-    check("必填预警 toast(效期管理)", any("效期管理" in t for t in toasts), toasts)
+    print("[竖屏 390x844]", json.dumps(g, ensure_ascii=False)[:500])
+    _tb = toasts_now()
+    print("预览页正文含预警:", "未映射必填列" in _tb)
+    check("必填预警 toast(效期管理)", "未映射必填列" in _tb and "效期管理" in _tb, _tb[:200])
     check("警示条已渲染且可见", g["warnBar"] and g["warnBar"]["height"] > 10, g["warnBar"])
     check("进预览回顶(不手动滚动即见内容)", g["scrollY"] == 0, g["scrollY"])
-    check("表格首帧可见(高度>100)", g["table"] and g["table"]["height"] > 100, g["table"])
-    check("页面不被撑高(docH ≈ vh)", g["docH"] <= g["vh"] * 1.25, g["docH"])
+    check("表格容器首帧可见(高>120)", g["scroll"] and g["scroll"]["height"] > 120, g["scroll"])
+    check("页面不被撑高(docH ≤ vh)", g["docH"] <= g["vh"] + 2, g["docH"])
     check("写入按钮在视口内", g["actions"] and g["actions"]["bottom"] <= g["vh"] + 1, g["actions"])
     # 点写入: 必须被通用硬拦(无任何写请求)
     page.click("button:has-text('确认写入')", timeout=4000)
-    page.wait_for_timeout(1500)
-    toasts2 = page.evaluate("() => window.__toasts || []")
-    check("写入被硬拦 toast", any("必须映射必填列" in t for t in toasts2[len(toasts):]), toasts2)
+    page.wait_for_timeout(900)
+    _tb2 = page.inner_text('body')
+    check("写入被硬拦 toast", "必须映射必填列" in _tb2, _tb2[:200])
     # 横屏
     page.set_viewport_size({"width": 844, "height": 390})
     page.wait_for_timeout(1200)
     g2 = geo(page)
     print("[横屏 844x390]", json.dumps(g2, ensure_ascii=False)[:400])
     check("横屏表格可见(高度>80)", g2["table"] and g2["table"]["height"] > 80, g2["table"])
-    check("横屏 docH ≈ vh(不被撑高→无 backdrop 采样遮挡)", g2["docH"] <= g2["vh"] * 1.3, g2["docH"])
+    check("横屏 docH ≈ vh(不被撑高→无 backdrop 采样遮挡)", g2["docH"] <= g2["vh"] + 2, g2["docH"])
     check("横屏按钮在视口内", g2["actions"] and g2["actions"]["bottom"] <= g2["vh"] + 1, g2["actions"])
     check("横屏仍在预览页(未误触发跳步)", g2["warnBar"] is not None)
     page.screenshot(path="/tmp/inj_portrait.png")
