@@ -89,8 +89,25 @@ def _make_skus(sfx, count=1000):
                   'price': p, 'box': random.choice([6, 12, 24]),
                   'barcode': '690%010d' % i, 'weight': round(random.uniform(5, 25), 1),
                   'volume': round(random.uniform(0.02, 0.12), 3),
-                  'status': 'active', 'brand': _pick_brand(c)})
+                  'status': 'active', 'brand': _pick_brand(c),
+                  # 2026-11-01 多码样本: 每渠道前 3 个 SKU 挂第二码(换包装/换供应商导致的条码变更)
+                  #   没有这组数据, 所有"按 69码聚合"的修复都只能在单码上验证 = 等于没验证
+                  'bc2': ('691%010d' % i) if i <= 3 else ''})
     return r
+
+
+def _bc_of(sk):
+    """订单取码(2026-11-01 多码样本): 多码 SKU 按 35% 概率出第二码
+
+    现实对应: 同一 SKU 换包装/换供应商后条码变更, 新码订单与旧码订单会并存一段时间。
+    订单带哪个码就该进哪个码的日销切片 —— 这正是 sku_sales_stats 按码行的来源。
+    """
+    if not isinstance(sk, dict):
+        return ""
+    _b2 = sk.get('bc2') or ''
+    if _b2 and random.random() < 0.35:
+        return _b2
+    return sk.get('barcode', '')
 
 
 def _seed_products_suppliers(skus_data):
@@ -218,7 +235,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                     _a = _amt(q, sk['price'], 0, 0, 0)
                     batch.append({'order_no': '%s-L%03d-%s' % (label.upper(), d, lsk[-3:]),
                                   'store': sk['store'], 'warehouse': random.choice(c_whs),
-                                  'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
+                                  'sku': sk['sku'], 'barcode': _bc_of(sk), 'product_name': sk['name'], 'quantity': q,
                                   'unit_price': sk['price'], **_a,
                                   'order_status': random.choices(['已完成', '已发货'], [80, 20])[0],
                                   'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
@@ -240,7 +257,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 batch.append({'order_no': '%s-%s%03d-%08d%04d' % (label.upper(), ch, d, total,
                                                                    random.randint(0, 9999)),
                               'store': sk['store'], 'warehouse': c_whs[_pi % len(c_whs)],
-                              'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'quantity': q,
+                              'sku': sk['sku'], 'barcode': _bc_of(sk), 'product_name': sk['name'], 'quantity': q,
                               'unit_price': sk['price'], **_a, 'order_status': st,
                               'ordered_at': dt.strftime('%Y-%m-%d ') + _rand_hm(),
                               'paid_at': paid_dt.strftime('%Y-%m-%d ') + _rand_hm(),
@@ -286,11 +303,24 @@ def _seed_inventory(skus_data):
                 #   期初 = 当前量的 20%~40%, 剩余部分由 入库−出库 解释; 批次重建时
                 #   期初批次排 FEFO 队首并参与扣减, Σ批次 仍恒等于可用。
                 beg = int(q * random.uniform(0.20, 0.40)) if wt == 'own' else 0
-                inv.append({'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'warehouse': wh_name,
-                            'warehouse_type': wt, 'available_qty': q, 'beginning_stock': beg,
-                            'in_transit_qty': 0 if low else random.randint(0, 200),
-                            'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
-                            'channel': ch})
+                # 2026-11-01 多码: own 仓按 65/35 拆成两行(同 SKU 同仓两个 69码)
+                #   inventory 本就按 (sku,barcode,warehouse,warehouse_type) 拆行 —— 拆行不是新概念,
+                #   是让"同 SKU 多码"这一真实形态在 seed 里存在, 否则按码聚合的修复无从验证。
+                #   拆分只发生在 own(出入库流水只属于自有仓), 平台仓仍单码。
+                _lines = [{'bc': sk.get('barcode', ''), 'q': q, 'beg': beg}]
+                if wt == 'own' and sk.get('bc2'):
+                    _q1 = int(round(q * 0.65))
+                    _b1 = int(round(beg * 0.65))
+                    _lines = [{'bc': sk['barcode'], 'q': _q1, 'beg': _b1},
+                              {'bc': sk['bc2'], 'q': q - _q1, 'beg': beg - _b1}]
+                for _ln in _lines:
+                    inv.append({'sku': sk['sku'], 'barcode': _ln['bc'], 'product_name': sk['name'],
+                                'warehouse': wh_name,
+                                'warehouse_type': wt, 'available_qty': _ln['q'],
+                                'beginning_stock': _ln['beg'],
+                                'in_transit_qty': 0 if low else random.randint(0, 200),
+                                'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
+                                'channel': ch})
     for i in range(0, len(inv), 500):
         cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty', 'beginning_stock',
                 'in_transit_qty', 'safety_qty', 'channel', 'barcode']
@@ -734,6 +764,34 @@ def prepare_skus():
     return {'jd': jd_s, 'other': ot_s}
 
 
+def _assert_barcode_aligned():
+    """seed 自检(2026-11-01): 档案有码 → 流水/库存必须同码, 空码条数必须为 0
+
+    为什么非做不可: 补码规则(`cleanse_write._fill_barcode_from_products`)是**导入入口**逻辑,
+    而 seed 直接写表、绕过了入口。没有这道自检, 这条规则在 seed 上等于从未被验证过 ——
+    多码/缺码链路会一直"看起来正常", 直到真实客户导入才炸。
+
+    只查"档案有码、流水空码"(四象限第 2 格)。**不查"码不符"**: 多码 SKU 的第二码
+    天然与档案单值不符, 那是合法数据, 查了必然误报。
+
+    违规 → 抛错终止(seed 数据自身违约, 不该带病继续跑后续步骤);
+    返回 {表: 空码条数}, 全 0 时原样返回供 step summary 展示。
+    """
+    out = {}
+    for tbl in ("inbound_records", "outbound_records", "inventory"):
+        try:
+            _r = one("SELECT COUNT(*) AS c FROM `%s` r JOIN products p ON p.sku=r.sku "
+                     "WHERE COALESCE(p.barcode,'')<>'' AND COALESCE(r.barcode,'')=''" % tbl) or {}
+            out[tbl] = int(_r.get("c") or 0)
+        except Exception as _e:
+            out[tbl] = "error: %s" % str(_e)[:80]
+    _bad = {k: v for k, v in out.items() if isinstance(v, int) and v > 0}
+    if _bad:
+        raise ValueError("seed 69码自检失败: 档案有码但记录空码 %s —— 补齐 _seed_* 生成逻辑 "
+                         "或确认 _fill_barcode_from_products 未被绕过" % _bad)
+    return out
+
+
 def seed_step(step, today, skus_data):
     """执行单个步骤(Makers 异步分步: 每步 ≤90s, 任务表驱动续跑); 返回 (next_step, part_summary)"""
     random.seed(42)  # 确定性: 各步/重复调用生成一致(防重跑数据漂移)
@@ -763,7 +821,9 @@ def seed_step(step, today, skus_data):
         except Exception as _e_s7:
             try_err('seed_fill', '分步重算降级', _e_s7)
         n = _seed_batches()
-        return 8, {'batches': n}
+        # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进 step8/9)
+        _bc_chk = _assert_barcode_aligned()
+        return 8, {'batches': n, 'barcode_aligned': _bc_chk}
     if step == 8:
         _ms = _sync_inv_month()
         _seed_config()
@@ -817,6 +877,7 @@ def run_seed_fill():
     except Exception as _e_rec:
         try_err('seed_fill', '自有仓重算降级(seed)', _e_rec)
     n_batch = _seed_batches()
+    _bc_chk = _assert_barcode_aligned()   # 自检: 档案有码 → 流水/库存不得空码
     _sync_inv_month()
     _seed_config()
     n_alert = _seed_alerts()
@@ -824,4 +885,5 @@ def run_seed_fill():
     return {'orders': n_orders, 'products': len(n_prod), 'suppliers': len(n_sup),
             'inventory': n_inv, 'inventory_db': inv_counts, 'orders_db': orders_db, 'batches': n_batch,
             'inbound': n_in, 'outbound': n_out, 'alerts': n_alert, 'snapshot': n_snap,
+            'barcode_aligned': _bc_chk,
             'elapsed': round(time.time() - started, 1)}

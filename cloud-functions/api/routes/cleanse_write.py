@@ -529,14 +529,14 @@ def _recalc_own_inventory(channel, skus):
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
             # 2026-10-29 仓型维度: 流水仓型须与库存行仓型一致(为多仓/多类型准备)
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
-            # 69码匹配规则: 有值→精准; **任一方为空→降级(少掉69码比较)**
-            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')='' "
-            "       OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS in_q, "
+            # 69码匹配: **严格相等**(2026-11-01 收口, 与 cron 批次对账同规则)
+            #   原"任一方为空即匹配"在多码 SKU 下会把别的码的流水算进来 —— 偏差被抵消, 查不出来。
+            #   库存行无码而流水有码 = 数据不一致, 应当暴露(available 只剩余期初), 不该悄悄借别的码。
+            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
-            "  AND (COALESCE(i.barcode,'')='' OR COALESCE(r.barcode,'')='' "
-            "       OR COALESCE(r.barcode,'')=COALESCE(i.barcode,''))), 0) AS out_q "
+            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
             % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
@@ -608,6 +608,72 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
             try_err('cleansing', '静默降级', _e)
     return n, skus
 
+def _fill_barcode_from_products(channel, cleaned):
+    """69码入口对齐(2026-11-01): products.barcode 是档案, 流水/订单里的码是一手实况
+
+    业务前提: 客户首月导入的订单表/出入库表往往**只有 SKU 和仓**, 根本没有 69码 列。
+    若在入口拒绝, 首月导入全废; 若在聚合层猜码, 就违反"不猜"。所以对齐放在入口, 且分四象限:
+
+      | 档案 barcode | 本行 barcode | 动作 |
+      | 有           | 空           | **用档案码补齐**(不拒绝) |
+      | 有           | 有值且不同   | **保留流水码 + 告警**(见下"为什么不剔除") |
+      | 空           | 有值         | 接受 + **回写档案**(流水反哺档案) |
+      | 空           | 空           | 无码商品, 原样 |
+
+    为什么"不符"不剔除(与初版设计不同):
+      多码 SKU 恰恰就是"同一 SKU 换了条码"——档案只能存一个码(barcode 是单值列),
+      新码流水必然与档案"不符"。按不符即剔除, 多码客户的第二码流水会被整批丢掉,
+      且不可挽回; 而误放一个错码只是多出一个码分组, 可事后修正。**两害取轻 → 保留 + 告警。**
+
+    返回 (补码行数, 回写档案数, 不符行数); cleaned 原地修改。
+    """
+    if not cleaned:
+        return 0, 0, 0
+    _skus = list({str(r.get("sku") or "").strip() for r in cleaned if r.get("sku")})
+    if not _skus:
+        return 0, 0, 0
+    _amap = {}
+    for _i in range(0, len(_skus), 500):
+        _part = _skus[_i:_i + 500]
+        for _b in query("SELECT sku, barcode FROM products WHERE sku IN (%s) "
+                        "AND barcode IS NOT NULL AND barcode<>''"
+                        % ",".join(["%s"] * len(_part)), _part):
+            _amap[str(_b.get("sku"))] = str(_b.get("barcode") or "").strip()
+    if not _amap:
+        return 0, 0, 0   # 档案侧全是无码/未建档 → 无可对齐
+
+    _filled, _mismatch, _writeback = 0, [], {}
+    for r in cleaned:
+        _k = str(r.get("sku") or "").strip()
+        _own = str(r.get("barcode") or "").strip()
+        _arc = _amap.get(_k, "")
+        if not _arc:
+            if _own:
+                _writeback[_k] = _own      # 档案缺码 + 流水有码 → 回写档案
+            continue
+        if not _own:
+            r["barcode"] = _arc            # 档案有码 + 流水缺码 → 补齐
+            _filled += 1
+        elif _own != _arc:
+            _mismatch.append((_k, _arc, _own))
+    if _mismatch:
+        try:
+            try_err('cleansing', '69码与档案不符(保留流水码 %d 行)' % len(_mismatch),
+                    ValueError('sku=%s 档案=%s 流水=%s' % _mismatch[0]))
+        except Exception:
+            pass
+    if _writeback:
+        try:
+            executemany("UPDATE products SET barcode=%s WHERE sku=%s "
+                        "AND (barcode IS NULL OR barcode='')",
+                        [(v, k) for k, v in _writeback.items()])
+            try_err('cleansing', '档案回写69码 %d 个 SKU(流水反哺档案)' % len(_writeback),
+                    ValueError('sku=%s 码=%s' % next(iter(_writeback.items()))))
+        except Exception as _e:
+            try_err('cleansing', '档案回写69码降级', _e)
+    return _filled, len(_writeback), len(_mismatch)
+
+
 def _write_rows(target, channel, conflict_mode, cleaned):
     """按 target 分派写入; 返回 (success, failed)
     渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道"""
@@ -615,24 +681,12 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         if "channel" not in it:
             it["channel"] = channel
     if target == "order":
-        # 69 码自动查补(2026-09-15): 导入文件未映射/为空时从 products 按 sku 拉取(products.barcode 已全量填充)
-        # —— 准确性(sku 1:1 唯一)/完整性(products 全有 barcode)/实时性(导入即补, 不再产生空 69 码)
+        # 69 码入口对齐(2026-11-01 统一): 与 inbound/outbound/inventory 同一套四象限规则,
+        #   见 _fill_barcode_from_products —— 原实现只补"空码"、不回写档案、不告警码不符
         try:
-            _miss = [r for r in cleaned if not (r.get("barcode") or "").strip()]
-            if _miss:
-                _skus = list({str(r.get("sku") or "").strip() for r in _miss if r.get("sku")})
-                if _skus:
-                    _bmap = {}
-                    for _b in query("SELECT sku, barcode FROM products WHERE sku IN (%s) "
-                                    "AND barcode IS NOT NULL AND barcode != ''"
-                                    % ",".join(["%s"] * len(_skus)), _skus):
-                        _bmap[str(_b.get("sku"))] = _b.get("barcode")
-                    for r in cleaned:
-                        _k = str(r.get("sku") or "").strip()
-                        if not (r.get("barcode") or "").strip() and _bmap.get(_k):
-                            r["barcode"] = _bmap[_k]
+            _fill_barcode_from_products(channel, cleaned)
         except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
+            try_err('cleansing', '69码入口对齐降级(order)', _e)
         return _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
                              "quantity", "unit_price", "total_amount", "order_status",
@@ -702,6 +756,12 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             agg_sum=["amount", "settled_amount"])
     if target in ("inventory", "platform_inv", "inventory_b"):
         wt = _TARGET_WH[target]
+        # 69码入口对齐: inventory 本就按 (sku,barcode,warehouse,warehouse_type) 拆行,
+        #   缺码会凭空多出一行空码库存, 与档案有码的流水对不上
+        try:
+            _fill_barcode_from_products(channel, cleaned)
+        except Exception as _e:
+            try_err('cleansing', '69码入口对齐降级(inventory)', _e)
         for it in cleaned:
             it["warehouse_type"] = wt
             # 2026-10-29 架构定案: 自有仓库存=重算制 —— 导入的 available_qty 作为【期初基线】
@@ -756,6 +816,11 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             agg_overwrite=True)  # 同 supplier_code 覆盖末行档案
     if target == "inbound":
         cleaned = _fill_warehouse_type(channel, cleaned, "inbound")
+        # 69码入口对齐: 档案有码而流水缺码 → 补齐(避免下游按码聚合时落到空码组)
+        try:
+            _fill_barcode_from_products(channel, cleaned)
+        except Exception as _e:
+            try_err('cleansing', '69码入口对齐降级(inbound)', _e)
         s, f, ed = _write_batch("inbound_records",
                             ["sku", "product_name", "quantity", "supplier", "inbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
@@ -776,6 +841,11 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         return s, f, ed
     if target == "outbound":
         cleaned = _fill_warehouse_type(channel, cleaned, "outbound")
+        # 69码入口对齐: 出库码缺失会让批次按 FEFO 降级扣减(精确匹配失效)
+        try:
+            _fill_barcode_from_products(channel, cleaned)
+        except Exception as _e:
+            try_err('cleansing', '69码入口对齐降级(outbound)', _e)
         return _write_batch("outbound_records",
                             ["sku", "product_name", "quantity", "target_warehouse", "outbound_date",
                              "channel", "prod_date", "exp_date", "warehouse",
@@ -884,6 +954,11 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                              "month_outbound", "turnover_days") if c in allowed_cols}
     # sum 累加仅限出入库记录(HammerCleansing 只在 inbound/outbound 暴露 sum/overwrite 选择)
     sum_mode = table in ("inbound_records", "outbound_records") and conflict_mode == "sum"
+    # 2026-11-01 库存 upsert = **覆盖**: inventory 是快照(此刻有多少), 不是流水(累加量)。
+    #   2026-11-01 才给 inventory 加业务唯一键(sku,barcode,warehouse,channel,warehouse_type);
+    #   在此之前没有唯一键, 重复导入是"另插一行"(行数翻倍, 肉眼可见); 加键之后若不声明 upsert
+    #   语义, 会直接 1062 整行失败。两种都不对 —— 正确的是覆盖(同一份文件重导应幂等)。
+    inv_upsert = table == "inventory"
     for i in range(0, len(cleaned), 500):
         chunk = cleaned[i:i + 500]
         rows = []
@@ -931,6 +1006,12 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                     upd.append("`%s` = VALUES(`%s`)" % (c, c))
             if upd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(upd)
+        elif inv_upsert:
+            # 同键全列覆盖(排除代理键与软删标记): 重导同一份库存文件结果不变
+            _iupd = ["`%s` = VALUES(`%s`)" % (c, c) for c in cols
+                     if c not in ("id", "deleted_at")]
+            if _iupd:
+                sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_iupd)
         else:
             # 2026-10-15 性能: 非 sum 模式已做已存在跳过(rows 全新键)——纯 INSERT 无 ON DUPLICATE(executemany+ON DUP 对 TiDB 慢 10 倍——seed 5000/批 36s vs 此处 5.5 分钟)
             pass
