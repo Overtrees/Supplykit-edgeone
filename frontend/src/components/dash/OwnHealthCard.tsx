@@ -173,7 +173,8 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
           {/* 数字区: 大数字 + 副行 + 语义计数行(三层, 与断货卡同构) */}
           <div style={{ marginTop: 4 }}>
             <div
-              className="card-value"
+              className="card-value clickable"
+              onClick={onShowAll}
               style={{
                 fontSize: 'clamp(17px,8cqi,28px)',
                 fontWeight: 700,
@@ -181,6 +182,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 color: d.critical > 0 ? 'var(--danger)' : 'var(--warning)',
                 fontVariantNumeric: 'tabular-nums',
                 marginBottom: 1,
+                cursor: 'pointer',
               }}
             >
               {fmtInt(d.total)}
@@ -227,8 +229,14 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
               ))}
             </div>
           </div>
-          {/* 3 行明细(贴底, 与断货卡完全同规格: font-9 / lineHeight 1.3 / marginTop 2) */}
-          <div style={{ flexShrink: 0, paddingTop: 6 }}>
+          {/* 3 行明细(贴底, 与断货卡完全同规格: font-9 / lineHeight 1.3 / marginTop 2)
+              2026-11-01: 卡内**不放**「更多 N」pill —— 实测 175px 卡(内容区 143px)下,
+              大数字+副行+计数行+3 行明细 = 191px > 175, 再塞 pill 必溢出(scrollH 191 > clientH 175)。
+              规范 §二 也禁止"卡片内容 marginBottom 差异化", 底部必须 padding 16 兜底。
+              进入明细弹窗的入口改为: 大数字点击 + 计数行点击(两处均可, 符合"可点击→弹窗"约定)。 */}
+          {/* minHeight:0 + overflow:hidden 是 flex 子项能真正收缩的前提(默认 min-height:auto 会撑破父级);
+              175px 卡放 3 行明细本就紧, 保留收缩能力防止极端长文本/大字号辅助功能下顶破卡片 */}
+          <div style={{ flexShrink: 1, minHeight: 0, overflow: 'hidden', paddingTop: 6 }}>
             {items.slice(0, 3).map((x, i) => {
               const m = TYPE_META[x.alert_type] || { t: '预警', c: 'var(--warning)' }
               const metric =
@@ -289,24 +297,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 </div>
               )
             })}
-            {d.total > 3 && (
-              <div
-                onClick={onShowAll}
-                className="clickable pill info"
-                style={{
-                  cursor: 'pointer',
-                  fontSize: 'var(--font-10)',
-                  padding: '1px 8px',
-                  minHeight: 'auto',
-                  lineHeight: '16px',
-                  marginTop: 6,
-                  width: 'fit-content',
-                  display: 'inline-flex',
-                }}
-              >
-                更多 {fmtInt(d.total - 3)}
-              </div>
-            )}
           </div>
         </div>
       )}
