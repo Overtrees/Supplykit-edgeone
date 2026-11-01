@@ -172,6 +172,15 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
         _chs = {c.get("channel") for c in cleaned_all if c.get("channel")}
         if _chs and channel not in _chs:
             _msg += " · 文件含其他渠道数据(%s), 已按当前渠道 %s 写入" % ("/".join(_chs), channel)
+        # 2026-11-01 补漏: 效期管理商品入库缺到期日 → 静默无批次(临期预警整段失效, 无任何提示)
+        if target == "inbound":
+            try:
+                _emiss = _expiry_missing_count(channel, cleaned_all)
+                if _emiss:
+                    _msg += (" · 注意: %d 行是效期管理商品但无到期日期, 未生成批次"
+                             "(临期预警/处置建议会缺这批货)" % _emiss)
+            except Exception:
+                pass
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
     return adjusted, evaluated, _msg
@@ -740,6 +749,32 @@ def _fill_barcode_from_products(channel, cleaned):
         except Exception as _e:
             try_err('cleansing', '档案回写69码降级', _e)
     return _filled, len(_writeback), len(_mismatch)
+
+
+def _expiry_missing_count(channel, rows):
+    """效期管理商品(expiry_managed='yes')的入库行缺到期日期 → 返回行数
+
+    为什么单独统计: batches 只在入库导入带 prod_date/exp_date 时同步(_sync_batches),
+    缺了就**静默**无批次, 而临期预警/处置建议/批次对账完全依赖 batches ——
+    用户看不到任何提示, 只会觉得"预警不准"。这是"是否效期管理"标记唯一的落地校验点。
+    """
+    if not rows:
+        return 0
+    _skus = list({str(r.get("sku") or "").strip() for r in rows if r.get("sku")})
+    if not _skus:
+        return 0
+    _yes = set()
+    for _i in range(0, len(_skus), 500):
+        _part = _skus[_i:_i + 500]
+        for _b in query("SELECT sku FROM products WHERE sku IN (%s) "
+                        "AND COALESCE(expiry_managed,'')='yes' "
+                        "AND (channel=%%s OR COALESCE(channel,'')='')"
+                        % ",".join(["%s"] * len(_part)), list(_part) + [channel]):
+            _yes.add(str(_b.get("sku")))
+    if not _yes:
+        return 0
+    return sum(1 for r in rows if str(r.get("sku") or "").strip() in _yes
+               and not str(r.get("exp_date") or "").strip())
 
 
 def _write_rows(target, channel, conflict_mode, cleaned):
