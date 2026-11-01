@@ -52,7 +52,14 @@ def _read_file_bytes(upload: UploadFile):
 
 def _parse_table(data: bytes, fname: str):
     """解析 CSV/XLSX → (headers, rows); rows 为 list[dict]"""
-    if fname.endswith(".xlsx"):
+    # 2026-11-01 内容嗅探(与文件名解耦): 前端统一用 uploadRawBytes(octet-stream) 发原始字节,
+    #   后端拿不到真实文件名, 只能给占位名。原来只按扩展名分支 → detect 的占位名是 "file.xlsx",
+    #   用户上传 **CSV** 就被当 xlsx 打开, 直接 "文件解析失败: File is not a zip file"
+    #   (实测: curl 与真实前端同样报错, 即 CSV 走这个接口从未成功过)。
+    #   xlsx 本质是 zip, 前两字节固定为 "PK"; CSV 不会。按内容校正一次最可靠。
+    if data[:2] == b"PK" and not str(fname).endswith(".xlsx"):
+        fname = "upload.xlsx"
+    if str(fname).endswith(".xlsx"):
         import openpyxl
         # 小文件普通模式(兼容非标准/无维度信息文件): read_only 下 max_row/max_column 可能误判 1×1
         # (实测: 采购订单明细导出(非图书).xlsx read_only 读到 1列0行, 普通模式 48列9行)
@@ -242,7 +249,7 @@ async def cleansing_detect(request: Request, file: UploadFile = File(None)):
     if not file:
         _raw = await request.body()
         if _raw:
-            file = _mk_upload(_raw, "file.xlsx")
+            file = _mk_upload(_raw, "file.csv")   # 占位名统一 csv: 真 xlsx 由 _parse_table 内容嗅探纠正
     # 临时诊断(2026-10-14 422 file missing 定位): 记录请求表单/文件到达情况
     try:
         from db import execute as _ed
