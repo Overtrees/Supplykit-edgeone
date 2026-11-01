@@ -2270,8 +2270,11 @@ input[type='file'] {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* 公式 = 原 176 − 上移的 24(见 margin-top 注释) = 152。
+     176 的来历: page.top 140(container pt70 + card pt16 + 卡内头部54) + card pb 16 + container pb 20。
+     上移 24 后实际占位 top 变为 116, 故扣 152。改 margin-top 必须同步改这里。 */
   height: calc(
-    100svh - 176px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
+    100svh - 152px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
   );
 }
 .clean-preview-page .clean-preview-body {
@@ -2288,12 +2291,12 @@ input[type='file'] {
 .clean-preview-page .clean-preview-actions {
   flex: 0 0 auto;
 }
-/* 竖屏预览态收窄容器顶部留白(70→46, 省 24px 全给表格): 只作用于"包含预览页的容器",
-   :has 命中即够了, 不引入新 class/新样式体系; 步骤条与卡片内 padding 一律不动。
-   横屏(下方 media)不在此列 —— 横屏保持旧文档流行为。 */
-main.container:has(> .card > .clean-preview-page),
-main.container:has(.clean-preview-page) {
-  padding-top: 46px;
+/* 竖屏预览态收窄顶部留白(等效 70→46, 省 24px 全给表格):
+   不用 :has() —— 实测选择器未命中(容器仍是 pt70), 且 :has 在旧 WebKit 上不可用。
+   改为给预览页自身加负 margin-top, 让它上移吃掉容器的 padding 顶部, 等价效果且兼容性好。
+   步骤条与卡片内 padding 一律不动。横屏(下方 media)还原。 */
+.clean-preview-page {
+  margin-top: -24px;
 }
 /* 横屏恢复 2026-10-28 行为(用户指示 2026-11-01: 横屏回退旧代码, 仅竖屏用 flex+svh):
    页面回文档流滚动, 表格容器限高 clamp —— 横屏竖直空间太小(390px), 锁高会把表格挤死;
@@ -2302,9 +2305,9 @@ main.container:has(.clean-preview-page) {
   .clean-preview-page {
     height: auto; /* 解除竖屏的 100svh 锁高 */
   }
-  /* 竖屏收窄的容器顶部留白在横屏还原(用户指示: 横屏回退旧代码, 只动竖屏) */
-  main.container:has(.clean-preview-page) {
-    padding-top: 70px;
+  /* 竖屏收窄的顶部留白在横屏还原(用户指示: 横屏回退旧代码, 只动竖屏) */
+  .clean-preview-page {
+    margin-top: 0;
   }
   .clean-preview-page .clean-preview-scroll {
     /* 覆盖竖屏规则的 min-height:0/max-height:none(同为 !important, 靠源码顺序取胜) */
