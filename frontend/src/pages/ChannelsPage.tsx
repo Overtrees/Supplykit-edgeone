@@ -41,7 +41,9 @@ export default function ChannelsPage() {
         setList(d)
         setChannels(d)
       })
-      .catch((e: Error) => toast && toast(e && e.message ? e.message : '渠道列表加载失败'))
+      // 2026-11-01 修复: useToast() 返回对象({success/error/warning/info}), 不是函数——
+      //   原 `toast && toast(msg)` 运行时 TypeError(对象不可调用), 且抛错被 .catch 二次吞掉
+      .catch((e: Error) => toast.error(e && e.message ? e.message : '渠道列表加载失败'))
       .finally(() => setLoading(false))
   }
 
@@ -53,7 +55,7 @@ export default function ChannelsPage() {
   const create = () => {
     const code = form.code.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_]{0,19}$/.test(code)) {
-      toast && toast('code 需小写字母开头，1-20 位字母/数字/下划线')
+      toast.warning('code 需小写字母开头，1-20 位字母/数字/下划线')
       return
     }
     setSaving(true)
@@ -71,12 +73,11 @@ export default function ChannelsPage() {
       )
       .then(r => {
         const cp = (r.data && r.data.copied) || {}
-        toast &&
-          toast(
-            cp.rules != null
-              ? `已创建「${form.name || code}」，复制规则 ${cp.rules} 条、参数 ${cp.config} 项`
-              : `已创建「${form.name || code}」`,
-          )
+        toast.success(
+          cp.rules != null
+            ? `已创建「${form.name || code}」，复制规则 ${cp.rules} 条、参数 ${cp.config} 项`
+            : `已创建「${form.name || code}」`,
+        )
         setForm({
           code: '',
           name: '',
@@ -87,7 +88,7 @@ export default function ChannelsPage() {
         setShowForm(false)
         load()
       })
-      .catch((e: Error) => toast && toast(e && e.message ? e.message : '创建失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : '创建失败'))
       .finally(() => setSaving(false))
   }
 
@@ -95,10 +96,10 @@ export default function ChannelsPage() {
     api
       .put('/api/channels/' + encodeURIComponent(code), body, { timeout: 20000 })
       .then(() => {
-        toast && toast('已保存')
+        toast.success('已保存')
         load()
       })
-      .catch((e: Error) => toast && toast(e && e.message ? e.message : '保存失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : '保存失败'))
   }
 
   const disable = (code: string) => {
@@ -109,10 +110,10 @@ export default function ChannelsPage() {
     api
       .delete('/api/channels/' + encodeURIComponent(code), { timeout: 20000 })
       .then(() => {
-        toast && toast('已禁用')
+        toast.success('已禁用')
         load()
       })
-      .catch((e: Error) => toast && toast(e && e.message ? e.message : '禁用失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : '禁用失败'))
   }
 
   return (

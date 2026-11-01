@@ -240,8 +240,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   }, [inventory])
 
   // 底部总计取值: 优先后端全量 summary(该维度所有 SKU), 缺失回退已加载行
+  // 2026-11-01 修正签名: 原声明 3 个形参却从不使用 fallback, 而 4 处调用只传 2 个
+  //   → tsc 报 TS2554(Expected 3 arguments, but got 2)。按实际用法收敛为 (key, pick)。
   const _sumVal = useCallback(
-    (key, pick, fallback) => {
+    (key, pick) => {
       const v = invSummary ? invSummary[key] : null
       return v != null ? v : inventory.reduce((s, x) => s + (pick(x) || 0), 0)
     },

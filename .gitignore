@@ -22,3 +22,6 @@ export_files/
 .env
 .edgeone/*
 .tef_dist/*
+
+# 本地 eslint 缓存(CI 每次新建, 不入库)
+.eslintcache
