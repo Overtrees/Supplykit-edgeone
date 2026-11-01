@@ -46,6 +46,10 @@ const VARS = {
   health_warning: '健康预警档位',
   adj_dos: '调整后可撑天数',
   lit: '补货周期',
+  // 2026-11-01 补 sellable —— 内置低库存规则的模板是「可售 {sellable} < 动态安全线 {safety}」,
+  //   后端 ctx 有 sellable(core/rules.py:110 仅库存事件注入), 但前端 VARS 漏了它 →
+  //   规则列表里直接显示英文原值 "sellable"。扫描模板变量全集发现的唯一遗漏项。
+  sellable: '可售量',
   // 2026-11-01 自有仓供给侧 —— 后端 core/rules.py 渲染前会把 own./params./batch. 三组
   //   **扁平化**到顶层(模板里只能写 {gap} 不能写 {own.gap}), 故这里按扁平名映射中文
   available: '自有仓可用',
@@ -63,6 +67,33 @@ const VARS = {
   transfer_gap_min: '缺口下限',
   own_overstock_days: '积压天数阈值',
   own_expiry_buffer_days: '效期缓冲',
+  // 2026-11-01 补全: 参数表单里可配置的其余键 —— 用户把 `own.gap > params.xxx` 写成这些参数时,
+  //   条件右侧原样显示 params.b_to_c_days 这类英文路径(fieldLbl 回落到原始字符串)。
+  //   凡表单可填的参数都必须在此有中文名, 否则"可视化可配置"在列表回显上打折。
+  b_to_c_days: 'B→C调拨天数',
+  c_safety_days: 'C仓缓冲天数',
+  ship_to_b_days: '自有仓→B仓时效',
+  safety_multiplier: '安全库存天数',
+  turnover_warning_15: '仓储费阈值',
+  turnover_warning_90: '周转考核红线',
+  lead_time_days: '前置期',
+  purchase_lead_days: '采购前置期',
+  purchase_safety_days: '采购安全库存',
+  moq: 'MOQ最小起订',
+  max_turnover_days: '目标周转天数',
+  // 断货规则参数(条件里 params.lit 已覆盖, 其余供右侧引用时显示)
+  otif_min: 'OTIF置信下限',
+  ss_z: '动态SS Z值',
+  sigma_days: '波动率σ样本天数',
+  accel_ratio: '加速倍率阈值',
+  accel_min_qty: '加速样本量',
+  buffer_orange: '橙灯缓冲上限',
+  buffer_yellow: '黄灯缓冲上限',
+  orange_slack_days: '橙灯天数余量',
+  include_avail_zero: '已断纳入红灯',
+  health_good: '健康档位线',
+  log: '审计日志',
+  alert_enabled: '告警开关',
 }
 const renderTmpl = text => {
   if (!text) return null
