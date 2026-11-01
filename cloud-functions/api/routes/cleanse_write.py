@@ -10,7 +10,7 @@ from routes.common import try_err, TARGET_WH as _TARGET_WH
 
 # ── 是否做效期管理(2026-11-01)─────────────────────────────────────────────
 # 三态: 'yes' 做效期(精确扣减+FEFO) / 'no' 不做(到货序 FIFO, 批次不带日期) / '' 未标注
-# 职责边界(DEVELOPMENT §15.53): 必填拦截在前端(映射校验), 后端只做写入——
+# 职责边界(DEVELOPMENT §15.94): 列必填拦截在前端(映射校验), 后端只做写入——
 #   故此处仅做**值归一化**(是/否→yes/no)与非法值留痕, 不做整批拒绝。
 _EXPIRY_YES = {"yes", "y", "是", "有", "true", "1", "做", "需要", "做效期管理"}
 _EXPIRY_NO = {"no", "n", "否", "无", "false", "0", "不做", "不需要", "不做效期管理"}
@@ -725,7 +725,7 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                                      "beginning_stock", "month_inbound", "month_outbound"])
     if target == "product":
         # 2026-11-01 效期管理标记归一(是/否 → yes/no); 非法值留痕并留空,
-        #   不阻断写入(拦截在前端, 见 DEVELOPMENT §15.53)
+        #   不阻断写入(列必填拦在前端; 值非法由 cleansing.py done 步回显到结果 message, 见 §15.94)
         _bad_exp = []
         for it in cleaned:
             _v = _norm_expiry(it.get("expiry_managed"))

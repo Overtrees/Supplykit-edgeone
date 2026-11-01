@@ -600,6 +600,20 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
             # 最后步: 全量重清洗(联动/评估/汇总用)
             _st0 = _t.time()
             cleaned_all = _clean_rows(rows, mp)
+            # 2026-11-01 效期标记值校验(列必填由前端拦, 这里兜"填了但值不合法/为空"):
+            #   _norm_expiry 只认 是/否(含同义词), 其余返回 '?' → _write_batch 留空且仅记质量日志。
+            #   导入结果页看不到 = 运营以为标了、实际全走"按做效期处理+告警" → 在此显性回到 message。
+            _exp_warn = ""
+            if target == "product":
+                try:
+                    from routes.cleanse_write import _norm_expiry as _ne
+                    _n_bad = sum(1 for _c in cleaned_all
+                                 if _ne(_c.get("expiry_managed")) not in ("yes", "no"))
+                    if _n_bad:
+                        _exp_warn = (" · 注意: %d 条「是否做效期管理」为空或无法识别(仅接受 是/否), "
+                                     "这些商品出入库将按「做效期」处理并告警" % _n_bad)
+                except Exception as _eexp:
+                    try_err('cleansing', '效期标记值校验降级', _eexp)
             try_err('cleansing', 'done步 清洗耗时: %s' % round(_t.time() - _st0, 1))
             if target == "order":
                 try:
@@ -617,7 +631,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                  "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
                      json.dumps({"result": {"target": target, "success": success, "failed": failed,
                                             "elapsed": elapsed,
-                                            "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed),
+                                            "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed) + _exp_warn,
                                             "failed_details": _fd if _fd else [],
                                             "eval_task": task_id + "_eval"}}, ensure_ascii=False), task_id))
             # 2026-10-16 分离: 创建评估联动任务(独立续跑——分片评估不超时——导入 done 后自动触发)
@@ -659,7 +673,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
             invalidate_all()
             return {"ok": True, "task_id": task_id, "status": "done",
                     "success": success, "failed": failed,
-                    "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed),
+                    "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed) + _exp_warn,
                     "failed_details": _fd if _fd else []}
         # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
         _sq = round(_t.time() - started, 1)

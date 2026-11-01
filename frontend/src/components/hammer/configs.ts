@@ -21,6 +21,9 @@ export const PRODUCT_COLS: ColumnDef[] = [
   { id: 'weight', label: '箱重/KG' },
   { id: 'volume', label: '体积/方' },
   { id: 'status', label: '状态' },
+  // 2026-11-01 是否做效期管理(只读展示, 编辑统一走清洗页导入)
+  //   三态: 是 / 否 / 未标注(空) —— 空不是"否", 它会让出入库按"做效期"处理并告警
+  { id: 'expiry_managed', label: '是否效期管理' },
 ]
 export const prodColKey = ch => 'c_cols_products_' + ch
 export const getProdVis = ch => {

@@ -790,7 +790,7 @@ export default function CleansingPage() {
         }
       }
       // 2026-11-01 商品必填: 是否做效期管理(决定后续出入库扣减口径: 是=精确+FEFO,
-      //   否=按到货顺序 FIFO 且批次不带日期)。拦截在前端、后端只写入(DEVELOPMENT §15.53)
+      //   否=按到货顺序 FIFO 且批次不带日期)。列必填在此硬拦; 值非法由后端回显到结果(§15.94)
       if (tt === 'product') {
         const hasExp = Object.values(mp || {}).some(
           m => m && (m.target === 'expiry_managed' || m.t === 'expiry_managed'),

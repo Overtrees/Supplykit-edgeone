@@ -347,6 +347,33 @@ export default function ProductPage() {
                           </span>
                         </td>
                       )
+                    // 三态只读: 未标注('')单独成态 —— 它不是"否", 出入库会按"做效期"处理并告警,
+                    //   必须让运营一眼看出哪些商品还欠一个标注(编辑统一走清洗页导入)
+                    if (col.id === 'expiry_managed') {
+                      const _em = String(x.expiry_managed ?? '').trim()
+                      const _map =
+                        _em === 'yes'
+                          ? { txt: '是', cls: 'success' }
+                          : _em === 'no'
+                            ? { txt: '否', cls: 'neutral' }
+                            : { txt: '未标注', cls: 'warning' }
+                      return (
+                        <td key={col.id} style={{ textAlign: 'center' }}>
+                          <span
+                            className={'pill ' + _map.cls}
+                            title={
+                              _em === 'yes'
+                                ? '出库按批次精确匹配, 缺失走 FEFO 降级'
+                                : _em === 'no'
+                                  ? '出库按到货顺序 FIFO, 批次不记日期'
+                                  : '未标注 → 出入库按"做效期"处理并告警; 请在清洗页导入商品表补标'
+                            }
+                          >
+                            {_map.txt}
+                          </span>
+                        </td>
+                      )
+                    }
                     return (
                       <td
                         key={col.id}

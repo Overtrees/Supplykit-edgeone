@@ -309,6 +309,11 @@ header {
   background: #eff6ff;
   color: var(--primary);
 }
+/* 中性态(如"是否效期管理=否"): 灰底, 不暗示好坏, 与 success/warning 视觉同构 */
+.pill.neutral {
+  background: var(--gray);
+  color: var(--muted);
+}
 .section-title {
   font-weight: 700;
   margin-bottom: 12px;
