@@ -2261,16 +2261,17 @@ input[type='file'] {
    表格 flex:1 自动吸收差值, 不再有 magic number 组合, 也不会与 min-height 打架。
    2026-11-01 注入量测定案(竖屏/横屏 page.top 均=140): 首版只扣 70+32 漏了步骤条
    占高 38 → 页面恒超视口 18px, 底部「确认写入」被推出屏幕(两方向一致)。
-   二版仍超 16px: card 自身 padding-bottom(32) 与 container 底 padding(20) 是嵌套
-   关系都占位。终版扣足: 140(page.top) + 32(card pb) + 20(container pb) = 192。
-   扣项 = page.top(140 = container pt70 + card pt32 + 步骤条 38, 均不含 safe-top)
-        + card pb 32 + container pb max(20, safe-bottom) + safe-top(进 container pt 一次)。 */
+   2026-11-01 复核(注入实测 card pb=16 / container pb=20 / page.top=140): 原公式把 card pb
+   写成 32 —— 实际垂直内边距是 16, 多扣了 16px, 表格白白少一截(card.bottom=788,
+   加 container pb 20 仍离视口底 844 空 36px)。改为实测真值:
+       176 = page.top(140: container pt70 + card pt16 + 卡内头部54) + card pb 16 + container pb 20
+   按钮区高度(44)已含在 page 自身高度内, 不重复扣。 */
 .clean-preview-page {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: calc(
-    100svh - 192px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
+    100svh - 176px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
   );
 }
 .clean-preview-page .clean-preview-body {
@@ -2287,12 +2288,23 @@ input[type='file'] {
 .clean-preview-page .clean-preview-actions {
   flex: 0 0 auto;
 }
+/* 竖屏预览态收窄容器顶部留白(70→46, 省 24px 全给表格): 只作用于"包含预览页的容器",
+   :has 命中即够了, 不引入新 class/新样式体系; 步骤条与卡片内 padding 一律不动。
+   横屏(下方 media)不在此列 —— 横屏保持旧文档流行为。 */
+main.container:has(> .card > .clean-preview-page),
+main.container:has(.clean-preview-page) {
+  padding-top: 46px;
+}
 /* 横屏恢复 2026-10-28 行为(用户指示 2026-11-01: 横屏回退旧代码, 仅竖屏用 flex+svh):
    页面回文档流滚动, 表格容器限高 clamp —— 横屏竖直空间太小(390px), 锁高会把表格挤死;
    竖屏(>500px)保持 .clean-preview-page 的 flex+svh 方案(实测不再需要手动滚动才显示)。 */
 @media (max-height: 500px) {
   .clean-preview-page {
     height: auto; /* 解除竖屏的 100svh 锁高 */
+  }
+  /* 竖屏收窄的容器顶部留白在横屏还原(用户指示: 横屏回退旧代码, 只动竖屏) */
+  main.container:has(.clean-preview-page) {
+    padding-top: 70px;
   }
   .clean-preview-page .clean-preview-scroll {
     /* 覆盖竖屏规则的 min-height:0/max-height:none(同为 !important, 靠源码顺序取胜) */

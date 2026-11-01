@@ -43,7 +43,7 @@ with sync_playwright() as p:
     check("下拉含「是否做效期管理(必)」", any("效期管理(必)" in o for o in opts), opts[:8])
     # 1) 未映射必填 → 点预览: 持久 toast + 不跳转
     page.click("button:has-text('下一步 · 预览')", timeout=6000)
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(2800)  # 预览请求返回后才弹 toast, 抓早了会漏
     g = geo(page)
     print("拦截toast全文片段:", [l for l in g["text"].split("\n") if "必填" in l])
     check("不跳转(仍在映射页)", g["scroll"] is None)
