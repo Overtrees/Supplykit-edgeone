@@ -609,21 +609,29 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
     return n, skus
 
 def _fill_barcode_from_products(channel, cleaned):
-    """69码入口对齐(2026-11-01): products.barcode 是档案, 流水/订单里的码是一手实况
+    """69码入口对齐(2026-11-01 二次收紧): products.barcode 是档案, 流水/订单里的码是一手实况
 
-    业务前提: 客户首月导入的订单表/出入库表往往**只有 SKU 和仓**, 根本没有 69码 列。
-    若在入口拒绝, 首月导入全废; 若在聚合层猜码, 就违反"不猜"。所以对齐放在入口, 且分四象限:
+    业务前提: 客户首月导入的订单表/出入库表往往**只有 SKU 和仓**, 没有 69码 列。
+    若在入口拒绝, 首月导入全废; 若在聚合层猜码, 违反"不猜"。所以对齐放在入口。
 
-      | 档案 barcode | 本行 barcode | 动作 |
-      | 有           | 空           | **用档案码补齐**(不拒绝) |
-      | 有           | 有值且不同   | **保留流水码 + 告警**(见下"为什么不剔除") |
-      | 空           | 有值         | 接受 + **回写档案**(流水反哺档案) |
-      | 空           | 空           | 无码商品, 原样 |
+      | 档案码 | 本行码 | 效期管理 | 多码证据 | 动作 |
+      | 有     | 空     | no       | 无       | 用档案码补齐(**唯一合法补码**) |
+      | 有     | 空     | yes/未标注/多码 | — | **留空 + 告警** |
+      | 有     | 有且不同 | 任意   | —        | 保留流水码 + 告警(不改写) |
+      | 空     | 有值   | 任意     | 无       | 回写档案(流水反哺档案) |
+      | 空     | 有值   | 任意     | 有       | 不回写 + 告警 |
+      | 空     | 空     | 任意     | —        | 无码商品, 原样 |
 
-    为什么"不符"不剔除(与初版设计不同):
-      多码 SKU 恰恰就是"同一 SKU 换了条码"——档案只能存一个码(barcode 是单值列),
-      新码流水必然与档案"不符"。按不符即剔除, 多码客户的第二码流水会被整批丢掉,
-      且不可挽回; 而误放一个错码只是多出一个码分组, 可事后修正。**两害取轻 → 保留 + 告警。**
+    **为什么补码要加这两道闸(2026-11-01 用户质询后修正)**:
+      档案 barcode 是单值列, 它只能证明"有这个码", **不能证明"只有这个码"**。
+      效期管理商品不同批次/不同包装本就可能是不同 69码 —— 此时"用档案码补齐"
+      等于把 B 码的销量记到 A 码头上。留空只是丢一个码的分辨率(下游按合计降级),
+      补错是错账, 且事后无法分辨哪几笔是错的。**两害相权, 留空。**
+
+    **为什么"不符"不剔除**:
+      多码 SKU 恰是"同一 SKU 换了条码"——档案只能存一个码, 新码流水必然"不符"。
+      按不符即剔除, 多码客户的第二码流水会被整批丢掉且不可挽回; 误放一个错码只是
+      多出一个码分组, 可事后修正。**两害取轻 → 保留 + 告警。**
 
     返回 (补码行数, 回写档案数, 不符行数); cleaned 原地修改。
     """
@@ -632,36 +640,94 @@ def _fill_barcode_from_products(channel, cleaned):
     _skus = list({str(r.get("sku") or "").strip() for r in cleaned if r.get("sku")})
     if not _skus:
         return 0, 0, 0
-    _amap = {}
+
+    # 档案码 + 效期标记(补码是否合法的两个前提之一)
+    #   products 按 (sku, channel) 建档: 同 SKU 跨渠道可能各自一码, 必须优先取本渠道档案,
+    #   否则 B 渠道导入会拿到 A 渠道的码 —— 这是比"缺码"更隐蔽的串码。ORDER BY 让本渠道排前,
+    #   下面用 setdefault(先到先得) 取值。
+    _amap, _expmap, _seen = {}, {}, set()
     for _i in range(0, len(_skus), 500):
         _part = _skus[_i:_i + 500]
-        for _b in query("SELECT sku, barcode FROM products WHERE sku IN (%s) "
-                        "AND barcode IS NOT NULL AND barcode<>''"
-                        % ",".join(["%s"] * len(_part)), _part):
-            _amap[str(_b.get("sku"))] = str(_b.get("barcode") or "").strip()
-    # 2026-11-01 删掉"档案侧全无码就 return"的早退: 那正是象限3(档案缺码 + 流水有码 →
-    #   回写档案)唯一的生效场景 —— 首月客户商品表没有 69码 列、订单表有, 早退让回写永不执行。
-    #   实测: 建档 barcode='' + 导入带码订单 → 订单保留码, 但 products.barcode 仍为空。
-    #   _amap 为空时下面的 _arc='' 分支天然走回写, 不需要提前返回。
+        for _b in query("SELECT sku, barcode, expiry_managed, channel FROM products WHERE sku IN (%s) "
+                        "ORDER BY (channel=%%s) DESC, id DESC"
+                        % ",".join(["%s"] * len(_part)), list(_part) + [channel]):
+            _k = str(_b.get("sku"))
+            if _k in _seen:
+                continue
+            _bc_ch = str(_b.get("channel") or "")
+            if _bc_ch and channel and _bc_ch != channel:
+                continue          # 只有别的渠道建档 → 本渠道视为无档案, 不借别渠道的码
+            _seen.add(_k)
+            _bc = str(_b.get("barcode") or "").strip()
+            if _bc:
+                _amap[_k] = _bc
+            _expmap[_k] = _norm_expiry(_b.get("expiry_managed"))
 
-    _filled, _mismatch, _writeback = 0, [], {}
+    # 多码证据(两级): ①本批同一 SKU 出现 ≥2 个码 ②历史库存/订单/批次里出现过 ≥2 个码
+    #   档案 barcode 是单值列, 它只能证明"有这个码", 不能证明"只有这个码" —— 所以要另找证据
+    _codes = {}
+    for r in cleaned:
+        _k = str(r.get("sku") or "").strip()
+        if not _k:
+            continue
+        _codes.setdefault(_k, set())
+        _bc = str(r.get("barcode") or "").strip()
+        if _bc:
+            _codes[_k].add(_bc)
+    _multi = {k for k, s in _codes.items() if len(s) > 1}
+    for _i in range(0, len(_skus), 500):
+        _part = _skus[_i:_i + 500]
+        _ph = ",".join(["%s"] * len(_part))
+        for _t in ("inventory", "orders", "batches"):
+            try:
+                for _b in query("SELECT sku, COUNT(DISTINCT barcode) c FROM `%s` WHERE sku IN (%s) "
+                                "AND barcode IS NOT NULL AND barcode<>'' GROUP BY sku" % (_t, _ph), _part):
+                    if int(_b.get("c") or 0) > 1:
+                        _multi.add(str(_b.get("sku")))
+            except Exception:
+                pass   # 证据查不到 → 按"无多码"处理(不因基础设施异常阻断导入), 但只影响 no 商品
+
+    _filled, _mismatch, _writeback, _held = 0, [], {}, []
     for r in cleaned:
         _k = str(r.get("sku") or "").strip()
         _own = str(r.get("barcode") or "").strip()
         _arc = _amap.get(_k, "")
         if not _arc:
-            if _own:
-                _writeback[_k] = _own      # 档案缺码 + 流水有码 → 回写档案
+            if not _own:
+                continue
+            if _k in _multi:
+                _held.append((_k, "档案缺码且存在多个69码"))   # 回写哪个? 不猜
+            else:
+                _writeback[_k] = _own      # 档案缺码 + 流水有码 + 唯一码 → 回写档案
             continue
         if not _own:
-            r["barcode"] = _arc            # 档案有码 + 流水缺码 → 补齐
-            _filled += 1
+            # 补码**唯一**合法场景: ①明确不做效期管理(expiry_managed='no') ②无任何多码证据
+            #   效期管理=yes 的商品, 不同批次/不同包装本就可能是不同 69码,
+            #   补档案码 = 把 B 码的销量记到 A 码头上, 比留空更糟(留空只丢一个码的分辨率, 补错是错账)
+            #   未标注('')同样不补: "没填"不能当成"不会多码"
+            if _k not in _multi and _expmap.get(_k) == "no":
+                r["barcode"] = _arc
+                _filled += 1
+            else:
+                _held.append((_k, "效期管理=%s/多码=%s" % (_expmap.get(_k) or "未标注",
+                                                          "是" if _k in _multi else "否")))
         elif _own != _arc:
+            # 一手数据优先: 订单/出入库是实际发生的交易, 码以流水为准; 只告警不改写
             _mismatch.append((_k, _arc, _own))
     if _mismatch:
         try:
             try_err('cleansing', '69码与档案不符(保留流水码 %d 行)' % len(_mismatch),
                     ValueError('sku=%s 档案=%s 流水=%s' % _mismatch[0]))
+        except Exception:
+            pass
+    if _held:
+        try:
+            _rc = {}
+            for _k, _why in _held:
+                _rc[_why] = _rc.get(_why, 0) + 1
+            try_err('cleansing', '69码留空未补 %d 行(缺码+效期管理/多码, 不猜测)'
+                    % len(_held),
+                    ValueError('; '.join('%s×%d' % (w, c) for w, c in list(_rc.items())[:3])))
         except Exception:
             pass
     if _writeback:

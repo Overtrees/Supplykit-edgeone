@@ -759,14 +759,17 @@ def prepare_skus():
 
 
 def _assert_barcode_aligned():
-    """seed 自检(2026-11-01): 档案有码 → 流水/库存必须同码, 空码条数必须为 0
+    """seed 自检(2026-11-01): **可补码的 SKU** 必须无空码
 
     为什么非做不可: 补码规则(`cleanse_write._fill_barcode_from_products`)是**导入入口**逻辑,
     而 seed 直接写表、绕过了入口。没有这道自检, 这条规则在 seed 上等于从未被验证过 ——
     多码/缺码链路会一直"看起来正常", 直到真实客户导入才炸。
 
-    只查"档案有码、流水空码"(四象限第 2 格)。**不查"码不符"**: 多码 SKU 的第二码
-    天然与档案单值不符, 那是合法数据, 查了必然误报。
+    **只查 expiry_managed='no'**(2026-11-01 二次收紧后): 补码唯一合法场景是"明确不做效期
+    管理 + 无多码证据"。效期商品/未标注商品出现空码是**合法状态**(留空待人工确认, 不猜),
+    拿它们当违约会误报, 逼着人去"补"从而把错账固化。
+
+    不查"码不符": 多码 SKU 的第二码天然与档案单值不符, 那是合法数据。
 
     违规 → 抛错终止(seed 数据自身违约, 不该带病继续跑后续步骤);
     返回 {表: 空码条数}, 全 0 时原样返回供 step summary 展示。
@@ -775,7 +778,8 @@ def _assert_barcode_aligned():
     for tbl in ("inbound_records", "outbound_records", "inventory"):
         try:
             _r = one("SELECT COUNT(*) AS c FROM `%s` r JOIN products p ON p.sku=r.sku "
-                     "WHERE COALESCE(p.barcode,'')<>'' AND COALESCE(r.barcode,'')=''" % tbl) or {}
+                     "WHERE COALESCE(p.barcode,'')<>'' AND COALESCE(r.barcode,'')='' "
+                     "AND COALESCE(p.expiry_managed,'')='no'" % tbl) or {}
             out[tbl] = int(_r.get("c") or 0)
         except Exception as _e:
             out[tbl] = "error: %s" % str(_e)[:80]
