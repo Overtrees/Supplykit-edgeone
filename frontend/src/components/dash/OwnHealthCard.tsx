@@ -244,10 +244,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                   {x.sku}
                   {x.warehouse ? ' · ' + x.warehouse : ''}
                   {mt.hint ? ' · ' + mt.hint : ''}
-                  {/* 副行补类型兜底: 行首 pill 在窄卡下可能被 ellipsis 吃掉, 副行再标一次 */}
-                  {x.alert_type === 'own_expiry_risk' && x.batch_no
-                    ? ' · 批次 ' + x.batch_no
-                    : ''}
                   {x.description ? ' · ' + String(x.description).slice(0, 40) : ''}
                 </div>
               </div>
