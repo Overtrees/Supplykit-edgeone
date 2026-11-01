@@ -200,6 +200,8 @@ async def seed_step_run(request: Request):
       · [5,6,7,8] 先补库存行(含多码拆行) 再走上面三步 —— 验证 _seed_inventory 新逻辑走这个
         (inventory 有业务唯一键, INSERT IGNORE 只补新键行: 已存在的码行不受影响, 期初不被改写)
       · 0-4 会写 products/orders → 拒绝; 5 只限 seed 库(orders.data_source='seed' 守卫)
+      · 首次 from_step=5 会连跑 5→8(实测 >120s), 可能返回 504 网关超时 —— 服务端仍会跑完,
+        用四维校验(Σ批次=可用 / 月汇总=流水)确认, 不要重复触发
       · 6 不可单独执行: 流水变了而可用未重算 → 可用与流水脱节, 反而破坏四维
         (故强制连续到 8, 不接受 [6] 或 [6,7])
       · 9 重建快照/物化(实测 456s, 超平台单请求时限) → 拒绝
@@ -296,9 +298,12 @@ async def seed_step_run(request: Request):
                     _rc(_ch, [x for x in _sk if x])
                     _nrc += len(_sk)
             _nb = _seed_batches()
+            # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进 step8)
+            from routes.seed_fill import _assert_barcode_aligned as _abc
+            _bc_chk = _abc()
             _steps.append({"step": 7, "name": "可用重算+批次重建",
                            "elapsed_s": round(_t.time() - _t0, 1),
-                           "result": {"skus": _nrc, "batches": _nb}})
+                           "result": {"skus": _nrc, "batches": _nb, "barcode_aligned": _bc_chk}})
         # ── step 8: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
         _t0 = _t.time()
         groups = _sync_inv_month()
