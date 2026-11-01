@@ -34,16 +34,16 @@ def run_import(qty):
                               "q_mp": json.dumps(MP, ensure_ascii=False)},
                       headers=H, data=csv_text(qty), timeout=120)
     j = r.json()
-    tid = (j.get("data") or {}).get("task_id") or j.get("task_id")
+    tid = j.get("task_id") or (j.get("data") or {}).get("task_id")
     if not tid:
         return {"error": "no task_id", "resp": str(j)[:300]}
     for _ in range(30):
         time.sleep(2)
         s = requests.get("%s/api/cleansing/status" % HOST,
                          params={"task_id": tid}, headers={"X-Auth-Token": TOKEN}, timeout=60).json()
-        st = (s.get("data") or {}).get("status")
+        st = s.get("status") or (s.get("data") or {}).get("status")
         if st in ("done", "error"):
-            return {"status": st, "detail": s.get("data")}
+            return {"status": st, "detail": s.get("result") or s.get("data")}
     return {"status": "timeout"}
 
 

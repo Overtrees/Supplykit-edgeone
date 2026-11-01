@@ -639,8 +639,10 @@ def _fill_barcode_from_products(channel, cleaned):
                         "AND barcode IS NOT NULL AND barcode<>''"
                         % ",".join(["%s"] * len(_part)), _part):
             _amap[str(_b.get("sku"))] = str(_b.get("barcode") or "").strip()
-    if not _amap:
-        return 0, 0, 0   # 档案侧全是无码/未建档 → 无可对齐
+    # 2026-11-01 删掉"档案侧全无码就 return"的早退: 那正是象限3(档案缺码 + 流水有码 →
+    #   回写档案)唯一的生效场景 —— 首月客户商品表没有 69码 列、订单表有, 早退让回写永不执行。
+    #   实测: 建档 barcode='' + 导入带码订单 → 订单保留码, 但 products.barcode 仍为空。
+    #   _amap 为空时下面的 _arc='' 分支天然走回写, 不需要提前返回。
 
     _filled, _mismatch, _writeback = 0, [], {}
     for r in cleaned:
