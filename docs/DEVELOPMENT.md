@@ -1600,3 +1600,61 @@ python3 scripts/deploy_status.py 2                                        # Comm
 沙箱里 `git` CLI 用 `/root/.git-credentials` 的 x-access-token; WorkBuddy 的 GitHub MCP
 用的是 MCP 自己的 OAuth 授权。**两者互不相通** —— MCP 授权成功不代表 `git push` 能用,
 反之亦然。CLI 报 401 就去查 `.git-credentials`, 不要去重新授权 MCP。
+
+### 15.96 本地跑得慢 ≠ 代码慢: 往返次数的账要按 RTT 算(2026-11-01)
+
+#### 一、先量环境, 再谈性能
+
+沙箱直连 TiDB 实测 **单次往返 RTT 423ms**(50 次 `SELECT 1`, P90 423.5ms, 极稳 —— 是固定
+公网路径延迟, 不是抖动)。线上云函数与 TiDB 同 region, 单次往返在个位数毫秒。
+
+**同一个函数, 本地和线上的耗时差 100 倍, 全部来自往返次数 × RTT。**
+
+| 场景 | 往返次数 | 本地(423ms/次) | 线上(~4ms/次) |
+|---|---|---|---|
+| step7 全量 | 约 6000 | 40 分钟+ | 25~30 秒 |
+| 单条 JOIN UPDATE 修 1666 行 | 1 | 1.8 秒 | 0.3 秒 |
+
+结论: **本地只用来验"算得对不对", 不用来验"跑得快不快"**。要测耗时, 线上同 region 唯一有效。
+本地全量跑 seed 步骤没有参考价值, 卡住的概率 100%。
+
+#### 二、pymysql.executemany 不是"批量" —— 只对 INSERT 是
+
+`db.executemany` 直接调 `cursor.executemany`。PyMySQL 的行为:
+
+| 语句 | 实际行为 | 往返 |
+|---|---|---|
+| `INSERT ... VALUES(...)` | 重写成多行 VALUES, **一次发送** | 1 次/批 |
+| `UPDATE ... WHERE id=%s` | **循环单条 execute** | N 次 |
+
+所以"已经改用 executemany 就快了"只对插入成立。`UPDATE inventory SET available_qty=%s
+WHERE id=%s` 传 2000 行 = 2000 次往返 —— 线上 8 秒(+其他开销 28.9s), 本地 14 分钟。
+UPDATE 要真批量, 只有两条路: `UPDATE ... JOIN` 一条搞定, 或 `INSERT ... ON DUPLICATE KEY UPDATE`。
+
+#### 三、优化必须放在阻塞点之前(本次实测案例)
+
+`_seed_batches` 里有两处写 `products.best_before`:
+
+- 位置 A(旧的 412-418 行): 两轮**逐条** UPDATE —— 先填空, 再覆盖问题 SKU。约 2000×2 次往返。
+- 位置 B(432 行): **一条** `UPDATE ... JOIN` 按批次 MIN(exp_date) 全量对齐。0.3 秒。
+
+B 完全覆盖 A 的效果(条件更宽、口径更权威), 但 A 在 B 之前执行 —— **A 跑不完, B 永远到不了**。
+2026-10-31 加 B 时只写了注释说"原逐条 UPDATE 200s", 没删 A, 于是优化形同不存在:
+本地实测 8 分钟还没走到 B。删掉 A 后, B 一次执行修正 1666 行, 1.8 秒。
+
+**教训: 加了批量版本, 必须删掉被它覆盖的逐条版本。** 否则"优化了"只是代码变长。
+
+#### 四、这次改动是否动到四维(实测, 不是推理)
+
+改的只是 `best_before` 的写入路径(删逐条、留批量), 不碰 `available_qty` / `beginning_stock` /
+`month_inbound` / `month_outbound`。跑完实测:
+
+```
+best_before 与批次不一致行数: 0
+四维指纹: rows=17006  available=5376612  beginning=190709
+月汇总 vs 流水偏差: 0
+69码自检: inbound=0 outbound=0 inventory=0
+```
+
+可用与期初**逐位相同**(5376612 / 190709), 与改动前一致 —— 四维零影响。若只改写入路径却让
+可用变了, 那一定是 SQL 写错了, 不是"优化"。

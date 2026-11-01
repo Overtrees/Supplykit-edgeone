@@ -367,7 +367,6 @@ def _seed_batches():
         elif chk < 0.04:
             problem.add(s)
     bdata = []
-    best_map = {}
     for r in rows:
         sku, wh, wht, ch, qty = str(r.get('sku')), str(r.get('warehouse') or ''), \
             str(r.get('warehouse_type') or ''), str(r.get('channel') or 'jd'), int(r.get('available_qty') or 0)
@@ -402,20 +401,15 @@ def _seed_batches():
                           'prod_date': '' if _no_exp else prod.strftime('%Y-%m-%d'),
                           'exp_date': '' if _no_exp else exp.strftime('%Y-%m-%d'),
                           'qty': bq})
-            if not _no_exp and (sku not in best_map or exp < best_map[sku]):
-                best_map[sku] = exp
     for i in range(0, len(bdata), 500):
         cols = ['sku', 'barcode', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
         executemany("INSERT IGNORE INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                             ", ".join(["%s"] * len(cols))),
                     [tuple(b[c] for c in cols) for b in bdata[i:i + 500]])
-    for sku, exp in best_map.items():
-        execute("UPDATE products SET best_before=%s WHERE sku=%s AND (best_before='' OR best_before IS NULL)",
-                (exp.strftime('%Y-%m-%d'), sku))
-    for sku in problem:
-        if sku in best_map:
-            execute("UPDATE products SET best_before=%s WHERE sku=%s",
-                    (best_map[sku].strftime('%Y-%m-%d'), sku))
+    # 2026-11-01: 此处原有两轮逐条 UPDATE products(先填 best_before, 再强制覆盖 problem SKU),
+    #   每个 SKU 一次往返 —— 2000 SKU 约 4000 次 RTT, 本地实测把 step7 拖到 8 分钟, 线上必爆
+    #   120s 网关。该效果已被下方"批次为准"的单条 JOIN UPDATE 完全覆盖(条件更宽、口径更权威):
+    #   批次 exp_date 就是这里生成的 exp, MIN(exp_date) 即本轮 best_map 的最小值。故删除。
     # 2026-10-31 own 仓批次: 走生产算法(期初 + 入库 − 出库精确扣减), 与真实导入同一条链路。
     #   原实现按 available_qty 随机拆 → 与 _rebuild_own_batches 两套口径, seed 跑完自洽,
     #   但任何一次真实导入触发重建就被按"空日期流水"重算而塌缩(本次 65 项偏差的成因之一)。
