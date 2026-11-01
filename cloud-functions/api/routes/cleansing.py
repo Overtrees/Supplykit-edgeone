@@ -325,15 +325,17 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
         _bdata, _bfname = _read_file_bytes(_dr)
         try:
             _bh, _brows = _parse_table(_bdata, _bfname)
-            # 2026-10-29 补齐: 库存/入库/出库 也要**写入前查库去重**
-            #   (原只覆盖 order/gmv_flow —— 库存与出入库纯 INSERT, 重复导入会产生重复行)
+            # 2026-10-29 补齐: 入库/出库 也要**写入前查库去重**
+            #   (原只覆盖 order/gmv_flow —— 出入库纯 INSERT, 重复导入会产生重复行)
             #   三键: 69码有值 → 组合键+69码; 空 → 二键降级(与项目既有约定一致)
             #   出入库 sum 模式是"累加"语义, 不拦截(重复导入=再入库一次, 合法)
+            # 2026-11-01 库存三类**移出查重**: inventory 是"此刻有多少"的快照, 不是流水。
+            #   同键重导 = 更新数值(客户每月导新快照), 不是"重复行"。
+            #   写入层已声明 inv_upsert = 同键全列覆盖(cleanse_write.py:961), 但查重挡在它前面 ——
+            #   键存在就 return duplicate、根本不建任务 → 覆盖逻辑成了死代码,
+            #   客户改完库存数量再导会被静默跳过, 库存永远停在首次导入的值(实测复现)。
             _dup_cfg = {"order": ("orders", "order_no", "sku", ""),
                         "gmv_flow": ("gmv_flows", "platform", "flow_no", ""),
-                        "inventory": ("inventory", "sku", "warehouse", "barcode"),
-                        "platform_inv": ("inventory", "sku", "warehouse", "barcode"),
-                        "inventory_b": ("inventory", "sku", "warehouse", "barcode"),
                         "inbound": ("inbound_records", "sku", "inbound_date", "barcode"),
                         "outbound": ("outbound_records", "sku", "outbound_date", "barcode")}
             # 出入库 sum 模式跳过拦截(累加语义)
