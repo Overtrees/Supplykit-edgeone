@@ -863,5 +863,34 @@ try:
 except Exception as _e2:
     check("口径/静默失败用例无异常", False, str(_e2)[:200])
 
+# ── 批次扣减分配(2026-11-01: 期初/无批次/多仓) ──────────────────────
+try:
+    from routes.cleanse_write import _allocate_to_batches as _alloc
+    _p = [{"quantity": 100, "prod_date": "", "exp_date": "", "_opening": True}]
+    _ov, _he, _hf, _mk = _alloc(_p, {}, 30)
+    check("批次: 期初被无批次出库扣减", _p[0]["quantity"] == 70 and _hf == 30 and _ov == 0, str(_p))
+    _p = [{"quantity": 100, "prod_date": "", "exp_date": "", "_opening": True}]
+    _ov, _he, _hf, _mk = _alloc(_p, {("2026-08-01", "2026-11-01"): 30}, 0)
+    check("批次: 批次未命中降级扣期初+记录",
+          _p[0]["quantity"] == 70 and _hf == 30 and _mk == [("2026-08-01", "2026-11-01")], (_p, _mk))
+    _p = [{"quantity": 100, "prod_date": "", "exp_date": "", "_opening": True},
+          {"quantity": 100, "prod_date": "2026-08-01", "exp_date": "2026-11-01"}]
+    _ov, _he, _hf, _mk = _alloc(_p, {("2026-08-01", "2026-11-01"): 40}, 0)
+    check("批次: 精确命中不动期初", _p[0]["quantity"] == 100 and _p[1]["quantity"] == 60 and _he == 40, _p)
+    _p = [{"quantity": 50, "prod_date": "", "exp_date": "", "_opening": True}]
+    _ov, _he, _hf, _mk = _alloc(_p, {}, 80)
+    check("批次: 超卖返回超出量且扣至0", _p[0]["quantity"] == 0 and _ov == 30, (_p, _ov))
+    _p = [{"quantity": 10, "prod_date": "2026-09-01", "exp_date": "2027-03-01"},
+          {"quantity": 10, "prod_date": "2026-08-01", "exp_date": "2026-12-01"}]
+    _alloc(_p, {}, 10)
+    check("批次: 降级按 FEFO 先扣早效期", _p[1]["quantity"] == 0 and _p[0]["quantity"] == 10, _p)
+    _pa = [{"quantity": 100, "prod_date": "2026-08-01", "exp_date": "2026-11-01"}]
+    _pb = [{"quantity": 100, "prod_date": "2026-08-01", "exp_date": "2026-11-01"}]
+    _alloc(_pa, {("2026-08-01", "2026-11-01"): 20}, 0)
+    _alloc(_pb, {("2026-08-01", "2026-11-01"): 30}, 0)
+    check("批次: 多仓同批号各扣各的", _pa[0]["quantity"] == 80 and _pb[0]["quantity"] == 70, (_pa, _pb))
+except Exception as _e3:
+    check("批次分配用例无异常", False, str(_e3)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

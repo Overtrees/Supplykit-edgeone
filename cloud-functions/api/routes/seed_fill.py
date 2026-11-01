@@ -279,13 +279,17 @@ def _seed_inventory(skus_data):
                     q = random.randint(0, 8)
                 else:
                     q = random.randint(50, 800)
+                # 2026-11-01: 自有仓给真实期初(此前恒 0, 导致"期初扣减"路径永远测不到)
+                #   期初 = 当前量的 20%~40%, 剩余部分由 入库−出库 解释; 批次重建时
+                #   期初批次排 FEFO 队首并参与扣减, Σ批次 仍恒等于可用。
+                beg = int(q * random.uniform(0.20, 0.40)) if wt == 'own' else 0
                 inv.append({'sku': sk['sku'], 'barcode': sk.get('barcode', ''), 'product_name': sk['name'], 'warehouse': wh_name,
-                            'warehouse_type': wt, 'available_qty': q,
+                            'warehouse_type': wt, 'available_qty': q, 'beginning_stock': beg,
                             'in_transit_qty': 0 if low else random.randint(0, 200),
                             'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
                             'channel': ch})
     for i in range(0, len(inv), 500):
-        cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty',
+        cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty', 'beginning_stock',
                 'in_transit_qty', 'safety_qty', 'channel', 'barcode']
         executemany("INSERT IGNORE INTO inventory(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                               ", ".join(["%s"] * len(cols))),
