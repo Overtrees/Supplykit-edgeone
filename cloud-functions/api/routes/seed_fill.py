@@ -557,6 +557,16 @@ def _sync_inv_month():
     """
     month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
     _stat = {}
+    # 2026-11-01 清零(跨月必需): 原实现只 UPDATE「有流水聚合组的行」, 当月无流水的行会
+    #   停留在上个月的月汇总值。实测 11-01: inventory.month_inbound 合计 98,725 vs 流水
+    #   53,915 (1.83 倍), 157 行是 10 月残留。月汇总语义 =「本月流水合计」, 无流水即 0。
+    #   注: 本函数仅 seed 调用(seed_step 8 / run_seed_fill); 生产环境客户导入的月度值
+    #   (ERP 口径, cleanse_write 可写 month_* 列)不得被此函数覆盖 —— 导入路径不调这里。
+    try:
+        execute("UPDATE inventory SET month_inbound=0, month_outbound=0")
+        _stat['cleared'] = 'all'
+    except Exception as _e:
+        try_err('seed_fill', '月汇总清零', _e)
     for table, date_col, target_col in (('inbound_records', 'inbound_date', 'month_inbound'),
                                         ('outbound_records', 'outbound_date', 'month_outbound')):
         rows = query("SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, channel, "
