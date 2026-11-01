@@ -126,6 +126,24 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                     _m = "bbcc" if ctx.get("channel") == "jd" else "traditional"  # 未指定=跟随渠道默认模式
                 _rp2["lit"] = ctx.get("lit_bbcc" if _m == "bbcc" else "lit_trad")
             ctx2 = {**_base_ctx, "rule": rule, "params": _rp2}
+            # 2026-11-01 模板扁平化: alert_title/alert_desc 用 str.format(**ctx2) 渲染,
+            #   只能取**顶层**键({product_name}/{sellable} 这类), 取不到嵌套的 own.gap / params.xxx。
+            #   → 把 own.* 与 params.* 摊到顶层, 模板可写成 {gap} / {own_overstock_days}。
+            #   setdefault 让原 ctx 顶层键优先(不被覆盖)。
+            #   线上实证踩过两次坑: own_transfer_gap 描述里 {need}/{gap} 原样落库(先漏 own),
+            #   修完 own 后 own_overstock 仍原样落库(再漏 params)。
+            _own_x = ctx.get("own")
+            if isinstance(_own_x, dict) and _own_x:
+                for _ok, _ov in _own_x.items():
+                    ctx2.setdefault(_ok, _ov)
+            if isinstance(_rp2, dict) and _rp2:
+                for _pk, _pv in _rp2.items():
+                    ctx2.setdefault(_pk, _pv)
+            # batch.*: 效期规则模板要写 {days_to_expire}(如"批次剩余 {days_to_expire} 天到期")
+            _bt_x = ctx.get("batch")
+            if isinstance(_bt_x, dict) and _bt_x:
+                for _bk, _bv in _bt_x.items():
+                    ctx2.setdefault(_bk, _bv)
             if not _check_condition(cond, ctx2):
                 continue
             at = rule.get("alert_type", "")
@@ -139,8 +157,12 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
             try:
                 title = title_tpl.format(**ctx2) if "{" in title_tpl else title_tpl
                 desc = desc_tpl.format(**ctx2) if "{" in desc_tpl else desc_tpl
-            except Exception:
+            except Exception as _etpl:
+                # 2026-11-01: 原 except 静默吞 → 模板变量写错时, 告警描述会**原样存进库**
+                #   (线上实证: '下游 {downstream_ds}/日×{b2c_days}天需 {need} 件' 直接落表)。
+                #   改为留痕, 便于发现规则模板与 ctx 键不匹配。
                 title, desc = title_tpl, desc_tpl
+                try_err("rules", "告警模板渲染失败(变量未匹配 ctx): %s" % (at,), _etpl)
             inserts.append((at, title, desc, rule.get("severity", "warning"),
                             sku, int(rule.get("id") or 0),
                             (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
@@ -207,6 +229,11 @@ _VALID_FIELDS = {
     "batch.days_to_expire", "supplier.score", "inv.turnover_days",
     "sku", "product_name", "days_since_last", "stock", "avail", "safety",
     "lit_trad", "lit_bbcc", "health", "health_score",
+    # 2026-11-01 自有仓供给侧(own_transfer_gap / own_overstock 规则用)
+    #   —— 不加白名单则规则页保存直接被 validate_condition 拦下
+    "own.available", "own.transit", "own.po_transit", "own.can_ship",
+    "own.downstream_ds", "own.downstream_avail", "own.b2c_days",
+    "own.need", "own.gap", "own.cover_days",
 }
 
 
@@ -250,7 +277,11 @@ def validate_condition(cond):
     return errors
 
 
-_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty")
+_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty",
+              # 2026-11-01 自有仓供给侧口径(own_transfer_gap / own_overstock 规则引用)
+              #   —— 这些键由 rule_eval 的 _need_calc 分支按需注入; 不进白名单则规则走"快速路径",
+              #   ctx 永远没有 own.* → 条件恒 None → 规则静默失效
+              "own.")
 
 
 

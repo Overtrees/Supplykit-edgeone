@@ -306,6 +306,55 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                     _sup_score[str(_rs.get("supplier_code"))] = float(_v)
         except Exception as _ex2:
             try_err('core_rules', '供应商评分加载降级', _ex2)
+        # ── 2026-11-01 自有仓供给侧 ctx(own_transfer_gap/own_overstock 规则用) ──
+        # 背景: 自有仓(集货仓)不产生销售 —— daily_sales_snapshot 只有平台仓行,
+        #   逐仓日销 ds=0 → 动态安全线=0 → 低库存口径恒不触发(口径错配, 非 bug)。
+        #   自有仓该判的是供给侧三件事, 这里把判定所需的量都注入 ctx, 让规则可配置:
+        #     own.available / own.transit        自有仓在仓/在途(逐 SKU 汇总)
+        #     own.po_transit                    采购在途(供应商已发未到)
+        #     own.can_ship                      可发量 = 在仓+在途+采购在途
+        #     own.need                          下游一个调拨周期的要货量 = 下游日销 × b2c_days × 覆盖倍数
+        #     own.gap                           缺口 = need − can_ship(>0 即调拨覆盖不足)
+        #     own.cover_days                    自有可用 ÷ 下游日销(积压判定)
+        #   缺数据一律不给键(条件求值 None → 跳过), 不用 0 冒充。
+        _own_map = {}
+        try:
+            _wm = {}
+            for _ro in query("SELECT sku, warehouse_type, IFNULL(SUM(IFNULL(available_qty,0)),0) AS av, "
+                             "IFNULL(SUM(IFNULL(in_transit_qty,0)),0) AS tr FROM inventory "
+                             "WHERE channel=%s AND warehouse_type IN ('own','platform','platform_b') "
+                             "GROUP BY sku, warehouse_type", [channel]):
+                _wm.setdefault(str(_ro.get("sku") or ""), {})[
+                    str(_ro.get("warehouse_type") or "")] = (
+                    int(_ro.get("av") or 0), int(_ro.get("tr") or 0))
+            _po_t = {}
+            try:
+                for _rpo in query(
+                        "SELECT sku, IFNULL(SUM(IFNULL(qty,0)-IFNULL(received_qty,0)),0) AS t "
+                        "FROM purchase_orders WHERE channel=%s "
+                        "AND status IN ('pending','in_transit','partial') GROUP BY sku", [channel]):
+                    _po_t[str(_rpo.get("sku") or "")] = int(_rpo.get("t") or 0)
+            except Exception as _epo:
+                try_err('core_rules', '采购在途加载降级(按 0)', _epo)
+            # 阈值同样走规则 params(可配置): 这里只给"默认值", 规则条件用 params.* 覆盖
+            _own_cover_mult = float(_rp.get("transfer_cover_mult", 1.0) or 1.0) if _rp else 1.0
+            for _sk, _d in _wm.items():
+                _oa, _ot = _d.get("own", (0, 0))
+                if _oa <= 0 and _ot <= 0:
+                    continue  # 非自有仓 SKU 不注入(避免给全量 SKU 造键)
+                _pb = _d.get("platform", (0, 0))
+                _pbb = _d.get("platform_b", (0, 0))
+                _down_av = _pb[0] + _pbb[0] + _pb[1] + _pbb[1]
+                _ds_own = _ds_of(_sk, "", "")
+                _can = _oa + _ot + _po_t.get(_sk, 0)
+                _own_map[_sk] = {
+                    "available": _oa, "transit": _ot, "po_transit": _po_t.get(_sk, 0),
+                    "can_ship": _can, "downstream_avail": _down_av,
+                    "b2c_days": _lit_bbcc,
+                    "cover_mult": _own_cover_mult,
+                }
+        except Exception as _eown:
+            try_err('core_rules', '自有仓供应量加载降级(own.* 键不注入)', _eown)
         for _r in rows:
             _sku = str(_r.get("sku") or "")
             _st = _agg.setdefault(_sku, {"avail": 0, "transit": 0, "safety": 0})
@@ -381,6 +430,30 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
         # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)
         if sku in _exp_map:
             base["batch"] = {"days_to_expire": _exp_map[sku]}
+        # 2026-11-01 自有仓供给侧键(仅 own 行注入 —— 规则需按 inv.warehouse_type=='own' 圈定):
+        #   need/gap 依赖下游日销, 无日销时不给 need/gap(积压判定仍需 cover_days, 也无从算) →
+        #   整块只在有下游日销时注入, 避免"缺口=need(0) - can" 产生负向误判
+        if str(r.get("warehouse_type") or "") == "own" and sku in _own_map:
+            _om = dict(_own_map[sku])
+            _ds_down = _ds_of(sku, str(r.get("barcode") or ""), "__C__")
+            if _ds_down and _ds_down > 0:
+                # 下游日销可能存在(全国 C 口径) → 复算 need/gap/cover
+                _b2c = float(_om.get("b2c_days") or 0)
+                _need = _ds_down * _b2c * float(_om.get("cover_mult") or 1.0)
+                base["own"] = {
+                    "available": _om["available"], "transit": _om["transit"],
+                    "po_transit": _om["po_transit"], "can_ship": _om["can_ship"],
+                    "downstream_avail": _om["downstream_avail"],
+                    "downstream_ds": round(_ds_down, 2),
+                    "b2c_days": _b2c,
+                    "need": round(_need, 1),
+                    "gap": round(_need - _om["can_ship"], 1),
+                    "cover_days": round(_om["available"] / _ds_down, 1),
+                }
+            else:
+                base["own"] = {"available": _om["available"], "transit": _om["transit"],
+                               "po_transit": _om["po_transit"], "can_ship": _om["can_ship"],
+                               "downstream_avail": _om["downstream_avail"]}
         _supc = _prod_sup.get(sku, "")
         if _supc and _supc in _sup_score:
             base["supplier"] = {"score": _sup_score[_supc], "code": _supc}

@@ -131,6 +131,21 @@ const LF = [
   { l: '库存健康分(渠道)', v: 'health.score' },
   { l: '补货周期 L/T(规则参数)', v: 'params.lit' },
   { l: '健康预警档位(规则参数)', v: 'params.health_warning' },
+  // 2026-11-01 自有仓供给侧口径 —— 自有仓(集货仓)不产生销售(daily_sales_snapshot 只有平台仓行),
+  //   逐仓日销 ds=0 → 动态安全线=0 → 低库存口径恒不触发(口径错配, 非 bug)。
+  //   自有仓是供给侧, 该判的是「下游要货备不备得出 / 压太多 / 会不会过期」, 故另开 own.* 变量组。
+  //   注意: 这些键**仅在 inv.warehouse_type=='own' 的行注入**, 所以条件里务必带上该前置。
+  { l: '— 自有仓 —', v: '' },
+  { l: '自有仓可用', v: 'own.available' },
+  { l: '自有仓在途', v: 'own.transit' },
+  { l: '采购在途(已发未到)', v: 'own.po_transit' },
+  { l: '自有可发(在仓+在途+采购在途)', v: 'own.can_ship' },
+  { l: '下游日销(平台仓)', v: 'own.downstream_ds' },
+  { l: '下游在仓(平台仓合计)', v: 'own.downstream_avail' },
+  { l: '调拨周期(天, 与规则同源)', v: 'own.b2c_days' },
+  { l: '下游本期要货量', v: 'own.need' },
+  { l: '调拨缺口(要货 − 可发)', v: 'own.gap' },
+  { l: '自有可撑天数(可用/下游日销)', v: 'own.cover_days' },
 ]
 const OPS = [
   { l: '小于', v: '<' },
@@ -398,7 +413,13 @@ export default function RulesPage() {
         }
       : at === 'health'
         ? { health_good: '85', health_warning: '60', log: '0', alert_enabled: '1' }
-        : { alert_enabled: '1' }
+        : at === 'own_transfer_gap'
+          ? { transfer_gap_min: '1', transfer_cover_mult: '1.0', log: '0', alert_enabled: '1' }
+          : at === 'own_overstock'
+            ? { own_overstock_days: '90', log: '0', alert_enabled: '1' }
+            : at === 'own_expiry_risk'
+              ? { own_expiry_buffer_days: '15', log: '0', alert_enabled: '1' }
+              : { alert_enabled: '1' }
   // 类型模板(联动性: 选类型自动带出默认事件/条件/参数, 防止事件-变量错配致规则永不触发)
   const TYPE_TEMPLATE = {
     low_stock: {
@@ -453,6 +474,41 @@ export default function RulesPage() {
         op: '>',
         right: '30',
         rightType: 'number',
+        pctValue: 100,
+        warehouse: '',
+      },
+    },
+    // 2026-11-01 自有仓供给侧三条(与看板「自有仓健康」卡同源; 判据也写在 seed_fill 内置规则里)
+    // 都带 inv.warehouse_type=='own' 前置 —— own.* 键只在 own 行注入, 缺前置则规则永不触发
+    own_transfer_gap: {
+      event: 'inventory.changed',
+      cond: {
+        left: 'inv.warehouse_type',
+        op: '==',
+        right: 'own',
+        rightType: 'value',
+        pctValue: 100,
+        warehouse: '',
+      },
+    },
+    own_overstock: {
+      event: 'scheduled.daily',
+      cond: {
+        left: 'inv.warehouse_type',
+        op: '==',
+        right: 'own',
+        rightType: 'value',
+        pctValue: 100,
+        warehouse: '',
+      },
+    },
+    own_expiry_risk: {
+      event: 'scheduled.daily',
+      cond: {
+        left: 'inv.warehouse_type',
+        op: '==',
+        right: 'own',
+        rightType: 'value',
         pctValue: 100,
         warehouse: '',
       },
@@ -1095,6 +1151,11 @@ export default function RulesPage() {
                       <option value="health">健康监控(看板同源)</option>
                       <option value="oversell">超卖保护</option>
                       <option value="slow_moving">滞销识别</option>
+                      {/* 2026-11-01 自有仓供给侧(看板「自有仓健康」卡同源) ——
+                          自有仓不产生销售, 低库存口径不适用, 故单列这组 */}
+                      <option value="own_transfer_gap">自有仓·调拨覆盖不足</option>
+                      <option value="own_overstock">自有仓·积压</option>
+                      <option value="own_expiry_risk">自有仓·效期风险</option>
                       <option value="custom">自定义</option>
                     </select>
                   </label>

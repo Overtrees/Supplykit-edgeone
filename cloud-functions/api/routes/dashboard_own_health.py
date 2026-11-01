@@ -75,10 +75,21 @@ def own_health(channel, full: int = 0, limit: int = 10):
     overstock_days = _cf(cfg, "overstock_days", 90)
     expiry_buffer_days = _cf(cfg, "expiry_buffer_days", 15)
     transfer_cover_mult = _cf(cfg, "transfer_cover_mult", 1.0)  # 覆盖要求倍数(1=刚好够)
-    # 下游调拨周期: 与补货同源(b_to_c_days = B→C 调拨前置期), 用于把"日销"换算成"本期要货"
-    b2c_days = _cf(cfg, "mode_bbcc_b_to_c_days", 0) or _cf(cfg, "b_to_c_days", 3)
+    # 下游调拨周期: **与规则引擎 _lit_bbcc 完全同口径** —— b2c + c_safety
+    #   (2026-11-01 对齐: 原只取 b_to_c_days=3, 而引擎用 b_to_c+c_safety=6,
+    #    同一缺口会算出两个数 → 看板卡与规则告警对不上。这里改为同一公式。)
+    #   mode_ 前缀键优先(补货配置的模式双线), 平铺键兜底
+    def _mc(key, mode, default):
+        v = cfg.get("mode_%s_%s" % (mode, key))
+        if v is None:
+            v = cfg.get(key)
+        try:
+            return float(v or default)
+        except Exception:
+            return float(default)
+    b2c_days = _mc("b_to_c_days", "bbcc", 3) + _mc("c_safety_days", "bbcc", 0)
     if b2c_days <= 0:
-        b2c_days = 3
+        b2c_days = 3.0
 
     # ── 自有仓库存(逐 SKU×仓 汇总; own 类型仓可能多行/多批次) ──
     own = query(
@@ -186,7 +197,9 @@ def own_health(channel, full: int = 0, limit: int = 10):
             need = ds * b2c_days * transfer_cover_mult      # 下游一个调拨周期要的量
             can = avail + transit + po                       # 自有仓能发出的量
             gap = need - can
-            if gap > 0:
+            # 0.5 件容差: 需量是 ds×天数 的连续值, 与整数可发量比较会出 0.0001 级的伪缺口
+            #   (实测出现过 "需 34 件/可发 33 件/缺 0 件" 这种自相矛盾的行)
+            if gap > 0.5:
                 items.append({
                     "sku": sku, "barcode": bc, "product_name": name, "warehouse": wh,
                     "alert_type": "own_transfer_gap", "level": "error",

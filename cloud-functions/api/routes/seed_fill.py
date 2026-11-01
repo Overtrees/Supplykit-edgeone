@@ -673,9 +673,45 @@ def _seed_config():
          '{"left":"health.score","op":"<","right":"params.health_warning"}',
          "health", "健康度预警: {health_score} 分", "库存健康分跌破 {health_warning} 档位线", "warning",
          None),
+        # ── 2026-11-01 自有仓供给侧三条(可视化可配置; 看板「自有仓健康」卡同源) ──
+        # 为什么不是低库存: 自有仓(集货仓)不产生销售 —— daily_sales_snapshot 只有平台仓行,
+        #   逐仓日销 ds=0 → 动态安全线=0 → 低库存口径 `可售 < 0` 恒假, 结构性不可能触发(口径错配)。
+        #   自有仓是供给侧, 该判的是「下游要货备不备得出 / 压得太多 / 会不会过期」。
+        # 三条都带 inv.warehouse_type == 'own' 前置, 保证只在自有仓行求值
+        #   (ctx 的 own.* 键也仅对 own 行注入, 双保险)。
+        # ① 调拨覆盖不足(error): 一个调拨周期的要货量 > 自有可发(在仓+在途+采购在途)
+        ("自有仓调拨覆盖不足", "inventory.changed",
+         '{"left":"inv.warehouse_type","op":"==","right":"own",'
+         '"and":{"left":"own.gap","op":">","right":"params.transfer_gap_min"}}',
+         "own_transfer_gap", "调拨覆盖不足: {product_name}",
+         "下游 {downstream_ds}/日×{b2c_days}天需 {need} 件, 自有可发 {can_ship} 件, 缺 {gap} 件", "error",
+         "own_transfer_gap"),
+        # ② 自有仓积压(warning): 自有可用 ÷ 下游日销 > 阈值天数
+        ("自有仓积压", "scheduled.daily",
+         '{"left":"inv.warehouse_type","op":"==","right":"own",'
+         '"and":{"left":"own.cover_days","op":">","right":"params.own_overstock_days"}}',
+         "own_overstock", "自有仓积压: {product_name}",
+         "自有可用 {available} 件, 可撑 {cover_days} 天(阈值 {own_overstock_days} 天), 建议加速调拨",
+         "warning", "own_overstock"),
+        # ③ 效期风险(error): 最早到期批次 < 效期缓冲 → 会过期报废(直接损失, 可调拨消化)
+        #   注意: 这里用 batch.days_to_expire(全仓最早批次), 与看板 own_health 的
+        #   "按自有仓批次 + 消耗速度" 是两层 —— 看板更严(含"吃不完"判据), 规则作兜底粗筛。
+        #   要更严可在规则页把阈值调大, 或叠加 own.cover_days 条件。
+        ("自有仓效期风险", "scheduled.daily",
+         '{"left":"inv.warehouse_type","op":"==","right":"own",'
+         '"and":{"left":"batch.days_to_expire","op":"<","right":"params.own_expiry_buffer_days"}}',
+         "own_expiry_risk", "效期风险: {product_name}",
+         "最早期批次 {days_to_expire} 天后到期(负值=已过期; 缓冲 {own_expiry_buffer_days} 天), 需调拨消化或报损",
+         "error", "own_expiry_risk"),
         # 注: 内置规则演进 —— "紧急补货"(replenish)/"滞销识别"(slow_moving) 退役
         #     (采购&补货卡读建议接口 / 处置建议页承载滞销); stockout/health 保留为参数载体(不告警)
     ]
+    # 自有仓三条的默认参数(全部可在规则 tab 编辑 — params 即 ctx.params.* 的真源)
+    _OWN_PARAMS = {
+        "own_transfer_gap": {"transfer_gap_min": 1, "transfer_cover_mult": 1.0, "log": 0},
+        "own_overstock": {"own_overstock_days": 90, "log": 0},
+        "own_expiry_risk": {"own_expiry_buffer_days": 15, "log": 0},
+    }
     for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
         for name, ev, cond, at, title, desc, sev, _p in rules:
             if at == "stockout":
@@ -685,6 +721,8 @@ def _seed_config():
                           "log": 0, "alert_enabled": 0}
             elif at == "health":
                 params = {"health_good": 85, "health_warning": 60, "log": 0, "alert_enabled": 0}
+            elif at in _OWN_PARAMS:
+                params = dict(_OWN_PARAMS[at])
             else:
                 params = None
             execute("INSERT INTO rules(name, event, condition_json, alert_type, alert_title, "

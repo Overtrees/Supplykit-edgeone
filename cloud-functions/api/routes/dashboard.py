@@ -842,8 +842,13 @@ def _build_aux(channel, mode):
     _ar = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
                 "ORDER BY id DESC LIMIT 300" % _AF, [channel])
     _ls_c = _rp_c = _ot_c = 0
+    # 2026-11-01 自有仓三条不进 aux 的 alerts 列表(其他组) ——
+    #   它们由 ownHealth 专属块承载(看板「自有仓健康」卡), 再混进"其他告警"会双重计数且语义相悖
+    _OWN_AT = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
     for r in _ar:
         at = r.get("alert_type") or ""
+        if at in _OWN_AT:
+            continue
         if at == "low_stock":
             if _ls_c < 100 and str(r.get("warehouse_type") or "") in _wh_types:
                 alerts.append(r)

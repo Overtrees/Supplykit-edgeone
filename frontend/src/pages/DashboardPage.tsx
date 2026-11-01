@@ -307,9 +307,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }, [channel, _replMode])
   const procTotal = procList.length
   // 其他告警(规则引擎非低库存类: 超卖/濒临断货/健康/滞销/自定义) —— 可点开明细, 不再只有计数
+  // 2026-11-01 排除自有仓三条: 它们有专属卡「自有仓健康」承载, 若再进"其他告警"
+  //   会双重计数(pendingTotal 里同一批货算两次), 且语义不同(供给侧 vs 销售侧)。
+  const _OWN_TYPES = ['own_transfer_gap', 'own_overstock', 'own_expiry_risk']
   const byType: Record<string, number> = (alertCounts && alertCounts.by_type) || {}
   const otherTotal = Object.entries(byType)
-    .filter(([k]) => !['low_stock', 'replenish', 'purchase_need'].includes(k))
+    .filter(([k]) => !['low_stock', 'replenish', 'purchase_need'].concat(_OWN_TYPES).includes(k))
     .reduce((sum, [, v]) => sum + (v || 0), 0)
   useEffect(() => {
     const seq = ++reqSeq.current
