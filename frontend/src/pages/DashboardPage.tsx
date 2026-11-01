@@ -707,6 +707,23 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const errCount = (qualityLogs || []).length
   const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
   const lowStockAlerts = alertsList.filter(x => x.alert_type === 'low_stock')
+  // 2026-11-01 卡面按 SKU 去重 —— 用户反馈"明细呢?"。
+  //   实测: 同一 SKU(番茄酱987)在 5 个仓各有一条 low_stock 告警, 接口按 id DESC 返回时
+  //   前 5 条全是它, 卡上 5 行看起来一模一样(标题只差"可售 0 / 1", 副行全一样),
+  //   视觉上等于"没有明细"。同一 SKU 卡面只留 1 条(取最小可售/最严重的), 其余进弹窗。
+  //   弹窗仍展示全部, 不丢数据。
+  const lowStockShown = (() => {
+    const seen = new Set<string>()
+    const out: typeof lowStockAlerts = []
+    for (const x of lowStockAlerts) {
+      const k = x.related_sku || x.id
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push(x)
+      if (out.length >= 5) break
+    }
+    return out
+  })()
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
   // 列表每组各取 200 条，总数可能远大于此，filter 计数会系统性漏报
   const _acSev: Record<string, number> = (alertCounts && alertCounts.by_severity) || {}
@@ -1690,28 +1707,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             {t('dash.low_stock')}
             {lowStockTotal > 0 ? ` (${fmtInt(lowStockTotal)})` : ''}
           </div>
-          {/* 空态判据必须是 lowStockTotal(后端精确 COUNT)而非 lowStockAlerts.length ——
-              `/api/alerts` 各分组按 id DESC LIMIT 200 截断, 低库存真实 160 条时每组都满额,
-              列表里混进大量其它类型, filter 出来的 low_stock 可能为 0 → 卡上只剩「更多 N」没有明细,
-              刷新后分组配额变化又冒出几行 → 表现为"一会渲染一会不渲染"。 */}
+          {/* 2026-11-01 去掉"共 N 条，点击查看全部"降级分支 —— 用户反馈"明细呢?"。
+              实测接口按分组各 LIMIT 200 返回, low_stock 能拿到满 200 条, 明细一直都在,
+              之前看到空白是瞬时态(登录后 alerts 未到时)被误判成"列表里没有", 不该用提示顶替明细。
+              空态只保留 lowStockTotal === 0 一种。 */}
           {lowStockTotal === 0 ? (
             <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
               {t('dash.no_alerts')}
             </div>
-          ) : lowStockAlerts.length === 0 ? (
-            // 有计数但截断列表里没抓到 low_stock 行: 直接降级为「查看全部」入口, 不留白
-            <div
-              onClick={() => {
-                loadFullAlerts()
-                setShowAllLowStock(true)
-              }}
-              className="clickable small muted"
-              style={{ padding: '10px 0', textAlign: 'center', cursor: 'pointer' }}
-            >
-              共 {fmtInt(lowStockTotal)} 条，点击查看全部
-            </div>
           ) : (
-            lowStockAlerts.slice(0, 5).map(x => (
+            lowStockShown.map(x => (
               <div
                 key={x.id}
                 onClick={() => onAlert && onAlert(x.related_sku, x.warehouse_type, x.warehouse)}
@@ -1741,7 +1746,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                       minWidth: 0,
                     }}
                   >
-                    {x.title}
+                    {x.related_sku || x.title}
                   </span>
                   <span
                     className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')}
@@ -1760,18 +1765,22 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     marginTop: 2,
                   }}
                 >
+                  {/* 副行必须带仓库 —— 告警是"SKU×仓"粒度, 不带仓库时同一 SKU 多仓
+                      的几行副行完全一样, 用户看到的仍是"重复的明细" */}
+                  {x.warehouse ? x.warehouse + ' · ' : ''}
                   {x.description}
                 </div>
               </div>
             ))
           )}
-          {lowStockTotal > 5 && (
+          {/* 更多 N 以"卡上已展示条数"为基准, 不再写死 5 —— lowStockShown 可能不足 5 条 */}
+          {lowStockTotal > lowStockShown.length && (
             <div
               onClick={() => {
                 loadFullAlerts()
                 setShowAllLowStock(true)
               }}
-              aria-label={`还有 ${lowStockTotal - 5} 条`}
+              aria-label={`还有 ${lowStockTotal - lowStockShown.length} 条`}
               className="clickable pill info"
               style={{
                 cursor: 'pointer',
@@ -1783,7 +1792,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 width: 'fit-content',
               }}
             >
-              更多 {fmtInt(lowStockTotal - 5)}
+              更多 {fmtInt(lowStockTotal - lowStockShown.length)}
             </div>
           )}
         </div>

@@ -144,12 +144,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
   }
   shown.length = Math.min(shown.length, 5)
 
-  const SUMMARY = [
-    { k: '调拨缺口', n: d.transferGap, c: 'var(--danger)', t: 'own_transfer_gap' },
-    { k: '效期', n: d.expiryRisk, c: 'var(--danger)', t: 'own_expiry_risk' },
-    { k: '积压', n: d.overstock, c: 'var(--warning)', t: 'own_overstock' },
-  ]
-
   return (
     <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
       <div className="section-title">
@@ -163,37 +157,10 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
         </div>
       ) : (
         <>
-          {/* 汇总行: 三类的计数 —— 点击进全量弹窗(用户定: 不做按类筛选)
-              2026-11-01 去掉右侧「自有仓不产生销售，不适用低库存口径」: 口径说明属实现注释,
-              不该占卡面; 且「待处理」总览卡第三行已有「● 低库存 N」计数, 用户已能对上账。 */}
-          <div
-            onClick={onShowAll}
-            className="clickable"
-            style={{
-              display: 'flex',
-              gap: 10,
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              padding: '2px 0 6px',
-              cursor: 'pointer',
-              lineHeight: 1.2,
-            }}
-          >
-            {SUMMARY.map(s => (
-              <span
-                key={s.k}
-                style={{
-                  fontSize: 'var(--font-10)',
-                  fontWeight: 600,
-                  color: s.n > 0 ? s.c : 'var(--muted2)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {s.n > 0 ? '● ' : ''}
-                {s.k} {fmtInt(s.n)}
-              </span>
-            ))}
-          </div>
+          {/* 2026-11-01 汇总计数行已整行移除(用户: "这行也要去除")。
+              理由: 三类计数在 .section-title 的总数 (N) 之外属重复信息, 且每行行首 pill
+              已标类型、右侧已带度量, 卡面不需要再复述一遍分类小计。
+              标题 (N) 即总量, 类型分布看 5 行明细或「更多」弹窗。 */}
 
           {shown.map((x, i) => {
             const m = TYPE_META[x.alert_type] || {
