@@ -51,6 +51,8 @@ const PROD_FIELDS = [
   { t: 'weight', l: '箱重/KG', tp: 'number' },
   { t: 'volume', l: '体积/方', tp: 'number' },
   { t: 'status', l: '状态', tp: 'string' },
+  // 2026-11-01 是否做效期管理(三态: 是/否; 必填): 决定后续出入库按效期精确扣减还是按到货顺序扣减
+  { t: 'expiry_managed', l: '是否做效期管理', tp: 'string' },
 ]
 const SYS_FIELDS = [
   { t: 'order_no', l: '订单号', tp: 'string' },
@@ -168,6 +170,10 @@ const ALIAS = {
   规格: 'spec',
   分类: 'category',
   商品分类: 'category',
+  是否做效期管理: 'expiry_managed',
+  是否效期管理: 'expiry_managed',
+  效期管理: 'expiry_managed',
+  是否管理效期: 'expiry_managed',
 }
 
 // 各导入类型专属字段集(下拉按类型过滤, 避免订单页出现库存/出入库无关字段)
@@ -299,7 +305,8 @@ export const PRESET_REQUIRED: Record<string, string[]> = {
   inventory: ['sku', 'warehouse'],
   platform_inv: ['sku', 'warehouse', 'available_qty'],
   inventory_b: ['sku', 'warehouse', 'available_qty'],
-  product: ['sku', 'product_name'],
+  // 2026-11-01 效期管理标记必填(缺失则出入库无法判断扣减口径; 拦截在前端, 后端只写入)
+  product: ['sku', 'product_name', 'expiry_managed'],
   supplier: ['supplier_code', 'supplier_name'],
   // 2026-10-29 仓库必选(为多自有仓准备); 效期(prod_date/exp_date)可选——部分品类不做效期管理
   inbound: ['sku', 'quantity', 'inbound_date', 'warehouse', 'warehouse_type'],
@@ -317,7 +324,7 @@ const PRESET_EXAMPLE: Record<string, Record<string, string>> = {
   inventory: { sku: 'SKU-0001-J', warehouse: '华东C仓', available_qty: '100' },
   platform_inv: { sku: 'SKU-0001-J', warehouse: '京东仓', available_qty: '100' },
   inventory_b: { sku: 'SKU-0001-J', warehouse: 'B仓', available_qty: '100' },
-  product: { sku: 'SKU-0001-J', product_name: '示例商品' },
+  product: { sku: 'SKU-0001-J', product_name: '示例商品', expiry_managed: '是' },
   supplier: { supplier_code: 'SUP-001', supplier_name: '示例供应商' },
   inbound: { sku: 'SKU-0001-J', quantity: '50', inbound_date: '2026-10-22' },
   outbound: { sku: 'SKU-0001-J', quantity: '10', outbound_date: '2026-10-22' },
@@ -777,6 +784,21 @@ export default function CleansingPage() {
         const hasSku = Object.values(mp || {}).some(m => m && (m.target === 'sku' || m.t === 'sku'))
         if (!hasSku) {
           toast.error('导入订单必须映射「SKU/商品编号」列（写入唯一键），否则整批订单将被跳过')
+          setBs('')
+          execLock.current = false
+          return
+        }
+      }
+      // 2026-11-01 商品必填: 是否做效期管理(决定后续出入库扣减口径: 是=精确+FEFO,
+      //   否=按到货顺序 FIFO 且批次不带日期)。拦截在前端、后端只写入(DEVELOPMENT §15.53)
+      if (tt === 'product') {
+        const hasExp = Object.values(mp || {}).some(
+          m => m && (m.target === 'expiry_managed' || m.t === 'expiry_managed'),
+        )
+        if (!hasExp) {
+          toast.error(
+            '导入商品必须映射「是否做效期管理」列（填 是/否），否则后续出入库无法判断按效期扣减还是按到货顺序扣减',
+          )
           setBs('')
           execLock.current = false
           return
@@ -1313,7 +1335,9 @@ export default function CleansingPage() {
           </div>
           {cols.map(c => {
             const matched = ALIAS[c.name]
-            const sf = SYS_FIELDS.find(x => x.t === matched)
+            const sf =
+              (TARGET_FIELDS[tt] || []).find(x => x.t === matched) ||
+              SYS_FIELDS.find(x => x.t === matched)
             // 统计每个目标被几个来源列映射
             const targetCounts = {}
             for (const [, cfg] of Object.entries(mp)) {
@@ -1357,7 +1381,10 @@ export default function CleansingPage() {
                   </span>
                   {mp[c.name]?.target ? (
                     (() => {
+                      // 2026-11-01 显示文案优先取该导入类型的字段集(TARGET_FIELDS[tt]),
+                      //   原只看 SYS_FIELDS → 类型专属新列(如 expiry_managed)已映射却不显示目标名
                       const sf2 =
+                        (TARGET_FIELDS[tt] || []).find(x => x.t === mp[c.name].target) ||
                         SYS_FIELDS.find(x => x.t === mp[c.name].target) ||
                         cf.find(x => x.t === mp[c.name].target)
                       return sf2 ? (

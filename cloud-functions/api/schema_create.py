@@ -61,6 +61,9 @@ _TABLES = {
         "category VARCHAR(64) DEFAULT '', price DECIMAL(12,2) DEFAULT 0, box_qty INT DEFAULT 0, "
         "unit VARCHAR(16) DEFAULT '', status VARCHAR(16) DEFAULT 'active', "
         "weight DECIMAL(10,2) DEFAULT 0, volume DECIMAL(10,4) DEFAULT 0, best_before VARCHAR(32) DEFAULT '', "
+        # 2026-11-01 是否做效期管理(三态): 'yes' 走精确扣减+FEFO; 'no' 走入库序 FIFO 且批次不带日期;
+        #   '' 未标注 → 出入库/库存导入直接拒绝(不猜)。值由导入端"是/否"归一化。
+        "expiry_managed VARCHAR(8) DEFAULT '', "
         "supplier_code VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
         "UNIQUE KEY uq_products_sku (sku), KEY idx_products_ch (channel))"
@@ -406,6 +409,8 @@ def create_all_tables():
             "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
                                  ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
             "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
+            # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
+            "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''")],
             # 2026-10-29 批次四维绑定(仓型+SKU+69码+批次信息): 补 barcode
             "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
             # 2026-10-29 日销按 69码 精准绑定(用户定案: 补货也按码):
@@ -427,4 +432,15 @@ def create_all_tables():
                         try_err('schema', '%s.%s 补列失败' % (_t, _c), _e)
     except Exception as e:
         try_err('schema', '补列自愈降级', e)
+    # 2026-11-01 效期管理标记存量推导(一次性, migration_log 幂等):
+    #   有批次行或 best_before 已填 → 视为"做效期管理"; 其余保持 ''(待标注, 导入时强制补)。
+    #   **不默认全 yes** —— 会把不做效期的老货误判; **不默认 no** —— 会废掉现有批次。
+    try:
+        if execute("INSERT IGNORE INTO migration_log(name) VALUES('products_expiry_managed_v1')"):
+            _n_em = execute("UPDATE products SET expiry_managed='yes' "
+                            "WHERE COALESCE(expiry_managed,'')='' AND ("
+                            "  COALESCE(best_before,'')<>'' OR sku IN (SELECT sku FROM batches))")
+            try_err('schema', '效期管理标记推导完成: %d 个 SKU 标 yes' % int(_n_em or 0), '')
+    except Exception as _eem:
+        try_err('schema', '效期管理标记推导降级', _eem)
     return ok_n

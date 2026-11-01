@@ -7,7 +7,8 @@ from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["products"])
 
-_FIELDS = "id, sku, barcode, product_name, brand, store, category, price, box_qty, unit, status, channel, weight, volume, best_before, deleted_at, ext_json"
+_FIELDS = ("id, sku, barcode, product_name, brand, store, category, price, box_qty, unit, status, "
+           "channel, weight, volume, best_before, expiry_managed, deleted_at, ext_json")
 
 
 @router.get("/products")

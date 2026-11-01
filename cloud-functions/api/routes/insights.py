@@ -145,7 +145,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                 "SELECT b.sku AS sku, b.barcode AS barcode, b.prod_date AS pd, b.exp_date AS ed, cc.cnt AS cnt FROM ("
                 "SELECT sku, COALESCE(barcode,'') AS barcode, prod_date, exp_date, "
                 "ROW_NUMBER() OVER (PARTITION BY sku, COALESCE(barcode,'') ORDER BY exp_date ASC) AS rn "
-                "FROM batches WHERE channel=%s AND warehouse_type=%s AND exp_date IS NOT NULL "
+                # 2026-11-01 空日期批次(batches.exp_date DEFAULT '')必须排除:
+                #   IS NOT NULL 放不过空串 → 不做效期管理的 SKU 会取到 '' 当成"最近效期"
+                "FROM batches WHERE channel=%s AND warehouse_type=%s AND COALESCE(exp_date,'')<>'' "
                 "AND sku IN (" + _ph + ")) b "
                 "JOIN (SELECT sku, COALESCE(barcode,'') AS barcode, COUNT(*) AS cnt FROM batches "
                 "WHERE channel=%s AND warehouse_type=%s AND sku IN (" + _ph + ") "

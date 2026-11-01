@@ -889,6 +889,25 @@ try:
     _alloc(_pa, {("2026-08-01", "2026-11-01"): 20}, 0)
     _alloc(_pb, {("2026-08-01", "2026-11-01"): 30}, 0)
     check("批次: 多仓同批号各扣各的", _pa[0]["quantity"] == 80 and _pb[0]["quantity"] == 70, (_pa, _pb))
+
+    # 2026-11-01 不做效期管理(expiry_managed=no): 按到货顺序 FIFO, 不看效期
+    #   池顺序 = 到货顺序; 故意让"先到的"效期更晚 → FEFO 会扣第二条, FIFO 必须扣第一条
+    _p = [{"quantity": 10, "prod_date": "2026-08-01", "exp_date": "2027-06-01"},
+          {"quantity": 10, "prod_date": "2026-09-01", "exp_date": "2026-12-01"}]
+    _ov, _he, _hf, _mk = _alloc(_p, {}, 10, mode="fifo")
+    check("批次: 不做效期按到货序 FIFO(不按效期)",
+          _p[0]["quantity"] == 0 and _p[1]["quantity"] == 10, _p)
+    # 不做效期时即使出库填了批次, 也忽略批次(不产生未命中告警)
+    _p = [{"quantity": 10, "prod_date": "2026-08-01", "exp_date": "2027-06-01"}]
+    _ov, _he, _hf, _mk = _alloc(_p, {("2026-01-01", "2026-02-01"): 8}, 0, mode="fifo")
+    check("批次: 不做效期忽略批次日期且无未命中",
+          _p[0]["quantity"] == 2 and _he == 0 and _mk == [] and _hf == 8, (_p, _he, _mk, _hf))
+
+    # 是否做效期管理取值归一(是/否 → yes/no; 无法识别 → ?)
+    from routes.cleanse_write import _norm_expiry as _ne
+    check("效期标记: 是/否归一",
+          _ne("是") == "yes" and _ne("否") == "no" and _ne("Y") == "yes" and _ne("0") == "no"
+          and _ne("") == "" and _ne("待定") == "?", (_ne("是"), _ne("否"), _ne("待定")))
 except Exception as _e3:
     check("批次分配用例无异常", False, str(_e3)[:200])
 

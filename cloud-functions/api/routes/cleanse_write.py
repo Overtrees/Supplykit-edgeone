@@ -8,6 +8,26 @@ from db import query, one, execute, executemany
 from routes.common import try_err, TARGET_WH as _TARGET_WH
 
 
+# ── 是否做效期管理(2026-11-01)─────────────────────────────────────────────
+# 三态: 'yes' 做效期(精确扣减+FEFO) / 'no' 不做(到货序 FIFO, 批次不带日期) / '' 未标注
+# 职责边界(DEVELOPMENT §15.53): 必填拦截在前端(映射校验), 后端只做写入——
+#   故此处仅做**值归一化**(是/否→yes/no)与非法值留痕, 不做整批拒绝。
+_EXPIRY_YES = {"yes", "y", "是", "有", "true", "1", "做", "需要", "做效期管理"}
+_EXPIRY_NO = {"no", "n", "否", "无", "false", "0", "不做", "不需要", "不做效期管理"}
+
+
+def _norm_expiry(v):
+    """是/否 → 'yes'/'no'; 空 → ''; 无法识别 → '?'(调用方留痕)"""
+    s = str(v if v is not None else "").strip().lower()
+    if not s:
+        return ""
+    if s in _EXPIRY_YES:
+        return "yes"
+    if s in _EXPIRY_NO:
+        return "no"
+    return "?"
+
+
 
 def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed):
     """接力导入最后一步: 库存联动 + 规则评估 + 汇总消息(与原 execute-async 同步版同逻辑)"""
@@ -156,23 +176,32 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
             try_err('cleansing', '静默降级', _e)
     return adjusted, evaluated, _msg
 
-def _allocate_to_batches(pool, exact_need, nobatch_need):
+def _allocate_to_batches(pool, exact_need, nobatch_need, mode="fefo"):
     """在批次行池上分配出库量(2026-11-01 期初/无批次扣减修复)
 
     背景: 旧实现只做 ① 精确匹配, 期初行(无日期)与未填批次出库都进不了匹配键
       → 期初永不扣减、无批次出库只告警不扣 → Σ批次 恒大于可用, 对账常年告警。
-    现改为"精确优先 + FEFO 降级", 保证任何数据形态下 Σ批次 ≡ 可用:
-      ① 精确: 出库批次 (pd, ed) 与批次行一致 → 直接扣该行;
-      ② 降级: ①扣不完的余量 + 未填批次的出库 → 按 FEFO 从剩余量继续扣。
+    现改为"精确优先 + 降级", 保证任何数据形态下 Σ批次 ≡ 可用:
+      ① 精确(仅 fefo): 出库批次 (pd, ed) 与批次行一致 → 直接扣该行;
+      ② 降级: ①扣不完的余量 + 未填批次的出库 → 从剩余量继续扣。
          FEFO 序 = 期初批次(无日期, 视为最早库存) → exp_date 升序(空排最后)
                    → prod_date 升序 → 原始顺序。
          降级扣减**同时告警**, 不静默: 扣减是为了账平, 告警是为了让人知道批次数据有缺。
+
+    2026-11-01 新增 mode="fifo"(不做效期管理的商品): 忽略批次日期, 按池原始顺序
+      (= 期初 → 入库 id 升序, 即真实先入先出)扣减。原 FEFO 把空效期排到最后,
+      对不做效期的 SKU 等价于"永不先出", 会让无批次货长期滞留成僵尸批次。
 
     pool: [{quantity, prod_date, exp_date, _opening?}], 原地扣减
     返回: (超卖量, 精确命中量, 降级命中量, 精确未命中的批次键列表)
     """
     left = {k: int(v) for k, v in (exact_need or {}).items() if int(v or 0) > 0}
     hit_exact = 0
+    _exact_total = sum(left.values())
+    if mode == "fifo":
+        # 不做效期管理: 批次无意义, 精确量并入"降级量"统一按到货顺序扣, 不产生告警
+        left = {}
+        nobatch_need = int(nobatch_need or 0) + _exact_total
     # ① 精确匹配: 同 (prod_date, exp_date)
     for r in pool:
         if not left:
@@ -194,13 +223,16 @@ def _allocate_to_batches(pool, exact_need, nobatch_need):
     miss_keys = [k for k, v in left.items() if v > 0]
     rest = sum(v for v in left.values() if v > 0) + max(0, int(nobatch_need or 0))
     hit_fallback = 0
-    # ② FEFO 降级
+    # ② 降级: fifo=原序(期初→入库 id 升序), fefo=效期升序(空排最后)
     if rest > 0 and pool:
-        order = sorted(range(len(pool)), key=lambda i: (
-            0 if pool[i].get("_opening") else 1,
-            str(pool[i].get("exp_date") or "") or "9999-12-31",
-            str(pool[i].get("prod_date") or "") or "9999-12-31",
-            i))
+        if mode == "fifo":
+            order = list(range(len(pool)))
+        else:
+            order = sorted(range(len(pool)), key=lambda i: (
+                0 if pool[i].get("_opening") else 1,
+                str(pool[i].get("exp_date") or "") or "9999-12-31",
+                str(pool[i].get("prod_date") or "") or "9999-12-31",
+                i))
         for i in order:
             if rest <= 0:
                 break
@@ -235,6 +267,7 @@ def _rebuild_own_batches(channel, skus):
     _miss = []          # 未填批次的出库量 [(sku, 仓, qty)] —— 已按 FEFO 扣, 仅告警
     _miss_exact = []    # 填了批次但该批次无对应入库 [(sku, 仓, [(pd,ed)], qty)] —— 已按 FEFO 扣, 仅告警
     _oversold = []      # 出库 > 期初+入库 [(sku, 仓, 超出量)] —— 批次扣到 0, 需补流水
+    _unlabeled = set()  # 未标注"是否做效期管理"的 SKU(历史数据; 暂按做效期处理并告警)
     for i in range(0, len(skus), 100):
         batch_skus = [x for x in skus[i:i + 100] if x]
         if not batch_skus:
@@ -291,6 +324,12 @@ def _rebuild_own_batches(channel, skus):
                       [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _wt_map[(str(_r1.get("sku") or ""), str(_r1.get("warehouse") or ""))] = str(
                 _r1.get("warehouse_type") or SELF_WAREHOUSE_TYPES[0])
+        # 2026-11-01 是否做效期管理(按 SKU 取, products.sku 全局唯一)
+        #   'no' → 批次不参与效期排序, 出库按到货顺序 FIFO 扣; 'yes'/'空' → 精确+FEFO
+        _em_map = {}
+        for _r2 in _q("SELECT sku, COALESCE(expiry_managed,'') AS em FROM products "
+                      "WHERE sku IN (%s)" % ph, batch_skus):
+            _em_map[str(_r2.get("sku") or "")] = str(_r2.get("em") or "")
         # 按 (sku, barcode, warehouse) 分组入库明细
         # 69码规则: 有值则精准归组; 无值则保持无码(不反推/不猜测归属)
         by_key = {}
@@ -314,23 +353,34 @@ def _rebuild_own_batches(channel, skus):
             _pool.extend(rows)
             _exact = outs_exact.get((sk, bc, wh)) or {}
             _nb = outs_noexp.get((sk, bc, wh), 0)
-            _over, _hit_e, _hit_f, _miss_keys = _allocate_to_batches(_pool, _exact, _nb)
-            if _miss_keys:
-                _miss_exact.append((sk, wh, _miss_keys,
-                                    sum(int(_exact.get(k) or 0) for k in _miss_keys)))
-            if _nb > 0:
-                _miss.append((sk, wh, _nb))
+            _expm = _em_map.get(sk, "")   # 注意: 本函数内 _em 是 executemany 别名
+            if _expm == "":
+                _unlabeled.add(sk)
+            if _expm == "no":
+                # 不做效期管理: 出库量(无论是否填批次)全部按到货顺序 FIFO 扣;
+                #   不产生"未填批次/批次无对应入库"告警(该品类本就没有批次概念)
+                _all_out = sum(int(v or 0) for v in _exact.values()) + _nb
+                _over, _hit_e, _hit_f, _miss_keys = _allocate_to_batches(
+                    _pool, {}, _all_out, mode="fifo")
+            else:
+                _over, _hit_e, _hit_f, _miss_keys = _allocate_to_batches(_pool, _exact, _nb)
+                if _miss_keys:
+                    _miss_exact.append((sk, wh, _miss_keys,
+                                        sum(int(_exact.get(k) or 0) for k in _miss_keys)))
+                if _nb > 0:
+                    _miss.append((sk, wh, _nb))
             if _over > 0:
                 _oversold.append((sk, wh, _over))
-            # ③ 生成本次剩余批次
+            # ③ 生成本次剩余批次(不做效期的 SKU 批次不带日期 —— 下游效期预警/临期自动跳过)
             for r in _pool:
                 qty = int(r.get("quantity") or 0)
                 if qty > 0:
                     _insert_rows.append({"sku": sk, "barcode": bc, "warehouse": wh,
                                          "warehouse_type": _wt_map.get((sk, wh), SELF_WAREHOUSE_TYPES[0]),
                                          "channel": channel,
-                                         "prod_date": str(r.get("prod_date") or "")[:10],
-                                         "exp_date": str(r.get("exp_date") or "")[:10], "qty": qty})
+                                         "prod_date": "" if _expm == "no" else str(r.get("prod_date") or "")[:10],
+                                         "exp_date": "" if _expm == "no" else str(r.get("exp_date") or "")[:10],
+                                         "qty": qty})
             _del_keys.append((sk, bc, wh))
         if not _del_keys:
             continue
@@ -388,6 +438,16 @@ def _rebuild_own_batches(channel, skus):
                               "(例 sku=%s 仓=%s 超出=%d 件) "
                               "—— 批次已扣至 0, 可用同步截断为 0; 请补录入库或核对出库数据"
                               % (channel, len(_oversold), _tot, _s0[0], _s0[1] or "-", _s0[2])))
+        except Exception:
+            pass
+    if _unlabeled:
+        try:
+            _ul = sorted(_unlabeled)
+            try_err('cleansing', '商品未标注是否做效期管理',
+                    Exception("渠道 %s 有 %d 个 SKU 未填「是否做效期管理」(例 sku=%s) "
+                              "—— 本次暂按'做效期'处理(精确扣减+FEFO); "
+                              "请在商品导入补齐该列(是/否)后重新导入, 否则不做效期的货会被按效期排序误扣"
+                              % (channel, len(_ul), _ul[0])))
         except Exception:
             pass
     return done
@@ -664,9 +724,28 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
                                      "beginning_stock", "month_inbound", "month_outbound"])
     if target == "product":
+        # 2026-11-01 效期管理标记归一(是/否 → yes/no); 非法值留痕并留空,
+        #   不阻断写入(拦截在前端, 见 DEVELOPMENT §15.53)
+        _bad_exp = []
+        for it in cleaned:
+            _v = _norm_expiry(it.get("expiry_managed"))
+            if _v == "?":
+                _bad_exp.append(str(it.get("sku") or ""))
+                it["expiry_managed"] = ""
+            else:
+                it["expiry_managed"] = _v
+        if _bad_exp:
+            try:
+                try_err('cleansing', '商品效期标记取值非法',
+                        Exception("渠道 %s 有 %d 行「是否做效期管理」取值无法识别(例 sku=%s), 已留空 "
+                                  "—— 仅接受 是/否; 留空期间出入库将按'做效期'处理并告警"
+                                  % (channel, len(_bad_exp), _bad_exp[0])))
+            except Exception:
+                pass
         return _write_batch("products",
                             ["sku", "product_name", "barcode", "store", "category", "price",
-                             "box_qty", "unit", "status", "channel", "brand", "weight", "volume"],
+                             "box_qty", "unit", "status", "channel", "brand", "weight", "volume",
+                             "expiry_managed"],
                             cleaned, conflict_mode, "sku", channel=channel,
                             agg_key3="barcode", agg_overwrite=True)  # 同 SKU+69码 覆盖末行档案
     if target == "supplier":

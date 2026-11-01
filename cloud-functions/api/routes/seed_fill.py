@@ -112,10 +112,13 @@ def _seed_products_suppliers(skus_data):
                               'category': p['cat'], 'price': p['price'], 'box_qty': p['box'],
                               'barcode': p['barcode'], 'weight': p['weight'], 'volume': p['volume'],
                               'status': p['status'], 'channel': ch, 'supplier_code': _sup_code,
-                              'brand': _brand, 'unit': '瓶'})
+                              'brand': _brand, 'unit': '瓶',
+                              # 2026-11-01 是否做效期管理: 家清/日化(home)不做, 食品/零食做
+                              #   —— 让两种扣减口径(FEFO / 到货序 FIFO)都有真实数据可验证
+                              'expiry_managed': 'no' if _g == 'home' else 'yes'})
     for i in range(0, len(prod_rows), 500):
         cols = list(prod_rows[0].keys())
-        executemany("INSERT INTO products(%s) VALUES(%s) ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), price=VALUES(price), brand=VALUES(brand), status='active'" %
+        executemany("INSERT INTO products(%s) VALUES(%s) ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), price=VALUES(price), brand=VALUES(brand), status='active', expiry_managed=VALUES(expiry_managed)" %
                     (", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))),
                     [tuple(p[c] for c in cols) for p in prod_rows[i:i + 500]])
     sup_rows = []
@@ -321,8 +324,10 @@ def _seed_batches():
     rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 平台仓批次按 sku×仓
                  "WHERE available_qty > 0 AND warehouse_type NOT IN ('own')")
     _pcat = {}
-    for r in query("SELECT sku, category, channel FROM products"):
+    _pem = {}
+    for r in query("SELECT sku, category, channel, COALESCE(expiry_managed,'') AS expiry_managed FROM products"):
         _pcat[(str(r.get('sku')), str(r.get('channel') or 'jd'))] = str(r.get('category') or '')
+        _pem[(str(r.get('sku')), str(r.get('channel') or 'jd'))] = str(r.get('expiry_managed') or '')
     problem = set()
     _all = sorted({(str(r.get('sku')), str(r.get('channel') or 'jd')) for r in rows})
     for idx, (s, c) in enumerate(_all):
@@ -360,11 +365,14 @@ def _seed_batches():
                 _ago = random.randint(2, max(shelf // 3 - 6, 5))
             prod = today - timedelta(days=_ago)
             exp = prod + timedelta(days=shelf)
+            _no_exp = _pem.get((sku, ch)) == 'no'
             bdata.append({'sku': sku, 'barcode': str(bc_map.get((sku, wh), '') or ''),
                           'warehouse': wh, 'warehouse_type': wht, 'channel': ch,
-                          'prod_date': prod.strftime('%Y-%m-%d'), 'exp_date': exp.strftime('%Y-%m-%d'),
+                          # 不做效期管理 → 批次无日期(效期预警/临期建议自动跳过)
+                          'prod_date': '' if _no_exp else prod.strftime('%Y-%m-%d'),
+                          'exp_date': '' if _no_exp else exp.strftime('%Y-%m-%d'),
                           'qty': bq})
-            if sku not in best_map or exp < best_map[sku]:
+            if not _no_exp and (sku not in best_map or exp < best_map[sku]):
                 best_map[sku] = exp
     for i in range(0, len(bdata), 500):
         cols = ['sku', 'barcode', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
@@ -396,7 +404,10 @@ def _seed_batches():
                 "  SELECT sku, MIN(exp_date) AS e FROM batches "
                 "  WHERE channel IN ('jd','other') AND COALESCE(exp_date,'')<>'' GROUP BY sku"
                 ") b ON b.sku=p.sku SET p.best_before=b.e "
-                "WHERE COALESCE(p.best_before,'')<>b.e")
+                "WHERE COALESCE(p.expiry_managed,'')<>'no' AND COALESCE(p.best_before,'')<>b.e")
+        # 不做效期管理的 SKU: 清空 best_before(否则旧值残留, 临期建议会误判)
+        execute("UPDATE products SET best_before='' WHERE COALESCE(expiry_managed,'')='no' "
+                "AND COALESCE(best_before,'')<>''")
     except Exception as _ebf:
         try_err('seed_fill', 'best_before 回写降级', _ebf)
     return len(bdata)
@@ -438,8 +449,13 @@ def _seed_records():
     _food_kw = ['酱油', '酱', '醋', '油', '酒', '糖', '蜂', '咖', '粉',
                 '薯', '坚果', '饼干', '巧克力', '糖果', '麻辣', '椒']
     in_rows, out_rows = [], []
-    for sku, sk_name, ch in [(r.get('sku'), r.get('product_name'), r.get('channel'))
-                             for r in query("SELECT sku, product_name, channel FROM products")]:
+    # 2026-11-01 按是否做效期管理分流: 'no' 的 SKU 流水不写 prod_date/exp_date,
+    #   批次重建走"到货序 FIFO", 效期预警/临期建议自然跳过(无日期)
+    for sku, sk_name, ch, _em in [(r.get('sku'), r.get('product_name'), r.get('channel'),
+                                   str(r.get('expiry_managed') or 'yes'))
+                                  for r in query("SELECT sku, product_name, channel, "
+                                                 "COALESCE(expiry_managed,'') AS expiry_managed "
+                                                 "FROM products")]:
         _ck = (str(sku or ''), str(ch or 'jd'))
         _pool = _batch_pool.get(_ck, [])
         if not _pool:
@@ -479,8 +495,10 @@ def _seed_records():
                 in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
                                 'supplier': '供应商-%s' % str(sku or '')[-3:],
                                 'inbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
-                                'channel': ch, 'prod_date': _b['pd'], 'exp_date': _b['ed'],
-                                'warehouse': _whm['wh'], 'barcode': _whm['bc']})
+                                'channel': ch, 'warehouse': _whm['wh'], 'barcode': _whm['bc'],
+                                # 不做效期管理 → 不落批次日期(重建走 FIFO, 不产生批次告警)
+                                'prod_date': '' if _em == 'no' else _b['pd'],
+                                'exp_date': '' if _em == 'no' else _b['ed']})
             # 出库: 先定目标出库率(55%~70%), 再按 2~4 笔分摊到批次;
             # 单笔上限 80%(原 60%×最多2笔 → 出库率仅 12%, 库存虚高、补货建议失真)
             _total_in = sum(b['left'] for b in plan)
@@ -504,8 +522,9 @@ def _seed_records():
                 out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
                                  'target_warehouse': 'B仓',
                                  'outbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
-                                 'channel': ch, 'prod_date': _b['pd'], 'exp_date': _b['ed'],
-                                 'warehouse': _whm['wh'], 'barcode': _whm['bc']})
+                                 'channel': ch, 'warehouse': _whm['wh'], 'barcode': _whm['bc'],
+                                 'prod_date': '' if _em == 'no' else _b['pd'],
+                                 'exp_date': '' if _em == 'no' else _b['ed']})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
                                   ('outbound_records', out_rows, 'outbound_date')):
         for i in range(0, len(rows), 500):
