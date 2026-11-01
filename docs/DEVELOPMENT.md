@@ -2058,3 +2058,50 @@ GitHub Actions 的 schedule 在免费额度下会被**限流跳过**: 实测 11-
 
 > 注意: 该测试文件里 `_db.query` 被 `fake_query` 替换,涉及"查真实库"的断言不可靠,
 > 本条改用**静态校验 seed 源码**。
+
+### 15.104 自有仓小卡按 UI_DESIGN 重构 + 规则页汉化补全(2026-11-01)
+
+#### 一、小卡初版偏离规范 6 处(已逐条对齐 `docs/UI_DESIGN.md` §二)
+
+| # | 偏离 | 规范依据 | 后果 |
+|---|---|---|---|
+| 1 | 卡内塞 3 行明细 + 「更多」pill | 小卡是"数字主角/语义状态行/紧凑分区", 明细属大卡 | `aspect-ratio:1` + `padding:16` + `minmax(140px)` 下内容区仅 ~108px; 大数字(28)+副行+计数行已占 ~62, 再加 3 行明细**必然溢出裁切** |
+| 2 | 大数字用 `var(--font-xl)` 固定值 | `clamp(17px, 8cqi, 28px)` + `tabular-nums` | 窄卡/横屏不流体, 与 GMV 卡不同规格 |
+| 3 | 用 `pill` 当明细行首标签 | `pill` 语义是状态(启用/停用); 明细行首用 `font-9` + 色点 `●` | 视觉重量压过大数字, 与断货卡三级计数不同构 |
+| 4 | 「更多」pill 在内容流末尾 | 底部只靠 `padding:16` 兜底, 无差异化 margin | 底部留白取 pill 下沿而非 16 → **4 卡底部几何不一致** |
+| 5 | 空态用 `'✓'` 文本字符 | §十一 emoji/文本字符已迁移 SVG | 图标不成体系 |
+| 6 | `toLocaleString()` 计数 | §十四 计数**不加千分位逗号**, 窄屏 ≥1万/宽屏 ≥10万转万 | `1,513` vs `1513`; 超 5 位挤爆 |
+
+**决策记录**: 明细不是"删掉", 而是**全部收进「更多」弹窗**(Sheet)。小卡只留两级:
+大数字(总项数) + 语义计数行(调拨缺口/效期/积压, 0 值走灰色保持行位稳定)。
+
+**实测验收**(线上 390×844 视口, `dploa92swv28`):
+```
+卡片尺寸 173x173 (正方形)
+文案: 自有仓健康 | ● 严重 55 | 90 | 项待处置 | ● 调拨缺口 9 | ● 效期 46 | ● 积压 35
+scrollHeight <= clientHeight  → 无溢出
+5 张小卡 [名称, 高, 末块底距]:
+  [('上月 GMV',173,16), ('Pending',173,16), ('库存Health',173,16),
+   ('濒临断货预警',173,16), ('自有仓健康',173,16)]   ← 底部几何全 16, 一致
+大数字字号 17px (= clamp 下限; (173-32)×8cqi≈11.3 被下限抬起, 与其余卡一致)
+```
+
+#### 二、规则页未汉化字段(用户反馈"新增的规则出现未汉化的字段")
+
+穷举扫描三条链路后定位到 **2 类 23 项**:
+
+| 类 | 根因 | 表现 |
+|---|---|---|
+| 模板变量 | `VARS` 缺 `sellable` | 内置低库存规则模板 `可售 {sellable} < 动态安全线 {safety}` 直接渲染英文 `sellable` |
+| 条件右侧参数 | `fieldLbl` 只查 `LF`(字段清单), `params.xxx` 不在其中 → 回落原字符串 | `own.gap > params.transfer_gap_min` 显示成 `params.transfer_gap_min` |
+
+修法:
+- `VARS` 补 `sellable: '可售量'`
+- `VARS` 补全 **22 个参数键**中文名(`b_to_c_days`/`c_safety_days`/`ship_to_b_days`/`safety_multiplier`/
+  `turnover_warning_15`/`turnover_warning_90`/`lead_time_days`/`purchase_lead_days`/`purchase_safety_days`/
+  `moq`/`max_turnover_days`/`otif_min`/`ss_z`/`sigma_days`/`accel_ratio`/`accel_min_qty`/`buffer_orange`/
+  `buffer_yellow`/`orange_slack_days`/`include_avail_zero`/`health_good`/`log`/`alert_enabled`)
+- `fieldLbl` 遇到 `params.` 前缀时回落查 `VARS`
+
+**判据**: "凡参数表单里能填的键, 必须在 `VARS` 有中文名" —— 否则"可视化可配置"在列表回显上打折。
+扫描脚本口径: `seed_fill.py` 模板变量全集 ∪ `params.*` 引用 ∪ `{ k: 'xxx' }` 表单键, 全部 ⊆ `VARS.keys()`。
