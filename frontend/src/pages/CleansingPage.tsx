@@ -1396,6 +1396,17 @@ export default function CleansingPage() {
             }}
           >
             <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>列映射</span>
+            {/* 2026-11-01 缺必选 pill(用户反馈: 必填只在"写入"时拦, 映射页全程静默)。
+                复用现有 pill danger, 不新增样式; 缺哪些列由 missingRequired 与写入硬拦同源 */}
+            {missingRequired(tt, mp).map(m => (
+              <span
+                key={m}
+                className="pill danger"
+                style={{ fontSize: 'var(--font-9)', padding: '1px 6px', minHeight: 'auto', lineHeight: '16px' }}
+              >
+                缺必选: {m}
+              </span>
+            ))}
             <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
               选择文件列对应的目标字段 · 未映射列导入时丢弃
             </span>
@@ -1445,7 +1456,10 @@ export default function CleansingPage() {
                           lineHeight: '16px',
                         }}
                       >
-                        未映射 · 导入时丢弃
+                        {/* 2026-11-01 建议目标是必选字段 → pill 文案升级为"必选"(复用同一 pill warning) */}
+                        {matched && (PRESET_REQUIRED[tt] || []).includes(matched)
+                          ? '未映射 · 必选'
+                          : '未映射 · 导入时丢弃'}
                       </span>
                     )}
                   </span>
@@ -1483,8 +1497,10 @@ export default function CleansingPage() {
                   >
                     <option value="">-- 不映射 --</option>
                     {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => (
+                      /* 2026-11-01 必选字段加"(必)"后缀——与下载模板表头同源口径(必/选) */
                       <option key={f.t} value={f.t}>
                         {f.l}
+                        {(PRESET_REQUIRED[tt] || []).includes(f.t) ? '(必)' : ''}
                       </option>
                     ))}
                     {cf
@@ -1541,25 +1557,16 @@ export default function CleansingPage() {
             )}
           </div>
           {reqMiss.length > 0 && (
-            <div
-              style={{
-                fontSize: 'var(--font-xs)',
-                color: 'var(--warning)',
-                background: 'rgba(245,158,11,0.08)',
-                border: '1px solid rgba(245,158,11,0.25)',
-                borderRadius: 'var(--radius-card)',
-                padding: '9px 12px',
-                marginBottom: 10,
-                display: 'flex',
-                gap: 6,
-                alignItems: 'flex-start',
-                lineHeight: 1.5,
-              }}
-            >
-              <IconWarning size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>
-                未映射必填列: <b>{reqMiss.join('、')}</b> —— 预览仅供检查数据,
-                点击「确认写入」会被拦截。请返回上一步补映射后再导入
+            /* 2026-11-01 复用现有 pill danger(与映射页同构), 不新造警示条样式 */
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+              <span
+                className="pill danger"
+                style={{ fontSize: 'var(--font-9)', padding: '2px 8px', minHeight: 'auto', lineHeight: '18px' }}
+              >
+                缺必选
+              </span>
+              <span className="small" style={{ color: 'var(--danger)' }}>
+                {reqMiss.join('、')} —— 可预览数据, 「确认写入」会被拦截, 请返回上一步补映射
               </span>
             </div>
           )}
