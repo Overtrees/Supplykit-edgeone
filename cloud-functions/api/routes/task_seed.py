@@ -151,4 +151,161 @@ async def seed_reset(request: Request):
         import traceback as _tb
         _log_task(task_id, "reset", "error", channel,
                   {"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]})
-        return fail("重置失败: %s" % str(e)[:200])# ── 导出任务 ──────────────────────────────────────────────────────────────
+        return fail("重置失败: %s" % str(e)[:200])
+
+
+# ── 单步运维口(2026-11-01) ──────────────────────────────────────────────────
+def _inv_fingerprint():
+    """inventory 指纹 —— 单步执行前后的不变量校验(比"算对了"更容易验证: 只要求没变)"""
+    r = one("SELECT COUNT(*) AS n_rows, COALESCE(SUM(available_qty),0) AS avail, "
+            "COALESCE(SUM(beginning_stock),0) AS bgn, "
+            "COALESCE(SUM(month_inbound),0) AS mi, COALESCE(SUM(month_outbound),0) AS mo "
+            "FROM inventory") or {}
+    return {"rows": int(r.get("n_rows") or 0), "available": int(r.get("avail") or 0),
+            "beginning": int(r.get("bgn") or 0),
+            "month_inbound": int(r.get("mi") or 0), "month_outbound": int(r.get("mo") or 0)}
+
+
+def _month_sum_diff(month_start):
+    """月汇总与当月流水不一致的库存行数(按 仓型×SKU×69码×仓×渠道 严格对齐)
+    改完应为 0; 若流水 warehouse_type 为空串 → 必然 >0, 让缺口显性化而非静默
+    """
+    _bad = 0
+    for table, date_col, col in (("inbound_records", "inbound_date", "month_inbound"),
+                                 ("outbound_records", "outbound_date", "month_outbound")):
+        r = one("SELECT COUNT(*) AS c FROM inventory i "
+                "LEFT JOIN (SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, channel, "
+                "                  SUM(quantity) AS q FROM `%s` WHERE `%s` >= %%s "
+                "           GROUP BY warehouse_type, sku, COALESCE(barcode,''), warehouse, channel) f "
+                "  ON f.sku=i.sku AND f.bc=COALESCE(i.barcode,'') AND f.warehouse=i.warehouse "
+                " AND f.channel=i.channel AND f.warehouse_type=i.warehouse_type "
+                "WHERE i.channel IN ('jd','other') AND i.`%s` <> COALESCE(f.q,0)"
+                % (table, date_col, col), [month_start]) or {}
+        _bad += int(r.get("c") or 0)
+    return _bad
+
+
+@router.post("/seed/step")
+@traced
+async def seed_step_run(request: Request):
+    """单步重跑(admin 运维端口): 只重算派生量 —— 不 reset、不重灌、不动前端
+
+    背景: /seed/fill 要求空库且从 step 0 全跑(实测 36.7 分钟), 只为验证一处派生逻辑
+      也要清空重来, RU 开销过大。此口让运维只重算指定步骤。
+
+    白名单: from_step ∈ {6,7,8}, 连续执行到 8
+      · [8]      只重算月汇总(最快, 前提: 流水已带 warehouse_type)
+      · [7,8]    重算自有仓可用 + 重建批次, 再重算月汇总
+      · [6,7,8]  重建流水(带仓型) + 重算可用 + 月汇总 —— 验证 _seed_records 新逻辑走这个
+      · 0-5 会写 products/orders/inventory(含期初), 单跑破坏期初/四维 → 拒绝
+      · 6 不可单独执行: 流水变了而可用未重算 → 可用与流水脱节, 反而破坏四维
+        (故强制连续到 8, 不接受 [6] 或 [6,7])
+      · 9 重建快照/物化(实测 456s, 超平台单请求时限) → 拒绝
+      · _seed_config 会 DELETE 并重写 replenishment_config/rules, 线上单跑会冲掉人工配置
+        → 不复用 seed_step(8), 只取其中的月汇总部分
+
+    四维保障(返回里直接给出证据):
+      · beginning_unchanged: 期初**任何情况下**都必须不变(铁律: 期初以导入为准)
+      · available_unchanged: 仅 [8] 时要求为 true(只许写 month_* 两列);
+        [7,8]/[6,7,8] 会按新流水重算可用, 允许变化, 由 month_diff 兜底验证自洽
+      · month_diff: 月汇总 vs 流水的偏差行数, 前后对比, 正常应为 0
+
+    调用:
+      curl -X POST <host>/api/seed/step -H 'X-Auth-Token: <admin>' -d '{"from_step":6}'
+    """
+    from routes.common import verify_token
+    if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
+        return fail("仅 admin 可用", 403)
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+        try_err('tasks', '静默降级', _e)
+    try:
+        from_step = int(d.get("from_step") or d.get("step") or 8)
+    except Exception:
+        return fail("from_step 必须是整数", 400)
+    if from_step not in (6, 7, 8):
+        return fail("from_step 只支持 6/7/8, 且必须连续执行到 8 —— "
+                    "6 重建流水 / 7 重算可用+批次 / 8 月汇总; "
+                    "0-5 会写期初, 6 单跑会让可用与流水脱节", 400)
+    from routes.seed_fill import _sync_inv_month
+    import time as _t
+    month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
+    _fixed = {}
+    # 可选: 就地回填流水仓型(seed 库专用, 幂等)
+    #   历史 seed 数据 inbound/outbound_records.warehouse_type 为空串(建表默认值, 生成时未写),
+    #   不修则新聚合(按真实仓型)匹配不到 inventory → 月汇总不更新。
+    #   业务定案见 seed_fill.py:427「出入库只属于自有仓」→ 空串视为 'own' 是**显式声明**,
+    #   不是代码兜底: 必须由调用方传 fix_flow_wh_type=true 才执行, 且仅对 demo 数据成立。
+    #   真实客户数据(可能存在 B 仓调拨流水)禁止使用, 应走导入端补仓型。
+    if bool(d.get("fix_flow_wh_type")):
+        for _tbl in ("inbound_records", "outbound_records"):
+            try:
+                _fixed[_tbl] = execute("UPDATE `%s` SET warehouse_type='own' "
+                                       "WHERE COALESCE(warehouse_type,'')=''" % _tbl)
+            except Exception as _ef:
+                _fixed[_tbl] = "error: %s" % str(_ef)[:120]
+    try:
+        _ta = _t.time()
+        before = _inv_fingerprint()
+        bad_before = _month_sum_diff(month_start)
+        _steps = []
+        # ── step 6: 重建出入库流水(带 warehouse_type) ──────────────────────
+        if from_step <= 6:
+            from routes.seed_fill import _seed_records
+            _t0 = _t.time()
+            _ib, _ob = _seed_records()
+            _steps.append({"step": 6, "name": "出入库流水重建",
+                           "elapsed_s": round(_t.time() - _t0, 1),
+                           "result": {"inbound": _ib, "outbound": _ob}})
+        # ── step 7: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
+        if from_step <= 7:
+            from routes.cleanse_write import _recalc_own_inventory as _rc
+            from routes.seed_fill import _seed_batches
+            _t0 = _t.time()
+            _nrc = 0
+            for _ch in ('jd', 'other'):
+                _sk = [r.get('sku') for r in query(
+                    "SELECT DISTINCT sku FROM inventory WHERE channel=%s AND warehouse_type='own'",
+                    [_ch])]
+                if _sk:
+                    _rc(_ch, [x for x in _sk if x])
+                    _nrc += len(_sk)
+            _nb = _seed_batches()
+            _steps.append({"step": 7, "name": "可用重算+批次重建",
+                           "elapsed_s": round(_t.time() - _t0, 1),
+                           "result": {"skus": _nrc, "batches": _nb}})
+        # ── step 8: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
+        _t0 = _t.time()
+        groups = _sync_inv_month()
+        _steps.append({"step": 8, "name": "月汇总重算",
+                       "elapsed_s": round(_t.time() - _t0, 1), "result": groups})
+        after = _inv_fingerprint()
+        bad_after = _month_sum_diff(month_start)
+        # 诊断: 流水仓型为空 → 聚合组匹配不到 inventory(不会写错值, 但月汇总不更新)
+        _empty_wt = int((one("SELECT COUNT(*) AS c FROM inbound_records "
+                             "WHERE COALESCE(warehouse_type,'')=''") or {}).get("c") or 0)
+        from routes.analysis_cache import invalidate_all
+        invalidate_all()   # 月汇总/可用变化 → 分析缓存即时失效
+        _hint = "ok"
+        if _empty_wt:
+            _hint = ("流水 warehouse_type 仍为空(%d 条) → 月汇总匹配不到库存行; "
+                     "用 from_step=6 重建流水, 或传 fix_flow_wh_type=true(仅 seed 库)" % _empty_wt)
+        elif bad_after:
+            _hint = "月汇总仍有 %d 行与流水不一致, 需排查库存行是否缺失或仓型不匹配" % bad_after
+        return ok({
+            "from_step": from_step, "to_step": 8,
+            "total_s": round(_t.time() - _ta, 1),
+            "steps": _steps,
+            "before": before, "after": after,
+            "beginning_unchanged": before["beginning"] == after["beginning"],
+            "available_unchanged": before["available"] == after["available"],
+            "month_diff": {"before": bad_before, "after": bad_after},
+            "flow_wh_type_empty": _empty_wt,
+            "flow_wh_type_fixed": _fixed,
+            "hint": _hint,
+        })
+    except Exception as e:
+        import traceback as _tb
+        return fail("单步执行失败: %s | %s" % (str(e)[:200], _tb.format_exc()[-400:]))

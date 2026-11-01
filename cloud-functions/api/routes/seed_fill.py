@@ -496,6 +496,9 @@ def _seed_records():
                                 'supplier': '供应商-%s' % str(sku or '')[-3:],
                                 'inbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
                                 'channel': ch, 'warehouse': _whm['wh'], 'barcode': _whm['bc'],
+                                # 2026-11-01 流水补仓型(原为空串): _sync_inv_month 按真实仓型
+                                #   聚合, 不再靠"UPDATE 写死 warehouse_type='own'"掩盖空值
+                                'warehouse_type': 'own',
                                 # 不做效期管理 → 不落批次日期(重建走 FIFO, 不产生批次告警)
                                 'prod_date': '' if _em == 'no' else _b['pd'],
                                 'exp_date': '' if _em == 'no' else _b['ed']})
@@ -523,6 +526,8 @@ def _seed_records():
                                  'target_warehouse': 'B仓',
                                  'outbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
                                  'channel': ch, 'warehouse': _whm['wh'], 'barcode': _whm['bc'],
+                                 # 2026-11-01 同入库: 流水落真实仓型, 供 _sync_inv_month 按码聚合
+                                 'warehouse_type': 'own',
                                  'prod_date': '' if _em == 'no' else _b['pd'],
                                  'exp_date': '' if _em == 'no' else _b['ed']})
     for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
@@ -536,21 +541,50 @@ def _seed_records():
 
 
 def _sync_inv_month():
-    """同步出入库记录到 inventory 月汇总 + 期初库存反推(与原版一致)"""
+    """同步出入库记录到 inventory 月汇总(仓型×SKU×69码×仓×渠道 聚合)
+
+    2026-11-01 三处修正(原实现只有 sku+warehouse+channel 三键, 且 UPDATE 缺 barcode):
+      · 聚合键补 warehouse_type / barcode
+        - 原 UPDATE ... WHERE sku=? AND warehouse=? AND channel=? AND warehouse_type='own'
+          没有 barcode 条件 → 同一 SKU 同仓多码时(inventory 本就按码拆行)会把**同一份
+          全量**写到每一行, 再经 insights.py:299 的 SUM() 汇总 → 当月入库/出库成倍放大
+        - 原写死 warehouse_type='own' → 掩盖了 inbound/outbound_records.warehouse_type
+          空串的缺口(seed 现已在 _seed_records 补写 'own')
+      · 逐行 execute(约 4000 次 RTT, 实测 step8 1366s) → executemany 批量
+      · 返回各列聚合组数, 供 /api/seed/step 运维口展示
+    说明: 流水仓型为空串时匹配不到 inventory(不会写错值, 也不会兜底猜), 表现为月汇总
+      不更新 —— 由 /api/seed/step 的前后对账把偏差显性暴露出来。
+    """
     month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
+    _stat = {}
     for table, date_col, target_col in (('inbound_records', 'inbound_date', 'month_inbound'),
                                         ('outbound_records', 'outbound_date', 'month_outbound')):
-        rows = query("SELECT sku, warehouse, channel, SUM(quantity) AS q FROM `%s` "
-                     "WHERE channel IN ('jd','other') AND `%s` >= %%s GROUP BY sku, warehouse, channel"
+        rows = query("SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, channel, "
+                     "SUM(quantity) AS q FROM `%s` "
+                     "WHERE channel IN ('jd','other') AND `%s` >= %%s "
+                     "GROUP BY warehouse_type, sku, COALESCE(barcode,''), warehouse, channel"
                      % (table, date_col), [month_start])
-        for r in rows:
-            try:
-                execute("UPDATE inventory SET `%s` = %%s WHERE sku=%%s AND warehouse=%%s "
-                        "AND channel=%%s AND warehouse_type='own'" % target_col,
-                        (int(r.get('q') or 0), str(r.get('sku')), str(r.get('warehouse') or ''),
-                         str(r.get('channel') or 'jd')))
-            except Exception as _e:
-                    try_err('seed_fill', '静默降级', _e)
+        _stat[target_col] = len(rows or [])
+        if not rows:
+            continue
+        _args = [(int(r.get('q') or 0), str(r.get('sku') or ''), str(r.get('bc') or ''),
+                  str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
+                  str(r.get('warehouse_type') or '')) for r in rows]
+        try:
+            executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s AND COALESCE(barcode,'')=%%s "
+                        "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args)
+        except Exception as _e:
+            try_err('seed_fill', '月汇总批量更新', _e)
+    # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
+    #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
+    #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**
+    #   · 删除 beginning_stock 覆盖
+    #   · 删除 month_inbound 负数兜底(同属自动修正, 违反"以导入为准")
+    # 2026-10-29 删除全部兜底(用户定案): 期初**以实际导入为准**, 不做任何反推或自动修正
+    #   · 原"期初为负则用 month_inbound/outbound 反推" → 已删除(会产生与流水矛盾的数据)
+    #   · 原"负期初归 0" → 一并删除(用户明确: 不要兜底; 负数应视为导入数据本身有问题,
+    #     由每日对账告警暴露, 而非静默改写)
+    return _stat
     # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
     #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
     #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**
@@ -718,9 +752,9 @@ def seed_step(step, today, skus_data):
         n = _seed_batches()
         return 8, {'batches': n}
     if step == 8:
-        _sync_inv_month()
+        _ms = _sync_inv_month()
         _seed_config()
-        return 9, {'config': 'ok'}
+        return 9, {'config': 'ok', 'inv_month': _ms}
     if step == 9:
         n_alert = _seed_alerts()
         n_snap = _build_snapshot()
