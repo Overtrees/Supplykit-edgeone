@@ -193,7 +193,11 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 marginTop: 0,
                 fontSize: 'var(--font-xs)',
                 color: 'var(--muted)',
-                lineHeight: 1.4,
+                // 2026-11-01: lineHeight 1.4 → 1.2 —— 166px 极窄卡(iPhone SE)内容区仅 134px,
+                //   本卡需 136px, 被 flex 收缩吃掉 1.87px → 末行底距 14.13 而非 16,
+                //   与其余 4 卡底部几何不一致(规范验收项 1)。压这一行行高省 2px 即可对齐,
+                //   不碰字号(规范禁止少行缩字号)、不碰 padding(规范禁止差异化 margin)。
+                lineHeight: 1.2,
               }}
             >
               项待处置
