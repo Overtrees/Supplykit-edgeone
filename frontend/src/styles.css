@@ -1238,11 +1238,27 @@ input[type='file'] {
   opacity: 0.7;
 }
 
-/* 响应式卡片网格 */
+/* 响应式卡片网格
+ * 2026-11-01 由 auto-fit 改**固定列数**。原 `repeat(auto-fit, minmax(140px, 1fr))` 的问题:
+ *   列数随宽度无限增加 → **屏幕越宽卡片反而越窄**(实测桌面 1440 只有 145.8px, 而平板 175px),
+ *   同时 `minmax` 下限 140 让卡内 3 行明细必然溢出(GMV 卡已在横屏实测 scrollH 157 > clientH 153)。
+ * 现按设备档位锁列数, 保证每档卡宽 >= 165px(3 行明细 + 大数字的实测下限):
+ *   手机竖(<600) 2 列 / 手机横屏与平板(600~1023) 4 列 / 桌面(>=1024) 5 列(对齐当前 5 张小卡一行)
+ */
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+@media (min-width: 600px) {
+  .card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  .card-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 /* 中卡（图表卡）— 手机横屏2列，宽屏自适应 */

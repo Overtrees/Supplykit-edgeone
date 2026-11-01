@@ -46,8 +46,14 @@ const fmtInt = (n?: number): string => {
   return String(v)
 }
 
+const TYPE_META: Record<string, { t: string; c: string }> = {
+  own_transfer_gap: { t: '调拨缺口', c: 'var(--danger)' },
+  own_expiry_risk: { t: '效期', c: 'var(--danger)' },
+  own_overstock: { t: '积压', c: 'var(--warning)' },
+}
+
 /**
- * 自有仓健康小卡(2026-11-01 新增; 同日晚按 docs/UI_DESIGN.md §二 重构)
+ * 自有仓健康小卡(2026-11-01 新增; 同日三轮对齐 docs/UI_DESIGN.md §二)
  *
  * 业务动因 —— 自有仓(集货仓)是供给侧, 不产生销售:
  *   daily_sales_snapshot 只记平台仓, 自有仓无销售行 → 逐仓日销 ds=0 →
@@ -56,20 +62,20 @@ const fmtInt = (n?: number): string => {
  *   用户明确这三类不能塞进「采购&补货」卡(那张卡答"哪些要补/要买", 积压/过期是"别买了"),
  *   故单独一张卡。
  *
- * ⚠️ 重构要点(初版严重偏离规范, 逐条对齐):
- *  1. **删掉卡内 3 行明细**。小卡是 `aspect-ratio:1` + padding 16, minmax 140px 下内容区仅
- *     ~108px: 大数字(28)+副行+计数行已占 ~62, 再塞 3 行明细+「更多」pill 必然溢出裁切。
- *     规范 §二 明确小卡是"数字主角/语义状态行/紧凑分区", 明细属于大卡(chart-row-3)。
- *     → 明细全部收进「更多」弹窗(Sheet), 小卡只留两级: 大数字 + 语义计数行。
- *  2. **大数字用 `.card-value` + clamp(17px,8cqi,28px) + tabular-nums**。原 `var(--font-xl)`
- *     是固定值, 窄卡/横屏不流体, 与 GMV 卡不同规格。
- *  3. **计数行 font-9 + 语义色 ● **(与断货卡三级计数同构)。原用 pill 标签当列表前缀,
- *     pill 语义是状态(启用/停用), 误用成行首标签, 且视觉重量压过大数字。
- *  4. **数字区 flex-end 贴底 + 底部无差异化 margin**(规范 §二"上松下紧"、16 兜底)。
- *     原「更多」pill 在内容流末尾, 使底部留白取 pill 下沿而非 16, 4 卡底部几何不一致。
- *  5. **空态 SVG 图标**(规范 §十一 禁 emoji)。原用 '✓' 文本字符。
- *  6. **计数项为 0 时保留位占位不显示**(规范 §二"空态显示灰色 0 保持行位稳定") ——
- *     这里三项恒显示: 0 值走 --muted2 灰, 避免卡内行数随数据跳动。
+ * 结构**与断货卡(RiskCard)完全同构** —— 用户要求两卡视觉整齐:
+ *   标题行(minHeight 14) → 大数字 clamp(17,8cqi,28) tabular-nums
+ *   → 副行 font-xs muted → 语义计数行 font-xs 600 色点 ● flex-wrap
+ *   → 3 行明细 font-9(色点 + 名称截断 + 右侧度量)
+ *
+ * ⚠️ 明细行为什么用 font-9 而不是文档写的 font-xs(12px):
+ *   实测 173px 卡(内容区 141px)里, 大数字 28 + 副行 17 + 计数行 14 ≈ 62px,
+ *   剩 79px 放 3 行; font-xs(12px×1.3=15.6/行 + 2px 间隔)= 51px → 边界可放,
+ *   但 12px 中文在 173px 卡里名称只剩 ~6 个字就被截断(断货卡同样问题)。
+ *   font-9(9px×1.3=11.7/行) → 约 39px, 留出余量且名称能显示 ~10 字。
+ *   断货卡线上实测即 font-9, 本卡与之对齐 —— **文档「明细行 font-xs」一条已过时, 以实测为准**。
+ *
+ * ⚠️ 排布前提: 本卡依赖 `.card-grid` **固定列数**(2026-11-01 改),
+ *   原 auto-fit minmax(140,1fr) 在桌面宽屏会把卡压到 145px → 3 行明细必溢出。
  */
 export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCardProps) {
   const d: OwnHealthData = data || {
@@ -81,6 +87,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
     critical: 0,
     warning: 0,
   }
+  const items = d.items || []
   const empty = !d.total
   // 三项恒渲染(0 值灰色), 保证行位稳定 —— 规范 §二「其他 0」同款处理
   const segs = [
@@ -111,20 +118,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
         >
           自有仓健康
         </div>
-        {/* 右上角严重数: 与「待处理」卡一致的 error 计数, 不重复列 warning */}
-        {d.critical > 0 && (
-          <span
-            style={{
-              fontSize: 'var(--font-9)',
-              fontWeight: 600,
-              color: 'var(--danger)',
-              lineHeight: 1.2,
-              flexShrink: 0,
-            }}
-          >
-            ● 严重 {fmtInt(d.critical)}
-          </span>
-        )}
       </div>
 
       {empty ? (
@@ -177,11 +170,10 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
             justifyContent: 'flex-end',
           }}
         >
-          {/* 大数字: 内容贴底(上松下紧) */}
+          {/* 数字区: 大数字 + 副行 + 语义计数行(三层, 与断货卡同构) */}
           <div style={{ marginTop: 4 }}>
             <div
               className="card-value"
-              onClick={onShowAll}
               style={{
                 fontSize: 'clamp(17px,8cqi,28px)',
                 fontWeight: 700,
@@ -189,7 +181,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 color: d.critical > 0 ? 'var(--danger)' : 'var(--warning)',
                 fontVariantNumeric: 'tabular-nums',
                 marginBottom: 1,
-                cursor: 'pointer',
               }}
             >
               {fmtInt(d.total)}
@@ -205,34 +196,117 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
             >
               项待处置
             </div>
+            <div
+              style={{
+                fontSize: 'var(--font-xs)',
+                display: 'flex',
+                gap: 6,
+                marginTop: 4,
+                flexWrap: 'wrap',
+                lineHeight: 1.2,
+              }}
+            >
+              {segs.map(s => (
+                <span
+                  key={s.k}
+                  onClick={function (e) {
+                    e.stopPropagation()
+                    onShowAll && onShowAll()
+                  }}
+                  className="clickable"
+                  style={{
+                    color: s.n > 0 ? s.c : 'var(--muted2)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {s.n > 0 ? '● ' : ''}
+                  {s.k} {fmtInt(s.n)}
+                </span>
+              ))}
+            </div>
           </div>
-          {/* 语义计数行: 三项恒占位(0 → 灰), 与断货卡三级计数同构; 点击进弹窗 */}
-          <div
-            onClick={onShowAll}
-            className="clickable"
-            style={{
-              display: 'flex',
-              gap: 6,
-              marginTop: 4,
-              flexWrap: 'wrap',
-              lineHeight: 1.2,
-              cursor: 'pointer',
-            }}
-          >
-            {segs.map(s => (
-              <span
-                key={s.k}
+          {/* 3 行明细(贴底, 与断货卡完全同规格: font-9 / lineHeight 1.3 / marginTop 2) */}
+          <div style={{ flexShrink: 0, paddingTop: 6 }}>
+            {items.slice(0, 3).map((x, i) => {
+              const m = TYPE_META[x.alert_type] || { t: '预警', c: 'var(--warning)' }
+              const metric =
+                x.alert_type === 'own_transfer_gap'
+                  ? '缺 ' + fmtInt(x.gap_qty)
+                  : x.alert_type === 'own_expiry_risk'
+                    ? x.days_to_expiry != null && x.days_to_expiry < 0
+                      ? '过期 ' + Math.abs(x.days_to_expiry) + '天'
+                      : '剩 ' + fmtInt(x.days_to_expiry ?? undefined) + '天'
+                    : '撑 ' + Math.round(Number(x.cover_days || 0)) + '天'
+              return (
+                <div
+                  key={x.alert_type + x.sku + i}
+                  title={(x.product_name || x.sku) + ' · ' + (x.description || '')}
+                  onClick={function () {
+                    onAlert && onAlert(x.sku, 'own', x.warehouse || '')
+                  }}
+                  className="clickable"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 'var(--font-9)',
+                    color: 'var(--muted2)',
+                    lineHeight: 1.3,
+                    marginTop: i === 0 ? 0 : 2,
+                    overflow: 'hidden',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ color: m.c, lineHeight: 1, flexShrink: 0 }}>●</span>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {x.product_name || x.sku}
+                  </span>
+                  {/* 右侧度量(对应断货卡的仓标签): 同规格 8px + --bg 底 + 4px 圆角 */}
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 8,
+                      fontWeight: 600,
+                      color: m.c,
+                      background: 'var(--bg)',
+                      padding: '0 4px',
+                      borderRadius: 4,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {metric}
+                  </span>
+                </div>
+              )
+            })}
+            {d.total > 3 && (
+              <div
+                onClick={onShowAll}
+                className="clickable pill info"
                 style={{
-                  fontSize: 'var(--font-9)',
-                  fontWeight: 600,
-                  color: s.n > 0 ? s.c : 'var(--muted2)',
-                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  fontSize: 'var(--font-10)',
+                  padding: '1px 8px',
+                  minHeight: 'auto',
+                  lineHeight: '16px',
+                  marginTop: 6,
+                  width: 'fit-content',
+                  display: 'inline-flex',
                 }}
               >
-                {s.n > 0 ? '● ' : ''}
-                {s.k} {fmtInt(s.n)}
-              </span>
-            ))}
+                更多 {fmtInt(d.total - 3)}
+              </div>
+            )}
           </div>
         </div>
       )}
