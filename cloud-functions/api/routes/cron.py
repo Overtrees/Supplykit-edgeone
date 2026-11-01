@@ -87,18 +87,23 @@ def continue_tasks():
 
 
 async def _authed(request: Request) -> bool:
-    """CRON_SECRET 校验。
+    """cron 鉴权(2026-11-01 定案: 定时任务迁回平台 schedules)。
 
-    2026-10-31 加固: 未配置 CRON_SECRET 时 return True(旧行为); 配置后接受两种携带方式——
-      (1) 请求头 X-Cron-Secret(人工/外部/CI 调用);
-      (2) POST body 中的 "_k" 字段(平台 schedules 触发)。
-    为什么需要第 (2) 种: EdgeOne schedules 的配置 schema 仅支持 name/cron/timezone/method/path/payload,
-    无法注入自定义请求头; 而 query(?k=) 会落 URL 与 access log, 已在上版废弃。payload 不进 URL, 是当前唯一可行通道。
-    两者均用 hmac.compare_digest 比较, 防 timing 侧信道。
+    EdgeOne schedules 的 schema 只有 name/cron/timezone/method/path/payload, **无法注入自定义请求头**;
+    官方文档确认 payload 不支持环境变量插值, 而 edgeone.json 进公开仓库 —— 用 payload 传密钥
+    等于把密钥公开(实测网关也不会为普通请求改写 Authorization, 故 q-sign 判据同样不可用)。
+
+    因此回到 security.md 既定的保留方案: **由平台签名(q-sign / 网关侧鉴权)作为保护层**,
+    应用层不再强校验密钥。两条通道仍然保留, 供人工/CI 显式调用时使用:
+      (1) X-Cron-Secret 头
+      (2) POST body 的 _k 字段
+    配置了 CRON_SECRET 时, 带正确密钥 → 放行; 不带 → 放行但**记一条审计日志**,
+    以便线上观察"无密钥调用"的频率(平台调度会持续产生, 外部扫描也会产生, 可据此发现异常量)。
+    如需回到强校验: 设 CRON_STRICT=1 即恢复"无密钥一律拒绝"(此时平台调度会失效, 慎用)。
     """
     secret = os.environ.get("CRON_SECRET", "")
     if not secret:
-        return True  # 未配置→保持旧行为(线上当前状态)
+        return True  # 未配置 → 放行(旧行为)
     import hmac as _hm
     h = request.headers.get("X-Cron-Secret", "")
     if h and _hm.compare_digest(h.encode(), secret.encode()):
@@ -111,7 +116,14 @@ async def _authed(request: Request) -> bool:
                 return True
     except Exception:
         pass
-    return False
+    # 无密钥调用: 默认放行(平台 schedules 通道), 严格模式直接拒
+    if str(os.environ.get("CRON_STRICT", "")) == "1":
+        return False
+    try:
+        _log("info", "cron 无密钥调用(平台调度通道): %s %s" % (request.method, request.url.path))
+    except Exception:
+        pass
+    return True
 
 
 def _log(level, message, source="cron"):

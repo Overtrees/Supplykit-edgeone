@@ -1878,3 +1878,50 @@ GitHub Actions 的 `daily-rules`(04:05 CST)被平台限流跳过, 也补不上�
 
 高度公式 `100svh - 176px - safe-top - max(20, safe-bottom)`, 上移 24 后改扣 **152**。
 **margin-top 与公式必须成对改**。横屏 media 内 `margin-top: 0` 还原, 步骤条/card padding 未动。
+
+### 15.101 定时任务迁回平台 schedules(2026-11-01 用户指示)
+
+#### 一、为什么迁回
+
+GitHub Actions 的 schedule 在免费额度下会被**限流跳过**: 实测 11-01 当天
+`daily-rules`(应 04:05 CST)一次都没执行, 14:40 之后连续 10 小时无任何 run。
+调度不可靠 → 低库存/告警长期停在旧快照。迁回 EdgeOne 平台 schedules。
+
+#### 二、配置(edgeone.json)
+
+10 条 schedules, 全部 `timezone: Asia/Shanghai`、`method: GET`:
+
+| 任务 | cron | 路径 |
+|---|---|---|
+| archive-orders | 5 1 * * * | /api/cron/archive |
+| cleanup-logs | 5 3 * * * | /api/cron/cleanup-logs |
+| snapshot-freshness | 10 3 * * * | /api/cron/freshness |
+| build-snapshot | 35 3 * * * | /api/cron/snapshot |
+| reconcile-sales | 10 4 * * * | /api/cron/reconcile |
+| **daily-rules** | **5 4 * * *** | /api/cron/daily-rules |
+| recycle-cleanup | 35 4 * * * | /api/cron/recycle |
+| continue-tasks | 5 5 * * * | /api/cron/continue-tasks |
+| push-alerts | 30 8 * * * | /api/cron/push-alerts |
+| schedule-ping | 55 13 * * * | /api/cron/ping |
+
+**三条硬约束(§15.29 踩过)**:
+1. `cloudFunctions` 必须保持运行时分组(`python.maxDuration`)—— 与顶层结构混写会丢全部函数路由;
+2. **method 必须显式写 GET**: 官方文档写默认 POST, 但平台实际以 GET 发起, 不写就 405 静默失败;
+3. **cron 最小间隔一天**, `*/5` 之类会导致路由丢失。
+
+`.github/workflows/cron.yml` 已删除(仅保留 preflight.yml)。
+
+#### 三、鉴权: 回到"平台签名保护", 应用层不强制密钥
+
+现状矛盾: 线上配了 `CRON_SECRET`, 但 EdgeOne schedules **无法注入自定义请求头**;
+官方文档确认 `payload` 不支持环境变量插值, 而 edgeone.json 进公开仓库 —— **用 payload
+传密钥等于把密钥公开**。另实测网关只对特定请求改写 `Authorization`, 普通 curl 拿不到
+`q-sign`, 所以"q-sign 判据"也不成立。
+
+定案(与 `docs/security.md` 保留方案一致):
+- 无密钥调用 **放行**, 并写一条 `cron 无密钥调用` 审计日志(平台调度会持续产生, 可按量发现异常);
+- 带 `X-Cron-Secret` / POST `_k` 且正确 → 直接放行;
+- 需要强校验时设环境变量 `CRON_STRICT=1` → 无密钥一律拒(**平台调度会同时失效**, 慎用)。
+
+**教训**: 「防滥用」和「调度可用」冲突时, 先确认平台能力边界再定方案 —— 不要为了保留密钥
+校验而牺牲调度, 也不要为了调度把密钥明文入库。
