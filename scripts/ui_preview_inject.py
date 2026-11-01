@@ -1,10 +1,10 @@
-"""§15.99 注入式一次核验: 预览页必填警示条 + 竖屏首帧可见 + 横屏按钮在视口内。
-只读预览 + 被硬拦的写入, 不产生任何数据残留。"""
+"""§15.99.1 注入式一次核验(线上): 必填未映射=持久toast+不跳转; 补映射后跳转+提示消失;
+竖屏 flex+svh 几何(回顶/不撑高/按钮在视口); 横屏回退 clamp。只读预览, 无写入。"""
 from playwright.sync_api import sync_playwright
 import json, sys
 
 HOST = "https://supplykit.top"
-CSV = "SKU,名称\nUI-TEST-999,注入验证专用商品\n"
+CSV = "SKU,名称,备注\nUI-TEST-999,注入验证专用商品,x\n"
 FAILS = []
 def check(name, cond, actual=None):
     print(("  PASS " if cond else "  FAIL ") + name + ("" if cond else "  → %s" % (actual,)))
@@ -12,24 +12,17 @@ def check(name, cond, actual=None):
 
 def geo(page):
     return page.evaluate("""() => {
-      const sc = document.querySelector('.clean-preview-scroll')
-      const act = document.querySelector('.clean-preview-actions')
-      const bar = [...document.querySelectorAll('.pill.danger')].find(d =>
-        d.textContent && d.textContent.includes('缺必选'))
-      const tb = document.querySelector('.clean-preview-scroll table, .clean-preview-scroll tbody')
-      const r = e => e ? JSON.parse(JSON.stringify(e.getBoundingClientRect())) : null
-      return { scroll: r(sc), actions: r(act), warnBar: r(bar), table: r(tb),
-        scrollY: window.scrollY, vh: window.innerHeight, vw: window.innerWidth,
-        docH: document.documentElement.scrollHeight }
+      const r = s => { const e=document.querySelector(s); return e?JSON.parse(JSON.stringify(e.getBoundingClientRect())):null }
+      return { vh: window.innerHeight, docH: document.documentElement.scrollHeight,
+        page: r('.clean-preview-page'), scroll: r('.clean-preview-scroll'),
+        actions: r('.clean-preview-actions'), scrollY: window.scrollY,
+        text: document.body.innerText }
     }""")
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True, args=["--no-sandbox"])
-    # 手机竖屏
     ctx = b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
     page = ctx.new_page()
-    toasts = []
-    page.on("console", lambda m: None)
     page.goto(HOST, wait_until="domcontentloaded"); page.wait_for_timeout(2500)
     page.fill("input[placeholder*='用户名']", "admin")
     page.fill("input[placeholder*='密码']", "admin123")
@@ -41,39 +34,45 @@ with sync_playwright() as p:
     page.wait_for_timeout(2000)
     assert "选择导入类型" in page.inner_text("body"), "未进入清洗页"
     page.select_option("select >> nth=1", value="product")
-    page.wait_for_timeout(600)
-    # 自研 Toast(fixed 定位普通 div), 用 innerText 抓取
-    def toasts_now():
-        return page.inner_text('body')
+    page.wait_for_timeout(500)
     page.set_input_files("input[type='file']", {"name": "ui_test.csv", "mimeType": "text/csv",
                                                 "buffer": CSV.encode("utf-8")})
     page.wait_for_timeout(2000)
+    # 下拉必选后缀(模板同源口径)
+    opts = page.eval_on_selector_all(".map-row >> nth=0 >> select >> option", "els=>els.map(e=>e.textContent)")
+    check("下拉含「是否做效期管理(必)」", any("效期管理(必)" in o for o in opts), opts[:8])
+    # 1) 未映射必填 → 点预览: 持久 toast + 不跳转
     page.click("button:has-text('下一步 · 预览')", timeout=6000)
-    page.wait_for_timeout(4500)
-    g = geo(page)
-    print("[竖屏 390x844]", json.dumps(g, ensure_ascii=False)[:500])
-    _tb = toasts_now()
-    print("预览页正文含预警:", "未映射必填列" in _tb)
-    check("必填预警 toast(效期管理)", "未映射必填列" in _tb and "效期管理" in _tb, _tb[:200])
-    check("警示条已渲染且可见", g["warnBar"] and g["warnBar"]["height"] > 10, g["warnBar"])
-    check("进预览回顶(不手动滚动即见内容)", g["scrollY"] == 0, g["scrollY"])
-    check("表格容器首帧可见(高>120)", g["scroll"] and g["scroll"]["height"] > 120, g["scroll"])
-    check("页面不被撑高(docH ≤ vh)", g["docH"] <= g["vh"] + 2, g["docH"])
-    check("写入按钮在视口内", g["actions"] and g["actions"]["bottom"] <= g["vh"] + 1, g["actions"])
-    # 点写入: 必须被通用硬拦(无任何写请求)
-    page.click("button:has-text('确认写入')", timeout=4000)
-    page.wait_for_timeout(900)
-    _tb2 = page.inner_text('body')
-    check("写入被硬拦 toast", "必须映射必填列" in _tb2, _tb2[:200])
-    # 横屏
-    page.set_viewport_size({"width": 844, "height": 390})
     page.wait_for_timeout(1200)
+    g = geo(page)
+    print("拦截toast全文片段:", [l for l in g["text"].split("\n") if "必填" in l])
+    check("不跳转(仍在映射页)", g["scroll"] is None)
+    check("持久toast出现", "未映射必填列" in g["text"] and "效期管理" in g["text"], g["text"][:200])
+    page.wait_for_timeout(4000)  # 普通 toast 3s 已消失; 持久必须还在
     g2 = geo(page)
-    print("[横屏 844x390]", json.dumps(g2, ensure_ascii=False)[:400])
-    check("横屏表格可见(高度>80)", g2["table"] and g2["table"]["height"] > 80, g2["table"])
-    check("横屏 docH ≈ vh(不被撑高→无 backdrop 采样遮挡)", g2["docH"] <= g2["vh"] + 2, g2["docH"])
-    check("横屏按钮在视口内", g2["actions"] and g2["actions"]["bottom"] <= g2["vh"] + 1, g2["actions"])
-    check("横屏仍在预览页(未误触发跳步)", g2["warnBar"] is not None)
-    page.screenshot(path="/tmp/inj_portrait.png")
+    check("toast 4s 后仍在(持久)", "未映射必填列" in g2["text"])
+    # 2) 补映射 → 再点预览: 跳转 + 提示消失
+    # 补齐必填映射: SKU→sku 名称→product_name 备注→expiry_managed(nth: 0渠道/1类型/2起映射行)
+    page.select_option(".map-row >> nth=0 >> select", value="sku")
+    page.select_option(".map-row >> nth=1 >> select", value="product_name")
+    page.select_option(".map-row >> nth=2 >> select", value="expiry_managed")
+    page.wait_for_timeout(500)
+    page.click("button:has-text('下一步 · 预览')", timeout=6000)
+    page.wait_for_timeout(4000)
+    g3 = geo(page)
+    check("跳转进入预览页", g3["scroll"] is not None)
+    check("toast 已消失(跳转即清)", "未映射必填列" not in g3["text"])
+    check("进预览回顶", g3["scrollY"] == 0, g3["scrollY"])
+    check("竖屏页面不撑高(docH ≤ vh)", g3["docH"] <= g3["vh"] + 2, "%s vs %s" % (g3["docH"], g3["vh"]))
+    check("竖屏写入按钮在视口内", g3["actions"] and g3["actions"]["bottom"] <= g3["vh"] + 1, g3["actions"])
+    check("竖屏表格容器可见(高>120)", g3["scroll"] and g3["scroll"]["height"] > 120, g3["scroll"])
+    page.screenshot(path="/tmp/inj2_port.png")
+    # 3) 横屏: 回退 clamp 行为
+    page.set_viewport_size({"width": 844, "height": 390}); page.wait_for_timeout(1200)
+    g4 = geo(page)
+    check("横屏表格容器限高生效(≤78dvh=304)", g4["scroll"] and g4["scroll"]["height"] <= 305, g4["scroll"])
+    check("横屏页面不撑高(docH ≤ vh+60 旧文档流行为)", g4["docH"] <= g4["vh"] + 60, "%s vs %s" % (g4["docH"], g4["vh"]))
+    page.screenshot(path="/tmp/inj2_land.png")
+    b.close()
     print("\nALL PASS" if not FAILS else "\nFAILED: %s" % FAILS)
     sys.exit(1 if FAILS else 0)
