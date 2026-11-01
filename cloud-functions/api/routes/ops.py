@@ -126,6 +126,11 @@ async def ops_snapshot_barcode(request: Request):
                 from biz.sales import _rebuild_sku_sales_stats
                 for _c2 in ([_ch] if _ch else ["jd", "other"]):
                     res.setdefault("sales_stats", {})[_c2] = _rebuild_sku_sales_stats(_c2, days=90)
+                # 2026-11-01 重建后必须失效聚合缓存: analysis_cache 存在 TiDB 表里、跨实例存活,
+                #   只重建表不清缓存 → 接口在 TTL 内继续返回旧切片(实测: 物化已是 1.071,
+                #   采购接口仍回 8.6 的合计值, 直到手动 invalidate_all 才对上)。
+                from routes.analysis_cache import invalidate_all
+                invalidate_all()
             except Exception as _e:
                 res["sales_stats_error"] = str(_e)[:200]
         return ok(res)

@@ -594,6 +594,13 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         _c = _o("SELECT COUNT(*) c FROM sku_sales_stats WHERE channel=%s", [channel]) or {}
         if int(_c.get("c") or 0) <= 0:
             _rebuild_sku_sales_stats(channel, 90)   # 2026-10-30 固定 90(原跟随调用方 days → 窗口不一致)
+            # 2026-11-01 自愈重建后失效聚合缓存: 表空期间可能已把"空结果"缓存进 analysis_cache(TiDB 表,
+            #   跨实例存活), 不失效会让消费方在 TTL 内继续读空 → 表现为"重建了但还是没数据"
+            try:
+                from routes.analysis_cache import invalidate_all as _inv
+                _inv()
+            except Exception as _einv:
+                try_err('sales', '自愈重建后缓存失效降级', _einv)
         where = "channel=%s"
         params = [channel]
         # 2026-10-29 按 69码: 不传 → 只读全码合计行(barcode='', 语义与改造前一致);
