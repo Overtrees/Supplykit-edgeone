@@ -655,7 +655,14 @@ export default function CleansingPage() {
         // 识别优先级: 用户自定义别名(历史手工映射记忆) → 系统精确 ALIAS → 归一化别名(英文/变体)
         // 目标必须属于当前导入类型字段集(避免订单页识别出库存/出入库无关字段)
         let key = customAlias[c.name] || ALIAS[c.name] || ALIAS_EXT[_nk(c.name)]
-        if (key && TARGET_TARGETS[tt] && !TARGET_TARGETS[tt].includes(key)) key = ''
+        if (key && TARGET_TARGETS[tt] && !TARGET_TARGETS[tt].includes(key)) {
+          // 2026-11-01 同一概念在不同导入类型里字段名不同: 「单价」订单=unit_price / 商品=price。
+          //   ALIAS 是全局表, 命中 unit_price 后被类型白名单清空 → 商品表的"单价"永远识别不出,
+          //   用户只能手工点。按显示名在同类型字段集里再找一次(必须 label 完全一致), 找不到才放弃。
+          const _lbl = (SYS_FIELDS.find(f => f.t === key) || {}).l
+          const _alt = _lbl && (TARGET_FIELDS[tt] || []).find(f => f.l === _lbl)
+          key = _alt ? _alt.t : ''
+        }
         if (key) a[c.name] = { target: key, type: 'string' }
       })
       // 以用户已选类型为锚点展示对应字段集; 仅当当前类型 0 命中(上次类型残留/选错)时,
