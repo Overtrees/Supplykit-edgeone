@@ -145,9 +145,9 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
   shown.length = Math.min(shown.length, 5)
 
   const SUMMARY = [
-    { k: '调拨缺口', n: d.transferGap, c: 'var(--danger)' },
-    { k: '效期', n: d.expiryRisk, c: 'var(--danger)' },
-    { k: '积压', n: d.overstock, c: 'var(--warning)' },
+    { k: '调拨缺口', n: d.transferGap, c: 'var(--danger)', t: 'own_transfer_gap' },
+    { k: '效期', n: d.expiryRisk, c: 'var(--danger)', t: 'own_expiry_risk' },
+    { k: '积压', n: d.overstock, c: 'var(--warning)', t: 'own_overstock' },
   ]
 
   return (
@@ -163,7 +163,9 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
         </div>
       ) : (
         <>
-          {/* 汇总行: 三类的计数与口径说明 —— 点击进全量弹窗(用户定: 不做按类筛选) */}
+          {/* 汇总行: 三类的计数 —— 点击进全量弹窗(用户定: 不做按类筛选)
+              2026-11-01 去掉右侧「自有仓不产生销售，不适用低库存口径」: 口径说明属实现注释,
+              不该占卡面; 且「待处理」总览卡第三行已有「● 低库存 N」计数, 用户已能对上账。 */}
           <div
             onClick={onShowAll}
             className="clickable"
@@ -191,12 +193,6 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 {s.k} {fmtInt(s.n)}
               </span>
             ))}
-            <span
-              className="small muted"
-              style={{ fontSize: 'var(--font-10)', marginLeft: 'auto', whiteSpace: 'nowrap' }}
-            >
-              自有仓不产生销售，不适用低库存口径
-            </span>
           </div>
 
           {shown.map((x, i) => {
@@ -281,6 +277,10 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                   {x.sku}
                   {x.warehouse ? ' · ' + x.warehouse : ''}
                   {mt.hint ? ' · ' + mt.hint : ''}
+                  {/* 副行补类型兜底: 行首 pill 在窄卡下可能被 ellipsis 吃掉, 副行再标一次 */}
+                  {x.alert_type === 'own_expiry_risk' && x.batch_no
+                    ? ' · 批次 ' + x.batch_no
+                    : ''}
                   {x.description ? ' · ' + String(x.description).slice(0, 40) : ''}
                 </div>
               </div>

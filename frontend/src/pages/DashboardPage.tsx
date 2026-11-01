@@ -1690,9 +1690,25 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             {t('dash.low_stock')}
             {lowStockTotal > 0 ? ` (${fmtInt(lowStockTotal)})` : ''}
           </div>
-          {lowStockAlerts.length === 0 ? (
+          {/* 空态判据必须是 lowStockTotal(后端精确 COUNT)而非 lowStockAlerts.length ——
+              `/api/alerts` 各分组按 id DESC LIMIT 200 截断, 低库存真实 160 条时每组都满额,
+              列表里混进大量其它类型, filter 出来的 low_stock 可能为 0 → 卡上只剩「更多 N」没有明细,
+              刷新后分组配额变化又冒出几行 → 表现为"一会渲染一会不渲染"。 */}
+          {lowStockTotal === 0 ? (
             <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
               {t('dash.no_alerts')}
+            </div>
+          ) : lowStockAlerts.length === 0 ? (
+            // 有计数但截断列表里没抓到 low_stock 行: 直接降级为「查看全部」入口, 不留白
+            <div
+              onClick={() => {
+                loadFullAlerts()
+                setShowAllLowStock(true)
+              }}
+              className="clickable small muted"
+              style={{ padding: '10px 0', textAlign: 'center', cursor: 'pointer' }}
+            >
+              共 {fmtInt(lowStockTotal)} 条，点击查看全部
             </div>
           ) : (
             lowStockAlerts.slice(0, 5).map(x => (
@@ -2128,18 +2144,23 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     own_expiry_risk: { tag: '效期', cls: 'danger', c: 'var(--danger)' },
                     own_overstock: { tag: '积压', cls: 'warning', c: 'var(--warning)' },
                   }
-                  const _ORD: Record<string, number> = {
-                    own_transfer_gap: 0,
-                    own_expiry_risk: 1,
-                    own_overstock: 2,
-                  }
-                  const all = (((ownHealth as OwnHealthData | null)?.items ||
-                    []) as OwnHealthItem[])
-                    .slice()
-                    .sort(function (a, b) {
-                      return (_ORD[a.alert_type] ?? 9) - (_ORD[b.alert_type] ?? 9)
+                  const _all = ((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[]
+                  // 2026-11-01 分类型配额(每类上限 20, 总数上限 60)——
+                  //   直接整体 sort 后 slice(0,60) 时, 缺口 9 条排在最前, 剩下 51 个名额
+                  //   全被"效期"吃掉, "积压" 35 条一条都进不来(实测弹窗只剩 积压 5)。
+                  //   改为三类各自排序后各取前 20 再拼回, 保证三类都可见。
+                  const _Q = 20
+                  const all = (['own_transfer_gap', 'own_expiry_risk', 'own_overstock'] as string[])
+                    .map(function (t) {
+                      return _all
+                        .filter(function (x) {
+                          return x.alert_type === t
+                        })
+                        .slice(0, _Q)
                     })
-                    .slice(0, 60)
+                    .reduce(function (a, b) {
+                      return a.concat(b)
+                    }, [])
                   return all.map(function (x, i) {
                     const m = _OWN_META[x.alert_type] || {
                       tag: '预警',
