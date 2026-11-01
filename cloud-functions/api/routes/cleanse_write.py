@@ -30,7 +30,15 @@ def _norm_expiry(v):
 
 
 def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed):
-    """接力导入最后一步: 库存联动 + 规则评估 + 汇总消息(与原 execute-async 同步版同逻辑)"""
+    """[已废弃 2026-11-01 · 勿调用 · 勿在此加逻辑] 旧版"导入最后一步"整包实现
+
+    2026-10-16 导入拆成两段后，实际链路是 cleansing.py 的:
+      · cleansing_status(done 步只写计数) 
+      · cleansing_eval_status(独立分片任务: 重算库存 / 重建批次 / 规则评估)
+    本函数自那以后**没有任何调用点**。代价已经出现过: §15.96 的"效期商品入库缺到期日"
+    提示写在这里面 —— 上线后从未显示过（用户零感知, 与"修了却没生效"等价）。
+    保留仅为对照 _adjust_inventory(增量制)的旧实现；新增逻辑一律写 cleansing.py。
+    """
     import time as _t
     adjusted = 0
     evaluated = 0
@@ -780,6 +788,30 @@ def _expiry_missing_count(channel, rows):
         return 0
     return sum(1 for r in rows if str(r.get("sku") or "").strip() in _yes
                and not str(r.get("exp_date") or "").strip())
+
+
+def _expiry_batch_gap(channel):
+    """自有仓: 做效期管理(expiry_managed='yes')但**没有一条带到期日批次**的库存行数
+
+    业务前提(2026-11-01 用户定案): 库存导入只提供【期初 + 在途】, 不提供批次;
+      批次只能由入库记录(含生产/到期日)产生。所以效期商品若只导了期初,
+      系统会生成"期初批次(有效期未知)", 临期预警/处置建议**天然覆盖不到这批货**。
+    为什么是提示而不是拦截: 期初本来就是历史库存, 有效期不可考; 拒写等于不让初始化。
+      但必须让人看见缺口 —— 否则"预警不准"永远查不到原因。
+    只看自有仓: 平台仓/B仓是平台导出快照, 不参与批次管理(用户定案)。
+    """
+    try:
+        r = one("SELECT COUNT(*) AS n FROM inventory i "
+                "JOIN products p ON p.sku=i.sku "
+                "WHERE i.channel=%s AND i.warehouse_type IN ('own') AND i.available_qty>0 "
+                "AND COALESCE(i.deleted_at,'')='' AND COALESCE(p.expiry_managed,'')='yes' "
+                "AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.channel=i.channel AND b.sku=i.sku "
+                "  AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'') AND b.warehouse=i.warehouse "
+                "  AND b.warehouse_type=i.warehouse_type AND COALESCE(b.exp_date,'')<>'')", [channel])
+        return int((r or {}).get("n") or 0)
+    except Exception as _e:
+        try_err('cleansing', '效期批次缺口统计降级', _e)
+        return 0
 
 
 def _write_rows(target, channel, conflict_mode, cleaned):

@@ -20,7 +20,7 @@ from fastapi import File
 from fastapi import Form
 
 from db import query, one, execute, executemany
-from routes.cleanse_write import _finalize_import, _adjust_inventory, _write_rows, _write_batch, _sync_batches
+from routes.cleanse_write import _adjust_inventory, _write_rows, _write_batch, _sync_batches
 from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["cleansing"])
@@ -623,6 +623,30 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                      "这些商品出入库将按「做效期」处理并告警" % _n_bad)
                 except Exception as _eexp:
                     try_err('cleansing', '效期标记值校验降级', _eexp)
+            # 2026-11-01 库存导入: 效期商品只有期初(无到期日批次) → 临期预警覆盖不到, 必须让人看见
+            #   判定依据是商品页 expiry_managed(用户定案), 只看自有仓(平台仓/B仓是平台快照, 无批次概念)
+            if target == "inventory":
+                try:
+                    from routes.cleanse_write import _expiry_batch_gap as _ebg
+                    _gap = _ebg(channel)
+                    if _gap:
+                        _exp_warn += (" · 注意: 自有仓有 %d 行效期管理商品当前没有带到期日的批次, "
+                                      "这部分库存不会进临期预警(批次只能由含生产/到期日的入库记录产生)"
+                                      % _gap)
+                except Exception as _eg:
+                    try_err('cleansing', '效期批次缺口提示降级', _eg)
+            # 2026-11-01 入库导入: 效期商品缺到期日 → 静默无批次
+            #   (该提示原写在 _finalize_import 里, 但那个函数自 2026-10-16 拆分成
+            #    cleansing_status + cleansing_eval_status 后**再未被调用** → 提示从未生效)
+            if target == "inbound":
+                try:
+                    from routes.cleanse_write import _expiry_missing_count as _emc
+                    _miss_n = _emc(channel, cleaned_all)
+                    if _miss_n:
+                        _exp_warn += (" · 注意: %d 行是效期管理商品但无到期日期, 未生成批次"
+                                      "(临期预警/处置建议会缺这批货)" % _miss_n)
+                except Exception as _ei:
+                    try_err('cleansing', '入库效期缺失提示降级', _ei)
             try_err('cleansing', 'done步 清洗耗时: %s' % round(_t.time() - _st0, 1))
             if target == "order":
                 try:
@@ -828,14 +852,20 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         #   原顺序: 取 inv_map → 评估 → 重算 → ctx.available_qty 是重算前旧值
         #   实证: 出库 800 后 own 仓 803→3, 但评估仍按 803 判定"库存充足" → 低库存不告警
         adjusted = 0
-        if str(params.get("target") or "") in ("inbound", "outbound"):
+        # 2026-11-01 库存导入也纳入重算(用户业务定案: 自有仓库存导入只提供【期初 + 在途】,
+        #   可用 = 期初 + Σ入库 − Σ出库 由系统算, **不采信文件里的可用值**)。
+        #   原条件只有 inbound/outbound → 库存导入写完 beginning_stock 后 available 长期不动,
+        #   要等下一次出入库导入才被修正; 期间库存页/看板/补货用的是旧可用值(静默错账)。
+        #   平台仓/B仓不在白名单: 它们是快照制(导入即权威), 重算会覆盖平台数据。
+        if str(params.get("target") or "") in ("inbound", "outbound", "inventory"):
             try:
                 from routes.cleanse_write import (
                     _ensure_inventory_rows as _eir0,
                     _recalc_own_inventory as _rc0,
                     _rebuild_own_batches as _rb0,
                 )
-                _eir0(channel, _cleaned)          # 仓库以导入表格为准(自动建档)
+                if str(params.get("target") or "") in ("inbound", "outbound"):
+                    _eir0(channel, _cleaned)      # 仓库以导入表格为准(自动建档)
                 adjusted = _rc0(channel, list(_batch))
                 _rb0(channel, list(_batch))
                 inv_map = {}                       # 刷新: 评估 ctx 必须用重算后的库存
