@@ -1521,3 +1521,82 @@ for (let attempt = 0; attempt <= 2; attempt += 1) {
 - 老客户商品表若没有这一列, 重新导入会被硬拦 —— 这是有意的 breaking, 因为"没填"无法推断
   扣减口径。补一列即可通过。
 - 修商品标注的代价 = 重导一次商品表(档案类是 upsert 覆盖末行, 幂等)。
+
+### 15.95 先本地直连、再部署确认(2026-11-01)
+
+#### 一、为什么不再"改完就推"
+
+| 方式 | 单次成本 | 限制 |
+|---|---|---|
+| 本地直连(进程内 TestClient) | 冷加载 ~40s + 单请求毫秒级 | 无 |
+| 推送到线上验证 | 2~2.5 分钟/次(推到 Prod=yes) | 云函数 **wall clock 120s 硬限**、request body 6MB |
+
+- 120s 是平台硬限(见 makers 云函数限制表), 不是配置项。step5 首次全量重算实测 >120s →
+  网关 504, 服务端其实跑完了, 但调用方拿不到结果。**这类"逻辑本身能过、只是超时"的验证,
+  本地做, 不要拿到线上试。**
+- 本地连的是 `.env` 里 `TIDB_DB` 指向的同一个库, 走的是同一个 `app`, 同一个路由、同一份
+  auth 校验 —— 不是"模拟层", 唯一差别是没有网关和冷启动。
+
+#### 二、命令
+
+```bash
+python3 scripts/local_api.py GET  /health
+python3 scripts/local_api.py POST /seed/step '{"from_step":7}'
+python3 scripts/local_api.py POST /ops/snapshot-barcode '{"dry_run":true}'
+```
+
+- 自动加载 `.env`、自动签 admin token, 无需手工 curl。
+- 冷加载 40s 是建表检查等一次性开销; 要连跑多个请求就写成同一进程里的脚本, 别反复启。
+- 只读校验可以直接 import 函数, 更快(实测四维+码自检 4.5s):
+
+```bash
+cd cloud-functions/api && python3 -c "
+from routes.seed_fill import _assert_barcode_aligned
+print(_assert_barcode_aligned())"
+```
+
+#### 三、本地测不到的, 才留给线上
+
+| 只能线上验 | 原因 |
+|---|---|
+| 前端构建产物/路由、CSS 改动 | 本地不跑 vite build |
+| 网关层 6MB body、120s 超时、冷启动 | 本地没有网关 |
+| 部署本身是否成功、跑的哪个 commit | 用 `scripts/deploy_status.py` |
+
+#### 四、推送失败的真实根因(2026-11-01 定案)
+
+**不是网络, 是"看起来没推上去"的误判。** 证据链:
+
+1. 分支从未设置 upstream → 只能手写 `git push origin HEAD:refs/heads/feat/edgeone`。
+2. **显式 refspec 推送不更新本地 `origin/*` 引用** → 推成功后 `git status` / `git branch -vv`
+   仍显示"领先 N 个提交" → 判定"又失败了" → 再推 → 仍显示落后 → 最后 `git reset` 重做提交。
+   reflog 里两次 `reset: moving to origin/feat/edgeone` 就是这么来的, 丢过一次提交。
+3. 反复中断的传输在 `.git/objects/pack/` 留下 `tmp_pack_*` 残留(实测两个, 共 24.4MB),
+   `git count-objects -vH` 会持续报 `garbage`。
+
+**根治(已落地)**:
+
+```bash
+git push -u origin feat/edgeone      # 建 upstream, 一次即可
+git config --global push.autoSetupRemote true   # 新分支裸 push 自动建 upstream
+git config --global fetch.prune true
+git config --global http.postBuffer 524288000
+git config --global http.lowSpeedLimit 1000
+git config --global http.lowSpeedTime 60        # 静默挂死 60s 就报错, 不无限等
+rm -f .git/objects/pack/tmp_pack_*              # 清残留
+```
+
+**判断推送结果不要看 `git status`, 看这两个**:
+
+```bash
+git fetch origin && git rev-list --left-right --count origin/<br>...HEAD   # 必须 0  0
+python3 scripts/deploy_status.py 2                                        # Commit==HEAD 且 Prod=yes
+```
+
+后者是唯一权威结论 —— 它直接问平台"生产上跑的是哪个 commit", 比任何本地状态都可靠。
+
+#### 五、凭证是两套, 别混
+
+沙箱里 `git` CLI 用 `/root/.git-credentials` 的 x-access-token; WorkBuddy 的 GitHub MCP
+用的是 MCP 自己的 OAuth 授权。**两者互不相通** —— MCP 授权成功不代表 `git push` 能用,
+反之亦然。CLI 报 401 就去查 `.git-credentials`, 不要去重新授权 MCP。
