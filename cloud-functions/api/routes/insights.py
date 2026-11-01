@@ -28,15 +28,20 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
                 search: str = "", days_threshold: int = 30):
     """滞销识别: 最后销售日距今 > threshold 且库存>0"""
     now = datetime.now(timezone.utc)
-    # 2026-10-29 按 69码: 分组含 barcode; 最后销售日按码取(无码则降级到 SKU 级)
+    # 2026-10-29 按 69码: 分组含 barcode; 最后销售日按码取
     # 2026-10-29 性能: 原为**相关子查询**(每个 (sku,69码) 组各扫一遍快照 —— 实测 10.5s)
-    #   → 改为两个预聚合 JOIN(各扫一次快照), 语义等价:
-    #     原逻辑 = max(该码组最后销售日, 空码合计组最后销售日) = GREATEST(精确组, 合计组)
+    #   → 改为两个预聚合 JOIN(各扫一次快照)
+    # 2026-11-01 修正 _ag(空码组)的适用范围: 原对所有行取 GREATEST(精确组, 空码组),
+    #   有码行会被"空码合计组"顶高 → 末销偏晚 → days_since_last 偏小 → **漏报滞销**。
+    #   补码上线后快照里已无空码组, 该分支对多数行退化为 NULL; 但历史未归码的数据仍在。
+    #   现改为: 有码行只认本码组; 无码行才用空码组合计兜底。
     rows = query(
         "SELECT i.sku AS sku, COALESCE(i.barcode,'') AS barcode, MAX(i.product_name) AS product_name, "
         "MAX(i.warehouse_type) AS warehouse_type, "
         "SUM(i.available_qty) AS available_qty, SUM(i.safety_qty) AS safety_qty, "
-        "MAX(GREATEST(COALESCE(_ex.d,''), COALESCE(_ag.d,''))) AS last_sale "
+        "MAX(CASE WHEN COALESCE(i.barcode,'')='' "
+        "         THEN GREATEST(COALESCE(_ex.d,''), COALESCE(_ag.d,'')) "
+        "         ELSE COALESCE(_ex.d,'') END) AS last_sale "
         "FROM inventory i "
         "LEFT JOIN (SELECT sku, channel, COALESCE(barcode,'') AS bc, "
         "           DATE_FORMAT(MAX(`date`),'%%Y-%%m-%%d') AS d FROM daily_sales_snapshot "
@@ -94,7 +99,11 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     sel = ("SELECT i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
            "i.safety_qty, i.product_name, i.month_inbound, i.month_outbound, i.beginning_stock, "
            "i.turnover_days, i.barcode, i.ext_json, p.brand, p.price, "
-           "(SELECT COUNT(*) FROM batches b WHERE b.sku=i.sku AND b.warehouse=i.warehouse AND b.channel=i.channel) AS batch_count "
+           # 2026-11-01 批次数按四维匹配: 原只带 sku/warehouse/channel → 同 SKU 同仓多码时
+           #   每个码行都数到全部批次(批次数虚高 N 倍), 且不隔离仓型。加 barcode + warehouse_type
+           "(SELECT COUNT(*) FROM batches b WHERE b.sku=i.sku AND b.warehouse=i.warehouse "
+           "AND b.channel=i.channel AND b.warehouse_type=i.warehouse_type "
+           "AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'')) AS batch_count "
            "FROM inventory i LEFT JOIN products p ON p.sku=i.sku AND p.channel=i.channel WHERE %s")
     if page > 0 and page_size > 0:
         rows = query((sel + " ORDER BY i.id ASC LIMIT %s OFFSET %s")
@@ -197,21 +206,25 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         except Exception as _e:
                 try_err('insights', '静默降级', _e)
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
-    # 2026-10-30 只对自有仓聚合: 平台仓/B 仓不产生出入库流水(实测 inbound/outbound 全部
-    #   warehouse_type='own'), 原无条件查询 → 每次白跑 2 次聚合(≈2 RU/27ms)
+    # 2026-11-01 聚合键补 69码 + 仓型: 原 GROUP BY sku,warehouse → 同 SKU 同仓两个码时,
+    #   两行库存各自拿到"两码合计", 经 SUM(month_inbound) 汇总后成倍放大; 且该值参与
+    #   beginning_stock = 可用 - 月入 + 月出 的反推 → 期初/周转/明细与底部合计同时错。
+    #   现在每行只取"本码 本仓"的流水; 流水仓型与库存不符时取不到 → 回退静态列(不猜)
     month_in, month_out = {}, {}
     if skus and wh_type == "own":
         _ph = ",".join(["%s"] * len(skus))
-        for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM inbound_records "
-                        "WHERE channel=%s AND inbound_date>=%s AND sku IN (" + _ph + ") "
-                        "GROUP BY sku, warehouse",
-                        [channel, month_start] + skus):
-            month_in[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
-        for _r in query("SELECT sku, warehouse, SUM(quantity) AS q FROM outbound_records "
-                        "WHERE channel=%s AND outbound_date>=%s AND sku IN (" + _ph + ") "
-                        "GROUP BY sku, warehouse",
-                        [channel, month_start] + skus):
-            month_out[(_r.get("sku"), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
+        for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
+                        "FROM inbound_records WHERE channel=%s AND inbound_date>=%s "
+                        "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
+                        "GROUP BY sku, COALESCE(barcode,''), warehouse",
+                        [channel, month_start, wh_type] + skus):
+            month_in[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
+        for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
+                        "FROM outbound_records WHERE channel=%s AND outbound_date>=%s "
+                        "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
+                        "GROUP BY sku, COALESCE(barcode,''), warehouse",
+                        [channel, month_start, wh_type] + skus):
+            month_out[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
     # 动态安全线周期(own→采购周期 / platform→补货周期按渠道默认模式)
     _cfg3 = {}
@@ -256,7 +269,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                 or _wh_ds.get("%s||%s" % (sku, _wh1), 0)
         avail = int(r.get("available_qty") or 0)
         transit = int(r.get("in_transit_qty") or 0)
-        _k = (sku, r.get("warehouse") or "")
+        _k = (sku, _bc1, _wh1)   # 2026-11-01 月进出按 四维(sku+69码+仓) 取, 不再按 sku+仓 取合计
         mi = month_in.get(_k)
         mo = month_out.get(_k)
         month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)

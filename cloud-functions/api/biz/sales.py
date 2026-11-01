@@ -140,7 +140,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None, with_bc_wh=False):
     if _in_chunks:
         for _ph, _chunk in _in_chunks:
             today_rows = query(
-                "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+                "SELECT sku, COALESCE(barcode,'') AS bc, warehouse, quantity, ordered_at, order_status FROM orders "
                 "WHERE channel=%s AND ordered_at>=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='')"
                 % ("%s", "%s", _ph),
                 [channel, today + " 00:00:00"] + _chunk)
@@ -151,7 +151,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None, with_bc_wh=False):
                      int(o.get("quantity") or 0), str(o.get("bc") or ""))
     else:
         today_rows = query(
-            "SELECT sku, warehouse, quantity, ordered_at, order_status FROM orders "
+            "SELECT sku, COALESCE(barcode,'') AS bc, warehouse, quantity, ordered_at, order_status FROM orders "
             "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='')",
             (channel, today + " 00:00:00"))
         for o in today_rows:

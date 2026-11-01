@@ -287,9 +287,11 @@ def run_daily_rules() -> dict:
                 "  COALESCE((SELECT SUM(b.qty) FROM batches b WHERE b.channel=i.channel "
                 "    AND b.sku=i.sku AND b.warehouse=i.warehouse "
                 "    AND b.warehouse_type=i.warehouse_type "
-                # 69码匹配: 有值→精准; 任一方为空→降级(少掉69码比较)
-                "    AND (COALESCE(i.barcode,'')='' OR COALESCE(b.barcode,'')='' "
-                "         OR COALESCE(b.barcode,'')=COALESCE(i.barcode,''))), 0) AS bq "
+                # 69码匹配: 必须严格相等(2026-11-01 收紧)
+                #   原为 "任一方为空 → 降级匹配", 属双向通配: 库存行有码 + 批次无码时,
+                #   会匹配上该仓**所有码**的批次, 偏差被别的码抵消 → 与本节"四维逐一、不能
+                #   抵消"的初衷自相矛盾, 等于给错配开了后门。空码只能匹配空码。
+                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,''))), 0) AS bq "
                 "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
                 "HAVING ABS(qty - bq) > 1" % _ph,
                 [_ch] + list(_SELF))

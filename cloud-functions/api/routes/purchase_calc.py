@@ -309,7 +309,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     """
     from routes.common import ch_supports_b as _csb2
     _ch_b = _csb2(channel)   # 该渠道是否走 BBCC(B 仓调拨链)
-    from biz.sales import load_daily_sales, calc_sales_multi
+    from biz.sales import calc_sales_multi, load_daily_sales_grouped
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     def _cfg_number(key, default):
@@ -342,24 +342,47 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                    "FROM products WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s",
                    [channel]):
         products[r.get("sku")] = r
-    # 最后销售日(快照 + 近90天订单)
-    last_order = {}
-    for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot "
-                   "WHERE channel=%s GROUP BY sku", [channel]):
-        last_order[str(r.get("sku"))] = str(r.get("m") or "")[:10]
+    # 最后销售日(快照 + 近90天订单) —— 按 69码(2026-11-01)
+    #   原为纯 SKU 级: 多码时冷码行(该码早就没卖过)的 days_zero 被同 SKU 热码的最后销售日
+    #   拉小 → 滞销程度被低估、处置优先级排后。level 判定用的就是 days_zero, 属真判据。
+    #   降级规则: 该码无任何销售记录且档案有码、快照只剩空码组(历史未归码) → 用 SKU 合计;
+    #   其余一律按码(冷码就是 0 天销售, 不拿别的码来顶)
+    last_order = {}      # sku → 最后销售日(所有码合计, 仅无码行/历史未归码降级用)
+    last_order_bc = {}   # (sku, 69码) → 最后销售日
+    _sku_has_bc = set()  # 该 SKU 存在过非空 69码 的销售记录(用于区分"冷码"与"整体未归码")
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, MAX(`date`) AS m "
+                   "FROM daily_sales_snapshot WHERE channel=%s "
+                   "GROUP BY sku, COALESCE(barcode,'')", [channel]):
+        _s0 = str(r.get("sku") or "")
+        _b0 = str(r.get("bc") or "")
+        _m0 = str(r.get("m") or "")[:10]
+        if _b0:
+            _sku_has_bc.add(_s0)
+        if _m0:
+            last_order_bc[(_s0, _b0)] = _m0
+            if _m0 > last_order.get(_s0, ""):
+                last_order[_s0] = _m0
     cutoff90 = (now - timedelta(days=90)).strftime("%Y-%m-%d")
-    for r in query("SELECT sku, MAX(ordered_at) AS m FROM orders "
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, MAX(ordered_at) AS m FROM orders "
                    "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='') "
-                   "GROUP BY sku", [channel, cutoff90 + " 00:00:00"]):
+                   "GROUP BY sku, COALESCE(barcode,'')", [channel, cutoff90 + " 00:00:00"]):
+        _s0 = str(r.get("sku") or "")
+        _b0 = str(r.get("bc") or "")
         mx = str(r.get("m") or "")[:10]
-        if mx and mx > last_order.get(str(r.get("sku")), ""):
-            last_order[str(r.get("sku"))] = mx
-    # 28 天日销
+        if _b0:
+            _sku_has_bc.add(_s0)
+        if mx:
+            if mx > last_order.get(_s0, ""):
+                last_order[_s0] = mx
+            if mx > last_order_bc.get((_s0, _b0), ""):
+                last_order_bc[(_s0, _b0)] = mx
+    # 28 天日销 —— SKU 级(降级用) + 按码"sku|69码"(主用)
     daily_map = {}
+    daily_bc = {}
     if products:
-        multi = calc_sales_multi(load_daily_sales(28, channel, skus=set(products.keys())),
-                                 windows=[28])
-        daily_map = multi[28]
+        _grp = load_daily_sales_grouped(28, channel, skus=set(products.keys()), with_bc_wh=True)
+        daily_map = calc_sales_multi(_grp[0], windows=[28])[28]
+        daily_bc = calc_sales_multi(_grp[2], windows=[28])[28]
     # B 仓入库批次(到仓日期)
     b_arrival = {}
     for r in query("SELECT sku, arrival_date FROM purchase_orders "
@@ -409,9 +432,22 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         slow_days = int(match.get("slow_days", 30)) if match else 30
         shelf_m = int(match.get("shelf_months", 3)) if match else 3
         cat_name = (match.get("name") or "未归类") if match else "未归类(默认食品线)"
-        ld = last_order.get(sku, "")
+        # 末销/日销按 69码(2026-11-01): 多码时冷码不被热码稀释
+        #   by_sku_bc_wh 只装非空码 → 码组缺失有两种含义, 必须分开:
+        #     · 该 SKU 已存在别的码组 → 本码确实没卖过(冷码), 不降级, 否则滞销被掩盖
+        #     · 该 SKU 只有空码组 → 历史未归码, 降级到 SKU 合计
+        _ldbc = last_order_bc.get((sku, _bc))
+        if _ldbc is None:
+            _ldbc = last_order.get(sku, "") if (_bc and sku not in _sku_has_bc) else ""
+        ld = _ldbc or ""
         days_zero = 999 if not ld else max((now - datetime.strptime(ld, "%Y-%m-%d")).days, 0)
-        daily = float(daily_map.get(sku, 0) or 0)
+        _kbc = "%s|%s" % (sku, _bc)
+        if _kbc in daily_bc:
+            daily = float(daily_bc[_kbc] or 0)
+        elif _bc and sku not in _sku_has_bc:
+            daily = float(daily_map.get(sku, 0) or 0)   # 整体未归码 → 降级
+        else:
+            daily = 0.0
         turnover = round(avail / daily, 1) if daily > 0 else 999.0
         fund = round(avail * float(p.get("price") or 0), 0)
         reason, level, b_storage = [], None, None
