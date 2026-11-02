@@ -476,6 +476,21 @@ def agg_pending(channel=None):
         return 0
 
 
+def agg_has_delete(channel):
+    """本批脏日期里是否有"删单类"原因(供日销孤儿行清理判断)
+
+    只有删单/永久删才可能让某个 SKU 从窗口里彻底消失; 导入/补录不会。
+    在 `_drain_agg_dirty` 出队**之前**查(出队后原因就没了)。
+    """
+    from db import one as _o
+    try:
+        r = _o("SELECT COUNT(*) AS c FROM agg_dirty_days WHERE channel=%s "
+               "AND reason IN ('order_delete','order_recycle')", [channel]) or {}
+        return int(r.get("c") or 0) > 0
+    except Exception:
+        return False
+
+
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()

@@ -1566,5 +1566,53 @@ try:
 except Exception as _e15:
     check("S2-1b 全量物化用例无异常", False, str(_e15)[:200])
 
+# ── 2026-11-02 S2-1c: 硬删订单后的日销孤儿行 ────────────────────────────
+# 同一类"组合消失"问题的第二段, 且**单向不可自愈**:
+#   sku_sales_stats 是"有销量才建行"。软删能自愈(行还在 orders → 按日反查得到 → 先删后建);
+#   硬删之后 SKU 既不在 orders 也不在快照 → 任何"按受影响 SKU 重建"都反查不到 → 旧行永久残留,
+#   补货/断货/健康继续按已删订单的日销算。线上实测: 快照残行已回收, 日销行仍 2 行。
+try:
+    _sv6 = open('biz/sales.py', encoding='utf-8').read()
+    check("S2-1c 有日销孤儿行清理(硬删订单后旧日销行没人清)",
+          "def purge_orphan_sku_stats" in _sv6, "sales.py")
+    check("S2-1c 孤儿判据取 快照∪订单 并集(只卖今天的 SKU 也要保住)",
+          "daily_sales_snapshot " in _sv6
+          and "SELECT DISTINCT sku FROM orders WHERE channel=%s " in _sv6, "sales.py")
+    _ac6 = open('routes/analysis_cache.py', encoding='utf-8').read()
+    check("S2-1c 只在删单类原因下清孤儿(导入不必多付一遍扫描)",
+          "agg_has_delete" in _ac6 and "if _is_del:" in _ac6, "analysis_cache.py")
+    check("S2-1c 删单原因在出队前判断(出队后 reason 随行消失)",
+          _ac6.index("_is_del = _ch_deleted(ch)") < _ac6.index("clear_agg_day(ch, d, t)"),
+          "analysis_cache.py")
+    _dmt6 = open('routes/dashboard_maintain.py', encoding='utf-8').read()
+    check("S2-1c 每日维护兜底清一次(直接改库/漏标记的最后一道)",
+          "purge_orphan_sku_stats" in _dmt6, "dashboard_maintain.py")
+
+    # 动态: 快照里有 A, 订单里有 A/C, 日销表里有 A/B(已硬删) → 只删 B
+    import db as _db6
+    from biz.sales import purge_orphan_sku_stats as _pos6
+    _o_q6, _o_e6 = _db6.query, _db6.execute
+    _dele6 = []
+
+    def _fq6(sql, params=None):
+        if "daily_sales_snapshot" in sql:
+            return [{"sku": "A"}]
+        if "FROM orders" in sql:
+            return [{"sku": "A"}, {"sku": "C"}]
+        if "sku_sales_stats" in sql:
+            return [{"sku": "A"}, {"sku": "B"}]
+        return []
+
+    _db6.query = _fq6
+    _db6.execute = lambda sql, params=None: (_dele6.append(list(params)) or 1)
+    try:
+        _n6 = _pos6("jd", 90)
+    finally:
+        _db6.query, _db6.execute = _o_q6, _o_e6
+    check("S2-1c 孤儿 SKU 被删, 存活 SKU 不动",
+          _n6 == 1 and len(_dele6) == 1 and _dele6[0][1:] == ["B"], str(_dele6))
+except Exception as _e16:
+    check("S2-1c 孤儿行用例无异常", False, str(_e16)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

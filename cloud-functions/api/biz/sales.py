@@ -591,6 +591,46 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         return 0
 
 
+def purge_orphan_sku_stats(channel, days=90):
+    """清掉"窗口内已无任何销量"的 SKU 日销行(硬删订单留下的孤儿)
+
+    2026-11-02 S2-1b: 与"快照组合残留"同类, 但是第二段, 且是**单向不可自愈**的。
+      `sku_sales_stats` 是"有销量才建行"的口径。某 SKU 的订单被**软删**时能自愈:
+      行还在 orders 里 → 按日反查得到它 → 重建时先按 SKU 删子集 → 不再插回。
+      **硬删**(永久删/回收站清空)之后, 它既不在 orders 也不在快照里 → 任何"按受影响 SKU
+      重建"的路径都反查不到它 → 旧行永远留着, 补货/断货/健康继续按已删订单的日销算。
+      线上实测: ZZ-S21-SKU2 订单硬删后, 快照残行随 S2-1b 修复被回收, 但日销行仍 2 行。
+
+    判据 = (快照窗口 ∪ 订单窗口) 的 SKU 并集 - 现有日销行 → 差集即孤儿。
+    取并集而不是只看快照: 快照可能晚一天(分段续跑), 只卖"今天"的 SKU 必须被保住。
+    """
+    from db import query as _q, execute as _ex
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from routes.common import SALES_SQL as _SQL, try_err
+    try:
+        _cut = (_dt.now(_tz.utc) - _td(days=int(days))).strftime("%Y-%m-%d")
+        _live = set()
+        for r in (_q("SELECT DISTINCT sku FROM daily_sales_snapshot "
+                     "WHERE channel=%s AND `date`>=%s", [channel, _cut]) or []):
+            _live.add(str(r.get("sku") or ""))
+        for r in (_q("SELECT DISTINCT sku FROM orders WHERE channel=%s "
+                     "AND (deleted_at IS NULL OR deleted_at='') AND ordered_at>=%s "
+                     "AND order_status IN (" + _SQL + ")", [channel, _cut]) or []):
+            _live.add(str(r.get("sku") or ""))
+        _live.discard("")
+        _have = [str(r.get("sku") or "") for r in (
+            _q("SELECT DISTINCT sku FROM sku_sales_stats WHERE channel=%s", [channel]) or [])]
+        _gone = sorted({s for s in _have if s and s not in _live})
+        for _i in range(0, len(_gone), 500):
+            _ck = _gone[_i:_i + 500]
+            _ex("DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN ("
+                + ",".join(["%s"] * len(_ck)) + ")", [channel] + _ck)
+        return len(_gone)
+    except Exception as _e:
+        try_err('sales', '日销孤儿行清理降级(%s)' % channel, _e)
+        return 0
+
+
 def rebuild_sku_stats_for_days(channel, days, max_skus=2000):
     """按业务日期增量重算日销三窗口物化(只重算这些天里出现过的 SKU)
 

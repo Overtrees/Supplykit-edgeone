@@ -266,6 +266,14 @@ def _track_data(channel, _db2):
                         _snapshot_reconcile(channel)   # 软删订单后的快照残留自愈
                     except Exception as _esr:
                         try_err('dashboard', '快照残留自愈降级', _esr)
+                    # 2026-11-02 S2-1b: 日销孤儿行兜底清理 —— 硬删订单的 SKU 不在 orders 也不在
+                    #   快照里, "按受影响 SKU 重建"反查不到, 只能按"窗口内已无销量"反查。
+                    #   写入路径已在删单时清过, 这里是"直接改库/漏标记"的最后一道。
+                    try:
+                        from biz.sales import purge_orphan_sku_stats as _pos
+                        _pos(channel, 90)
+                    except Exception as _esp:
+                        try_err('dashboard', '日销孤儿行兜底清理降级', _esp)
                     # 2026-11-02 S2-2: 兜底补扫 —— 增量重建依赖"每个写入口都登记了日期",
                     # 漏一个入口不会报错、只会让物化长期少算。synced_at 由 DB 维护, 漏不了。
                     try:

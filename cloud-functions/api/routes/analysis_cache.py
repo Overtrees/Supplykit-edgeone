@@ -195,13 +195,13 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
     出队用 ts 比较(见 common.clear_agg_day): 重建期间又有新写入 → 保留, 下轮再来。
     失败不出队, 且本轮立即停止(不原地打转, 留给下一次 invalidate / 每日 sweep)。
     """
-    from routes.common import (take_agg_days, clear_agg_day, agg_pending, _runs,
-                               track_run)
+    from routes.common import (take_agg_days, clear_agg_day, agg_pending, agg_has_delete,
+                               _runs, track_run)
     from routes.dashboard_maintain import (_rebuild_agg_range, _rebuild_snapshot_range,
                                            _mark_agg_dirty, _clear_agg_dirty)
     _pend = agg_pending()
     _full = _pend > batch * 2
-    out = {"pending": _pend, "days": 0, "snap": 0, "failed": 0,
+    out = {"pending": _pend, "days": 0, "snap": 0, "failed": 0, "stat_purge": 0,
            "mode": "full" if _full else "incremental"}
     if not _pend:
         _clear_agg_dirty()
@@ -214,6 +214,14 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
         _rounds = 1 if _full else max_rounds
         _budget = 24 if _full else 0
         _nr = 0
+        _del_cache = {}
+
+        def _ch_deleted(_c):
+            """本批该渠道是否有删单类原因(懒查 + 缓存; 只为决定要不要清日销孤儿行)"""
+            if _c not in _del_cache:
+                _del_cache[_c] = bool(agg_has_delete(_c))
+            return _del_cache[_c]
+
         for _ in range(_rounds):
             items = take_agg_days(_cap)
             if not items:
@@ -225,6 +233,8 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                     by_ch.setdefault(ch, []).append((day, ts))
             _stop = False
             for ch, pairs in by_ch.items():
+                # 删单原因必须在**出队前**问(出队后 reason 随行消失)
+                _is_del = _ch_deleted(ch)
                 _done_days = []
                 for (a, b) in _runs([d for (d, _t) in pairs], 7):
                     if not _rebuild_agg_range(ch, a, b):
@@ -255,6 +265,15 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                     except Exception as _es2:
                         # 失败不影响 agg 出队(已正确); 下次写操作/每日对账还会再来
                         try_err('analysis_cache', '日销三窗口重建降级(%s)' % ch, _es2)
+                    # 2026-11-02 S2-1b: 删单/永久删还要清"日销孤儿行"——某 SKU 的订单被**硬删**
+                    #   之后, 它不在 orders 也不在快照里, 上面那个"按受影响 SKU 重建"反查不到它,
+                    #   旧日销行会一直留着(补货/断货继续按已删订单算)。软删能自愈, 硬删不能。
+                    if _is_del:
+                        try:
+                            from biz.sales import purge_orphan_sku_stats as _pos
+                            out["stat_purge"] += int(_pos(ch, 90) or 0)
+                        except Exception as _es4:
+                            try_err('analysis_cache', '日销孤儿行清理降级(%s)' % ch, _es4)
                 if _stop or out["failed"]:
                     break
             if out["failed"] or _stop or len(items) < _cap:
@@ -268,7 +287,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
         rec.rows = out["days"]
         rec.detail = {"mode": out["mode"], "pending": _pend, "left": _left,
                       "snap": out["snap"], "failed": out["failed"],
-                      "stats": out.get("stats", 0)}
+                      "stats": out.get("stats", 0), "stat_purge": out.get("stat_purge", 0)}
         out["left"] = _left
     return out
 
