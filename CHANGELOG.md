@@ -1,3 +1,21 @@
+## 2026-11-02: 库存删除可恢复 —— 归档表快照(S2-7)
+
+> 回归 343 通过 / 0 失败; preflight 六步全绿
+
+- 先钉事实: inventory 删除原是**硬删**(`DELETE FROM inventory WHERE id=%s`), `deleted_at`
+  无写入路径(软删行 0 条), "恢复删除"功能本就不存在 —— 此前登记的"重算不过滤 deleted_at"
+  待办前提有误, 已修正
+- 用户定案口径: **恢复删除 = 复原删除时的快照**
+- 方案选**归档表**而非软删: 60 处读库存 SQL 零改动、唯一键 uq_inventory_biz 不被已删行占位、
+  导入语义无两难
+- 新增 `inventory_archive`(与 inventory 同列序 + archived_at, 原 id 作主键);
+  DELETE 先快照后删(rowcount 判存在, 不会"删了没存");
+  `GET /inventory/archive` 归档列表; `POST /inventory/{iid}/restore` 原样插回,
+  同业务键已重新导入/原 id 被占 → 拦截并报错可读
+- `_recalc_own_inventory` 补 deleted_at 过滤(防御); 前端删除文案改为如实描述
+- 语义: 快照管恢复那一刻; 恢复后再次导入会按最新流水重算覆盖
+- 回归新增 8 条(S2-7, 含 4 条动态)
+
 ## 2026-11-02: 冷算耗时收口(往返 22→14 / 23→16 / 10→7, 口径逐字段不变)
 
 > 回归 334 通过 / 0 失败; preflight 六步全绿

@@ -557,6 +557,10 @@ def _recalc_own_inventory(channel, skus):
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
             "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
+            # 2026-11-02 删除快照口径: 软删行(若有)冻结删除时的数量, 重算不碰 —— 恢复删除 =
+            #   复原删除时的快照。当前 inventory 删除走归档表(硬删), 此过滤纯防御,
+            #   与 _adjust_inventory 的命中查询同一条件。
+            " AND (i.deleted_at IS NULL OR i.deleted_at='')"
             % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
         upd = []

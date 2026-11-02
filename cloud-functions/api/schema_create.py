@@ -57,6 +57,25 @@ _TABLES = {
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
         "KEY idx_inv_ch_wh (channel, warehouse_type))"
     ),
+    # 2026-11-02 库存删除快照(用户定案: 恢复删除 = 复原删除时的快照):
+    #   inventory 的删除原是硬删(前端明示"不可恢复"), 快照无处可存。归档表方案:
+    #   DELETE 前整行搬进来(保留原 id), 恢复 = 原样插回 —— 60 处读库存的 SQL 零改动、
+    #   唯一键 uq_inventory_biz 不被占位(软删方案做不到这两点)。
+    #   列必须与 inventory 逐一对应(恢复时 INSERT 全列), 新列只能"两边同加"。
+    "inventory_archive": (
+        "CREATE TABLE IF NOT EXISTS inventory_archive ("
+        "id BIGINT PRIMARY KEY, sku VARCHAR(64) NOT NULL, "
+        "product_name VARCHAR(128) DEFAULT '', store VARCHAR(64) DEFAULT '', "
+        "warehouse VARCHAR(64) DEFAULT '', warehouse_type VARCHAR(20) DEFAULT 'own', "
+        "available_qty INT DEFAULT 0, in_transit_qty INT DEFAULT 0, c_transit INT DEFAULT 0, "
+        "safety_qty INT DEFAULT 0, safety_days DECIMAL(10,2) DEFAULT 0, locked_qty INT DEFAULT 0, "
+        "beginning_stock INT DEFAULT 0, month_inbound INT DEFAULT 0, month_outbound INT DEFAULT 0, "
+        "turnover_days DECIMAL(10,2) DEFAULT 0, weight DECIMAL(10,2) DEFAULT 0, volume DECIMAL(10,4) DEFAULT 0, "
+        "barcode VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
+        "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
+        "archived_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "KEY idx_inv_arch_ch (channel, sku))"
+    ),
     "products": (
         "CREATE TABLE IF NOT EXISTS products ("
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) DEFAULT '', "

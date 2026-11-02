@@ -142,7 +142,7 @@ _db._release = lambda c: None
 
 _db.query = fake_query
 _db.one = fake_one
-_db.execute = lambda sql, params=None: 0
+_db.execute = lambda sql, params=None: 1  # rowcount 语义(2026-11-02: 删除快照按 rowcount 判存在)
 _db.executemany = lambda sql, seq: None
 
 
@@ -1842,6 +1842,95 @@ try:
           str(_out6["summary"])[:160])
 except Exception as _e19:
     check("S2-6 冷算收口用例无异常", False, str(_e19)[:200])
+
+# ── S2-7: 库存删除可恢复(删除时快照) —— 归档表方案 ──────────────────────────
+try:
+    import routes.inventory as _inv7
+    import routes.analysis_cache as _ac7
+    _src7 = open('routes/inventory.py', encoding='utf-8').read()
+    _src7b = open('schema_create.py', encoding='utf-8').read()
+
+    check("S2-7 归档表已注册(与 inventory 同列序 + archived_at)",
+          "CREATE TABLE IF NOT EXISTS inventory_archive" in _src7b
+          and "archived_at DATETIME" in _src7b, "schema_create.py")
+    check("S2-7 删除前先快照(INSERT...SELECT 整行), 不是先删后补",
+          "INSERT INTO inventory_archive (" in _src7
+          and _src7.find("INSERT INTO inventory_archive") < _src7.find("DELETE FROM inventory WHERE id=%s"),
+          "routes/inventory.py")
+    check("S2-7 恢复先查业务键冲突再插回(查重在 INSERT 之前)",
+          "已重新导入为新行" in _src7
+          and 0 < _src7.find("SELECT id FROM inventory WHERE sku=") < _src7.find("INSERT INTO inventory ("),
+          "routes/inventory.py")
+    check("S2-7 重算跳过软删行(快照口径: 删除时的数量不被覆盖)",
+          "i.deleted_at IS NULL OR i.deleted_at=''" in
+          open('routes/cleanse_write.py', encoding='utf-8').read(), "routes/cleanse_write.py")
+
+    # 动态: 删除 → 归档 INSERT...SELECT + 原行 DELETE + 缓存失效; 恢复 → 原样插回 + 归档移除
+    _o7 = (_inv7.query, _inv7.one, _inv7.execute, _ac7.invalidate)
+    _inv_row7 = {"id": 77, "sku": "SKU-D", "barcode": "BC-D", "warehouse": "集货仓",
+                 "warehouse_type": "own", "channel": "jd", "available_qty": 42}
+    _calls7 = {"exec": [], "inv": 0}
+
+    def _one7(sql, p=None):
+        s = str(sql)
+        if "FROM inventory_archive WHERE id" in s:
+            return _arc7
+        if "FROM inventory WHERE id=%s" in s and "archive" not in s:
+            return _live7  # 同id占用检查 / 删除存在性检查
+        if "AND id<>%s" in s:
+            return _dup7
+        return {"id": 1}
+
+    def _exec7(sql, p=None):
+        _calls7["exec"].append((str(sql), p))
+        return _rc7
+
+    _inv7.query = lambda sql, p=None: []
+    _inv7.one = _one7
+    _inv7.execute = _exec7
+    _ac7.invalidate = lambda dom: _calls7.__setitem__("inv", _calls7["inv"] + 1)
+
+    # 删除: 行存在(rowcount=1) → 快照 + 删除
+    _live7, _arc7, _dup7, _rc7 = {"id": 77}, None, None, 1
+    _r7 = _inv7.delete_inventory(77)
+    check("S2-7 删除 = 快照进归档表 + 删原行 + 失效缓存",
+          _r7.get("ok") and len(_calls7["exec"]) == 2
+          and "INSERT INTO inventory_archive" in _calls7["exec"][0][0]
+          and "SELECT" in _calls7["exec"][0][0].upper()
+          and _calls7["exec"][1][0].startswith("DELETE FROM inventory")
+          and _calls7["inv"] == 1, str(_r7))
+    check("S2-7 快照带 archived_at(NOW())且按 id 对齐",
+          "archived_at" in _calls7["exec"][0][0]
+          and "NOW()" in _calls7["exec"][0][0].upper(), _calls7["exec"][0][0][:120])
+
+    # 恢复: 归档行在、无同id、无同键 → 原样插回(22 列全量, 含原 available_qty=42) + 移除归档
+    _calls7["exec"] = []
+    _live7, _arc7, _dup7 = None, _inv_row7, None
+    _r7 = _inv7.restore_inventory(77)
+    _ins7 = _calls7["exec"][0] if _calls7["exec"] else ("", None)
+    check("S2-7 恢复 = 原样插回(22 列含原值) + 归档移除",
+          _r7.get("ok") and "INSERT INTO inventory" in _ins7[0]
+          and _ins7[1] and len(_ins7[1]) == 22 and _ins7[1][6] == 42
+          and _calls7["exec"][1][0].startswith("DELETE FROM inventory_archive"),
+          "%s | %s" % (str(_r7), str(_ins7[1])[:120] if _ins7[1] else ""))
+
+    # 恢复被拦: 同业务键已重新导入 → fail, 不发 INSERT
+    _calls7["exec"] = []
+    _live7, _arc7, _dup7 = None, _inv_row7, {"id": 999}
+    _r7 = _inv7.restore_inventory(77)
+    check("S2-7 恢复被拦(同键已有新行): 不插回、报错可读",
+          not _r7.get("ok") and "已重新导入" in str(_r7.get("error")) and not _calls7["exec"],
+          str(_r7))
+
+    # 删除被拦: rowcount=0(行不存在) → fail, 且只有那一条 INSERT...SELECT、没有 DELETE
+    _calls7["exec"] = []
+    _live7, _arc7, _dup7, _rc7 = None, None, None, 0
+    _r7 = _inv7.delete_inventory(77)
+    check("S2-7 删除不存在的行: fail 且不删原行",
+          not _r7.get("ok") and len(_calls7["exec"]) == 1, str(_r7))
+    _inv7.query, _inv7.one, _inv7.execute, _ac7.invalidate = _o7
+except Exception as _e20:
+    check("S2-7 删除快照用例无异常", False, str(_e20)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

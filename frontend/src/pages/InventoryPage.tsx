@@ -1136,7 +1136,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       <ConfirmDialog
         open={!!confirmDel}
         title="删除库存记录"
-        desc="删除后不可恢复"
+        desc="删除后整行进归档(保留删除时的数量), 可在恢复接口/归档列表中找回; 重新导入同业务键后再恢复会被拦截"
         confirmLabel="删除"
         onConfirm={delInv}
         onCancel={() => setConfirmDel(null)}
