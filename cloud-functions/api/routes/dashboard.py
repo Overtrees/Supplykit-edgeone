@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from db import query, one, execute
 from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced, try_err, INVENTORY_COLS as _INV_COLS
+from routes.common import track_run  # 2026-11-02 S1-2: 链路运行流水
 
 router = APIRouter(tags=["dashboard"])
 
@@ -39,47 +40,49 @@ def _daily_maintenance(channel="jd"):
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
         if not _got:
             return  # 今天已维护(本实例或其他实例)
-        # ② digest 预填(每日维护——get_sales_digest 填表缓存——健康/低库存/规则/补货/断货消费方首访命中——首冷降频)
-        try:
-            from biz.sales import get_sales_digest
-            # 2026-10-30 渠道数据驱动: 预填所有启用渠道(原硬编码 jd/other 双渠道)
-            from routes.common import ch_codes as _chc
-            for _c0 in _chc():
-                get_sales_digest(_c0)
-        except Exception as _e:
-                try_err('dashboard', 'digest 预填降级', _e)
-        # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs)
-        #   2026-11-02 S1-3: 与 cron 共用 common.prune_quality_logs(按天保留30天 + 2万条硬上限)。
-        #   原实现「超 500 截断至 300」会把当天写的排障证据也一起冲掉(id 曾达 159 万级——
-        #   正是这种写删循环造成的), 现按时间保留。
-        try:
-            from routes.common import prune_quality_logs as _prune
-            _prune()
-        except Exception as _e:
-                try_err('dashboard', '日志清理降级', _e)
-        # ④ export_files/sync_tasks 导出任务清理(2026-10-09: 分片+文件越积越多——7 天保留)
-        try:
-            execute("DELETE FROM export_files WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
-            execute("DELETE FROM sync_tasks WHERE task_type='export' "
-                    "AND status IN ('done','error') "
-                    "AND updated_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
-        except Exception as _e:
-                try_err('dashboard', '导出文件清理降级', _e)
-        # ⑤ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
-        try:
-            from datetime import timedelta as _td2
-            _yest = (datetime.now(timezone.utc) - _td2(days=1)).strftime("%Y-%m-%d")
-            from routes.misc import _export_md as _em
-            for _sc in ("user", "dev", "all"):
-                _d3, _cnt3, _md3 = _em(_yest, _sc, "")
-                execute("INSERT INTO log_archives(`date`, `scope`, markdown, `count`, updated_at) "
-                        "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE "
-                        "markdown=VALUES(markdown), `count`=VALUES(`count`), updated_at=NOW(6)",
-                        [_d3, _sc, _md3, _cnt3])
-            _cut = (datetime.now(timezone.utc) - _td2(days=90)).strftime("%Y-%m-%d")
-            execute("DELETE FROM log_archives WHERE `date` < %s", [_cut])
-        except Exception as _e:
-                try_err('dashboard', '静默降级', _e)
+        # 2026-11-02 S1-2: 维护耗时/成败留痕 —— 这是"每天第一次打开看板会卡一下"的那条路径
+        with track_run("daily_maintenance", channel) as _mrec:
+            # ② digest 预填(每日维护——get_sales_digest 填表缓存——健康/低库存/规则/补货/断货消费方首访命中——首冷降频)
+            try:
+                from biz.sales import get_sales_digest
+                # 2026-10-30 渠道数据驱动: 预填所有启用渠道(原硬编码 jd/other 双渠道)
+                from routes.common import ch_codes as _chc
+                for _c0 in _chc():
+                    get_sales_digest(_c0)
+            except Exception as _e:
+                    try_err('dashboard', 'digest 预填降级', _e)
+            # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs)
+            #   2026-11-02 S1-3: 与 cron 共用 common.prune_quality_logs(按天保留30天 + 2万条硬上限)。
+            #   原实现「超 500 截断至 300」会把当天写的排障证据也一起冲掉(id 曾达 159 万级——
+            #   正是这种写删循环造成的), 现按时间保留。
+            try:
+                from routes.common import prune_quality_logs as _prune
+                _mrec.detail = _prune()   # 顺手把清理结果记进 pipeline_runs(rows/detail 可查)
+            except Exception as _e:
+                    try_err('dashboard', '日志清理降级', _e)
+            # ④ export_files/sync_tasks 导出任务清理(2026-10-09: 分片+文件越积越多——7 天保留)
+            try:
+                execute("DELETE FROM export_files WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
+                execute("DELETE FROM sync_tasks WHERE task_type='export' "
+                        "AND status IN ('done','error') "
+                        "AND updated_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")
+            except Exception as _e:
+                    try_err('dashboard', '导出文件清理降级', _e)
+            # ⑤ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
+            try:
+                from datetime import timedelta as _td2
+                _yest = (datetime.now(timezone.utc) - _td2(days=1)).strftime("%Y-%m-%d")
+                from routes.misc import _export_md as _em
+                for _sc in ("user", "dev", "all"):
+                    _d3, _cnt3, _md3 = _em(_yest, _sc, "")
+                    execute("INSERT INTO log_archives(`date`, `scope`, markdown, `count`, updated_at) "
+                            "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE "
+                            "markdown=VALUES(markdown), `count`=VALUES(`count`), updated_at=NOW(6)",
+                            [_d3, _sc, _md3, _cnt3])
+                _cut = (datetime.now(timezone.utc) - _td2(days=90)).strftime("%Y-%m-%d")
+                execute("DELETE FROM log_archives WHERE `date` < %s", [_cut])
+            except Exception as _e:
+                    try_err('dashboard', '静默降级', _e)
     except Exception as _me:
         # 2026-11-02 S0: 失败必须回滚抢占标记 —— 原实现失败后标记仍在, 当天永久跳过,
         # 而失败只写一条 quality_logs 就再无痕迹(用户表现为"数据不更新"却查不出原因)。
