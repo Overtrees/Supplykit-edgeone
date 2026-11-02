@@ -2588,8 +2588,12 @@ input[type='file'] {
 /* 2026-11-02 S2-9: .hist-meta(页面上的区间/来源两行)已删除 —— 区间与来源改由
    锤子菜单的统计区间摘要表达, 页面首屏只剩标题。 */
 /* 400 天截断提示(锤子菜单区间摘要下方, 2026-11-02 从页面移入) */
+/* 400 天截断提示(锤子菜单区间摘要下方, 2026-11-02 从页面移入)
+   实测(390 视口): 上 4 / 下 8 —— 摘要行与提示间隔出 4px(负 margin 会贴成一行,
+   看起来像摘要的一部分); 提示与 segmented 间 8px, 恢复分组前的呼吸感。
+   左右 0 与摘要行对齐(labelLeft == hintLeft 实测一致)。 */
 .hist-clamp-hint {
-  margin: -2px 0 6px;
+  margin: 4px 0 8px;
   font-size: var(--font-10);
   color: var(--warning);
   line-height: 1.5;
