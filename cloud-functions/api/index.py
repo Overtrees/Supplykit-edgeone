@@ -370,6 +370,23 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "
                   "store VARCHAR(60) NOT NULL, gmv DECIMAL(14,2) DEFAULT 0, subsidy DECIMAL(14,2) DEFAULT 0, cnt INT DEFAULT 0, "
                   "PRIMARY KEY(`date`, channel, order_status, store))")
+            # 增量重建队列(2026-11-02 S2-2): 按**业务日期**登记待重建, 而不是按导入时间/文件。
+            # 数据来自清洗页导入, 一批文件可横跨任意业务日期(补录上月/上季度), ordered_at 与
+            # "什么时候导入的"无关 —— 按导入时间推窗口, 补录的历史日期永远落不进去。
+            # 主键 (channel,date) 天然去重: 同一天反复导入只留一行, 不会重复重建。
+            _exec("CREATE TABLE IF NOT EXISTS agg_dirty_days ("
+                  "channel VARCHAR(20) NOT NULL, `date` CHAR(10) NOT NULL, "
+                  "reason VARCHAR(32) DEFAULT 'write', "
+                  "ts DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), "
+                  "PRIMARY KEY(channel, `date`))")
+            # 行级"最后变更时刻"(2026-11-02 S2-2 兜底): 写入口漏调 on_data_changed 时,
+            # 每日 sweep 用 synced_at 反查"哪些业务日期被动过", 补标记。
+            # 幂等: 列已存在报错忽略(与 maintenance_log.details 同风格)。
+            try:
+                _exec("ALTER TABLE orders ADD COLUMN synced_at DATETIME(6) "
+                      "DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)")
+            except Exception:
+                pass
         except Exception as _e:
                 try_err('index', '静默降级', _e)
         # ── 启动数据迁移(2026-09-15: barcode 补齐; 2026-10-10 移除 M2/M3 时间随机化——演示专用且实际场景有害)

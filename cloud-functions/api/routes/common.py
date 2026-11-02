@@ -7,6 +7,7 @@ import json
 import os
 import time
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 # GMV 总收入口径(含申请退款流水, net 再扣)——看板 GMV/趋势/漏斗
 PAID_STATUSES = ("待发货", "已发货", "已完成", "申请退款")
@@ -365,6 +366,114 @@ def last_runs(limit_pipelines=32):
     except Exception:
         return []   # 表未建/查询失败 → 空列表(调用方按"无数据"展示), 不影响 /health 的 ok
     return out
+
+
+# ── 增量重建队列(2026-11-02 S2-2) ──────────────────────────────────────
+# 核心命题: 清洗页导入的不是"事件流", 而是"一批行"。一批文件可以横跨任意业务日期
+#   (补录上月初 / 补上一季度), 而 ordered_at 与"什么时候导入"没有任何关系。
+# 所以重建范围只能由**受影响的业务日期集合**决定, 不能由导入时间窗口推导 ——
+#   后者会让补录的历史日期永远落不进重建窗口, 看板少算且不报错。
+# 用表不用内存: 后台重建线程可能随实例回收被打断, 内存队列会丢;
+#   (channel,date) 主键又天然去重, 同一天反复导入只重建一次。
+
+def _norm_day(v):
+    """规整为 'YYYY-MM-DD'; 不合法返回空(宁可漏标也不要标错日期)"""
+    s = str(v or "")[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-" and s.replace("-", "").isdigit():
+        return s
+    return ""
+
+
+# 物化窗口(天): _rebuild_day_agg / 快照 / 对账三处必须一致, 改一处就要改全部
+AGG_WINDOW_DAYS = 90
+
+
+def _shift_day(day, n):
+    return (datetime.strptime(str(day)[:10], "%Y-%m-%d") + timedelta(days=n)).strftime("%Y-%m-%d")
+
+
+def _runs(days, span=7):
+    """把日期集合切成「连续区间」, 单段最多 span 天 —— 供增量重建合批用
+
+    为什么要合段: 逐日重建每天一次事务往返(实测单日 1.3~2.6s, 时间基本花在往返而非计算),
+    补录一段 5 天就是 5 次往返。合成的代价只是 SQL 多一个 BETWEEN。
+    为什么要限 span: 段越长事务越大, 超过 ~7 天会重新踩到"大事务持锁 → 并发 9004 锁超时"。
+    """
+    _ds = sorted({_norm_day(d) for d in (days or [])} - {""})
+    out = []
+    i = 0
+    while i < len(_ds):
+        j = i
+        while (j + 1 < len(_ds) and (j + 2 - i) <= span
+               and _shift_day(_ds[j], 1) == _ds[j + 1]):
+            j += 1
+        out.append((_ds[i], _ds[j]))
+        i = j + 1
+    return out
+
+
+def mark_agg_days(channel, days, reason="write"):
+    """登记"这些业务日期需要重建"(幂等: 同一天只留一行, 重复标记刷新 ts)
+
+    同步把 agg_dirty 置位 → summary 在此期间**降级为直查 orders**(宁可慢一拍,
+    不可读缺数据的物化表)。重建清空队列后自动清位。
+    返回去重后的天数; 全部非法或在窗口外返回 0。
+
+    **只登记物化窗口内的日期**(与 _rebuild_day_agg(90)/快照 90 天窗口一致):
+    更早的日期 agg 本来就不服务(那部分由 summary 自定义区间 / 历史归档页直查),
+    登记了也永远不会被重建 → 队列残留 → agg_dirty 永远置位 → 看板永久降级直查。
+    """
+    _min = (datetime.now(timezone.utc) - timedelta(days=AGG_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    _ds = sorted({_norm_day(d) for d in (days or [])} - {""})
+    _ds = [d for d in _ds if d >= _min]
+    if not _ds:
+        return 0
+    from db import executemany as _em
+    _sql = ("INSERT INTO agg_dirty_days(channel, `date`, reason, ts) "
+            "VALUES(%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE ts=NOW(6), reason=VALUES(reason)")
+    _em(_sql, [[channel, d, str(reason)[:32]] for d in _ds])
+    try:
+        from routes.dashboard_maintain import _mark_agg_dirty
+        _mark_agg_dirty()
+    except Exception as e:
+        try_err("common", "agg 脏标记置位失败", e)
+    return len(_ds)
+
+
+def take_agg_days(limit=60):
+    """取一批待重建 (channel, date, ts), 日期升序(先补最老的缺口)
+
+    ts 必须一起取出: 重建完成后要用它判断"期间是否又被标记"。
+    """
+    from db import query as _q
+    rows = _q("SELECT channel, `date` AS d, ts FROM agg_dirty_days "
+              "ORDER BY `date` ASC LIMIT %s", [max(1, int(limit))]) or []
+    return [(str(r.get("channel") or ""), _norm_day(r.get("d")), r.get("ts")) for r in rows]
+
+
+def clear_agg_day(channel, day, ts):
+    """重建成功后出队 —— **仅当 ts 没被刷新**时才真正删除
+
+    为什么比较 ts: 单日重建要几十~几百毫秒, 这期间用户可能又导入了同一天的新数据。
+    直接 DELETE 会把那次写入的标记一起吃掉 → 该日永远等不到重建(要等第二天的 sweep)。
+    返回 True=已出队; False=期间有新标记, 保留待下轮(本轮不算完成)。
+    """
+    from db import execute as _e
+    return bool(_e("DELETE FROM agg_dirty_days WHERE channel=%s AND `date`=%s AND ts<=%s",
+                   [channel, day, ts]))
+
+
+def agg_pending(channel=None):
+    """待重建天数(供读侧判断是否需要绕过物化)"""
+    from db import one as _o
+    if channel:
+        r = _o("SELECT COUNT(*) AS c FROM agg_dirty_days WHERE channel=%s", [channel]) or {}
+    else:
+        r = _o("SELECT COUNT(*) AS c FROM agg_dirty_days") or {}
+    try:
+        return int(r.get("c") or 0)
+    except Exception:
+        return 0
 
 
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────

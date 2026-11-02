@@ -16,10 +16,13 @@ import json
 _registry = {}
 
 # 2026-10-17 物化追平限频(写放大控制——35 个 invalidate 调用点曾全量重建 RU 爆):
-# 重建(agg/日销物化)5 分钟窗口内只跑一次; 非阻塞锁防并发; 窗口内多余写操作合并
+# 非阻塞锁防并发; 窗口只用于**合并同一次导入的多次调用**
+# 2026-11-02 S2-2: 300 秒 → 3 秒。原来 5 分钟的语义是"这次不重建", 而补录历史日期后
+# 若没有后续写操作, 那 5 分钟窗口过去也不会有人再触发 → agg 永久落后。现在队列里的
+# 标记不会因为窗口被丢弃, 窗口只用来避免一次导入连起十几个线程。
 _MAT_LOCK_OBJ = None
 _MAT_LAST = 0.0
-_MAT_WINDOW = 300  # 5 分钟限频窗口(写操作后 5min 内多次 invalidate → 一次重建)
+_MAT_WINDOW = 3
 
 
 def register(clear_fn):
@@ -100,6 +103,84 @@ def cache_get(key, ttl, builder):
         return builder()
 
 
+def _drain_agg_dirty(batch=40, max_rounds=6):
+    """消费 agg_dirty_days: 逐日精准重建「日聚合 + 日销快照」, 重建完出队
+
+    为什么逐日而不是整段:
+      · 单日 DELETE + INSERT 走 (channel, ordered_at) 索引, 几十毫秒;
+        整段重建要扫全窗口(90 天 ≈ 20 万行), 且大事务持锁(实测 9004 锁超时)。
+      · 补录通常只涉及几天(某月月初/某个促销周), 逐日天然贴合实际改动量。
+    天数过多(> batch*2, 例如补录整个季度)才退化为全量一次 —— 逐日往返反而更慢。
+
+    出队用 ts 比较(见 common.clear_agg_day): 重建期间又有新写入 → 保留, 下轮再来。
+    失败不出队, 且本轮立即停止(不原地打转, 留给下一次 invalidate / 每日 sweep)。
+    """
+    from routes.common import (take_agg_days, clear_agg_day, agg_pending, _runs,
+                               AGG_WINDOW_DAYS, track_run)
+    from routes.dashboard_maintain import (_rebuild_day_agg, _rebuild_agg_range,
+                                           _rebuild_snapshot_range,
+                                           _mark_agg_dirty, _clear_agg_dirty)
+    _pend = agg_pending()
+    out = {"pending": _pend, "days": 0, "snap": 0, "failed": 0, "mode": "incremental"}
+    if not _pend:
+        _clear_agg_dirty()
+        return out
+    with track_run("agg_incremental", "all") as rec:
+        if _pend > batch * 2:
+            out["mode"] = "full"
+            _ok = _rebuild_day_agg(AGG_WINDOW_DAYS)
+            if _ok:
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                from db import execute as _e
+                _cut = (_dt.now(_tz.utc) - _td(days=AGG_WINDOW_DAYS)).strftime("%Y-%m-%d")
+                # 只清窗口内的标记: 窗口外的日期 agg 本来就不服务(mark 侧已过滤, 这里是双保险)
+                _e("DELETE FROM agg_dirty_days WHERE `date` >= %s", [_cut])
+                _clear_agg_dirty()
+                out["days"] = _pend
+            else:
+                _mark_agg_dirty()
+                out["failed"] = 1
+            rec.rows = _pend if _ok else 0
+            rec.detail = {"mode": "full", "ok": bool(_ok), "pending": _pend}
+            return out
+        for _ in range(max_rounds):
+            items = take_agg_days(batch)
+            if not items:
+                break
+            # 按渠道分组 → 每组内合成连续区间(补录通常是连续的几天/一周)
+            by_ch = {}
+            for (ch, day, ts) in items:
+                if ch and day:
+                    by_ch.setdefault(ch, []).append((day, ts))
+            for ch, pairs in by_ch.items():
+                for (a, b) in _runs([d for (d, _t) in pairs], 7):
+                    if not _rebuild_agg_range(ch, a, b):
+                        out["failed"] += 1
+                        break
+                    try:
+                        _rebuild_snapshot_range(ch, a, b)
+                        out["snap"] += 1
+                    except Exception as _es:
+                        # 快照失败不阻塞 agg 出队: agg 已正确, 快照由每日 _snapshot_reconcile 兜底
+                        try_err('analysis_cache', '快照区间重建降级(%s %s~%s)' % (ch, a, b), _es)
+                    # 区间内逐日出队 —— 各天带自己的 ts, 期间被重新标记的那天会保留
+                    for (d, t) in pairs:
+                        if a <= d <= b and clear_agg_day(ch, d, t):
+                            out["days"] += 1
+            if out["failed"] or len(items) < batch:
+                break
+        _left = agg_pending()
+        # 队列非空 = agg 仍可能落后 → 保持降级直查; 清空才恢复物化路径
+        if _left:
+            _mark_agg_dirty()
+        else:
+            _clear_agg_dirty()
+        rec.rows = out["days"]
+        rec.detail = {"mode": "incremental", "pending": _pend, "left": _left,
+                      "snap": out["snap"], "failed": out["failed"]}
+    return out
+
+
 def invalidate_all():
     """数据变更后全局失效: 删共享表缓存(跨实例一致) + 物化即时追平(写操作后 agg/快照增量——
     导入/删单/规则/参数变更后物化立即跟数据, 非轮询延迟——数据实时性根治)"""
@@ -118,8 +199,14 @@ def invalidate_all():
                 fn()
             except Exception as _e:
                     try_err('analysis_cache', '静默降级', _e)
-        # 物化追平(异步线程尽力——写操作不阻塞; 兜底链: 每 miss 即时检查续段 + 读路径当天直查保证数据完整)
-        # 2026-10-17 限频: 5 分钟窗口一次(写放大控制——35 调用点 × 全量重建曾 RU 爆)
+        # 物化追平(异步线程尽力——写操作不阻塞)
+        # 2026-11-02 S2-2: 由「5 分钟限频 + 全量 90 天」改为「按业务日期增量」。
+        #   旧做法两个硬伤:
+        #     ① 补录历史日期后, 若 5 分钟内没有后续写操作, 重建被窗口挡掉 → agg 永不更新
+        #        (读侧只直查「昨天+今天」, 补录 3 天前的数据没人兜底)
+        #     ② 只能全量 90 天 → 单次 RU 高, 才不得不限频; 限频又放大 ①
+        #   增量后单日重建很便宜(走 idx_orders_channel_ordered), 不需要限频;
+        #   只在一次性铺开很多天(补录整个季度)时退化为全量, 省往返。
         try:
             import threading as _thm
             import time as _t2
@@ -127,66 +214,24 @@ def invalidate_all():
             if _MAT_LOCK_OBJ is None:
                 _MAT_LOCK_OBJ = _thm.Lock()
             _now2 = _t2.time()
+            # 3 秒合并窗口: 一次导入写完会连调多次 invalidate, 只起一个线程。
+            # 注意这不是「这次不重建」—— 队列里的标记不会丢, 下一轮还能捞到。
             if _now2 - _MAT_LAST < _MAT_WINDOW:
-                pass  # 窗口内已有重建(数据时效由读侧当天直查兜底, 不重复打 RU)
+                pass
             elif _MAT_LOCK_OBJ.acquire(blocking=False):
                 _MAT_LAST = _now2
 
                 def _mat():
                     try:
-                        from routes.dashboard import _rebuild_day_agg, _snapshot_step
-                        from routes.dashboard_maintain import _mark_agg_dirty as _mk, _clear_agg_dirty as _ck
-                        from db import one as _o1
-                        _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                                  "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-                        _dbs = str(_db.get("m") or "")[:10]
-                        # 2026-11-02 S1-2: 物化重建全程留一条运行记录 —— S2 要做增量重建,
-                        #   届时靠这条记录(rows/耗时/成功与否)证明"只重建了变更范围"。
-                        from routes.common import track_run as _trm
-                        with _trm("mat_rebuild", "all") as _recm:
-                            _ok_agg = _rebuild_day_agg(90)   # 2026-10-30 与 summary/物化/对账窗口统一 90
-                            if _ok_agg:
-                                _ck()
-                            else:
-                                _mk()
-                            _recm.rows = 1 if _ok_agg else 0
-                            _recm.detail = {"day_agg": bool(_ok_agg), "sku_stats": []}
-                            # 2026-10-17 日销物化表重建(写操作后预重建——限频窗口上方已合并;
-                            # 重建含当天订单, 消费方读表零重算; 实时性: 库存仍每次直查, 物化只慢变日销)
-                            try:
-                                from biz.sales import _rebuild_sku_sales_stats as _rss
-                                from routes.common import ch_codes as _chc_m
-                                for _c_m in _chc_m():   # 2026-11-02 S1-5: 渠道数据驱动
-                                    _rss(_c_m)
-                                    _recm.detail["sku_stats"].append(_c_m)
-                            except Exception as _e2b:
-                                    try_err('analysis_cache', '物化重建降级', _e2b)
-                        # 2026-10-30 RU 预警: 物化全量重建单次成本高(5000 SKU ≈ 22 万 RU),
-                        #   当日次数 > 6 时提醒(每日一条, maintenance_log 抢占防刷屏)
-                        try:
-                            from db import one as _oc, execute as _ec
-                            from datetime import datetime as _dtc, timezone as _tzc
-                            _cnt = int((_oc("SELECT COUNT(*) c FROM quality_logs WHERE log_type='mat_rebuild' "
-                                            "AND DATE(created_at)=CURDATE()") or {}).get("c") or 0)
-                            if _cnt > 6:
-                                _td = _dtc.now(_tzc.utc).strftime("%Y-%m-%d")
-                                if _ec("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,'mat_alert')", [_td]):
-                                    _ec("INSERT INTO quality_logs(log_type, level, message, source) "
-                                        "VALUES('slow_alert','error',%s,'sales')",
-                                        ("物化重建次数异常: 今日 %d 次, 单次全量成本随 SKU 数线性增长, 注意 RU 配额" % _cnt,))
-                        except Exception as _ec2:
-                            try_err('analysis_cache', '重建次数预警降级', _ec2)
-                        if _dbs:
-                            from routes.common import ch_codes as _chc_s
-                            for _c_s in _chc_s():   # 2026-11-02 S1-5: 渠道数据驱动
-                                _snapshot_step(_c_s, _dbs)
+                        _drain_agg_dirty()
                     except Exception as _e2:
-                            try_err('analysis_cache', '物化追平降级', _e2)
+                        try_err('analysis_cache', '增量重建降级', _e2)
                     finally:
                         try:
                             _MAT_LOCK_OBJ.release()
                         except Exception:
                             pass
+
                 _thm.Thread(target=_mat, daemon=True).start()
         except Exception:
             pass

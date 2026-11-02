@@ -514,6 +514,14 @@ async def cron_recycle(request: Request):
         return fail("未授权", 401)
     if not _claim("cron:recycle"):
         return ok({"skipped": True, "reason": "今天已清理"})
+    # 2026-11-02 S2-2: 永久删会改变物化, 受影响日期必须在删之前取出来
+    try:
+        _gone = query("SELECT DISTINCT channel, DATE(ordered_at) AS d FROM orders "
+                      "WHERE deleted_at IS NOT NULL AND deleted_at != '' "
+                      "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)") or []
+    except Exception as _eg:
+        try_err('cron', '回收站取受影响日期降级', _eg)
+        _gone = []
     try:
         n1 = execute("DELETE FROM orders WHERE deleted_at IS NOT NULL AND deleted_at != '' "
                      "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
@@ -525,6 +533,17 @@ async def cron_recycle(request: Request):
     total = int(n1 or 0) + int(n2 or 0)
     if total > 0:
         _log("info", "回收站清理: 永久删除 %d 条(订单 %s + 规则 %s)" % (total, n1, n2))
+        from routes.common import mark_agg_days as _mkd
+        _by = {}
+        for r in _gone:
+            _ch, _d = str(r.get("channel") or ""), str(r.get("d") or "")[:10]
+            if _ch and _d:
+                _by.setdefault(_ch, set()).add(_d)
+        for _ch, _ds in _by.items():
+            try:
+                _mkd(_ch, _ds, reason="order_recycle")
+            except Exception as _em:
+                try_err('cron', '回收站删单后登记重建降级', _em)
     return ok({"deleted": total})
 
 
@@ -670,6 +689,63 @@ def run_reconcile(days=90):
             _start, _end,
             " / ".join("%s=%d" % (k, v.get("snapshot", 0)) for k, v in out.items() if "snapshot" in v)))
     return {"range": [_start, _end], "channels": out, "mismatch": _bad}
+
+
+def run_agg_sweep(hours=48):
+    """兜底扫描核心(同步, 供 cron 端点与每日维护共用)
+
+    按 orders.synced_at 反查「最近被改过的业务日期」并重建 —— 防的是"某个写入口忘了
+    调 mark_agg_days"。这种漏法不会报错, 只会让物化长期少算; synced_at 由数据库
+    自动维护, 应用代码可以漏, 它漏不了。
+    """
+    try:
+        _h = max(1, min(int(hours or 48), 24 * 30))
+        # INTERVAL 后不能走占位符(TiDB 语法错) —— _h 已 clamp 为整数, 内联安全
+        rows = query("SELECT channel, DATE(ordered_at) AS d, COUNT(*) AS c FROM orders "
+                     "WHERE synced_at >= DATE_SUB(NOW(), INTERVAL %d HOUR) "
+                     "GROUP BY channel, DATE(ordered_at)" % _h) or []
+    except Exception as _e:
+        try_err('cron', 'agg-sweep 扫描降级', _e)
+        return {"marked": 0, "error": "扫描失败"}
+    from routes.common import mark_agg_days as _mkd
+    _by, _rows = {}, 0
+    for r in rows:
+        _ch, _d = str(r.get("channel") or ""), str(r.get("d") or "")[:10]
+        if _ch and _d:
+            _by.setdefault(_ch, set()).add(_d)
+            _rows += int(r.get("c") or 0)
+    _n = 0
+    for _ch, _ds in _by.items():
+        _n += _mkd(_ch, _ds, reason="sweep")
+    # 同步消费一轮(最多 40 天/轮) —— 让调用方返回时数据已追平, 便于直接验证
+    from routes.analysis_cache import _drain_agg_dirty
+    _res = _drain_agg_dirty()
+    if _n:
+        _log("info", "agg-sweep: %d 小时内 %d 行变更 → 标记 %d 个业务日期, 重建 %d 天"
+             % (_h, _rows, _n, _res.get("days", 0)))
+    return {"hours": _h, "rows": _rows, "marked": _n,
+            "rebuilt": _res.get("days", 0), "pending": _res.get("pending", 0),
+            "mode": _res.get("mode")}
+
+
+@router.api_route("/cron/agg-sweep", methods=["GET", "POST"])
+@traced
+@_pipe("agg_sweep", rows_key="marked")
+async def cron_agg_sweep(request: Request, hours: int = 48):
+    """兜底扫描(2026-11-02 S2-2): 按 orders.synced_at 反查「最近被改过的业务日期」并重建
+
+    为什么需要它: 增量重建的正确性依赖「每个写入口都调了 mark_agg_days」。漏一个入口,
+    那条路径的数据就永远进不了物化, 而且**不会报错** —— 只有用户发现数字不对才会知道。
+    synced_at 由数据库自动维护(ON UPDATE), 不经过应用代码: 应用代码可以漏, 它漏不了。
+
+    为什么按「改过的日期」而不是按「导入时间窗口」: 补录的 ordered_at 可以是任意历史日期,
+    与什么时候写进来无关。这里拿 synced_at 当**触发器**, 拿 ordered_at 当**重建范围**。
+
+    每天一次、只扫最近 N 小时, 成本 = 重建那几天(单日几十毫秒), 与全量 90 天差两个数量级。
+    """
+    if not await _authed(request):
+        return fail("未授权", 401)
+    return ok(run_agg_sweep(hours))
 
 
 @router.api_route("/cron/reconcile", methods=["GET", "POST"])

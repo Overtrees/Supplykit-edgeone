@@ -14,8 +14,11 @@ import { useAppStore } from '../store/useAppStore'
  * 但有三件事必须由页面负责说清楚, 否则数字会被误读:
  *  1. 口径: 金额 = 订单金额合计(全部状态), **不等于**看板的 GMV(已支付口径)。
  *     两个页面数字对不上时, 用户第一反应是"有 bug"。
- *  2. 覆盖: 归档为空时要直说"为什么空"(订单最早到哪天 / 保留期多久), 而不是空白表格。
+ *  2. 覆盖: 归档为空时要直说"为什么空", 而不是空白表格。
  *  3. 同比: 没有去年数据时显示"无可比数据", 绝不用 0 当分母算成 -100%。
+ *
+ * 样式一律走 styles.css 的 .hist-* 类(2026-11-02 用户要求): 内联 style 会让同一个
+ * "卡片内小标题"在四个卡片里各有一套字号/间距, 改一处漏三处。
  */
 const dstr = (d: Date) => d.toISOString().slice(0, 10)
 const daysAgo = (n: number) => {
@@ -25,18 +28,19 @@ const daysAgo = (n: number) => {
 }
 const today = () => dstr(new Date())
 
-const isNarrow = () => typeof window !== 'undefined' && window.innerWidth <= 932
+// 金额一律两位小数: 原实现 <1万走 toLocaleString 默认 0 位, 会显示 64046640.8 这类
+// "只有一位小数"的值, 与"万/亿"分支(两位)不一致, 同一列上下两行精度不同。
 const fmtMoney = (n: number): string => {
   const v = Number(n || 0)
   const abs = Math.abs(v)
   if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (abs >= (isNarrow() ? 1e4 : 1e5)) return (v / 1e4).toFixed(2) + '万'
-  return v.toLocaleString('zh-CN')
+  if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万'
+  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 const fmtInt = (n: number): string => {
   const v = Math.round(Number(n || 0))
-  if (Math.abs(v) >= (isNarrow() ? 1e4 : 1e5)) return Math.round(v / 1e4) + '万'
-  return String(v)
+  if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(2) + '万'
+  return v.toLocaleString('zh-CN')
 }
 
 const PRESETS = [
@@ -45,6 +49,22 @@ const PRESETS = [
   { id: '90d', label: '近 90 天', days: 90 },
   { id: 'custom', label: '自定义', days: 0 },
 ]
+
+/**
+ * 来源结构兼容层。
+ *
+ * 出现过 "来源: 订单表 undefined ~ undefined": 前端产物还在用数组下标(`s.orders[0]`),
+ * 而接口已改成对象 `{from,to,days}` —— `obj[0]` 恒为 undefined。两类结构都认,
+ * 缺字段就整段不显示, 不允许把 undefined 打到界面上。
+ */
+const readSeg = (v: any): { from: string; to: string; days: number } | null => {
+  if (!v) return null
+  if (Array.isArray(v)) {
+    return v[0] && v[1] ? { from: String(v[0]), to: String(v[1]), days: 0 } : null
+  }
+  if (!v.from || !v.to) return null
+  return { from: String(v.from), to: String(v.to), days: Number(v.days || 0) }
+}
 
 export default function HistoryPage() {
   const channel = useAppStore(s => s.channel)
@@ -65,14 +85,13 @@ export default function HistoryPage() {
     const my = ++seq.current
     setLoading(true)
     setErr(null)
-    const q = `channel=${encodeURIComponent(channel || 'jd')}&start=${start}&end=${end}&t=${freshStamp()}`
+    const ch = encodeURIComponent(channel || 'jd')
+    const q = `channel=${ch}&start=${start}&end=${end}&t=${freshStamp()}`
     Promise.allSettled([
-      api.get(`/api/history/coverage?channel=${encodeURIComponent(channel || 'jd')}`),
+      api.get(`/api/history/coverage?channel=${ch}`),
       api.get(`/api/history/summary?${q}&by=${by}`),
       api.get(`/api/history/top?${q}&by=${topBy}&limit=20`),
-      api.get(
-        `/api/history/yoy?channel=${encodeURIComponent(channel || 'jd')}&days=30&t=${freshStamp()}`,
-      ),
+      api.get(`/api/history/yoy?channel=${ch}&days=30&t=${freshStamp()}`),
     ]).then(([c, s, t0, y]) => {
       if (my !== seq.current) return
       const val = (r: any) => (r.status === 'fulfilled' ? r.value?.data : null)
@@ -139,59 +158,49 @@ export default function HistoryPage() {
     }
   }, [series])
 
-  // 来源 = 真的有数据的那段(后端按 src 分组统计), 不是"本来打算查的那段" ——
-  // 否则查 2023 年时页面会写"来源: 归档表", 而归档表里一行都没有。
+  // 来源 = 真的有数据的那段(后端按 src 分组统计), 不是"本来打算查的那段"。
   const srcText = useMemo(() => {
     const s = sum?.sources || {}
-    const parts: string[] = []
     const unit = by === 'month' ? ' 个月' : ' 天'
-    if (s.archive)
-      parts.push(`归档表 ${s.archive.from} ~ ${s.archive.to}(${s.archive.days}${unit})`)
-    if (s.orders) parts.push(`订单表 ${s.orders.from} ~ ${s.orders.to}(${s.orders.days}${unit})`)
+    const parts: string[] = []
+    const a = readSeg(s.archive)
+    const o = readSeg(s.orders)
+    if (a) parts.push(`归档 ${a.from} ~ ${a.to}(${a.days}${unit})`)
+    if (o) parts.push(`订单 ${o.from} ~ ${o.to}(${o.days}${unit})`)
     return parts.join(' · ')
   }, [sum, by])
 
   return (
-    <div>
+    <div className="hist-page">
       <div className="card">
-        <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 2 }}>
-          历史归档
-          <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
-            {' '}
-            一年以前的数据从这里查
-          </span>
+        <div className="hist-head">
+          <span className="hist-title">历史归档</span>
+          <span className="hist-sub">含 1 年以前</span>
         </div>
-        <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>
+        <div className="hist-note">
           {cov?.note || '加载中…'}
-          {cov?.archive?.rows
-            ? ` · ${fmtInt(cov.archive.rows)} 行 / ${fmtInt(cov.archive.skus)} 个 SKU`
-            : ''}
+          {cov?.archive?.rows ? ` · ${fmtInt(cov.archive.rows)} 行` : ''}
         </div>
 
-        {/* 区间与粒度分两行: 手机上 4 个预设 + 2 个粒度挤不进一行, 挤的结果是
-            "按日/按月"被顶到第二行左端, 看起来像布局坏了 */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+        <div className="hist-row">
           {PRESETS.map(p => (
             <span
               key={p.id}
-              className={'pill ' + (preset === p.id ? 'info' : 'neutral')}
+              className={'pill hist-pill ' + (preset === p.id ? 'info' : 'neutral')}
               onClick={() => pickPreset(p.id, p.days)}
-              style={{ cursor: 'pointer', fontSize: 'var(--font-xs)' }}
             >
               {p.label}
             </span>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-          <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            粒度
-          </span>
+
+        <div className="hist-row">
+          <span className="hist-row-label">粒度</span>
           {(['day', 'month'] as const).map(k => (
             <span
               key={k}
-              className={'pill ' + (by === k ? 'info' : 'neutral')}
+              className={'pill hist-pill ' + (by === k ? 'info' : 'neutral')}
               onClick={() => setBy(k)}
-              style={{ cursor: 'pointer', fontSize: 'var(--font-xs)' }}
             >
               {k === 'day' ? '按日' : '按月'}
             </span>
@@ -199,27 +208,27 @@ export default function HistoryPage() {
         </div>
 
         {preset === 'custom' && (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+          <div className="hist-row">
             <input
               type="date"
-              className="tpl-field"
+              className="hist-date"
               value={start}
               onChange={e => setStart(e.target.value)}
             />
-            <span className="muted small">~</span>
+            <span className="hist-row-label">~</span>
             <input
               type="date"
-              className="tpl-field"
+              className="hist-date"
               value={end}
               onChange={e => setEnd(e.target.value)}
             />
           </div>
         )}
 
-        <div className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
+        <div className="hist-note">
           {sum ? `${sum.start} ~ ${sum.end}` : ''}
-          {sum?.clamped ? ' · 已按单次查询 400 天上限截断' : ''}
-          {srcText ? ' · 来源: ' + srcText : ''}
+          {sum?.clamped ? ' · 已按 400 天上限截断' : ''}
+          {srcText ? ' · 来源 ' + srcText : ''}
         </div>
       </div>
 
@@ -231,42 +240,27 @@ export default function HistoryPage() {
 
       <div className="card">
         <div className="section-title">区间汇总</div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0,1fr))',
-            gap: 8,
-            margin: '8px 0 4px',
-          }}
-        >
+        <div className="hist-kpis">
           {[
             { k: '金额', v: fmtMoney(totals.gmv), s: '元' },
             { k: '单数', v: fmtInt(totals.orders), s: '单' },
             { k: '件数', v: fmtInt(totals.qty), s: '件' },
             { k: '日均', v: fmtMoney(totals.avg_gmv_per_day), s: '元/天' },
           ].map(x => (
-            <div key={x.k} style={{ minWidth: 0 }}>
-              <div className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-                {x.k}
-              </div>
-              <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, lineHeight: 1.25 }}>
-                {loading && !sum ? '—' : x.v}
-              </div>
-              <div className="small muted" style={{ fontSize: 'var(--font-9)' }}>
-                {x.s}
-              </div>
+            <div key={x.k}>
+              <div className="hist-kpi-k">{x.k}</div>
+              <div className="hist-kpi-v">{loading && !sum ? '—' : x.v}</div>
+              <div className="hist-kpi-u">{x.s}</div>
             </div>
           ))}
         </div>
-        <div className="small muted" style={{ fontSize: 'var(--font-9)', marginBottom: 6 }}>
-          金额 = 订单金额合计(全部状态), 与看板 GMV(已支付口径, 扣优惠/加运费税)不同口径
+        <div className="hist-note hist-caveat">
+          金额按订单原价合计(含未支付/退款)，与看板 GMV 口径不同
         </div>
         {empty ? (
-          <div
-            className="small muted"
-            style={{ padding: '22px 0', textAlign: 'center', fontSize: 'var(--font-13)' }}
-          >
-            该区间没有数据{cov?.note ? ' · ' + cov.note : ''}
+          <div className="hist-empty">
+            <div>该区间没有数据</div>
+            {cov?.note ? <div className="hist-empty-sub">{cov.note}</div> : null}
           </div>
         ) : (
           <Chart option={chartOption} height={200} />
@@ -274,143 +268,73 @@ export default function HistoryPage() {
       </div>
 
       <div className="card">
-        <div
-          className="section-title"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-        >
-          <span>Top 20</span>
-          <span
-            style={{
-              display: 'inline-flex',
-              gap: 2,
-              background: 'var(--bg)',
-              borderRadius: 999,
-              padding: 2,
-            }}
-          >
+        <div className="hist-title-row">
+          <span className="section-title hist-title-flat">Top 20</span>
+          <span className="hist-seg">
             {(['sku', 'store'] as const).map(k => (
               <span
                 key={k}
                 onClick={() => setTopBy(k)}
-                style={{
-                  fontSize: 'var(--font-9)',
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  cursor: 'pointer',
-                  fontWeight: topBy === k ? 600 : 400,
-                  background: topBy === k ? 'var(--card)' : 'transparent',
-                  color: topBy === k ? 'var(--text)' : 'var(--muted2)',
-                }}
+                className={'hist-seg-item' + (topBy === k ? ' on' : '')}
               >
-                {k === 'sku' ? '按 SKU' : '按店铺'}
+                {k === 'sku' ? 'SKU' : '店铺'}
               </span>
             ))}
           </span>
         </div>
         {(top?.items || []).length === 0 ? (
-          <div className="small muted" style={{ padding: '10px 0' }}>
-            无数据
-          </div>
+          <div className="hist-empty">无数据</div>
         ) : (
           (top.items as any[]).map((it, i) => (
-            <div
-              key={it.key + i}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '7px 0',
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
-              <span
-                className="small muted"
-                style={{ width: 18, fontSize: 'var(--font-xs)', flex: 'none' }}
-              >
-                {i + 1}
-              </span>
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: 'var(--font-13)',
-                }}
-                title={it.key}
-              >
+            <div key={it.key + i} className="hist-row-item">
+              <span className="hist-rank">{i + 1}</span>
+              <span className="hist-name" title={it.key}>
                 {it.key || '(空)'}
               </span>
-              <span style={{ fontSize: 'var(--font-13)', fontWeight: 600, flex: 'none' }}>
-                {fmtMoney(it.gmv)}
-              </span>
-              <span
-                className="small muted"
-                style={{ width: 46, textAlign: 'right', fontSize: 'var(--font-xs)', flex: 'none' }}
-              >
-                {it.share}%
-              </span>
+              <span className="hist-amt">{fmtMoney(it.gmv)}</span>
+              <span className="hist-share">{it.share}%</span>
             </div>
           ))
         )}
       </div>
 
       <div className="card">
-        <div className="section-title">同比 · 近 30 天 vs 去年同期</div>
+        <div className="section-title">同比 · 近 30 天</div>
         {!yoy ? (
-          <div className="small muted" style={{ padding: '10px 0' }}>
-            加载中…
-          </div>
+          <div className="hist-empty">加载中…</div>
         ) : !yoy.has_prev ? (
-          <div className="small muted" style={{ fontSize: 'var(--font-13)', lineHeight: 1.6 }}>
-            {yoy.note}
+          <div className="hist-note">
+            {yoy.prev?.start
+              ? `去年同期 ${yoy.prev.start} ~ ${yoy.prev.end} 无数据`
+              : '去年同期无数据'}
+            ，暂不做同比
           </div>
         ) : (
-          <div style={{ marginTop: 6 }}>
-            <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginBottom: 6 }}>
+          <>
+            <div className="hist-yoy-meta">
               {yoy.cur.start} ~ {yoy.cur.end} vs {yoy.prev.start} ~ {yoy.prev.end}
             </div>
             {(['gmv', 'orders', 'qty'] as const).map(k => {
-              const cur = yoy.cur[k]
-              const prev = yoy.prev[k]
               const d = yoy.delta?.[k]
-              const up = (d ?? 0) >= 0
+              const cls = d === null || d === undefined ? 'na' : d >= 0 ? 'up' : 'down'
               return (
-                <div
-                  key={k}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 0',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
-                  <span style={{ flex: 1, fontSize: 'var(--font-13)' }}>
+                <div key={k} className="hist-row-item">
+                  <span className="hist-name">
                     {k === 'gmv' ? '金额' : k === 'orders' ? '单数' : '件数'}
                   </span>
-                  <span style={{ fontSize: 'var(--font-13)' }}>
-                    {k === 'gmv' ? fmtMoney(cur) : fmtInt(cur)}
+                  <span className="hist-amt">
+                    {k === 'gmv' ? fmtMoney(yoy.cur[k]) : fmtInt(yoy.cur[k])}
                   </span>
-                  <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-                    去年 {k === 'gmv' ? fmtMoney(prev) : fmtInt(prev)}
+                  <span className="hist-share hist-share-wide">
+                    去年 {k === 'gmv' ? fmtMoney(yoy.prev[k]) : fmtInt(yoy.prev[k])}
                   </span>
-                  <span
-                    style={{
-                      width: 62,
-                      textAlign: 'right',
-                      fontSize: 'var(--font-13)',
-                      fontWeight: 600,
-                      color: d === null ? 'var(--muted2)' : up ? 'var(--danger)' : 'var(--success)',
-                    }}
-                  >
-                    {d === null ? '—' : (up ? '+' : '') + d + '%'}
+                  <span className={'hist-delta ' + cls}>
+                    {cls === 'na' ? '—' : (d >= 0 ? '+' : '') + d + '%'}
                   </span>
                 </div>
               )
             })}
-          </div>
+          </>
         )}
       </div>
     </div>

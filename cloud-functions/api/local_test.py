@@ -1205,7 +1205,7 @@ try:
     r = client.get("/history/yoy?channel=jd&days=30&end=2026-01-31", headers=_h)
     _d = r.json().get("data") or {}
     check("history/yoy 无去年数据时 has_prev=false 且不编造同比",
-          _d.get("has_prev") is False and _d.get("delta") is None and "归档" in (_d.get("note") or ""),
+          _d.get("has_prev") is False and _d.get("delta") is None and "无数据" in (_d.get("note") or ""),
           r.text[:200])
 
     r = client.get("/history/summary?channel=jd&start=2023-01-01&end=2023-03-01", headers=_h)
@@ -1223,6 +1223,93 @@ try:
     check("history/* 未登录被拦(业务数据不裸奔)", r.status_code == 401, str(r.status_code))
 except Exception as _e10:
     check("历史归档用例无异常", False, str(_e10)[:200])
+
+
+# ── S2-2 增量重建(2026-11-02): 按业务日期重建, 不按导入时间 ──
+try:
+    from routes.common import (_norm_day, mark_agg_days, clear_agg_day, AGG_WINDOW_DAYS)
+    from datetime import datetime as _dt4, timedelta as _td4, timezone as _tz4
+
+    _MARKED = []
+    _old_em4, _old_q4, _old_o4, _old_e4 = (_db.executemany, _db.query, _db.one, _db.execute)
+    _db.executemany = lambda sql, seq: _MARKED.extend(list(seq))
+    _db.query = lambda sql, params=None: (
+        [{"channel": "jd", "d": "2026-11-01", "ts": "2026-11-02 10:00:00"}]
+        if "FROM agg_dirty_days" in sql else _old_q4(sql, params))
+    _db.one = lambda sql, params=None: (
+        {"c": 0} if "FROM agg_dirty_days" in sql else _old_o4(sql, params))
+    _db.execute = lambda sql, params=None: (1 if "agg_dirty_days" in sql else 0)
+
+    from routes.common import _runs
+    check("S2-2 _runs 合并连续日期, 断点切段",
+          _runs(["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-09"]) ==
+          [("2026-10-01", "2026-10-03"), ("2026-10-09", "2026-10-09")],
+          str(_runs(["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-09"])))
+    check("S2-2 _runs 单段不超过 span 天(防大事务持锁)",
+          _runs(["2026-10-%02d" % i for i in range(1, 21)], 7) ==
+          [("2026-10-01", "2026-10-07"), ("2026-10-08", "2026-10-14"),
+           ("2026-10-15", "2026-10-20")],
+          str(_runs(["2026-10-%02d" % i for i in range(1, 21)], 7)))
+
+    check("S2-2 _norm_day 只认日期形状(不接受脏值)",
+          _norm_day("abc") == "" and _norm_day("2026-11") == ""
+          and _norm_day("2026-11-01 10:00:00") == "2026-11-01", "")
+
+    _oday = (_dt4.now(_tz4.utc) - _td4(days=AGG_WINDOW_DAYS + 5)).strftime("%Y-%m-%d")
+    _nday = (_dt4.now(_tz4.utc) - _td4(days=1)).strftime("%Y-%m-%d")
+    _MARKED.clear()
+    _n = mark_agg_days("jd", [_nday, _oday, "bad", _nday], reason="t")
+    check("S2-2 mark 去重 + 丢掉窗口外日期 + 拒绝脏值",
+          _n == 1 and len(_MARKED) == 1 and _MARKED[0][1] == _nday,
+          "n=%s marked=%s" % (_n, _MARKED))
+
+    _db.execute = lambda sql, params=None: (0 if "ts<=%s" in sql else 1)
+    check("S2-2 clear 在重建期间被重新标记时不误删",
+          clear_agg_day("jd", _nday, "2026-11-02 10:00:00") is False, "")
+    _db.execute = lambda sql, params=None: 1
+    check("S2-2 clear 正常出队", clear_agg_day("jd", _nday, "2026-11-02 10:00:00") is True, "")
+
+    _cw = open('routes/cleanse_write.py', encoding='utf-8').read()
+    check("S2-2 订单导入成功后登记重建",
+          "mark_agg_days(channel, _days" in _cw and "agg_sum=[\"quantity\"" in _cw, "cleanse_write.py")
+    check("S2-2 登记发生在写入之后(顺序反了会丢数据)",
+          _cw.index('_res = _write_batch("orders"') < _cw.index("mark_agg_days(channel, _days"),
+          "cleanse_write.py")
+
+    _od = open('routes/orders.py', encoding='utf-8').read()
+    check("S2-2 删单/恢复前先取受影响日期",
+          "_touch_days = _days_of(ids)" in _od and "_tdays = _days_of([oid])" in _od, "orders.py")
+    _mk_at = _od.index("_mark_days(_touch_days")
+    check("S2-2 先入队再 invalidate(否则线程读到空队列)",
+          _mk_at < _od.index("invalidate_all()", _mk_at), "orders.py")
+
+    _ac = open('routes/analysis_cache.py', encoding='utf-8').read()
+    check("S2-2 物化追平改为按日增量消费",
+          "_drain_agg_dirty" in _ac and "_MAT_WINDOW = 3" in _ac, "analysis_cache.py")
+    check("S2-2 增量重建同时重建日销快照(否则日销口径掉)",
+          "_rebuild_snapshot_range(ch, a, b)" in _ac, "analysis_cache.py")
+
+    _cr3 = open('routes/cron.py', encoding='utf-8').read()
+    check("S2-2 兜底扫描用 synced_at 反查业务日期",
+          "def run_agg_sweep" in _cr3 and "synced_at >= DATE_SUB" in _cr3, "cron.py")
+    check("S2-2 回收站永久删前先取日期",
+          "回收站取受影响日期" in _cr3, "cron.py")
+
+    _ix2 = open('index.py', encoding='utf-8').read()
+    check("S2-2 建 agg_dirty_days 表 + orders.synced_at 列",
+          "CREATE TABLE IF NOT EXISTS agg_dirty_days" in _ix2
+          and "synced_at DATETIME(6)" in _ix2, "index.py")
+
+    _dm2 = open('routes/dashboard_maintain.py', encoding='utf-8').read()
+    check("S2-2 每日维护跑兜底扫描",
+          "run_agg_sweep(48)" in _dm2, "dashboard_maintain.py")
+    check("S2-2 快照单日重建已抽成函数(对账与增量共用同一实现)",
+          "def _rebuild_snapshot_day" in _dm2 and "_rebuild_snapshot_day(channel, d)" in _dm2,
+          "dashboard_maintain.py")
+
+    _db.executemany, _db.query, _db.one, _db.execute = _old_em4, _old_q4, _old_o4, _old_e4
+except Exception as _e11:
+    check("S2-2 用例无异常", False, str(_e11)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

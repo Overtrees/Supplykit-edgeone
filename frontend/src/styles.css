@@ -2335,3 +2335,208 @@ input[type='file'] {
    解决: ①隐藏容器滚动条(保留滑动能力) ②orientation/resize 时强制重置滚动位置并重绘 */
 /* 2026-10-28 回退滚动条隐藏: ::-webkit-scrollbar display:none + 移除惯性滚动
    曾致 iOS 滚动容器首帧不绘制内容(需手动触摸触发); 横条滞留改由 JS 只清 scrollLeft 解决 */
+
+/* ── 历史归档页(2026-11-02 S2-4/A) ─────────────────────────────────────
+   整页样式集中在这里, 组件内不再写内联 style —— 否则同一个"卡片内小标题"在
+   4 个卡片里会有 4 套 padding/字号, 改一处漏三处。间距统一按 4 的倍数取。 */
+.hist-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.hist-title {
+  font-size: var(--font-18);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.hist-sub {
+  font-size: var(--font-xs);
+  font-weight: 400;
+  color: var(--muted);
+}
+.hist-note {
+  font-size: var(--font-xs);
+  color: var(--muted);
+  line-height: 1.55;
+  margin-top: 4px;
+}
+/* 筛选区: 预设 / 粒度 / 自定义日期 三行同构, 行间距统一 6px */
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.hist-row-label {
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  flex: none;
+}
+.hist-pill {
+  cursor: pointer;
+  font-size: var(--font-xs);
+}
+.hist-date {
+  font-size: var(--font-sm);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+/* 汇总四格: 桌面 4 列; 手机上 2 列 —— 4 列时金额(10,674,441.01)必溢出 */
+.hist-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+.hist-kpi-k {
+  font-size: var(--font-xs);
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.hist-kpi-v {
+  font-size: var(--font-18);
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-kpi-u {
+  font-size: var(--font-9);
+  color: var(--muted2);
+  margin-top: 2px;
+}
+.hist-empty {
+  padding: 24px 0;
+  text-align: center;
+  font-size: var(--font-13);
+  color: var(--muted);
+  line-height: 1.6;
+}
+/* 分段切换(SKU/店铺): 胶囊内嵌两块, 与 .pill 的视觉重量对齐但不占一整行 */
+.hist-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg);
+  border-radius: var(--radius-full);
+  padding: 2px;
+  flex: none;
+}
+.hist-seg-item {
+  font-size: var(--font-9);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  color: var(--muted2);
+  font-weight: 400;
+}
+.hist-seg-item.on {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+}
+/* 榜单/同比: 同一套行高(上下 8px)与分隔线, 两张卡片视觉节奏一致 */
+.hist-row-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hist-row-item:last-child {
+  border-bottom: none;
+}
+.hist-rank {
+  width: 18px;
+  flex: none;
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  font-variant-numeric: tabular-nums;
+}
+.hist-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-13);
+}
+.hist-amt {
+  flex: none;
+  font-size: var(--font-13);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.hist-share {
+  width: 48px;
+  flex: none;
+  text-align: right;
+  font-size: var(--font-xs);
+  color: var(--muted2);
+  font-variant-numeric: tabular-nums;
+}
+.hist-delta {
+  width: 64px;
+  flex: none;
+  text-align: right;
+  font-size: var(--font-13);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* 涨红跌绿(中国市场惯例) */
+.hist-delta.up {
+  color: var(--danger);
+}
+.hist-delta.down {
+  color: var(--success);
+}
+.hist-delta.na {
+  color: var(--muted2);
+}
+.hist-yoy-meta {
+  font-size: var(--font-xs);
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+@media (max-width: 600px) {
+  .hist-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+  .hist-title {
+    font-size: var(--font-lg);
+  }
+}
+/* 历史页根容器: 卡片间距只在这一次定义(页面内不再写 margin) */
+.hist-page {
+  display: grid;
+  gap: 12px;
+}
+.hist-caveat {
+  margin-bottom: 8px;
+}
+.hist-empty-sub {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  color: var(--muted2);
+}
+.hist-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+/* section-title 自带 margin-bottom, 放进 flex 行里会把行撑高 */
+.hist-title-flat {
+  margin-bottom: 0;
+}
+.hist-share-wide {
+  width: 96px;
+}

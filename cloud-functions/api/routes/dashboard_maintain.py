@@ -35,14 +35,19 @@ def _rebuild_day_agg(days=90, channel=None):
             try_err('dashboard', '静默降级', _e)
             return False
 
-def _rebuild_agg_day(channel, day):
-    """单日精准重建(2026-10-25 残留根治): DELETE 该日 agg 行 + INSERT SELECT 该日订单(小事务短锁,
-    不碰全窗口——大事务持锁致并发 9004)——软删使组合消失时 ON DUPLICATE 覆盖不了的残留由这里清"""
+def _rebuild_agg_range(channel, d1, d2):
+    """[d1,d2] 闭区间精准重建(2026-11-02 S2-2 新增): DELETE 区间 agg 行 + INSERT SELECT
+
+    为什么要区间而不只是单日: 补录常常是连续的(上月初 1~5 号 / 某个促销周), 逐日重建
+    每次都要一次事务往返(实测单日 ≈1.3s, 主要花在往返而非计算)。合并成区间后
+    5 天只需一次往返。**单段上限见 _runs(7 天)** —— 再长就是大事务持锁(9004 锁超时)。
+    """
     try:
         from db import transaction
-        _d2 = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        _d3 = (datetime.strptime(d2, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         with transaction():
-            execute("DELETE FROM orders_day_agg WHERE channel=%s AND `date`=%s", [channel, day])
+            execute("DELETE FROM orders_day_agg WHERE channel=%s AND `date`>=%s AND `date`<=%s",
+                    [channel, d1, d2])
             execute("INSERT INTO orders_day_agg(`date`, channel, order_status, store, gmv, subsidy, cnt) "
                     "SELECT DATE(ordered_at), channel, order_status, store, "
                     "SUM(IF(%s, total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)), "
@@ -51,11 +56,16 @@ def _rebuild_agg_day(channel, day):
                     "AND ordered_at >= %%s AND ordered_at < %%s "
                     "GROUP BY DATE(ordered_at), channel, order_status, store"
                     % (_status_cond(), _status_cond()),
-                    [channel, day + " 00:00:00", _d2 + " 00:00:00"])
+                    [channel, d1 + " 00:00:00", _d3 + " 00:00:00"])
         return True
     except Exception as _e:
-            try_err('dashboard', '单日重建降级', _e)
+            try_err('dashboard', '区间重建降级(%s %s~%s)' % (channel, d1, d2), _e)
             return False
+
+
+def _rebuild_agg_day(channel, day):
+    """单日精准重建(2026-10-25 残留根治): 软删使组合消失时 ON DUPLICATE 覆盖不了的残留由这里清"""
+    return _rebuild_agg_range(channel, day, day)
 
 def _mark_agg_dirty():
     """agg 重建失败置位(幂等, 1 行): summary 陈旧检测读到 → 降级直查, 不误用缺数据 agg"""
@@ -109,6 +119,35 @@ def _snapshot_step(channel, _db2):
     except Exception as _e:
             try_err('dashboard', '快照续段降级', _e)
 
+def _rebuild_snapshot_range(channel, d1, d2):
+    """[d1,d2] 闭区间快照精准重建: DELETE 区间 + INSERT SELECT(2026-11-02 S2-2)
+
+    补录历史日期时, 快照的 order_count 必须跟着变 —— 否则日销(30/60/90 天窗口)偏差,
+    再往下传导成"补货建议偏少", 而这层错误在订单页完全看不出来。
+    区间重建的理由同 agg: 逐日一次事务往返(实测 1.3~2.6s/天)在补录一段时会拖到几分钟。
+    """
+    from routes.common import SALES_SQL as _SQL
+    from db import transaction as _tx
+    # 用 [d1, d2+1) 而不是 DATE(ordered_at)=day: 后者把列包进函数, (channel,ordered_at)
+    # 索引失效 → 每次重建都变成全渠道扫描(实测: 2 天 8.6s, 比全量 90 天还慢)
+    _d3 = (datetime.strptime(d2, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    with _tx():
+        execute("DELETE FROM daily_sales_snapshot WHERE channel=%s AND `date`>=%s AND `date`<=%s",
+                [channel, d1, d2])
+        execute("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
+                "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
+                "FROM orders WHERE channel=%s AND ordered_at >= %s AND ordered_at < %s "
+                "AND order_status IN (" + _SQL + ") AND (deleted_at IS NULL OR deleted_at='') "
+                "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse",
+                [channel, d1 + " 00:00:00", _d3 + " 00:00:00"])
+
+
+def _rebuild_snapshot_day(channel, day):
+    """单日快照精准重建(对账自愈走这里, 保留原签名)"""
+    return _rebuild_snapshot_range(channel, day, day)
+
+
+
 def _snapshot_reconcile(channel, days=90, limit_days=10):
     """快照窗口对账自愈(2026-10-29): 软删订单后快照残留组合不会因 upsert 消失
 
@@ -133,12 +172,7 @@ def _snapshot_reconcile(channel, days=90, limit_days=10):
                                "GROUP BY DATE(ordered_at)", [channel, _start])}
         _bad = sorted(d for d in set(_snap) | set(_ord) if _snap.get(d) != _ord.get(d))
         for d in _bad[:limit_days]:
-            execute("DELETE FROM daily_sales_snapshot WHERE channel=%s AND `date`=%s", [channel, d])
-            execute("INSERT INTO daily_sales_snapshot(`date`, channel, sku, barcode, warehouse, order_count) "
-                    "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) "
-                    "FROM orders WHERE channel=%s AND DATE(ordered_at)=%s AND order_status IN (" + _SQL + ") "
-                    "AND (deleted_at IS NULL OR deleted_at='') "
-                    "GROUP BY DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse", [channel, d])
+            _rebuild_snapshot_day(channel, d)
         if _bad:
             try_err('dash', '快照残留自愈 %s: 发现 %d 天不一致, 本次修 %d 天'
                     % (channel, len(_bad), min(len(_bad), limit_days)), None)
@@ -232,6 +266,13 @@ def _track_data(channel, _db2):
                         _snapshot_reconcile(channel)   # 软删订单后的快照残留自愈
                     except Exception as _esr:
                         try_err('dashboard', '快照残留自愈降级', _esr)
+                    # 2026-11-02 S2-2: 兜底补扫 —— 增量重建依赖"每个写入口都登记了日期",
+                    # 漏一个入口不会报错、只会让物化长期少算。synced_at 由 DB 维护, 漏不了。
+                    try:
+                        from routes.cron import run_agg_sweep
+                        run_agg_sweep(48)
+                    except Exception as _esw:
+                        try_err('dashboard', 'agg 兜底扫描降级', _esw)
                 _th.Thread(target=_rc_run, daemon=True).start()
         except Exception as _erc2:
             try_err('dashboard', '日销对账调度降级', _erc2)

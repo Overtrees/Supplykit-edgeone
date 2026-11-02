@@ -7,6 +7,7 @@ import json
 
 from db import query, one, execute, executemany
 from routes.common import try_err, TARGET_WH as _TARGET_WH
+from routes.common import mark_agg_days
 
 
 # ── 是否做效期管理(2026-11-01)─────────────────────────────────────────────
@@ -828,7 +829,11 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             _fill_barcode_from_products(channel, cleaned)
         except Exception as _e:
             try_err('cleansing', '69码入口对齐降级(order)', _e)
-        return _write_batch("orders",
+        # 2026-11-02 S2-2: 先记下"这批数据落在哪些业务日期", 写成功后再登记重建。
+        #   顺序不能反 —— 先标记后写入的话, 后台重建线程可能在写入完成前就把这几天
+        #   重建完并清掉标记, 这批数据就永远进不了物化(且不会有任何报错)。
+        _days = {str(_it.get("ordered_at") or "")[:10] for _it in cleaned}
+        _res = _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
                              "quantity", "unit_price", "total_amount", "order_status",
                              "ordered_at", "paid_at", "platform", "channel", "data_source",
@@ -839,6 +844,14 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                             agg_key3="barcode",
                             agg_sum=["quantity", "total_amount", "actual_amount", "discount_amount",
                                      "freight_amount", "subsidy_amount", "tax_amount"])
+        # 只在真有行写成功时登记(全失败还去重建, 等于拿没变的数据白跑一遍物化)
+        try:
+            if int(_res[0] or 0) > 0:
+                mark_agg_days(channel, _days, reason="order_import")
+        except Exception as _em:
+            # 标记失败不影响导入结果(数据已落库), 由每日 sweep 用 synced_at 反查补标记
+            try_err('cleanse_write', '订单导入后登记重建降级', _em)
+        return _res
     if target == "gmv_flow":
         # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
         try_err('cleanse_write', 'gmv_flow 分支进入 cleaned=%d' % len(cleaned))

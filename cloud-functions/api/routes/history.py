@@ -134,16 +134,28 @@ def history_coverage(channel: str = ""):
                      (" AND channel=%s" if channel else ""), _p) or {}
             out["orders"] = {"rows": _int(_o.get("c")), "min": str(_o.get("mn") or "")[:10],
                              "max": str(_o.get("mx") or "")[:10]}
+            # 早于归档线但仍在 orders 里的行(2026-11-02 S2-2): 只可能是"补录了 365 天前的数据",
+            # archive 还没搬走。这段区间**本页查不到**(归档段读 daily_stats, 订单段从切线起),
+            # 与其让用户对着空白表格猜, 不如直接告诉他"下次归档后可见"。
+            _st = one("SELECT COUNT(*) AS c FROM orders "
+                      "WHERE (deleted_at IS NULL OR deleted_at='') AND ordered_at < %s" +
+                      (" AND channel=%s" if channel else ""),
+                      [_cutoff()] + ([channel] if channel else [])) or {}
+            out["stale_orders"] = _int(_st.get("c"))
         except Exception as _e:
             try_err('history', '覆盖率查询降级', _e)
         # 人话结论: 归档为空时直接说清"为什么空", 别让用户以为是查询坏了
         _a = out.get("archive") or {}
         if not _a.get("rows"):
             _mn = (out.get("orders") or {}).get("min") or ""
-            out["note"] = ("暂无归档数据: 订单最早 %s, 保留期 %d 天, 归档只搬 %d 天前的订单"
-                           % (_mn or "-", _CUT_DAYS, _CUT_DAYS))
+            # 一句人话即可: 长句("保留期 N 天, 归档只搬 N 天前的订单")在卡片顶部会折三行,
+            # 而用户只需要知道"为什么空 / 什么时候会有"
+            out["note"] = ("暂无归档：订单自 %s 起，满 %d 天后自动归档"
+                           % (_mn or "-", _CUT_DAYS))
         else:
             out["note"] = "归档覆盖 %s ~ %s" % (_a.get("min"), _a.get("max"))
+        if out.get("stale_orders"):
+            out["note"] += " · 另有 %d 行早于归档线待搬移" % out["stale_orders"]
         return out
     return ok(_cache_get("history|coverage|%s" % (channel or "all"), 300, _build))
 
@@ -268,8 +280,8 @@ def history_yoy(channel: str = "jd", end: str = "", days: int = 30):
         out = {"channel": channel, "days": _n, "cur": cur, "prev": prev, "has_prev": _has,
                "delta": None, "note": ""}
         if not _has:
-            out["note"] = ("去年同期(%s ~ %s)无数据 —— 归档表还没有那一年的记录; "
-                           "本页不做同比, 而不是按 0 算成 -100%%" % (_ps, _pe))
+            # 给 API 直接消费方的一句结论; 前端自己用 prev.start/end 拼完整句子
+            out["note"] = "去年同期(%s ~ %s)无数据, 不做同比" % (_ps, _pe)
         else:
             out["delta"] = _delta(cur, prev)
         return out

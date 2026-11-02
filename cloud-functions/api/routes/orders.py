@@ -96,6 +96,45 @@ def _skus_of(ids):
         return []
 
 
+def _days_of(ids):
+    """变更**之前**取受影响的 (channel, 业务日期) 集合(2026-11-02 S2-2)
+
+    软删/永久删让这些行从物化里消失, 恢复让它们重新出现 —— 两种都要重建对应日期。
+    必须先查后改: 删完再查, 行已经不可见, 就永远不知道该重建哪天。
+    """
+    if not ids:
+        return []
+    out = []
+    for _i in range(0, len(ids), 2000):
+        _b = ids[_i:_i + 2000]
+        _ph = ",".join(["%s"] * len(_b))
+        try:
+            rows = query("SELECT DISTINCT channel, DATE(ordered_at) AS d FROM orders "
+                         "WHERE id IN (%s)" % _ph, _b)
+        except Exception as _e:
+            try_err('orders', '取受影响日期降级', _e)
+            continue
+        for r in (rows or []):
+            _ch = str(r.get("channel") or "")
+            _d = str(r.get("d") or "")[:10]
+            if _ch and _d:
+                out.append((_ch, _d))
+    return out
+
+
+def _mark_days(pairs, reason="order_edit"):
+    """按渠道分组登记重建(批量操作可能跨渠道, 各自有自己的窗口)"""
+    _by = {}
+    for _ch, _d in pairs or []:
+        _by.setdefault(_ch, set()).add(_d)
+    for _ch, _ds in _by.items():
+        try:
+            mark_agg_days(_ch, _ds, reason=reason)
+        except Exception as _e:
+            # 失败不影响接口结果: 每日 sweep 会用 synced_at 反查补标记
+            try_err('orders', '订单变更后登记重建降级', _e)
+
+
 def _close_orphan(skus):
     """删单联动(2026-10-15 通用化): SKU 级孤儿关闭——core/rules.close_orphan_for_skus(该 SKU active 告警→规则 event 重评估——自定义 alert_type 覆盖 + low_stock 无行特殊)"""
     try:
@@ -109,6 +148,7 @@ def _close_orphan(skus):
 
 from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
+from routes.common import mark_agg_days
 
 router = APIRouter(tags=["orders"])
 
@@ -177,6 +217,9 @@ async def orders_batch(request: Request):
     if action not in ("delete", "restore", "permanent-delete") or not ids:
         return fail("参数无效: 需 action 与 ids")
     _del_skus = _skus_of(ids) if action in ("delete", "permanent-delete") else []
+    # 2026-11-02 S2-2: 三种动作都会改变物化(软删=消失 / 恢复=重现 / 永久删=消失),
+    # 受影响日期必须在动数据之前取出来
+    _touch_days = _days_of(ids)
     # 分批(5000/批)——防大批量单 SQL IN 过大/超时(10万级也稳定)
     for _i in range(0, len(ids), 5000):
         _batch = ids[_i:_i + 5000]
@@ -187,6 +230,8 @@ async def orders_batch(request: Request):
             execute("UPDATE orders SET deleted_at='' WHERE id IN (%s)" % _ph, _batch)
         else:
             execute("DELETE FROM orders WHERE id IN (%s)" % _ph, _batch)
+    # 先入队再失效: invalidate_all 会立刻起后台线程消费队列, 顺序反了线程会读到空队列
+    _mark_days(_touch_days, reason="order_" + action)
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     if action == "restore":
@@ -199,7 +244,9 @@ async def orders_batch(request: Request):
 @router.post("/orders/{oid}/restore")
 @traced
 def restore_order(oid: int):
+    _tdays = _days_of([oid])
     execute("UPDATE orders SET deleted_at='' WHERE id=%s", [oid])
+    _mark_days(_tdays, reason="order_restore")
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     _evaluate_restored([oid])
@@ -210,7 +257,9 @@ def restore_order(oid: int):
 @traced
 def permanent_delete_order(oid: int):
     _skus = _skus_of([oid])
+    _tdays = _days_of([oid])
     execute("DELETE FROM orders WHERE id=%s", [oid])
+    _mark_days(_tdays, reason="order_delete")
     from routes.analysis_cache import invalidate_all
     invalidate_all()
     _close_orphan(_skus)
