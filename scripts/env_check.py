@@ -147,25 +147,53 @@ if tok and pid and not NO_NET:
             "最近 %s %s · commit %s · Prod=%s · 本地 HEAD=%s%s"
             % (d.get("DeploymentId"), d.get("Status"), dc,
                "yes" if d.get("UsedInProd") else "-", head,
-               "" if same else " (不一致)"))
+               "" if same else " (SHA 不同; 走 push_api 推送属预期, 内容是否一致用 push_api --dry-run 复核)"))
     except Exception as e:
         add("线上部署", False, str(e)[:90], "token 过期/ProjectId 错误 → 重新生成 API Token")
 elif not NO_NET:
     add("线上部署", False, "凭据不全, 未查询", None)
 
 # ── 4. push 权限(部署触发器: 本项目为 Git 集成, push 即构建) ──
-if not NO_NET:
+# 2026-11-02 改判据: 本沙箱 github.com:443 不可达, 实际通道是 api.github.com(scripts/push_api.py)。
+#   所以先按 API 探测, 通了就算可推送; API 也不通时才回落到 git push 探测。
+def _gh_slug():
+    rc, out, _ = run(["git", "remote", "get-url", "origin"], timeout=10)
+    u = out.strip()
+    u = u.split("github.com")[-1].lstrip("/:").replace(".git", "")
+    parts = [x for x in u.split("/") if x]
+    return (parts[0], parts[1]) if len(parts) >= 2 else (None, None)
+
+
+_gh = os.environ.get("GITHUB_TOKEN")
+if not _gh and os.path.exists(auth_f):
+    try:
+        _gh = json.load(open(auth_f)).get("GITHUB_TOKEN")
+    except Exception:
+        pass
+push_ok, push_msg = False, ""
+if _gh and not NO_NET:
+    _o, _r = _gh_slug()
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/%s/%s" % (_o, _r),
+            headers={"Authorization": "Bearer " + _gh, "Accept": "application/vnd.github+json",
+                     "User-Agent": "supplykit-envcheck"})
+        _pr = (json.loads(urllib.request.urlopen(req, timeout=15).read()).get("permissions") or {})
+        push_ok = bool(_pr.get("push"))
+        push_msg = "可推送(经 GitHub API, 用 scripts/push_api.py)" if push_ok else "token 无 push 权限"
+    except Exception as e:
+        push_msg = "GitHub API 不可用: %s" % str(e)[:50]
+
+if not push_ok and not NO_NET and "GitHub API 不可用" not in push_msg:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true")
     rc, out, err = run(["git", "push", "--dry-run", "origin", "HEAD:refs/heads/feat/edgeone"],
                        timeout=25, env=env)
-    ok = rc == 0
-    _msg = "可推送(部署将随之触发)" if ok else (err or out).split("\n")[-1][:90]
-    if "timed out" in _msg or not _msg:
-        _msg = "超时(无凭据或网络受限, 无法判定)"
-    add("push 权限", ok, _msg,
-        "配 GitHub PAT: git remote set-url origin https://<user>:<token>@github.com/Overtrees/Supplykit-edgeone.git")
-else:
-    add("push 权限", True, "已跳过(--no-net)")
+    push_ok = rc == 0
+    push_msg = "可推送(git 直连)" if push_ok else (err or out).split("\n")[-1][:90]
+    if "timed out" in push_msg or not push_msg:
+        push_msg = "超时(无凭据或网络受限, 无法判定)"
+add("push 权限", push_ok or NO_NET, "已跳过(--no-net)" if NO_NET else push_msg,
+    "GitHub PAT 需 contents:write: 写入 .edgeone/auth.json 的 GITHUB_TOKEN")
 
 # ── 5. 部署 CLI(可选, 直传项目才用得上) ──
 rc, out, _ = run(["edgeone", "--version"], timeout=20)
