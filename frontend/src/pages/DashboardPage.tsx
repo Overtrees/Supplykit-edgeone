@@ -398,15 +398,19 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 clearInterval(timer)
                 return
               }
+              // 2026-11-02 重试必须绕开缓存: 走到这里说明上一轮拿到的不是可用数据(异常结构),
+              //   而那次 200 响应已经写进 30s 缓存 —— 若沿用 freshStamp() 的时间窗 key,
+              //   3s/6s/9s 三次重试会全部命中同一份坏数据, 重试等于没做。此处用真实时间戳。
+              const _rt = 't=' + Date.now()
               Promise.allSettled([
                 (() => {
                   const _st = useAppStore.getState()
-                  let _u = '/api/dashboard/summary?t=' + freshStamp()
+                  let _u = '/api/dashboard/summary?' + _rt
                   if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
                     _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
                   return api.get(_u)
                 })(),
-                api.get('/api/dashboard/stock-risk?t=' + freshStamp()),
+                api.get('/api/dashboard/stock-risk?' + _rt),
               ]).then(([s2, r2]) => {
                 if (seq !== reqSeq.current) {
                   clearInterval(timer)
