@@ -3,6 +3,7 @@ import Chart from '../components/Chart'
 import ErrorRetry from '../components/ErrorRetry'
 import { api, freshStamp } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
+import { t } from '../locale'
 
 /**
  * 历史归档(2026-11-02 S2-4 方案 A)
@@ -88,7 +89,7 @@ export default function HistoryPage() {
     Promise.allSettled([
       api.get(`/api/history/summary?${q}&by=${by}`),
       api.get(`/api/history/top?${q}&by=${topBy}&limit=20`),
-      api.get(`/api/history/yoy?channel=${ch}&days=30&t=${freshStamp()}`),
+      api.get(`/api/history/yoy?${q}`),
     ])
       .then(([s, t0, y]) => {
         if (my !== seq.current) return
@@ -171,7 +172,16 @@ export default function HistoryPage() {
       ) : null}
 
       <div className="card">
-        <div className="section-title">区间汇总</div>
+        {/* 2026-11-02 S2-9: 口径提示从"数字与图表之间"上提到标题行 —— 它原来是 11px
+            灰字夹在 KPI 和趋势图中间, 读的人会跳过; 但它不是装饰: 拿本页金额和看板
+            GMV 对不上时, 这是唯一能解释差异的依据。放标题右侧后与"区间汇总"同层,
+            不打断"数字→图"的阅读动线 */}
+        <div className="hist-title-row">
+          <span className="section-title hist-title-flat">区间汇总</span>
+          <span className="hist-caveat-inline" title={t('hist.caveat_full')}>
+            {t('hist.caveat_short')}
+          </span>
+        </div>
         {/* 2026-11-02 S2-9: 首载(无任何数据)走骨架, 刷新(有旧值)走淡出过渡 ——
             原来一律显示四个 "—", 用户分不清"在加载"和"真的没数" */}
         <div className={'hist-kpis' + (loading && !sum ? ' is-fresh' : '')}>
@@ -197,9 +207,6 @@ export default function HistoryPage() {
               </div>
             </div>
           ))}
-        </div>
-        <div className="hist-note hist-caveat">
-          金额按订单原价合计(含未支付/退款)，与看板 GMV 口径不同
         </div>
         {loading && !sum ? (
           <div className="skeleton hist-chart-skel" />
@@ -244,7 +251,16 @@ export default function HistoryPage() {
       </div>
 
       <div className="card">
-        <div className="section-title">同比 · 近 30 天</div>
+        {/* 2026-11-02 S2-9: 标题去"近 30 天" —— 口径改成跟随菜单区间(与汇总同源),
+            写死天数会与上方汇总各算一套时间窗, 页面里出现两个口径却无一处说明 */}
+        <div className="hist-title-row">
+          <span className="section-title hist-title-flat">同比</span>
+          {yoy?.cur?.start && yoy?.cur?.end ? (
+            <span className="hist-yoy-span">
+              {yoy.cur.start} ~ {yoy.cur.end}
+            </span>
+          ) : null}
+        </div>
         {!yoy ? (
           <div className="hist-empty">加载中…</div>
         ) : !yoy.has_prev ? (
@@ -257,7 +273,7 @@ export default function HistoryPage() {
         ) : (
           <>
             <div className="hist-yoy-meta">
-              {yoy.cur.start} ~ {yoy.cur.end} vs {yoy.prev.start} ~ {yoy.prev.end}
+              去年同期 {yoy.prev.start} ~ {yoy.prev.end}
             </div>
             {(['gmv', 'orders', 'qty'] as const).map(k => {
               const d = yoy.delta?.[k]

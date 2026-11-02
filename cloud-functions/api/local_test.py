@@ -1212,6 +1212,27 @@ try:
           _d.get("has_prev") is False and _d.get("delta") is None and "无数据" in (_d.get("note") or ""),
           r.text[:200])
 
+    # 2026-11-02 S2-9: 同比跟随区间 —— 传 start/end 时窗口按两端日期算(不再只认 days)
+    r = client.get("/history/yoy?channel=jd&start=2026-10-04&end=2026-11-02", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/yoy 传 start/end 时按区间窗口(cur 两端与入参一致, 天数=30)",
+          (_d.get("cur") or {}).get("start") == "2026-10-04"
+          and (_d.get("cur") or {}).get("end") == "2026-11-02"
+          and _d.get("days") == 30, r.text[:220])
+
+    # 同一 end 不同 start 不能共用缓存(否则改起点仍返回旧窗口)
+    r2 = client.get("/history/yoy?channel=jd&start=2026-09-01&end=2026-11-02", headers=_h)
+    _d2 = r2.json().get("data") or {}
+    check("history/yoy 缓存 key 含 start(同 end 不同起点窗口不同)",
+          (_d2.get("cur") or {}).get("start") == "2026-09-01"
+          and (_d2.get("days") or 0) == 63, r2.text[:220])
+
+    # 区间超 400 天: 与 _range 同口径, 截断到最近 400 天而不是报错
+    r3 = client.get("/history/yoy?channel=jd&start=2024-01-01&end=2026-11-02", headers=_h)
+    _d3 = r3.json().get("data") or {}
+    check("history/yoy 区间 >400 天截断到 400 天",
+          r3.status_code == 200 and (_d3.get("days") or 0) == 400, r3.text[:220])
+
     r = client.get("/history/summary?channel=jd&start=2023-01-01&end=2023-03-01", headers=_h)
     _d = r.json().get("data") or {}
     check("history/summary 无数据时不谎报来源(两段都为 null)",

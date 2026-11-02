@@ -270,15 +270,37 @@ def _delta(cur, prev):
 
 @router.get("/history/yoy")
 @traced
-def history_yoy(channel: str = "jd", end: str = "", days: int = 30):
-    """同比: 近 N 天 vs 去年同 N 天(去年那份来自归档表)
+def history_yoy(channel: str = "jd", end: str = "", days: int = 30,
+                start: str = ""):
+    """同比: 本报区间 vs 去年同期(去年那份来自归档表)
 
     关键取舍: **没有去年数据就返回 has_prev=false, 不算同比**。
     直接算 (今年-0)/0 会显示 -100%, 用户会以为生意掉了 100% —— 这比"暂无同比"有害得多。
+
+    2026-11-02 S2-9(用户定案"同比跟随区间"): 新增 start。
+    此前只认 days(默认近 30 天), 而历史页上方汇总跟着菜单区间走 —— 选「近 90 天」时
+    页面里同时存在 90 天汇总与 30 天同比两个时间口径, 且界面上没有任何字说明。
+    现在传 [start,end] 就按这段算, 去年同期 = 各自减 _CUT_DAYS; 不传 start 仍走
+    原 days 语义(向后兼容, 其它调用方零改动)。
     """
-    _n = max(1, min(int(days or 30), 366))
     _e = str(end or "").strip()[:10] or _today()
-    _s = _shift(_e, -(_n - 1))
+    _s = str(start or "").strip()[:10]
+    if _s:
+        try:
+            datetime.strptime(_s, "%Y-%m-%d")
+            datetime.strptime(_e, "%Y-%m-%d")
+        except Exception:
+            _s = ""
+    if _s and _s <= _e:
+        # 区间语义: 天数由两端日期决定(含首尾), 同样限 400 天与 _range 一致
+        _n = (datetime.strptime(_e, "%Y-%m-%d") -
+              datetime.strptime(_s, "%Y-%m-%d")).days + 1
+        if _n > _MAX_SPAN:
+            _s = _shift(_e, -(_MAX_SPAN - 1))
+            _n = _MAX_SPAN
+    else:
+        _n = max(1, min(int(days or 30), 366))
+        _s = _shift(_e, -(_n - 1))
     _ps, _pe = _shift(_s, -_CUT_DAYS), _shift(_e, -_CUT_DAYS)
 
     def _window(start, end):
@@ -303,5 +325,6 @@ def history_yoy(channel: str = "jd", end: str = "", days: int = 30):
             out["delta"] = _delta(cur, prev)
         return out
 
-    _key = "history|yoy|%s|%s|%d" % (channel, _e, _n)
+    # key 必须含 _s: 加了 start 参数后, 同一 end 配不同起点是两份不同结果
+    _key = "history|yoy|%s|%s|%s|%d" % (channel, _s, _e, _n)
     return ok(_cache_get(_key, 120, _build))

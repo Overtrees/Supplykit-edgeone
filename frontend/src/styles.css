@@ -2567,8 +2567,24 @@ input[type='file'] {
     height: 260px;
   }
 }
-.hist-caveat {
-  margin-bottom: 8px;
+/* 口径提示(短句常驻标题行右侧, 2026-11-02 从卡片中部上提):
+   淡底胶囊 + 10px, 与标题同层但不抢主标题; title 属性挂长句全文(桌面悬停可见),
+   手机上点不出来的问题由文案本身"非 GMV 口径"兜住语义。 */
+.hist-caveat-inline {
+  flex: none;
+  font-size: var(--font-10);
+  color: var(--muted);
+  background: var(--gray);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  line-height: 1.5;
+  cursor: help;
+}
+/* 同比卡: 区间在标题行右侧(替代原来标题里的"近 30 天"), 与汇总同口径 */
+.hist-yoy-span {
+  font-size: var(--font-10);
+  color: var(--muted2);
+  flex: none;
 }
 /* 2026-11-02 S2-9: .hist-empty-sub 随"空态兜底说明"一并删除 —— 归档说明只在锤子
    菜单显示, 页面空态只留一句"该区间没有数据" */

@@ -25,6 +25,9 @@ const zh: Record<string, string> = {
   'hist.archive_day': '订单自 {d} 起，满 {n} 天后自动归档',
   'hist.archive_stale': '另有 {n} 行早于归档线待搬移',
   'hist.clamped_hint': '跨度超过 400 天，已截断至最近 400 天',
+  // 口径提示: 短句常驻标题行(长句本身在卡片里太抢眼, 但这条不能删)
+  'hist.caveat_short': '非 GMV 口径',
+  'hist.caveat_full': '金额按订单原价合计（含未支付/退款），与看板 GMV 口径不同',
   'nav.insights': '货品供应建议',
   'nav.cleansing': '数据清洗及导入',
   'nav.rules': '规则与参数搭建',
@@ -197,6 +200,9 @@ const en: Record<string, string> = {
   'hist.archive_day': 'Orders from {d} auto-archive after {n} days',
   'hist.archive_stale': '{n} rows past the cutoff awaiting move',
   'hist.clamped_hint': 'Span over 400 days — truncated to the latest 400',
+  'hist.caveat_short': 'Not GMV basis',
+  'hist.caveat_full':
+    'Amounts sum order list price (incl. unpaid/refunded) — differs from dashboard GMV',
   'nav.insights': 'Replenishment',
   'nav.cleansing': 'Data Import',
   'nav.rules': 'Rules & Parameters',
