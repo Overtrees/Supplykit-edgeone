@@ -1355,6 +1355,11 @@ try:
           "cleanse_write.py")
     check("S2-5 多码 SKU 不参与对齐(那本来就是多行)",
           'len(_nonempty) == 1 and "" not in _codes' in _cw3, "cleanse_write.py")
+    # 实测 TiDB 单条 UPDATE 222ms —— 逐行升级 5000 行要 18 分钟, 必须是批量 CASE 语句
+    check("S2-5 空码升级走批量 CASE(不是逐行 UPDATE)",
+          "def _promote_empty_barcode" in _cw3 and "CASE CONCAT(order_no,'|',sku)" in _cw3
+          and "UPDATE orders SET barcode=%s WHERE channel=%s AND order_no=%s" not in _cw3,
+          "cleanse_write.py")
 
     _cl3 = open('routes/cleansing.py', encoding='utf-8').read()
     check("S2-5 订单不再被入口查重拦死(否则覆盖逻辑成死代码)",
