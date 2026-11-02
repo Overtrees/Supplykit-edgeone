@@ -726,14 +726,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   现在: ① 进入页面自动拉一次全量(不用等用户点「更多」) ② 卡面与弹窗同源同口径。
   const lowStockFull = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : null
   const lowStockAlerts = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
-  // 卡面 5 行取数(2026-11-02 改「按仓轮转」, 取代旧的「全局按 SKU 去重取前 5」):
-  //   旧法的问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是同一个仓(实测全落郑州仓),
-  //   多仓都缺货这件事在卡面上完全看不出来。
-  //   注意**不能**改成"每仓最多 1 条"的硬配额: 那样只有 3 个仓时就只显示 3 行, 卡面反而空掉。
-  //   现方案: ① 去重键改成「SKU × 仓」(副行已带仓库名, 同 SKU 多仓是有效信息, 不算重复);
-  //          ② 按仓分桶(桶内保持 id DESC), 轮转取数 —— 第一轮每仓各 1 条保证覆盖,
-  //             不满 5 条再来第二轮、第三轮…
-  //   → 3 个仓 = 3+2 共 5 行(不浪费卡面); ≥5 个仓 = 每仓 1 行(谁都不被淹没)。
+  // 卡面 5 行取数(2026-11-02 改「按仓轮转 + 轮内 SKU 去重」):
+  //   旧法问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是郑州仓。
+  //   但**只按仓轮转还不够**: 规则引擎对各仓是同一批 SKU 顺序评估的, 每个仓的"第一条"
+  //   往往是同一个 SKU(线上实测 7 个仓 top1 都是 SKU-0987-J) → 卡面会变成"同一 SKU × 5 个仓",
+  //   仍然像重复行。所以每轮取数时**优先挑本仓还没出现过的 SKU**, 只有该仓确实没有新 SKU 才允许重复。
+  //   注意**不能**改成"每仓最多 1 条"的硬配额: 只有 3 个仓时卡面就只剩 3 行, 白白空掉。
+  //   现方案: ① 去重键「SKU × 仓」防重复告警; ② 按仓分桶(桶内 id DESC);
+  //          ③ 逐轮、逐仓取 1 条, 轮内跳过已上卡面的 SKU。3 仓 = 3+2 共 5 行; ≥5 仓 = 每仓 1 行。
   const lowStockShown = (() => {
     const seen = new Set<string>()
     const buckets: Record<string, typeof lowStockAlerts> = {}
@@ -750,15 +750,25 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       buckets[w].push(x)
     }
     const out: typeof lowStockAlerts = []
-    for (let round = 0; out.length < 5; round++) {
+    const usedSku = new Set<string>()
+    const ptr: Record<string, number> = {}
+    for (let round = 0; out.length < 5 && round < 500; round++) {
       let added = false
       for (const w of order) {
         if (out.length >= 5) break
-        const row = buckets[w][round]
-        if (row) {
-          out.push(row)
-          added = true
-        }
+        const arr = buckets[w]
+        const start = ptr[w] || 0
+        if (start >= arr.length) continue
+        let idx = start
+        const skuOf = (r: (typeof arr)[number]) => String(r.related_sku || r.id)
+        while (idx < arr.length && usedSku.has(skuOf(arr[idx]))) idx++
+        // 本仓找不到新 SKU 时退回本轮首条(同 SKU 多仓缺货仍是有效信息, 不该留空)
+        const pick = idx < arr.length ? idx : start
+        const row = arr[pick]
+        ptr[w] = pick + 1
+        out.push(row)
+        usedSku.add(skuOf(row))
+        added = true
       }
       if (!added) break
     }
