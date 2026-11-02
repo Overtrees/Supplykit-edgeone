@@ -1715,5 +1715,66 @@ try:
 except Exception as _e17:
     check("S2-1d 自有仓在途用例无异常", False, str(_e17)[:200])
 
+# ── S2-1e: 库存联动 _adjust_inventory 的组合键补齐(四维 sku×码×仓×仓型) ──
+try:
+    from routes import cleanse_write as _cw5
+    _src5 = open('routes/cleanse_write.py', encoding='utf-8').read()
+    check("S2-1e 联动键含 69码(不再是三维 sku+仓+仓型)",
+          "def _adjust_key" in _src5 and "barcode" in _src5.split("def _adjust_key")[1][:900],
+          "routes/cleanse_write.py")
+    check("S2-1e 联动命中行按五维匹配(码/仓型都进 _cur_map 键)",
+          "str(_c.get(\"wt\") or \"\"))] = _c" in _src5.replace(" ", "").replace("\n", "")
+          or "COALESCE(warehouse_type,'') AS wt" in _src5, "routes/cleanse_write.py")
+    check("S2-1e 联动不再逐 SKU 回查库(`LIMIT 1` 取任意行会串码)",
+          "inventory WHERE sku=%s AND channel=%s LIMIT 1" not in _src5, "routes/cleanse_write.py")
+    check("S2-1e 新行落 barcode 且 beginning_stock 同步(否则重算把增量抹成 0)",
+          "INSERT INTO inventory(sku, barcode, warehouse, warehouse_type, available_qty, " in _src5
+          and "beginning_stock, safety_qty, channel" in _src5, "routes/cleanse_write.py")
+
+    # 动态: 同 SKU 两个 69码 → 各更新各的行(id 不能串); 三维旧键 → 落到空码行
+    _rows5 = [
+        {"id": 11, "sku": "SKU-X", "bc": "BC-A", "wh": "集货仓", "wt": "own",
+         "available_qty": 10, "safety_qty": 3, "product_name": "多码品", "in_transit_qty": 0},
+        {"id": 12, "sku": "SKU-X", "bc": "BC-B", "wh": "集货仓", "wt": "own",
+         "available_qty": 50, "safety_qty": 3, "product_name": "多码品", "in_transit_qty": 7},
+    ]
+    _seen5 = {"sql": [], "upd": [], "ins": [], "ctx": []}
+    _o5 = (_cw5.query, _cw5.executemany)
+    _cw5.query = lambda sql, params=None: _seen5["sql"].append(sql) or list(_rows5)
+    _cw5.executemany = lambda sql, rows: (_seen5["upd" if sql.lstrip().upper().startswith("UPDATE") else "ins"].append((sql, list(rows))) or len(rows))
+    # 拦截规则评估: 直接看传进来的上下文
+    import core.rules as _cr5
+    _o_em5 = _cr5.evaluate_many
+    _cr5.evaluate_many = lambda ev, ctxs, ch=None, rc=None, **k: (_seen5["ctx"].extend(ctxs) or [])
+    try:
+        _n5, _t5 = _cw5._adjust_inventory("jd", {
+            ("SKU-X", "BC-A", "集货仓", "own"): -4,   # 命中 id=11 → 10-4=6
+            ("SKU-X", "BC-B", "集货仓", "own"): -5,   # 命中 id=12 → 50-5=45
+            ("SKU-X", "集货仓", "own"): -1,           # 旧三维键 → 空码行(库中无) → 插入
+            ("SKU-NEW", "BC-C", "集货仓", "own"): 8,  # 新行, 无库存行 → 插入
+        })
+    finally:
+        _cw5.query, _cw5.executemany = _o5
+        _cr5.evaluate_many = _o_em5
+    _upd5 = dict((r[1], r[0]) for (sq, rr) in _seen5["upd"] for r in rr)
+    check("S2-1e 多码各扣各的(A码 10→6, B码 50→45, id 不串)",
+          _upd5.get(11) == 6 and _upd5.get(12) == 45, str(_upd5))
+    _ins5 = [r for (sq, rr) in _seen5["ins"] for r in rr]
+    check("S2-1e 新行走 INSERT 且带码(旧三维键→空码行, 新 SKU→BC-C)",
+          len(_ins5) == 2
+          and any(r[1] == "" and r[2] == "集货仓" and r[4] == 0 for r in _ins5)
+          and any(r[1] == "BC-C" and r[5] == 8 for r in _ins5), str(_ins5))
+    check("S2-1e 评估上下文逐行(sku×码×仓)且用更新后的量",
+          len(_seen5["ctx"]) == 4
+          and {(c["sku"], c["barcode"], c["inv"]["available_qty"]) for c in _seen5["ctx"]}
+          >= {("SKU-X", "BC-A", 6), ("SKU-X", "BC-B", 45), ("SKU-NEW", "BC-C", 8)},
+          str(_seen5["ctx"])[:240])
+    check("S2-1e 联动不再有逐 SKU 回查(query 只调一次批量 SELECT)",
+          len(_seen5["sql"]) == 1, "query 调用 %d 次" % len(_seen5["sql"]))
+    check("S2-1e 软删行不参与命中(WHERE 带 deleted_at 过滤)",
+          all("deleted_at" in s for s in _seen5["sql"]), str(_seen5["sql"])[:160])
+except Exception as _e18:
+    check("S2-1e 库存联动键用例无异常", False, str(_e18)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

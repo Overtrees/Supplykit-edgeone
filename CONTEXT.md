@@ -146,9 +146,13 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   `purchase_orders` 反推(那张表没有 qty/received_qty, 恒 0 且与导入值双计)。同日对齐组合键:
   自有仓按 `(sku, 69码, 仓)` 聚合、批次只查 own 仓并按同码同仓优先、告警行用库存行真实码。
   线上 jd 效期 51 → 31(20 条是把 B 仓/platform 仓批次当自有仓的误报)。见 §15.118
-- **待办(已定位未改): `cleanse_write._adjust_inventory` 的 deltas 键缺 69码**
-  (`(sku, warehouse, warehouse_type)`), 多码 SKU 会命中错行(`_cur_map` 后者覆盖前者)。
-  当前无调用点(出库联动走 `_recalc_own_inventory`, 严格按码匹配), 启用前必须先补码维度
+- **`cleanse_write._adjust_inventory` 键已补成四维(2026-11-02)**: `(sku, 69码, 仓, 仓型)`,
+  `_cur_map` 升五维、INSERT 补 barcode、`beginning_stock` 与 available 同置(否则重算把增量抹成 0)、
+  评估上下文复用同一次查询(原逐 SKU `LIMIT 1` 多码串行)。该函数**仍无调用点**(出库联动走
+  `_recalc_own_inventory`), 属"启用前先补对"。见 §15.119
+- **待办(已定位未改): `_recalc_own_inventory` 的库存行查询不过滤 `deleted_at`** ——
+  软删行会被一起重算 available(读侧过滤了看不见, 一旦"恢复删除"暴露的是重算后的值)。
+  当前软删行 0 条, 无实际影响; 加过滤是一行 SQL 的事, 但要先确认"恢复删除"该按什么口径复原
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节

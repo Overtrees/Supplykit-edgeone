@@ -572,57 +572,100 @@ def _recalc_own_inventory(channel, skus):
     return out
 
 
+def _adjust_key(k):
+    """deltas 键归一为四维 (sku, 69码, 仓, 仓型)
+
+    2026-11-02 补码: inventory 的业务唯一键是**五维** `uq_inventory_biz(sku, barcode, warehouse,
+    channel, warehouse_type)`, 原键只有 (sku, 仓, 仓型) —— 多码 SKU 的 A 码/B 码会命中同一行
+    (`_cur_map` 后者覆盖前者), 扣减加到别的码上。
+    兼容旧三维调用方: 缺码按空串处理(与"空落二键"的项目约定一致, 不猜码)。
+    """
+    if len(k) >= 4:
+        sku, bc, wh, wt = k[0], k[1], k[2], k[3]
+    else:
+        sku, wh, wt = k[0], k[1], k[2]
+        bc = ""
+    return (str(sku or ""), str(bc or ""),
+            str(wh or ""), str(wt or "") or SELF_WAREHOUSE_TYPES[0])
+
+
 def _adjust_inventory(channel, deltas, evaluate_skus=None):
-    """库存联动: {(sku, warehouse, warehouse_type): delta} → 批量更新库存(下限 0) + 规则批量评估(全量 SKU)
+    """库存联动: {(sku, 69码, 仓, 仓型): delta} → 批量更新库存(下限 0) + 规则批量评估
 
     完整性: 不限量 —— 大文件联动 SKU 全覆盖(原 300 上限曾致 >300 SKU 导入后规则评估缺失, 告警漏报);
-    性能: evaluate_many 一次加载规则 + executemany 批量(原单条 evaluate 循环 N×查询)
+    性能: evaluate_many 一次加载规则 + executemany 批量(原单条 evaluate 循环 N×查询);
+         2026-11-02 连评估上下文也复用同一次查询结果(原逐 SKU 一次 `one(... LIMIT 1)` = N 次往返)。
     """
     if not deltas:
         return 0, []
     # 2026-10-15 批量联动(逐键 SELECT+UPDATE 曾 5000 键 ~10000 往返——210s 大头): 批量 SELECT 一次 + executemany 更新
     n = 0
     touched = []
-    _keys = list(deltas.keys())
+    # 键归一 + 同键合并(四维/三维混传时可能落到同一行, 先加起来再更新, 避免后写覆盖)
+    _K = {}
+    for _k, _d in deltas.items():
+        try:
+            _n = _adjust_key(_k)
+            _K[_n] = _K.get(_n, 0) + int(_d or 0)
+        except Exception as _e:
+            try_err('cleansing', '库存联动键非法(已跳过): %r' % (_k,), _e)
+    _keys = list(_K.keys())
     _cur_map = {}
     for _i in range(0, len(_keys), 200):
         _batch = _keys[_i:_i + 200]
         _or = " OR ".join("(sku=%s AND warehouse=%s AND channel=%s)" for _ in _batch)
         _params = []
-        for (sk, wh, wt) in _batch:
-            _params += [sk, wh or "", channel]
+        for (sk, bc, wh, wt) in _batch:
+            _params += [sk, wh, channel]
         if _or:
-            for _c in query("SELECT id, sku, warehouse, available_qty FROM inventory WHERE %s" % _or, _params):
-                _cur_map[(_c.get("sku"), _c.get("warehouse") or "", channel)] = _c
+            # 软删行不参与: 增量加到看不见的行上 = 用户看不到变化, 且下次导入还会被覆盖
+            for _c in query(
+                    "SELECT id, sku, COALESCE(barcode,'') AS bc, COALESCE(warehouse,'') AS wh, "
+                    "COALESCE(warehouse_type,'') AS wt, available_qty, safety_qty, product_name, "
+                    "in_transit_qty FROM inventory WHERE (%s) "
+                    "AND (deleted_at IS NULL OR deleted_at='')" % _or, _params):
+                _cur_map[(str(_c.get("sku") or ""), str(_c.get("bc") or ""),
+                          str(_c.get("wh") or ""), str(_c.get("wt") or ""))] = _c
     _upd = []
     _ins = []
-    for (sku, wh, wht), delta in deltas.items():
-        _ck = (sku, wh or "", channel)
-        cur = _cur_map.get(_ck)
+    _ctxs = []
+    for key, delta in _K.items():
+        sku, bc, wh, wht = key
+        cur = _cur_map.get(key)
         if cur:
             new_qty = max(0, int(cur.get("available_qty") or 0) + delta)
             _upd.append((new_qty, cur.get("id")))
+            # 评估上下文复用本次查到的行(更新后量), 不再逐 SKU 回查
+            _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
+                          "inv": {"sku": sku, "warehouse": wh, "warehouse_type": wht,
+                                  "product_name": cur.get("product_name") or "",
+                                  "available_qty": new_qty,
+                                  "safety_qty": cur.get("safety_qty") or 0,
+                                  "in_transit_qty": cur.get("in_transit_qty") or 0}})
         else:
-            _ins.append((sku, wh or "", wht or "own", max(0, delta), channel))
+            # beginning_stock 与 available 同置: _recalc_own_inventory 的口径是
+            #   available = beginning + Σ入 − Σ出, 新行无流水; 若 beginning 留 0,
+            #   下一次重算会把刚加的增量抹成 0(增量"导入后自行消失")
+            _q = max(0, delta)
+            _ins.append((sku, bc, wh, wht, _q, _q, channel))
+            _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
+                          "inv": {"sku": sku, "warehouse": wh, "warehouse_type": wht,
+                                  "product_name": "", "available_qty": _q,
+                                  "safety_qty": 10, "in_transit_qty": 0}})
         n += 1
         if sku not in touched:
             touched.append(sku)
     if _upd:
         executemany("UPDATE inventory SET available_qty=%s WHERE id=%s", _upd)
     if _ins:
-        executemany("INSERT INTO inventory(sku, warehouse, warehouse_type, available_qty, safety_qty, channel) "
-                    "VALUES(%s,%s,%s,%s,10,%s)", _ins)
+        executemany("INSERT INTO inventory(sku, barcode, warehouse, warehouse_type, available_qty, "
+                    "beginning_stock, safety_qty, channel) VALUES(%s,%s,%s,%s,%s,%s,10,%s)", _ins)
     skus = touched
     try:
         from core.rules import evaluate_many, load_rules_for
-        ctxs = []
-        for sku in skus:
-            inv = one("SELECT sku, warehouse, warehouse_type, product_name, available_qty, safety_qty, "
-                      "in_transit_qty FROM inventory WHERE sku=%s AND channel=%s LIMIT 1", [sku, channel])
-            if inv:
-                ctxs.append({"sku": sku, "channel": channel, "inv": inv})
-        if ctxs:
-            evaluate_many("inventory.changed", ctxs, channel, load_rules_for("inventory.changed", channel))
+        if _ctxs:
+            # 逐行(sku×码×仓)一条上下文 —— 与告警去重键的粒度一致, 多码/多仓各判各的
+            evaluate_many("inventory.changed", _ctxs, channel, load_rules_for("inventory.changed", channel))
     except Exception as _e:
             try_err('cleansing', '静默降级', _e)
     return n, skus

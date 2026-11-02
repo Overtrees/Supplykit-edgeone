@@ -3419,3 +3419,49 @@ exp_date 非空"的批次行(0 条无对应); 反向验证"仅靠在途才够"�
 ②`在仓70+在途5` 时不报缺口; ③多码 SKU 两码各判(BC-A 缺、日销 0.5 的 BC-B 不报)。
 
 本地回归 **316 通过 / 0 失败**, preflight 六步全绿。
+
+### 15.119 库存联动 `_adjust_inventory` 的键补齐(2026-11-02)
+
+#### 一、补的是"同一类缺陷的第三处"
+
+`inventory` 的业务键是五维 `uq_inventory_biz(sku, barcode, warehouse, channel, warehouse_type)`
+(线上 `SHOW INDEX` 确认, 且当前 0 重复行)。15.118 修的是**读侧**(自有仓健康)的三处,
+这一节修**写侧**的同一处 —— 联动扣减:
+
+| 项 | 旧 | 后果 |
+|---|---|---|
+| deltas 键 | `(sku, warehouse, warehouse_type)` 三维 | 同 SKU 两个 69码 落到同一 key → `_cur_map` 后者覆盖前者 → 扣减加到别的码上 |
+| `_cur_map` 键 | `(sku, warehouse, channel)` | 同上, 且同 SKU 同仓多行(多码/多仓型)时只更新最后一行 |
+| INSERT 列 | `sku, warehouse, warehouse_type, available_qty, safety_qty, channel` | **丢 69码** → 多码 SKU 插出无码行, 下次导入按码匹配不上, 再插一行 |
+| 新行 `beginning_stock` | 不写(默认 0) | `_recalc_own_inventory` 口径是 `available = beginning + Σ入 − Σ出`; 新行无流水, 重算把刚加的增量抹成 0 —— 增量"导入后自行消失" |
+| 评估上下文 | 逐 SKU `one(... LIMIT 1)` 回查 | ①多码时取到任意一行(串码) ②N 个 SKU = N 次往返 |
+
+#### 二、改法
+
+```python
+def _adjust_key(k):          # 四维 (sku, 69码, 仓, 仓型); 兼容旧三维(缺码按空串, 不猜码)
+```
+
+- 键归一后**同键先合并再更新**(四维/三维混传可能落到同一行, 否则后写覆盖前写);
+- `_cur_map` 键升到五维(含 channel + 仓型), 命中行严格匹配,**不做单仓降级** ——
+  与 `_recalc_own_inventory` 注释里的"严格匹配, 不做隐式修正"同一原则;
+- 命中查询排除软删行(`deleted_at IS NULL OR deleted_at=''`): 增量加到看不见的行上 =
+  用户看不到变化, 且下次导入还会被覆盖;
+- INSERT 补 `barcode`, 且 `beginning_stock` 与 `available_qty` 同置为增量;
+- 评估上下文**复用同一次查询结果**(更新后的量), 逐行 `(sku, 码, 仓)` 一条 ——
+  与告警去重键的粒度一致, 多码/多仓各判各的。
+
+改动前该函数**无调用点**(出库联动走 `_recalc_own_inventory`, 那是严格按码匹配的),
+所以线上行为零变化; 这次是"启用前先把键补对", 避免将来接上就出错账。
+
+#### 三、回归
+
+新增 9 条(S2-1e), 含 5 条动态断言(桩 DB):
+
+- 多码各扣各的: A 码 10→6、B 码 50→45, 更新的 id 不串;
+- 旧三维键 → 落空码行(不借别的码); 新 SKU → INSERT 带 `BC-C` 且 `beginning_stock=8`;
+- 评估上下文 4 条且量是更新后的(A=6 / B=45 / NEW=8);
+- `query` 只调 1 次批量 SELECT(证明不再逐 SKU 回查);
+- 命中 SQL 带 `deleted_at` 过滤。
+
+本地回归 **325 通过 / 0 失败**, preflight 六步全绿。
