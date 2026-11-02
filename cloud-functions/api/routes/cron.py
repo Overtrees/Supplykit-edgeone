@@ -13,6 +13,8 @@ PA 版 APScheduler 10 任务中, TiDB 场景需要外部化的核心任务(备�
 """
 import os
 import json
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter
@@ -27,7 +29,12 @@ router = APIRouter(tags=["cron"])
 @traced
 def continue_tasks():
     """2026-10-14: 续跑所有 running 的 cleansing/seed/export 任务(后端跟进——app 后台/页面不驻留任务也推进)
-    由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)"""
+    由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)
+
+    2026-11-02 S0: 本端点此前**既无鉴权也无护栏**(唯一一个裸的) —— 匿名 GET 即可反复触发。
+    加进程内 30s 限频(正常调用方是中间件 60s 一次 + 平台每天一次, 不会被影响)。"""
+    if not _throttle("continue-tasks", 30):
+        return ok({"skipped": True, "reason": "30 秒内已推进过"})
     from db import query as _qc, execute as _ec, one as _oc
     from datetime import datetime, timedelta as _td2, timezone as _tz2
     done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
@@ -86,6 +93,52 @@ def continue_tasks():
 
 
 
+# ── 调度护栏(2026-11-02 S0): 把"调用者是谁"换成"今天该不该跑" ──────────────
+# 前提事实(非推测, 见 docs/security.md): EdgeOne schedules 的 schema 只有
+# name/cron/timezone/method/path/payload, **没有 headers 字段**, payload 又不支持环境变量插值,
+# 而 edgeone.json 本身在公开仓库 —— 所以"让平台带着密钥来"在物理上做不到。
+# 既无法识别调用方, 就不去猜, 改守"执行次数": 每个重成本/破坏性任务当日只允许真正执行一次,
+# 重复调用直接返回 skipped(只花一次 COUNT 级查询)。这样即使路径被公开、被脚本狂刷,
+# 后果也只是"多几次 INSERT IGNORE", 而不是"RU 打爆 / 日志被清空 / webhook 被骚扰"。
+#
+# 两道锁:
+#   ① 进程内限频(挡高频轰炸, 冷启动失效, 所以不是唯一防线)
+#   ② DB 当日抢占(maintenance_log 主键, 多实例安全) + **失败回滚**(否则当天永久跳过)
+_RUN_AT = {}
+_RUN_LOCK = threading.Lock()
+
+
+def _throttle(key, seconds):
+    """进程内限频: 同一 key 在 seconds 内只放行一次。返回 True=可以执行"""
+    now = time.time()
+    with _RUN_LOCK:
+        if now - _RUN_AT.get(key, 0) < seconds:
+            return False
+        _RUN_AT[key] = now
+        return True
+
+
+def _claim(task):
+    """当日一次性抢占(多实例安全)。返回 True=抢到, 应执行。
+    表异常时放行执行 —— 宁可多跑一次, 也不要因为护栏自己出错而整天空转。"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        return bool(execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,%s)",
+                            [today, task]))
+    except Exception as _e:
+        try_err('cron', '抢占标记失败(放行执行)', _e)
+        return True
+
+
+def _unclaim(task):
+    """执行失败回滚抢占标记 —— 不回滚=当天永久跳过(dashboard._daily_maintenance 就是栽在这)"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        execute("DELETE FROM maintenance_log WHERE `date`=%s AND task=%s", [today, task])
+    except Exception as _e:
+        try_err('cron', '回滚抢占标记失败', _e)
+
+
 async def _authed(request: Request) -> bool:
     """cron 鉴权(2026-11-01 定案: 定时任务迁回平台 schedules)。
 
@@ -100,6 +153,10 @@ async def _authed(request: Request) -> bool:
     配置了 CRON_SECRET 时, 带正确密钥 → 放行; 不带 → 放行但**记一条审计日志**,
     以便线上观察"无密钥调用"的频率(平台调度会持续产生, 外部扫描也会产生, 可据此发现异常量)。
     如需回到强校验: 设 CRON_STRICT=1 即恢复"无密钥一律拒绝"(此时平台调度会失效, 慎用)。
+
+    2026-11-02 补充: 本函数**不再是唯一防线**。因无法识别调用方(见上方护栏注释),
+    每个端点另加 _throttle + _claim 两道执行次数锁 —— 即使本函数放行, 重复调用也不会真正执行。
+    审计日志改为限频写(原实现每个匿名请求写一行 quality_logs, 本身就是一条 RU 消耗通道)。
     """
     secret = os.environ.get("CRON_SECRET", "")
     if not secret:
@@ -120,7 +177,10 @@ async def _authed(request: Request) -> bool:
     if str(os.environ.get("CRON_STRICT", "")) == "1":
         return False
     try:
-        _log("info", "cron 无密钥调用(平台调度通道): %s %s" % (request.method, request.url.path))
+        # 限频写: 原实现每个匿名请求都写一行 —— 匿名扫描既耗 RU, 又会把 quality_logs 冲掉
+        if _throttle("audit:" + request.url.path, 300):
+            _log("info", "cron 无密钥调用(平台调度/外部扫描无法区分): %s %s"
+                 % (request.method, request.url.path))
     except Exception:
         pass
     return True
@@ -158,9 +218,18 @@ def _build_snapshot(rebuild_days=90):
 @router.api_route("/cron/snapshot", methods=["GET","POST"])
 @traced
 async def cron_snapshot(request: Request):
+    """日销快照构建。2026-11-02 S0: 全量重建 90 天是 RU 最重的操作之一, 加当日一次性抢占"""
     if not await _authed(request):
         return fail("未授权", 401)
-    n = _build_snapshot()
+    if not _throttle("snapshot", 300):
+        return ok({"skipped": True, "reason": "5 分钟内已执行"})
+    if not _claim("snapshot"):
+        return ok({"skipped": True, "reason": "今天已构建(另一实例或应用层兜底)"})
+    try:
+        n = _build_snapshot()
+    except Exception:
+        _unclaim("snapshot")   # 失败回滚: 否则当天不再重试
+        raise
     _log("info", "日销快照构建完成, 快照总行数 %d" % n)
     return ok({"snapshot_rows": n})
 
@@ -169,29 +238,41 @@ async def cron_snapshot(request: Request):
 @traced
 async def cron_freshness(request: Request):
     """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建
-    maintenance_log(date+'snapshot') 抢占 —— 与应用层自愈互斥, 一天只重建一次"""
+    maintenance_log(date+'snapshot') 抢占 —— 与应用层自愈互斥, 一天只重建一次
+
+    2026-11-02 S0 修正: 原实现**先抢占再判断是否陈旧** —— 不陈旧时也占了 'snapshot' 标记,
+    导致 3:35 的 build-snapshot 恒返回 skipped(顺序 3:10 freshness 在前)。
+    改为"先判断, 确实要重建才抢占"。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'snapshot')", [_today])
-    if not _got:
-        return ok({"skipped": True, "reason": "今天已自愈(应用层兜底或另一实例)"})
     r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot") or {}
     m = str(r.get("m") or "")
     stale_limit = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-    if not m or m < stale_limit:
+    if m and m >= stale_limit:
+        return ok({"rebuilt": False, "max_date": m})
+    if not _claim("snapshot"):
+        return ok({"skipped": True, "reason": "今天已自愈(应用层兜底或另一实例)"})
+    try:
         n = _build_snapshot()
-        _log("warning", "快照陈旧(max=%s), 已重建(%d 行)" % (m or "无", n))
-        return ok({"rebuilt": True, "rows": n})
-    return ok({"rebuilt": False, "max_date": m})
+    except Exception:
+        _unclaim("snapshot")
+        raise
+    _log("warning", "快照陈旧(max=%s), 已重建(%d 行)" % (m or "无", n))
+    return ok({"rebuilt": True, "rows": n})
 
 
 @router.api_route("/cron/archive", methods=["GET","POST"])
 @traced
 async def cron_archive(request: Request):
-    """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)"""
+    """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)
+
+    2026-11-02 S0: 全表拉取 + 逐条 INSERT, 是本项目最重的操作; 加当日一次性抢占。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    if not _throttle("archive", 600):
+        return ok({"skipped": True, "reason": "10 分钟内已执行"})
+    if not _claim("cron:archive"):
+        return ok({"skipped": True, "reason": "今天已归档"})
     cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
     old = query(
         "SELECT id, ordered_at, channel, store, sku, order_status, total_amount, quantity "
@@ -227,8 +308,11 @@ async def cron_archive(request: Request):
 @router.api_route("/cron/cleanup-logs", methods=["GET","POST"])
 @traced
 async def cron_cleanup_logs(request: Request):
+    """2026-11-02 S0: 删日志是不可逆操作(会清掉排障证据), 加当日一次性抢占"""
     if not await _authed(request):
         return fail("未授权", 401)
+    if not _claim("cron:cleanup_logs"):
+        return ok({"skipped": True, "reason": "今天已清理"})
     r = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
     total = int(r.get("c") or 0)
     deleted = 0
@@ -366,14 +450,32 @@ def run_daily_rules() -> dict:
 async def cron_daily_rules(request: Request, force: int = 0):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
     maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行);
-    force=1: 运维强制重跑(重置后/数据重建场景, 绕过当天抢占)"""
+    force=1: 运维强制重跑(重置后/数据重建场景, 绕过当天抢占)
+
+    2026-11-02 S0 两处修正:
+      ① force=1 此前匿名可传 —— 等于给了一个"每调一次就跑 10 万行全量评估"的免费放大器;
+         现在必须带正确 CRON_SECRET 才认, 否则降级为普通调用。
+      ② 执行失败回滚抢占标记 —— 原实现失败后当天不再重试(dashboard._daily_maintenance 同款问题)。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    if force:
+        _sec = os.environ.get("CRON_SECRET", "")
+        _h = request.headers.get("X-Cron-Secret", "")
+        if not (_sec and _h):
+            force = 0
+        else:
+            import hmac as _hm2
+            if not _hm2.compare_digest(_h.encode(), _sec.encode()):
+                force = 0
     if not force:
-        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily_rules')", [_today])
-        if not _got:
+        if not _claim("daily_rules"):
             return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
+        try:
+            _r = run_daily_rules()
+        except Exception:
+            _unclaim("daily_rules")
+            raise
+        return ok(_r)
     return ok(run_daily_rules())
 
 
@@ -390,13 +492,21 @@ async def cron_ping(request: Request):
 @router.api_route("/cron/recycle", methods=["GET","POST"])
 @traced
 async def cron_recycle(request: Request):
-    """回收站清理: 软删超过 30 天的订单/规则永久删除(deleted_at != '' 且 < now-30d)"""
+    """回收站清理: 软删超过 30 天的订单/规则永久删除(deleted_at != '' 且 < now-30d)
+
+    2026-11-02 S0: 不可逆删除, 加当日一次性抢占; 幂等(DELETE 按条件), 失败可安全回滚重试"""
     if not await _authed(request):
         return fail("未授权", 401)
-    n1 = execute("DELETE FROM orders WHERE deleted_at IS NOT NULL AND deleted_at != '' "
-                 "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
-    n2 = execute("DELETE FROM rules WHERE is_active=0 AND deleted_at IS NOT NULL AND deleted_at != '' "
-                 "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
+    if not _claim("cron:recycle"):
+        return ok({"skipped": True, "reason": "今天已清理"})
+    try:
+        n1 = execute("DELETE FROM orders WHERE deleted_at IS NOT NULL AND deleted_at != '' "
+                     "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
+        n2 = execute("DELETE FROM rules WHERE is_active=0 AND deleted_at IS NOT NULL AND deleted_at != '' "
+                     "AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")
+    except Exception:
+        _unclaim("cron:recycle")
+        raise
     total = int(n1 or 0) + int(n2 or 0)
     if total > 0:
         _log("info", "回收站清理: 永久删除 %d 条(订单 %s + 规则 %s)" % (total, n1, n2))
@@ -406,9 +516,14 @@ async def cron_recycle(request: Request):
 @router.api_route("/cron/push-alerts", methods=["GET","POST"])
 @traced
 async def cron_push_alerts(request: Request):
-    """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)"""
+    """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)
+
+    2026-11-02 S0: 本端点会向真实 webhook 发消息(可被用于骚扰/刷屏), 加 5 分钟限频。
+    不设当日抢占 —— pushed 标记本身幂等, 推送失败需要重试。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    if not _throttle("push-alerts", 300):
+        return ok({"skipped": True, "reason": "5 分钟内已推送"})
     try:
         cfg = one("SELECT value FROM replenishment_config WHERE `key`='webhook_url'") or {}
         url = (cfg.get("value") or "").strip()
@@ -484,7 +599,11 @@ def run_reconcile(days=90):
 @router.api_route("/cron/reconcile", methods=["GET", "POST"])
 @traced
 async def cron_reconcile(request: Request, days: int = 90):
-    """日销对账(cron 入口)——体量与口径见 run_reconcile"""
+    """日销对账(cron 入口)——体量与口径见 run_reconcile
+
+    2026-11-02 S0: 加 5 分钟限频(只读, 重复执行无害但耗 RU); days 已在 run_reconcile 内 clamp 到 [1,365]"""
     if not await _authed(request):
         return fail("未授权", 401)
+    if not _throttle("reconcile", 300):
+        return ok({"skipped": True, "reason": "5 分钟内已对账"})
     return ok(run_reconcile(days))

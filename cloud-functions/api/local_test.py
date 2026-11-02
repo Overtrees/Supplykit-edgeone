@@ -1012,5 +1012,44 @@ try:
 except Exception as _e5:
     check("restore 联动用例无异常", False, str(_e5)[:200])
 
+# ── cron 调度护栏(2026-11-02 S0): 无法识别调用方, 改守执行次数 ──
+try:
+    from routes.cron import _throttle, _claim, _unclaim, _RUN_AT
+    _RUN_AT.clear()
+    check("cron 限频: 首次放行", _throttle("ut1", 60) is True)
+    check("cron 限频: 窗口内拦截", _throttle("ut1", 60) is False)
+    check("cron 限频: 不同 key 互不影响", _throttle("ut2", 60) is True)
+
+    # 当日抢占: 用假 execute 记录 SQL, 模拟 maintenance_log 主键冲突
+    import routes.cron as _cn
+    _calls = []
+    _rows = set()
+
+    def _fake_exec(sql, params=None):
+        _calls.append(sql.split()[0])
+        if sql.strip().startswith("INSERT IGNORE"):
+            k = tuple(params or ())
+            if k in _rows:
+                return 0
+            _rows.add(k)
+            return 1
+        if sql.strip().startswith("DELETE"):
+            _rows.discard(tuple(params or ()))
+            return 1
+        return 0
+
+    _old_exec = _cn.execute
+    _cn.execute = _fake_exec
+    try:
+        a = _claim("t:demo")
+        b = _claim("t:demo")      # 同一天第二次
+        _unclaim("t:demo")
+        c = _claim("t:demo")      # 回滚后应可重新抢占
+    finally:
+        _cn.execute = _old_exec
+    check("cron 当日抢占: 首次 True / 重复 False / 回滚后可重抢", (a, b, c) == (True, False, True), str((a, b, c)))
+except Exception as _e6:
+    check("cron 护栏用例无异常", False, str(_e6)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

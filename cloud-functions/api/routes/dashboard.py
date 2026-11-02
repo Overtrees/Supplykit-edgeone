@@ -82,6 +82,14 @@ def _daily_maintenance(channel="jd"):
         except Exception as _e:
                 try_err('dashboard', '静默降级', _e)
     except Exception as _me:
+        # 2026-11-02 S0: 失败必须回滚抢占标记 —— 原实现失败后标记仍在, 当天永久跳过,
+        # 而失败只写一条 quality_logs 就再无痕迹(用户表现为"数据不更新"却查不出原因)。
+        # 同文件 _daily_rules_guard 一直是有回滚的, 两种写法并存本身就是隐患。
+        try:
+            _td = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            execute("DELETE FROM maintenance_log WHERE `date`=%s AND task='daily'", [_td])
+        except Exception as _e2:
+            try_err('dashboard', '回滚维护标记失败', _e2)
         try:
             execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                     "VALUES('maint','error',%s,%s,'dash')",

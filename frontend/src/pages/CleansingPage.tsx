@@ -812,6 +812,18 @@ export default function CleansingPage() {
     setColMapSaving(false)
   }
   const execLock = useRef(false)
+  // 2026-11-02 S0: 导入进度轮询的 setInterval 只在"任务结束"分支清理, 组件卸载时不管 ——
+  // 用户切页后轮询仍在跑(每秒一次 status 请求 + 对已卸载组件 setState)。
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(
+    () => () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    },
+    [],
+  )
   const [overlapAsk, setOverlapAsk] = useState<{ message: string } | null>(null)
   const doExecute = async () => {
     if (execLock.current) return
@@ -1093,6 +1105,7 @@ export default function CleansingPage() {
             }
           }
         }, 1000)
+        pollRef.current = poll
         // 全局持久化
         try {
           localStorage.setItem(

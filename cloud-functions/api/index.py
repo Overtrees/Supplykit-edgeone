@@ -41,10 +41,32 @@ app = FastAPI()
 
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
+    """未捕获异常: 只回 request_id, 堆栈写 quality_logs。
+
+    2026-11-02 S0: 原实现把 traceback(限 10 帧/1200 字符)+ str(exc) 直接回传浏览器 ——
+    等于对外公开文件路径、表名、SQL 片段、依赖版本。改后用户凭 request_id 报障,
+    运维在 quality_logs 里按 rid 精确检索(比让用户截图堆栈更准)。
+    """
     import traceback as _tb
-    return JSONResponse({"ok": False, "error": "服务器内部错误",
-                         "detail": str(exc)[:400],
-                         "tb": _tb.format_exc(limit=10)[-1200:]}, status_code=500)
+    import uuid as _uuid
+    _rid = _uuid.uuid4().hex[:12]
+    _stack = _tb.format_exc(limit=12)
+    try:
+        import asyncio as _aio
+        from db import execute as _e
+
+        _msg = ("%s %s rid=%s" % (request.method, request.url.path, _rid))[:190]
+
+        def _write():
+            _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
+               "VALUES(%s,%s,%s,%s,%s)", ("api_unhandled", "error", _msg, _stack[-1800:], "api"))
+
+        # 必须卸载到线程: 直接 await 同步写库会阻塞事件循环(同 slow_log 的教训)
+        await _aio.to_thread(_write)
+    except Exception:
+        pass
+    return JSONResponse({"ok": False, "error": "服务器内部错误", "request_id": _rid},
+                        status_code=500)
 
 
 @app.exception_handler(RequestValidationError)

@@ -254,25 +254,33 @@ def check_password(password: str, stored: str) -> bool:
         return False
 
 
-# ── 统一异常追踪装饰器(所有路由自动捕获返回 detail+tb, 状态 200 防 Makers 转页) ──
+# ── 统一异常追踪装饰器(所有路由自动捕获, 堆栈只入库不回传) ──
 def traced(handler):
-    """包装 FastAPI 路由: 异常返回 {ok:False, error, detail, tb}(200 状态避免 Makers 500 转页)"""
+    """包装 FastAPI 路由: 未捕获异常 → {ok:False, error, detail=异常类型名, request_id}(200 状态避免 Makers 500 转页)
+
+    2026-11-02 S0: 原实现把 detail(str(e)[:400]) + tb(完整堆栈 2000 字符)回传浏览器 ——
+    本项目所有路由都套了这个装饰器, 所以它才是 traceback 泄漏的**主通道**(比全局 handler 更常走)。
+    堆栈里含文件路径/表名/SQL 片段/依赖版本, 不该出现在响应体。
+    现在只回 request_id(用户报障凭它), 完整堆栈写 quality_logs 按 rid 检索。
+    """
     from functools import wraps
     import traceback as _tb
+    import uuid as _uuid
     import asyncio as _ai
 
     def _err(e):
+        _rid = _uuid.uuid4().hex[:12]
         try:
             from db import execute as _e
             _e("INSERT INTO quality_logs(log_type, level, message, details, source) "
                "VALUES(%s,%s,%s,%s,%s)",
-               ("api_error", "error", ("%s: %s" % (type(e).__name__, str(e)[:300])),
+               ("api_error", "error",
+                ("%s: %s rid=%s" % (type(e).__name__, str(e)[:260], _rid)),
                 _tb.format_exc(limit=15)[-1800:], "api"))
         except Exception as _e:
                 try_err('common', '静默降级', _e)
-        return {"ok": False, "error": "handler-error",
-                "detail": "%s: %s" % (type(e).__name__, str(e)[:400]),
-                "tb": _tb.format_exc(limit=15)[-2000:]}
+        return {"ok": False, "error": "服务处理失败，请稍后重试（错误码 %s）" % _rid,
+                "detail": type(e).__name__, "request_id": _rid}
 
     if _ai.iscoroutinefunction(handler):
         @wraps(handler)

@@ -2545,3 +2545,103 @@ lock 里只有 esbuild 主包与 `@esbuild/linux-x64` 等少数几个(历史遗�
 | `npm ci` 真实执行 | 通过, added 362 packages, exit 0 |
 
 CI 的 node20 本来没事, 但本地/未来升级 npm 11 会直接被这个卡住, 早补早省事。
+
+### 15.110 S0 止血批: cron 执行次数护栏 + 连接池名额 + traceback 收口(2026-11-02)
+
+审计报告(`supplykit-priority-2026-11-02.md`)S0 五项落地。核心判断:**顺序不按严重程度排,
+按「不可逆性 × 性价比 × 依赖前置」** —— 所以最吓人的 `threading.local + 53 async 路由` 反而排到 S3,
+因为连接池用 1/50 的成本压住了同样风险。
+
+#### 一、cron: 既然无法识别调用方, 就守"执行次数"
+
+审计发现匿名 `curl /api/cron/continue-tasks` 返回 200 且逻辑真的执行。但**不能简单改成强校验** ——
+EdgeOne schedules 的 schema 只有 `name/cron/timezone/method/path/payload`,`没有 headers 字段`,
+payload 又不支持环境变量插值,而 `edgeone.json` 本身在公开仓库。**"让平台带密钥来"物理上做不到。**
+
+所以换思路: 不去猜调用方是谁, 改守"这个任务今天跑过没有"。两道锁:
+
+| 锁 | 实现 | 作用 | 局限 |
+|---|---|---|---|
+| 进程内限频 | `_throttle(key, sec)` | 挡高频轰炸 | 冷启动失效, 故不是唯一防线 |
+| 当日抢占 | `_claim(task)` → `INSERT IGNORE maintenance_log(date,task)` | 多实例安全, 一天只真正执行一次 | 依赖 DB 可用 |
+
+效果: 即使路径公开、被脚本狂刷, 后果也只是"多几次 INSERT IGNORE", 而不是 RU 打爆 / 日志被清空 / webhook 被骚扰。
+
+**回滚策略按幂等性区分**(这点容易做错):
+
+| 端点 | 失败是否 `_unclaim` | 理由 |
+|---|---|---|
+| snapshot / freshness | ✅ 回滚 | 全量重建幂等, 重试安全 |
+| recycle / daily-rules | ✅ 回滚 | DELETE 按条件、评估幂等 |
+| **archive** | ❌ **不回滚** | 归档是"逐条 INSERT ... ON DUPLICATE KEY UPDATE 累加", **重跑会重复累加 daily_stats**。宁可当天不再跑, 也不能把金额算两遍 |
+| cleanup-logs | 不回滚 | 删日志无"重试"语义 |
+
+顺带修掉两个真 bug:
+
+1. **`force=1` 匿名可传** —— 等于开放了一个"每调一次就跑 10 万行全量评估"的免费放大器。
+   现在必须带正确 `CRON_SECRET` 才认, 否则降级为普通调用。
+2. **freshness 先抢占再判断** —— 不陈旧时也占了 `'snapshot'` 标记, 导致 3:35 的 `build-snapshot`
+   恒返回 skipped(3:10 的 freshness 在前)。改为"确实要重建才抢占"。
+3. `continue-tasks` 是唯一既无鉴权也无护栏的裸端点, 补 30s 限频(正常调用是中间件 60s + 平台每天一次)。
+
+#### 二、连接池: `q.qsize()` 判断的是"空闲"不是"总数"
+
+```python
+# 原实现(db.py)
+if q.qsize() < _POOL_LIMIT:   # 队列里只有已归还的连接, 在用的根本不在里面
+    c = _new_conn()           # → 几乎永远满足 → 无限新建
+```
+
+复刻原逻辑压测: **上限 10 / 并发 60 → 建了 60 条连接**。TiDB Serverless 有连接数硬上限,
+一次尖峰就是全站 500, 且不可提前感知。
+
+改为 `threading.BoundedSemaphore(_POOL_LIMIT)` 表达"存活连接总数": 新建前 acquire, `_close_conn()` 时 release。
+所有真正的 `close()` 统一走 `_close_conn`(否则名额泄漏 → 池永久少一条)。
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 并发 60 / 上限 10 | 建连 **60** 条 | 建连 **10** 条(耗时 1.52s, 60 个请求全部完成) |
+| 第 2 轮并发 60 | 继续新建 | 仍 10 条(池复用, 无泄漏) |
+| 10 条连接全坏后重建 | — | 20 条(10 旧关闭 + 10 新建), 名额守恒, 信号量余量 0/10 ✅ |
+
+#### 三、traceback: 主通道不是全局 handler, 是 `traced`
+
+`index.py` 的 `@app.exception_handler` 回传 `tb` 很好发现。但**所有路由都套了 `traced` 装饰器**,
+它在路由内就把异常吞了, 根本走不到全局 handler —— 所以 `routes/common.py:275` 那个 `"tb": format_exc()[-2000:]`
+才是实际泄漏面最大的地方(文件路径 / 表名 / SQL 片段 / 依赖版本)。
+
+统一改为: 返回 `{"ok": false, "error": "服务处理失败…（错误码 <rid>）", "detail": <异常类型名>, "request_id": <rid>}`,
+完整堆栈写 `quality_logs` 按 rid 检索。`detail` 只留类型名 —— `ProgrammingError` 本身不敏感,
+但 `str(e)` 里的 `Table 'supplykit.foo' doesn't exist` 会泄漏表名。
+
+#### 四、前端三处泄漏(都是真 bug, 不是理论风险)
+
+| 位置 | 问题 | 影响 |
+|---|---|---|
+| `Chart.tsx` | `setTimeout` 回调里 `return () => {...}` —— **返回值被 setTimeout 丢弃**, 不是 effect cleanup | 每次 option/theme 变化新增一个 resize 监听 + ResizeObserver, 永不释放。看板 8 图 × 30s 一轮 = 每小时上千僵尸监听 |
+| `App.tsx:796` | `addEventListener(..., 匿名函数)` 但 `removeEventListener(..., cont)` | 引用不同, 移除永不生效 |
+| `CleansingPage.tsx` | 轮询 `setInterval` 只在"任务结束"分支清理 | 切页后仍在每秒请求 + 对已卸载组件 setState |
+
+Chart 的修法: 把内部清理函数存进 `cleanup` 变量, 由外层 effect cleanup 统一调用。
+
+#### 五、`t=Date.now()` —— 用户纠正了我的方案
+
+审计里我把"去掉时间戳让缓存生效"当成 S1 最高性价比。**用户指出: 破缓存是为了保证数据实时性,
+不能为了性能单独牺牲它。** 判断成立 —— 这个系统的数据每 15 秒就可能变(导入/评估/告警), 缓存 30s
+意味着用户可能看到过期数据而不自知。
+
+正确方案不是"去掉", 而是**把毫秒时间戳换成时间窗分桶**:
+
+```ts
+// 现在: 每次请求 key 都不同 → 永不命中, 且 cache Map 只增不减(每 15s × 3 个 URL)
+params.t = Date.now()
+// 改为: 15 秒一个桶 —— 新鲜度与现有轮询周期一致, 同一次刷新的重复请求自动合并
+params.t = Math.floor(Date.now() / 15000)
+```
+
+| 方案 | 数据新鲜度 | 缓存命中 | 评价 |
+|---|---|---|---|
+| 保持 `Date.now()` | 每次最新 | 0% | 现状; 且 cache Map 无限增长 |
+| 直接删掉 | 30s 内可能过期 | 高 | ❌ 用户明确否决 |
+| **时间窗分桶(15s)** | **与轮询周期等同** | 同一窗口内合并 | ✅ 待做(S1-1 修正版) |
+| data_version 作缓存键 | 变更即失效 | 最高 | 中期方案, 依赖 `invalidate_all` 不漏调(当前 35 处靠自觉) |

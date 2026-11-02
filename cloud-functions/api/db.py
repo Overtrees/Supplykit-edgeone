@@ -16,29 +16,63 @@ _local = threading.local()
 _POOL = None
 _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每实例——TiDB serverless 连接限制保险)
 
+# 2026-11-02 S0 修复: 原实现用 `q.qsize() < _POOL_LIMIT` 判断能否新建连接, 但队列里只有
+# 「已归还」的连接, 正在使用的根本不在队列里 —— qsize 几乎永远 < 上限, 于是每次池空都新建,
+# 上限形同虚设。复刻原逻辑压测: 上限 10 / 并发 60 → 实际建了 60 条连接, 一次尖峰即可打满
+# TiDB Serverless 连接数 → 全站 500。
+# 改为用信号量表达「存活连接总数」: 新建前 acquire, 真正 close 时 release。
+# 名额与连接一一对应, 池中 + 使用中 永远 ≤ _POOL_LIMIT。
+_SEM = threading.BoundedSemaphore(_POOL_LIMIT)
+
+
+class _PoolFull(Exception):
+    """名额耗尽 —— 调用方应等待池中连接归还, 而不是继续新建"""
+
+
+def _close_conn(c):
+    """关闭连接并归还名额。**所有真正的 close 必须走这里**, 否则名额泄漏 → 池永久少一条。"""
+    if c is None:
+        return
+    try:
+        c.close()
+    except Exception:
+        pass
+    try:
+        _SEM.release()
+    except ValueError:
+        pass  # BoundedSemaphore 超额释放(重复 close) —— 吞掉, 计名额比崩掉重要
+
 
 def _new_conn():
     """连接 TiDB(库不存在自动建库——2026-10-17 新集群迁移: 空库首连 Unknown database 时
-    无库连接 CREATE DATABASE 后重连; 幂等, 迁移到空集群自动引导)"""
-    _db = os.environ.get("TIDB_DB", "supplykit")
+    无库连接 CREATE DATABASE 后重连; 幂等, 迁移到空集群自动引导)
+
+    2026-11-02: 先抢名额再建连; 建连失败归还名额(否则一次网络抖动就永久吃掉一个配额)。"""
+    if not _SEM.acquire(blocking=False):
+        raise _PoolFull("连接池名额已满(%d)" % _POOL_LIMIT)
     try:
-        return _connect_db(_db)
-    except pymysql.err.OperationalError as _e:
-        if "Unknown database" in str(_e) or "1049" in str(_e):
-            try:
-                _c0 = _connect_db(None)
+        _db = os.environ.get("TIDB_DB", "supplykit")
+        try:
+            return _connect_db(_db)
+        except pymysql.err.OperationalError as _e:
+            if "Unknown database" in str(_e) or "1049" in str(_e):
                 try:
-                    cur = _c0.cursor()
-                    cur.execute("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin" % _db)
-                    cur.close()
-                finally:
+                    _c0 = _connect_db(None)
                     try:
-                        _c0.close()
-                    except Exception:
-                        pass
-                return _connect_db(_db)
-            except Exception:
-                pass
+                        cur = _c0.cursor()
+                        cur.execute("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin" % _db)
+                        cur.close()
+                    finally:
+                        try:
+                            _c0.close()
+                        except Exception:
+                            pass
+                    return _connect_db(_db)
+                except Exception:
+                    pass
+            raise
+    except Exception:
+        _SEM.release()
         raise
 
 
@@ -67,39 +101,40 @@ def _pool():
 
 
 def _acquire():
-    """池取(空闲连接复用/池满等待 20s——防无限新建超 TiDB 连接上限)"""
+    """池取(空闲连接复用/名额耗尽则等待归还 20s——防无限新建超 TiDB 连接上限)
+
+    2026-11-02: 名额判断交给 _new_conn 内部信号量; 这里只负责"池里没有就尝试新建,
+    新建被名额挡住就等别人归还"。"""
     q = _pool()
     try:
         c = q.get_nowait()
     except queue.Empty:
-        # 池空: 若池从未满(当前池数量<上限)新建; 已满则阻塞等待复用(20s 超时)
-        if q.qsize() < _POOL_LIMIT:
+        try:
             c = _new_conn()
-        else:
-            c = q.get(timeout=20)
+        except _PoolFull:
+            # 存活连接已达上限 —— 阻塞等池中归还(20s), 不再无脑新建
+            try:
+                c = q.get(timeout=20)
+            except queue.Empty:
+                raise RuntimeError(
+                    "数据库连接池耗尽(上限 %d, 等待 20s 无归还) —— 检查是否有长事务/未释放连接" % _POOL_LIMIT)
     try:
         c.ping(reconnect=True)
     except Exception:
-        try:
-            c.close()
-        except Exception:
-            pass
-        c = _new_conn()
+        _close_conn(c)   # 坏连接: 关闭并**归还名额**
+        c = _new_conn()  # 重新占名额
     return c
 
 
 def _release(c):
-    """归还池(事务连接不在此归还——transaction finally 管); 池满关闭"""
+    """归还池(事务连接不在此归还——transaction finally 管); 池满关闭并归还名额"""
     if c is None or (getattr(_local, "txn", None) is c):
         return  # 事务连接由 transaction 归还
     try:
         q = _pool()
         q.put_nowait(c)
     except queue.Full:
-        try:
-            c.close()
-        except Exception:
-            pass
+        _close_conn(c)
 
 
 def conn():
@@ -127,7 +162,10 @@ def transaction():
         raise
     finally:
         _local.txn = None
-        c.autocommit(True)
+        try:
+            c.autocommit(True)
+        except Exception:
+            pass  # 连接可能已坏 —— 仍要归还名额, 下次 _acquire 的 ping 会重建
         _release(c)
 
 

@@ -797,10 +797,13 @@ export default function App() {
         },
       }).catch(() => {})
     }
-    document.addEventListener('visibilitychange', () => {
+    // 2026-11-02 S0: 原写 addEventListener(..., 匿名函数) 但 removeEventListener(..., cont) ——
+    // 引用不同, 移除永不生效。每次 App 重挂载都多一个常驻监听。
+    const onVisible = () => {
       if (document.visibilityState === 'visible') cont()
-    })
-    return () => document.removeEventListener('visibilitychange', cont)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [])
   const renderPage = pageId => {
     const wrap = el => <ErrorBoundary key={pageId}>{el}</ErrorBoundary>

@@ -27,6 +27,11 @@ export default function Chart({ option, height = 260 }: ChartProps) {
 
   useEffect(() => {
     if (!ref.current) return
+    // 2026-11-02 S0: setTimeout 内部的 return 会被 **setTimeout 丢弃**(不是 effect cleanup),
+    // 于是每次 option/theme 变化都新增一个 resize 监听 + 一个 ResizeObserver, 永不释放。
+    // 看板 8 个图表 × 每 30s 刷新一轮 = 每小时上千个僵尸监听器, 内存与 resize 抖动持续累积。
+    // 改为把内部清理函数存进 cleanup 变量, 由外层 effect cleanup 统一调用。
+    let cleanup: (() => void) | null = null
     const timer = setTimeout(() => {
       if (!ref.current) return
       try {
@@ -89,18 +94,26 @@ export default function Chart({ option, height = 260 }: ChartProps) {
           ro = new ResizeObserver(() => chart.resize())
           ro.observe(ref.current)
         }
-        return () => {
+        cleanup = () => {
           window.removeEventListener('resize', resize)
           if (ro) ro.disconnect()
           try {
             chart.dispose()
           } catch (e) {}
+          if (inst.current === chart) inst.current = null
         }
       } catch (e) {
         console.error('Chart error:', e)
       }
     }, 100)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      if (cleanup) {
+        try {
+          cleanup()
+        } catch (e) {}
+      }
+    }
   }, [option, theme])
   return <div ref={ref} style={{ width: '100%', height }} />
 }

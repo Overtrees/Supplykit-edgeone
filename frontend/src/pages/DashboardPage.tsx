@@ -719,7 +719,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     x => Number(x.available_qty) < Number(x.safety_qty),
   ).length
   const errCount = (qualityLogs || []).length
-  const alertsList = Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []
+  // 2026-11-02 S0: 这两层派生原先每次渲染都重算(且返回新引用, 让下游 useMemo 全部失效)。
+  const alertsList = useMemo(
+    () => (Array.isArray(alerts) ? alerts.filter(x => x.status === 'active') : []),
+    [alerts],
+  )
   // 2026-11-01 根治: 卡面数据源优先级 —— fullAlerts(点击时拉的全量) > alertsList(首屏截断 200/组)
   //   截断列表只是"首屏快照", 与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200 条);
   //   卡面此前直接吃截断列表, 一旦 id DESC 的前 N 条被同类其它仓占满, 卡上明细就会缺失或重复。
@@ -729,11 +733,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   此前只按 alert_type 过滤, bbcc 下卡面拿到的是 /api/alerts 全量里 id 更新的 platform 行,
   //   显示成"郑州仓"等单仓数据 —— 跟标题(160 = bc 计数)对不上, 也违背"BC 合计才有意义"的业务口径。
   //   筛完为空时回落不过滤(历史数据仓型不规范时不能把卡面变空)。
-  const _lsTypes = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
-  const lowStockFull = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : null
-  const _lsRaw = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
-  const _lsByMode = _lsRaw.filter(x => _lsTypes.includes(String(x.warehouse_type || '')))
-  const lowStockAlerts = _lsByMode.length ? _lsByMode : _lsRaw
+  const lowStockAlerts = useMemo(() => {
+    const types = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
+    const raw = fullAlerts
+      ? fullAlerts.filter((x: any) => x.alert_type === 'low_stock')
+      : alertsList.filter((x: any) => x.alert_type === 'low_stock')
+    const byMode = raw.filter((x: any) => types.includes(String(x.warehouse_type || '')))
+    return byMode.length ? byMode : raw
+  }, [fullAlerts, alertsList, _replMode])
   // 卡面 5 行取数(2026-11-02 改「按仓轮转 + 轮内 SKU 去重」):
   //   旧法问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是郑州仓。
   //   但**只按仓轮转还不够**: 规则引擎对各仓是同一批 SKU 顺序评估的, 每个仓的"第一条"
@@ -742,7 +749,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   注意**不能**改成"每仓最多 1 条"的硬配额: 只有 3 个仓时卡面就只剩 3 行, 白白空掉。
   //   现方案: ① 去重键「SKU × 仓」防重复告警; ② 按仓分桶(桶内 id DESC);
   //          ③ 逐轮、逐仓取 1 条, 轮内跳过已上卡面的 SKU。3 仓 = 3+2 共 5 行; ≥5 仓 = 每仓 1 行。
-  const lowStockShown = (() => {
+  // 2026-11-02 S0: 原来是渲染期 IIFE —— 每次 setState/父组件重渲染都重跑一遍整套分桶+轮转
+  // (线上 1150 条 low_stock 全量参与)。改为 useMemo, 只在数据源变化时重算。
+  const lowStockShown = useMemo(() => {
     const seen = new Set<string>()
     const buckets: Record<string, typeof lowStockAlerts> = {}
     const order: string[] = []
@@ -781,7 +790,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       if (!added) break
     }
     return out
-  })()
+  }, [lowStockAlerts])
   // 弹窗与卡面同源(2026-11-02): lowStockAlerts 已按补货模式筛过仓型, 直接用即可 ——
   //   早前这里是独立再筛一遍, 结果卡面(未筛)与弹窗口径不一致; 现在两处都从 lowStockAlerts 出。
   const lowStockModalRows = lowStockAlerts

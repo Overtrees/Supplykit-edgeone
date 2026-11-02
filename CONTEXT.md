@@ -25,6 +25,7 @@
 | 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/DEVELOPMENT.md` §15.101 |
 | 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/DEVELOPMENT.md` §15.106 |
 | 低库存卡口径: bbcc=BC 合计 / traditional=逐仓(轮转只服务后者) | `docs/DEVELOPMENT.md` §15.109 |
+| S0 止血: cron 执行次数护栏 / 连接池名额 / traceback 收口 / 前端泄漏 | `docs/DEVELOPMENT.md` §15.110 |
 | 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
 
 ## 关键口径(不可破坏的业务约定)
@@ -81,6 +82,16 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   卡面与弹窗共用一份数据。bbcc 只有 `__BC__` 一个桶, **轮转退化为顺序取 5 条(无害无功)**,
   轮转真正服务 traditional 的 7 仓。见 §15.109
 - 大卡弹窗为全量列表(自有仓 90 条全展示), `maxHeight:70vh` 滚动承接
+- ~~cron 对公网开放~~ **已加固(2026-11-02)**: EdgeOne schedules 无 headers 字段 → **无法给平台调度注入凭据**,
+  所以改守"执行次数"(`_throttle` 进程内限频 + `_claim` 当日抢占)。**archive 失败刻意不回滚**
+  (逐条累加非幂等, 重跑会把金额算两遍), 其余可回滚。见 §15.110 第一节
+- ~~连接池上限形同虚设~~ **已修(2026-11-02)**: `q.qsize()` 数的是空闲不是总数 → 并发 60 建 60 条;
+  改 `BoundedSemaphore`, 压测 60 并发只建 10 条。见 §15.110 第二节
+- ~~traceback 回传浏览器~~ **已修**: 主通道是 `traced` 装饰器(所有路由都套), 不是全局 handler。
+  现在只回 request_id, 堆栈写 quality_logs。见 §15.110 第三节
+- **`t=Date.now()` 不要简单删掉** —— 它保证数据实时性(用户明确要求)。改法是时间窗分桶
+  `Math.floor(Date.now()/15000)`: 新鲜度与轮询周期等同, 同窗口内重复请求自动合并。见 §15.110 第五节
+- 审计待办: S1(pipeline_runs/告警护栏/渠道去硬编码) → S2(on_data_changed + 增量重建) → S3(页面拆分)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
 
