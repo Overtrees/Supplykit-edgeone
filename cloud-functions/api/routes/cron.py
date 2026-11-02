@@ -570,12 +570,54 @@ async def cron_push_alerts(request: Request):
         return ok({"pushed": 0, "error": str(e)[:150]})
 
 
-def run_reconcile(days=90):
-    """日销对账核心(同步, 供 cron 端点与应用层兜底共用)
+def _reconcile_gmv(channel, start, end):
+    """GMV 物化对账(2026-11-02 S2-3): orders_day_agg vs orders 源表
 
-    断言: 同区间 [今-days, 昨] 内 SUM(快照 order_count) == SUM(订单 quantity)
-      · 排除当天: 当天订单仍在增长, 快照可能滞后(差异属正常)
-      · 口径: 销量池 SALES_SQL(=已完成), 与快照写入同源
+    口径必须与 dashboard_maintain._rebuild_day_agg **逐字一致**, 否则对账自己就成了噪音源:
+      gmv = total_amount - discount_amount + freight_amount + tax_amount, 仅已支付状态
+      cnt = COUNT(*) 全部订单(不过滤状态 —— 物化表的 cnt 就是这么算的)
+    物化表只有 90 天窗口 → 下界取 max(请求起点, agg 最早日期), 无数据则返回 None(不参与对账)。
+    返回 {"agg_gmv","src_gmv","agg_cnt","src_cnt","gmv_diff","cnt_diff"}
+    """
+    from routes.common import status_cond as _sc
+    _mn = one("SELECT COALESCE(MIN(`date`),'') AS mn FROM orders_day_agg WHERE channel=%s",
+              [channel]) or {}
+    _mnv = str(_mn.get("mn") or "")[:10]
+    if not _mnv:
+        return None
+    _s = max(start, _mnv)
+    _cond = _sc()
+    _sql = ("SELECT "
+            "(SELECT IFNULL(SUM(gmv),0) FROM orders_day_agg WHERE channel=%s AND `date`>=%s AND `date`<=%s) AS agg_gmv,"
+            "(SELECT IFNULL(SUM(cnt),0) FROM orders_day_agg WHERE channel=%s AND `date`>=%s AND `date`<=%s) AS agg_cnt,"
+            "(SELECT IFNULL(SUM(IF(" + _cond + ", total_amount - COALESCE(discount_amount,0) "
+            "+ COALESCE(freight_amount,0) + COALESCE(tax_amount,0), 0)),0) FROM orders "
+            "WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+            "AND ordered_at>=%s AND ordered_at<DATE_ADD(%s, INTERVAL 1 DAY)) AS src_gmv,"
+            "(SELECT COUNT(*) FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+            "AND ordered_at>=%s AND ordered_at<DATE_ADD(%s, INTERVAL 1 DAY)) AS src_cnt")
+    r = one(_sql, [channel, _s, end] * 2 + [channel, _s, end] * 2) or {}
+    _ag, _sg = round(float(r.get("agg_gmv") or 0), 2), round(float(r.get("src_gmv") or 0), 2)
+    _ac, _scnt = int(r.get("agg_cnt") or 0), int(r.get("src_cnt") or 0)
+    return {"from": _s, "agg_gmv": _ag, "src_gmv": _sg, "gmv_diff": round(_ag - _sg, 2),
+            "agg_cnt": _ac, "src_cnt": _scnt, "cnt_diff": _ac - _scnt}
+
+
+def run_reconcile(days=90):
+    """对账核心(同步, 供 cron 端点与应用层兜底共用) —— 2026-11-02 S2-3 扩为两段
+
+    ① 日销: [今-days, 昨] 内 SUM(快照 order_count) == SUM(订单 quantity)
+       · 排除当天: 当天订单仍在增长, 快照可能滞后(差异属正常)
+       · 口径: 销量池 SALES_SQL(=已完成), 与快照写入同源
+    ② GMV : orders_day_agg 的 gmv/cnt == 订单源表同口径重算(见 _reconcile_gmv)
+       · 原因: 原对账只比"行数/件数", 金额错了根本发现不了; 而看板 GMV 全靠这张物化表
+       · 窗口比日销段晚一天收口(到 today-2): 软删残留靠 _rebuild_agg_day 单日精准自愈,
+         最近两天可能还没自愈, 报出来是噪音而非数据错
+
+    第三段(SKU 统计 sku_sales_stats)刻意不做: 它是从快照派生的二阶物化, 源头已被①覆盖,
+    而全量重算 90 天 SKU 日销的成本远高于它能发现的问题 —— 真要查, 用
+    /api/health?detail=1 看 mat_rebuild 的耗时与行数是否异常。
+
     差异 ≠ 0 → error 日志(source=cron), 前端质量页可见。
     """
     try:
@@ -585,6 +627,9 @@ def run_reconcile(days=90):
     _now = datetime.now(timezone.utc)
     _start = (_now - timedelta(days=_d)).strftime("%Y-%m-%d")
     _end = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
+    # GMV 段晚一天收口: 软删残留靠 _rebuild_agg_day 单日精准自愈, 最近两天可能尚未重建,
+    # 比进去只会产生"看起来是数据错、其实是还没自愈"的噪音。
+    _end_gmv = (_now - timedelta(days=2)).strftime("%Y-%m-%d")
     out = {}
     _bad = 0
     for _ch in _CHANNELS():
@@ -606,6 +651,20 @@ def run_reconcile(days=90):
         except Exception as _e:
             out[_ch] = {"error": str(_e)[:150]}
             try_err('cron', '日销对账降级(%s)' % _ch, _e)
+        # ② GMV 段(独立 try: 物化表缺失/未建时不能让日销段一起失败)
+        try:
+            _g = _reconcile_gmv(_ch, _start, _end_gmv)
+            if _g:
+                out[_ch]["gmv"] = _g
+                # 金额容差 0.01(浮点/分位舍入); 件数必须严格相等
+                if abs(_g["gmv_diff"]) > 0.01 or _g["cnt_diff"] != 0:
+                    _bad += 1
+                    _log("error", "GMV 对账不一致[%s] %s~%s: 物化 gmv=%.2f cnt=%d / 源 gmv=%.2f cnt=%d "
+                         "(差 %.2f / %d 单)" % (_ch, _g["from"], _end_gmv, _g["agg_gmv"], _g["agg_cnt"],
+                                               _g["src_gmv"], _g["src_cnt"], _g["gmv_diff"], _g["cnt_diff"]))
+        except Exception as _e:
+            out[_ch]["gmv_error"] = str(_e)[:150]
+            try_err('cron', 'GMV 对账降级(%s)' % _ch, _e)
     if not _bad:
         _log("info", "日销对账一致 %s~%s: %s" % (
             _start, _end,

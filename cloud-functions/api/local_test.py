@@ -810,6 +810,14 @@ try:
           "def run_reconcile" in _cr and "_PAID_SQL" in _cr.split("def run_reconcile")[1][:2000], "cron.py")
     check("对账: 应用层每日兜底已挂",
           "run_reconcile" in _dm and "maintenance_log" in _dm, "dashboard_maintain.py")
+    # 2026-11-02 S2-3: 对账必须含 GMV 段(只比行数/件数的话, 金额错了发现不了)
+    _rc_src = _cr.split("def run_reconcile")[1] if "def run_reconcile" in _cr else ""
+    check("对账: 含 GMV 段(物化金额 vs 源表同口径)",
+          "def _reconcile_gmv" in _cr and "_reconcile_gmv(_ch" in _rc_src
+          and "total_amount - COALESCE(discount_amount,0)" in _cr,
+          "cron.py")
+    check("对账: GMV 段晚一天收口(躲开未自愈的软删残留)",
+          "_end_gmv" in _rc_src and "_reconcile_gmv(_ch, _start, _end_gmv)" in _rc_src, "cron.py")
     _sc = _rf("schema_create.py")
     check("根治: 日销两表用代理主键 + 业务唯一键",
           "id BIGINT AUTO_INCREMENT PRIMARY KEY" in _sc
