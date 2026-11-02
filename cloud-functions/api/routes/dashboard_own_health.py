@@ -120,14 +120,12 @@ def own_health(channel, full: int = 0, limit: int = 10):
 
     skus = list({k[0] for k in own_rows})
     pmap = {}
-    for i in range(0, len(skus), 800):
-        chunk = skus[i:i + 800]
-        ph = ",".join(["%s"] * len(chunk))
-        for r in query(
-                "SELECT sku, product_name, barcode, supplier_code, IFNULL(expiry_managed,'') AS expiry_managed "
-                "FROM products WHERE channel=%s AND sku IN (" + ph + ") "
-                "AND (deleted_at IS NULL OR deleted_at='')", [channel] + chunk):
-            pmap[str(r.get("sku") or "")] = r
+    # 2026-11-02 冷算: 原按 800 分片走 IN 列表(1000 SKU → 2 次往返)。products 单渠道实测仅 1000 行、
+    #   7 列, 全量取回比"拼 IN + 分片循环"更省(一次往返 + 更小的 SQL 文本)。
+    for r in query(
+            "SELECT sku, product_name, barcode, supplier_code, IFNULL(expiry_managed,'') AS expiry_managed "
+            "FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]):
+        pmap[str(r.get("sku") or "")] = r
 
     # ── 下游(平台仓)日销 —— 自有仓的"消耗"= 调拨给平台仓的量 ──
     # 键与库存行同粒度: ①该 69码(平台仓 __C__ 的按码行) ②该 SKU 合计码(无码行/该码无记录时)
@@ -160,22 +158,20 @@ def own_health(channel, full: int = 0, limit: int = 10):
                     if str((pmap.get(s) or {}).get("expiry_managed") or "").strip().lower() in _yes]
     if _expiry_skus:
         try:
-            for i in range(0, len(_expiry_skus), 800):
-                chunk = _expiry_skus[i:i + 800]
-                ph = ",".join(["%s"] * len(chunk))
-                # 注意: batches 表**无 batch_no 列**(实测字段: id/sku/warehouse/warehouse_type/
-                #   channel/prod_date/exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
-                for r in query(
-                        "SELECT id AS batch_id, sku, IFNULL(barcode,'') AS barcode, "
-                        "IFNULL(warehouse,'') AS warehouse, exp_date, IFNULL(qty,0) AS qty "
-                        "FROM batches WHERE channel=%s AND warehouse_type='own' "
-                        "AND exp_date IS NOT NULL AND exp_date<>'' "
-                        "AND sku IN (" + ph + ") ORDER BY exp_date ASC", [channel] + chunk):
-                    # 2026-11-02 键对齐: 原实现 JOIN inventory 只按 sku+channel → 同 SKU 的
-                    #   其它码/其它自有仓批次也并进来, 再取"最早到期" → 报出的批次/到期日可能
-                    #   属于**另一个码或另一个仓**。现在按 (sku, 码, 仓) 分组, 由 _pick_batch
-                    #   逐级取: ①同码同仓 ②同仓(码缺失) ③该 SKU 最早 —— 只降"码"不跨仓。
-                    exp_map.setdefault(str(r.get("sku") or ""), []).append(r)
+            # 2026-11-02 冷算: 同上, 去掉 800 分片 —— own 仓有有效期的批次实测仅 1696 行。
+            # 注意: batches 表**无 batch_no 列**(实测字段: id/sku/warehouse/warehouse_type/
+            #   channel/prod_date/exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
+            for r in query(
+                    "SELECT id AS batch_id, sku, IFNULL(barcode,'') AS barcode, "
+                    "IFNULL(warehouse,'') AS warehouse, exp_date, IFNULL(qty,0) AS qty "
+                    "FROM batches WHERE channel=%s AND warehouse_type='own' "
+                    "AND exp_date IS NOT NULL AND exp_date<>'' "
+                    "ORDER BY exp_date ASC", [channel]):
+                # 2026-11-02 键对齐: 原实现 JOIN inventory 只按 sku+channel → 同 SKU 的
+                #   其它码/其它自有仓批次也并进来, 再取"最早到期" → 报出的批次/到期日可能
+                #   属于**另一个码或另一个仓**。现在按 (sku, 码, 仓) 分组, 由 _pick_batch
+                #   逐级取: ①同码同仓 ②同仓(码缺失) ③该 SKU 最早 —— 只降"码"不跨仓。
+                exp_map.setdefault(str(r.get("sku") or ""), []).append(r)
         except Exception as _e:
             try_err("own_health", "批次效期读取降级", _e)
 
@@ -285,7 +281,11 @@ def own_health(channel, full: int = 0, limit: int = 10):
             urg = x.get("days_to_expiry") if x.get("days_to_expiry") is not None else 9999
         else:
             urg = -(x.get("cover_days") or 0)
-        return (lv, urg)
+        # 2026-11-02 确定性定序: 原来只按(级别, 紧急度), 同分项(常见于 gap 相同/效期同日)
+        #   的先后由 SQL 返回顺序决定 → 同一份数据不同请求条序不同, 且 full=0 时 [:limit]
+        #   截断会取到不同成员。补 (sku, 码, 仓) 作稳定次级键, 数值与集合不变。
+        return (lv, urg, str(x.get("sku") or ""), str(x.get("barcode") or ""),
+                str(x.get("warehouse") or ""))
 
     items.sort(key=_key)
     tg = sum(1 for i in items if i["alert_type"] == "own_transfer_gap")

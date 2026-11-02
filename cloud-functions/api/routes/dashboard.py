@@ -266,7 +266,13 @@ def _q_recent(channel, d1):
 def _q_inventory(channel):
     # 全量行(health out_of_stock 需 avail<=0 缺货行; 低库存消费方自行过滤 avail>0)
     # 2026-10-29 按码: 补 barcode + warehouse(原只有 sku/仓型/数量, 健康与低库存无法按码/按仓判定)
-    _rows = query("SELECT " + _INV_COLS + " FROM inventory WHERE channel=%s", [channel])
+    # 2026-11-02 冷算: 只取**实际被消费的 5 列**。原 INVENTORY_COLS 是 12 列(含 product_name
+    #   VARCHAR(128)、beginning_stock、c_transit、locked_qty…), 实测同一份 9003 行:
+    #   12 列 1.44s / 6 列 0.45s / 仅 COUNT 0.41s —— 差的是**传输量**, 不是扫描。
+    #   而这里的两处消费方(_health_index 分档、低库存计数)只用 sku/仓型/可用量,
+    #   barcode/warehouse 供 _check_cols 断言保留。缺货列表(dashboard.py 另一处)仍用全列。
+    _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                  "available_qty FROM inventory WHERE channel=%s", [channel])
     try:
         from routes.common import check_cols as _cc
         _cc(_rows, ("barcode", "warehouse"), "dash", "看板物料")
@@ -284,21 +290,121 @@ def _q_digest(channel):
         return {}
 
 
+# ── 2026-11-02 冷算收口: 把"同源重复往返"合成一条 ──────────────────────────
+# 线上 perf_debug 实测(build_summary_agg): "查询 0.3s / 组装 1.15s" —— 而组装里 Python 只占 0.015s
+# (cProfile: _assemble tottime 0.015s / cumtime 6.15s), 其余全是逐条 SQL 的往返固定开销
+# (TiDB 与函数不同区, 单次 ~57ms)。所以降耗 = 降**往返次数**, 不是降计算量。
+# 三条合并都保持原口径逐字不变(同 _status_cond / 同 CASE 净额表达式 / 同 JOIN / 同 deleted_at 过滤)。
+
+_FLOW_NET = ("CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
+             "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) "
+             "ELSE amount END")
+
+
+def _q_counts(channel):
+    """概览三个计数 → 一条(原 alerts/products/suppliers 各一次 COUNT, 3 次往返)
+
+    标量子查询在同一条语句、同一快照内取值 —— 与原逐条 COUNT 的口径逐字一致。
+    """
+    r = one("SELECT "
+            "(SELECT COUNT(*) FROM alerts WHERE channel=%s AND status='active') AS alerts_c, "
+            "(SELECT COUNT(*) FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')) AS products_c, "
+            "(SELECT COUNT(*) FROM suppliers) AS suppliers_c",
+            [channel, channel]) or {}
+    return {"alerts": int(r.get("alerts_c") or 0),
+            "products": int(r.get("products_c") or 0),
+            "suppliers": int(r.get("suppliers_c") or 0)}
+
+
+def _q_cfg(channel):
+    """补货参数配置(健康分与低库存动态安全线共用一份 —— 原两处各查一次)"""
+    try:
+        return {r.get("key"): r.get("value") for r in
+                query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+    except Exception as _e:
+        try_err('dashboard', '补货配置加载降级', _e)
+        return {}
+
+
+def _q_flows_month(channel, d30, d31):
+    """月度回款: 总额 + 按日 + 按店 → 一条(原 3 次扫描同一时间窗)
+
+    口径不变: 同一个 `_FLOW_NET` 净额表达式、同一个 arrived_time 区间。
+    返回 (总额|None, {日: 净额}, {店: 净额}); 无流水返回 (None, None, None) —— 与原
+    "COUNT(*)>0 才算有流水" 等价(空结果即无流水)。
+    """
+    rows = query("SELECT DATE(arrived_time) AS d, shop, COALESCE(SUM(" + _FLOW_NET + "),0) AS v "
+                 "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
+                 "GROUP BY DATE(arrived_time), shop",
+                 [channel, d30 + " 00:00:00", d31 + " 23:59:59"])
+    if not rows:
+        return None, None, None
+    _tot = 0.0
+    _by_day = {}
+    _by_shop = {}
+    for r in rows:
+        _v = float(r.get("v") or 0)
+        _dd = str(r.get("d") or "")[:10]
+        _sh = str(r.get("shop") or "")
+        _tot += _v
+        _by_day[_dd] = _by_day.get(_dd, 0.0) + _v
+        _by_shop[_sh] = _by_shop.get(_sh, 0.0) + _v
+    return (round(_tot, 2),
+            {k: round(v, 2) for k, v in _by_day.items()},
+            {k: round(v, 2) for k, v in _by_shop.items()})
+
+
+def _q_brands(channel, d_from, d_to=""):
+    """品牌 GMV: 按(日, 品牌)一次取回, 内存切周期 —— 原 today/week/month(/custom) 各查一次
+
+    SQL 与 `_brands_range` 逐字同源(`_status_cond` 两处、LEFT JOIN products、deleted_at 过滤),
+    只多分了 `DATE(ordered_at)` 这一维; 周期切片在内存做, 结果与原逐周期查询一致。
+    """
+    _sql = ("SELECT DATE(o.ordered_at) AS d, COALESCE(p.brand,'') AS brand, "
+            "SUM(IF(%s, o.total_amount - COALESCE(o.discount_amount,0) "
+            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
+            "SUM(IF(%s, COALESCE(o.subsidy_amount,0), 0)) AS sb, "
+            "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
+            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
+            "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products "
+            "WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
+            "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
+            "AND o.ordered_at>=%%s" % (_status_cond(), _status_cond()))
+    _p = [channel, d_from + " 00:00:00"]
+    if d_to:
+        _sql += " AND o.ordered_at<=%s"
+        _p.append(d_to + " 23:59:59")
+    _sql += " GROUP BY DATE(o.ordered_at), COALESCE(p.brand,'')"
+    try:
+        return query(_sql, _p)
+    except Exception as _e:
+        try_err('dashboard', '品牌按日聚合降级', _e)
+        return []
+
+
 def _build_summary_agg(channel, days60, now, mode="bbcc"):
     """agg 路径(强实时): 前天及以前读 orders_day_agg, 昨天+今天实时直查 orders(补录/新增当日立即反映)
-    4 个独立查询并行(agg/当天直查/inventory/digest——TiDB 多实例并发, 非缓存 3s→1.5s);
-    近 2 天直查失败降级仅 agg"""
+
+    2026-11-02 冷算收口: 原 4 条并行 + 组装阶段 13 条**串行**(计数 3 / 回款流水 3 / 品牌 5 /
+    配置 2) —— 线上实测 22 次往返、单次 ~57ms, 光往返就 1.25s。现在把同源的合成 3 条
+    (计数 1 / 流水 1 / 品牌 1)并全部前置到并行池, 组装阶段不再发 SQL。
+    """
     today = now.strftime("%Y-%m-%d")
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     _st30 = (now - timedelta(days=29)).strftime("%Y-%m-%d")
     import time as _t
     _t0 = _t.time()
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=3) as _ex:  # 2026-10-11 线程收敛(4→3——TiDB 连接数压力降, 查询并行收益保留)
+    # max_workers=6: 八个任务两波(6+2); 连接池上限 10, 峰值 6 不挤占其他请求
+    with ThreadPoolExecutor(max_workers=6) as _ex:
         _f1 = _ex.submit(_q_agg, channel, days60, d1)
         _f2 = _ex.submit(_q_recent, channel, d1)
         _f3 = _ex.submit(_q_inventory, channel)
         _f4 = _ex.submit(_q_digest, channel)
+        _f5 = _ex.submit(_q_counts, channel)
+        _f6 = _ex.submit(_q_flows_month, channel, _st30, today)
+        _f7 = _ex.submit(_q_brands, channel, min(days60, _st30), today)
+        _f8 = _ex.submit(_q_cfg, channel)
         agg = _f1.result()
         try:
             recent = _f2.result()
@@ -306,9 +412,30 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
             recent = []  # 近 2 天直查失败: 仅 agg, 不阻塞
         _inv_rows = _f3.result()
         _ds_map = _f4.result()
+        try:
+            _counts = _f5.result()
+        except Exception as _ec:
+            try_err('dashboard', '概览计数降级', _ec)
+            _counts = None
+        try:
+            _flows = _f6.result()
+        except Exception as _ef:
+            try_err('dashboard', '月度回款降级', _ef)
+            _flows = (None, None, None)
+        try:
+            _brands_raw = _f7.result()
+        except Exception as _eb:
+            try_err('dashboard', '品牌聚合降级', _eb)
+            _brands_raw = None
+        try:
+            _cfg = _f8.result()
+        except Exception as _eg:
+            try_err('dashboard', '补货配置降级', _eg)
+            _cfg = None
     _t1 = _t.time()
     _ass = _assemble(list(agg) + list(recent), channel, _st30, today, mode,
-                     _inv_rows=_inv_rows, _ds_map=_ds_map)
+                     _inv_rows=_inv_rows, _ds_map=_ds_map,
+                     _counts=_counts, _flows=_flows, _brands_raw=_brands_raw, _cfg=_cfg)
     _t2 = _t.time()
     # 临时计时(定位非缓存 3s 分布——排查后移除)
     try:
@@ -316,7 +443,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
         _et("INSERT INTO quality_logs(log_type, level, message, details, source) "
             "VALUES('perf_debug','info',%s,%s,'dash')",
             ("summary agg 计时: 查询 %.2fs 组装 %.2fs" % (_t1 - _t0, _t2 - _t1),
-             "parallel"))
+             "parallel8"))
     except Exception:
         pass
     return _ass
@@ -386,7 +513,13 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
     return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
 
 
-def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None):
+def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None,
+              _counts=None, _flows=None, _brands_raw=None, _cfg=None):
+    """把聚合行组装成看板结构
+
+    2026-11-02 冷算收口: `_counts` / `_flows` / `_brands_raw` / `_cfg` 由调用方预取并注入
+    (agg 路径已在并行池里取好), 组装阶段不再发 SQL。为 None 时自己查(自定义区间直查路径)。
+    """
     # 行形态归一(兼容 DictCursor list[dict] 与非 DictCursor tuple rows——列序=SELECT 顺序)
     _cols = ("d", "order_status", "store", "g", "sub", "cnt")
     _norm = []
@@ -516,21 +649,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                 s += _sv
         return s
 
-    # 2026-10-16 GMV 回款: 优先真实资金流水(gmv_flows——按到账时间月度归属); 无数据降级 orders 推算
-    def _payout_flows(d0, d1):
-        """gmv_flows 月度到账净额(货款到账+ / 退款扣回/扣点扣款-); 返回 None=无数据(降级 orders 推算)"""
-        try:
-            from db import query as _qf
-            _r = _qf("SELECT COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
-                     "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) AS v, "
-                     "COUNT(*) AS c FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s",
-                     [channel, d0 + " 00:00:00", d1 + " 23:59:59"])
-            if _r and int((_r[0] or {}).get("c") or 0) > 0:
-                return round(float((_r[0] or {}).get("v") or 0), 2)
-        except Exception:
-            pass
-        return None
-
+    # 2026-11-02 冷算: 原 _payout_flows()(每次一次 SUM+COUNT 扫同窗)已并入 _q_flows_month 的
+    #   一次 GROUP BY DATE,shop, 此处不再单发查询。
     tg, to = _agg(today_s, today_s)
     pg, po = _agg(d1, d1)
     wg, wo = _agg(d7, d8)  # d7=上周一 d8=上周日——完整自然周(2026-10-16 曾 _agg(d7,today_s) 终点错含今天)
@@ -556,7 +676,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                   "payout": round(mg - _refund(d30, d31) - _sub(d30, d31), 2)},
     }
 
-    health = _health_index(channel, mode, _inv_rows, _ds_map)
+    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg)
     # 低库存计数(动态安全线, 替代静态 SQL——seed safety_qty=0 后静态判定恒 0)
     low_stock = {"c": 0}
     try:
@@ -573,12 +693,14 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                 _ls_ds = {s: _rp2(_m2[7].get(s, 0), _m2[14].get(s, 0), _m2[28].get(s, 0)) for s in _by2}
             except Exception:
                 pass
-        _cfg_ls = {}
-        try:
-            _cfg_ls = {r.get("key"): r.get("value") for r in
-                       query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-        except Exception:
-            pass
+        if _cfg is not None:
+            _cfg_ls = _cfg
+        else:
+            _cfg_ls = {}
+            try:
+                _cfg_ls = _q_cfg(channel)
+            except Exception:
+                pass
         def _mcl(key, m2, default):
             v = _cfg_ls.get("mode_%s_%s" % (m2, key))
             if v is None:
@@ -603,9 +725,11 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
         low_stock = {"c": _ls_cnt}
     except Exception as _e:
             try_err('dashboard', '低库存计数动态降级', _e)
-    alert_count = one("SELECT COUNT(*) AS c FROM alerts WHERE channel=%s AND status='active'", [channel]) or {}
-    product_count = one("SELECT COUNT(*) AS c FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]) or {}
-    supplier_count = one("SELECT COUNT(*) AS c FROM suppliers") or {}
+    # 三个概览计数: 原 3 次往返 → 一条(标量子查询, 同快照同口径); 调用方已预取则直接用
+    _cnts = _counts if _counts is not None else _q_counts(channel)
+    alert_count = {"c": _cnts.get("alerts", 0)}
+    product_count = {"c": _cnts.get("products", 0)}
+    supplier_count = {"c": _cnts.get("suppliers", 0)}
 
     summary = {
         "gmv": round(gmv, 2), "net_gmv": round(gmv - refund_amt, 2),
@@ -662,38 +786,19 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     _po_m = None
     _flow_day = None   # 回款趋势: 真实流水按日净额 {日期: 金额}(有流水才查)
     _flow_shop = None  # 店铺回款: 真实流水按 shop 聚合(月度有流水才查)
+    # 2026-11-02 冷算: 原三次扫同一时间窗(总额/按日/按店) → 一条 GROUP BY DATE,shop 内存派生。
+    #   口径不变: 同一个 _FLOW_NET 净额表达式 + 同一个 arrived_time 区间; 无流水时返回 (None,None,None)
+    #   —— 与原 "COUNT(*)>0 才算有流水" 等价。
     try:
-        from db import query as _qf
-        _rr = _qf("SELECT COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
-                   "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) AS v, "
-                   "COUNT(*) AS c FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s",
-                   [channel, d30 + " 00:00:00", d31 + " 23:59:59"])
-        if _rr and int((_rr[0] or {}).get("c") or 0) > 0:
-            _po_m = round(float((_rr[0] or {}).get("v") or 0), 2)
-    except Exception:
-        pass
+        if _flows is not None:
+            _po_m, _flow_day, _flow_shop = _flows
+        else:
+            _po_m, _flow_day, _flow_shop = _q_flows_month(channel, d30, d31)
+    except Exception as _e:
+        try_err('dashboard', '月度回款读取降级', _e)
     if _po_m is not None:
         periods["month"]["payout"] = _po_m
         periods["month"]["payout_source"] = "flow"   # 真实资金流水
-        # 回款趋势数据源(折线/微条/店铺图柱口径统一): 按日 + 按 shop 聚合真实流水
-        try:
-            from db import query as _qfd
-            _flow_day = {}
-            for _r in _qfd("SELECT DATE(arrived_time) d, COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
-                           "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) v "
-                           "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
-                           "GROUP BY DATE(arrived_time)",
-                           [channel, d30 + " 00:00:00", d31 + " 23:59:59"]):
-                _flow_day[str(_r.get("d") or "")[:10]] = round(float(_r.get("v") or 0), 2)
-            _flow_shop = {}
-            for _r in _qfd("SELECT shop, COALESCE(SUM(CASE WHEN flow_type IN ('货款到账','交易收入','结算入账') THEN amount "
-                           "WHEN flow_type IN ('退款扣回','扣点扣款','技术服务费','调价补差') THEN -ABS(amount) ELSE amount END),0) v "
-                           "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
-                           "GROUP BY shop",
-                           [channel, d30 + " 00:00:00", d31 + " 23:59:59"]):
-                _flow_shop[str(_r.get("shop") or "")] = round(float(_r.get("v") or 0), 2)
-        except Exception as _e:
-                try_err('dashboard', '回款流水按日/店铺聚合降级', _e)
     else:
         periods["month"]["payout"] = None            # 无真实流水——前端弱化提示(不显示推算——v1.0 算不准宁可不给)
         periods["month"]["payout_source"] = "pending"
@@ -705,56 +810,47 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     # 品牌维度(店铺 GMV 卡切品牌: 近 60 天 paid 订单按品牌聚合, join products)
     # v4-paidset: g/sb 必须用 _status_cond()(PAID 4 状态含申请退款) —— 历史线上曾误用非支付状态集(待确认+已退货)导致品牌 GMV 低估/净额为负
     brands_map = {}
-    try:
-        _br = query(
-            "SELECT COALESCE(p.brand,'') AS brand, "
-            "SUM(IF(%s, o.total_amount - COALESCE(o.discount_amount,0) "
-            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
-            "SUM(IF(%s, COALESCE(o.subsidy_amount,0), 0)) AS sb, "
-            "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
-            "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
-            "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
-            "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
-            "AND o.ordered_at>=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
-            [channel, d60 + " 00:00:00"])
-        for _r in _br:
-            _b = _r.get("brand") or "未分类"
+    # 2026-11-02 冷算: 品牌原来 5 次往返(60天 + today/week/month/custom 各一次, 同一段 SQL 只差日期界);
+    #   改为一次按(日,品牌)取回, 各区间的聚合在内存做。口径逐字不变。
+    _brands_rows = _brands_raw if _brands_raw is not None else _q_brands(channel, d60)
+
+    def _brands_agg(d0, d1=None):
+        """从(日,品牌)行按区间累加; d1=None 表示无上界(与原 60 天查询同)"""
+        _out = {}
+        for _r in _brands_rows:
+            _dd = str(_r.get("d") or "")[:10]
+            if not _dd or _dd < d0:
+                continue
+            if d1 is not None and _dd > d1:
+                continue
+            _b = str(_r.get("brand") or "")
             if not _b or _b == "未分类":
                 continue
-            brands_map[_b] = {"g": round(float(_r.get("g") or 0), 2),
-                              "rf": round(float(_r.get("rf") or 0), 2),
-                              "sb": round(float(_r.get("sb") or 0), 2)}
+            _v = _out.setdefault(_b, {"g": 0.0, "rf": 0.0, "sb": 0.0})
+            _v["g"] += float(_r.get("g") or 0)
+            _v["rf"] += float(_r.get("rf") or 0)
+            _v["sb"] += float(_r.get("sb") or 0)
+        return {k: {"g": round(v["g"], 2), "rf": round(v["rf"], 2), "sb": round(v["sb"], 2)}
+                for k, v in _out.items()}
+
+    try:
+        brands_map = _brands_agg(d60)
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
+    # 次级键 = 品牌名: GMV 并列(常见于退款抵消后为 0)时原实现依赖 SQL 返回顺序,
+    #   不同请求/不同实现间会抖动; 加名称定序后结果可复现(数值不受影响)
     brands = [{"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
               "payout": round(v["g"] - v["rf"] - v["sb"], 2)}
-              for k, v in sorted(brands_map.items(), key=lambda x: -x[1]["g"])]
+              for k, v in sorted(brands_map.items(), key=lambda x: (-x[1]["g"], x[0]))]
     def _brands_range(d0, d1=""):
         """按起始日聚合品牌 GMV(周期联动)——2026-10-16 双参(d1 终点——完整自然周/月; 空=至今)"""
         try:
-            _bm = {}
-            for _r2 in query(
-                    "SELECT COALESCE(p.brand,'') AS brand, "
-                    "SUM(IF(%s, o.total_amount - COALESCE(o.discount_amount,0) "
-                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS g, "
-                    "SUM(IF(%s, COALESCE(o.subsidy_amount,0), 0)) AS sb, "
-                    "SUM(IF(o.order_status = '申请退款', o.total_amount - COALESCE(o.discount_amount,0) "
-                    "+ COALESCE(o.freight_amount,0) + COALESCE(o.tax_amount,0), 0)) AS rf "
-                    "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products WHERE brand IS NOT NULL AND brand != '') p ON o.sku=p.sku AND o.channel=p.channel "
-                    "WHERE o.channel=%%s AND (o.deleted_at IS NULL OR o.deleted_at='') "
-                    "AND o.ordered_at>=%%s AND o.ordered_at<=%%s GROUP BY p.brand" % (_status_cond(), _status_cond()),
-                    [channel, d0 + " 00:00:00", (d1 or d0) + " 23:59:59"]):  # 双参完整区间(2026-10-16): 终点含当日
-                _b = _r2.get("brand") or ""
-                if not _b or _b == "未分类":
-                    continue
-                _bm[_b] = {"g": round(float(_r2.get("g") or 0), 2),
-                           "rf": round(float(_r2.get("rf") or 0), 2),
-                           "sb": round(float(_r2.get("sb") or 0), 2)}
+            _bm = _brands_agg(d0, d1 or d0)
             # 2026-10-16 回款口径: 品牌维度无真实流水归属(gmv_flows 仅 shop 维度)→ month 回款=null
             # (不显示推算——与 GMV 卡"有就有没有就没有"同源); 非 month 周期保留 orders 推算
             _is_month_b = d0 == d30 and (not d1 or d1 == d31)
             out = []
-            for k, v in sorted(_bm.items(), key=lambda x: -x[1]["g"]):
+            for k, v in sorted(_bm.items(), key=lambda x: (-x[1]["g"], x[0])):
                 out.append({"name": k, "gmv": v["g"], "net_gmv": round(v["g"] - v["rf"], 2),
                             "payout": None if _is_month_b else round(v["g"] - v["rf"] - v["sb"], 2)})
             return out

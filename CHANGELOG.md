@@ -1,3 +1,37 @@
+## 2026-11-02: 冷算耗时收口(往返 22→14 / 23→16 / 10→7, 口径逐字段不变)
+
+> 回归 334 通过 / 0 失败; preflight 六步全绿
+
+### 一、结论先摆: 不是加缓存, 是减往返
+线上 `perf_debug` 是 "查询 0.3s / 组装 1.15s", cProfile 一照 `_assemble` tottime **0.015s**、
+cumtime **6.15s** —— 组装阶段自身只算 15ms, 6.1s 全是它内部 21 条串行 SQL 的往返(TiDB 跨区, 单次 ~57ms)。
+加缓存/拖 TTL 只会把慢藏起来(首个请求依旧慢, 且 TTL 越长数据越旧), 因此本轮只动**取数方式**。
+
+### 二、合并同源往返(口径逐字不改)
+- alerts/products/suppliers 三个 COUNT → 一条语句三个标量子查询(同快照)
+- 月度回款 总额/按日/按店 三次扫同窗 → 一次 `GROUP BY DATE(arrived_time), shop`, 内存派生
+- 品牌 GMV 五次(60天+today/week/month/custom) → 一次 `GROUP BY DATE(ordered_at), brand`, 内存切
+- `_assemble` 改为接收预取值 `_counts/_flows/_brands_raw/_cfg`(调用方并行池已取好):
+  全部注入时组装阶段**零 SQL**; 缺失时仍自行查询(自定义区间直查路径不变)
+- 看板物料 12 列 → 5 列(9003 行: 1.44s → 0.45s, 差的是传输量)
+- `sku_sales_stats` 建表 DDL 进程内只发一次(原每屏 2 次)
+- 自有仓 products/批次去掉 800 分片(实测仅 1000 / 1696 行)
+- 删除已无调用点的 `_payout_flows()`(回款并入上面那条)
+
+### 三、等价性(逐字段比对, 非目测)
+旧实现从 HEAD 导出后与新版双跑同一份生产数据:
+- summary jd / other: 10 个顶层键**完全一致**(jd 118091 单, GMV 54515859.25)
+- aux jd/other × bbcc/traditional: 四组完全一致(含顺序)
+- own_health jd / other: 数值与集合一致
+
+唯一差异是**并列定序**: 旧实现靠 SQL 返回顺序, GMV 并列(退款抵消为 0)时品牌顺序抖动;
+自有仓告警同分项先后随机, 而 `full=0` 时 `[:limit]` 会截到不同成员。现补稳定次级键
+(品牌名 / sku+码+仓), 可复现且数值不变。
+
+### 四、回归
+新增 9 条(S2-6), 其中 2 条动态: 六个预取全注入时把 `query/one` 换成抛异常的桩, `_assemble`
+仍跑完且**零 SQL**; 注入值直接生效(products=2 / suppliers=3 / month payout=123.45 来自入参)。
+
 ## 2026-11-02: 库存联动 `_adjust_inventory` 键补齐(写侧, 与 15.118 同一类)
 
 > 回归 325 通过 / 0 失败; preflight 六步全绿

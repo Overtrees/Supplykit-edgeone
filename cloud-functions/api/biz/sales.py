@@ -372,6 +372,22 @@ def rolling_predict(s7, s14, s28):
 # 2026-10-29: 改为引用 schema_create 单一真源(原为独立副本 → 主键/列与 schema 漂移)
 _SKU_STATS_DDL = _table_ddl("sku_sales_stats")
 
+# 建表只发一次/进程(2026-11-02 冷算): 原 get_sku_sales_stats 每次调用都发
+#   `CREATE TABLE IF NOT EXISTS sku_sales_stats` —— 一个看板屏把它调 2 次(aux 自查 + own_health),
+#   等于每屏 2 次 DDL。DDL 在 TiDB 上要走 schema 路径(即使已存在), 比 SELECT 贵且可能与其它 DDL 排队。
+#   置位放在 execute 之后: 失败不置位, 下次仍会重试(与原"每次都建"的容错等价)。
+_STATS_DDL_READY = False
+
+
+def _ensure_stats_table():
+    """确保 sku_sales_stats 存在(进程内只发一次 DDL; 幂等, 实例重启再发一次无副作用)"""
+    global _STATS_DDL_READY
+    if _STATS_DDL_READY:
+        return
+    from db import execute as _e
+    _e(_SKU_STATS_DDL)
+    _STATS_DDL_READY = True
+
 # 行维度白名单(防魔法值): 物化行 warehouse 取值枚举
 WH_C = "__C__"      # 全国 platform 合计(bbcc 补货/断货 C)
 WH_BC = "__BC__"    # platform+platform_b 合计(bbcc 断货 BC)
@@ -418,7 +434,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     import time as _tm
     _t0 = _tm.time()
     try:
-        _ex(_SKU_STATS_DDL)
+        _ensure_stats_table()
         by_sku, by_sku_wh, by_sku_bc, by_sku_wh_bc = load_daily_sales_grouped(
             days, channel, skus=skus, with_bc_wh=True)
         if not by_sku and not by_sku_wh:
@@ -674,9 +690,11 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
     """
     try:
         from db import query as _q, one as _o
-        _o(_SKU_STATS_DDL)
-        _c = _o("SELECT COUNT(*) c FROM sku_sales_stats WHERE channel=%s", [channel]) or {}
-        if int(_c.get("c") or 0) <= 0:
+        _ensure_stats_table()
+        # 存在性判断: 原 COUNT(*) 要扫该渠道全部行(3 万+), 只为回答"有没有"。
+        #   LIMIT 1 命中索引即返回, 语义等价(c<=0 ⇔ 无行)。
+        _c = _o("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s LIMIT 1", [channel]) or {}
+        if not _c:
             _rebuild_sku_sales_stats(channel, 90)   # 2026-10-30 固定 90(原跟随调用方 days → 窗口不一致)
             # 2026-11-01 自愈重建后失效聚合缓存: 表空期间可能已把"空结果"缓存进 analysis_cache(TiDB 表,
             #   跨实例存活), 不失效会让消费方在 TTL 内继续读空 → 表现为"重建了但还是没数据"

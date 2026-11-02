@@ -150,6 +150,12 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   `_cur_map` 升五维、INSERT 补 barcode、`beginning_stock` 与 available 同置(否则重算把增量抹成 0)、
   评估上下文复用同一次查询(原逐 SKU `LIMIT 1` 多码串行)。该函数**仍无调用点**(出库联动走
   `_recalc_own_inventory`), 属"启用前先补对"。见 §15.119
+- **冷算慢的根因是往返次数, 不是 Python 计算(2026-11-02 S2-6)**: `_assemble` tottime 0.015s /
+  cumtime 6.15s —— 组装阶段 99% 是它内部 21 条串行 SQL 的往返(线上单次 ~57ms)。本轮只合并同源查询
+  (三计数合一 / 回款一条 GROUP BY / 品牌按日一次取 / 只看被消费的列 / DDL 进程内一次 / 去 800 分片),
+  并让 `_assemble` 接收并行池预取值(全注入时零 SQL)。往返 22→14 / 23→16 / 10→7, 输出与旧实现逐字段一致
+  (jd/other summary + aux 四组; own_health 仅并列定序差异, 已补稳定次级键)。**不加缓存、不拖 TTL**。
+  见 §15.120
 - **待办(已定位未改): `_recalc_own_inventory` 的库存行查询不过滤 `deleted_at`** ——
   软删行会被一起重算 available(读侧过滤了看不见, 一旦"恢复删除"暴露的是重算后的值)。
   当前软删行 0 条, 无实际影响; 加过滤是一行 SQL 的事, 但要先确认"恢复删除"该按什么口径复原

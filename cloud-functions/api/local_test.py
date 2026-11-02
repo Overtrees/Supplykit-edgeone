@@ -1776,5 +1776,72 @@ try:
 except Exception as _e18:
     check("S2-1e 库存联动键用例无异常", False, str(_e18)[:200])
 
+# ── S2-6: 冷算耗时收口 —— 线上瓶颈是 SQL 往返次数(单次 ~57ms), 不是 Python 计算 ──
+#    定位依据: cProfile 下 _assemble tottime=0.015s / cumtime=6.15s —— 组装阶段 99% 是往返。
+try:
+    import routes.dashboard as _dsh6
+    import routes.dashboard_health as _dh6
+    _src6 = open('routes/dashboard.py', encoding='utf-8').read()
+    _src6b = open('biz/sales.py', encoding='utf-8').read()
+    _src6c = open('routes/dashboard_own_health.py', encoding='utf-8').read()
+
+    check("S2-6 概览三计数合成一条(标量子查询, 同一快照)",
+          "def _q_counts" in _src6
+          and all(k in _src6.split("def _q_counts")[1][:900]
+                  for k in ("AS alerts_c", "AS products_c", "AS suppliers_c")),
+          "routes/dashboard.py")
+    check("S2-6 月度回款一条 GROUP BY DATE,shop(原总额/按日/按店三次扫同窗)",
+          "GROUP BY DATE(arrived_time), shop" in _src6, "routes/dashboard.py")
+    check("S2-6 品牌一次按(日,品牌)取回, 周期在内存切(原 5 次只差日期界)",
+          "GROUP BY DATE(o.ordered_at), COALESCE(p.brand,'')" in _src6
+          and "def _brands_agg(d0, d1=None)" in _src6, "routes/dashboard.py")
+    check("S2-6 品牌并列定序确定(同 GMV 按品牌名, 不再靠 SQL 返回顺序)",
+          'key=lambda x: (-x[1]["g"], x[0])' in _src6, "routes/dashboard.py")
+    check("S2-6 看板物料只投影被消费的列(原 12 列含 product_name, 9003 行多花 1s)",
+          "SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, " in _src6
+          and "SELECT * FROM inventory" not in _src6, "routes/dashboard.py")
+    _g6 = _src6b.split("def get_sku_sales_stats")[-1] if "def get_sku_sales_stats" in _src6b else ""
+    check("S2-6 建表 DDL 进程内只发一次(原每次 get_sku_sales_stats 都发)",
+          "_STATS_DDL_READY" in _src6b and "if _STATS_DDL_READY:" in _src6b
+          and "_e(_SKU_STATS_DDL)" in _src6b.split("def _ensure_stats_table")[1][:300]
+          and "_e(_SKU_STATS_DDL)" not in _g6,
+          "biz/sales.py")
+    check("S2-6 自有仓产品/批次不再按 800 分片(实测仅 1000/1696 行)",
+          "_chunk" not in _src6c and "exp_map.setdefault(" in _src6c,
+          "routes/dashboard_own_health.py")
+
+    # 动态: 全部预取注入时, 组装阶段一条 SQL 都不该发
+    _rows6 = [{"d": _NOW.strftime("%Y-%m-%d"), "order_status": "已完成",
+               "store": "自营旗舰店", "g": 100.0, "sub": 5.0, "cnt": 2}]
+    _hits6 = {"n": 0}
+
+    def _noquery6(*a, **k):
+        _hits6["n"] += 1
+        raise AssertionError("组装阶段不应再发 SQL: %s" % str(a[0])[:80])
+
+    _o6 = (_dsh6.query, _dsh6.one, _dh6.query, _dh6.one)
+    _dsh6.query = _dsh6.one = _dh6.query = _dh6.one = _noquery6
+    try:
+        _out6 = _dsh6._assemble(
+            _rows6, "jd", "2026-10-01", "2026-10-31", "bbcc",
+            _inv_rows=[{"sku": "S1", "barcode": "B1", "warehouse": "集货仓",
+                        "warehouse_type": "own", "available_qty": 10}],
+            _ds_map={"S1": 1.0},
+            _counts={"alerts": 1, "products": 2, "suppliers": 3},
+            _flows=(123.45, {"2026-10-01": 123.45}, {"店A": 123.45}),
+            _brands_raw=[{"d": "2026-10-01", "brand": "品牌A", "g": 100.0, "sb": 5.0, "rf": 0.0}],
+            _cfg={})
+    finally:
+        _dsh6.query, _dsh6.one, _dh6.query, _dh6.one = _o6
+    check("S2-6 全部预取注入时 _assemble 一条 SQL 都不发", _hits6["n"] == 0,
+          "发出 %d 次" % _hits6["n"])
+    check("S2-6 注入值直接生效(计数/月度回款来自入参, 不是重查)",
+          _out6["summary"]["total_products"] == 2
+          and _out6["summary"]["total_suppliers"] == 3
+          and _out6["periods"]["month"]["payout"] == 123.45,
+          str(_out6["summary"])[:160])
+except Exception as _e19:
+    check("S2-6 冷算收口用例无异常", False, str(_e19)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

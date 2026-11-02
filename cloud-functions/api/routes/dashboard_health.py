@@ -34,9 +34,13 @@ def _sync_health_snapshot(channel, health):
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
 
-def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
+def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None):
     """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
-    ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out"""
+    ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out
+
+    2026-11-02 冷算: `_cfg` 可由调用方注入 —— 同一次看板组装里 `_assemble` 也要这份配置,
+    原来两边各查一次(同一段 `SELECT key,value FROM replenishment_config`), 纯重复往返。
+    """
     rows = _inv_rows if _inv_rows is not None else query(
         "SELECT " + _INV_COLS + " FROM inventory "
         "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
@@ -49,12 +53,15 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None):
         except Exception as _e:
                 try_err('dash', '健康指数日销降级', _e)
     # 动态安全线周期(与补货/采购备注同口径)
-    _cfg = {}
-    try:
-        _cfg = {r.get("key"): r.get("value") for r in
-                query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-    except Exception as _e:
-            try_err('dash', '健康指数配置加载降级', _e)
+    if _cfg is not None:
+        _cfg = dict(_cfg) if not isinstance(_cfg, dict) else _cfg
+    else:
+        _cfg = {}
+        try:
+            _cfg = {r.get("key"): r.get("value") for r in
+                    query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+        except Exception as _e:
+                try_err('dash', '健康指数配置加载降级', _e)
 
     def _mc(key, mode2, default):
         v = _cfg.get("mode_%s_%s" % (mode2, key))
