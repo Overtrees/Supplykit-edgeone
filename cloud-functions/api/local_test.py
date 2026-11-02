@@ -1686,6 +1686,32 @@ try:
     check("S2-1d 告警行带真实码与仓(不再用档案码顶替)",
           _gap7 and _gap7[0].get("barcode") == "BC-A" and _gap7[0].get("warehouse") == "集货仓",
           str(_gap7[:1])[:200])
+
+    # 多码: 同 SKU 两个 69码 必须各判各的(合并判会用一个码的日销去判另一个码的库存)
+    _bs7.get_sku_sales_stats = lambda *a, **k: {
+        "SKU-M|BC-A|__C__": {"sku": "SKU-M", "barcode": "BC-A", "warehouse": "__C__",
+                             "ds7": 12, "ds14": 12, "ds28": 12},
+        "SKU-M|BC-B|__C__": {"sku": "SKU-M", "barcode": "BC-B", "warehouse": "__C__",
+                             "ds7": 0.5, "ds14": 0.5, "ds28": 0.5},
+        "SKU-M||__C__": {"sku": "SKU-M", "barcode": "", "warehouse": "__C__",
+                         "ds7": 12.5, "ds14": 12.5, "ds28": 12.5}}
+    _ohmod7.query = lambda sql, params=None: (
+        [{"sku": "SKU-M", "barcode": "BC-A", "warehouse": "集货仓", "avail": 10, "transit": 0},
+         {"sku": "SKU-M", "barcode": "BC-B", "warehouse": "集货仓", "avail": 1, "transit": 0}]
+        if ("FROM inventory" in sql and "warehouse_type='own'" in sql) else
+        ([{"sku": "SKU-M", "product_name": "多码品", "barcode": "BC-A",
+           "supplier_code": "", "expiry_managed": "no"}] if "FROM products" in sql else []))
+    try:
+        _r8 = _ohmod7.own_health("jd", full=1)
+        _g8 = [x for x in _r8["items"] if x["alert_type"] == "own_transfer_gap"]
+    finally:
+        _ohmod7.query = _fq7
+        _bs7.get_sku_sales_stats = lambda *a, **k: {
+            "SKU-A|BC-A|__C__": {"sku": "SKU-A", "barcode": "BC-A", "warehouse": "__C__",
+                                 "ds7": 12, "ds14": 12, "ds28": 12}}
+    check("S2-1d 多码 SKU 各码各判(BC-A 报缺, 日销 0.5 的 BC-B 不报)",
+          len(_g8) == 1 and _g8[0].get("barcode") == "BC-A"
+          and int(_g8[0]["available_qty"]) == 10, str(_g8)[:240])
 except Exception as _e17:
     check("S2-1d 自有仓在途用例无异常", False, str(_e17)[:200])
 

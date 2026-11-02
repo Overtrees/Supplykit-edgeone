@@ -1,6 +1,6 @@
 ## 2026-11-02: 自有仓「采购在途」口径定案 + 组合键对齐
 
-> 回归 315 通过 / 0 失败; preflight 六步全绿
+> 回归 316 通过 / 0 失败; preflight 六步全绿
 
 ### 一、采购在途只认库存导入(自有仓)的 in_transit_qty
 - 旧实现叠了两份: `inventory`(own) 的 `in_transit_qty` + `purchase_orders` 的
