@@ -437,7 +437,8 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
                      _inv_rows=_inv_rows, _ds_map=_ds_map,
                      _counts=_counts, _flows=_flows, _brands_raw=_brands_raw, _cfg=_cfg)
     _t2 = _t.time()
-    # 临时计时(定位非缓存 3s 分布——排查后移除)
+    # 冷算计时(2026-11-02 S2-6 收口后保留): perf_debug 是线上冷算观测的唯一手段
+    #   (本地往返数不能外推线上), 部署验收/回归都读它。写 quality_logs 限每屏一条, 成本可忽略。
     try:
         from db import execute as _et
         _et("INSERT INTO quality_logs(log_type, level, message, details, source) "

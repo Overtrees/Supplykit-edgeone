@@ -1,3 +1,12 @@
+## 2026-11-02: 冗余清理 + 补列统一 + 启动探测统一(S2-9)
+
+> 回归 355 通过 / 0 失败; preflight 六步全绿
+
+- 死代码删除(AST 零引用扫描+人工核实): db.py esc_ident / suppliers.py _norm_order_status / cleansing.py _after+_detect_columns
+- 三套并存补列统一为 schema_create._COLUMN_ADDS 单一声明, 受版本门禁管(热路径零列探测)
+- M0/M1 迁移与规则修复/退役四段**整体退役删除**(线上实证标记齐全/规则目标态 → 使命完成, 冷启动 7 条探测 SQL 纯空转); 90天物化重建/69码补齐/规则恢复的复用做法写入 docs §15.123 第三节备用
+- index.py 注释与临时计时注释同步收口
+
 ## 2026-11-02: 启动 DDL 版本门禁 —— 热路径一条 SELECT, 零 DDL(S2-8)
 
 > 回归 349 通过 / 0 失败; preflight 六步全绿

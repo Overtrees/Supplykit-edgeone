@@ -3662,3 +3662,56 @@ def _adjust_key(k):          # 四维 (sku, 69码, 仓, 仓型); 兼容旧三维
 且会向真实库发 DDL(幂等无害但掩盖了断言)。
 
 本地回归 **349 通过 / 0 失败**, preflight 六步全绿。
+
+### 15.123 冗余清理 + 补列统一 + 启动探测统一(2026-11-02, S2-9)
+
+#### 一、死代码删除(AST 全库零引用扫描 + 人工核实, 只删实证 0 引用)
+
+vulture 在本机不可用(PEP668/多 python 环境), 改用 AST 扫描全部 def/class 赋值名
+的引用计数 → 94 个零引用名 → 逐个人工核实(装饰器注册的路由/测试白名单守卫/运维
+端点均为误报) → 确认 4 个真死代码删除:
+
+| 删除 | 位置 | 证据 |
+|---|---|---|
+| `esc_ident` | db.py | 0 引用(层内早已参数化) |
+| `_norm_order_status` | routes/suppliers.py | 0 引用 |
+| `_after` / `_detect_columns` | routes/cleansing.py | 0 引用 |
+
+#### 二、补列统一(用户定案"补列之类统一处理")
+
+三套并存补列(create_all_tables 内嵌 / ensure_schema 旧段 / index.py 启动四组列探测)
+合并为 `schema_create._COLUMN_ADDS` 单一声明: 同表多列合并为一组(dict 无重复键),
+`ensure_schema` 全量路径每表一次列探测、缺才 ALTER。效果: 补列受版本门禁管
+(热路径零探测), 新加补列 = 改声明, 不再写检查代码。
+
+#### 三、启动迁移/规则自愈四段整体退役(方案B, 用户确认"去除 + 文档留复用说明")
+
+**先实证后动手**(production 在线查证 2026-11-02):
+- `migration_log`: `day_agg_init`(2026-10-17)/`m1_69code`(2026-10-25) 标记均在
+- `rules`: 濒临断货预警/库存健康监控 ×4 行均为恢复态(active+params 在);
+  滞销识别/紧急补货已不在表
+- 结论: 四段使命全部完成, 每次冷启动 7 条探测 SQL 纯空转 → **整体删除**(index.py)
+
+**备用复用说明**(如有类似情况 —— 新库/备份恢复/物化缺失 —— 直接按此操作):
+
+1. **90 天物化首建**(原 M0 语义): 调一次 `routes/dashboard_maintain.py` 的
+   `_rebuild_day_agg(days=90)`(dashboard.py 从它 import)。临时手段二选一:
+   - 本地: `python3 -c "from routes.dashboard_maintain import _rebuild_day_agg; print(_rebuild_day_agg(90))"`
+     (需 TIDB_* 环境变量)
+   - 日常维护无需手动: 每日 `/cron/daily` 维护走增量, 缺口靠 `/cron/agg-sweep`(扫最近
+     48h `synced_at` 变化重建) + `/cron/reconcile`(agg vs 源表对账)三重兜底 —— 大面积
+     物化缺失时才需要手动 90 天全量重建一次
+2. **订单 69 码补齐**(原 M1 语义): 已不需要 —— 导入时自动查补(2026-09-15 起, 源头解决);
+   存量若有空码(如备份恢复到旧点), 一次性:
+   `UPDATE orders o JOIN products p ON o.sku=p.sku SET o.barcode=p.barcode
+    WHERE (o.barcode IS NULL OR o.barcode='') AND p.barcode IS NOT NULL AND p.barcode != ''`
+3. **规则自愈**(原修复/退役语义): 规则被误删后 `_rule_params` 读不到 → 看板回默认参数,
+   功能不挂; 若要恢复 params 载体, 在告警规则页重建同名规则(alert_type 对应 stockout/
+   health)即可, params 默认值与代码原内置值一致
+4. **migration_log 标记**: 重跑上述任一项前无需删标记(这些操作本身幂等/按需); 仅在
+   需要重走原启动逻辑时 `DELETE FROM migration_log WHERE name IN ('day_agg_init','m1_69code')`
+
+#### 四、回归
+
+本地回归 **355 通过 / 0 失败**(S2-9 新增 6 条: 补列声明唯一/走门禁/dict 无重复键/
+缺列才补动态用例/迁移段已退役/规则段已退役), preflight 六步全绿。

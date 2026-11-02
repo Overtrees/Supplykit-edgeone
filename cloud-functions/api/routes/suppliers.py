@@ -231,14 +231,6 @@ def _status_map_items(channel):
     return {x.get("name"): x.get("group") for x in _DEFAULT_STATUS_MAP if x.get("name")}
 
 
-def _norm_order_status(channel, raw):
-    """订单状态归一化(导入写入时): sale → '已完成'(进销量池); blocked/未识别 → 保留原值(不进销量池)"""
-    if not raw:
-        return raw
-    g = _status_map_items(channel).get(str(raw).strip(), "blocked")
-    return "已完成" if g == "sale" else raw
-
-
 # ── 列值映射(渠道级, 通用: 列名 → [{值, 档位}]; 当前 order_status, 未来可拓展其他列做指定字段筛选) ──
 _DEFAULT_COLUMN_MAP = {
     "order_status": [

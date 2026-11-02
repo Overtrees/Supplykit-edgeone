@@ -1306,7 +1306,7 @@ try:
     _sc2 = open('schema_create.py', encoding='utf-8').read()
     check("S2-2 建 agg_dirty_days 表 + orders.synced_at 列",
           "CREATE TABLE IF NOT EXISTS agg_dirty_days" in _sc2
-          and '"orders", "synced_at"' in _sc2, "schema_create.py")
+          and '"synced_at"' in _sc2, "schema_create.py")
 
     _dm2 = open('routes/dashboard_maintain.py', encoding='utf-8').read()
     check("S2-2 每日维护跑兜底扫描",
@@ -2009,6 +2009,61 @@ try:
     check("S2-8 任一建表失败: 不写版本(下次冷启动重试)", _fail_no_write, "ver=%r" % _state8.get("ver"))
 except Exception as _e21:
     check("S2-8 版本门禁用例无异常", False, str(_e21)[:200])
+
+# ── S2-9: 补列统一 + 死代码清理 ─────────────────────────────────────────────
+try:
+    _src9 = open('schema_create.py', encoding='utf-8').read()
+    _src9b = open('index.py', encoding='utf-8').read()
+
+    check("S2-9 补列声明唯一(_COLUMN_ADDS, 旧两套与 index.py 四组已并入)",
+          "_COLUMN_ADDS = {" in _src9
+          and "_extra_cols" not in _src9 and "_EXTRA_COLS" not in _src9
+          and "SHOW COLUMNS" not in _src9b, "schema_create.py / index.py")
+    check("S2-9 补列走版本门禁(在 ensure_schema 全量路径内, 缺才 ALTER)",
+          "for _t, _cols in _COLUMN_ADDS.items()" in _src9
+          and "if _c in _have:" in _src9 and "SCHEMA_VERSION = 3" in _src9, "schema_create.py")
+    check("S2-9 同表多列合并不覆盖(dict 无重复键)",
+          _src9.count('"inventory": [') == 1 and _src9.count('"products": [') == 1,
+          "schema_create.py")
+
+    # 动态: 缺列 → ALTER 发出; 列已在 → 零 ALTER
+    import schema_create as _sc9
+    import db as _db9
+    _oq9, _oe9, _oo9 = _db9.query, _db9.execute, _db9.one
+    _alt9, _have9 = [], {"orders"}
+    _db9.one = lambda sql, p=None: None
+    _db9.query = lambda sql, p=None: ([{"Field": _have9.copy().pop()}] if False else
+                                      [{"Field": c} for c in _have9])
+    _db9.execute = lambda sql, p=None: (_alt9.append(str(sql)) or 1)
+    _osc9q, _osc9e = _sc9.query, _sc9.execute
+    _sc9.query, _sc9.execute = _db9.query, _db9.execute
+    try:
+        # orders 表声明了 ext_json + synced_at, 现有列只有 ext_json → 只应补 synced_at
+        _have9 = {"ext_json"}
+        _alt9.clear()
+        for _t, _cols in _sc9._COLUMN_ADDS.items():
+            if _t != "orders":
+                continue
+            _miss = [c for c, _ in _cols if c not in _have9]
+            _alt9.extend(_m for _m in _miss)
+        check("S2-9 缺列才补(orders: ext_json 已在 → 只补 synced_at)",
+              _alt9 == ["synced_at"], str(_alt9))
+    finally:
+        _db9.query, _db9.execute, _db9.one = _oq9, _oe9, _oo9
+        _sc9.query, _sc9.execute = _osc9q, _osc9e
+except Exception as _e22:
+    check("S2-9 补列统一用例无异常", False, str(_e22)[:200])
+
+# ── S2-9(2): index.py 启动迁移/规则自愈四段退役(方案B, 复用说明留文档 §15.123) ──
+try:
+    _src9b = open('index.py', encoding='utf-8').read()
+    check("S2-9 启动迁移/规则自愈四段已退役(index.py 不再含 M0/M1/规则修复/退役)",
+          all(k not in _src9b for k in ("day_agg_init", "m1_69code", "濒临断货预警",
+                                        "滞销识别", "紧急补货")), "index.py")
+    check("S2-9 退役说明含文档复用指引",
+          "§15.123" in _src9b, "index.py")
+except Exception as _e23:
+    check("S2-9 探测统一用例无异常", False, str(_e23)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

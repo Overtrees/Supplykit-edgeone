@@ -231,11 +231,6 @@ def count(sql, params=None):
         return 0
 
 
-def esc_ident(name):
-    """标识符转义(防注入): 反引号包裹"""
-    return "`" + str(name).replace("`", "``") + "`"
-
-
 def table(name):
     """轻量 CRUD 助手(按需用原生 SQL, 无 ORM 魔法)"""
     return _Table(name)

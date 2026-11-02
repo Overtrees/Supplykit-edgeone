@@ -168,15 +168,6 @@ def _clean_rows(rows, mapping, custom_fields=None):
     return out
 
 
-def _after(now, days_ago):
-    return (now - timedelta(days=days_ago)).strftime("%Y-%m-%d")
-
-
-def _detect_columns(fname, data):
-    headers, _ = _parse_table(data, fname)
-    return headers
-
-
 # ── detect: 识别列名 ────────────────────────────────────────────────────
 @router.post("/cleansing/dup-check")
 @traced

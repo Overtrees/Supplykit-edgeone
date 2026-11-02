@@ -372,15 +372,68 @@ _DROP_INDEXES = [
     ("idx_orders_ch_status", "orders"),  # 被 idx_orders_ch_ordered_at 前缀覆盖
 ]
 
-# 存量表幂等补列(原 index.py 三条 ALTER + schema 补列机制已在 create_all_tables 内)
-_EXTRA_COLS = [
-    ("maintenance_log", "details", "VARCHAR(255) DEFAULT NULL"),   # 2026-11-01 库存指纹
-    ("analysis_cache", "tok", "BIGINT DEFAULT 0"),                  # 2026-11-02 S2-1 写入令牌
-    ("orders", "synced_at", "DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)"),
-]
+# 存量表补列声明(2026-11-02 S2-9 统一, 用户定案"补列之类统一处理"):
+#   此前三处各一套 —— create_all_tables 内嵌补列 / ensure_schema 的旧补列段 /
+#   index.py 启动段四组列探测补列(每次冷启动都跑, 不受门禁管)。现合并为这一份,
+#   由 ensure_schema 全量路径统一执行(每表一次列探测, 缺才 ALTER)。
+#   新库不需要它(_TABLES DDL 已含同名列); 它只服务存量表(CREATE IF NOT EXISTS 不改已存在表)。
+_COLUMN_ADDS = {
+    "cleansing_templates": [("cf_meta", "TEXT")],
+    # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
+    "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
+                        ("warehouse_type", "VARCHAR(20) DEFAULT ''"),
+                        # 2026-09-10 出入库记录带商品属性列(明细展示与导出需要; 原 schema 仅 10 列)
+                        ("barcode", "VARCHAR(64) DEFAULT ''"),
+                        ("platform", "VARCHAR(32) DEFAULT ''"),
+                        ("brand", "VARCHAR(64) DEFAULT ''"),
+                        ("store", "VARCHAR(64) DEFAULT ''"),
+                        ("category", "VARCHAR(64) DEFAULT ''"),
+                        ("price", "DECIMAL(12,2) DEFAULT 0"),
+                        ("box_qty", "INT DEFAULT 0"),
+                        ("unit", "VARCHAR(16) DEFAULT ''"),
+                        ("weight", "DECIMAL(10,2) DEFAULT 0"),
+                        ("volume", "DECIMAL(10,4) DEFAULT 0"),
+                        ("status", "VARCHAR(16) DEFAULT ''")],
+    "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
+                         ("warehouse_type", "VARCHAR(20) DEFAULT ''"),
+                         ("barcode", "VARCHAR(64) DEFAULT ''"),
+                         ("platform", "VARCHAR(32) DEFAULT ''"),
+                         ("brand", "VARCHAR(64) DEFAULT ''"),
+                         ("store", "VARCHAR(64) DEFAULT ''"),
+                         ("category", "VARCHAR(64) DEFAULT ''"),
+                         ("price", "DECIMAL(12,2) DEFAULT 0"),
+                         ("box_qty", "INT DEFAULT 0"),
+                         ("unit", "VARCHAR(16) DEFAULT ''"),
+                         ("weight", "DECIMAL(10,2) DEFAULT 0"),
+                         ("volume", "DECIMAL(10,4) DEFAULT 0"),
+                         ("status", "VARCHAR(16) DEFAULT ''")],
+    "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0"),    # 曾漏(采购建议 SELECT 用, 1054 实证)
+                  ("ext_json", "TEXT")],
+    # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
+    # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
+    "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''"), ("ext_json", "TEXT")],
+    # 2026-10-29 批次四维绑定(仓型+SKU+69码+批次信息): 补 barcode
+    "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
+    # 2026-10-29 日销按 69码 精准绑定(用户定案: 补货也按码): 快照层与物化层都加, 空码降级
+    "daily_sales_snapshot": [("barcode", "VARCHAR(64) DEFAULT ''")],
+    "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''")],
+    # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
+    "orders": [("ext_json", "TEXT"),
+               ("synced_at", "DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)")],
+    "suppliers": [("ext_json", "TEXT")],
+    # 2026-10-29 告警逐仓化 + 按 69码 去重(SKU×码 各自独立)
+    "alerts": [("warehouse", "VARCHAR(64) DEFAULT ''"),
+               ("barcode", "VARCHAR(64) DEFAULT ''")],
+    # 规则携带业务计算参数(断货/健康看板逻辑融合进规则配置)
+    "rules": [("params", "TEXT")],
+    # 2026-11-01 库存指纹(治"一天只评估一次"致看板停旧快照)
+    "maintenance_log": [("details", "VARCHAR(255) DEFAULT NULL")],
+    # 2026-11-02 S2-1 写入令牌(防"重建期间被失效"的旧值覆盖墓碑)
+    "analysis_cache": [("tok", "BIGINT DEFAULT 0")],
+}
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def table_ddl(name):
@@ -547,41 +600,8 @@ def create_all_tables():
                 "WHERE alert_type='oversell' AND description='订单数量超过可用库存'")
     except Exception as e:
         try_err('schema', '超卖告警文案迁移降级', e)
-    # 2026-10-17 幂等补列(已建表 vs DDL 差异自愈——CREATE IF NOT EXISTS 不改已存在表):
-    # inventory.safety_days 曾漏(采购建议 SELECT 用, 1054 实证)——SHOW COLUMNS 差异→ALTER ADD
-    try:
-        from db import query as _q2
-        _extra_cols = {
-            "cleansing_templates": [("cf_meta", "TEXT")],
-            # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
-            "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
-                                ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
-            "outbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
-                                 ("warehouse_type", "VARCHAR(20) DEFAULT ''")],
-            "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0")],
-            # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
-            "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''")],
-            # 2026-10-29 批次四维绑定(仓型+SKU+69码+批次信息): 补 barcode
-            "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
-            # 2026-10-29 日销按 69码 精准绑定(用户定案: 补货也按码):
-            # 快照层与物化层都加 barcode, 空码降级(与库存/批次同规则)
-            "daily_sales_snapshot": [("barcode", "VARCHAR(64) DEFAULT ''")],
-            "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''")],
-        }
-        for _t, _cols in _extra_cols.items():
-            try:
-                _have = {str(r.get("Field") or "") for r in _q2("SHOW COLUMNS FROM `%s`" % _t)}
-            except Exception:
-                continue
-            for _c, _c_ddl in _cols:
-                if _c not in _have:
-                    try:
-                        execute("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _c, _c_ddl))
-                        try_err('schema', '%s.%s 补列完成' % (_t, _c), '')
-                    except Exception as _e:
-                        try_err('schema', '%s.%s 补列失败' % (_t, _c), _e)
-    except Exception as e:
-        try_err('schema', '补列自愈降级', e)
+    # 2026-11-02 S2-9: 幂等补列已统一为模块级 _COLUMN_ADDS, 由 ensure_schema 全量路径执行
+    #   (原此处内嵌补列 —— 与 index.py 启动段补列并存两套, 现合并为单一声明)。
     # 2026-11-01 效期管理标记存量推导(一次性, migration_log 幂等):
     #   有批次行或 best_before 已填 → 视为"做效期管理"; 其余保持 ''(待标注, 导入时强制补)。
     #   **不默认全 yes** —— 会把不做效期的老货误判; **不默认 no** —— 会废掉现有批次。
@@ -674,12 +694,25 @@ def ensure_schema():
             _e("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname3, _itbl3))
         except Exception as _e4:
             _errors.append("删索引 %s: %s" % (_iname3, _e4))
-    for _t, _c, _ddl in _EXTRA_COLS:
-        try:
-            _e("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _c, _ddl))
-        except Exception as _e5:
-            if "Duplicate column" not in str(_e5):
-                _errors.append("补列 %s.%s: %s" % (_t, _c, _e5))
+    # 补列(统一声明 _COLUMN_ADDS): 每表一次 SHOW COLUMNS, 缺才 ALTER
+    try:
+        from db import query as _qc9
+        for _t, _cols in _COLUMN_ADDS.items():
+            try:
+                _have = {str(r.get("Field") or "") for r in _qc9("SHOW COLUMNS FROM `%s`" % _t)}
+            except Exception as _e9a:
+                _errors.append("补列探测 %s: %s" % (_t, _e9a))
+                continue
+            for _c, _c_ddl in _cols:
+                if _c in _have:
+                    continue
+                try:
+                    _e("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _c, _c_ddl))
+                except Exception as _e9:
+                    if "Duplicate column" not in str(_e9):
+                        _errors.append("补列 %s.%s: %s" % (_t, _c, _e9))
+    except Exception as _e9b:
+        try_err('schema', '补列统一执行降级', _e9b)
     # ④ 全部成功才写版本(任一失败 → 不写 → 下次冷启动重试)
     if _errors:
         try_err('schema', 'schema 初始化未完成(%d 处失败), 不写版本, 下次冷启动重试' % len(_errors),
