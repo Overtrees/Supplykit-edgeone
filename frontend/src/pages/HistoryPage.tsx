@@ -37,6 +37,15 @@ const fmtMoney = (n: number): string => {
   if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万'
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
+// 轴刻度专用: 刻度的作用是看量级, 不是看精度 —— "300.00万" 会白占宽度,
+// 还会被 iOS 的窄图区挤成两行
+const fmtAxis = (n: number): string => {
+  const v = Number(n || 0)
+  const abs = Math.abs(v)
+  if (abs >= 1e8) return (v / 1e8).toFixed(1) + '亿'
+  if (abs >= 1e4) return Math.round(v / 1e4) + '万'
+  return String(Math.round(v))
+}
 const fmtInt = (n: number): string => {
   const v = Math.round(Number(n || 0))
   if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(2) + '万'
@@ -142,7 +151,7 @@ export default function HistoryPage() {
         axisLabel: { fontSize: 9, hideOverlap: true },
         axisTick: { show: false },
       },
-      yAxis: { type: 'value', axisLabel: { fontSize: 9, formatter: (v: number) => fmtMoney(v) } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 9, formatter: (v: number) => fmtAxis(v) } },
       series: [
         {
           type: series.length === 1 ? 'bar' : 'line',
@@ -225,10 +234,12 @@ export default function HistoryPage() {
           </div>
         )}
 
-        <div className="hist-note">
-          {sum ? `${sum.start} ~ ${sum.end}` : ''}
-          {sum?.clamped ? ' · 已按 400 天上限截断' : ''}
-          {srcText ? ' · 来源 ' + srcText : ''}
+        <div className="hist-meta">
+          <span>
+            {sum ? `${sum.start} ~ ${sum.end}` : ''}
+            {sum?.clamped ? '（已截断至 400 天）' : ''}
+          </span>
+          {srcText ? <span>来源 {srcText}</span> : null}
         </div>
       </div>
 
@@ -263,7 +274,7 @@ export default function HistoryPage() {
             {cov?.note ? <div className="hist-empty-sub">{cov.note}</div> : null}
           </div>
         ) : (
-          <Chart option={chartOption} height={200} />
+          <Chart option={chartOption} height={window.innerWidth <= 600 ? 220 : 260} />
         )}
       </div>
 

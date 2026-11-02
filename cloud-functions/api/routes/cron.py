@@ -724,7 +724,9 @@ def run_agg_sweep(hours=48):
         _log("info", "agg-sweep: %d 小时内 %d 行变更 → 标记 %d 个业务日期, 重建 %d 天"
              % (_h, _rows, _n, _res.get("days", 0)))
     return {"hours": _h, "rows": _rows, "marked": _n,
-            "rebuilt": _res.get("days", 0), "pending": _res.get("pending", 0),
+            "rebuilt": _res.get("days", 0),
+            # pending 用 left(剩余) 而不是入参: 入参永远等于"这轮的全部", 看着像没清干净
+            "pending": _res.get("left", _res.get("pending", 0)),
             "mode": _res.get("mode")}
 
 

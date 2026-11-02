@@ -142,6 +142,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                 out["failed"] = 1
             rec.rows = _pend if _ok else 0
             rec.detail = {"mode": "full", "ok": bool(_ok), "pending": _pend}
+            out["left"] = 0 if _ok else _pend   # 出参给"剩余", 否则调用方会把入参当残留
             return out
         for _ in range(max_rounds):
             items = take_agg_days(batch)
@@ -178,6 +179,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
         rec.rows = out["days"]
         rec.detail = {"mode": "incremental", "pending": _pend, "left": _left,
                       "snap": out["snap"], "failed": out["failed"]}
+        out["left"] = _left
     return out
 
 
