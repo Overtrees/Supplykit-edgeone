@@ -105,11 +105,15 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - ~~对账只比件数不比金额~~ **已补(2026-11-02)**: GMV 段比 `orders_day_agg` 与订单源表,
   口径必须与 `_rebuild_day_agg` 逐字一致(金额仅已支付, cnt 不过滤状态), 收口 today-2。
   见 §15.112
-- **`daily_stats` 是死表**: archive 每天往里搬 365 天前订单, 但**全仓库无读取方** ——
-  "归档可查年同比"实际做不到。S2-4(优化 archive 写入)因此**暂缓**, 待用户拍板:
-  A 给它查询入口 / B 明确定为冷备 / C 才轮到优化写入。见 §15.112 末节
-- 审计待办: ~~S1~~ → ~~S2-3~~ → S2-1(`on_data_changed`) → S2-2(增量重建) →
-  S2-4(待定) → S3(页面拆分/async 化)
+- ~~`daily_stats` 是死表~~ **已给出口(2026-11-02, 方案 A)**: `routes/history.py` 把
+  `orders`(≤365 天)与 `daily_stats`(>365 天)按 365 天切线 UNION 成一个查询面,
+  前端新增「历史归档」页(汇总/趋势/Top/同比)。**两表互斥**是不变量, 改 archive cutoff
+  必须同步改 `_CUT_DAYS`; 口径与 archive 写入侧一致(金额=total_amount 全状态, ≠ 看板 GMV)。
+  同比无去年数据时回 `has_prev=false`(**不拿 0 算 -100%**)。见 §15.113
+- **历史归档当前只有近一年可查**: 线上 `daily_stats` 0 行、订单最早 2026-09-03,
+  归档侧要到 2027-09 才有第一批数据 —— 这是数据长度问题, 不是功能缺陷
+- 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → S2-1(`on_data_changed`) → S2-2(增量重建) →
+  S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
 

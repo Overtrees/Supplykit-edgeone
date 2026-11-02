@@ -164,7 +164,9 @@ export default function HistoryPage() {
             : ''}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+        {/* 区间与粒度分两行: 手机上 4 个预设 + 2 个粒度挤不进一行, 挤的结果是
+            "按日/按月"被顶到第二行左端, 看起来像布局坏了 */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
           {PRESETS.map(p => (
             <span
               key={p.id}
@@ -175,7 +177,11 @@ export default function HistoryPage() {
               {p.label}
             </span>
           ))}
-          <span style={{ flex: 1 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+          <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
+            粒度
+          </span>
           {(['day', 'month'] as const).map(k => (
             <span
               key={k}
