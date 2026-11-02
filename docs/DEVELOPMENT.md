@@ -2645,3 +2645,118 @@ params.t = Math.floor(Date.now() / 15000)
 | 直接删掉 | 30s 内可能过期 | 高 | ❌ 用户明确否决 |
 | **时间窗分桶(15s)** | **与轮询周期等同** | 同一窗口内合并 | ✅ 待做(S1-1 修正版) |
 | data_version 作缓存键 | 变更即失效 | 最高 | 中期方案, 依赖 `invalidate_all` 不漏调(当前 35 处靠自觉) |
+
+---
+
+### 15.111 S1 高性价比批: 时间窗分桶 + 链路流水 + 日志按天 + 误关护栏 + 渠道去硬编码(2026-11-02)
+
+S0 之后按 `supplykit-priority-2026-11-02.md` 推进 S1 五项。这一档的共同点:**用户能立刻感知**,
+且全部是「改 10~100 行、消除一整类故障」的量级。
+
+#### 一、S1-1 时间窗分桶: 把「破缓存」和「实时性」解耦
+
+原状: 看板/规则页/清洗页共 10 处用 `t=Date.now()` 拼 URL 绕缓存, 目的是保证数据实时性。
+代价是**每次请求 URL 都唯一** → 缓存恒 miss、在途去重恒失效、`cache` Map 只增不减
+(每 15s × 若干个 URL, 一天上万个条目常驻内存, 永不回收)。
+
+改法(用户定调的方案): 不删时间戳, 改成**按 15 秒分桶**。
+
+```ts
+// frontend/src/api/client.ts
+export function freshStamp(windowMs = 15_000): number {
+  return Math.floor(Date.now() / windowMs)
+}
+```
+
+| 方案 | 新鲜度上限 | 同窗口合并 | cache 增长 | 结论 |
+|---|---|---|---|---|
+| `Date.now()` | 0 | ❌ | 无限 | 现状, 已废 |
+| 直接删除 t | 30s(缓存 TTL) | ✅ | 有限 | ❌ 用户否决: 会看到过期数据不自知 |
+| **`freshStamp()` 15s 分桶** | **15s** | ✅ | 有限 | ✅ 已实施 |
+
+配套两件事:
+
+1. `client.ts` 加 `pruneCache()`: 超过 200 条先清过期、再按插入序淘汰最旧。以前这个 Map 是只写不删的。
+2. 分桶值必须 **≤ 最短轮询周期**(看板 30s 静默刷新 / 3s 重试 / Freshness 单次拉取), 否则窗口内
+   会拿到比窗口更旧的数据。当前统一 15s, 留有 2 倍余量。
+
+> **踩坑记录**: 第一版用字符串批量替换 `Date.now()` → `freshStamp()`, 误伤 3 处**非 URL** 用法:
+> 告警天龄计算 `(Date.now() - ts)/86400000`、自定义字段唯一 id `'field_' + Date.now()`、
+> React key `'new' + Date.now()`。分桶值比真实毫秒小 4 个数量级, 前者的天数会算成天文数字。
+> **教训: 批量替换必须按语义分类, 不能按字符串匹配** —— 只有出现在 URL 查询串里的才该换。
+
+#### 二、S1-2 `pipeline_runs`: 让「链路跑没跑」变成可查询事实
+
+问题: 排查"每日评估/物化重建今天跑了吗、跑了多久、影响多少行", 只能翻 `quality_logs` 里零散的
+审计行, 而且那批日志只保留 500 条(见 S1-3)。**S2 要做增量重建, 没有这个就无从证明"只重建了变更范围"**
+—— 它是 S2 的硬前置。
+
+```sql
+CREATE TABLE pipeline_runs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  pipeline VARCHAR(64), scope VARCHAR(32) DEFAULT 'all',
+  status VARCHAR(16),          -- running / ok / failed / skipped
+  started_at DATETIME, finished_at DATETIME NULL,
+  duration_ms INT, rows_affected INT,
+  error VARCHAR(500) NULL, detail MEDIUMTEXT NULL,
+  KEY idx_pipe_id (pipeline, id), KEY idx_started (started_at)
+)
+```
+
+接线方式两种, 按代码形态选:
+
+| 形态 | 用法 | 用在 |
+|---|---|---|
+| 装饰器 `@pipeline_run(name, rows_key=)` | 包整个路由, 从统一响应体推断 status | 8 个 `/cron/*` 端点 |
+| 上下文 `with track_run(name, scope) as rec` | 包一段逻辑, 手动写 `rec.rows/detail` | 逐渠道规则评估、物化重建 |
+
+`status` 的推断规则(与 `/cron/*` 统一响应体对齐, 否则 skipped 会被当成 ok 掩盖"今天没跑"):
+
+| 返回体 | status |
+|---|---|
+| `{ok:false}` (含 401/500) | `failed` |
+| `{ok:true, data:{skipped:true}}` | `skipped` |
+| 其余 `{ok:true}` | `ok` |
+| 抛异常 | `failed` + error 摘要(200 字), 异常照旧向外抛 |
+
+读取: `GET /health?detail=1` 追加 `last_runs`(每个 pipeline×scope 最近一次)。
+
+- **默认 `/health` 不带** —— 前端每 15s 轮询它, 加一条 JOIN 就是每分钟多 4 次查询的纯浪费;
+- **只回结构化摘要, 不回 error 正文** —— 该端点匿名可读, S0 刚把 traceback 收口, 不能从这儿再漏出去;
+- `stale` 标记: `status='running'` 且已开始 >30 分钟 → 进程中途被回收(记录永远停在 running)。
+
+#### 三、S1-3 日志保留: 按条数截断 → 按天
+
+原策略「只留最近 500 条」在高峰期(规则评估 + 清洗 + 导入)一天就写满, **回头查问题时前一天的证据
+已经被冲掉**; 低谷期又白留。更糟的是 dashboard 里另有一套「超 500 截到 300」, 两处策略漂移。
+
+统一到 `common.prune_quality_logs()`: ① 按 `created_at` 保留 30 天 ② 仍超 2 万条则按 id 兜底截断。
+cron `/cron/cleanup-logs` 与 dashboard 每日维护都调它。`pipeline_runs` 同生命周期一并清理。
+
+> SQL 细节: `INTERVAL %s DAY` 在 TiDB 上不能用占位符, 天数走 `int()` 内联(常量, 不接受外部输入)。
+
+#### 四、S1-4 告警「未命中即关闭」加批量护栏
+
+评估口径是"本轮没命中 → 关闭 active 告警"。一旦某轮数据不全(日销装载降级、计算变量注入失败、
+规则条件 JSON 异常), `hits` 会大幅减少 → **满屏告警被一次性关掉, 且关掉的告警不会自己亮回来**
+(下轮要重新命中才生成), 用户侧表现为"告警凭空消失"。
+
+护栏: 全量评估 + 拟关闭数 ≥30 且 ≥ 该类型 active 的 80% → 判定为"更像数据异常而非集体恢复",
+**本轮跳过关闭** + 落一条 `rule_guard/error` 日志。增量评估(只关本批 SKU)天然安全, 不受限制。
+
+取舍明确: **宁可短时虚高(看到已恢复的旧告警), 不可批量误关** —— 前者用户能自己判断, 后者会让
+真实风险从视野里消失, 且没有自愈路径。
+
+#### 五、S1-5 渠道去硬编码
+
+6 处 `("jd", "other")` / `"京东" if ch=="jd" else "其他"` 改为 `ch_codes()` / `ch_conf(ch)["name"]`。
+不改的后果很具体: **建第三个渠道时不报错、也能导入数据, 但每日评估/物化重建/告警推送全都只跑
+jd+other** —— 看着支持, 实际不出告警。
+
+#### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端语法 3.10 / pyflakes | ✓ |
+| local_test | **220 通过 / 0 失败**(新增 10 条: 建表语句存在、track_run 三种退出状态、detail=1 有/默认无、last_runs 无 error 正文、按天保留、prune 返回结构) |
+| 前端 eslint / prettier / tsc | ✓ |

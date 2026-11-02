@@ -599,6 +599,23 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                           and str(a.get("wt") or "") in _close_wt
                           and (_at, a.get("related_sku"), a.get("warehouse") or "", channel,
                                str(a.get("bc") or "")) not in hits]
+                # 2026-11-02 批量误关护栏(S1-4): 评估口径是"未命中即关闭", 一旦本轮数据不全
+                #   (日销/库存装载降级、计算变量注入失败、规则条件 JSON 解析异常……)→ hits 变少
+                #   → 满屏 active 告警被一次性关掉, 而**关掉的告警不会再自己亮回来**(下轮要重新命中
+                #   才生成), 用户侧表现为"告警凭空消失"。这里设一道闸:
+                #   全量评估 + 拟关闭数 >=30 且 >= 该类型 active 的 80% → 判定为"更像数据异常而非
+                #   集体恢复", 本轮跳过关闭并落一条 error 日志。宁可短时虚高, 不可批量误关。
+                #   增量评估(_only 非 None)只关本批 SKU, 天然安全, 不受此闸限制。
+                if _only is None and len(_close) >= 30 and len(_close) >= int(len(_act) * 0.8):
+                    try:
+                        execute("INSERT INTO quality_logs(log_type, level, message, source) "
+                                "VALUES('rule_guard','error',%s,'rules')",
+                                ("告警批量关闭已拦截: type=%s channel=%s 拟关=%s/%s active "
+                                 "(全量评估单轮关闭比例>=80%%, 疑数据不全; 如确属批量恢复请人工关一次)"
+                                 % (_at, channel, len(_close), len(_act)),))
+                    except Exception:
+                        pass
+                    continue
                 for _i in range(0, len(_close), 200):
                     _b = _close[_i:_i + 200]
                     if _b:

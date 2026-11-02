@@ -1,10 +1,12 @@
 """通用工具: 统一响应 + JWT + 密码哈希(与旧 backend 兼容)"""
 import base64
+import functools
 import hashlib
 import hmac
 import json
 import os
 import time
+from contextlib import contextmanager
 
 # GMV 总收入口径(含申请退款流水, net 再扣)——看板 GMV/趋势/漏斗
 PAID_STATUSES = ("待发货", "已发货", "已完成", "申请退款")
@@ -188,6 +190,181 @@ def try_err(src, what, exc=None, details=""):
         _st.update(ts=_now, count=0, what="", exc=None, det="")
     except Exception:
         pass  # 自身异常自吞(防递归)
+
+
+# ── quality_logs 保留策略(单一真源) ──────────────────────────────────
+# 2026-11-02 S1-3: 原策略「只留最近 500 条」是按条数截断, 高峰期(规则评估+清洗+导入)一天就写满,
+# 回头查问题时前一天的证据已被冲掉; 低谷期又白留。改为按天保留 + 硬上限兜底。
+QUALITY_LOG_KEEP_DAYS = 30
+QUALITY_LOG_HARD_CAP = 20000
+
+
+def prune_quality_logs(keep_days=None, hard_cap=None):
+    """清理 quality_logs: ① deleted 超过 keep_days 天的 ② 仍超 hard_cap 则按 id 兜底截断
+
+    返回 {"old": 按天删除数, "cap": 兜底删除数, "total": 清理后总数}。
+    调用方(cron / 每日维护)共用本函数, 避免两处策略漂移(历史上 cron 留 500、dashboard 截到 300)。
+    INTERVAL 不能用占位符(TiDB 报错), 天数走 int() 内联, 不接受外部输入。
+    """
+    _kd = int(keep_days if keep_days is not None else QUALITY_LOG_KEEP_DAYS)
+    _cap = int(hard_cap if hard_cap is not None else QUALITY_LOG_HARD_CAP)
+    out = {"old": 0, "cap": 0, "total": 0}
+    from db import execute as _e, one as _o
+    if _kd > 0:
+        out["old"] = int(_e("DELETE FROM quality_logs WHERE created_at < "
+                            "DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd) or 0)
+    _c = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
+    if _cap > 0 and _c > _cap:
+        _k = _o("SELECT id FROM quality_logs ORDER BY id DESC LIMIT %s", [_cap]) or {}
+        if _k.get("id"):
+            out["cap"] = int(_e("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")]) or 0)
+    out["total"] = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
+    # pipeline_runs 同生命周期(30 天): 链路运行流水只用于"最近一次/最近几天"排查
+    if _kd > 0:
+        try:
+            _e("DELETE FROM pipeline_runs WHERE started_at < DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd)
+        except Exception:
+            pass  # 表可能尚未建(首次启动) —— 静默
+    return out
+
+
+# ── 链路运行流水(2026-11-02 S1-2) ────────────────────────────────────
+# 解决「链路不可观测」: 此前排查"每日评估/物化重建到底跑没跑、跑了多久、影响多少行"只能翻
+# quality_logs 里零散的审计行, 且那些行只保留 500 条(现已改按天, 见 prune_quality_logs)。
+# 现在每次运行留一条结构化记录, /health?detail=1 直接读出「每个 pipeline 最近一次运行」。
+class _RunRec(object):
+    """运行记录句柄: 调用方在 with 体内写 rec.rows/rec.detail"""
+
+    __slots__ = ("rows", "detail", "status")
+
+    def __init__(self):
+        self.rows = 0
+        self.detail = None
+        self.status = None   # None=按退出状态推断; 'skipped'/'partial' 等可显式指定
+
+
+@contextmanager
+def track_run(pipeline, scope="all"):
+    """pipeline 运行记录上下文管理器
+
+    用法:
+        with track_run("daily_rules", ch) as rec:
+            rec.rows = do_work()
+
+    约束(设计取舍):
+    - **绝不因记录失败影响主流程**: 建行/更新行全部 try/except 吞掉(它就是观测设施,
+      不能反过来成为故障源); 因此本函数不会抛记录类异常。
+    - 异常仍然向外抛(调用方照旧处理降级), 但会先把 status 落成 failed + error 摘要(200 字截断)。
+    - 不记录堆栈(避免 quality_logs 里那套 traceback 落到可从公网读的 /health)。
+    """
+    _t0 = time.time()
+    _rid = 0
+    try:
+        from db import execute_id as _ei
+        _rid = int(_ei("INSERT INTO pipeline_runs(pipeline, scope, started_at, status) "
+                       "VALUES(%s, %s, NOW(), 'running')", [str(pipeline)[:64], str(scope)[:32]]) or 0)
+    except Exception:
+        _rid = 0
+    rec = _RunRec()
+    _err = ""
+    try:
+        yield rec
+    except Exception as _e:
+        _err = ("%s: %s" % (type(_e).__name__, str(_e)[:180]))[:200]
+        raise
+    finally:
+        if _rid:
+            try:
+                from db import execute as _ex
+                _st = rec.status or ("failed" if _err else "ok")
+                _det = None
+                if rec.detail is not None:
+                    try:
+                        _det = json.dumps(rec.detail, ensure_ascii=False)[:4000]
+                    except Exception:
+                        _det = None
+                _ex("UPDATE pipeline_runs SET status=%s, finished_at=NOW(), duration_ms=%s, "
+                    "rows_affected=%s, error=%s, detail=%s WHERE id=%s",
+                    [_st, int((time.time() - _t0) * 1000), int(rec.rows or 0),
+                     _err or None, _det, _rid])
+            except Exception:
+                pass
+
+
+def pipeline_run(name, scope="all", rows_key=None):
+    """把一次 pipeline 运行记入 pipeline_runs(S1-2)
+
+    用在 @traced 内层、业务函数外层:
+        @router.api_route(...)
+        @traced
+        @pipeline_run("archive", rows_key="archived")
+        async def cron_archive(request): ...
+
+    status 约定(与 /cron/* 统一响应体一致), 目的是让 /health?detail=1 能区分
+    「真的跑了」「今天被抢占跳过」「跑挂了」三种情况:
+      ok:false      → failed      (含 401/500)
+      data.skipped  → skipped     (当日幂等抢占命中, 未执行)
+      其余          → ok
+    rows 取 data[rows_key] 转 int(取不到/非数值记 0)。
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*a, **kw):
+            with track_run(name, scope) as rec:
+                res = await fn(*a, **kw)
+                if isinstance(res, dict):
+                    if not res.get("ok"):
+                        rec.status = "failed"
+                    else:
+                        d = res.get("data") or {}
+                        if isinstance(d, dict) and d.get("skipped"):
+                            rec.status = "skipped"
+                        elif rows_key and isinstance(d, dict):
+                            for _k in ((rows_key,) if isinstance(rows_key, str) else tuple(rows_key)):
+                                try:
+                                    rec.rows = int(d.get(_k) or 0)
+                                    break
+                                except Exception:
+                                    continue
+                return res
+        return wrapper
+    return deco
+
+
+def last_runs(limit_pipelines=32):
+    """每个 (pipeline, scope) 的最近一次运行 —— 供 /health?detail=1
+
+    只回结构化摘要(不含 error 正文, 只给 has_error) —— /health 匿名可读, 防泄漏表名/SQL 片段。
+    stale: running 且已开始超过 30 分钟 → 视为"进程中途被回收"(记录永远停在 running)。
+    """
+    out = []
+    try:
+        from db import query as _q
+        rows = _q("SELECT r.pipeline, r.scope, r.status, r.started_at, r.finished_at, "
+                  "r.duration_ms, r.rows_affected, (r.error IS NOT NULL AND r.error<>'') AS has_error "
+                  "FROM pipeline_runs r JOIN (SELECT pipeline, scope, MAX(id) AS mid FROM pipeline_runs "
+                  "WHERE started_at > DATE_SUB(NOW(), INTERVAL 7 DAY) "
+                  "GROUP BY pipeline, scope) m ON r.id=m.mid "
+                  "ORDER BY r.pipeline, r.scope LIMIT %s", [int(limit_pipelines)])
+        _now = time.time()
+        for r in rows or []:
+            _sa = str(r.get("started_at") or "")[:19]
+            _st = str(r.get("status") or "")
+            _stale = False
+            if _st == "running":
+                try:
+                    from datetime import datetime as _dt
+                    _age = _now - _dt.strptime(_sa, "%Y-%m-%d %H:%M:%S").timestamp()
+                    _stale = _age > 1800
+                except Exception:
+                    _stale = False
+            out.append({"pipeline": r.get("pipeline"), "scope": r.get("scope"), "status": _st,
+                        "started_at": _sa, "duration_ms": int(r.get("duration_ms") or 0),
+                        "rows": int(r.get("rows_affected") or 0),
+                        "has_error": bool(r.get("has_error")), "stale": _stale})
+    except Exception:
+        return []   # 表未建/查询失败 → 空列表(调用方按"无数据"展示), 不影响 /health 的 ok
+    return out
 
 
 # ── JWT (HS256, 零依赖) ──────────────────────────────────────────────

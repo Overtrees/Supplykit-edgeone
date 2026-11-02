@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { api, clearCache, clearInflight } from '../api/client'
+import { api, clearCache, clearInflight, freshStamp } from '../api/client'
 import { useToast } from '../components/Toast'
 import ErrorRetry from '../components/ErrorRetry'
 import EmptyState from '../components/EmptyState'
@@ -718,7 +718,7 @@ export default function RulesPage() {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
       const r = await api.get(
-        '/api/replenishment-config?mode=' + m + '&channel=' + c + '&t=' + Date.now(),
+        '/api/replenishment-config?mode=' + m + '&channel=' + c + '&t=' + freshStamp(),
       )
       if (r.data && Object.keys(r.data).length > 0) {
         const mP = 'mode_' + m + '_'
@@ -742,7 +742,7 @@ export default function RulesPage() {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
       const r = await api.get(
-        '/api/replenishment-config/seasons?mode=' + m + '&channel=' + c + '&t=' + Date.now(),
+        '/api/replenishment-config/seasons?mode=' + m + '&channel=' + c + '&t=' + freshStamp(),
       )
       setSeasons(r.data || [])
     } catch (e) {}
@@ -751,8 +751,8 @@ export default function RulesPage() {
     try {
       const c = globalChannel
       const [rc, rf] = await Promise.all([
-        api.get('/api/replenishment-config/slow-cats?channel=' + c + '&t=' + Date.now()),
-        api.get('/api/replenishment-config?channel=' + c + '&t=' + Date.now()),
+        api.get('/api/replenishment-config/slow-cats?channel=' + c + '&t=' + freshStamp()),
+        api.get('/api/replenishment-config?channel=' + c + '&t=' + freshStamp()),
       ])
       if (rc.data) setSlowCats(Array.isArray(rc.data) ? rc.data : [])
       if (rf.data) {

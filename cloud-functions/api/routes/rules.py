@@ -247,7 +247,8 @@ async def rules_batch(request: Request):
         # 启用即时评估生成告警(四维: 启用即生效, 不等每日 cron; 幂等去重)
         try:
             from core.rules import evaluate_stock_skus
-            for _ch in ("jd", "other"):
+            from routes.common import ch_codes as _chc0
+            for _ch in _chc0():   # 2026-11-02 S1-5: 渠道数据驱动(原硬编码 jd/other)
                 evaluate_stock_skus(_ch, limit=100000)
         except Exception as _e:
                 try_err('rules', '静默降级', _e)

@@ -89,9 +89,20 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   改 `BoundedSemaphore`, 压测 60 并发只建 10 条。见 §15.110 第二节
 - ~~traceback 回传浏览器~~ **已修**: 主通道是 `traced` 装饰器(所有路由都套), 不是全局 handler。
   现在只回 request_id, 堆栈写 quality_logs。见 §15.110 第三节
-- **`t=Date.now()` 不要简单删掉** —— 它保证数据实时性(用户明确要求)。改法是时间窗分桶
-  `Math.floor(Date.now()/15000)`: 新鲜度与轮询周期等同, 同窗口内重复请求自动合并。见 §15.110 第五节
-- 审计待办: S1(pipeline_runs/告警护栏/渠道去硬编码) → S2(on_data_changed + 增量重建) → S3(页面拆分)
+- ~~`t=Date.now()` 不要简单删掉~~ **已定案并实施(2026-11-02)**: 它保证数据实时性(用户明确要求),
+  所以不删, 改「时间窗分桶」`freshStamp()`(默认 15s, 在 `frontend/src/api/client.ts`)。
+  **只有出现在 URL 查询串里的 `Date.now()` 才该换** —— 日期差/唯一 id/React key 必须留原样
+  (批量字符串替换误伤过 3 处)。见 §15.111 第一节
+- ~~链路不可观测(评估/重建跑没跑只能翻日志猜)~~ **已修(2026-11-02)**: `pipeline_runs` 表 +
+  `GET /health?detail=1` 的 `last_runs`。默认 `/health` 不带(前端 15s 轮询, 不能加查询);
+  该端点匿名可读 → **只回 status/耗时/行数, 不回 error 正文**。见 §15.111 第二节
+- ~~日志只留 500 条(一天就冲掉排障证据)~~ **已修**: `common.prune_quality_logs()` 按天保留 30 天
+  + 2 万条硬上限, cron 与 dashboard 共用(此前两处策略不一致)。见 §15.111 第三节
+- ~~告警"未命中即关闭"可能批量误关~~ **已加护栏**: 全量评估时拟关 ≥30 条且 ≥80% → 跳过并记
+  `rule_guard/error`。**宁可短时虚高, 不可批量误关**(关掉的告警不会自己亮回来)。见 §15.111 第四节
+- ~~渠道硬编码 `("jd","other")`~~ **已改数据驱动**(`ch_codes()`/`ch_conf()`), 覆盖每日评估/物化重建/
+  告警推送渠道名。见 §15.111 第五节
+- 审计待办: ~~S1~~(已完成) → S2(`on_data_changed` + 增量重建, 前置已具备) → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
 

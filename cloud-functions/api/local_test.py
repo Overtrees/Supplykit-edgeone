@@ -1067,5 +1067,69 @@ try:
 except Exception as _e7:
     check("traced 用例无异常", False, str(_e7)[:200])
 
+# ── 链路运行流水 pipeline_runs(2026-11-02 S1-2) ──
+# 背景: 之前"每日评估/物化重建到底跑没跑"只能翻 quality_logs 猜, 且只留 500 条。
+# 这组用例守住三件事: ① 建表语句还在 ② track_run 各种退出状态都落到正确的 status
+# ③ /health?detail=1 能读出来(且默认路径不带 last_runs, 不增加 15s 轮询开销)
+try:
+    import os as _os
+    _idx_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "index.py"),
+                    encoding="utf-8").read()
+    check("pipeline_runs 建表语句存在", "CREATE TABLE IF NOT EXISTS pipeline_runs" in _idx_src)
+
+    from routes.common import track_run, last_runs
+
+    _RUN_SQL = []
+    _old_ei, _old_ex = _db.execute_id, _db.execute
+    _db.execute_id = lambda sql, params=None: (_RUN_SQL.append(("ins", sql, params)), 77)[1]
+    _db.execute = lambda sql, params=None: (_RUN_SQL.append(("upd", sql, params)), 1)[1]
+
+    with track_run("demo_pipe", "jd") as _rc:
+        _rc.rows = 5
+    with track_run("demo_pipe", "jd") as _rc2:
+        _rc2.status = "skipped"
+    _err_ok = False
+    try:
+        with track_run("demo_pipe", "jd"):
+            raise RuntimeError("boom")
+    except RuntimeError:
+        _err_ok = True
+    _db.execute_id, _db.execute = _old_ei, _old_ex
+
+    _upd = [x for x in _RUN_SQL if x[0] == "upd"]
+    check("track_run 建行+回写各一次", len([x for x in _RUN_SQL if x[0] == "ins"]) == 3 and len(_upd) == 3,
+          str(len(_RUN_SQL)))
+    check("track_run 正常退出记 ok", _upd and _upd[0][2][0] == "ok", str(_upd[:1]))
+    check("track_run 可显式 skipped", len(_upd) > 1 and _upd[1][2][0] == "skipped", str(_upd[1:2]))
+    check("track_run 异常记 failed 且原样抛出",
+          len(_upd) > 2 and _upd[2][2][0] == "failed" and _err_ok, str(_upd[2:3]))
+
+    r = client.get("/health")
+    check("health 默认不带 last_runs(零额外查询)", "last_runs" not in r.json(), r.text[:150])
+    r = client.get("/health?detail=1")
+    check("health?detail=1 返回 last_runs 列表",
+          r.status_code == 200 and isinstance(r.json().get("last_runs"), list), r.text[:200])
+
+    # 运行流水不得外泄 error 正文/堆栈(本端点匿名可读)
+    _lr = last_runs()
+    check("last_runs 不含 error 正文", all("error" not in x for x in _lr), str(_lr[:1])[:160])
+except Exception as _e8:
+    check("pipeline_runs 用例无异常", False, str(_e8)[:200])
+
+# ── 日志保留改按天(2026-11-02 S1-3) ──
+try:
+    from routes.common import prune_quality_logs, QUALITY_LOG_KEEP_DAYS
+    _DEL_SQL = []
+    _old_ex2 = _db.execute
+    _db.execute = lambda sql, params=None: (_DEL_SQL.append(sql), 0)[1]
+    _res = prune_quality_logs()
+    _db.execute = _old_ex2
+    check("日志保留按天(不再是「留最近 N 条」)",
+          QUALITY_LOG_KEEP_DAYS >= 7 and any("created_at < DATE_SUB" in s for s in _DEL_SQL),
+          str(_DEL_SQL)[:160])
+    check("prune 返回结构化结果", isinstance(_res, dict) and {"old", "cap", "total"} <= set(_res), str(_res))
+except Exception as _e9:
+    check("日志保留用例无异常", False, str(_e9)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -188,7 +188,8 @@ async def auth_middleware(request: Request, next):
 
 
 @app.get("/health")
-def health():
+def health(detail: int = 0):
+    """健康探针。detail=1 追加链路运行流水(前端 15s 轮询不带此参数, 零额外查询/RU)"""
     from datetime import datetime, timezone
     out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
     # 2026-10-15 保活顺带续跑(UptimeRobot 5min ping——有 running 任务才调 continue——无任务零开销——RU 不浪费)
@@ -241,6 +242,15 @@ def health():
         # 静默降级=指纹失效且无人知(本次 bug 正是如此) → 必须留痕
         try_err('index', 'health 版本指纹降级', _ev)
         out["version"] = "0"
+    # 2026-11-02 S1-2: 链路运行流水(仅 detail=1 时查 —— 默认路径保持轻量)
+    # 只给 pipeline/status/耗时/行数, 不给 error 正文(本端点匿名可读, 防泄漏表名与 SQL 片段)
+    if detail:
+        try:
+            from routes.common import last_runs
+            out["last_runs"] = last_runs()
+        except Exception as _el:
+            out["last_runs"] = []
+            try_err('index', 'health 运行流水降级', _el)
     return out
 
 
@@ -342,6 +352,17 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
                   "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
                   "markdown MEDIUMTEXT, `count` INT DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
                   "PRIMARY KEY(`date`, `scope`))")
+            # 链路运行流水(2026-11-02 S1-2): 每次 cron/评估/重建跑一条, /health?detail=1 读最近一次。
+            # 目的: 让"增量重建是否生效/每日任务是否真的跑了"可被直接证明, 而不是翻日志猜。
+            # 保留期由 common.prune_quality_logs(30 天) 一并清理。
+            _exec("CREATE TABLE IF NOT EXISTS pipeline_runs ("
+                  "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+                  "pipeline VARCHAR(64) NOT NULL, scope VARCHAR(32) NOT NULL DEFAULT 'all', "
+                  "status VARCHAR(16) NOT NULL DEFAULT 'running', "
+                  "started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME NULL, "
+                  "duration_ms INT DEFAULT 0, rows_affected INT DEFAULT 0, "
+                  "error VARCHAR(500) DEFAULT NULL, detail MEDIUMTEXT DEFAULT NULL, "
+                  "KEY idx_pipe_id (pipeline, id), KEY idx_started (started_at))")
             # 看板提速物化表(2026-09-15): 日级订单汇总(历史区间 summary 读此替代 19 万行直查)
             _exec("CREATE TABLE IF NOT EXISTS orders_day_agg ("
                   "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "

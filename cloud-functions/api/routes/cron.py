@@ -22,6 +22,9 @@ from fastapi import Request
 
 from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
+from routes.common import pipeline_run as _pipe  # 2026-11-02 S1-2: 运行流水
+from routes.common import ch_codes as _CHANNELS  # 2026-11-02 S1-5: 渠道数据驱动(原各处硬编码 ("jd","other"))
+from routes.common import ch_conf as _CH_CONF
 from routes.common import SALES_SQL as _PAID_SQL  # 2026-10-29 销量池单一真源(原硬编码 已完成)
 
 router = APIRouter(tags=["cron"])
@@ -217,6 +220,7 @@ def _build_snapshot(rebuild_days=90):
 
 @router.api_route("/cron/snapshot", methods=["GET","POST"])
 @traced
+@_pipe("snapshot", rows_key=("snapshot_rows","rows"))
 async def cron_snapshot(request: Request):
     """日销快照构建。2026-11-02 S0: 全量重建 90 天是 RU 最重的操作之一, 加当日一次性抢占"""
     if not await _authed(request):
@@ -236,6 +240,7 @@ async def cron_snapshot(request: Request):
 
 @router.api_route("/cron/freshness", methods=["GET","POST"])
 @traced
+@_pipe("freshness", rows_key=("rows",))
 async def cron_freshness(request: Request):
     """快照新鲜度守护: MAX(date) < 今天-2 天 → 重建
     maintenance_log(date+'snapshot') 抢占 —— 与应用层自愈互斥, 一天只重建一次
@@ -263,6 +268,7 @@ async def cron_freshness(request: Request):
 
 @router.api_route("/cron/archive", methods=["GET","POST"])
 @traced
+@_pipe("archive", rows_key="archived")
 async def cron_archive(request: Request):
     """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)
 
@@ -307,22 +313,23 @@ async def cron_archive(request: Request):
 
 @router.api_route("/cron/cleanup-logs", methods=["GET","POST"])
 @traced
+@_pipe("cleanup_logs", rows_key="old")
 async def cron_cleanup_logs(request: Request):
-    """2026-11-02 S0: 删日志是不可逆操作(会清掉排障证据), 加当日一次性抢占"""
+    """日志清理: 按天保留(默认30天) + 2万条硬上限 —— 见 common.prune_quality_logs
+
+    2026-11-02 S1-3: 原「保留最近 500 条」按条数截断, 高峰期一天就把前一天的日志冲掉,
+    出问题查不到证据; 现改按 created_at 保留(与 dashboard 每日维护共用同一实现)。
+    2026-11-02 S0: 删日志不可逆, 加当日一次性抢占。
+    """
     if not await _authed(request):
         return fail("未授权", 401)
     if not _claim("cron:cleanup_logs"):
         return ok({"skipped": True, "reason": "今天已清理"})
-    r = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
-    total = int(r.get("c") or 0)
-    deleted = 0
-    if total > 500:
-        keep = one("SELECT id FROM quality_logs ORDER BY id DESC LIMIT 500") or {}
-        kid = keep.get("id")
-        if kid:
-            deleted = int((one("SELECT COUNT(*) AS c FROM quality_logs WHERE id<%s", [kid]) or {}).get("c") or 0)
-            execute("DELETE FROM quality_logs WHERE id<%s", [kid])
-    return ok({"total": total, "deleted": deleted})
+    from routes.common import prune_quality_logs
+    r = prune_quality_logs()
+    _log("info", "日志清理: 过期删除 %d 条 / 上限删除 %d 条 / 现存 %d 条"
+         % (r.get("old", 0), r.get("cap", 0), r.get("total", 0)))
+    return ok(r)
 
 
 def run_daily_rules() -> dict:
@@ -366,8 +373,14 @@ def run_daily_rules() -> dict:
     #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
     from core.rules import evaluate_stock_skus
     triggered = []
-    for _ch in ("jd", "other"):
-        triggered.extend(evaluate_stock_skus(_ch, limit=100000))
+    from routes.common import track_run as _tr
+    for _ch in _CHANNELS():
+        # 2026-11-02 S1-2: 逐渠道留一条运行记录(scope=渠道) —— 出问题时一眼看出哪个渠道没评估到
+        with _tr("rule_eval", _ch) as _rec:
+            _hits = evaluate_stock_skus(_ch, limit=100000)
+            _rec.rows = len(_hits or [])
+            _rec.detail = {"triggered": len(_hits or [])}
+        triggered.extend(_hits or [])
     # 2026-10-29 批次对账(四维逐一, 用户定案): 
     #   对每个 (仓库类型, SKU, 69码, 仓库) 校验 Σ(batches.qty) ≡ inventory.available_qty
     #   **不能按 SKU 汇总核对** —— 不同仓/不同码的偏差会互相抵消(A 多 100 与 B 少 100 汇总后为 0),
@@ -376,7 +389,7 @@ def run_daily_rules() -> dict:
     try:
         from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
         _ph = ",".join(["%s"] * len(_SELF))
-        for _ch in ("jd", "other"):
+        for _ch in _CHANNELS():
             _bad = query(
                 "SELECT i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
                 "  i.available_qty AS qty, "
@@ -408,7 +421,7 @@ def run_daily_rules() -> dict:
     # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)
     try:
         from routes.dashboard import _stock_risk, _health_index
-        for _ch in ("jd", "other"):
+        for _ch in _CHANNELS():
             _rk = _stock_risk(_ch)
             _hi = _health_index(_ch)
             _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
@@ -447,6 +460,7 @@ def run_daily_rules() -> dict:
 
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
+@_pipe("daily_rules", rows_key="orphan_cleaned")
 async def cron_daily_rules(request: Request, force: int = 0):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
     maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行);
@@ -491,6 +505,7 @@ async def cron_ping(request: Request):
 
 @router.api_route("/cron/recycle", methods=["GET","POST"])
 @traced
+@_pipe("recycle", rows_key="deleted")
 async def cron_recycle(request: Request):
     """回收站清理: 软删超过 30 天的订单/规则永久删除(deleted_at != '' 且 < now-30d)
 
@@ -515,6 +530,7 @@ async def cron_recycle(request: Request):
 
 @router.api_route("/cron/push-alerts", methods=["GET","POST"])
 @traced
+@_pipe("push_alerts", rows_key="pushed")
 async def cron_push_alerts(request: Request):
     """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)
 
@@ -538,7 +554,8 @@ async def cron_push_alerts(request: Request):
         import requests
         lines = ["【SupplyKit 告警】"]
         for r in rows:
-            _ch = "京东" if (r.get("channel") or "jd") == "jd" else "其他"
+            # 2026-11-02 S1-5: 渠道中文名走配置(原 "京东"/"其他" 二元判断, 新增渠道恒显示"其他")
+            _ch = str(_CH_CONF(r.get("channel") or "jd").get("name") or r.get("channel") or "jd")
             lines.append("%s: %s%s (%s%s)" % (r.get("severity", "info"), r.get("title", ""),
                                               (" - " + str(r.get("description"))) if r.get("description") else "",
                                               _ch, (" / " + str(r.get("related_sku"))) if r.get("related_sku") else ""))
@@ -570,7 +587,7 @@ def run_reconcile(days=90):
     _end = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
     out = {}
     _bad = 0
-    for _ch in ("jd", "other"):
+    for _ch in _CHANNELS():
         try:
             _s = one("SELECT COALESCE(SUM(order_count),0) AS q FROM daily_sales_snapshot "
                      "WHERE channel=%s AND `date`>=%s AND `date`<=%s", [_ch, _start, _end]) or {}
@@ -598,6 +615,7 @@ def run_reconcile(days=90):
 
 @router.api_route("/cron/reconcile", methods=["GET", "POST"])
 @traced
+@_pipe("reconcile")
 async def cron_reconcile(request: Request, days: int = 90):
     """日销对账(cron 入口)——体量与口径见 run_reconcile
 

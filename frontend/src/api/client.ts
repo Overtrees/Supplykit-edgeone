@@ -7,6 +7,39 @@ const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 // 响应缓存（内存）
 const cache = new Map()
 const CACHE_TTL = 30_000 // 30s 内复用缓存
+// 缓存条目上限: 以前 cache 只写不删, 而看板 URL 带 t=<时间戳>(每轮询一次就多一个 key),
+// 一天下来上万个条目常驻内存。这里在写入路径上做 LRU 回收(见 pruneCache)。
+const CACHE_MAX = 200
+
+/**
+ * 破缓存时间戳 —— 时间窗分桶(2026-11-02)
+ *
+ * 原先各页面用 `t=Date.now()` 拼 URL 绕过缓存, 目的是保证数据实时性(不能让用户看着
+ * 30s 前的数字而毫不知情)。但这让每次请求的 URL 都唯一: 缓存永远 miss、在途去重永远
+ * 失效、cache Map 无限膨胀 —— 同一屏的三个请求即便在同一毫秒内并发也合并不了。
+ *
+ * 改成按 15s 分桶: 新鲜度上限仍是 15s(与看板轮询周期同量级, 用户感知无差别),
+ * 但同一窗口内的重复请求 URL 相同 → 命中缓存/在途去重, 真正的"刷新"仍会在下一个
+ * 窗口发生。窗口大小可传参, 但调用方应保持"≤ 最短轮询周期"这一约束。
+ */
+export function freshStamp(windowMs = 15_000): number {
+  return Math.floor(Date.now() / windowMs)
+}
+
+// 写入缓存后的回收: 先清过期, 仍超额则按插入顺序淘汰最旧(Map 保持插入序)
+function pruneCache() {
+  if (cache.size <= CACHE_MAX) return
+  const now = Date.now()
+  for (const [k, v] of cache) {
+    if (!v || now - v.ts >= CACHE_TTL) cache.delete(k)
+  }
+  if (cache.size <= CACHE_MAX) return
+  let over = cache.size - CACHE_MAX
+  for (const k of cache.keys()) {
+    if (over-- <= 0) break
+    cache.delete(k)
+  }
+}
 
 function cacheKey(method, url, params) {
   return method + ':' + url + ':' + JSON.stringify(params || {})
@@ -58,6 +91,7 @@ instance.interceptors.response.use(
     const key = cacheKey(method || 'get', url || '', params)
     if ((method || 'get').toLowerCase() === 'get') {
       cache.set(key, { data: response.data, ts: Date.now() })
+      pruneCache()
     }
     inflight.delete(key)
     console.debug(

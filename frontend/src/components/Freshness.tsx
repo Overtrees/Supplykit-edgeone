@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { api } from '../api/client'
+import { api, freshStamp } from '../api/client'
 
 /**
  * 数据新鲜度(2026-10-29)
@@ -33,7 +33,7 @@ export function useFreshness(channel?: string) {
   useEffect(() => {
     let alive = true
     api
-      .get(`/api/data-freshness?channel=${channel || 'jd'}&t=${Date.now()}`, { timeout: 20000 })
+      .get(`/api/data-freshness?channel=${channel || 'jd'}&t=${freshStamp()}`, { timeout: 20000 })
       .then((r: any) => {
         if (alive) setData(r?.data || null)
       })

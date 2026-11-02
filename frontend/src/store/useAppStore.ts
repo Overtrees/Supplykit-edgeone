@@ -28,7 +28,7 @@ export interface Channel {
 }
 
 import { create } from 'zustand'
-import { api, clearCache, clearInflight } from '../api/client'
+import { api, clearCache, clearInflight, freshStamp } from '../api/client'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
 
@@ -289,7 +289,7 @@ const initAppStore = (set, get) => ({
         await new Promise<void>(res => setTimeout(res, 1200))
         if (_mySeq !== this._loadSeq) return
         r0 = await Promise.allSettled([
-          api.get(dashUrl + _sep + 'part=main&t=' + Date.now(), { timeout: 35000 }),
+          api.get(dashUrl + _sep + 'part=main&t=' + freshStamp(), { timeout: 35000 }),
         ])
       }
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }

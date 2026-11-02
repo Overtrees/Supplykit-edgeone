@@ -140,18 +140,27 @@ def invalidate_all():
                         _db = _o1("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
                                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
                         _dbs = str(_db.get("m") or "")[:10]
-                        if _rebuild_day_agg(90):   # 2026-10-30 与 summary/物化/对账窗口统一 90
-                            _ck()
-                        else:
-                            _mk()
-                        # 2026-10-17 日销物化表重建(写操作后预重建——限频窗口上方已合并;
-                        # 重建含当天订单, 消费方读表零重算; 实时性: 库存仍每次直查, 物化只慢变日销)
-                        try:
-                            from biz.sales import _rebuild_sku_sales_stats as _rss
-                            _rss("jd")
-                            _rss("other")
-                        except Exception as _e2b:
-                                try_err('analysis_cache', '物化重建降级', _e2b)
+                        # 2026-11-02 S1-2: 物化重建全程留一条运行记录 —— S2 要做增量重建,
+                        #   届时靠这条记录(rows/耗时/成功与否)证明"只重建了变更范围"。
+                        from routes.common import track_run as _trm
+                        with _trm("mat_rebuild", "all") as _recm:
+                            _ok_agg = _rebuild_day_agg(90)   # 2026-10-30 与 summary/物化/对账窗口统一 90
+                            if _ok_agg:
+                                _ck()
+                            else:
+                                _mk()
+                            _recm.rows = 1 if _ok_agg else 0
+                            _recm.detail = {"day_agg": bool(_ok_agg), "sku_stats": []}
+                            # 2026-10-17 日销物化表重建(写操作后预重建——限频窗口上方已合并;
+                            # 重建含当天订单, 消费方读表零重算; 实时性: 库存仍每次直查, 物化只慢变日销)
+                            try:
+                                from biz.sales import _rebuild_sku_sales_stats as _rss
+                                from routes.common import ch_codes as _chc_m
+                                for _c_m in _chc_m():   # 2026-11-02 S1-5: 渠道数据驱动
+                                    _rss(_c_m)
+                                    _recm.detail["sku_stats"].append(_c_m)
+                            except Exception as _e2b:
+                                    try_err('analysis_cache', '物化重建降级', _e2b)
                         # 2026-10-30 RU 预警: 物化全量重建单次成本高(5000 SKU ≈ 22 万 RU),
                         #   当日次数 > 6 时提醒(每日一条, maintenance_log 抢占防刷屏)
                         try:
@@ -168,8 +177,9 @@ def invalidate_all():
                         except Exception as _ec2:
                             try_err('analysis_cache', '重建次数预警降级', _ec2)
                         if _dbs:
-                            _snapshot_step("jd", _dbs)
-                            _snapshot_step("other", _dbs)
+                            from routes.common import ch_codes as _chc_s
+                            for _c_s in _chc_s():   # 2026-11-02 S1-5: 渠道数据驱动
+                                _snapshot_step(_c_s, _dbs)
                     except Exception as _e2:
                             try_err('analysis_cache', '物化追平降级', _e2)
                     finally:

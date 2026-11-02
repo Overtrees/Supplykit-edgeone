@@ -9,7 +9,7 @@ import {
   IconClipboard,
 } from '../components/Icons'
 import React, { useState, useEffect, useRef } from 'react'
-import { api, uploadRawBytes } from '../api/client'
+import { api, uploadRawBytes, freshStamp } from '../api/client'
 import { reportError } from '../api/logger'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
@@ -787,7 +787,7 @@ export default function CleansingPage() {
   const loadColMap = async () => {
     try {
       const r = await api.get(
-        '/api/replenishment-config/column-value-map?channel=' + ch + '&t=' + Date.now(),
+        '/api/replenishment-config/column-value-map?channel=' + ch + '&t=' + freshStamp(),
       )
       setColMap(r.data && typeof r.data === 'object' ? r.data : {})
     } catch (e) {}

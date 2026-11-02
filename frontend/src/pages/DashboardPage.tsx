@@ -4,7 +4,7 @@ import OwnHealthCard from '../components/dash/OwnHealthCard'
 import type { OwnHealthData } from '../components/dash/OwnHealthCard'
 import type { OwnHealthItem } from '../components/dash/OwnHealthCard'
 import { createPortal } from 'react-dom'
-import { api } from '../api/client'
+import { api, freshStamp } from '../api/client'
 import type { InventoryRow, StockRiskShim } from '../api/types'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
@@ -220,7 +220,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       .catch(() => setOosList([]))
     // 健康分数趋势(近14天, health-trend 接口; 快照由 summary/cron 每日记录)
     api
-      .get('/api/dashboard/health-trend?channel=' + channel + '&days=14&t=' + Date.now(), {
+      .get('/api/dashboard/health-trend?channel=' + channel + '&days=14&t=' + freshStamp(), {
         timeout: 30000,
       })
       .then(r => {
@@ -340,13 +340,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       Promise.allSettled([
         (() => {
           const _st = useAppStore.getState()
-          let _u = '/api/dashboard/summary?t=' + Date.now()
+          let _u = '/api/dashboard/summary?t=' + freshStamp()
           if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
             _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
           return api.get(_u, { timeout: 60000 })
         })(),
         api.get(
-          '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + Date.now(),
+          '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + freshStamp(),
           { timeout: 60000 },
         ),
       ])
@@ -401,12 +401,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               Promise.allSettled([
                 (() => {
                   const _st = useAppStore.getState()
-                  let _u = '/api/dashboard/summary?t=' + Date.now()
+                  let _u = '/api/dashboard/summary?t=' + freshStamp()
                   if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
                     _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
                   return api.get(_u)
                 })(),
-                api.get('/api/dashboard/stock-risk?t=' + Date.now()),
+                api.get('/api/dashboard/stock-risk?t=' + freshStamp()),
               ]).then(([s2, r2]) => {
                 if (seq !== reqSeq.current) {
                   clearInterval(timer)
@@ -436,7 +436,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         .finally(() => useAppStore.getState().setSyncing(-1))
       // stock-risk 后置(独立 30s TTL 接口, 不阻塞首屏骨架; 到达后更新断货卡)
       api
-        .get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + Date.now(), {
+        .get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + freshStamp(), {
           timeout: 60000,
         })
         .then(r => {
@@ -479,7 +479,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       useAppStore.getState().setSyncing(1) // 30s 静默刷新接入徽标提示
       useAppStore.getState().setSyncOld(true) // 静默刷新必然有旧值→同步中
       try {
-        const _t = 't=' + Date.now()
+        const _t = 't=' + freshStamp()
         const [s, ax, sr] = await Promise.all([
           (() => {
             const _st = useAppStore.getState()

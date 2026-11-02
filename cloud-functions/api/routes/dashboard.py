@@ -48,16 +48,15 @@ def _daily_maintenance(channel="jd"):
                 get_sales_digest(_c0)
         except Exception as _e:
                 try_err('dashboard', 'digest 预填降级', _e)
-        # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs): 超 500 截断至 300
-        #   (id 曾达 159 万级——大量写删循环, 每日维护抢占保证只跑一次, 与 cleanup 同逻辑幂等)
+        # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs)
+        #   2026-11-02 S1-3: 与 cron 共用 common.prune_quality_logs(按天保留30天 + 2万条硬上限)。
+        #   原实现「超 500 截断至 300」会把当天写的排障证据也一起冲掉(id 曾达 159 万级——
+        #   正是这种写删循环造成的), 现按时间保留。
         try:
-            _c = one("SELECT COUNT(*) AS c FROM quality_logs") or {}
-            if int(_c.get("c") or 0) > 500:
-                _k = one("SELECT id FROM quality_logs ORDER BY id DESC LIMIT 300") or {}
-                if _k.get("id"):
-                    execute("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")])
+            from routes.common import prune_quality_logs as _prune
+            _prune()
         except Exception as _e:
-                try_err('dashboard', '静默降级', _e)
+                try_err('dashboard', '日志清理降级', _e)
         # ④ export_files/sync_tasks 导出任务清理(2026-10-09: 分片+文件越积越多——7 天保留)
         try:
             execute("DELETE FROM export_files WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)")

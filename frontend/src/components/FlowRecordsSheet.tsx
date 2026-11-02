@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { api } from '../api/client'
+import { api, freshStamp } from '../api/client'
 import { IconTrash } from './Icons'
 
 /**
@@ -41,7 +41,7 @@ export default function FlowRecordsSheet({
           (dateFrom ? `&date_from=${dateFrom}` : '') +
           (dateTo ? `&date_to=${dateTo}` : '') +
           (skuQ ? `&sku=${encodeURIComponent(skuQ)}` : '') +
-          `&t=${Date.now()}`,
+          `&t=${freshStamp()}`,
         { timeout: 60000 },
       )
       const d = r.data || {}
