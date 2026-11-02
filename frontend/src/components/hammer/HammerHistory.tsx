@@ -3,21 +3,18 @@ import { useAppStore } from '../../store/useAppStore'
 import { t } from '../../locale'
 
 /**
- * 历史归档页锤子菜单(2026-11-02 S2-9)
+ * 历史归档页锤子菜单(2026-11-02 S2-9; 同日 UI 收敛: 去按钮/短文案/间距对齐看板)
  *
- * 原历史页把「时间区间 / 粒度 / 自定义日期」三组控件全铺在页面卡片里, 占用首屏
- * 高度且与看板页锤子菜单的交互心智不一致(看板的时间也是在锤子里选的)。本组件把
- * 这些控件收敛到锤子菜单, 布局照抄 HammerDashboard:
- *   hammer-header(标题) → 当前区间摘要 → hammer-segmented(区间) → hammer-panel(自定义)
- *   → hammer-segmented(粒度) → hammer-btn-row(跳转归档页)
+ * 历史页的时间区间/粒度控件收敛于此, 布局对齐 HammerDashboard:
+ *   hammer-header → 区间摘要(右对齐日期) → segmented(区间) → panel(自定义)
+ *   → segmented(粒度) → (无操作按钮 —— 用户已在归档页, 入口按钮纯属多余)
  *
- * 状态**不放组件本地**, 全部落 store(histPreset/histStart/histEnd/histBy):
- * 锤子面板与页面读写同一个 store, 关掉锤子后页面立刻按新条件重查 —— 这是"交互联动"
- * 的关键。若放组件本地, 锤子面板卸载即丢, 页面拿不到值。
+ * 间距规范(与看板逐项对齐):
+ *   两行摘要标签统一样式(muted2 text-10 mb-4), segmented 与下一组标签间 marginTop 12,
+ *   自定义面板沿用 hammer-panel 既有节奏 —— 不再各写一套 margin。
  *
- * 唯一的例外是**自定义日期草稿**(startDraft/endDraft): 它是"尚未确认"的输入,
- * 不能直接写 store —— 否则用户每敲一个字(选一天)页面就重查一次, 且取消/关面板后
- * 页面已经跑到了没确认的区间。点「确认」才 commit。
+ * 状态落 store(histPreset/histStart/histEnd/histBy), 页面与锤子同源读写;
+ * 自定义日期是组件本地草稿, 点「确认」才 commit(避免逐字段触发重查/取消污染区间)。
  */
 export default function HammerHistory({ channel }: { channel: string }) {
   const histPreset = useAppStore(s => s.histPreset)
@@ -32,7 +29,7 @@ export default function HammerHistory({ channel }: { channel: string }) {
   const [startDraft, setStartDraft] = useState(histStart)
   const [endDraft, setEndDraft] = useState(histEnd)
 
-  // 从页面「调整」进来时, 草稿要反映当前生效区间(否则看到的是上次残留的草稿)
+  // 从外部进来时草稿要反映当前生效区间(否则看到上次残留草稿)
   useEffect(() => {
     setStartDraft(histStart)
     setEndDraft(histEnd)
@@ -53,7 +50,7 @@ export default function HammerHistory({ channel }: { channel: string }) {
         </span>
       </div>
 
-      {/* 区间预设: 与看板同款 hammer-segmented, 选中态全靠 .active */}
+      {/* 短文案(7天/30天/90天/自定义): 4 段在 390 视口内一行放下, 不再截断换行 */}
       <div className="hammer-segmented">
         {[
           { id: '7d', label: t('hist.preset.7d') },
@@ -72,7 +69,7 @@ export default function HammerHistory({ channel }: { channel: string }) {
                 }
               } else {
                 setShowCustom(false)
-                setHistPreset(p.id) // store 内部会把 start/end 一并算好(PRESET_DAYS)
+                setHistPreset(p.id) // store 内部同步回写 start/end
               }
             }}
             className={'hammer-segment' + (histPreset === p.id ? ' active' : '')}
@@ -82,7 +79,6 @@ export default function HammerHistory({ channel }: { channel: string }) {
         ))}
       </div>
 
-      {/* 自定义区间: 与看板同构(panel 内两个 date + 确认); 输入只改草稿, 确认才提交 */}
       {showCustom && (
         <div className="hammer-panel overflow-hidden">
           <div className="mb-8">
@@ -111,7 +107,6 @@ export default function HammerHistory({ channel }: { channel: string }) {
           </div>
           <button
             onClick={() => {
-              // 非法区间(起 > 止)不提交: 后端会 clamp, 但用户应当立刻看到没生效
               if (!valid) return
               setHistRange(startDraft, endDraft, true)
               setShowCustom(false)
@@ -124,13 +119,14 @@ export default function HammerHistory({ channel }: { channel: string }) {
           </button>
           {!valid && (
             <div className="muted2 text-10" style={{ marginTop: 6, textAlign: 'center' }}>
-              起始日期不能晚于结束日期
+              {t('hist.range_invalid')}
             </div>
           )}
         </div>
       )}
 
-      <div className="flex items-center gap-6 muted2 text-10 mb-3" style={{ marginTop: 12 }}>
+      {/* 粒度标签与区间摘要同构(muted2 text-10 mb-4 + marginTop 12 分组间距) */}
+      <div className="flex items-center gap-6 muted2 text-10 mb-4" style={{ marginTop: 12 }}>
         {t('hist.by_label')}
       </div>
       <div className="hammer-segmented">
@@ -143,20 +139,6 @@ export default function HammerHistory({ channel }: { channel: string }) {
             {k === 'day' ? t('hist.by.day') : t('hist.by.month')}
           </span>
         ))}
-      </div>
-
-      {/* 操作行: 照抄看板 hammer-btn-row(等宽 flex) */}
-      <div className="hammer-btn-row" style={{ marginTop: 12 }}>
-        <button
-          onClick={() => {
-            try {
-              window.__setPage && window.__setPage('history')
-            } catch {}
-          }}
-          className="hammer-btn btn-primary"
-        >
-          {t('hist.open_page')}
-        </button>
       </div>
     </div>
   )

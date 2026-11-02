@@ -102,7 +102,6 @@ export default function App() {
     setChannels,
     hammerData,
     setHammerPanel,
-    hammerOpenReq,
   } = useAppStore()
   const syncing = useAppStore(s => s.syncing)
   // 2026-10-30 渠道注册表: 走项目既有「同步中/加载中」机制 + 失败重试 2 次 + 留痕
@@ -690,16 +689,6 @@ export default function App() {
   }, [showHammerMenu, hammerMenuClosing, closeHammerMenu, openHammerMenu])
 
   const hammerMenuRef = useRef(null)
-
-  // 2026-11-02 S2-9: 页面请求打开锤子菜单(历史归档页「调整」按钮)。
-  // 用 skip 首帧的方式: hammerOpenReq 初值 0, mount 时不该自动弹面板。
-  const _hOpenPrev = useRef(0)
-  useEffect(() => {
-    if (hammerOpenReq !== _hOpenPrev.current) {
-      _hOpenPrev.current = hammerOpenReq
-      openHammerMenu()
-    }
-  }, [hammerOpenReq, openHammerMenu])
 
   useEffect(() => {
     if (!showHammerMenu) return

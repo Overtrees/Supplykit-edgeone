@@ -166,12 +166,6 @@ const initAppStore = (set, get) => ({
   setRecycleSel: sel => set({ recycleSel: sel }),
   setRecycleBusy: b => set({ recycleBusy: b }),
   setHammerPanel: panel => set({ hammerPanel: panel }),
-  // 2026-11-02 S2-9: 页面 -> 锤子菜单的"请求打开"信号。
-  // 锤子菜单的 show/closing 是 App 组件内的 useState(带 220ms 出场动画), 页面拿不到;
-  // 用自增计数当信号: 页面 bump 一次, App 的 useEffect 监听值变化后调 openHammerMenu()。
-  // 递增而非布尔 —— 连续点两次"调整"也能各自触发一次(布尔第二次没变化就不触发了)。
-  hammerOpenReq: 0,
-  requestHammerOpen: () => set(s => ({ hammerOpenReq: s.hammerOpenReq + 1 })),
   hammerSearch: '',
   setHammerSearch: text => set({ hammerSearch: text }),
   hammerData: safeGetJSON('c_hammer_data_' + (safeGet('c_channel') || 'jd')) || {},

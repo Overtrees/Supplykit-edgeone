@@ -2417,17 +2417,6 @@ input[type='file'] {
   cursor: pointer;
   font-size: var(--font-xs);
 }
-/* 2026-11-02 S2-9: 区间/粒度控件已移入锤子菜单, 页面只留回显 pill + 这个"调整"入口 */
-.hist-adjust {
-  margin-left: auto;
-  font-size: var(--font-xs);
-  color: var(--primary);
-  background: none;
-  border: none;
-  padding: 2px 4px;
-  cursor: pointer;
-  font-weight: 600;
-}
 .hist-date {
   font-size: var(--font-sm);
   padding: 4px 8px;

@@ -20,13 +20,6 @@ import { useAppStore } from '../store/useAppStore'
  * 样式一律走 styles.css 的 .hist-* 类(2026-11-02 用户要求): 内联 style 会让同一个
  * "卡片内小标题"在四个卡片里各有一套字号/间距, 改一处漏三处。
  */
-// 区间预设的中文名(与 HammerHistory 的 PRESETS 保持一致; 页面只做回显不做选择)
-const PRESET_LABEL: Record<string, string> = {
-  '7d': '近 7 天',
-  '30d': '近 30 天',
-  '90d': '近 90 天',
-  custom: '自定义',
-}
 // 日期区间默认值/预设换算已随控件一起移入 store(useAppStore 的 histStart/histEnd/
 // setHistPreset) —— 不再放在页面侧, 否则锤子菜单与页面各算一份, 极易不一致。
 
@@ -73,8 +66,8 @@ const readSeg = (v: any): { from: string; to: string; days: number } | null => {
 export default function HistoryPage() {
   const channel = useAppStore(s => s.channel)
   // 2026-11-02 S2-9: 时间区间/粒度改由锤子菜单(HammerHistory)控制, 页面只读 store。
-  //   preset/start/end/by 不再本地 useState —— 锤子面板卸载本地态就没了, 页面无法联动。
-  const preset = useAppStore(s => s.histPreset)
+  //   start/end/by 不再本地 useState —— 锤子面板卸载本地态就没了, 页面无法联动。
+  //   preset 只在锤子菜单内有意义(选中态), 页面不订阅。
   const start = useAppStore(s => s.histStart)
   const end = useAppStore(s => s.histEnd)
   const by = useAppStore(s => s.histBy)
@@ -180,31 +173,18 @@ export default function HistoryPage() {
           {cov?.archive?.rows ? ` · ${fmtInt(cov.archive.rows)} 行` : ''}
         </div>
 
-        {/* 2026-11-02 S2-9: 区间与粒度控件已收敛到锤子菜单(HammerHistory) ——
-            页面只回显当前生效的条件, 并提供跳转按钮, 避免同一开关两处出现、两处不同步 */}
-        <div className="hist-row">
-          <span className="hist-row-label">区间</span>
-          <span className="pill hist-pill info">{PRESET_LABEL[preset] || preset}</span>
-          <span className="hist-row-label">粒度</span>
-          <span className="pill hist-pill info">{by === 'day' ? '按日' : '按月'}</span>
-          <button
-            type="button"
-            className="hist-adjust"
-            onClick={() => {
-              // 走 store 信号: 锤子菜单的 show state 在 App 内, 页面拿不到(见 requestHammerOpen 注释)
-              try {
-                useAppStore.getState().requestHammerOpen()
-              } catch {}
-            }}
-          >
-            调整
-          </button>
-        </div>
+        {/* 2026-11-02 S2-9: 区间/粒度控件收敛到锤子菜单; 页面不再重复回显
+            (hist-meta 已有生效区间日期, 锤子按钮 header 常驻随时可调) */}
 
         <div className="hist-meta">
+          {/* 2026-11-02 S2-9: 接口偶发失败时 sum 是错误对象(无 start/end), 直接模板串
+              会渲染 "undefined ~ undefined" —— 缺字段整段不显示(本页既定原则) */}
           <span>
-            {sum ? `${sum.start} ~ ${sum.end}` : ''}
-            {sum?.clamped ? '（已截断至 400 天）' : ''}
+            {sum?.start && sum?.end
+              ? `${sum.start} ~ ${sum.end}${sum?.clamped ? '（已截断至 400 天）' : ''}`
+              : loading
+                ? '加载中…'
+                : ''}
           </span>
           {srcText ? <span>来源 {srcText}</span> : null}
         </div>
@@ -230,7 +210,7 @@ export default function HistoryPage() {
               {/* 单位跟在数值右侧而不是另起一行: 另起一行时 18px 数字的行高会在中间
                   留出一道空, 视觉上单位像独立的第四行 */}
               <div className="hist-kpi-v">
-                {loading && !sum ? '—' : x.v}
+                {loading || !totals.orders ? '—' : x.v}
                 <span className="hist-kpi-unit">{x.s}</span>
               </div>
             </div>
