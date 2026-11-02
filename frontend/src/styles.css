@@ -41,6 +41,13 @@ body.sidebar-open {
   --space-sm: 10px;
   --space-xs: 4px;
   --space-md: 16px;
+  --skeleton: #e2e8f0;
+  /* 过渡动效刻度(2026-11-02 S2-9): 页面/卡片/按钮统一用这套, 避免各写 cubic-bezier */
+  --ease-out: cubic-bezier(0.34, 1.2, 0.64, 1);
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
   --font-xs: 11px;
   --font-sm: 12px;
   --font-md: 14px;
@@ -563,7 +570,8 @@ input[type='file'] {
   white-space: nowrap;
 }
 .skeleton {
-  background: #e2e8f0;
+  /* 2026-11-02 S2-9: 原硬编码 #e2e8f0 + 暗色单独覆写, 改为变量(见 :root --skeleton) */
+  background: var(--skeleton);
   border-radius: 8px;
   height: 16px;
   margin-bottom: 8px;
@@ -576,11 +584,6 @@ input[type='file'] {
   }
   50% {
     opacity: 0.4;
-  }
-}
-@media (prefers-color-scheme: dark) {
-  .skeleton {
-    background: #2c2c2e;
   }
 }
 /* SVG icon base — inherit color for dark mode */
@@ -1370,6 +1373,7 @@ input[type='file'] {
   :root {
     --bg: #000000;
     --card: #1c1c1e;
+    --skeleton: #2c2c2e;
     --gray: #2c2c2e;
     --border: #334155;
     --text: #f1f5f9;
@@ -2557,6 +2561,30 @@ input[type='file'] {
 .hist-page {
   display: grid;
   gap: 12px;
+  /* 2026-11-02 S2-9: 刷新时轻微淡出, 让"正在换数"有感知(首载走骨架, 不叠这个) */
+  transition: opacity var(--dur-base) var(--ease-std);
+}
+.hist-page.is-loading {
+  opacity: 0.6;
+}
+/* 首载骨架: 数值占位 + 图表占位(尺寸与真实内容对齐, 避免骨架塌陷后跳版) */
+.hist-kpi-skel {
+  display: inline-block;
+  width: 72px;
+  height: 20px;
+  margin-bottom: 0;
+  vertical-align: middle;
+  border-radius: var(--radius-xs);
+}
+.hist-chart-skel {
+  height: 220px;
+  margin-bottom: 0;
+  border-radius: var(--radius-sm);
+}
+@media (min-width: 601px) {
+  .hist-chart-skel {
+    height: 260px;
+  }
 }
 .hist-caveat {
   margin-bottom: 8px;

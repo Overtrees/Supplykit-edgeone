@@ -120,7 +120,11 @@ export default function ChannelsPage() {
     <div className="form-page">
       <Group title="渠道管理">
         {loading ? (
-          <Row label="加载中..." />
+          // 2026-11-02 S2-9: 首载走骨架(两行占位), 不再是单行"加载中..." —— 骨架不让卡片塌陷跳版
+          <div style={{ padding: '14px 16px' }}>
+            <div className="skeleton" style={{ width: '38%', height: 16, marginBottom: 8 }} />
+            <div className="skeleton" style={{ width: '62%', height: 12, marginBottom: 0 }} />
+          </div>
         ) : list.length === 0 ? (
           <Row label="暂无渠道" sub="点下方「新增渠道」创建" />
         ) : (
@@ -203,31 +207,37 @@ export default function ChannelsPage() {
         </Group>
       )}
 
-      {list.length > 0 && (
-        <Group title="停用渠道">
-          {list
-            .filter(c => c.enabled !== 0)
-            .map(c => (
-              <Row
-                key={'d' + c.code}
-                label={`禁用 ${c.name}`}
-                danger
-                onClick={() => disable(c.code)}
-              />
-            ))}
-          {list.filter(c => c.enabled === 0).length > 0 &&
-            list
-              .filter(c => c.enabled === 0)
-              .map(c => (
+      {list.length > 0 &&
+        (() => {
+          // 2026-11-02 S2-9: 卡片整体末行不画分割线(last) —— 否则贴卡片圆角底边出现一道
+          //   "多余横线"。两组(可禁用 / 可重新启用)各自知道自己是不是全卡片最后一行。
+          const actives = list.filter(c => c.enabled !== 0)
+          const disabled = list.filter(c => c.enabled === 0)
+          return (
+            <Group title="停用渠道">
+              {actives.map((c, i) => (
+                <Row
+                  key={'d' + c.code}
+                  label={`禁用 ${c.name}`}
+                  danger
+                  loading={saving}
+                  last={disabled.length === 0 && i === actives.length - 1}
+                  onClick={() => disable(c.code)}
+                />
+              ))}
+              {disabled.map((c, i) => (
                 <Row
                   key={'e' + c.code}
                   label={`重新启用 ${c.name}`}
                   sub={c.code}
+                  loading={saving}
+                  last={i === disabled.length - 1}
                   onClick={() => patch(c.code, { enabled: 1 })}
                 />
               ))}
-        </Group>
-      )}
+            </Group>
+          )
+        })()}
     </div>
   )
 }

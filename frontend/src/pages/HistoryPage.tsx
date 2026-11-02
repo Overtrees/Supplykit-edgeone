@@ -84,6 +84,17 @@ export default function HistoryPage() {
     const my = ++seq.current
     setLoading(true)
     setErr(null)
+    // 2026-11-02 S2-9: 接入全局同步胶囊 —— 本页 4 个请求不在 store.loadAll 里,
+    //   原本 header 胶囊对历史页一动不动, 用户点完锤子看不出"在拉数"。
+    //   +1/-1 严格配对(含过期响应 early-return 分支), 否则胶囊永久转圈。
+    const _st = useAppStore.getState()
+    _st.setSyncing(1)
+    let _settled = false
+    const _settle = () => {
+      if (_settled) return
+      _settled = true
+      useAppStore.getState().setSyncing(-1)
+    }
     const ch = encodeURIComponent(channel || 'jd')
     const q = `channel=${ch}&start=${start}&end=${end}&t=${freshStamp()}`
     Promise.allSettled([
@@ -91,16 +102,18 @@ export default function HistoryPage() {
       api.get(`/api/history/summary?${q}&by=${by}`),
       api.get(`/api/history/top?${q}&by=${topBy}&limit=20`),
       api.get(`/api/history/yoy?channel=${ch}&days=30&t=${freshStamp()}`),
-    ]).then(([c, s, t0, y]) => {
-      if (my !== seq.current) return
-      const val = (r: any) => (r.status === 'fulfilled' ? r.value?.data : null)
-      setCov(val(c))
-      setSum(val(s))
-      setTop(val(t0))
-      setYoy(val(y))
-      if (s.status === 'rejected') setErr(s.reason)
-      setLoading(false)
-    })
+    ])
+      .then(([c, s, t0, y]) => {
+        if (my !== seq.current) return
+        const val = (r: any) => (r.status === 'fulfilled' ? r.value?.data : null)
+        setCov(val(c))
+        setSum(val(s))
+        setTop(val(t0))
+        setYoy(val(y))
+        if (s.status === 'rejected') setErr(s.reason)
+        setLoading(false)
+      })
+      .finally(_settle)
   }
 
   useEffect(() => {
@@ -162,7 +175,7 @@ export default function HistoryPage() {
   }, [sum, by])
 
   return (
-    <div className="hist-page">
+    <div className={'hist-page' + (loading ? ' is-loading' : '')}>
       <div className="card">
         <div className="hist-head">
           <span className="hist-title">历史归档</span>
@@ -198,7 +211,9 @@ export default function HistoryPage() {
 
       <div className="card">
         <div className="section-title">区间汇总</div>
-        <div className="hist-kpis">
+        {/* 2026-11-02 S2-9: 首载(无任何数据)走骨架, 刷新(有旧值)走淡出过渡 ——
+            原来一律显示四个 "—", 用户分不清"在加载"和"真的没数" */}
+        <div className={'hist-kpis' + (loading && !sum ? ' is-fresh' : '')}>
           {[
             { k: '金额', v: fmtMoney(totals.gmv), s: '元' },
             { k: '单数', v: fmtInt(totals.orders), s: '单' },
@@ -210,7 +225,13 @@ export default function HistoryPage() {
               {/* 单位跟在数值右侧而不是另起一行: 另起一行时 18px 数字的行高会在中间
                   留出一道空, 视觉上单位像独立的第四行 */}
               <div className="hist-kpi-v">
-                {loading || !totals.orders ? '—' : x.v}
+                {loading && !sum ? (
+                  <span className="skeleton hist-kpi-skel" />
+                ) : !totals.orders ? (
+                  '—'
+                ) : (
+                  x.v
+                )}
                 <span className="hist-kpi-unit">{x.s}</span>
               </div>
             </div>
@@ -219,7 +240,9 @@ export default function HistoryPage() {
         <div className="hist-note hist-caveat">
           金额按订单原价合计(含未支付/退款)，与看板 GMV 口径不同
         </div>
-        {empty ? (
+        {loading && !sum ? (
+          <div className="skeleton hist-chart-skel" />
+        ) : empty ? (
           <div className="hist-empty">
             <div>该区间没有数据</div>
             {cov?.note ? <div className="hist-empty-sub">{cov.note}</div> : null}

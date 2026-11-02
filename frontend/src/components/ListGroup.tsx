@@ -27,7 +27,9 @@ export const Group = ({ title, children }: any) => (
   </div>
 )
 
-export const Row = ({ label, value, sub, onClick, danger, loading }: any) => (
+// last=true: 末行不画底部分割线 —— 卡片自身 overflow:hidden 收边, 末行再画线会紧贴卡片
+//   圆角底边, 视觉上是"卡片被切开一道"(2026-11-02 S2-9: 渠道管理停用卡片实证)
+export const Row = ({ label, value, sub, onClick, danger, loading, last }: any) => (
   <div
     onClick={loading ? undefined : onClick}
     className={onClick && !loading ? 'clickable' : ''}
@@ -45,7 +47,7 @@ export const Row = ({ label, value, sub, onClick, danger, loading }: any) => (
         alignItems: 'center',
         padding: '14px 0',
         minHeight: 48,
-        borderBottom: '1px solid var(--border)',
+        borderBottom: last ? 'none' : '1px solid var(--border)',
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
