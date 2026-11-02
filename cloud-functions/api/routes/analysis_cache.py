@@ -1,14 +1,20 @@
 """中央缓存失效注册表 → 共享表缓存(2026-09-09 治本重构)
 
 背景: Makers cloud-functions 为请求模式(无状态/每请求环境/多实例), 模块级内存缓存
-      (dict) 命中率≈0(每次请求新环境), 且 invalidate_all 只清当前实例 → 跨实例旧缓存
+      (dict) 命中率≈0(每次请求新环境), 且进程内失效只清当前实例 → 跨实例旧缓存
       不一致(参数保存后其他实例仍返回旧值)+ 接口每次全量重算(慢→前端超时兜底)。
 
 方案: 聚合缓存存 TiDB 表 analysis_cache(跨实例共享, 行级一致性):
   - cache_get(key, ttl, builder): SELECT 命中且未过期(DB 侧 TIMESTAMPDIFF, 免时区坑)
     → 返回; 否则 builder() 重算 → REPLACE 落表 → 返回
-  - invalidate_all(): DELETE 全表 → 所有实例立即失效(全局一致, 不再依赖实例内存)
+  - invalidate(域): 按数据域打墓碑 → 所有实例立即失效(全局一致, 不再依赖实例内存)
   - 单 key 并发重建: 多实例同时 miss → 各自 REPLACE, TiDB 行锁幂等, 最终一致
+
+2026-11-02 S2-1 域级失效(本节重构的关键语义):
+  改一个供应商也曾把看板/规则/采购的缓存全打掉 —— 一次无关写入, 全站冷算。
+  现改为「缓存族声明依赖哪些数据域」, 写入方只声明自己动了哪个域:
+    invalidate("suppliers") → 只清 dash_summary / dash_aux / stock_risk
+  未登记的缓存族(新加的键忘了登记)一律清 —— 宁多清一次, 不漏清一次。
 """
 from routes.common import try_err
 import json
@@ -46,17 +52,83 @@ def _loads(value):
         return _FAILED
 
 
+# ── 2026-11-02 S2-1: 缓存族 → 数据域 依赖矩阵 ───────────────────────────────
+# 键的第一段就是"缓存族"(见各 cache_get 调用点); 这里声明每一族**读哪些表**。
+# 写入方只声明自己动了哪些域, 由矩阵反推要清哪些族 —— 依赖关系只在这里维护一份。
+#
+# 域(见 common/各路由写入点):
+#   orders     订单 + 日聚合(orders_day_agg) + 日销物化(daily_sales_snapshot/sku_sales_stats) + 历史归档(daily_stats)
+#   inventory  库存/批次/入出库流水(含月汇总)
+#   products   商品档案(含 69 码、箱规、供应商归属)
+#   suppliers  供应商档案/评分(评分进断货系数与规则 ctx, 不改 sales)
+#   config     补货采购参数(前置期/安全天数/季节/滞销品类/列映射/订单状态映射)
+#   rules      规则表 + alerts 表(两者一一联动, 合成一个域)
+#   purchases  采购单 + 处置记录
+#   flows      回款流水(gmv_flows, 只进看板 payout)
+#
+# ⚠️ 加新缓存族必须在这里登记, 否则该族的键会落在"未登记"集合里 —— 任何写入都会清它
+#    (保守但正确: 不会被漏清, 只是少一次复用)。local_test 有静态用例盯住这件事。
+_FAMILY_DEPS = {
+    # 缓存族            依赖的数据域
+    "orders":       {"orders"},
+    "history":      {"orders"},
+    "accel":        {"orders"},
+    "sales_digest": {"orders"},
+    "dash_summary": {"orders", "inventory", "products", "suppliers", "rules", "config", "flows"},
+    "dash_aux":     {"orders", "inventory", "products", "suppliers", "rules", "config"},
+    "stock_risk":   {"orders", "inventory", "products", "suppliers", "rules", "config"},
+    "purchase":     {"orders", "inventory", "products", "config", "rules", "purchases"},
+    "repl":         {"orders", "inventory", "products", "config"},
+}
+
+_KNOWN_DOMAINS = set()
+for _f, _d in _FAMILY_DEPS.items():
+    _KNOWN_DOMAINS |= _d
+
+# 失效"墓碑": 把 created_at 打到 1970(读侧 age 极大 → 必然 miss), 同时改写 tok(写入令牌)。
+# 不 DELETE 而是留墓碑, 是为了挡住这个竞态:
+#   读线程 A 开始重建(t=0) → 写线程 B 提交并失效(t=1) → A 把 t=0 的旧值落表
+# 若 B 是 DELETE, A 的新插入没有冲突行, 旧值直接写进去 → 缓存脏满一个 TTL(采购 300s)。
+# 有了 tok: B 把行 tok 打到 t=1, A 落表时 `VALUES(tok)>=tok` 不成立 → 不覆盖 → 下次读仍是
+# 墓碑 → 重新重建。代价是可能多算一次, 换来"永不用旧值覆盖新失效"。
+_DEAD_TS = "1970-01-01 00:00:00"
+
+
+def _now_tok():
+    """写入令牌(微秒): 纯应用侧单调时间戳, 不进 DB 时区比较"""
+    import time as _t
+    return int(_t.time() * 1000000)
+
+
+def cache_put(key, value, tok=None, raw=False):
+    """带令牌守卫的落表: 只有"比当前行更新的令牌"才允许覆盖
+    raw=True 时 value 已是字符串(调用方自己序列化)
+    """
+    from db import execute as _e
+    _v = value if (raw and isinstance(value, str)) else json.dumps(value, ensure_ascii=False, default=str)
+    _t = int(tok if tok is not None else _now_tok())
+    _e("INSERT INTO analysis_cache(`key`, value, created_at, tok) VALUES(%s,%s,NOW(6),%s) "
+       "ON DUPLICATE KEY UPDATE "
+       "value=IF(VALUES(tok)>=tok, VALUES(value), value), "
+       "created_at=IF(VALUES(tok)>=tok, VALUES(created_at), created_at), "
+       "tok=GREATEST(tok, VALUES(tok))",
+       (key, _v, _t))
+
+
 _CALC_INFLIGHT = {}
 
 
-def cache_get(key, ttl, builder):
+def cache_get(key, ttl, builder, max_bytes=None):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
     2026-10-25 去悲观锁(性能根治): 原 SELECT ... FOR UPDATE 持锁重算(10-11 并发根治设计),
     但 builder 重算 2-3s >> TiDB lock_wait_timeout(默认 1s)→ 并发请求 9004 锁超时 → 降级直算
     → 缓存从不命中, 每次请求全量重算(summary 85-174s/补货采购 2-3s 实测)——去锁:
-    无锁快读命中返回(miss 无锁重算 + REPLACE 幂等, 并发重复算可接受最终一致)"""
+    无锁快读命中返回(miss 无锁重算 + REPLACE 幂等, 并发重复算可接受最终一致)
+    2026-11-02: 落表改 cache_put(令牌守卫) —— 重建期间被失效 → 旧值不许覆盖墓碑;
+    max_bytes: 超过阈值不落缓存(防 TiDB 单行上限, stock_risk 曾 11.6MB 教训), 只本次返回
+    """
     try:
-        from db import one, execute
+        from db import one
         row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
                   "FROM analysis_cache WHERE `key`=%s", [key])
         if row:
@@ -66,10 +138,12 @@ def cache_get(key, ttl, builder):
                 v = _loads(v0 or "")
                 if v is not _FAILED:
                     return v
+        _tok = _now_tok()   # 令牌必须在 builder() **之前**取: 之后取会把重建期间的新写入盖掉
         val = builder()
-        execute("REPLACE INTO analysis_cache(`key`, value, created_at) "
-                "VALUES(%s,%s,NOW(6))",
-                (key, json.dumps(val, ensure_ascii=False, default=str)))
+        _s = json.dumps(val, ensure_ascii=False, default=str)
+        if max_bytes and len(_s.encode("utf-8")) > max_bytes:
+            return val
+        cache_put(key, _s, tok=_tok, raw=True)
         return val
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
@@ -79,7 +153,7 @@ def cache_get(key, ttl, builder):
             _e3("DELETE FROM analysis_cache WHERE `key`=%s", [key])
             _e3("CREATE TABLE IF NOT EXISTS analysis_cache ("
                 "`key` VARCHAR(160) PRIMARY KEY, value MEDIUMTEXT, "
-                "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+                "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), tok BIGINT DEFAULT 0)")
             _e3("INSERT INTO quality_logs(log_type, level, message, source) "
                 "VALUES('cache_error','error',%s,'api')",
                 ("cache_get 降级直算[%s]: %s" % (str(key)[:80], str(e)[:150]),))
@@ -137,6 +211,13 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                 _e("DELETE FROM agg_dirty_days WHERE `date` >= %s", [_cut])
                 _clear_agg_dirty()
                 out["days"] = _pend
+                # 大范围补录: 日销三窗口也一并全量重算(逐日算与全量同阶, 但往返多几十倍)
+                try:
+                    from biz.sales import _rebuild_sku_sales_stats as _rss
+                    from routes.common import ch_codes as _chs
+                    out["stats"] = sum(int(_rss(_c2, 90) or 0) for _c2 in _chs())
+                except Exception as _es3:
+                    try_err('analysis_cache', '日销三窗口全量重建降级', _es3)
             else:
                 _mark_agg_dirty()
                 out["failed"] = 1
@@ -154,6 +235,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                 if ch and day:
                     by_ch.setdefault(ch, []).append((day, ts))
             for ch, pairs in by_ch.items():
+                _done_days = []
                 for (a, b) in _runs([d for (d, _t) in pairs], 7):
                     if not _rebuild_agg_range(ch, a, b):
                         out["failed"] += 1
@@ -168,6 +250,17 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                     for (d, t) in pairs:
                         if a <= d <= b and clear_agg_day(ch, d, t):
                             out["days"] += 1
+                            _done_days.append(d)
+                # 2026-11-02 S2-1: 二阶物化(日销三窗口)跟着这批日期重算 —— 它从快照派生,
+                #   快照刚变, 不重算就等于"补货/采购读旧日销"。只算这些天出现过的 SKU。
+                if _done_days:
+                    try:
+                        from biz.sales import rebuild_sku_stats_for_days as _rst
+                        _n2 = _rst(ch, _done_days)
+                        out["stats"] = int(out.get("stats") or 0) + int(_n2 or 0)
+                    except Exception as _es2:
+                        # 失败不影响 agg 出队(已正确); 下次写操作/每日对账还会再来
+                        try_err('analysis_cache', '日销三窗口重建降级(%s)' % ch, _es2)
             if out["failed"] or len(items) < batch:
                 break
         _left = agg_pending()
@@ -178,29 +271,55 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
             _clear_agg_dirty()
         rec.rows = out["days"]
         rec.detail = {"mode": "incremental", "pending": _pend, "left": _left,
-                      "snap": out["snap"], "failed": out["failed"]}
+                      "snap": out["snap"], "failed": out["failed"],
+                      "stats": out.get("stats", 0)}
         out["left"] = _left
     return out
 
 
-def invalidate_all():
-    """数据变更后全局失效: 删共享表缓存(跨实例一致) + 物化即时追平(写操作后 agg/快照增量——
-    导入/删单/规则/参数变更后物化立即跟数据, 非轮询延迟——数据实时性根治)"""
+def invalidate(*domains):
+    """数据变更后按**域**失效: 只清依赖这些域的缓存族(其余族继续复用)
+
+    · invalidate("orders")    导入/删单/补录 → 订单、历史、加速、日销摘要 + 全部派生聚合
+    · invalidate("suppliers") 供应商改评分/档案 → 只清 看板summary/aux/断货风险
+    · invalidate("all")       迁移/重置/种子(动了很多表) → 全清
+
+    未登记域的调用一律按全清处理 —— 写错域名宁可多清, 不能漏清。
+    返回失效的族名列表(便于日志/测试断言)。
+    """
+    _doms = set()
+    for _d in domains:
+        if isinstance(_d, (list, tuple, set)):
+            _doms |= {str(x) for x in _d if x}
+        elif _d:
+            _doms.add(str(_d))
+    _wipe = (not _doms) or ("all" in _doms) or bool(_doms - _KNOWN_DOMAINS)
+    _hit = sorted(_FAMILY_DEPS) if _wipe else sorted(
+        f for f, deps in _FAMILY_DEPS.items() if deps & _doms)
     try:
         from db import execute as _e
-        # 2026-10-29 数据版本根治: invalidate_all 是**所有写操作必经的中央失效点** →
+        # 2026-10-29 数据版本根治: 这里是**所有写操作必经的中央失效点** →
         # 在此递增计数, /health 读它即可感知 UPDATE 类变更(告警关闭/库存重算/参数保存),
         # 补掉 MAX(id) 指纹"只认新增、不认更新"的盲区。零额外查询(写操作内 +1 次 UPDATE)。
+        # 2026-11-02: 仍保持"每次写都涨", 因为它记录的是**数据变更次数**, 不是缓存代次。
         try:
             _e("INSERT INTO data_version(id, v) VALUES(1,1) ON DUPLICATE KEY UPDATE v=v+1")
         except Exception as _dv:
             try_err('analysis_cache', '数据版本递增降级', _dv)
-        _e("DELETE FROM analysis_cache")
+        _tok = _now_tok()
+        _keep = [f for f in _FAMILY_DEPS if f not in _hit]
+        if _keep:
+            # 留下的族 = 本次没动的域; 其余(含未登记键)一律打墓碑
+            _cond = " OR ".join(["`key` LIKE %s"] * len(_keep))
+            _e("UPDATE analysis_cache SET created_at=%s, tok=%s WHERE NOT (" + _cond + ")",
+               [_DEAD_TS, _tok] + ["%s|%%" % f for f in _keep])
+        else:
+            _e("UPDATE analysis_cache SET created_at=%s, tok=%s", [_DEAD_TS, _tok])
         for fn in list(_registry.values()):
             try:
                 fn()
-            except Exception as _e:
-                    try_err('analysis_cache', '静默降级', _e)
+            except Exception as _ec:
+                    try_err('analysis_cache', '静默降级', _ec)
         # 物化追平(异步线程尽力——写操作不阻塞)
         # 2026-11-02 S2-2: 由「5 分钟限频 + 全量 90 天」改为「按业务日期增量」。
         #   旧做法两个硬伤:
@@ -209,6 +328,11 @@ def invalidate_all():
         #     ② 只能全量 90 天 → 单次 RU 高, 才不得不限频; 限频又放大 ①
         #   增量后单日重建很便宜(走 idx_orders_channel_ordered), 不需要限频;
         #   只在一次性铺开很多天(补录整个季度)时退化为全量, 省往返。
+        # 2026-11-02 S2-1: 只有订单域变了才需要追平 —— 供应商/参数/采购单写入从来没改过
+        #   orders, 起线程只是白扫一遍队列(还占连接)。队列有标记就说明订单动过, 所以这里
+        #   不再加 `agg_pending()` 判断(标记可能刚写还没读到, 会把重建卡住)。
+        if not (_wipe or ("orders" in _doms)):
+            return _hit
         try:
             import threading as _thm
             import time as _t2
@@ -237,6 +361,7 @@ def invalidate_all():
                 _thm.Thread(target=_mat, daemon=True).start()
         except Exception:
             pass
+        return _hit
     except Exception as e:
         # 失效失败可见性(四维-实时性): 缓存未清则 TTL 内读旧值, 记 quality_logs 供审计
         try:
@@ -245,3 +370,13 @@ def invalidate_all():
                 "VALUES('cache_invalidate','error',%s,'api')", (str(e)[:200],))
         except Exception as _e:
                 try_err('analysis_cache', '静默降级', _e)
+        return _hit
+
+
+def invalidate_all():
+    """全量失效(迁移/重置/种子/跨表重建用): 等价于 invalidate("all")
+
+    日常写入**不要**用它 —— 用 invalidate("<域>")。这里保留是为了让"确实动了很多表"的
+    少数场景有个显式出口, 而不是让每个调用点都背一次"我知道我只动了供应商"的判断。
+    """
+    return invalidate("all")

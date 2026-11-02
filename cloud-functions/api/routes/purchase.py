@@ -40,8 +40,8 @@ async def create_purchase_order(request: Request):
             "VALUES(%s,%s,%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), suggested_qty=VALUES(suggested_qty)",
             (sku, store, product_name, suggested_qty, channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("purchases")
     # 2026-10-26 根治: 返回真实新行(含 id)——前端乐观项用后端行替换, 消除"无 id 项 → 日期更新 PUT /undefined 422"
     row = one("SELECT id, sku, store, product_name, suggested_qty, actual_qty, arrival_date, status, channel "
               "FROM purchase_orders WHERE sku=%s AND store=%s AND channel=%s",
@@ -58,8 +58,8 @@ async def delete_purchase_order(request: Request):
     channel = q.get("channel", "jd")
     execute("DELETE FROM purchase_orders WHERE sku=%s AND store=%s AND channel=%s",
             (sku, store, channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("purchases")
     return ok({})
 
 
@@ -80,8 +80,8 @@ async def update_purchase_order(pid: int, request: Request):
         return fail("无更新字段")
     params.append(pid)
     execute("UPDATE purchase_orders SET %s WHERE id=%%s" % ", ".join(sets), params)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("purchases")
     return ok({})
 
 
@@ -143,6 +143,6 @@ async def disposals_batch(request: Request):
                  it.get("level", ""), float(it.get("turnover_days") or 0),
                  it.get("reason") or "", action, note))
         n += 1
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("purchases")
     return ok({"updated": n})

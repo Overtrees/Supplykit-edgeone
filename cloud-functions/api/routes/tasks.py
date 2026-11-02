@@ -93,8 +93,8 @@ async def tasks_maintain(request: Request):
         import threading as _th3
         from routes.dashboard import _rebuild_day_agg as _rda3
         _th3.Thread(target=_rda3, args=(90,), daemon=True).start()
-        from routes.analysis_cache import invalidate_all
-        invalidate_all()
+        from routes.analysis_cache import invalidate
+        invalidate("orders")
         return ok({"started": True, "action": "rebuild_agg"})
     if action == "warmup":
         # 预热各缓存(后台顺序调用 builder, 填 300s 共享表缓存)——部署/重置后调用一次, 首屏不撞重算

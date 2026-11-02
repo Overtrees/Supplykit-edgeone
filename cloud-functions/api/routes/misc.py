@@ -341,8 +341,8 @@ async def flow_records_batch(request: Request):
                (" reason=" + str(d.get("reason"))) if d.get("reason") else ""),))
     except Exception as _e5:
         try_err('misc', '删除审计写入降级', _e5)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("inventory")
     return ok({"deleted": len(_rows), "batch_cleaned": _b_cleaned,
                "message": "已删除 %d 条记录" % len(_rows)})
 
@@ -608,8 +608,8 @@ async def heal_own_inventory(request: Request):
         out["_stats_rebuild"] = _reb
     except Exception as _em:
         try_err('misc', '主键迁移/重建降级', _em)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("all")
     return ok(out)
 
 

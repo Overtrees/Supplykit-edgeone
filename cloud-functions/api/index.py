@@ -338,7 +338,13 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
             _exec("CREATE TABLE IF NOT EXISTS analysis_cache ("
                   "`key` VARCHAR(160) PRIMARY KEY, "
                   "value MEDIUMTEXT, "
-                  "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
+                  "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
+                  "tok BIGINT DEFAULT 0)")
+            # 2026-11-02 S2-1: 写入令牌列(防"重建期间被失效"的旧值覆盖墓碑); 老表幂等补列
+            try:
+                _exec("ALTER TABLE analysis_cache ADD COLUMN tok BIGINT DEFAULT 0")
+            except Exception:
+                pass
             # 规则变更即时重算告警(2026-09-11): 脏标记单行, 线程 DELETE 抢占串行评估
             _exec("CREATE TABLE IF NOT EXISTS eval_pending ("
                   "`task` VARCHAR(32) PRIMARY KEY, "

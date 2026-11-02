@@ -81,7 +81,7 @@ def close_orphan_for_skus(skus, channel="jd"):
 
 def close_oversell_for_skus(skus, channel="jd"):
     """删单联动(2026-10-15): 该 SKU 未删订单量 vs 可用库存重评估——不超卖 → 关 active oversell 告警
-    (曾只 invalidate_all 缓存——告警表不清——孤儿 oversell 残留看板)"""
+    (曾只失效缓存——告警表不清——孤儿 oversell 残留看板)"""
     if not skus:
         return
     from db import query as _q, execute as _e

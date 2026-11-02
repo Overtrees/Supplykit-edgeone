@@ -249,7 +249,13 @@ def get_sales_digest(channel, days=28):
     _hit = _SALES_DIGEST_CACHE.get(_key)
     if _hit and _now - _hit[0] < _SALES_DIGEST_TTL:
         return _hit[1]
-    # 表缓存(跨实例共享——首屏新实例命中, 60s; invalidate_all 数据变更清表 → 重算)
+    # 表缓存(跨实例共享——首屏新实例命中, 60s; 写操作 invalidate("orders") 打墓碑 → 重算)
+    _w_tok = None
+    try:
+        from routes.analysis_cache import _now_tok as _nt
+        _w_tok = _nt()   # 令牌: 取在重算之前(重算期间被失效 → 本次结果不许落表)
+    except Exception:
+        pass
     try:
         from db import one as _one
         _tk = "sales_digest|%s|%s" % (channel, days)
@@ -311,11 +317,9 @@ def get_sales_digest(channel, days=28):
                     sigma[_sku] = float(_r.get("sigma") or 0)
             # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值; 覆盖 __CALC__ 标记为结果)
             try:
-                from db import execute as _exec
-                _exec("INSERT INTO analysis_cache(`key`, value) VALUES(%s,%s) "
-                      "ON DUPLICATE KEY UPDATE value=VALUES(value)",
-                      ["sales_digest|%s|%s" % (channel, days),
-                       _json.dumps({"fused": fused, "sigma": sigma})])
+                from routes.analysis_cache import cache_put as _cp
+                _cp("sales_digest|%s|%s" % (channel, days),
+                    _json.dumps({"fused": fused, "sigma": sigma}), tok=_w_tok, raw=True)
             except Exception:
                 pass
             _SALES_DIGEST_CACHE[_key] = (_now, ({}, fused, sigma))
@@ -335,11 +339,9 @@ def get_sales_digest(channel, days=28):
             sigma[_s] = _vv ** 0.5
     # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值; 覆盖 __CALC__ 标记为结果)
     try:
-        from db import execute as _exec
-        _exec("INSERT INTO analysis_cache(`key`, value) VALUES(%s,%s) "
-              "ON DUPLICATE KEY UPDATE value=VALUES(value)",
-              ["sales_digest|%s|%s" % (channel, days),
-               _json.dumps({"fused": fused, "sigma": sigma})])
+        from routes.analysis_cache import cache_put as _cp2
+        _cp2("sales_digest|%s|%s" % (channel, days),
+             _json.dumps({"fused": fused, "sigma": sigma}), tok=_w_tok, raw=True)
     except Exception:
         pass
     _SALES_DIGEST_CACHE[_key] = (_now, (by_sku, fused, sigma))
@@ -548,8 +550,17 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         if rows:
             # 2026-10-29 先删该渠道旧行(替代 ON DUPLICATE —— 旧主键不含 barcode 会与
             # 含码唯一键冲突, 且同 SKU 不同码的行会被旧主键合并覆盖)
+            # 2026-11-02 S2-1: 子集重建只删这些 SKU 的行。原实现无条件 `WHERE channel=`,
+            #   按 SKU 增量补齐时会把该渠道其余 SKU 全清空 → 补货/采购当场只剩这一批。
             try:
-                _ex("DELETE FROM sku_sales_stats WHERE channel=%s", [channel])
+                _scope = sorted({str(s) for s in (skus or []) if s})
+                if _scope:
+                    for _i2 in range(0, len(_scope), 500):
+                        _ch2 = _scope[_i2:_i2 + 500]
+                        _ex("DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN ("
+                            + ",".join(["%s"] * len(_ch2)) + ")", [channel] + _ch2)
+                else:
+                    _ex("DELETE FROM sku_sales_stats WHERE channel=%s", [channel])
             except Exception as _edel:
                 try_err('sales', '日销旧行清理降级', _edel)
             cols = ["channel", "sku", "barcode", "warehouse", "ds7", "ds14", "ds28", "sigma",
@@ -580,6 +591,39 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
         return 0
 
 
+def rebuild_sku_stats_for_days(channel, days, max_skus=2000):
+    """按业务日期增量重算日销三窗口物化(只重算这些天里出现过的 SKU)
+
+    2026-11-02 S2-1: S2-2 把"每次写操作后全量重建 90 天"整块删掉了(5000 SKU ≈ 22 万 RU),
+    但没补增量路径 —— 导入后 sku_sales_stats 就停在旧快照上(线上实测 updated_at 11-01,
+    orders.synced_at 11-02), 而补货/采购/断货/健康全读它。缓存再新也只是"新瓶装旧数"。
+
+    做法: 脏日期 → 反查这些天出现过的 SKU → 只重算他们(窗口仍 90 天, ds7/14/28 依赖整段)。
+    影响面超过 max_skus 时直接全量: 逐批重算与全量成本同阶, 但往返次数多得多。
+    """
+    from db import query as _q
+    from datetime import datetime as _dt
+    _ds = sorted({str(d)[:10] for d in (days or []) if d})
+    if not _ds:
+        return 0
+    _lo = _ds[0] + " 00:00:00"
+    _hi = (_dt.strptime(_ds[-1], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
+    try:
+        _skus = [str(r.get("sku") or "") for r in _q(
+            "SELECT DISTINCT sku FROM orders WHERE channel=%s AND ordered_at>=%s AND ordered_at<%s",
+            [channel, _lo, _hi])]
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('sales', '按日重建日销: 取 SKU 失败(退全量)', _e)
+        _skus = []
+    _skus = [s for s in _skus if s]
+    if not _skus:
+        return 0
+    if len(_skus) > max_skus:
+        return _rebuild_sku_sales_stats(channel, 90)
+    return _rebuild_sku_sales_stats(channel, 90, skus=_skus)
+
+
 def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
     """物化读取(消费方入口): 按 sku/wh 查行返回 {wh|sku: {ds7/14/28, sigma, *_cut, nnz*, last_sale}}
 
@@ -597,8 +641,8 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
             # 2026-11-01 自愈重建后失效聚合缓存: 表空期间可能已把"空结果"缓存进 analysis_cache(TiDB 表,
             #   跨实例存活), 不失效会让消费方在 TTL 内继续读空 → 表现为"重建了但还是没数据"
             try:
-                from routes.analysis_cache import invalidate_all as _inv
-                _inv()
+                from routes.analysis_cache import invalidate as _inv
+                _inv("orders")
             except Exception as _einv:
                 try_err('sales', '自愈重建后缓存失效降级', _einv)
         where = "channel=%s"

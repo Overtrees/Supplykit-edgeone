@@ -1,3 +1,34 @@
+## 2026-11-02: 缓存按域失效(S2-1) + 日销三窗口增量重建
+
+> 回归 291 通过 / 0 失败; preflight 六步全绿
+
+### 一、改一个供应商不再打掉全站缓存（S2-1）
+- **问题**: 35 个写入口共用 `invalidate_all()`(`DELETE FROM analysis_cache`), 改供应商联系人
+  也会把看板/规则/采购/补货全部冷算 —— 采购/补货 builder 各 2~3s 且扫 5 万行, 谁都白付一遍
+- **做法**: `_FAMILY_DEPS` 声明「缓存族 → 依赖的数据域」, 写入方只写 `invalidate("<域>")`
+  - `suppliers` → 只清 `dash_summary`/`dash_aux`/`stock_risk`
+  - `purchases` → 只清 `purchase`；`config` → 不动 orders/history/accel/sales_digest
+  - `orders` → 9 族全清(订单确实是根)
+- **两道兜底**: 域名没登记 → 按 `all`；缓存族没登记 → 任何写入都清它(新键忘了登记也不会脏)
+- **墓碑 + 写入令牌**: 失效从 DELETE 改为 `created_at=1970` + `tok=失效时刻`, 落表带 `tok` 守卫
+  (`IF(VALUES(tok)>=tok, ...)`) —— 堵住"重建期间被失效, 旧值又写回去, 脏满一个 TTL(采购 300s)"
+- `stock_risk` 手写缓存块并回 `cache_get`(键族归首 `stock_risk|c1|...`, 否则域级匹配不到);
+  11.6MB 体积上限改成 `max_bytes` 参数
+
+### 二、附带修一个更严重的: 日销三窗口从 S2-2 起没再重建（S2-1）
+- S2-2 删掉"写操作后全量重建 90 天"(5000 SKU ≈ 22 万 RU)却没补增量 → 线上
+  `sku_sales_stats.updated_at` 比 `orders.synced_at` 晚一天, 而补货/采购/断货/健康全读它
+  → 缓存失效做得再好也是"新瓶装旧数"
+- 新增 `rebuild_sku_stats_for_days`: 脏日期 → 反查受影响 SKU → 只重算他们(窗口仍 90 天);
+  >2000 SKU 直接全量。挂在 `_drain_agg_dirty`, 大范围补录走全量分支
+- 配套: `_rebuild_sku_sales_stats` 的 DELETE 支持按 SKU 子集(原实现无条件删整渠道,
+  子集重建会把其余 SKU 清空 → 补货当场只剩这一批)
+
+### 三、联动补全
+- 供应商 `score` 变更 → 触发规则重算(评分是 `supplier.score` 条件与断货 OTIF 的输入)
+- 补货参数保存 → 触发规则重算(前置期/安全天数是动态安全线的输入)
+- 规则后台评估完补一次 `invalidate("rules")`(原来调用方的失效发生在评估之前 → 告警变了看板还旧)
+
 ## 2026-11-02: 订单业务键四维化(重导幂等) + 增量重建 + 历史归档页
 
 > 当日 S2-2(增量重建按业务日期)/S2-4(历史归档出口)/S2-5(订单四维业务键); 回归 267 通过 / 0 失败

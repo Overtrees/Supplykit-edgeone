@@ -184,7 +184,7 @@ def _snapshot_reconcile(channel, days=90, limit_days=10):
 
 def _track_data(channel, _db2):
     """数据追平(即时): 一次 SQL 合并三 MAX 子查询(orders/快照/agg——3 查询→1 往返)——
-    每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate_all 触发增量
+    每 miss 即时检查追平(非 TTL 降频——物化即时跟数据); 写操作后另有 invalidate("orders") 触发增量
     2026-10-25 增: 60 天查询窗口行数一致性自愈(接力——每 miss 检测, 不一致则重建 60 天一次,
     ON DUPLICATE 幂等覆盖; 修复后一致即停)——兜底"非尾部缺口"(软删残留/历史遗留/手动改库:
     尾部 MAX 检测发现不了中间缺口, 曾 10-16 agg cnt 残留 2809 vs orders 1100)"""

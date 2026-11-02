@@ -48,6 +48,6 @@ def inventory_sample(channel: str = "jd"):
 @traced
 def delete_inventory(iid: int):
     execute("DELETE FROM inventory WHERE id=%s", [iid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("inventory")
     return ok({})

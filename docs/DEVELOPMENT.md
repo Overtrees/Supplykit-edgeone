@@ -3137,3 +3137,135 @@ agg 翻倍且对账发现不了"*。用户当场反问: **前端不是做了去�
 
 那个 222ms 值得记: 单条 UPDATE 在 TiDB Serverless 上是"一次完整往返 + 编译 + 提交"。
 任何"循环里逐条改库"的写法在这套环境里都是不可用的 —— 200 条就要 44 秒。
+
+### 15.117 S2-1 缓存按域失效: 从「一次写入全站冷算」到「谁变清谁」(2026-11-02)
+
+#### 一、起因: 改一个供应商的连坐
+
+用户报的现象很具体: **改一个供应商的联系人, 看板、规则、采购的缓存全被打掉**。查下去是
+`invalidate_all()` —— 35 个写入口共用一个"DELETE FROM analysis_cache", 于是:
+
+| 写入 | 实际清掉的 | 真正依赖它的 |
+|---|---|---|
+| 供应商改名 | 9 个缓存族全清 | 只有 看板summary(supplier_count)/aux/断货风险(OTIF 评分) |
+| 采购单改到货日 | 9 个族全清 | 只有采购建议 |
+| 改补货参数 | 9 个族全清 | 看板/采购/补货/断货/规则 |
+| 订单导入 | 9 个族全清 | 确实**全部**(订单是绝大多数聚合的源头) |
+
+后果不是"算错", 是**每次都重新付一遍冷算成本**: 采购/补货 builder 各 2~3s 且要扫 5 万行;
+改个联系人也照样付。这才是"导入响应不稳"的来源之一 —— 同一时刻别人在冷算, 抢的是同一批 RU。
+
+#### 二、做法: 依赖只声明一份, 由矩阵反推要清谁
+
+`routes/analysis_cache.py` 里新增 `_FAMILY_DEPS`(缓存族 → 依赖的数据域):
+
+| 缓存族 | 依赖域 |
+|---|---|
+| `orders` `history` `accel` `sales_digest` | orders |
+| `dash_summary` | orders, inventory, products, suppliers, rules, config, flows |
+| `dash_aux` | orders, inventory, products, suppliers, rules, config |
+| `stock_risk` | orders, inventory, products, suppliers, rules, config |
+| `purchase` | orders, inventory, products, config, rules, purchases |
+| `repl` | orders, inventory, products, config |
+
+写入方只写 `invalidate("suppliers")`, 由矩阵算出要打哪几个族。于是:
+
+- `invalidate("suppliers")` → **只**清 `dash_summary` / `dash_aux` / `stock_risk`(3 个)
+- `invalidate("purchases")` → **只**清 `purchase`(1 个)
+- `invalidate("orders")` → 9 个全清(订单确实是根, 这是事实不是懒)
+- `invalidate("all")` → 迁移/重置/种子用, 保留显式出口
+
+**两道兜底**(宁可多清, 不能漏清):
+
+1. 调了未登记的域名(拼错/新域没登记) → 按 `all` 处理, 记都记不住就全清。
+2. 出现了未登记的缓存族(新加的键忘了登记) → 这个键**任何写入都会被清**。
+   `local_test` 有静态用例扫全部 `cache_get` 字面键, 类名不在矩阵里就红。
+
+顺带把 `dashboard.stock_risk` 手写的缓存块并回 `cache_get` —— 它原来的键是
+`c1|stock_risk|...`, 族名不在首位, 域级匹配根本匹配不到(会变成"永远不清")。键改 `stock_risk|c1|...`,
+`full=1` 的体积上限(曾 11.6MB)用新增的 `max_bytes` 参数挡住, 超限只返不落表。
+
+#### 三、墓碑 + 写入令牌: 堵住"重建期间被失效"的旧值覆盖
+
+改成"按域清"之后, 一个旧问题变得更值得修:
+
+```
+读线程 A 开始重建(t=0)  →  写线程 B 提交并失效(t=1)  →  A 把 t=0 算出的旧值落表
+```
+
+原来是 `DELETE`, A 的插入没有冲突行, 旧值直接写进去 → **脏满一个 TTL**(采购 300s)。以前也这样,
+只是全清时更容易被下一次写入顺手再清掉; 现在清了别的域, 这条脏值就更容易活满 5 分钟。
+
+做法: 失效不是 DELETE 而是**打墓碑** (`created_at = 1970-01-01`, `tok = 失效时刻`), 落表带令牌:
+
+```sql
+INSERT ... VALUES(%s,%s,NOW(6),%s)
+ON DUPLICATE KEY UPDATE
+  value      = IF(VALUES(tok) >= tok, VALUES(value), value),
+  created_at = IF(VALUES(tok) >= tok, VALUES(created_at), created_at),
+  tok        = GREATEST(tok, VALUES(tok))
+```
+
+令牌在 `builder()` **之前**取。B 的令牌比 A 新 → A 的写入被拒 → 行留在墓碑上 → 下次读重新重建。
+代价是可能多算一次; 换来"永不用旧值覆盖新失效"。读侧判定没变(仍看 `age < ttl`), 墓碑 `created_at`
+是 1970, 天然 miss。
+
+> 边界: 令牌是应用侧微秒时间戳, 跨实例依赖时钟。同一云同区域内 NTP 偏差在毫秒级; 真偏了也只是
+> "该写的被拒 → 多重建一次", 方向安全(不会写出脏值)。
+
+#### 四、顺带修一个更严重的: 日销三窗口从 S2-2 起就没再重建过
+
+查"订单导入后采购/补货要不要失效"时发现的:**它们读的不是订单表, 是 `sku_sales_stats`(二阶物化)**。
+而 S2-2 把"写操作后全量重建 90 天"整块删了(5000 SKU ≈ 22 万 RU, 当时判断成本过高), 却没补增量路径。
+
+线上实证: `sku_sales_stats.updated_at = 11-01 07:23`, `orders.synced_at = 11-02 05:55` —— **晚一天**。
+也就是说 S2-2 之后, 每次导入都在"刷新缓存, 但缓存里装的还是旧日销"。缓存失效做得再好也只是新瓶装旧数。
+
+修法(`biz/sales.rebuild_sku_stats_for_days`): 脏日期 → 反查这些天出现过的 SKU → **只重算他们**
+(窗口仍 90 天, ds7/14/28 依赖整段); 影响面 > 2000 SKU 时直接全量(逐批与全量成本同阶, 往返多几十倍)。
+落在 `_drain_agg_dirty` 里, 跟着 agg/快照一起跑, 大范围补录走全量分支。
+
+配套改了 `_rebuild_sku_sales_stats` 的删除范围: 原实现**无条件** `DELETE ... WHERE channel=%s`,
+按 SKU 子集重建会先把该渠道其余 SKU 全清空(补货当场只剩这一批)。现在有 `skus` 就按 SKU 分片删。
+
+#### 五、还有两处"联动"补全(不是缓存问题, 但同一条链)
+
+- **供应商评分**是规则 ctx 的输入(`supplier.score` 条件 + 断货 OTIF 系数), 但改分从来不重算规则 →
+  告警停在旧分上, 只有等每日评估。现在 `update_supplier` 里 `score` 变更就 `_schedule_rule_eval()`。
+- **补货参数**(前置期/安全天数/季节系数)同样是规则 ctx 的动态安全线输入, `update_config` 也补了重算。
+- **后台评估完补一次失效**: 原 `_worker()` 评估完不起效, 调用方的 `invalidate` 发生在评估**之前** →
+  "告警变了, 看板还显示旧计数"直到 TTL。现在评估完 `invalidate("rules")`。
+
+#### 六、验证
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| `invalidate("suppliers")` | 只清 3 族, 订单/历史/采购/补货/日销摘要存活 | ✅ 6 个键存活, 3 个墓碑 + 未登记键被清 |
+| `invalidate("purchases")` | 只清采购 | ✅ |
+| `invalidate("config")` | 不动 orders/history/accel/sales_digest | ✅ |
+| 拼错域名 `"typo"` | 全清(不静默漏清) | ✅ 9 族全墓碑 |
+| 未登记族 `zz_new_family` | 任何写入都被清 | ✅ |
+| 令牌守卫 | 重建期间失效 → 旧值不许覆盖墓碑 | ✅ 墓碑保持 1970; 新令牌可正常落表 |
+| `cache_get` 冷/热/失效/无关域 | 1/1/2/2 次 build | ✅ |
+| `max_bytes` 超限 | 不落表, 只本次返回 | ✅ 行数 0 |
+| 日销物化子集重建 | 只动该 SKU, 其余行数不变 | ✅ 6 行 → 6 行, 只有 B 的 ds7 从 1.57 涨到 3.71 |
+
+回归 **291 通过 / 0 失败**, preflight 六步全绿。线上 `ALTER TABLE analysis_cache ADD COLUMN tok` 0.6s。
+
+#### 七、调用点映射(35 处)
+
+| 入口 | 域 | 说明 |
+|---|---|---|
+| `orders.py` 软删/批量/恢复/永久删 | orders | 同时 `mark_agg_days` 入队 |
+| `cleansing.py` 导入完成 | 按 `target` 映射 | order/inventory/product/supplier/gmv_flow 各归各域 |
+| `cleansing.py` 评估联动 | rules + inventory | 评估会写 alerts, 也可能调库存 |
+| `inventory.py` / `misc.py` 删流水 | inventory | 月汇总口径跟着变 |
+| `products.py` 启停/删除 | products | |
+| `purchase.py` 采购单/处置记录 | purchases | |
+| `rules.py` 规则增删改/批量/评估 | rules | |
+| `suppliers.py` 档案增删改 | suppliers | 评分变更另触发规则重算 |
+| `suppliers.py` 参数/季节/列映射/状态映射 | config | 前置期等参数进补货采购与规则 |
+| `ops.py` 归码迁移 | orders | 改的是按码日销切片 |
+| `tasks.py` 重建 agg | orders | |
+| `task_seed.py` 种子每步/重置 | all | 动了很多表 |
+| `misc.py` 主键迁移+物化重建 | all | |

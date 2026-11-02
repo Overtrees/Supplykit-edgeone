@@ -177,7 +177,7 @@ def list_orders(channel: str = "jd", page: int = 1, page_size: int = 30,
         where += " AND o.order_status=%s"
         params.append(status)
     # 2026-10-27 订单页提速: 短 TTL 共享表缓存(5s, key 含全参数)——冷请求消峰(进入页面/切回不再每次 1-8s),
-    # 热态 <0.1s; invalidate_all 清 analysis_cache 全表 → 导入/删单等写操作即时失效, 实时性不损
+    # 热态 <0.1s; invalidate("orders") 打墓碑 → 导入/删单等写操作即时失效, 实时性不损
     _key = "orders|%s|%s|%s|%s|%s" % (channel, page, search, status, page_size)
     return _cache_get(_key, 5, lambda: _build_orders(where, params, page, page_size, include_deleted))
 
@@ -197,8 +197,8 @@ def soft_delete_order(oid: int):
     """软删除(前端 5s 撤销窗口, 回收站可恢复)"""
     _skus = _skus_of([oid])
     execute("UPDATE orders SET deleted_at=NOW() WHERE id=%s", [oid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("orders")
     _close_orphan(_skus)
     return ok({})
 
@@ -230,10 +230,10 @@ async def orders_batch(request: Request):
             execute("UPDATE orders SET deleted_at='' WHERE id IN (%s)" % _ph, _batch)
         else:
             execute("DELETE FROM orders WHERE id IN (%s)" % _ph, _batch)
-    # 先入队再失效: invalidate_all 会立刻起后台线程消费队列, 顺序反了线程会读到空队列
+    # 先入队再失效: invalidate("orders") 会立刻起后台线程消费队列, 顺序反了线程会读到空队列
     _mark_days(_touch_days, reason="order_" + action)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("orders")
     if action == "restore":
         _evaluate_restored(ids)
     elif _del_skus:
@@ -247,8 +247,8 @@ def restore_order(oid: int):
     _tdays = _days_of([oid])
     execute("UPDATE orders SET deleted_at='' WHERE id=%s", [oid])
     _mark_days(_tdays, reason="order_restore")
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("orders")
     _evaluate_restored([oid])
     return ok({})
 
@@ -260,7 +260,7 @@ def permanent_delete_order(oid: int):
     _tdays = _days_of([oid])
     execute("DELETE FROM orders WHERE id=%s", [oid])
     _mark_days(_tdays, reason="order_delete")
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("orders")
     _close_orphan(_skus)
     return ok({})

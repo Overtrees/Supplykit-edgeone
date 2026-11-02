@@ -515,7 +515,7 @@ check("审计: 无 IN (%s) 与 _status_cond 同段(双包裹)", not _bad2, "; ".
 _expect_keys = [
     ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
-    ("stock_risk|", ["channel", "full"]),
+    ("stock_risk|", ["_CV", "channel", "full"]),   # 2026-11-02 S2-1: 键族归首, 版本号进第二段
     ("accel|", ["channel", "ratio", "min_qty"]),
     ("purchase|", ["channel", "mode", "days"]),
     ("repl|", ["channel", "mode", "days", "source"]),
@@ -1285,7 +1285,7 @@ try:
           "_touch_days = _days_of(ids)" in _od and "_tdays = _days_of([oid])" in _od, "orders.py")
     _mk_at = _od.index("_mark_days(_touch_days")
     check("S2-2 先入队再 invalidate(否则线程读到空队列)",
-          _mk_at < _od.index("invalidate_all()", _mk_at), "orders.py")
+          _mk_at < _od.index('invalidate("orders")', _mk_at), "orders.py")
 
     _ac = open('routes/analysis_cache.py', encoding='utf-8').read()
     check("S2-2 物化追平改为按日增量消费",
@@ -1371,6 +1371,98 @@ try:
           "CleansingPage.tsx")
 except Exception as _e12:
     check("S2-5 用例无异常", False, str(_e12)[:200])
+
+# ── 2026-11-02 S2-1: 缓存按域失效 ────────────────────────────────────
+try:
+    import glob as _glob
+    import re as _re
+
+    _ac4 = open('routes/analysis_cache.py', encoding='utf-8').read()
+    check("S2-1 声明了缓存族→数据域矩阵", "_FAMILY_DEPS" in _ac4 and "_KNOWN_DOMAINS" in _ac4,
+          "analysis_cache.py")
+    check("S2-1 失效用墓碑而非 DELETE(令牌才有落点)",
+          "_DEAD_TS" in _ac4 and "DELETE FROM analysis_cache\n" not in _ac4, "analysis_cache.py")
+    check("S2-1 令牌取在 builder 之前(之后取会盖掉重建期间的新写入)",
+          _ac4.index("_tok = _now_tok()") < _ac4.index("val = builder()"), "analysis_cache.py")
+    check("S2-1 落表走令牌守卫 cache_put", "cache_put(key, _s, tok=_tok" in _ac4, "analysis_cache.py")
+    check("S2-1 未登记域按全清处理(写错域名不能漏清)",
+          'bool(_doms - _KNOWN_DOMAINS)' in _ac4, "analysis_cache.py")
+    check("S2-1 只有订单域才起物化追平线程",
+          'if not (_wipe or ("orders" in _doms))' in _ac4, "analysis_cache.py")
+
+    # 逐文件扫描: 不许裸 invalidate(); 域名必须已登记; invalidate_all 只许出现在白名单
+    from routes.analysis_cache import (_FAMILY_DEPS as _FD4, _KNOWN_DOMAINS as _KD4)
+    _bare, _bad, _nuc = [], [], []
+    for _f in sorted(_glob.glob('routes/*.py')):
+        _s4 = open(_f, encoding='utf-8').read()
+        for _m in _re.finditer(r"[^_]invalidate\(\)", _s4):
+            _bare.append(_f)
+        for _m in _re.finditer(r"invalidate\(([^)\n]*)\)", _s4):
+            if "def " in _s4[max(0, _m.start() - 12):_m.start()]:
+                continue
+            for _d in _re.findall(r"\"([a-z_]+)\"", _m.group(1)):
+                if _d != "all" and _d not in _KD4:
+                    _bad.append("%s:%s" % (_f, _d))
+        for _m in _re.finditer(r"from routes\.analysis_cache import invalidate_all", _s4):
+            _nuc.append(_f)
+    check("S2-1 无裸 invalidate() 调用", not _bare, str(sorted(set(_bare))))
+    check("S2-1 调用点域名全部已登记", not _bad, str(sorted(set(_bad))[:5]))
+    check("S2-1 invalidate_all 只用于跨表场景(种子/重置/迁移)",
+          set(_nuc) <= {"routes/task_seed.py", "routes/misc.py"}, str(sorted(set(_nuc))))
+
+    # 矩阵语义: 改供应商不能连带清采购/补货/订单/历史
+    check("S2-1 供应商只清 看板summary/aux/断货风险",
+          {f for f, d in _FD4.items() if "suppliers" in d} == {"dash_summary", "dash_aux", "stock_risk"},
+          str({f for f, d in _FD4.items() if "suppliers" in d}))
+    check("S2-1 采购单/处置记录只清采购建议",
+          {f for f, d in _FD4.items() if "purchases" in d} == {"purchase"},
+          str({f for f, d in _FD4.items() if "purchases" in d}))
+    check("S2-1 订单域必须波及全部派生聚合(4维任一改都会改数)",
+          {f for f, d in _FD4.items() if "orders" in d} == set(_FD4), "矩阵漏项")
+    check("S2-1 参数域不动订单/历史/加速/日销摘要",
+          not ({"orders", "history", "accel", "sales_digest"} & {f for f, d in _FD4.items() if "config" in d}),
+          "config 域过宽")
+
+    # 动态: 桩掉 db 只看"该清哪些族"
+    _old_ex4 = _db.execute
+    _db.execute = lambda sql, params=None: 0
+    try:
+        from routes.analysis_cache import invalidate as _inv4
+        _r_sup = _inv4("suppliers")
+        _r_pur = _inv4("purchases")
+        _r_typ = _inv4("no_such_domain")
+    finally:
+        _db.execute = _old_ex4
+    check("S2-1 invalidate(suppliers) 实际只清 3 族", _r_sup == ["dash_aux", "dash_summary", "stock_risk"],
+          str(_r_sup))
+    check("S2-1 invalidate(purchases) 实际只清 1 族", _r_pur == ["purchase"], str(_r_pur))
+    check("S2-1 未知域名回落全清", len(_r_typ) == len(_FD4), str(len(_r_typ)))
+
+    _ds4 = open('routes/dashboard.py', encoding='utf-8').read()
+    check("S2-1 断货风险键族归首(否则域级匹配不到)",
+          '"stock_risk|%s|%s|%s"' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
+    _sv4 = open('biz/sales.py', encoding='utf-8').read()
+    check("S2-1 日销摘要走 cache_put(令牌)", "cache_put" in _sv4 and "tok=_w_tok" in _sv4, "sales.py")
+    _sp4 = open('routes/suppliers.py', encoding='utf-8').read()
+    check("S2-1 供应商评分变更触发规则重算(评分是规则 ctx 输入)",
+          '_schedule_rule_eval' in _sp4 and 'if "score" in d' in _sp4, "suppliers.py")
+    _rl4 = open('routes/rules.py', encoding='utf-8').read()
+    check("S2-1 后台评估完补一次失效(否则告警变了看板还旧)",
+          '_inv("rules")' in _rl4, "rules.py")
+
+    # S2-2 删掉"写操作后全量重建日销三窗口"却没补增量 → 线上 sku_sales_stats 比订单晚一天。
+    #   补货/采购/断货/健康全读它, 不修的话"缓存失效后重建出来的还是旧数"。
+    check("S2-1 脏日期会重算日销三窗口(否则补货读旧日销)",
+          "rebuild_sku_stats_for_days" in _ac4 and "_rst(ch, _done_days)" in _ac4,
+          "analysis_cache.py")
+    _sv4b = open('biz/sales.py', encoding='utf-8').read()
+    check("S2-1 日销物化支持按 SKU 子集重建(不整渠道删)",
+          "def rebuild_sku_stats_for_days" in _sv4b
+          and "DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN (" in _sv4b, "sales.py")
+    check("S2-1 子集重建不误删其它 SKU(整渠道 DELETE 只能在全量分支)",
+          "_scope" in _sv4b and "if _scope:" in _sv4b, "sales.py")
+except Exception as _e13:
+    check("S2-1 用例无异常", False, str(_e13)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

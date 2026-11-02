@@ -66,8 +66,8 @@ async def create_rule(request: Request):
                        d.get("alert_type", ""), d.get("alert_title", ""), d.get("alert_desc", ""),
                        d.get("severity", "warning"), 1 if d.get("is_active", 1) else 0,
                        d.get("channel", "jd"), d.get("mode", ""), _pjson))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 规则新建 → 看板/接口缓存即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("rules")  # 规则新建 → 看板/接口缓存即时失效
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({"id": _rid})
 
@@ -127,8 +127,8 @@ async def update_rule(rid: int, request: Request):
                 evaluate_stock_skus(_ch, limit=100000)
             except Exception as _e:
                     try_err('rules', '静默降级', _e)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 规则编辑 → 缓存即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("rules")  # 规则编辑 → 缓存即时失效
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
 
@@ -170,6 +170,14 @@ def _schedule_rule_eval():
                     run_daily_rules()
                 except Exception as _e:
                         try_err('rules', '静默降级', _e)
+                # 2026-11-02 S2-1: 评估写完 alerts 必须失效一次 —— 调用方的 invalidate 发生在
+                #   _schedule_rule_eval 之前, 缓存很可能在评估完成前就被重建, 结果是"告警变了,
+                #   看板还显示旧计数"直到 TTL 到期。这里评估完补一次(只清依赖 rules 的族)。
+                try:
+                    from routes.analysis_cache import invalidate as _inv
+                    _inv("rules")
+                except Exception as _ei:
+                    try_err('rules', '评估后缓存失效降级', _ei)
                 # 评估期间又有新变更 → 尾追再评估一轮; 无则退出
         except Exception as _e:
                 try_err('rules', '静默降级', _e)
@@ -203,8 +211,8 @@ def delete_rule(rid: int):
     # 软删除 + 联动关闭该类告警
     _close_alerts_for_rules([rid])
     execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id=%s", [rid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("rules")
     return ok({})
 
 
@@ -212,8 +220,8 @@ def delete_rule(rid: int):
 @traced
 def restore_rule(rid: int):
     execute("UPDATE rules SET deleted_at='', is_active=1 WHERE id=%s", [rid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("rules")
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
 
@@ -222,8 +230,8 @@ def restore_rule(rid: int):
 @traced
 def permanent_delete_rule(rid: int):
     execute("DELETE FROM rules WHERE id=%s", [rid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("rules")
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({})
 
@@ -266,8 +274,8 @@ async def rules_batch(request: Request):
         execute("DELETE FROM rules WHERE id IN (%s)" % ph, ids)
     else:
         return fail("未知操作: " + str(action))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 批量启用/停用/删除/恢复/永久删 → 看板告警计数/规则联动即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("rules")  # 批量启用/停用/删除/恢复/永久删 → 看板告警计数/规则联动即时失效
     _schedule_rule_eval()  # 规则变更 → 后台即时重算告警(脏标记线程, 不等每日评估)
     return ok({"updated": len(ids)})
 
@@ -293,8 +301,8 @@ async def rules_evaluate(request: Request):
             out[ch] = len(evaluate_stock_skus(ch, limit=100000, mode=mode or None))
         except Exception as e:
             out[ch] = "error: %s" % str(e)[:80]
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 评估可能生成/变更告警 → 看板/接口缓存即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("rules")  # 评估可能生成/变更告警 → 看板/接口缓存即时失效
     try:
         from core.rule_eval import LAST_DIAG as _diag
     except Exception:

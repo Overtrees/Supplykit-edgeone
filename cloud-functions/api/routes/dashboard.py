@@ -199,7 +199,7 @@ def health_trend(channel: str = "jd", days: int = 14):
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc",
                       part: str = ""):
-    """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作 invalidate_all 全局失效, 数据变化最多 30s 可见)
+    """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作按域失效(2026-11-02 S2-1), 数据变化最多 30s 可见)
     附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
     _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
     # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
@@ -979,37 +979,20 @@ def stock_risk(channel: str = "jd", full: int = 0):
     """濒临断货(30s 共享表缓存)+单独无锁路径(2026-10-11: 行锁对 stock-risk 16s/无锁 2s——无锁保留;
     瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)
     2026-10-17 修复: 曾裸 REPLACE + except 静默吞异常 → 缓存永不落库 → 每次全量冷算 2.5-14s;
-    改为无锁缓存(命中秒回/未算写回/写入失败 try_err 留痕——不再静默)"""
-    from routes.analysis_cache import _CACHE_V as _CV, _loads as _lds, _FAILED as _FD
-    _key = "%s|stock_risk|%s|%s" % (_CV, channel, full)
-    try:
-        from db import one, execute
-        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
-                  "FROM analysis_cache WHERE `key`=%s", [_key])
-        if row:
-            age = row.get("age")
-            if age is not None and int(age) < _RISK_TTL:
-                _v = _lds(row.get("value") or "")
-                if _v is not None and _v is not _FD:
-                    return ok(_v)
-        # 未命中: 冷算 + 写回(失败仅留痕, 不阻塞返回——2026-10-17 曾静默吞导致缓存永不落)
-        import json as _json
+    改为无锁缓存(命中秒回/未算写回/写入失败 try_err 留痕——不再静默)
+    2026-11-02 S2-1: 手写缓存换成统一 cache_get —— 键族归一到首位(否则域级失效匹配不到),
+    并复用"写入令牌"守卫; full=1 体积大(曾 11.6MB)仍用 max_bytes 挡住不落表。"""
+    from routes.analysis_cache import _CACHE_V as _CV
+    _key = "stock_risk|%s|%s|%s" % (_CV, channel, full)
+
+    def _build():
         try:
-            val = _stock_risk(channel, full=full)
+            return _stock_risk(channel, full=full)
         except Exception as _e:
             try_err('dash', 'stock_risk 计算降级', _e)
-            val = _stock_risk(channel, full=full)
-        try:
-            _vjson = _json.dumps(val, ensure_ascii=False, default=str)
-            if _vjson and len(_vjson) < 6 * 1024 * 1024 - 1024:  # 防超 TiDB 单行上限(曾 11.6MB 教训)
-                execute("REPLACE INTO analysis_cache(`key`, value, created_at) VALUES(%s,%s,NOW(6))",
-                        (_key, _vjson))
-        except Exception as _e2:
-            try_err('dash', 'stock_risk 缓存写回降级(冷算结果已返回)', _e2)
-        return ok(val)
-    except Exception as _e3:
-        try_err('dash', 'stock_risk 端点降级', _e3)
-        return ok(_stock_risk(channel, full=full))
+            return _stock_risk(channel, full=full)
+
+    return ok(_cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024))
 
 
 _accel_cache = {}

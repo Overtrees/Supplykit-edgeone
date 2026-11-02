@@ -40,8 +40,8 @@ async def create_supplier(request: Request):
             "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
             (code, d.get("supplier_name", ""), d.get("contact_person", ""), d.get("contact_phone", ""),
              int(d.get("score") or 0), d.get("status", "active"), ch, d.get("brand", "")))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("suppliers")
     return ok({"id": 0, "supplier_code": code})
 
 
@@ -64,8 +64,17 @@ async def update_supplier(sid: int, request: Request):
         return fail("无更新字段")
     params.append(sid)
     execute("UPDATE suppliers SET %s WHERE id=%%s" % ", ".join(sets), params)
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("suppliers")
+    # 2026-11-02 S2-1: 评分是规则 ctx 的输入(supplier.score 条件 + 断货 OTIF 系数),
+    #   改了分不重算 → 告警/断货等级停在旧分上, 只有等每日评估才追平。
+    #   这里补一次后台重算(脏标记线程, 密集编辑合并成尾追), 让"改分 → 告警变化"当天成立。
+    if "score" in d:
+        try:
+            from routes.rules import _schedule_rule_eval as _sre
+            _sre()
+        except Exception as _e:
+            try_err('suppliers', '评分变更重算告警降级', _e)
     return ok({})
 
 
@@ -73,8 +82,8 @@ async def update_supplier(sid: int, request: Request):
 @traced
 def delete_supplier(sid: int):
     execute("DELETE FROM suppliers WHERE id=%s", [sid])
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("suppliers")
     return ok({})
 
 
@@ -127,8 +136,16 @@ async def update_config(request: Request):
         execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE value=VALUES(value)", (key, str(v), channel))
         n += 1
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("config")
+    # 2026-11-02 S2-1: 前置期/安全天数/季节系数既是补货采购的输入, 也是规则 ctx 的动态安全线
+    #   (_mcv 现读配置)。只清缓存不重算 → 告警仍按旧阈值, 等下一次库存变动或每日任务才追平。
+    #   这里补一次后台重算(脏标记, 连续调参合并成尾追), 让"改参数 → 告警跟着变"当天成立。
+    try:
+        from routes.rules import _schedule_rule_eval as _sre
+        _sre()
+    except Exception as _e:
+        try_err('suppliers', '配置变更重算告警降级', _e)
     return ok({"updated": n})
 
 
@@ -174,8 +191,8 @@ async def put_slow_cats(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('slow_cats',%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(items, ensure_ascii=False), channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 滞销参数变更 → 处置建议缓存即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("config")  # 滞销参数变更 → 处置建议缓存即时失效
     return ok({"updated": len(items)})
 
 
@@ -316,8 +333,8 @@ async def put_column_value_map(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('column_value_map',%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(data, ensure_ascii=False), channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("config")
     return ok({"updated": sum(len(v or []) for v in data.values()) if isinstance(data, dict) else 0})
 
 
@@ -363,8 +380,8 @@ async def put_custom_columns(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('custom_columns',%s,'') "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(data, ensure_ascii=False),))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("config")
     return ok({"updated": True})
 
 
@@ -384,8 +401,8 @@ async def put_status_map(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES('order_status_map',%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (json.dumps(items, ensure_ascii=False), channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()
+    from routes.analysis_cache import invalidate
+    invalidate("config")
     return ok({"updated": len(items)})
 
 
@@ -422,6 +439,6 @@ async def put_seasons(request: Request):
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
             (key, json.dumps(items, ensure_ascii=False), channel))
-    from routes.analysis_cache import invalidate_all
-    invalidate_all()  # 季节参数变更 → 补货/采购缓存即时失效
+    from routes.analysis_cache import invalidate
+    invalidate("config")  # 季节参数变更 → 补货/采购缓存即时失效
     return ok({"updated": len(items)})

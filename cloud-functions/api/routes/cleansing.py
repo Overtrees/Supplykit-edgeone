@@ -27,6 +27,13 @@ router = APIRouter(tags=["cleansing"])
 
 # 目标类型 → 表/仓库类型映射
 from routes.common import TARGET_WH as _TARGET_WH  # 单一真源(2026-10-29)
+
+# 2026-11-02 S2-1: 导入目标 → 缓存失效域。导入一次只写一类表, 没必要清全站缓存。
+#   未登记目标(将来新增的导入类型) → 回落 "all", 宁可多清。
+_TARGET_DOMAIN = {"order": "orders", "inventory": "inventory", "product": "products",
+                  "supplier": "suppliers", "gmv_flow": "flows",
+                  "inbound": "inventory", "outbound": "inventory"}
+
 _NUMS = {"number", "price", "quantity", "score", "safety_qty", "available_qty", "in_transit_qty",
          "month_inbound", "month_outbound", "beginning_stock", "turnover_days", "c_transit",
          "locked_qty", "weight", "volume", "box_qty", "total_amount", "unit_price",
@@ -707,8 +714,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                                   "cur_step": {"name": "评估联动准备", "started": int(_t.time())}}, ensure_ascii=False), channel])
             except Exception as _e4:
                 try_err('cleansing', '创建评估任务降级', _e4)
-            from routes.analysis_cache import invalidate_all
-            invalidate_all()
+            from routes.analysis_cache import invalidate
+            invalidate(_TARGET_DOMAIN.get(target, "all"))
             return {"ok": True, "task_id": task_id, "status": "done",
                     "success": success, "failed": failed,
                     "message": "成功 %d 条, 跳过 %d 条 · 评估联动已创建独立任务" % (success, failed) + _exp_warn,
@@ -809,8 +816,8 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
             _rri = _rj.get("result") or {}
             execute("UPDATE sync_tasks SET status='done', params=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({**params, "cur_step": None}, ensure_ascii=False), task_id))
-            from routes.analysis_cache import invalidate_all
-            invalidate_all()
+            from routes.analysis_cache import invalidate
+            invalidate("rules", "inventory")
             return {"ok": True, "task_id": task_id, "status": "done",
                     "rules_evaluated": _rri.get("rules_evaluated"), "inventory_adjusted": _rri.get("inventory_adjusted")}
         _total = len(sku_list)
@@ -984,8 +991,8 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                                         "rules_evaluated": _cum_rules, "inventory_adjusted": _cum_inv,
                                         "message": "评估 %d SKU, 联动 %d" % (_cum_rules, _cum_inv)}}, ensure_ascii=False), task_id))
         if _done:
-            from routes.analysis_cache import invalidate_all
-            invalidate_all()
+            from routes.analysis_cache import invalidate
+            invalidate("rules", "inventory")
         return {"ok": True, "task_id": task_id, "status": _status, "page": _seg_no,
                 "rules_evaluated": _cum_rules, "inventory_adjusted": _cum_inv}
     except Exception as _e6:
