@@ -157,9 +157,12 @@ elif not NO_NET:
 if not NO_NET:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true")
     rc, out, err = run(["git", "push", "--dry-run", "origin", "HEAD:refs/heads/feat/edgeone"],
-                       timeout=45, env=env)
+                       timeout=25, env=env)
     ok = rc == 0
-    add("push 权限", ok, "可推送(部署将随之触发)" if ok else (err or out).split("\n")[-1][:90],
+    _msg = "可推送(部署将随之触发)" if ok else (err or out).split("\n")[-1][:90]
+    if "timed out" in _msg or not _msg:
+        _msg = "超时(无凭据或网络受限, 无法判定)"
+    add("push 权限", ok, _msg,
         "配 GitHub PAT: git remote set-url origin https://<user>:<token>@github.com/Overtrees/Supplykit-edgeone.git")
 else:
     add("push 权限", True, "已跳过(--no-net)")
