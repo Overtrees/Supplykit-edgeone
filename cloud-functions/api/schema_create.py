@@ -278,7 +278,109 @@ _TABLES = {
         "warehouse_type VARCHAR(20) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     ),
+    # ── 2026-11-02 S2-8: 原 index.py 启动段内联的 12 张运行表, 收敛为声明(单一真源) ──
+    "maintenance_log": (
+        "CREATE TABLE IF NOT EXISTS maintenance_log (`date` DATE NOT NULL, "
+        "task VARCHAR(32) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "PRIMARY KEY(`date`, task))"
+    ),
+    "gmv_flows": (
+        "CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+        "platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, "
+        "related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, "
+        "flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, "
+        "channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', "
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))"
+    ),
+    "health_snapshot": (
+        "CREATE TABLE IF NOT EXISTS health_snapshot (`date` DATE NOT NULL, "
+        "channel VARCHAR(20) NOT NULL, score INT DEFAULT 0, own_score INT DEFAULT -1, "
+        "platform_score INT DEFAULT -1, bc_score INT DEFAULT -1, "
+        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date, channel))"
+    ),
+    "analysis_cache": (
+        "CREATE TABLE IF NOT EXISTS analysis_cache ("
+        "`key` VARCHAR(160) PRIMARY KEY, value MEDIUMTEXT, "
+        "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), tok BIGINT DEFAULT 0)"
+    ),
+    "eval_pending": (
+        "CREATE TABLE IF NOT EXISTS eval_pending ("
+        "`task` VARCHAR(32) PRIMARY KEY, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))"
+    ),
+    "migration_log": (
+        "CREATE TABLE IF NOT EXISTS migration_log "
+        "(name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    ),
+    "agg_dirty": (
+        "CREATE TABLE IF NOT EXISTS agg_dirty "
+        "(id TINYINT PRIMARY KEY, ts DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))"
+    ),
+    "data_version": (
+        "CREATE TABLE IF NOT EXISTS data_version (id TINYINT PRIMARY KEY, v BIGINT DEFAULT 0, "
+        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
+    ),
+    "log_archives": (
+        "CREATE TABLE IF NOT EXISTS log_archives ("
+        "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
+        "markdown MEDIUMTEXT, `count` INT DEFAULT 0, "
+        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(`date`, `scope`))"
+    ),
+    "pipeline_runs": (
+        "CREATE TABLE IF NOT EXISTS pipeline_runs ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, pipeline VARCHAR(64) NOT NULL, "
+        "scope VARCHAR(32) NOT NULL DEFAULT 'all', status VARCHAR(16) NOT NULL DEFAULT 'running', "
+        "started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME NULL, "
+        "duration_ms INT DEFAULT 0, rows_affected INT DEFAULT 0, "
+        "error VARCHAR(500) DEFAULT NULL, detail MEDIUMTEXT DEFAULT NULL, "
+        "KEY idx_pipe_id (pipeline, id), KEY idx_started (started_at))"
+    ),
+    "orders_day_agg": (
+        "CREATE TABLE IF NOT EXISTS orders_day_agg ("
+        "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "
+        "store VARCHAR(60) NOT NULL, gmv DECIMAL(14,2) DEFAULT 0, subsidy DECIMAL(14,2) DEFAULT 0, "
+        "cnt INT DEFAULT 0, PRIMARY KEY(`date`, channel, order_status, store))"
+    ),
+    "agg_dirty_days": (
+        "CREATE TABLE IF NOT EXISTS agg_dirty_days ("
+        "channel VARCHAR(20) NOT NULL, `date` CHAR(10) NOT NULL, "
+        "reason VARCHAR(32) DEFAULT 'write', "
+        "ts DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY(channel, `date`))"
+    ),
 }
+
+# ── 索引声明(2026-11-02 S2-8: 原 index.py 启动段三组, 收敛到同一处) ─────────
+_INDEXES = [
+    ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
+    ("idx_orders_ch_id", "orders", "channel, id"),  # 订单分页 ORDER BY id DESC 走索引(曾 TopN 全表扫 428 RU/次)
+    ("idx_batches_ch_wt_sku", "batches", "channel, warehouse_type, sku"),
+    ("idx_batches_ch_exp", "batches", "channel, exp_date"),  # 批次页 WHERE channel ORDER BY exp_date(曾 9.3s)
+    ("idx_alerts_ch_status_created", "alerts", "channel, status, created_at"),
+    ("idx_rules_ch_active", "rules", "channel, is_active"),
+    ("idx_snapshot_ch_date", "daily_sales_snapshot", "channel, date"),
+    ("idx_snapshot_ch_date_full", "daily_sales_snapshot", "channel, date, sku, warehouse, order_count"),  # 覆盖索引(快照查询免回表)
+]
+_ADD_INDEXES = [
+    ("idx_inbound_ch_date", "inbound_records", "(channel, inbound_date)"),
+    ("idx_outbound_ch_date", "outbound_records", "(channel, outbound_date)"),
+    ("idx_alerts_status_source", "alerts", "(status, source)"),
+    ("idx_products_barcode_ch", "products", "(barcode, channel)"),
+]
+_DROP_INDEXES = [
+    ("idx_orders_sku", "orders"),        # 被 idx_orders_sku_ordered_at 前缀覆盖
+    ("idx_orders_order_no", "orders"),   # 被 uq_orders_biz(channel,order_no,sku,barcode) 前缀覆盖
+    ("idx_orders_ch_status", "orders"),  # 被 idx_orders_ch_ordered_at 前缀覆盖
+]
+
+# 存量表幂等补列(原 index.py 三条 ALTER + schema 补列机制已在 create_all_tables 内)
+_EXTRA_COLS = [
+    ("maintenance_log", "details", "VARCHAR(255) DEFAULT NULL"),   # 2026-11-01 库存指纹
+    ("analysis_cache", "tok", "BIGINT DEFAULT 0"),                  # 2026-11-02 S2-1 写入令牌
+    ("orders", "synced_at", "DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)"),
+]
+
+# schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
+SCHEMA_VERSION = 2
 
 
 def table_ddl(name):
@@ -297,12 +399,14 @@ def create_all_tables():
     except Exception as _ec:
         try_err('schema', '渠道种子写入降级', _ec)
     ok_n = 0
+    _failed = []
     for name, ddl in _TABLES.items():
         try:
             execute(ddl)
             ok_n += 1
         except Exception as e:
             try_err('schema', '建表失败 %s' % name, e)
+            _failed.append(name)
     # 2026-11-02 S2-5 订单业务键: 旧键 uq_orders_no_sku(order_no, sku) → 新键
     #   uq_orders_biz(channel, order_no, sku, barcode) —— 四维, 与写入层 upsert / 查重口径同一套。
     #
@@ -512,4 +616,78 @@ def create_all_tables():
                 try_err('schema', 'inventory 唯一键 uq_inventory_biz 建立完成', '')
     except Exception as _eix5:
         try_err('schema', 'inventory 唯一键迁移降级', _eix5)
-    return ok_n
+    return ok_n, _failed
+
+
+def ensure_schema():
+    """schema 版本门禁(2026-11-02 S2-8, 用户定案"从表源头解决"): **热路径一条 SELECT, 零 DDL**
+
+    旧启动每次冷启动发 ~50 条幂等 DDL(IF NOT EXISTS 在 TiDB 上仍走 schema 路径)。
+    现在: ①先 SELECT schema_state(表不存在 → 版本 0); ②版本 ≥ SCHEMA_VERSION → 直接返回;
+    ③否则全量幂等建表/索引/迁移(与旧启动完全同一套声明), **全部成功**才写版本 ——
+    任一失败不写, 下次冷启动自动重试(不会带着缺口跳过)。
+    改表/索引/迁移 → 只需 bump SCHEMA_VERSION + 改声明, 不再写"SHOW INDEX 检查 + ALTER"式迁移代码。
+    并发安全: DDL 幂等, 版本写入 GREATEST 防回退; 两实例同时首跑 = 重复执行无害。
+    """
+    from db import query as _q, one as _one, execute as _e
+    from routes.common import try_err
+    # ① 热路径: 一次 SELECT(表不存在 → 异常 → 视为版本 0)
+    try:
+        _row = _one("SELECT version FROM schema_state WHERE name='main'")
+        _ver = int((_row or {}).get("version") or 0)
+        if _ver >= SCHEMA_VERSION:
+            return
+    except Exception:
+        _ver = 0
+    # ② 版本表自身(唯一必须先建的表; 建表失败 → 后面写版本也会失败 → 下次重试, 无害)
+    try:
+        _e("CREATE TABLE IF NOT EXISTS schema_state (name VARCHAR(32) PRIMARY KEY, "
+           "version INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP "
+           "ON UPDATE CURRENT_TIMESTAMP)")
+    except Exception as _e0:
+        try_err('schema', 'schema_state 建表降级', _e0)
+        return
+    # ③ 全量幂等执行(声明式, 与旧启动同一套)
+    _errors = []
+    try:
+        _ok_n, _failed = create_all_tables()
+        if _failed:
+            _errors.append("建表失败: %s" % ",".join(_failed))
+    except Exception as _e1:
+        _errors.append("create_all_tables 异常: %s" % _e1)
+        try_err('schema', 'create_all_tables 降级', _e1)
+    for _iname, _tbl, _cols in _INDEXES:
+        try:
+            _e("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
+        except Exception as _e2:
+            _errors.append("索引 %s: %s" % (_iname, _e2))
+            try_err('schema', '索引降级 %s' % _iname, _e2)
+    for _iname2, _itbl2, _icols2 in _ADD_INDEXES:
+        try:
+            _e("ALTER TABLE `%s` ADD INDEX `%s` %s" % (_itbl2, _iname2, _icols2))
+        except Exception as _e3:
+            # 已存在(重复报错)不算失败 —— 与旧启动"忽略重复"语义一致
+            if "Duplicate key name" not in str(_e3):
+                _errors.append("补索引 %s: %s" % (_iname2, _e3))
+    for _iname3, _itbl3 in _DROP_INDEXES:
+        try:
+            _e("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname3, _itbl3))
+        except Exception as _e4:
+            _errors.append("删索引 %s: %s" % (_iname3, _e4))
+    for _t, _c, _ddl in _EXTRA_COLS:
+        try:
+            _e("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (_t, _c, _ddl))
+        except Exception as _e5:
+            if "Duplicate column" not in str(_e5):
+                _errors.append("补列 %s.%s: %s" % (_t, _c, _e5))
+    # ④ 全部成功才写版本(任一失败 → 不写 → 下次冷启动重试)
+    if _errors:
+        try_err('schema', 'schema 初始化未完成(%d 处失败), 不写版本, 下次冷启动重试' % len(_errors),
+                "; ".join(_errors)[:400])
+        return
+    try:
+        _e("INSERT INTO schema_state(name, version) VALUES('main', %s) "
+           "ON DUPLICATE KEY UPDATE version=GREATEST(version, VALUES(version))", [SCHEMA_VERSION])
+        try_err('schema', 'schema v%d 就绪(下次实例启动零 DDL)' % SCHEMA_VERSION, '')
+    except Exception as _e6:
+        try_err('schema', 'schema 版本写入降级', _e6)

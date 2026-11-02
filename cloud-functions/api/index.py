@@ -274,128 +274,21 @@ app.include_router(cron_router)
 app.include_router(channels_router)
 app.include_router(history_router)
 
-# ── 启动自动补索引(幂等, 免费额度 RU 优化: 看板 60 天范围查询走 (channel, ordered_at) 区间) ──
-_INDEXES = [
-    ("idx_orders_channel_ordered", "orders", "channel, ordered_at"),
-    ("idx_orders_ch_id", "orders", "channel, id"),  # 2026-10-17 订单分页 ORDER BY id DESC 走索引(曾 TopN 全表扫 428 RU/次; 百万订单线性涨——加索引只读目标行)
-    ("idx_batches_ch_wt_sku", "batches", "channel, warehouse_type, sku"),
-    # 2026-10-29 批次页 /batches: WHERE channel ORDER BY exp_date —— 原全表 3.2 万行 + filesort(实测 9.3s)
-    ("idx_batches_ch_exp", "batches", "channel, exp_date"),  # 2026-10-17 进销存批次效期摘要(channel+wh_type+sku IN)——曾全扫 26782 行 121.6 RU
-    ("idx_alerts_ch_status_created", "alerts", "channel, status, created_at"),  # 告警分组配额/列表查询(2026-09-11 体检)
-    ("idx_rules_ch_active", "rules", "channel, is_active"),  # 规则列表/评估孤儿查询(2026-09-11 体检)
-    ("idx_snapshot_ch_date", "daily_sales_snapshot", "channel, date"),  # 日销窗口查询(2026-10-08 建议页 10s→索引)
-    ("idx_snapshot_ch_date_full", "daily_sales_snapshot", "channel, date, sku, warehouse, order_count"),  # 覆盖索引(2026-10-10: 快照查询免回表——digest miss 3.5s 根治)
-]
-# 冗余索引删除(被复合索引前缀覆盖, 写放大; 幂等 IF EXISTS)
-_ADD_INDEXES = [
-    # 2026-10-29 出入库明细弹窗(按渠道+日期倒序分页)
-    ("idx_inbound_ch_date", "inbound_records", "(channel, inbound_date)"),
-    ("idx_outbound_ch_date", "outbound_records", "(channel, outbound_date)"),
-    ("idx_alerts_status_source", "alerts", "(status, source)"),  # 2026-10-16 evaluate 预载 SELECT status+source 走索引(9.8万行全扫曾慢)
-    ("idx_products_barcode_ch", "products", "(barcode, channel)"),  # 2026-10-27 订单品牌子查询(pb.barcode=o.barcode) Apply 提速——曾 per-row 无索引
-]
-
-_DROP_INDEXES = [
-    ("idx_orders_sku", "orders"),  # 被 idx_orders_sku_ordered_at(sku,ordered_at,channel) 前缀覆盖
-    ("idx_orders_order_no", "orders"),  # 2026-10-16 被 idx_orders_no_sku(order_no,sku) 唯一索引前缀覆盖——冗余——写放大 11 KV→10 KV
-    ("idx_orders_ch_status", "orders"),  # 2026-10-16 被 idx_orders_ch_ordered_at(channel,order_status,ordered_at) 前缀覆盖——冗余——10 KV→9 KV
-]
+# ── 启动 schema 初始化(2026-11-02 S2-8): 表/索引声明全部收敛到 schema_create.py, 版本门禁热路径零 DDL ──
 if os.environ.get("DB_BACKEND", "tidb") == "tidb":
     try:
+        # 2026-11-02 S2-8 版本门禁: schema_state 版本一致 → 热路径一条 SELECT、零 DDL;
+        # 版本落后/首启 → 幂等全量(建表+索引+迁移), 全部成功才写版本。声明见 schema_create.py。
+        from schema_create import ensure_schema
+        ensure_schema()
+    except Exception as _e:
+            try_err('index', 'schema 初始化降级', _e)
+
+if os.environ.get("DB_BACKEND", "tidb") == "tidb":
+    try:
+        # _exec: 迁移/补列仍走直连(2026-11-02 S2-8 拆块后补回)
         from db import execute as _exec
-        # 2026-10-17 新集群迁移: 全表 DDL 重建(按现有代码数据逻辑, 幂等——空库自动引导)
-        try:
-            from schema_create import create_all_tables
-            create_all_tables()
-        except Exception as _e:
-                try_err('index', 'schema 全表重建降级', _e)
-        for _iname, _tbl, _cols in _INDEXES:
-            try:
-                _exec("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
-            except Exception as _e:
-                    try_err('index', '静默降级', _e)
-        for _iname2, _itbl2, _icols2 in _ADD_INDEXES:
-            try:
-                _exec("ALTER TABLE `%s` ADD INDEX `%s` %s" % (_itbl2, _iname2, _icols2))
-            except Exception:
-                pass
-        for _iname, _tbl in _DROP_INDEXES:
-            try:
-                _exec("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname, _tbl))
-            except Exception as _e:
-                    try_err('index', '静默降级', _e)
-        # 共享表缓存(2026-09-09 治本: Makers 请求模式多实例, 内存缓存命中率≈0 → 聚合缓存落 TiDB 表)
-        try:
-            _exec("CREATE TABLE IF NOT EXISTS maintenance_log (`date` DATE NOT NULL, task VARCHAR(32) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(`date`, task))")
-            # 2026-11-01 指纹列(治"一天只评估一次"致看板停旧快照): details 存库存指纹「行数|最大updated_at」,
-            # 指纹变化即允许当天重评估。老表无此列 → 幂等补列(已存在时报错忽略, 与上面 _DROP_INDEXES 同风格)
-            try:
-                _exec("ALTER TABLE maintenance_log ADD COLUMN details VARCHAR(255) DEFAULT NULL")
-            except Exception:
-                pass
-            _exec("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))")
-            _exec("CREATE TABLE IF NOT EXISTS health_snapshot (`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, score INT DEFAULT 0, own_score INT DEFAULT -1, platform_score INT DEFAULT -1, bc_score INT DEFAULT -1, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date, channel))")
-            _exec("CREATE TABLE IF NOT EXISTS analysis_cache ("
-                  "`key` VARCHAR(160) PRIMARY KEY, "
-                  "value MEDIUMTEXT, "
-                  "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
-                  "tok BIGINT DEFAULT 0)")
-            # 2026-11-02 S2-1: 写入令牌列(防"重建期间被失效"的旧值覆盖墓碑); 老表幂等补列
-            try:
-                _exec("ALTER TABLE analysis_cache ADD COLUMN tok BIGINT DEFAULT 0")
-            except Exception:
-                pass
-            # 规则变更即时重算告警(2026-09-11): 脏标记单行, 线程 DELETE 抢占串行评估
-            _exec("CREATE TABLE IF NOT EXISTS eval_pending ("
-                  "`task` VARCHAR(32) PRIMARY KEY, "
-                  "updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
-            # 一次性数据迁移登记表(2026-09-15: barcode 补齐 —— INSERT IGNORE 抢注幂等; M2/M3 已移除)
-            _exec("CREATE TABLE IF NOT EXISTS migration_log (name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
-            # agg 重建失败脏标记(2026-10-25 封死补录/重建失败边界): 重建失败 → 置位 → summary 降级直查(不误用缺数据 agg); 成功 → 清位自愈
-            _exec("CREATE TABLE IF NOT EXISTS agg_dirty (id TINYINT PRIMARY KEY, ts DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
-            # 数据版本计数(2026-10-29): 写操作中央失效点递增, /health 读取 → 感知 UPDATE 类变更
-            _exec("CREATE TABLE IF NOT EXISTS data_version (id TINYINT PRIMARY KEY, v BIGINT DEFAULT 0, "
-                  "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)")
-            _exec("CREATE TABLE IF NOT EXISTS log_archives ("
-                  "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
-                  "markdown MEDIUMTEXT, `count` INT DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
-                  "PRIMARY KEY(`date`, `scope`))")
-            # 链路运行流水(2026-11-02 S1-2): 每次 cron/评估/重建跑一条, /health?detail=1 读最近一次。
-            # 目的: 让"增量重建是否生效/每日任务是否真的跑了"可被直接证明, 而不是翻日志猜。
-            # 保留期由 common.prune_quality_logs(30 天) 一并清理。
-            _exec("CREATE TABLE IF NOT EXISTS pipeline_runs ("
-                  "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
-                  "pipeline VARCHAR(64) NOT NULL, scope VARCHAR(32) NOT NULL DEFAULT 'all', "
-                  "status VARCHAR(16) NOT NULL DEFAULT 'running', "
-                  "started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME NULL, "
-                  "duration_ms INT DEFAULT 0, rows_affected INT DEFAULT 0, "
-                  "error VARCHAR(500) DEFAULT NULL, detail MEDIUMTEXT DEFAULT NULL, "
-                  "KEY idx_pipe_id (pipeline, id), KEY idx_started (started_at))")
-            # 看板提速物化表(2026-09-15): 日级订单汇总(历史区间 summary 读此替代 19 万行直查)
-            _exec("CREATE TABLE IF NOT EXISTS orders_day_agg ("
-                  "`date` DATE NOT NULL, channel VARCHAR(20) NOT NULL, order_status VARCHAR(20) NOT NULL, "
-                  "store VARCHAR(60) NOT NULL, gmv DECIMAL(14,2) DEFAULT 0, subsidy DECIMAL(14,2) DEFAULT 0, cnt INT DEFAULT 0, "
-                  "PRIMARY KEY(`date`, channel, order_status, store))")
-            # 增量重建队列(2026-11-02 S2-2): 按**业务日期**登记待重建, 而不是按导入时间/文件。
-            # 数据来自清洗页导入, 一批文件可横跨任意业务日期(补录上月/上季度), ordered_at 与
-            # "什么时候导入的"无关 —— 按导入时间推窗口, 补录的历史日期永远落不进去。
-            # 主键 (channel,date) 天然去重: 同一天反复导入只留一行, 不会重复重建。
-            _exec("CREATE TABLE IF NOT EXISTS agg_dirty_days ("
-                  "channel VARCHAR(20) NOT NULL, `date` CHAR(10) NOT NULL, "
-                  "reason VARCHAR(32) DEFAULT 'write', "
-                  "ts DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), "
-                  "PRIMARY KEY(channel, `date`))")
-            # 行级"最后变更时刻"(2026-11-02 S2-2 兜底): 写入口漏调 on_data_changed 时,
-            # 每日 sweep 用 synced_at 反查"哪些业务日期被动过", 补标记。
-            # 幂等: 列已存在报错忽略(与 maintenance_log.details 同风格)。
-            try:
-                _exec("ALTER TABLE orders ADD COLUMN synced_at DATETIME(6) "
-                      "DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)")
-            except Exception:
-                pass
-        except Exception as _e:
-                try_err('index', '静默降级', _e)
-        # ── 启动数据迁移(2026-09-15: barcode 补齐; 2026-10-10 移除 M2/M3 时间随机化——演示专用且实际场景有害)
+# ── 启动数据迁移(2026-09-15: barcode 补齐; 2026-10-10 移除 M2/M3 时间随机化——演示专用且实际场景有害)
         # 设计: 不抢注, 靠 WHERE 条件幂等(空值/0点) + 分批(5万) → 每次启动续跑, 中断下次续跑, 完成自然零行
         # 注意: SQL 内 DATE_FORMAT 的 % 必须 %% 转义(pymysql 参数化时 % 被当占位符 → 曾致迁移假成功)
         try:

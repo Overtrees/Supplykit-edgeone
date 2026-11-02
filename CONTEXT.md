@@ -162,6 +162,10 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   零改动、唯一键不占位): DELETE 先快照后删; `POST /inventory/{iid}/restore` 原样插回, 同业务键
   已重新导入则拦截; `_recalc_own_inventory` 补 deleted_at 过滤(防御)。恢复 UI 待接(接口已备)。
   见 §15.121
+- **启动 DDL 版本门禁(2026-11-02 S2-8)**: 实例冷启动原发 ~50 条幂等 DDL; 现 schema(表+索引)
+  全部收敛为 schema_create.py 声明 + `SCHEMA_VERSION` 门禁 —— 热路径**一条 SELECT、零 DDL**,
+  全量执行失败不写版本(下次重试)。以后加表/索引 = 改声明 + bump 版本, 不再写迁移检查。
+  **改 schema 必 bump `SCHEMA_VERSION`, 否则存量实例不执行新声明**。见 §15.122
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节

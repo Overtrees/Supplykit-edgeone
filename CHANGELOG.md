@@ -1,3 +1,15 @@
+## 2026-11-02: 启动 DDL 版本门禁 —— 热路径一条 SELECT, 零 DDL(S2-8)
+
+> 回归 349 通过 / 0 失败; preflight 六步全绿
+
+- 旧启动每次冷启动发 ~50 条幂等 DDL(38 建表 + 15 索引/补列); IF NOT EXISTS 在 TiDB 上仍走 schema 路径
+- 用户定案"从表源头解决": index.py 内联的 12 张运行表 + 三组索引声明全部收敛进 schema_create.py
+  (单一真源); 以后加表/索引 = 改声明 + bump SCHEMA_VERSION, 不再写迁移检查代码
+- `ensure_schema()` 版本门禁: 版本一致 → **一条 SELECT 短路, 零 DDL**; 落后/首启 → 幂等全量,
+  **全部成功才写版本**(任一失败不写, 下次冷启动重试); 并发用 GREATEST 防版本回退
+- 数据迁移(M0/M1/ext_json 补列)留 index.py(有自身标记且非 DDL); 3 条无条件补列收进门禁
+- 回归新增 5 条; 踩坑记录: 测试须同时 patch schema_create.execute(模块级绑定), 否则注入不生效
+
 ## 2026-11-02: 库存删除可恢复 —— 归档表快照(S2-7)
 
 > 回归 343 通过 / 0 失败; preflight 六步全绿

@@ -3614,3 +3614,51 @@ def _adjust_key(k):          # 四维 (sku, 69码, 仓, 仓型); 兼容旧三维
 恢复被拦时零写入; 删不存在的行只发一条探测、不删原行)。
 
 本地回归 **343 通过 / 0 失败**, preflight 六步全绿。
+
+### 15.122 启动 DDL 版本门禁: 热路径一条 SELECT, 零 DDL(2026-11-02, S2-8)
+
+#### 一、问题与方案(用户定案"从表源头解决, 避免每次迁移")
+
+旧启动每次冷启动发 **~50 条**幂等 DDL: `create_all_tables()` 的 38 条 + index.py 内联的
+三组索引(8 CREATE / 4 ALTER / 3 DROP) + 12 张运行表 DDL + 3 条幂等补列。
+`IF NOT EXISTS` 在 TiDB 上仍要走 schema 路径 —— 实例每次冷启动都白付一遍。
+
+根治方式不是"把 DDL 挪个地方", 而是**声明式 schema + 版本门禁**:
+
+```
+冷启动 → SELECT version FROM schema_state WHERE name='main'
+         ├─ version ≥ SCHEMA_VERSION → 返回(热路径: 1 条 SELECT, 0 条 DDL)
+         └─ 否则 → 幂等全量(建表+索引+迁移) → 全部成功才写版本
+```
+
+- **单一真源**: index.py 内联的 12 张运行表(maintenance_log/gmv_flows/health_snapshot/
+  analysis_cache/eval_pending/migration_log/agg_dirty/data_version/log_archives/pipeline_runs/
+  orders_day_agg/agg_dirty_days)与三组索引声明, 全部搬进 `schema_create.py` 的 `_TABLES`/
+  `_INDEXES/_ADD_INDEXES/_DROP_INDEXES`; index.py 启动段只剩一行 `ensure_schema()`。
+  以后加表/加索引 = 改声明 + bump `SCHEMA_VERSION`, 不再写"SHOW INDEX 检查 + ALTER"式迁移代码。
+- **失败不写版本**: 任一建表/索引/补列失败(重复键/列已存在除外, 与旧语义一致)→ 不写版本
+  → 下次冷启动自动重试 —— 不会带着 schema 缺口跳过。
+- **并发安全**: DDL 幂等, 版本写入 `GREATEST(version, VALUES(version))` 防回退;
+  两实例同时首跑 = 重复执行无害。
+- **数据迁移(M0/M1/补列 ext_json 等)留在 index.py**: 它们有自身 migration_log 标记且非 DDL;
+  其中 3 条无条件补列(maintenance_log.details / analysis_cache.tok / orders.synced_at)收进门禁。
+
+#### 二、效果
+
+| | 改前 | 改后 |
+|---|---|---|
+| 实例冷启动 DDL | ~50 条 | **0 条**(1 条 SELECT 短路) |
+| 首启/升级 | 同样 ~50 条 | 同样全量, 但成功后写版本 |
+| 新增一张表的操作 | 建表 DDL + (若 index.py)搬位置 | `_TABLES` 加声明 + bump 版本 |
+
+#### 三、回归
+
+新增 5 条(S2-8): 3 静态(声明收敛、版本门禁与 bump 提示、失败不写版本) + 3 动态
+(版本一致全程零写; 首启建 schema_state+全量+写版本; 注入建表失败 → 版本不落)。
+过程中修正 2 条旧断言的指源(index.py → schema_create.py, DDL 搬家所致)。
+
+**踩坑记录**: 测试只 patch `db.execute` 不够 —— `create_all_tables` 用模块顶部
+`from db import execute` 的绑定, 必须同时 patch `schema_create.execute`, 否则注入不生效
+且会向真实库发 DDL(幂等无害但掩盖了断言)。
+
+本地回归 **349 通过 / 0 失败**, preflight 六步全绿。

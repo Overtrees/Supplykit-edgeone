@@ -1098,7 +1098,11 @@ try:
     import os as _os
     _idx_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "index.py"),
                     encoding="utf-8").read()
-    check("pipeline_runs 建表语句存在", "CREATE TABLE IF NOT EXISTS pipeline_runs" in _idx_src)
+    _sc_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "schema_create.py"),
+                   encoding="utf-8").read()
+    # 2026-11-02 S2-8: 运行表 DDL 收敛到 schema_create(单一真源), index.py 只调 ensure_schema()
+    check("pipeline_runs 建表语句存在", "CREATE TABLE IF NOT EXISTS pipeline_runs" in _sc_src
+          and "ensure_schema" in _idx_src)
 
     from routes.common import track_run, last_runs
 
@@ -1299,10 +1303,10 @@ try:
     check("S2-2 回收站永久删前先取日期",
           "回收站取受影响日期" in _cr3, "cron.py")
 
-    _ix2 = open('index.py', encoding='utf-8').read()
+    _sc2 = open('schema_create.py', encoding='utf-8').read()
     check("S2-2 建 agg_dirty_days 表 + orders.synced_at 列",
-          "CREATE TABLE IF NOT EXISTS agg_dirty_days" in _ix2
-          and "synced_at DATETIME(6)" in _ix2, "index.py")
+          "CREATE TABLE IF NOT EXISTS agg_dirty_days" in _sc2
+          and '"orders", "synced_at"' in _sc2, "schema_create.py")
 
     _dm2 = open('routes/dashboard_maintain.py', encoding='utf-8').read()
     check("S2-2 每日维护跑兜底扫描",
@@ -1931,6 +1935,80 @@ try:
     _inv7.query, _inv7.one, _inv7.execute, _ac7.invalidate = _o7
 except Exception as _e20:
     check("S2-7 删除快照用例无异常", False, str(_e20)[:200])
+
+# ── S2-8: 启动 DDL 版本门禁 —— 热路径一条 SELECT, 零 DDL ────────────────────
+try:
+    import schema_create as _sc8
+    _src8 = open('schema_create.py', encoding='utf-8').read()
+    _src8b = open('index.py', encoding='utf-8').read()
+
+    check("S2-8 索引/运行表声明收敛到 schema_create(index.py 不再内联 DDL)",
+          "_ADD_INDEXES" in _src8 and "CREATE TABLE IF NOT EXISTS gmv_flows" in _src8
+          and "_ADD_INDEXES" not in _src8b
+          and "CREATE TABLE IF NOT EXISTS analysis_cache" not in _src8b, "index.py")
+    check("S2-8 版本门禁存在且版本号显式声明(bump 提示)",
+          "SCHEMA_VERSION = " in _src8 and "_ver >= SCHEMA_VERSION" in _src8
+          and "GREATEST(version, VALUES(version))" in _src8, "schema_create.py")
+    check("S2-8 失败不写版本(缺口不会跳过)",
+          "if _errors:" in _src8 and "不写版本" in _src8, "schema_create.py")
+
+    # 动态①: 版本一致 → 只发 1 条 SELECT, 零 DDL/零写入
+    _oq8, _oe8 = _sc8.execute, None
+    _hits8 = {"q": 0, "e": []}
+    _sc8.query = lambda sql, p=None: (_hits8.__setitem__("q", _hits8["q"] + 1), [])
+    _sc8_err = None
+    import db as _db8
+    _oq8db, _oe8db, _oo8db = _db8.query, _db8.execute, _db8.one
+    _db8.one = lambda sql, p=None: {"version": _sc8.SCHEMA_VERSION}
+    _db8.execute = lambda sql, p=None: _hits8["e"].append(str(sql)) or 1
+    try:
+        _sc8.ensure_schema()
+    finally:
+        _db8.query, _db8.execute, _db8.one = _oq8db, _oe8db, _oo8db
+    check("S2-8 版本一致: 全程零写(仅一次版本探测)",
+          not _hits8["e"], "执行 %d 条: %s" % (len(_hits8["e"]), _hits8["e"][:2]))
+
+    # 动态②: 首启(表不存在) → 建表+全量+写版本; 且失败不写版本
+    # 注意: create_all_tables 用模块顶部 `from db import execute` 绑定 —— 必须同时 patch
+    # schema_create.execute, 否则注入不生效且会对真实库发 DDL(2026-11-02 实测踩坑)
+    _state8 = {"ver": None, "tables": False}
+    def _one8(sql, p=None):
+        if "schema_state" in str(sql):
+            return {"version": _state8["ver"]} if _state8["ver"] is not None else None
+        return None
+    def _ex8(sql, p=None):
+        s8 = str(sql)
+        if "CREATE TABLE IF NOT EXISTS schema_state" in s8:
+            _state8["tables"] = True
+        if "INSERT INTO schema_state" in s8:
+            _state8["ver"] = p[0] if p else 0
+        return 1
+    _osc_q, _osc_e = _sc8.query, _sc8.execute
+    _db8.one, _db8.execute = _one8, _ex8
+    _sc8.query, _sc8.execute = (lambda sql, p=None: []), _ex8
+    _oq8b = _db8.query
+    _db8.query = lambda sql, p=None: []
+    try:
+        _state8["ver"] = None
+        _sc8.ensure_schema()
+        _first_ok = _state8["ver"] == _sc8.SCHEMA_VERSION
+        # 失败注入: 让某张表建不出来(execute 对业务表抛错) → 不写版本
+        _state8["ver"] = None
+        def _ex8f(sql, p=None):
+            if "CREATE TABLE IF NOT EXISTS orders" in str(sql):
+                raise RuntimeError("boom")
+            return _ex8(sql, p)
+        _db8.execute = _ex8f
+        _sc8.execute = _ex8f
+        _sc8.ensure_schema()
+        _fail_no_write = _state8["ver"] is None
+    finally:
+        _db8.query, _db8.execute, _db8.one = _oq8b, _oe8db, _oo8db
+        _sc8.query, _sc8.execute = _osc_q, _osc_e
+    check("S2-8 首启: 建 schema_state + 全量执行 + 写入版本", _first_ok, "ver=%r" % _state8.get("ver"))
+    check("S2-8 任一建表失败: 不写版本(下次冷启动重试)", _fail_no_write, "ver=%r" % _state8.get("ver"))
+except Exception as _e21:
+    check("S2-8 版本门禁用例无异常", False, str(_e21)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
