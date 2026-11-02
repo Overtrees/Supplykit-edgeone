@@ -98,6 +98,66 @@ const initAppStore = (set, get) => ({
   syncOld: false,
   setSyncOld: (v: boolean) => set({ syncOld: v }),
   sidebarOpen: false,
+  // ── 历史归档页共享状态(2026-11-02 S2-9: 时间控件收敛到锤子菜单, 页面与锤子同源) ──
+  // 与看板 setHammerDashPeriod 同思路: 落 localStorage(按渠道), 切页面/刷新都不丢。
+  // 不放组件本地的原因见 HammerHistory 头注释 —— 锤子面板卸载即丢, 页面拿不到值。
+  histPreset: safeGet('c_hist_preset_' + (safeGet('c_channel') || 'jd')) || '30d',
+  histStart: (() => {
+    const _c = safeGet('c_channel') || 'jd'
+    const _s = safeGet('c_hist_start_' + _c) || ''
+    if (_s) return _s
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - 29)
+    return d.toISOString().slice(0, 10)
+  })(),
+  histEnd: (() => {
+    const _c = safeGet('c_channel') || 'jd'
+    return safeGet('c_hist_end_' + _c) || new Date().toISOString().slice(0, 10)
+  })(),
+  histBy: (safeGet('c_hist_by_' + (safeGet('c_channel') || 'jd')) as 'day' | 'month') || 'day',
+  histShowCustom: false,
+  setHistShowCustom: v => set({ histShowCustom: v }),
+  // 预设: 天数 > 0 时同步回写 start/end(否则页面拿到新 preset 却用旧区间 → 显示与数据不一致)
+  setHistPreset: p => {
+    const ch = get().channel
+    const days = p === '7d' ? 7 : p === '30d' ? 30 : p === '90d' ? 90 : 0
+    let start = get().histStart
+    let end = get().histEnd
+    if (days > 0) {
+      const d = new Date()
+      d.setUTCDate(d.getUTCDate() - (days - 1))
+      start = d.toISOString().slice(0, 10)
+      end = new Date().toISOString().slice(0, 10)
+    }
+    try {
+      localStorage.setItem('c_hist_preset_' + ch, p)
+      if (days > 0) {
+        localStorage.setItem('c_hist_start_' + ch, start)
+        localStorage.setItem('c_hist_end_' + ch, end)
+      }
+    } catch {}
+    set({ histPreset: p, histStart: start, histEnd: end })
+  },
+  // 自定义日期: 逐字段改(不强制切 custom, 由"确认"决定是否生效), commit=true 时落库并切 custom
+  setHistRange: (start, end, commit) => {
+    const ch = get().channel
+    if (commit) {
+      try {
+        localStorage.setItem('c_hist_start_' + ch, start)
+        localStorage.setItem('c_hist_end_' + ch, end)
+        localStorage.setItem('c_hist_preset_' + ch, 'custom')
+      } catch {}
+      set({ histStart: start, histEnd: end, histPreset: 'custom' })
+    } else {
+      set({ histStart: start, histEnd: end })
+    }
+  },
+  setHistBy: b => {
+    try {
+      localStorage.setItem('c_hist_by_' + get().channel, b)
+    } catch {}
+    set({ histBy: b })
+  },
   setSidebarOpen: v => set({ sidebarOpen: v }),
   hammerPanel: null,
   // 回收页共享状态(2026-09-15: 页面与锤子菜单联动)——selected 计数 + 忙碌标志
@@ -106,6 +166,12 @@ const initAppStore = (set, get) => ({
   setRecycleSel: sel => set({ recycleSel: sel }),
   setRecycleBusy: b => set({ recycleBusy: b }),
   setHammerPanel: panel => set({ hammerPanel: panel }),
+  // 2026-11-02 S2-9: 页面 -> 锤子菜单的"请求打开"信号。
+  // 锤子菜单的 show/closing 是 App 组件内的 useState(带 220ms 出场动画), 页面拿不到;
+  // 用自增计数当信号: 页面 bump 一次, App 的 useEffect 监听值变化后调 openHammerMenu()。
+  // 递增而非布尔 —— 连续点两次"调整"也能各自触发一次(布尔第二次没变化就不触发了)。
+  hammerOpenReq: 0,
+  requestHammerOpen: () => set(s => ({ hammerOpenReq: s.hammerOpenReq + 1 })),
   hammerSearch: '',
   setHammerSearch: text => set({ hammerSearch: text }),
   hammerData: safeGetJSON('c_hammer_data_' + (safeGet('c_channel') || 'jd')) || {},
@@ -244,6 +310,19 @@ const initAppStore = (set, get) => ({
       hammerReplenMode: safeGet('c_replen_mode_' + ch) || (ch === 'jd' ? 'bbcc' : 'traditional'),
       hammerRulesMode: safeGet('c_replen_mode_' + ch) || (ch === 'jd' ? 'bbcc' : 'traditional'),
       hammerCleansingChannel: ch,
+      // 2026-11-02 S2-9: 历史归档区间也按渠道恢复(与看板周期同规则), 否则切渠道后
+      // 页面沿用了上一个渠道的日期区间 —— 用户会以为数据错
+      histPreset: safeGet('c_hist_preset_' + ch) || '30d',
+      histStart: (() => {
+        const _s = safeGet('c_hist_start_' + ch) || ''
+        if (_s) return _s
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() - 29)
+        return d.toISOString().slice(0, 10)
+      })(),
+      histEnd: safeGet('c_hist_end_' + ch) || new Date().toISOString().slice(0, 10),
+      histBy: (safeGet('c_hist_by_' + ch) as 'day' | 'month') || 'day',
+      histShowCustom: false,
       prodBatch: false,
       prodSelIds: [],
       batchStateMap: {},

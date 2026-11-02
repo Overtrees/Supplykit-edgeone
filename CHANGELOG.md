@@ -1,3 +1,16 @@
+## 2026-11-02: 历史归档时间控件收敛到锤子菜单(交互联动)
+
+> preflight 六步全绿; Playwright 端到端实测(真实登录+线上 API)
+
+- 布局照抄看板页锤子菜单: hammer-header → 区间摘要 → hammer-segmented(近7/30/90天/自定义)
+  → hammer-panel(自定义日期+确认) → hammer-segmented(按日/按月) → hammer-btn-row(打开归档页)
+- 状态全部落 store(histPreset/histStart/histEnd/histBy, 按渠道存 localStorage):
+  锤子面板与页面同源读写, 关面板即按新条件重查; 自定义日期为组件本地草稿,
+  点「确认」才提交(避免每选一天就重查一次, 且取消不污染已生效区间)
+- 页面卡片内控件改为只读回显 pill + 「调整」按钮(经 store hammerOpenReq 信号打开锤子面板,
+  自增计数保证连续点击每次都触发); 非法区间(起>止)确认按钮禁用并提示
+- 切渠道时按渠道恢复历史区间(与看板周期同规则), 页面 daysAgo/today 死代码删除
+
 ## 2026-11-02: 渠道管理页样式上提 + CI 审计修复(S2-9 收尾)
 
 > 回归 355 通过 / 0 失败; 审计 11 通过 / 0 失败; preflight 六步全绿

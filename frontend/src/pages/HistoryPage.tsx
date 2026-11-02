@@ -20,13 +20,15 @@ import { useAppStore } from '../store/useAppStore'
  * 样式一律走 styles.css 的 .hist-* 类(2026-11-02 用户要求): 内联 style 会让同一个
  * "卡片内小标题"在四个卡片里各有一套字号/间距, 改一处漏三处。
  */
-const dstr = (d: Date) => d.toISOString().slice(0, 10)
-const daysAgo = (n: number) => {
-  const d = new Date()
-  d.setUTCDate(d.getUTCDate() - n)
-  return dstr(d)
+// 区间预设的中文名(与 HammerHistory 的 PRESETS 保持一致; 页面只做回显不做选择)
+const PRESET_LABEL: Record<string, string> = {
+  '7d': '近 7 天',
+  '30d': '近 30 天',
+  '90d': '近 90 天',
+  custom: '自定义',
 }
-const today = () => dstr(new Date())
+// 日期区间默认值/预设换算已随控件一起移入 store(useAppStore 的 histStart/histEnd/
+// setHistPreset) —— 不再放在页面侧, 否则锤子菜单与页面各算一份, 极易不一致。
 
 // 金额一律两位小数: 原实现 <1万走 toLocaleString 默认 0 位, 会显示 64046640.8 这类
 // "只有一位小数"的值, 与"万/亿"分支(两位)不一致, 同一列上下两行精度不同。
@@ -52,13 +54,6 @@ const fmtInt = (n: number): string => {
   return v.toLocaleString('zh-CN')
 }
 
-const PRESETS = [
-  { id: '7d', label: '近 7 天', days: 7 },
-  { id: '30d', label: '近 30 天', days: 30 },
-  { id: '90d', label: '近 90 天', days: 90 },
-  { id: 'custom', label: '自定义', days: 0 },
-]
-
 /**
  * 来源结构兼容层。
  *
@@ -77,10 +72,12 @@ const readSeg = (v: any): { from: string; to: string; days: number } | null => {
 
 export default function HistoryPage() {
   const channel = useAppStore(s => s.channel)
-  const [preset, setPreset] = useState('30d')
-  const [start, setStart] = useState(() => daysAgo(29))
-  const [end, setEnd] = useState(() => today())
-  const [by, setBy] = useState<'day' | 'month'>('day')
+  // 2026-11-02 S2-9: 时间区间/粒度改由锤子菜单(HammerHistory)控制, 页面只读 store。
+  //   preset/start/end/by 不再本地 useState —— 锤子面板卸载本地态就没了, 页面无法联动。
+  const preset = useAppStore(s => s.histPreset)
+  const start = useAppStore(s => s.histStart)
+  const end = useAppStore(s => s.histEnd)
+  const by = useAppStore(s => s.histBy)
   const [topBy, setTopBy] = useState<'sku' | 'store'>('sku')
   const [cov, setCov] = useState<any>(null)
   const [sum, setSum] = useState<any>(null)
@@ -117,14 +114,6 @@ export default function HistoryPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, start, end, by, topBy])
-
-  const pickPreset = (id: string, days: number) => {
-    setPreset(id)
-    if (days) {
-      setStart(daysAgo(days - 1))
-      setEnd(today())
-    }
-  }
 
   const series = sum?.series || []
   const totals = sum?.totals || {}
@@ -191,48 +180,26 @@ export default function HistoryPage() {
           {cov?.archive?.rows ? ` · ${fmtInt(cov.archive.rows)} 行` : ''}
         </div>
 
+        {/* 2026-11-02 S2-9: 区间与粒度控件已收敛到锤子菜单(HammerHistory) ——
+            页面只回显当前生效的条件, 并提供跳转按钮, 避免同一开关两处出现、两处不同步 */}
         <div className="hist-row">
-          {PRESETS.map(p => (
-            <span
-              key={p.id}
-              className={'pill hist-pill ' + (preset === p.id ? 'info' : 'neutral')}
-              onClick={() => pickPreset(p.id, p.days)}
-            >
-              {p.label}
-            </span>
-          ))}
-        </div>
-
-        <div className="hist-row">
+          <span className="hist-row-label">区间</span>
+          <span className="pill hist-pill info">{PRESET_LABEL[preset] || preset}</span>
           <span className="hist-row-label">粒度</span>
-          {(['day', 'month'] as const).map(k => (
-            <span
-              key={k}
-              className={'pill hist-pill ' + (by === k ? 'info' : 'neutral')}
-              onClick={() => setBy(k)}
-            >
-              {k === 'day' ? '按日' : '按月'}
-            </span>
-          ))}
+          <span className="pill hist-pill info">{by === 'day' ? '按日' : '按月'}</span>
+          <button
+            type="button"
+            className="hist-adjust"
+            onClick={() => {
+              // 走 store 信号: 锤子菜单的 show state 在 App 内, 页面拿不到(见 requestHammerOpen 注释)
+              try {
+                useAppStore.getState().requestHammerOpen()
+              } catch {}
+            }}
+          >
+            调整
+          </button>
         </div>
-
-        {preset === 'custom' && (
-          <div className="hist-row">
-            <input
-              type="date"
-              className="hist-date"
-              value={start}
-              onChange={e => setStart(e.target.value)}
-            />
-            <span className="hist-row-label">~</span>
-            <input
-              type="date"
-              className="hist-date"
-              value={end}
-              onChange={e => setEnd(e.target.value)}
-            />
-          </div>
-        )}
 
         <div className="hist-meta">
           <span>
