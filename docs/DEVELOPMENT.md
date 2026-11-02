@@ -3346,3 +3346,74 @@ gone = 日销表里的 SKU - live     # 差集 = 孤儿 → 分片 DELETE
   恰好 1 个孤儿(`ZZ-S21-SKU2`), other 渠道 0 个 —— 判据没有误伤。
 
 回归再补 6 条(S2-1c): 含"孤儿 SKU 被删、存活 SKU 不动"的动态用例。
+
+### 15.118 自有仓「采购在途」口径定案 + 组合键对齐(2026-11-02)
+
+#### 一、口径由用户定: 以库存导入(自有仓)填写的为准
+
+`own_health` 的"调拨覆盖不足"要算**自有仓能发出多少**:
+
+```
+可发 = 自有仓可用 + 采购在途
+```
+
+旧实现里"采购在途"叠了两份: ①`inventory`(warehouse_type='own') 的 `in_transit_qty`,
+②`purchase_orders` 的 `SUM(qty - received_qty)`。第②份从来没出过数 —— `purchase_orders`
+只有 `suggested_qty / actual_qty / arrival_date / status`, 没有 `qty`/`received_qty`,
+每次调用都 `Unknown column 'qty'` 被 try 吞掉、按 0 处理。
+
+用户定案: **采购在途 = 库存导入(导入类型=库存, 自有仓维度)里填写的 `in_transit_qty`**。
+理由是一条链只认一个权威源 —— 导入值已经是人工核对过的实况, 再从采购单推一遍就是双计
+(同一批货既在在途字段里, 又在采购单里)。于是删掉第②份, 只认 ①, 文案改
+`(在仓 %d/采购在途 %d)`。
+
+#### 二、组合键: 三处没对齐, 其中一处造成 20 条误报
+
+`inventory` 的业务键是**五维**: `uq_inventory_biz(sku, barcode, warehouse, channel, warehouse_type)`
+(导入侧 upsert 用 `sku|warehouse|barcode` 三键 + 渠道, 仓型由"导入类型"派生)。而旧实现:
+
+| 位置 | 旧写法 | 后果 |
+|---|---|---|
+| 自有仓聚合 | `GROUP BY sku, barcode, warehouse` 后又压成 `own_by_sku[sku]` | 多码 SKU 的可用量被合并、仓名只留第一个; 告警指向的码/仓与实际行不符 |
+| 批次效期 | `JOIN inventory inv ON inv.sku=b.sku AND inv.channel=b.channel AND inv.warehouse_type='own'` | JOIN 只锁到 SKU,**B 仓/platform 仓的批次也算进自有仓** → 取"最早到期"取到别的仓 → 误报"自有仓批次已过期, 待报损" |
+| 告警行的码 | `bc = products.barcode or 行码` | 档案码是单值列, 多码时会把 A 码的告警记到 B 码名下 |
+
+批次那条的实证(线上 `SKU-0442-J`): 自有仓(集货仓)那批 `exp_date` 是**空**(不判效期),
+而 JOIN 把 B 仓 2026-10-17 的过期批次算了进来 → 报"自有仓 491 件待报损"。
+旧口径 51 条效期里 **20 条属于这一类**。
+
+改法(统一到"只降码、不跨仓"):
+
+- 自有仓主键 `(sku, 69码, 仓)`, 直接作为循环粒度; 输出行的 `barcode/warehouse` 用真实行值。
+- 日销按同码取: `pick_ds(_bc_ds, _agg_ds, sku, bc, WH_C)` —— ①该码行 ②该 SKU 合计行
+  (只有"码"可降级, 这是项目既定规则, 收敛在 `biz.sales.pick_ds`)。
+- 批次 `_pick_batch(sku, bc, wh)`: ①同码同仓 ②同仓(码缺失) ③该 SKU 最早。
+  批次查询改成直接查 `batches`(own 仓) 而不 JOIN `inventory`, 从根上不再跨码跨仓。
+
+#### 三、数字变化(线上 jd, 同一份数据)
+
+| 指标 | 旧 | 新 | 说明 |
+|---|---|---|---|
+| total | 110 | 89 | |
+| 效期风险 | 51 | **31** | 20 条是别的仓/别的码的批次, 属误报 |
+| 积压 | 52 | 51 | 1 条因按码取日销后不再超阈值 |
+| 调拨缺口 | 7 | 7 | 在途口径未变(仍是导入的 in_transit_qty), 金额不变 |
+
+校验: 新口径 31 条效期**全部**能对到"同 SKU + 同码 + 同仓 + warehouse_type='own' 且
+exp_date 非空"的批次行(0 条无对应); 反向验证"仅靠在途才够"的 2 个 SKU
+(`avail < need ≤ avail+在途`) **都没有**误报缺口 —— 在途确实进了 `can`。
+
+#### 四、顺带压了一次往返(8.8s → 7.2s)
+
+分段计时显示大头是**往返次数**(单次 ~0.4s), 不是数据量:
+
+- 日销原分两次取(合计行 1.48s + 按码行 1.28s) → `get_sku_sales_stats` 新增
+  `barcode="all"`(不加码过滤), 一次取回在内存分流, 省一次往返。
+- `products` / `batches` 分片 300 → 800(2006 个 SKU: 7 次 → 3 次), 各省 ~1.7s。
+
+留了 `_adjust_inventory` 一处**未改**: 它的 `deltas` 键是 `(sku, warehouse, warehouse_type)`,
+缺 69码, 多码 SKU 会命中错行(`_cur_map` 后者覆盖前者)。当前**无调用点**(增量扣减走
+`_recalc_own_inventory`, 那里是严格按码匹配的), 故只登记不动 —— 将来启用前必须先补码维度。
+
+回归新增 8 条(S2-1d): 含两条动态断言 —— ①`在仓10+在途5` 时缺 `需求-15` 且文案带"采购在途 5";
+②`在仓70+在途5` 时不报缺口。

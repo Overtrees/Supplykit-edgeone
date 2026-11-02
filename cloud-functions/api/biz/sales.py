@@ -694,6 +694,11 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         elif barcode == "*":
             # 2026-10-29 批量读全部按码行(断货/健康一次取全, 避免逐码往返)
             where += " AND COALESCE(barcode,'')!=''"
+        elif barcode == "all":
+            # 2026-11-02 一次取"合计行 + 全部按码行"(不加码过滤):
+            #   消费方既要合计(无码行/该码无记录时降级)又要按码, 分两次查是两次往返(实测各 ~1.3s,
+            #   数据量只差一倍但延迟是往返主导)。调用方按行的 barcode 自行分流。
+            pass
         else:
             where += " AND COALESCE(barcode,'')=%s"
             params += [str(barcode)]

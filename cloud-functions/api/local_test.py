@@ -1614,5 +1614,80 @@ try:
 except Exception as _e16:
     check("S2-1c 孤儿行用例无异常", False, str(_e16)[:200])
 
+# ── 2026-11-02 S2-1d: 自有仓健康 —— 采购在途取导入值 + 组合键对齐 ──────────
+# 用户定案: "采购在途以导入类型库存自有仓维度, 导入填写的为准"。
+#   现状: own_health 里另有一段 purchase_orders 推算(SUM(qty-received_qty)),
+#   而该表只有 suggested_qty/actual_qty/arrival_date —— 每次 Unknown column, 恒按 0,
+#   且与 inventory.in_transit_qty 语义重复(导入值已是权威)。→ 删掉, 只认导入。
+# 组合键: inventory 业务键是 sku+barcode+warehouse+channel+warehouse_type 五维,
+#   而 own_health 原来压扁到 SKU、批次 JOIN 只按 sku+channel —— 会拿别的码/别的仓的批次
+#   报效期(线上 51 条里 20 条是 platform/B 仓的批次, 自有仓那批根本没填效期)。
+try:
+    _oh7 = open('routes/dashboard_own_health.py', encoding='utf-8').read()
+    check("S2-1d 采购在途不再从 purchase_orders 反推(字段不存在, 恒 0 且重复计)",
+          "FROM purchase_orders" not in _oh7, "dashboard_own_health.py")
+    check("S2-1d 采购在途取库存导入的自有仓 in_transit_qty",
+          "SUM(IFNULL(in_transit_qty,0)) AS transit" in _oh7
+          and "warehouse_type='own'" in _oh7, "dashboard_own_health.py")
+    check("S2-1d 自有仓按 sku×69码×仓 聚合(与 inventory 业务键同粒度)",
+          "GROUP BY sku, IFNULL(barcode,''), IFNULL(warehouse,'')" in _oh7
+          and "_k = (sku," in _oh7, "dashboard_own_health.py")
+    check("S2-1d 批次效期不再 JOIN inventory 跨码跨仓(只按 own 仓批次自身维度)",
+          "JOIN inventory inv ON inv.sku=b.sku" not in _oh7
+          and "warehouse_type='own' \"\n" in _oh7, "dashboard_own_health.py")
+    check("S2-1d 批次取值逐级降级: 同码同仓 → 同仓 → 该 SKU 最早",
+          "def _pick_batch" in _oh7 and "_pick_batch(sku, bc, wh_raw)" in _oh7,
+          "dashboard_own_health.py")
+    check("S2-1d 日销按码取值走 pick_ds(单一真源, 只有码可降级)",
+          "pick_ds(_bc_ds, _agg_ds, sku, bc, WH_C)" in _oh7, "dashboard_own_health.py")
+    check("S2-1d 日销一次取合计+按码(分两次查只是多一次往返)",
+          'barcode="all"' in _oh7 and 'barcode == "all"' in open('biz/sales.py', encoding='utf-8').read(),
+          "sales.py")
+
+    # 动态: 桩掉 query/get_sku_sales_stats, 断言 ①在途进 can ②缺口数值 ③在途够则不报
+    import db as _db7
+    from biz import sales as _bs7
+    from routes import dashboard_own_health as _ohmod7
+    _o7 = (_ohmod7.query, _ohmod7.one, _bs7.get_sku_sales_stats)
+    _state7 = {"avail": 10, "transit": 5}
+
+    def _fq7(sql, params=None):
+        if "FROM inventory" in sql and "warehouse_type='own'" in sql:
+            return [{"sku": "SKU-A", "barcode": "BC-A", "warehouse": "集货仓",
+                     "avail": _state7["avail"], "transit": _state7["transit"]}]
+        if "FROM products" in sql:
+            return [{"sku": "SKU-A", "product_name": "测试A", "barcode": "BC-A",
+                     "supplier_code": "", "expiry_managed": "no"}]
+        return []
+
+    _bs7.get_sku_sales_stats = lambda *a, **k: {
+        "SKU-A|BC-A|__C__": {"sku": "SKU-A", "barcode": "BC-A", "warehouse": "__C__",
+                             "ds7": 12, "ds14": 12, "ds28": 12}}
+    _ohmod7.query = _fq7
+    _ohmod7.one = lambda sql, params=None: {}
+    try:
+        _r7 = _ohmod7.own_health("jd", full=1)
+        _gap7 = [x for x in _r7["items"] if x["alert_type"] == "own_transfer_gap"]
+        _state7["avail"], _state7["transit"] = 70, 5
+        _r7b = _ohmod7.own_health("jd", full=1)
+        _gap7b = [x for x in _r7b["items"] if x["alert_type"] == "own_transfer_gap"]
+    finally:
+        _ohmod7.query, _ohmod7.one, _bs7.get_sku_sales_stats = _o7
+
+    _need7 = round(12 * float((_r7.get("limits") or {}).get("b2c_days") or 6))
+    check("S2-1d 在仓+采购在途一起算可发(缺 = 需求 - 10 - 5)",
+          len(_gap7) == 1
+          and int(_gap7[0]["gap_qty"]) == _need7 - 10 - 5
+          and int(_gap7[0]["need_qty"]) == _need7
+          and int(_gap7[0]["available_qty"]) == 10
+          and "采购在途 5" in _gap7[0]["description"], str(_gap7[:1])[:240])
+    check("S2-1d 在途够则不报缺口(70+5>=72)",
+          len(_gap7b) == 0, str(_gap7b[:1])[:200])
+    check("S2-1d 告警行带真实码与仓(不再用档案码顶替)",
+          _gap7 and _gap7[0].get("barcode") == "BC-A" and _gap7[0].get("warehouse") == "集货仓",
+          str(_gap7[:1])[:200])
+except Exception as _e17:
+    check("S2-1d 自有仓在途用例无异常", False, str(_e17)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

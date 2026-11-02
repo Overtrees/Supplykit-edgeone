@@ -68,7 +68,7 @@ def own_health(channel, full: int = 0, limit: int = 10):
       limits: {overstock_days, expiry_buffer_days, ...}   # 回传生效阈值(前端展示口径)
     }
     """
-    from biz.sales import get_sku_sales_stats, WH_C, rolling_predict
+    from biz.sales import get_sku_sales_stats, WH_C, rolling_predict, pick_ds
 
     cfg = _cfg(channel)
     # 阈值(可被规则 params 覆盖): 积压天数 / 效期缓冲天数 / 下游覆盖要求倍数
@@ -91,37 +91,37 @@ def own_health(channel, full: int = 0, limit: int = 10):
     if b2c_days <= 0:
         b2c_days = 3.0
 
-    # ── 自有仓库存(逐 SKU×仓 汇总; own 类型仓可能多行/多批次) ──
+    # ── 自有仓库存(逐 SKU×69码×仓; own 仓可能多批次多行) ──
+    # 键 = (sku, 69码, 仓) —— 与 inventory 的业务键同粒度(uq_inventory_biz: sku+barcode+
+    #   warehouse+channel+warehouse_type)。**不再压扁到 SKU**: 压扁后多码 SKU 的可用量被合并、
+    #   仓名只留第一个, 告警指向的码/仓与实际行对不上(线上自有仓有 6 个 SKU 多码)。
+    # 在途口径(2026-11-02 用户定案): **采购在途 = 库存导入(自有仓维度)填写的 in_transit_qty**,
+    #   即这里 SUM 出来的 transit。不再从 purchase_orders 反推 —— 那张表没有 qty/received_qty
+    #   列(每次查询 Unknown column, 恒按 0 算), 且导入值已是权威, 再推一遍就是双计。
     own = query(
-        "SELECT sku, IFNULL(barcode,'') AS barcode, warehouse, "
+        "SELECT sku, IFNULL(barcode,'') AS barcode, IFNULL(warehouse,'') AS warehouse, "
         "SUM(IFNULL(available_qty,0)) AS avail, "
-        "SUM(IFNULL(in_transit_qty,0)) AS transit, "
-        "MIN(IFNULL(warehouse,'')) AS wh_min "
+        "SUM(IFNULL(in_transit_qty,0)) AS transit "
         "FROM inventory WHERE channel=%s AND warehouse_type='own' "
-        "GROUP BY sku, IFNULL(barcode,''), warehouse", [channel])
-    own_by_sku = {}
+        "GROUP BY sku, IFNULL(barcode,''), IFNULL(warehouse,'')", [channel])
+    own_rows = {}
     for r in own:
         sku = str(r.get("sku") or "")
         if not sku:
             continue
-        st = own_by_sku.setdefault(sku, {"avail": 0, "transit": 0, "wh": "", "barcode": ""})
-        st["avail"] += int(r.get("avail") or 0)
-        st["transit"] += int(r.get("transit") or 0)
-        if not st["wh"]:
-            st["wh"] = str(r.get("warehouse") or "")
-        if not st["barcode"]:
-            st["barcode"] = str(r.get("barcode") or "")
-    if not own_by_sku:
+        _k = (sku, str(r.get("barcode") or ""), str(r.get("warehouse") or ""))
+        own_rows[_k] = {"avail": int(r.get("avail") or 0), "transit": int(r.get("transit") or 0)}
+    if not own_rows:
         return {"items": [], "total": 0, "transferGap": 0, "overstock": 0, "expiryRisk": 0,
                 "critical": 0, "warning": 0,
                 "limits": {"overstock_days": overstock_days,
                            "expiry_buffer_days": expiry_buffer_days,
                            "b2c_days": b2c_days}}
 
-    skus = list(own_by_sku.keys())
+    skus = list({k[0] for k in own_rows})
     pmap = {}
-    for i in range(0, len(skus), 300):
-        chunk = skus[i:i + 300]
+    for i in range(0, len(skus), 800):
+        chunk = skus[i:i + 800]
         ph = ",".join(["%s"] * len(chunk))
         for r in query(
                 "SELECT sku, product_name, barcode, supplier_code, IFNULL(expiry_managed,'') AS expiry_managed "
@@ -130,28 +130,26 @@ def own_health(channel, full: int = 0, limit: int = 10):
             pmap[str(r.get("sku") or "")] = r
 
     # ── 下游(平台仓)日销 —— 自有仓的"消耗"= 调拨给平台仓的量 ──
-    ds_map = {}
+    # 键与库存行同粒度: ①该 69码(平台仓 __C__ 的按码行) ②该 SKU 合计码(无码行/该码无记录时)
+    #   取值降级规则走 biz.sales.pick_ds(单一真源: 只有"码"可降级, 维度不降级)。
+    #   注意: 空码行必须读合计行(barcode=''), 不能拿档案码去借该码的销量。
+    #   一次取"合计行 + 按码行"(barcode="all"): 分两次查只是多一次往返(实测 1.5s vs 2.8s)。
+    _bc_ds, _agg_ds = {}, {}
     try:
-        rows = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}
+        rows = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all") or {}
         for _k, r in rows.items():
-            sku = str(r.get("sku") or "")
-            ds = rolling_predict(float(r.get("ds7") or 0), float(r.get("ds14") or 0),
-                                 float(r.get("ds28") or 0))
-            if sku and ds > 0:
-                ds_map[sku] = ds
+            _s = str(r.get("sku") or "")
+            if not _s:
+                continue
+            _ds = rolling_predict(float(r.get("ds7") or 0), float(r.get("ds14") or 0),
+                                  float(r.get("ds28") or 0))
+            _bc = str(r.get("barcode") or "")
+            if _bc:
+                _bc_ds[(_s, _bc, WH_C)] = _ds
+            else:
+                _agg_ds[(_s, WH_C)] = _ds
     except Exception as _e:
         try_err("own_health", "下游日销读取降级(积压/覆盖判定将不出数)", _e)
-
-    # ── 采购在途(供应商已发未到) —— 覆盖缺口时可抵扣 ──
-    po_transit = {}
-    try:
-        for r in query(
-                "SELECT sku, IFNULL(SUM(IFNULL(qty,0)-IFNULL(received_qty,0)),0) AS t "
-                "FROM purchase_orders WHERE channel=%s AND status IN ('pending','in_transit','partial') "
-                "GROUP BY sku", [channel]):
-            po_transit[str(r.get("sku") or "")] = int(r.get("t") or 0)
-    except Exception as _e:
-        try_err("own_health", "采购在途读取降级(按 0 处理)", _e)
 
     # ── 自有仓批次效期(仅 expiry_managed 管效期的品类) ──
     # 注意: products.expiry_managed 是 **字符串 'yes'/'no'**(实测 874 yes / 126 no),
@@ -162,40 +160,54 @@ def own_health(channel, full: int = 0, limit: int = 10):
                     if str((pmap.get(s) or {}).get("expiry_managed") or "").strip().lower() in _yes]
     if _expiry_skus:
         try:
-            for i in range(0, len(_expiry_skus), 300):
-                chunk = _expiry_skus[i:i + 300]
+            for i in range(0, len(_expiry_skus), 800):
+                chunk = _expiry_skus[i:i + 800]
                 ph = ",".join(["%s"] * len(chunk))
                 # 注意: batches 表**无 batch_no 列**(实测字段: id/sku/warehouse/warehouse_type/
                 #   channel/prod_date/exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
                 for r in query(
-                        "SELECT b.id AS batch_id, b.sku, b.warehouse, b.exp_date, IFNULL(b.qty,0) AS qty "
-                        "FROM batches b JOIN inventory inv ON inv.sku=b.sku AND inv.channel=b.channel "
-                        "WHERE b.channel=%s AND inv.warehouse_type='own' "
-                        "AND b.exp_date IS NOT NULL AND b.exp_date<>'' "
-                        "AND b.sku IN (" + ph + ") ORDER BY b.exp_date ASC", [channel] + chunk):
-                    sku = str(r.get("sku") or "")
-                    if sku not in exp_map:  # 最早批次(已按 exp_date 升序)
-                        exp_map[sku] = r
+                        "SELECT id AS batch_id, sku, IFNULL(barcode,'') AS barcode, "
+                        "IFNULL(warehouse,'') AS warehouse, exp_date, IFNULL(qty,0) AS qty "
+                        "FROM batches WHERE channel=%s AND warehouse_type='own' "
+                        "AND exp_date IS NOT NULL AND exp_date<>'' "
+                        "AND sku IN (" + ph + ") ORDER BY exp_date ASC", [channel] + chunk):
+                    # 2026-11-02 键对齐: 原实现 JOIN inventory 只按 sku+channel → 同 SKU 的
+                    #   其它码/其它自有仓批次也并进来, 再取"最早到期" → 报出的批次/到期日可能
+                    #   属于**另一个码或另一个仓**。现在按 (sku, 码, 仓) 分组, 由 _pick_batch
+                    #   逐级取: ①同码同仓 ②同仓(码缺失) ③该 SKU 最早 —— 只降"码"不跨仓。
+                    exp_map.setdefault(str(r.get("sku") or ""), []).append(r)
         except Exception as _e:
             try_err("own_health", "批次效期读取降级", _e)
+
+    def _pick_batch(_sku, _bc, _wh):
+        """该库存行对应的最早到期批次: 精确(码+仓) → 同仓(码缺) → 该 SKU 最早
+
+        只降"码"不跨仓: 多码是数据缺失(可降级), 换仓是换了业务对象(不能降级)。
+        """
+        _rows = exp_map.get(_sku) or []
+        for _r in _rows:
+            if str(_r.get("barcode") or "") == _bc and str(_r.get("warehouse") or "") == _wh:
+                return _r
+        for _r in _rows:
+            if str(_r.get("warehouse") or "") == _wh:
+                return _r
+        return _rows[0] if _rows else None
 
     _today = datetime.now(timezone.utc).date()
     items = []
 
-    for sku, st in own_by_sku.items():
+    for (sku, bc, wh_raw), st in own_rows.items():
         avail = st["avail"]
-        transit = st["transit"]
+        transit = st["transit"]          # 采购在途 = 库存导入(自有仓)填写的 in_transit_qty
         p = pmap.get(sku) or {}
         name = str(p.get("product_name") or sku)
-        bc = str(p.get("barcode") or st["barcode"] or "")
-        wh = st["wh"] or "自有仓"
-        ds = ds_map.get(sku, 0.0)
-        po = po_transit.get(sku, 0)
+        wh = wh_raw or "自有仓"
+        ds = pick_ds(_bc_ds, _agg_ds, sku, bc, WH_C)
 
-        # ---- ① 调拨覆盖不足: 下游本期要货 vs 自有可发(在仓+在途+采购在途) ----
+        # ---- ① 调拨覆盖不足: 下游本期要货 vs 自有可发(在仓 + 采购在途) ----
         if ds > 0:
             need = ds * b2c_days * transfer_cover_mult      # 下游一个调拨周期要的量
-            can = avail + transit + po                       # 自有仓能发出的量
+            can = avail + transit                            # 自有仓能发出的量
             gap = need - can
             # 0.5 件容差: 需量是 ds×天数 的连续值, 与整数可发量比较会出 0.0001 级的伪缺口
             #   (实测出现过 "需 34 件/可发 33 件/缺 0 件" 这种自相矛盾的行)
@@ -204,8 +216,8 @@ def own_health(channel, full: int = 0, limit: int = 10):
                     "sku": sku, "barcode": bc, "product_name": name, "warehouse": wh,
                     "alert_type": "own_transfer_gap", "level": "error",
                     "title": "%s 调拨覆盖不足" % name,
-                    "description": "下游 %.0f/日×%g天需 %.0f 件, 自有可发 %.0f 件(在仓 %d/在途 %d/采购 %d), 缺 %.0f 件"
-                                   % (ds, b2c_days, need, can, avail, transit, po, gap),
+                    "description": "下游 %.0f/日×%g天需 %.0f 件, 自有可发 %.0f 件(在仓 %d/采购在途 %d), 缺 %.0f 件"
+                                   % (ds, b2c_days, need, can, avail, transit, gap),
                     "available_qty": avail, "need_qty": round(need), "gap_qty": round(gap),
                     "cover_days": round(can / ds, 1) if ds > 0 else None,
                     "days_to_expiry": None, "batch_no": "", "exp_date": "",
@@ -226,8 +238,8 @@ def own_health(channel, full: int = 0, limit: int = 10):
                     "days_to_expiry": None, "batch_no": "", "exp_date": "",
                 })
 
-        # ---- ③ 效期风险: 最早到期批次会在用完前过期 ----
-        b = exp_map.get(sku)
+        # ---- ③ 效期风险: 该码该仓的最早到期批次会在用完前过期 ----
+        b = _pick_batch(sku, bc, wh_raw)
         if b:
             try:
                 _ed = str(b.get("exp_date") or "")[:10]
