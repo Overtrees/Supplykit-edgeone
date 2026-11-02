@@ -23,7 +23,7 @@ done
 echo "════════ SupplyKit preflight ════════"
 
 if [ "$SKIP_BACK" = "0" ]; then
-  echo "── [1/3] 后端 Python 3.10 语法门禁 ──"
+  echo "── [1/6] 后端 Python 3.10 语法门禁 ──"
   BAD=0
   for f in $(find "$API" -name "*.py"); do
     if ! python3 -c "import ast; ast.parse(open('$f').read(), feature_version=(3,10))" 2>"$API/../.syntax_err"; then
@@ -33,7 +33,7 @@ if [ "$SKIP_BACK" = "0" ]; then
   rm -f "$API/../.syntax_err"
   [ "$BAD" = "0" ] && echo "  ✓ 全部 .py 通过" || FAILS+=("后端语法")
 
-  echo "── [2/3] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
+  echo "── [2/6] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
   if command -v pyflakes >/dev/null 2>&1; then
     ERR=$(cd "$API" && pyflakes . 2>&1 | grep -vE "imported but unused|unable to detect undefined names" | grep -E "undefined name|redefin|used before assignment" || true)
     if [ -n "$ERR" ]; then
@@ -46,13 +46,17 @@ if [ "$SKIP_BACK" = "0" ]; then
   fi
 
   echo "── [3/6] local_test 回归 ──"
-  (cd "$API" && python3 local_test.py 2>&1 | tail -2) | grep -E "通过|失败|FAIL" | while read -r line; do
-    echo "  $line"
-    case "$line" in
-      *"失败"*) echo "PREFLIGHT_FAIL" > /tmp/preflight_back_fail ;;
-    esac
-  done
-  if [ -f /tmp/preflight_back_fail ]; then rm -f /tmp/preflight_back_fail; FAILS+=("local_test"); else echo "  ✓ 回归通过"; fi
+  # 2026-11-02 修误判: 原用 "行内含『失败』" 判定, 而汇总行本身就是"205 通过, 0 失败"
+  #   → 永远命中, preflight 恒红(实测每次都在这一步报错)。改为: 退出码 + 失败数>0 才算失败。
+  _lt_out=$(cd "$API" && python3 local_test.py 2>&1)
+  _lt_rc=$?
+  echo "$_lt_out" | grep -E "本地回归:" | sed 's/^/  /'
+  if [ "$_lt_rc" = "0" ] && echo "$_lt_out" | grep -qE "本地回归: [0-9]+ 通过, 0 失败"; then
+    echo "  ✓ 回归通过"
+  else
+    echo "$_lt_out" | tail -6
+    FAILS+=("local_test")
+  fi
 fi
 
 if [ "$SKIP_FRONT" = "0" ]; then

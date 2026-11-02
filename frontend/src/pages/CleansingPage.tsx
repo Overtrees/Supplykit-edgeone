@@ -758,7 +758,10 @@ export default function CleansingPage() {
       if (_miss.length) {
         toast.add({
           type: 'warning',
-          title: '未映射必填列: ' + _miss.join('、') + ' —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
+          title:
+            '未映射必填列: ' +
+            _miss.join('、') +
+            ' —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
           duration: 0,
         })
         setBs('')
@@ -820,7 +823,9 @@ export default function CleansingPage() {
       const _miss = missingRequired(tt, mp)
       if (_miss.length) {
         toast.error(
-          '写入前必须映射必填列: ' + _miss.join('、') + '（缺失将导致整批跳过或核算错误），请返回上一步补映射',
+          '写入前必须映射必填列: ' +
+            _miss.join('、') +
+            '（缺失将导致整批跳过或核算错误），请返回上一步补映射',
         )
         setBs('')
         execLock.current = false

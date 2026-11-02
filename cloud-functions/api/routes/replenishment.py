@@ -130,7 +130,6 @@ def _build_repl(channel, mode):
             from routes.common import try_err as _te2
             _te2('repl', '补货按码行加载降级', _ebc)
     except Exception as _e:
-        from routes.common import try_err
         try_err('repl', '物化读取降级', _e)
         _stats = {}
     # 直算降级(仅物化表空/不可用时——与旧口径一致; 构造同构 _stats 使主循环单一)

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from db import query
 from schema_create import table_ddl as _table_ddl
-from routes.common import SALES_STATUSES as _SS  # 日销口径: 发货消耗状态(排除申请退款)
+from routes.common import SALES_STATUSES as _SS, try_err  # 日销口径: 发货消耗状态(排除申请退款)
 
 
 def _sku_in_clause(skus, batch=500, max_sql=2000):

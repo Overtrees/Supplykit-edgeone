@@ -76,8 +76,7 @@ const TYPE_META: Record<
 
 // 每类的右侧度量(与 pill 同色的加粗数字)
 const metricOf = (x: OwnHealthItem): { v: string; hint: string } => {
-  if (x.alert_type === 'own_transfer_gap')
-    return { v: '缺 ' + fmtInt(x.gap_qty), hint: fn(x) }
+  if (x.alert_type === 'own_transfer_gap') return { v: '缺 ' + fmtInt(x.gap_qty), hint: fn(x) }
   if (x.alert_type === 'own_expiry_risk') {
     const d = x.days_to_expiry
     if (d == null) return { v: '—', hint: '' }

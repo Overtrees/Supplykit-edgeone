@@ -2,10 +2,32 @@
 from fastapi import APIRouter, Request
 from routes.analysis_cache import cache_get as _cache_get
 
-def _evaluate_restored(ids):
-    """restore 联动(2026-10-15): 恢复订单→order.created 规则重评估(超卖/低库存——恢复后重新生成告警——对称于删单联动关)"""
+def _evaluate_restored(ids, channel=None):
+    """restore 联动(2026-10-15): 恢复订单→order.created 规则重评估(超卖/低库存——恢复后重新生成告警——对称于删单联动关)
+
+    2026-11-02 修复: 原函数体引用未定义的 `channel`(函数签名只有 ids), NameError 被底部
+    `except Exception` 吞成"降级"留痕 → 恢复订单的规则重评估**从未真正执行**。
+    现按订单实际 channel 分组评估(批量恢复可能跨渠道); 显式传 channel 时跳过查库。
+    """
     if not ids:
         return
+    if channel:
+        _evaluate_restored_ch(ids, channel)
+        return
+    try:
+        _ph = ",".join(["%s"] * len(ids))
+        _chans = [r.get("channel") for r in
+                  query("SELECT DISTINCT channel FROM orders WHERE id IN (%s)" % _ph, ids)]
+    except Exception as _e:
+        try_err('orders', 'restore 联动取 channel 降级', _e)
+        return
+    for _ch in _chans:
+        if _ch:
+            _evaluate_restored_ch(ids, _ch)
+
+
+def _evaluate_restored_ch(ids, channel):
+    """单渠道的 restore 联动评估(逻辑同原 _evaluate_restored, 只负责一个 channel)"""
     try:
         from core.rules import evaluate_many, load_rules_for
         _ph = ",".join(["%s"] * len(ids))

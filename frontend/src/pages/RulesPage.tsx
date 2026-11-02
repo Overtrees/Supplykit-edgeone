@@ -381,7 +381,9 @@ export default function RulesPage() {
     gap: '',
     cover_days: '',
   })
-  const [testBatch, setTestBatch] = useState<Record<string, string | number>>({ days_to_expire: 10 })
+  const [testBatch, setTestBatch] = useState<Record<string, string | number>>({
+    days_to_expire: 10,
+  })
   const [testSampleSku, setTestSampleSku] = useState('')
   const [testLoading, setTestLoading] = useState(false)
 
@@ -3316,9 +3318,7 @@ export default function RulesPage() {
                                   {testResult.detail.or.map((o, oi) => (
                                     <div key={oi} style={{ paddingLeft: 8 }}>
                                       · {fieldLbl(o.left)} {opLbl(o.op)}{' '}
-                                      {String(o.right).includes('.')
-                                        ? fieldLbl(o.right)
-                                        : o.right}{' '}
+                                      {String(o.right).includes('.') ? fieldLbl(o.right) : o.right}{' '}
                                       <span
                                         style={{
                                           color: o.hit ? 'var(--success)' : 'var(--danger)',

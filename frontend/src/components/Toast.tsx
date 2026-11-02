@@ -78,7 +78,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.slice(-3).map(t => (
           <div
             key={t.id}
-            onClick={() => remove(t.id) /* 持久提示(duration:0)靠点击关闭; 普通 toast 点击关也无害 */}
+            onClick={
+              () => remove(t.id) /* 持久提示(duration:0)靠点击关闭; 普通 toast 点击关也无害 */
+            }
             className="clickable"
             style={{
               display: 'flex',

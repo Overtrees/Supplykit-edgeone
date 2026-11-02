@@ -23,6 +23,7 @@
 | 库存导入职责边界(期初/在途 vs 批次) | `docs/DEVELOPMENT.md` §15.98 |
 | 69 码不猜: 补码两道闸 | `docs/DEVELOPMENT.md` §15.97 |
 | 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/DEVELOPMENT.md` §15.101 |
+| 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/DEVELOPMENT.md` §15.106 |
 
 ## 关键口径(不可破坏的业务约定)
 
@@ -36,16 +37,19 @@
 
 ## 工作流程铁律
 
+- **换机先自检**: `python3 scripts/env_check.py` —— 缺 .env / EDGEONE token / push 凭据会一次性列出, 别等 push 才发现
 - **先本地, 再线上**: 逻辑验证用 `python3 scripts/local_api.py`(本地直连同库), 推一次 2~3 分钟且云函数 120s 硬限
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 204 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 205 通过/0 失败
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
 - **文档同步**: 每项改动在 `docs/DEVELOPMENT.md` 追加 §15.10x, 写根因 + 实测数据
 
 ## 常用命令
 
 ```bash
+# 环境自检(换机/新会话第一条命令)
+python3 scripts/env_check.py
 # 部署状态
 python3 scripts/deploy_status.py
 # 本地直连测试

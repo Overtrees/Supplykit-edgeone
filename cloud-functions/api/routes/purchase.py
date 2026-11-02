@@ -12,7 +12,7 @@ from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["purchase"])
 
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
-from routes.purchase_calc import _build_purchase, disposal_suggestions
+from routes.purchase_calc import _build_purchase
 _register_cache(lambda: _purchase_cache.clear())
 
 

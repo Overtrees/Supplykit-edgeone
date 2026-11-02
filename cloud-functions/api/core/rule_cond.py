@@ -65,7 +65,6 @@ def _resolve_muldiv(expr, ctx):
     expr = str(expr).strip()
     if "*" not in expr and "/" not in expr:
         return _resolve_single(expr, ctx)
-    import re
     tokens = re.split(r"([*/])", expr)
     result, op = None, None
     for t in tokens:
@@ -89,7 +88,6 @@ def _resolve_muldiv(expr, ctx):
 
 def _resolve_value(expr, ctx):
     """解析表达式: 支持括号分组 + 加减 + 乘除"""
-    import re
     expr = str(expr).strip()
     if not expr:
         return 0

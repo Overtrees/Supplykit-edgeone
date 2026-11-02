@@ -2271,3 +2271,69 @@ scrollHeight <= clientHeight  → 无溢出
 | 多视口实测 | 375/390/844/768/1024/1440 全部 无溢出 + 无横向滚动 |
 | 线上部署 | 每次以 `Commit == HEAD && Prod == yes && Status == Success` 为准 |
 | 规则页汉化 | 全页正则扫 `params.* / own.* / batch.* / {var} / sellable` → 0 命中 |
+
+### 15.106 质量门禁转绿 + 三处「try 吞 NameError」潜伏 bug(2026-11-02)
+
+> 起因: 换机后按 CONTEXT.md 接续, 先跑 `scripts/preflight.sh` 建立基线 —— 结果**红**。
+> 顺着红点查下去, 三处 undefined name 全是"被 except 吞掉的静默失效", 与 15.x 反复
+> 总结的同一类问题(护栏代码本身写错 → 护栏形同虚设)。
+
+#### 一、门禁为什么是红的(两类)
+
+| 症状 | 根因 | 性质 |
+|---|---|---|
+| pyflakes 报 10 条 undefined name / 重定义 | 见下表, 其中 3 条是真 bug | 真问题 |
+| Prettier 报 4 个文件不合规 | 11-01 末轮改动(OwnHealthCard/Toast/CleansingPage/RulesPage)未跑 `--write` | 格式, CI 会红 |
+| **local_test 恒判失败** | preflight 用"行内含『失败』"判定, 而汇总行就是"205 通过, 0 失败" → 永远命中 | **门禁自身 bug** |
+
+#### 二、三处真 bug(都被 try/except 吞成"降级", 功能从未生效)
+
+| # | 位置 | 症状 | 根因 | 修法 |
+|---|---|---|---|---|
+| 1 | `routes/orders.py` `_evaluate_restored` | 恢复订单后 from-order 规则(超卖/低库存)不重评估 | 函数签名只有 `ids`, 函数体却引用 `channel` → NameError 被函数自身 `except Exception` 吞成「restore 联动评估降级」留痕 | 拆 `_evaluate_restored_ch(ids, channel)`, 外层按订单实际渠道 `SELECT DISTINCT channel` 分组(批量恢复可跨渠道); 显式传 channel 时跳过查库 |
+| 2 | `routes/cleanse_write.py:1143` | 导入含**自定义列**的文件时抛 NameError | 用了 `json.dumps` 却从未 `import json`(ext_json 合并存储分支) | 补 `import json` |
+| 3 | `biz/sales.py:603` | sku_sales_stats 自愈重建后缓存失效失败时, 异常升级成 NameError | `try_err` 未导入(同文件 import 只带了 `SALES_STATUSES`) | 从 `routes.common` 一并导入 `try_err` |
+
+其余为清理项: `products.py` 残留 `s if False else ""` 死表达式(下一行已覆盖 key)、
+`purchase.py` 路由函数名与导入名同名(改为只导入 `_build_purchase`)、`replenishment.py` /
+`rule_cond.py` / `cleansing.py` 的重复局部 import、`local_test.py` 重复 `_FakeConn` 定义。
+
+#### 三、门禁自身的 bug(更值得记)
+
+`preflight.sh` 第 3 步原实现:
+
+```bash
+... | grep -E "通过|失败|FAIL" | while read -r line; do
+  case "$line" in *"失败"*) echo PREFLIGHT_FAIL > /tmp/... ;; esac
+done
+```
+
+汇总行「205 通过, 0 失败」本身就含"失败"二字 → **每次都写入失败标记** → preflight 永远红。
+这类"判据写反"比业务 bug 更隐蔽: 因为大家会以为"又是沙箱环境问题"而忽略整块输出。
+
+改为: 拿退出码 + 正则 `本地回归: [0-9]+ 通过, 0 失败` 双条件; 失败时才回显最后 6 行。
+同时把步骤序号 `[1/3] [2/3]` 更正为 `[1/6] [2/6]`(实际共 6 步, 原序号是拆分前的残留)。
+
+#### 四、新增: 换机自检 `scripts/env_check.py`
+
+换机/新会话最大的坑不是代码, 是三样**不入库**的凭据缺失, 且往往改完代码才在 push 那一步发现:
+
+| 检查项 | 缺失后果 | 获取方式 |
+|---|---|---|
+| `.env`(TIDB_HOST/USER/PASSWORD) | 只能跑 mock 回归, 不能 `local_api.py` 验真实数据 | TiDB 控制台 Connect |
+| `.edgeone/auth.json`(EDGEONE_PAGES_API_TOKEN + ProjectId) | 无法 `deploy_status.py` 确认线上跑的是哪个 commit | Makers → Settings → API Token |
+| git push 凭据 | Git 集成项目的**部署触发器**是 push, 没凭据 = 无法上线 | GitHub PAT |
+
+`python3 scripts/env_check.py` 一次输出七项 ✓/✗ 并给逐条待办; `--no-net` 只查本地文件与依赖。
+另补 `.env.example`(此前只有 `.gitignore` 里的一句"保留模板", 实际文件不存在)。
+
+#### 五、验证基线(本次)
+
+| 项 | 结果 |
+|---|---|
+| pyflakes 门禁(undefined name / 重定义 / 先使用后定义) | 0 命中(修复前 10 条) |
+| `local_test.py` | **205 通过 / 0 失败**(新增 1 条 restore-channel 用例, 防回归) |
+| `scripts/preflight.sh` | **全部通过, 可 push**(修复前恒红) |
+| 前端 `tsc --noEmit` / `eslint` / `prettier --check` | 全绿(修复前 prettier 4 文件不合规) |
+| 前端 `npm run build` | 成功, dist 1.76 MB / gzip 450 kB |
+| `env_check.py` | 7 项中 2 项通过 —— 缺 .env / EDGEONE token / push 凭据(待用户提供) |

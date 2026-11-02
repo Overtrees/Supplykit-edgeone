@@ -813,7 +813,6 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         _seg_cnt = (_total + page_size - 1) // page_size
         # 该片 SKU: 评估(order.created——库存上下文)+ 联动(销售扣减——deltas 只算该片)
         from db import query as _q5, execute as _e5, transaction as _txn5
-        from routes.cleanse_write import _adjust_inventory
         from core.rules import evaluate_many, load_rules_for
         from collections import defaultdict
         inv_map = {}

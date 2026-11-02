@@ -722,16 +722,7 @@ try:
     check("agg 路径: health_index 生成", ((_ar.get("data") or {}).get("health_index") or {}).get("score") is not None)
 except Exception as _e:
     check("agg 路径: summary 调用无异常", False, str(_e)[:200])
-# 假 conn(transaction 不真连库——沙箱 TiDB 连接超时)
-class _FakeConn:
-    def __init__(self):
-        self._ac = True
-    def autocommit(self, v):
-        self._ac = v
-    def commit(self):
-        pass
-    def rollback(self):
-        pass
+# 假 conn(transaction 不真连库——沙箱 TiDB 连接超时; 类定义在文件前部, 此处只重绑)
 _db.conn = lambda: _FakeConn()
 _db._acquire = lambda: _FakeConn()  # 连接池取用 mock(transaction 用 _acquire——沙箱不真连库)
 _db._release = lambda c: None
@@ -986,6 +977,40 @@ try:
           "routes/rules.py + RulesPage.tsx")
 except Exception as _e4:
     check("规则字段/口径用例无异常", False, str(_e4)[:200])
+
+# ── 11. restore 联动的 channel 解析(2026-11-02) ─────────────────────────
+#     _evaluate_restored(ids) 原函数体直接引用未定义的 channel → NameError 被自身
+#     except 吞成"restore 联动评估降级"留痕 → 恢复订单的规则重评估从未真正跑过。
+#     这里断言: 不传 channel 时按订单实际渠道查库解析, 并把 channel 透传给 evaluate_many。
+try:
+    import routes.orders as _ro
+    _seen = {}
+
+    def _fq(sql, params=None):
+        if "DISTINCT channel" in sql:
+            return [{"channel": "jd"}]
+        if "SUM(quantity)" in sql:
+            return [{"sku": "SKU0001", "q": 2}]
+        if "FROM inventory" in sql:
+            return [{"sku": "SKU0001", "avail": 10}]
+        if "MAX(quantity)" in sql:
+            return [{"sku": "SKU0001", "q": 2, "amt": 50, "mx": 2, "mn": 2, "lc": 1, "up": 25}]
+        return []
+
+    import core.rules as _cr
+    _old_q, _old_em, _old_lr = _ro.query, _cr.evaluate_many, _cr.load_rules_for
+    _ro.query = _fq
+    _cr.evaluate_many = lambda ev, ctxs, ch, rules: _seen.update({"ev": ev, "ch": ch, "n": len(ctxs)})
+    _cr.load_rules_for = lambda ev, ch: []
+    try:
+        _ro._evaluate_restored([1, 2])
+    finally:
+        _ro.query, _cr.evaluate_many, _cr.load_rules_for = _old_q, _old_em, _old_lr
+    check("restore 联动: 按订单 channel 解析并重评估",
+          _seen.get("ch") == "jd" and _seen.get("ev") == "order.created" and _seen.get("n") == 1,
+          str(_seen))
+except Exception as _e5:
+    check("restore 联动用例无异常", False, str(_e5)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
