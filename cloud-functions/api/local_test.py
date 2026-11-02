@@ -1051,5 +1051,21 @@ try:
 except Exception as _e6:
     check("cron 护栏用例无异常", False, str(_e6)[:200])
 
+# ── traced 不回传 traceback(2026-11-02 S0) ──
+try:
+    from routes.common import traced
+
+    @traced
+    def _boom():
+        raise ValueError("内部细节: SELECT * FROM secret_table")
+
+    _r = _boom()
+    _blob = json.dumps(_r, ensure_ascii=False)
+    check("traced 不回传堆栈/表名(只回 request_id)",
+          ("tb" not in _r) and ("secret_table" not in _blob) and bool(_r.get("request_id")),
+          _blob[:160])
+except Exception as _e7:
+    check("traced 用例无异常", False, str(_e7)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
