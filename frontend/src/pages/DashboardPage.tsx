@@ -726,18 +726,41 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   现在: ① 进入页面自动拉一次全量(不用等用户点「更多」) ② 卡面与弹窗同源同口径。
   const lowStockFull = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : null
   const lowStockAlerts = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
-  // 卡面按 SKU 去重 —— 同一 SKU 在多仓各有一条 low_stock 告警(「SKU × 仓」粒度),
-  //   按 id DESC 取前 5 条时可能全是同一 SKU 的不同仓, 副行又不带仓库 → 5 行看起来一模一样,
-  //   视觉上等于"没有明细"。卡面同 SKU 只留 1 条, 其余进弹窗(弹窗展示全部, 不丢数据)。
+  // 卡面 5 行取数(2026-11-02 改「按仓轮转」, 取代旧的「全局按 SKU 去重取前 5」):
+  //   旧法的问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是同一个仓(实测全落郑州仓),
+  //   多仓都缺货这件事在卡面上完全看不出来。
+  //   注意**不能**改成"每仓最多 1 条"的硬配额: 那样只有 3 个仓时就只显示 3 行, 卡面反而空掉。
+  //   现方案: ① 去重键改成「SKU × 仓」(副行已带仓库名, 同 SKU 多仓是有效信息, 不算重复);
+  //          ② 按仓分桶(桶内保持 id DESC), 轮转取数 —— 第一轮每仓各 1 条保证覆盖,
+  //             不满 5 条再来第二轮、第三轮…
+  //   → 3 个仓 = 3+2 共 5 行(不浪费卡面); ≥5 个仓 = 每仓 1 行(谁都不被淹没)。
   const lowStockShown = (() => {
     const seen = new Set<string>()
-    const out: typeof lowStockAlerts = []
+    const buckets: Record<string, typeof lowStockAlerts> = {}
+    const order: string[] = []
     for (const x of lowStockAlerts) {
-      const k = x.related_sku || x.id
+      const k = `${x.related_sku || x.id}|${x.warehouse || ''}`
       if (seen.has(k)) continue
       seen.add(k)
-      out.push(x)
-      if (out.length >= 5) break
+      const w = x.warehouse || '-'
+      if (!buckets[w]) {
+        buckets[w] = []
+        order.push(w)
+      }
+      buckets[w].push(x)
+    }
+    const out: typeof lowStockAlerts = []
+    for (let round = 0; out.length < 5; round++) {
+      let added = false
+      for (const w of order) {
+        if (out.length >= 5) break
+        const row = buckets[w][round]
+        if (row) {
+          out.push(row)
+          added = true
+        }
+      }
+      if (!added) break
     }
     return out
   })()

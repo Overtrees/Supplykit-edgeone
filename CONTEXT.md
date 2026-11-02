@@ -66,11 +66,13 @@ cd cloud-functions/api && python3 local_test.py
 cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 ```
 
-## 已知遗留(截至 2026-11-01)
+## 已知遗留(截至 2026-11-02)
 
-- 低库存卡 5 行当前全落郑州仓(接口 id DESC + 最新告警同仓), 用户接受现状;
-  如需多仓覆盖可改"每仓最多 1 条"配额
+- ~~低库存卡 5 行全落郑州仓~~ **已修**: 卡面改「按仓轮转」——第一轮每仓 1 条, 不满 5 条
+  继续第二轮(3 个仓 = 3+2 仍是 5 行)。**不要再做"每仓最多 1 条"的硬配额**, 仓少时卡面会塌成 3 行。
+  见 `docs/DEVELOPMENT.md` §15.108
 - 大卡弹窗为全量列表(自有仓 90 条全展示), `maxHeight:70vh` 滚动承接
+- `frontend/package-lock.json` 缺 esbuild 全平台可选依赖: npm 11 下 `npm ci` 直接 EUSAGE(CI 用 node20 暂不炸)
 
 ## 用户偏好
 
