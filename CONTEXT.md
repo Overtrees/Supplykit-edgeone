@@ -47,7 +47,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 355 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 358 通过/0 失败
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
 - **文档同步**: 每项改动在 `docs/DEVELOPMENT.md` 追加 §15.10x, 写根因 + 实测数据
 
@@ -178,6 +178,18 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   区间, 来源行降级为"归档 N 天 · 订单 M 天"。**不要再把归档状态搬回页面卡片**。
 - **CSS 死类要随手删**: 控件迁走(`.hist-row/.hist-pill/.hist-date/.hist-sub`)后留着,
   后来人会以为页面还有一套自绘控件。改 UI 时顺手 `grep` 一遍引用。
+- **同页只能有一个时间口径(2026-11-02 §15.125)**: 历史页汇总跟随菜单区间, 同比原先写死
+  「近 30 天」—— 选 90 天时同页并存两个口径且无任何说明。现 `history_yoy` 收 `start`,
+  与汇总同窗口、同 400 天截断。**任何"卡片自带时间范围"的写法都要跟着菜单走, 不要写死**。
+- **加了会改变结果的入参, 必须同步改缓存 key**: `yoy` 加 `start` 后 key 补 `_s`, 否则同 `end`
+  不同起点共用结果, 且只在命中缓存时复现(线上"时好时坏", 本地难查)。
+- **前端不要自己算时间窗口**: 区间一律取接口返回的 `cur.start/end` 展示。前端按预设再算一遍,
+  后端一截断标题就显示假窗口 —— 与 `archive_day` 同一类"两处各算一份"的坑。
+- **口径提示放标题行, 不放卡片中部**: 长句压住 KPI 与图表之间是"先看数再看解释"; 现为
+  「区间汇总」标题右侧 10px 胶囊「非 GMV 口径」, 完整长句挂 `title`。
+- **本地起后端的正确姿势**: `.env` 凭据 + `uvicorn`, 生产由 Makers 框架剥 `/api` 而 uvicorn
+  不剥 → 套一层 ASGI 中间件改 `scope["path"]`。**dev 代理指向线上时, 线上跑的是旧代码**,
+  排查"改了没生效"先直连后端验接口。验证完 `git checkout -- frontend/vite.config.js`。
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → ~~S2-9~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节

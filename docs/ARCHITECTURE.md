@@ -12,7 +12,7 @@
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 27 路由模块 · local_test 355 项     │
+│  FastAPI · 27 路由模块 · local_test 358 项     │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -47,7 +47,7 @@
 | `misc` | `/api/*` | quality-logs(分页)/monitor/db/diag |
 | `batches` | `/api/batches` | 批次明细 |
 | `channels` | `/api/channels` | 渠道 CRUD(启停/排序) |
-| `history` | `/api/history` | 归档查询面(coverage/summary/top/yoy), 365 天切线拼 orders + daily_stats |
+| `history` | `/api/history` | 归档查询面(coverage/summary/top/yoy), 365 天切线拼 orders + daily_stats; summary/yoy 同收 `[start,end]` 与 400 天截断 |
 | `auth` | `/api/auth` | setup/login/check |
 | `cron` | `/api/cron` | 11 端点（snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts/ping/continue-tasks/agg-sweep/reconcile） |
 
@@ -73,7 +73,7 @@ cloud-functions/api/
 ├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
 ├── routes/ (31个)                路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
-└── local_test.py                 本地回归 355 项（mock db + TestClient）
+└── local_test.py                 本地回归 358 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -116,7 +116,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 355 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/S2 系列）
+cd cloud-functions/api && python3 local_test.py   # 358 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/S2 系列）
 ```
 
 ---

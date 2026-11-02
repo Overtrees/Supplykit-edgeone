@@ -121,7 +121,7 @@
 | 🧹 **数据清洗** | 9 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
 | ⚙️ **规则引擎** | 计算参数融合(断货/健康) / 计算变量字段 / or 多组 / 类型模板 / 告警开关 / 立即运行 / 审计 |
 | 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / 软删撤销+回收站 |
-| 🗂️ **历史归档** | 汇总/趋势/Top20/同比 / 365 天切线双表拼接 / 区间粒度收进锤子菜单 / 归档状态可查 |
+| 🗂️ **历史归档** | 汇总/趋势/Top20/同比 / 365 天切线双表拼接 / 区间粒度收进锤子菜单 / 同比与汇总同一区间口径 / 归档状态可查 |
 | 📦 **进销存台账** | 自有/平台/B仓三视图(模式跟随) / 批次效期 / 当月进出 / 删除可恢复 / 告警跳转定位 |
 | 🧭 **货品供应建议** | 自有仓三口径(调拨缺口/积压/效期) / 该采该停该清 |
 | 🏷️ **商品/供应商** | CRUD / 搜索 / 批次效期 |
@@ -150,7 +150,7 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 355 项全过
+cd cloud-functions/api && python3 local_test.py        # 358 项全过
 
 # 前端
 cd frontend && npm install && npm run dev
