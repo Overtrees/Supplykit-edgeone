@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { Group, Row, LastRow } from '../components/ListGroup'
@@ -117,7 +117,7 @@ export default function ChannelsPage() {
   }
 
   return (
-    <div style={{ padding: '16px 0', maxWidth: 560, margin: '0 auto' }}>
+    <div className="form-page">
       <Group title="渠道管理">
         {loading ? (
           <Row label="加载中..." />
@@ -143,45 +143,37 @@ export default function ChannelsPage() {
 
       {showForm && (
         <Group title="新增渠道">
-          <div style={{ padding: '12px 16px', display: 'grid', gap: 10 }}>
-            <label style={{ fontSize: 'var(--font-13)', color: 'var(--muted2)' }}>
+          <div className="form-grid">
+            <label className="form-field">
               渠道标识 code（小写，创建后不可改）
               <input
                 value={form.code}
                 onChange={e => setForm({ ...form, code: e.target.value })}
                 placeholder="如 tmall / pdd / douyin"
-                style={inputStyle}
+                className="form-input"
               />
             </label>
-            <label style={{ fontSize: 'var(--font-13)', color: 'var(--muted2)' }}>
+            <label className="form-field">
               显示名
               <input
                 value={form.name}
                 onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="如 天猫"
-                style={inputStyle}
+                className="form-input"
               />
             </label>
-            <label style={{ fontSize: 'var(--font-13)', color: 'var(--muted2)' }}>
+            <label className="form-field">
               默认补货模式
               <select
                 value={form.default_mode}
                 onChange={e => setForm({ ...form, default_mode: e.target.value })}
-                style={inputStyle}
+                className="form-input"
               >
                 <option value="traditional">传统多仓（逐仓补货）</option>
                 <option value="bbcc">BBCC（一盘货：B仓→C仓）</option>
               </select>
             </label>
-            <label
-              style={{
-                fontSize: 'var(--font-13)',
-                color: 'var(--muted2)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
+            <label className="form-check">
               <input
                 type="checkbox"
                 checked={form.supports_b}
@@ -189,12 +181,12 @@ export default function ChannelsPage() {
               />
               走 BBCC 体系（启用 B 仓调拨链）
             </label>
-            <label style={{ fontSize: 'var(--font-13)', color: 'var(--muted2)' }}>
+            <label className="form-field">
               复制规则与参数自（可选）
               <select
                 value={form.copy_from}
                 onChange={e => setForm({ ...form, copy_from: e.target.value })}
-                style={inputStyle}
+                className="form-input"
               >
                 <option value="">不复制（空白渠道）</option>
                 {list.map(c => (
@@ -238,16 +230,4 @@ export default function ChannelsPage() {
       )}
     </div>
   )
-}
-
-const inputStyle: React.CSSProperties = {
-  display: 'block',
-  width: '100%',
-  marginTop: 4,
-  padding: '8px 10px',
-  fontSize: 'var(--font-13)',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--card)',
-  boxSizing: 'border-box',
 }

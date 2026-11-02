@@ -157,7 +157,8 @@ def history_coverage(channel: str = ""):
         if out.get("stale_orders"):
             out["note"] += " · 另有 %d 行早于归档线待搬移" % out["stale_orders"]
         return out
-    return ok(_cache_get("history|coverage|%s" % (channel or "all"), 300, _build))
+    _key = "history|coverage|%s" % (channel or "all")
+    return ok(_cache_get(_key, 300, _build))
 
 
 @router.get("/history/summary")
@@ -209,7 +210,8 @@ def history_summary(channel: str = "jd", start: str = "", end: str = "", by: str
                 "series": series,
                 "sources": {"orders": _src.get("o"), "archive": _src.get("a")}}
 
-    return ok(_cache_get("history|summary|%s|%s|%s|%s" % (channel, s, e, _by), 120, _build))
+    _key = "history|summary|%s|%s|%s|%s" % (channel, s, e, _by)
+    return ok(_cache_get(_key, 120, _build))
 
 
 @router.get("/history/top")
@@ -239,7 +241,8 @@ def history_top(channel: str = "jd", start: str = "", end: str = "",
         return {"start": s, "end": e, "by": _by, "clamped": _clamped,
                 "total_gmv": _tot, "items": items}
 
-    return ok(_cache_get("history|top|%s|%s|%s|%s|%d" % (channel, s, e, _by, _n), 120, _build))
+    _key = "history|top|%s|%s|%s|%s|%d" % (channel, s, e, _by, _n)
+    return ok(_cache_get(_key, 120, _build))
 
 
 def _delta(cur, prev):
@@ -286,4 +289,5 @@ def history_yoy(channel: str = "jd", end: str = "", days: int = 30):
             out["delta"] = _delta(cur, prev)
         return out
 
-    return ok(_cache_get("history|yoy|%s|%s|%d" % (channel, _e, _n), 120, _build))
+    _key = "history|yoy|%s|%s|%d" % (channel, _e, _n)
+    return ok(_cache_get(_key, 120, _build))

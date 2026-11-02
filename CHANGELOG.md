@@ -1,3 +1,15 @@
+## 2026-11-02: 渠道管理页样式上提 + CI 审计修复(S2-9 收尾)
+
+> 回归 355 通过 / 0 失败; 审计 11 通过 / 0 失败; preflight 六步全绿
+
+- ChannelsPage.tsx 内联样式清零(7 处 → 0): 上提为全局表单基元 .form-page/.form-grid/
+  .form-field/.form-check/.form-input, 全部走现有 CSS 变量(--font-13/--muted2/--radius-md/
+  --card/--border), 新增 --space-xs(4px)/--space-md(16px) 补齐间距刻度; 供后续页面复用
+- Playwright 实测 computed style 与原内联逐项一致(含截图); React 冗余默认导入清理
+- CI 修复: ① test_audit 缓存 key 校验误报(stock_risk 的 _CV 版本段参数未被识别为非维度)
+  ② history.py 四处 _cache_get 直传字符串 key → 统一走 _key 变量(全站惯例)
+  ③ index.py 迁移段退役后 DATE_FORMAT 检查恒真 → 改为全库同口径
+
 ## 2026-11-02: 冗余清理 + 补列统一 + 启动探测统一(S2-9)
 
 > 回归 355 通过 / 0 失败; preflight 六步全绿

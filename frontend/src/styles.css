@@ -39,6 +39,8 @@ body.sidebar-open {
   --font-15: 15px;
   --font-18: 18px;
   --space-sm: 10px;
+  --space-xs: 4px;
+  --space-md: 16px;
   --font-xs: 11px;
   --font-sm: 12px;
   --font-md: 14px;
@@ -386,6 +388,42 @@ tbody tr:nth-child(even) td {
 tbody tr:nth-child(even):hover td {
   background: #f1f5f9;
 }
+/* ── 表单基元(2026-11-02 S2-9: 原 ChannelsPage 内联样式上提, 供各页复用) ──
+   全部走 CSS 变量: 深色模式/主题切换无需额外覆写。 */
+.form-page {
+  padding: var(--space-md) 0;
+  max-width: 560px;
+  margin: 0 auto;
+}
+.form-grid {
+  padding: 12px var(--space-md);
+  display: grid;
+  gap: var(--space-sm);
+}
+.form-field {
+  font-size: var(--font-13);
+  color: var(--muted2);
+}
+.form-check {
+  font-size: var(--font-13);
+  color: var(--muted2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-input {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-xs);
+  padding: 8px var(--space-sm);
+  font-size: var(--font-13);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
 .btn {
   padding: 8px 20px;
   border: none;

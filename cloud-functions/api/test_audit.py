@@ -88,12 +88,17 @@ seen = set()
 for f, tmpl, args in key_defs:
     n_ps = tmpl.count("%s")
     argnames = [a.strip().split("=")[0].strip() for a in args.split(",") if a.strip()]
+    # 2026-11-02 S2-9: 版本段参数(_CV/_CACHE_V/...V)不是业务维度, 不计入 need 校验;
+    #   原逻辑只剥离「模板以 %s| 开头」的前缀, 而 stock_risk 的 _CV 写在模板首位之外
+    #   ("stock_risk|%s|%s|%s" % (_CV, channel, full)) → 误报少一个维度。
+    _ver_args = [a for a in argnames if a in ("_CV", "_CACHE_V", "_VER", "_V")]
+    _dim_args = [a for a in argnames if a not in _ver_args]
     for prefix, need in EXPECT:
         if prefix in tmpl:  # 容忍 _CACHE_V 前缀(%s|stock_risk|...)
             seen.add(prefix)
-            missing = [p for p in need if p not in argnames]
+            missing = [p for p in need if p not in _dim_args]
             check("缓存 key %s 含 %s" % (prefix, ",".join(need)),
-                  not missing and (n_ps - (1 if tmpl.startswith('%s|') else 0)) == len(need),  # 严格: 剥离 _CACHE_V 前缀 %s 后 == need(0 容忍)
+                  not missing and n_ps == len(argnames) and len(_dim_args) == len(need),
                   "模板=%s 参数=%s" % (tmpl, argnames))
 for prefix, need in EXPECT:
     if prefix not in seen:
@@ -137,13 +142,15 @@ for f, s in srcs.items():
 check("无 DATE_FORMAT 单 % 格式串(参数化 SQL 须 %%)", not single_pct, "; ".join(single_pct[:5]))
 for u in single_pct[:10]:
     print("  单%处(人工核对, 无参数查询 %Y 合法):", u)
-# index.py 迁移 SQL(M2/M3)必须 %% 转义 —— M3 曾因 %Y 被 pymysql 当占位符从未执行
-_idx = srcs.get("index.py", "")
+# index.py 迁移段已于 2026-11-02 S2-9 整体退役(见 docs §15.123), 原"迁移 SQL DATE_FORMAT
+# 必须 %% 转义"检查会变成恒真空跑; 改为全库同口径(任何文件的 DATE_FORMAT 格式串都不得用单 %),
+# 与上一条 D 段互补: 上一条查裸 %Y 字面量, 这条查 DATE_FORMAT 内格式串。
 _mig_ok = True
-for m in re.finditer(r'DATE_FORMAT\([^,]+,\s*\'([^\']*)\'', _idx):
-    if "%%" not in m.group(1):
-        _mig_ok = False
-check("index.py 迁移 SQL DATE_FORMAT 全部 %% 转义(M3 防复发)", _mig_ok)
+for _f, _s in srcs.items():
+    for m in re.finditer(r'DATE_FORMAT\([^,]+,\s*\'([^\']*)\'', _s):
+        if "%" in m.group(1) and "%%" not in m.group(1):
+            _mig_ok = False
+check("全库 DATE_FORMAT 格式串无单 %% (M3 防复发; 迁移段退役后全库同口径)", _mig_ok)
 
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

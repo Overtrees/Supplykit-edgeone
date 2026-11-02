@@ -1080,7 +1080,7 @@ def stock_risk(channel: str = "jd", full: int = 0):
     2026-11-02 S2-1: 手写缓存换成统一 cache_get —— 键族归一到首位(否则域级失效匹配不到),
     并复用"写入令牌"守卫; full=1 体积大(曾 11.6MB)仍用 max_bytes 挡住不落表。"""
     from routes.analysis_cache import _CACHE_V as _CV
-    _key = "stock_risk|%s|%s|%s" % (_CV, channel, full)
+    _key = "stock_risk|%s|%s|%s" % (_CV, channel, full)  # _CV 缓存版本段, 后两段为业务维度
 
     def _build():
         try:
