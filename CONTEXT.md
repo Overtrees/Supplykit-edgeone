@@ -24,6 +24,7 @@
 | 69 码不猜: 补码两道闸 | `docs/DEVELOPMENT.md` §15.97 |
 | 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/DEVELOPMENT.md` §15.101 |
 | 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/DEVELOPMENT.md` §15.106 |
+| 低库存卡口径: bbcc=BC 合计 / traditional=逐仓(轮转只服务后者) | `docs/DEVELOPMENT.md` §15.109 |
 | 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
 
 ## 关键口径(不可破坏的业务约定)
@@ -75,8 +76,13 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - ~~bbcc 模式低库存卡空白(标题 160 条 / 卡面 0 行)~~ **已修(2026-11-02)**: bc 行 id 比 platform 行
   小 6 万, 混在 `ORDER BY id DESC LIMIT 300` 里被整体挤出窗口 → low_stock 拆成单独查询。
   别再"从截断样本推断全量"(11-01 就误判成"库里没有 bc 行")。见 `docs/DEVELOPMENT.md` §15.108 第三节
+- ~~bbcc 卡面显示 C 仓(应为 BC 合计)~~ **已修(2026-11-02)**: `lowStockAlerts = fullAlerts || alertsList`
+  这个"数据源优先级"把 aux 已按模式筛好的结果顶掉了; 仓型过滤上提到 lowStockAlerts 这一层,
+  卡面与弹窗共用一份数据。bbcc 只有 `__BC__` 一个桶, **轮转退化为顺序取 5 条(无害无功)**,
+  轮转真正服务 traditional 的 7 仓。见 §15.109
 - 大卡弹窗为全量列表(自有仓 90 条全展示), `maxHeight:70vh` 滚动承接
-- `frontend/package-lock.json` 缺 esbuild 全平台可选依赖: npm 11 下 `npm ci` 直接 EUSAGE(CI 用 node20 暂不炸)
+- ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
+  `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
 
 ## 用户偏好
 

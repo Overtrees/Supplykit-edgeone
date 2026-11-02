@@ -2488,3 +2488,60 @@ token 在会话里明文出现过, 用户决定暂不轮换, 但要求"把上下
 
 ⚠ 脱敏只是"记录层面止损", 不能让已泄漏的 token 变安全。用户知情并选择暂不轮换;
 轮换时只需改 `.edgeone/auth.json`, `python3 scripts/env_check.py` 会立刻反映是否生效。
+
+### 15.109 bbcc 卡面口径回归「BC 合计」+ lockfile 补齐 esbuild 平台包(2026-11-02)
+
+#### 一、15.108 修完仍有口径错: 卡面显示的是 C 仓, 不是 BC
+
+15.108 让 bbcc 的 aux 终于返回了 160 条 bc 行, 但用户复查线上截图, 卡面副行是
+`郑州仓 · 可售 0 < 动态安全线 5.6` —— bbcc 模式下这行本该是 `BC · 可售 6 < 动态安全线 84.4`。
+
+**三处三个口径**:
+
+| 位置 | 数据源 | 结果 |
+|---|---|---|
+| 标题 `(160)` | `alertCounts.by_type.low_stock` | bc 计数 |
+| 卡面 5 行 | `fullAlerts`(`/api/alerts` 全量 1150 条) | platform 逐仓行(郑州仓…) |
+| 弹窗 | `fullAlerts` 再按仓型筛 | bc 行 |
+
+根因是 11-01 引入的**数据源优先级**: `lowStockAlerts = fullAlerts || alertsList`,
+本意是"别吃截断列表", 但 fullAlerts 是全量原始数据, 把 aux 已经按模式筛好的结果整个顶掉了。
+
+修法: 把仓型过滤**上提到 lowStockAlerts 这一层**(不是卡面、也不是弹窗各筛一遍):
+
+```ts
+const _lsTypes = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
+const _lsRaw = (fullAlerts ? fullAlerts.filter(low_stock) : alertsList.filter(low_stock))
+const _lsByMode = _lsRaw.filter(x => _lsTypes.includes(x.warehouse_type || ''))
+const lowStockAlerts = _lsByMode.length ? _lsByMode : _lsRaw   // 筛空回落
+```
+
+弹窗直接复用 `lowStockAlerts`, 不再自己筛 —— 同一个数据源不可能再出现两种口径。
+
+> 教训: "数据源优先级"和"口径过滤"是两件正交的事。换了数据源不等于换了口径,
+> 优先级写法 `A || B` 会把 A 里已有的过滤悄悄丢掉。
+
+#### 二、轮转在 bbcc 下的真实定位
+
+bbcc 的 low_stock 只有 `__BC__` 一个"仓", 分桶后退化为单桶, 轮转等价于"按 id 顺序取 5 条",
+**无害但无功**; 它真正服务的是 traditional 的 7 个 C 仓。这点写进 CONTEXT, 避免后来者以为
+"轮转在 bbcc 下也该有轮转效果"。
+
+#### 三、lockfile 补齐 esbuild 平台包(npm 11 下 `npm ci` 直接 EUSAGE)
+
+```
+npm error `npm ci` can only install packages when package.json and package-lock.json are in sync
+npm error Missing: @esbuild/aix-ppc64@0.21.5 from lock file     ← 共 22 个平台包
+```
+
+lock 里只有 esbuild 主包与 `@esbuild/linux-x64` 等少数几个(历史遗留: 曾在 `--no-package-lock`
+或旧 npm 下生成)。修法 **`npm install --package-lock-only`**(只重算 lock, 不动 node_modules):
+
+| 指标 | 结果 |
+|---|---|
+| 新增条目 | 22 个 `@esbuild/darwin-*/linux-*/win32-*` 可选包 |
+| 删除条目 | **0** |
+| 版本漂移 | **0**(唯一变化是 `0.21.5` 出现次数 2 → 24, 即新增的平台包) |
+| `npm ci` 真实执行 | 通过, added 362 packages, exit 0 |
+
+CI 的 node20 本来没事, 但本地/未来升级 npm 11 会直接被这个卡住, 早补早省事。

@@ -724,8 +724,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   截断列表只是"首屏快照", 与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200 条);
   //   卡面此前直接吃截断列表, 一旦 id DESC 的前 N 条被同类其它仓占满, 卡上明细就会缺失或重复。
   //   现在: ① 进入页面自动拉一次全量(不用等用户点「更多」) ② 卡面与弹窗同源同口径。
+  // 2026-11-02 补: 还要跟随补货模式的**仓型口径** ——
+  //   bbcc → B+C 合计行(bc); traditional → C 仓逐仓(platform); own 两种都看。
+  //   此前只按 alert_type 过滤, bbcc 下卡面拿到的是 /api/alerts 全量里 id 更新的 platform 行,
+  //   显示成"郑州仓"等单仓数据 —— 跟标题(160 = bc 计数)对不上, 也违背"BC 合计才有意义"的业务口径。
+  //   筛完为空时回落不过滤(历史数据仓型不规范时不能把卡面变空)。
+  const _lsTypes = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
   const lowStockFull = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : null
-  const lowStockAlerts = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
+  const _lsRaw = lowStockFull || alertsList.filter(x => x.alert_type === 'low_stock')
+  const _lsByMode = _lsRaw.filter(x => _lsTypes.includes(String(x.warehouse_type || '')))
+  const lowStockAlerts = _lsByMode.length ? _lsByMode : _lsRaw
   // 卡面 5 行取数(2026-11-02 改「按仓轮转 + 轮内 SKU 去重」):
   //   旧法问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是郑州仓。
   //   但**只按仓轮转还不够**: 规则引擎对各仓是同一批 SKU 顺序评估的, 每个仓的"第一条"
@@ -774,17 +782,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     }
     return out
   })()
-  // 弹窗与卡面同口径(2026-11-02): bbcc → B+C 合计行(bc) + 自有仓; traditional → C 仓(platform) + 自有仓。
-  //   后端 aux 的 low_stock 已按同一白名单取数(dashboard.py 同日注释); 但弹窗吃的是
-  //   /api/alerts 全量(1150 条), 不筛就会混入 990 条 C 仓逐仓明细, 与标题「共 160 条」对不上。
-  //   防御: 筛完为空(历史数据仓型不规范)时回落到不过滤 —— 不能再出现"卡上有数、弹窗空白"。
-  const lowStockModalRows = (() => {
-    const all = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : lowStockAlerts
-    if (!fullAlerts) return all
-    const types = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
-    const hit = all.filter(x => types.includes(x.warehouse_type || ''))
-    return hit.length ? hit : all
-  })()
+  // 弹窗与卡面同源(2026-11-02): lowStockAlerts 已按补货模式筛过仓型, 直接用即可 ——
+  //   早前这里是独立再筛一遍, 结果卡面(未筛)与弹窗口径不一致; 现在两处都从 lowStockAlerts 出。
+  const lowStockModalRows = lowStockAlerts
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
   // 列表每组各取 200 条，总数可能远大于此，filter 计数会系统性漏报
   const _acSev: Record<string, number> = (alertCounts && alertCounts.by_severity) || {}
@@ -2049,8 +2049,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     "库内 low_stock 200 条全是 platform, 没有 bc 类型", 于是 bbcc 下过滤恒空。
                     2026-11-02 复查后发现真因不是"没有 bc 行", 而是 **bc 行的 id 比 platform 小 6 万**,
                     后端混在一起 ORDER BY id DESC LIMIT 300 时被挤出窗口, 前端全量接口里其实有
-                    160 条 bc 行(dashboard.py 同日改为 low_stock 单独查)。所以过滤恢复了,
-                    但挪到 lowStockModalRows 里做, 且带"筛空则回落全量"的防御。 */}
+                    160 条 bc 行(dashboard.py 同日改为 low_stock 单独查)。过滤现在统一在
+                    lowStockAlerts 里做(带"筛空则回落全量"的防御), 卡面与弹窗共用同一份,
+                    不会再出现"卡面显示郑州仓、弹窗显示 BC"这种两套口径。 */}
                 {lowStockModalRows.map(function (x) {
                   return (
                     <div
