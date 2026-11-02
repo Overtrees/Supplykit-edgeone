@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { api } from '../../api/client'
 import { t } from '../../locale'
@@ -54,6 +54,14 @@ export default function HammerHistory({ channel }: { channel: string }) {
 
   const valid = !!startDraft && !!endDraft && startDraft <= endDraft
   const hasArchive = Number(cov?.archive?.rows || 0) > 0
+  // 与后端 _MAX_SPAN 对齐: 超过 400 天会被截断到最近 400 天(前端只做提示, 不裁剪)
+  const spanDays = useMemo(() => {
+    if (!histStart || !histEnd) return 0
+    const a = Date.parse(histStart + 'T00:00:00Z')
+    const b = Date.parse(histEnd + 'T00:00:00Z')
+    if (isNaN(a) || isNaN(b) || b < a) return 0
+    return Math.round((b - a) / 86400000) + 1
+  }, [histStart, histEnd])
 
   return (
     <div>
@@ -67,6 +75,10 @@ export default function HammerHistory({ channel }: { channel: string }) {
           {histStart.slice(5)}/{histEnd.slice(5)}
         </span>
       </div>
+      {/* 2026-11-02 S2-9: 400 天截断提示从页面移到这里 —— 页面头部已无区间文案,
+          这条"你选的范围被截短了"必须有个地方说, 否则用户会以为数据缺了。
+          只在实际跨度 >400 天时出现, 放摘要下方一行 10px 灰字, 不占分段控件位置。 */}
+      {spanDays > 400 ? <div className="hist-clamp-hint">{t('hist.clamped_hint')}</div> : null}
 
       {/* 短文案(7天/30天/90天/自定义): 4 段在 390 视口内一行放下, 不再截断换行 */}
       <div className="hammer-segmented">

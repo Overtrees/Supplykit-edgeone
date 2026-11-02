@@ -2585,14 +2585,14 @@ input[type='file'] {
 .hist-share-wide {
   width: 96px;
 }
-/* 区间 / 来源: 两行结构 —— 390px 下拼成一行会把 "(29 天)" 折成只剩 "天)" */
-.hist-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 8px;
-  font-size: var(--font-xs);
-  color: var(--muted);
+/* 2026-11-02 S2-9: .hist-meta(页面上的区间/来源两行)已删除 —— 区间与来源改由
+   锤子菜单的统计区间摘要表达, 页面首屏只剩标题。 */
+/* 400 天截断提示(锤子菜单区间摘要下方, 2026-11-02 从页面移入) */
+.hist-clamp-hint {
+  margin: -2px 0 6px;
+  font-size: var(--font-10);
+  color: var(--warning);
+  line-height: 1.5;
 }
 /* 归档状态(锤子菜单底部, 2026-11-02 从页面卡片移入)
    上 12 = 与 hammer-segmented 之间沿用"分组间距"; 左右 2 = 与自定义面板内

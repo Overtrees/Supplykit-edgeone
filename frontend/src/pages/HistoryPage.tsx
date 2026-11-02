@@ -47,21 +47,8 @@ const fmtInt = (n: number): string => {
   return v.toLocaleString('zh-CN')
 }
 
-/**
- * 来源结构兼容层。
- *
- * 出现过 "来源: 订单表 undefined ~ undefined": 前端产物还在用数组下标(`s.orders[0]`),
- * 而接口已改成对象 `{from,to,days}` —— `obj[0]` 恒为 undefined。两类结构都认,
- * 缺字段就整段不显示, 不允许把 undefined 打到界面上。
- */
-const readSeg = (v: any): { from: string; to: string; days: number } | null => {
-  if (!v) return null
-  if (Array.isArray(v)) {
-    return v[0] && v[1] ? { from: String(v[0]), to: String(v[1]), days: 0 } : null
-  }
-  if (!v.from || !v.to) return null
-  return { from: String(v.from), to: String(v.to), days: Number(v.days || 0) }
-}
+// 2026-11-02 S2-9: readSeg(来源结构兼容层)随页面上的"来源 归档 N 天 · 订单 M 天"
+// 一起删除 —— 该行已移出页面, 区间与来源信息统一由锤子菜单的统计区间摘要表达。
 
 export default function HistoryPage() {
   const channel = useAppStore(s => s.channel)
@@ -161,21 +148,6 @@ export default function HistoryPage() {
     }
   }, [series])
 
-  // 来源 = 真的有数据的那段(后端按 src 分组统计), 不是"本来打算查的那段"。
-  // 2026-11-02 S2-9: 原来每段都带自己 "a ~ b" 日期, 与 hist-meta 首行的生效区间
-  //   逐字重复(用户点名的那条冗余)。这里改为"哪几段来源 + 各多少天": 覆盖到哪段
-  //   区间已由首行说明, 来源行只补"分了几段、各段多长"这层信息。
-  const srcText = useMemo(() => {
-    const s = sum?.sources || {}
-    const unit = by === 'month' ? ' 个月' : ' 天'
-    const parts: string[] = []
-    const a = readSeg(s.archive)
-    const o = readSeg(s.orders)
-    if (a) parts.push(`归档 ${a.days}${unit}`)
-    if (o) parts.push(`订单 ${o.days}${unit}`)
-    return parts.join(' · ')
-  }, [sum, by])
-
   return (
     <div className={'hist-page' + (loading ? ' is-loading' : '')}>
       {/* 2026-11-02 S2-9: 头部不再包卡片 —— "标题+覆盖摘要+区间"做成裸排版(与
@@ -185,27 +157,11 @@ export default function HistoryPage() {
         <div className="hist-head">
           <span className="hist-title">历史归档</span>
         </div>
-        {/* 2026-11-02 S2-9(用户定案): 页面上不留任何归档说明 —— 状态、覆盖区间、
-            "订单自 X 起满 N 天后自动归档"全部由锤子菜单底部承接(.hist-arc)。
-            页面首屏只回答"现在查的是哪段区间"。 */}
-
-        {/* 2026-11-02 S2-9: 区间/粒度控件收敛到锤子菜单; 页面不再重复回显
-            (hist-meta 已有生效区间日期, 锤子按钮 header 常驻随时可调) */}
-
-        <div className="hist-meta">
-          {/* 2026-11-02 S2-9: 接口偶发失败时 sum 是错误对象(无 start/end), 直接模板串
-              会渲染 "undefined ~ undefined" —— 缺字段整段不显示(本页既定原则)
-              区间只在这里写一次: 来源行原本也带 "订单 a ~ b", 与首行逐字重复
-              (2026-11-02 用户指出), 现只描述"哪几段来源 + 各多少天" */}
-          <span>
-            {sum?.start && sum?.end
-              ? `${sum.start} ~ ${sum.end}${sum?.clamped ? '（已截断至 400 天）' : ''}`
-              : loading
-                ? '加载中…'
-                : ''}
-          </span>
-          {srcText ? <span>来源 {srcText}</span> : null}
-        </div>
+        {/* 2026-11-02 S2-9(用户定案最终形态): 标题下方不再有任何副文本 ——
+            · 归档状态/覆盖区间/"哪天起自动归档" → 锤子菜单底部(.hist-arc)
+            · 生效区间/粒度 + 来源段说明 → 锤子菜单 header(区间摘要)与统计区间分段
+            页面首屏只留标题, 立刻进入数据; 控件齐在锤子菜单, 点两下就能看能调。
+            400 天截断提示随之移入锤子菜单(见 HammerHistory 的区间摘要)。 */}
       </div>
 
       {err && !sum ? (
