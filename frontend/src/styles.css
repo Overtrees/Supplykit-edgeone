@@ -2408,10 +2408,11 @@ input[type='file'] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hist-kpi-u {
-  font-size: var(--font-9);
+.hist-kpi-unit {
+  font-size: var(--font-xs);
+  font-weight: 400;
   color: var(--muted2);
-  margin-top: 2px;
+  margin-left: 3px;
 }
 .hist-empty {
   padding: 24px 0;

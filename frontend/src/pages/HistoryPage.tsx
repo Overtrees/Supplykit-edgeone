@@ -260,8 +260,12 @@ export default function HistoryPage() {
           ].map(x => (
             <div key={x.k}>
               <div className="hist-kpi-k">{x.k}</div>
-              <div className="hist-kpi-v">{loading && !sum ? '—' : x.v}</div>
-              <div className="hist-kpi-u">{x.s}</div>
+              {/* 单位跟在数值右侧而不是另起一行: 另起一行时 18px 数字的行高会在中间
+                  留出一道空, 视觉上单位像独立的第四行 */}
+              <div className="hist-kpi-v">
+                {loading && !sum ? '—' : x.v}
+                <span className="hist-kpi-unit">{x.s}</span>
+              </div>
             </div>
           ))}
         </div>
