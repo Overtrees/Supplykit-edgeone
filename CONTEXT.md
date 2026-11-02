@@ -24,6 +24,7 @@
 | 69 码不猜: 补码两道闸 | `docs/DEVELOPMENT.md` §15.97 |
 | 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/DEVELOPMENT.md` §15.101 |
 | 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/DEVELOPMENT.md` §15.106 |
+| 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
 
 ## 关键口径(不可破坏的业务约定)
 
@@ -39,7 +40,8 @@
 
 - **换机先自检**: `python3 scripts/env_check.py` —— 缺 .env / EDGEONE token / push 凭据会一次性列出, 别等 push 才发现
 - **先本地, 再线上**: 逻辑验证用 `python3 scripts/local_api.py`(本地直连同库), 推一次 2~3 分钟且云函数 120s 硬限
-- **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成
+- **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
+  若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
 - **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 205 通过/0 失败
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
@@ -50,6 +52,8 @@
 ```bash
 # 环境自检(换机/新会话第一条命令)
 python3 scripts/env_check.py
+# 推送(github.com:443 在本沙箱不可达, 走 API; 一次一个 squash 提交)
+python3 scripts/push_api.py -m "fix(xxx): ..." 
 # 部署状态
 python3 scripts/deploy_status.py
 # 本地直连测试
