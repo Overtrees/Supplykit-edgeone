@@ -816,6 +816,70 @@ def _expiry_batch_gap(channel):
         return 0
 
 
+def _align_order_keys(channel, cleaned, chunk=300):
+    """订单四维业务键对齐(channel, order_no, sku, barcode)—— 2026-11-02 S2-5
+
+    唯一键是四维, 而"码"在入口会被 `_fill_barcode_from_products` 补齐或保留, 于是**同一行在不同
+    时间导入可能算出不同的码**: 首次导入时档案没码(存 ''), 之后档案补了码, 再导同批 →
+    四维键变了 → 不是"更新那一行", 而是"再造一行" → 同一笔订单两行, 金额翻倍。
+    反向同理: 本批缺码而库里已有码。
+
+    所以写入前按 (channel, order_no) 前缀把已存在行读一次, 做两件事:
+      ① 本批空码 + 库里同 (order_no,sku) 只有一个非空码 → 沿用库里的码。
+         这是**不猜**: 只用来阻止同一行分叉, 不产生新信息(库里那行本来就带这个码)。
+         多码 SKU(库里有 ≥2 个码, 或空码与有码并存)不参与对齐 —— 那是真的多行, 不该合并。
+      ② 本批有码 + 库里有同 (order_no,sku) 的空码行 → 先把那行原地升级成新码(保住 id),
+         之后 INSERT..ON DUPLICATE 正好命中它, 不会和它并成两行。
+
+    顺带返回每个已存在键的 ordered_at 集合: upsert 可能把一行挪到新的业务日期, 旧日期也得
+    重建 agg, 否则旧日期物化里留着这份数据 → 双计(调用方用它补登记)。
+
+    返回 ({[order_no, sku]: {"codes": set, "dates": set}}, 补码行数, 升级行数)。
+    """
+    if not cleaned:
+        return {}, 0, 0
+    _nos = list(dict.fromkeys(str(it.get("order_no") or "").strip() for it in cleaned
+                              if str(it.get("order_no") or "").strip()))
+    if not _nos:
+        return {}, 0, 0
+    prev = {}
+    for _i in range(0, len(_nos), chunk):
+        _part = _nos[_i:_i + chunk]
+        for _r in query("SELECT order_no, sku, barcode, ordered_at FROM orders "
+                        "WHERE channel=%%s AND order_no IN (%s)"
+                        % ",".join(["%s"] * len(_part)), [channel] + _part):
+            _k = (str(_r.get("order_no") or ""), str(_r.get("sku") or ""))
+            _p = prev.setdefault(_k, {"codes": set(), "dates": set()})
+            _p["codes"].add(str(_r.get("barcode") or "").strip())
+            _d = str(_r.get("ordered_at") or "")[:10]
+            if _d:
+                _p["dates"].add(_d)
+    fixed = promoted = 0
+    for it in cleaned:
+        _k = (str(it.get("order_no") or "").strip(), str(it.get("sku") or "").strip())
+        _p = prev.get(_k)
+        if not _p:
+            continue
+        _b = str(it.get("barcode") or "").strip()
+        _codes = _p["codes"]
+        if not _b:
+            _nonempty = {c for c in _codes if c}
+            if len(_nonempty) == 1 and "" not in _codes:
+                it["barcode"] = next(iter(_nonempty))
+                fixed += 1
+        elif _b not in _codes and "" in _codes:
+            try:
+                execute("UPDATE orders SET barcode=%s WHERE channel=%s AND order_no=%s AND sku=%s "
+                        "AND (barcode IS NULL OR barcode='')", [_b, channel, _k[0], _k[1]])
+                promoted += 1
+                _codes.discard("")
+                _codes.add(_b)
+            except Exception as _e:
+                # 升级失败不退化为"再插一行"——那正是要避免的翻倍, 交给唯一键挡住
+                try_err('cleanse_write', '空码行升级降级(%s|%s)' % _k, _e)
+    return prev, fixed, promoted
+
+
 def _write_rows(target, channel, conflict_mode, cleaned):
     """按 target 分派写入; 返回 (success, failed)
     渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道"""
@@ -829,10 +893,19 @@ def _write_rows(target, channel, conflict_mode, cleaned):
             _fill_barcode_from_products(channel, cleaned)
         except Exception as _e:
             try_err('cleansing', '69码入口对齐降级(order)', _e)
+        # 2026-11-02 S2-5 四维业务键对齐(必须放在补码之后 —— 补码会改变键)
+        _prev, _fixed, _promoted = {}, 0, 0
+        try:
+            _prev, _fixed, _promoted = _align_order_keys(channel, cleaned)
+        except Exception as _e:
+            try_err('cleansing', '订单四维键预读降级(退化为按本批码直写)', _e)
         # 2026-11-02 S2-2: 先记下"这批数据落在哪些业务日期", 写成功后再登记重建。
         #   顺序不能反 —— 先标记后写入的话, 后台重建线程可能在写入完成前就把这几天
         #   重建完并清掉标记, 这批数据就永远进不了物化(且不会有任何报错)。
         _days = {str(_it.get("ordered_at") or "")[:10] for _it in cleaned}
+        # upsert 会把已存在的行挪到新的 ordered_at —— 旧日期也要重建, 否则旧日期 agg 里
+        #   还留着这一行, 新日期又加一遍 → 同一笔订单在两天各算一次
+        _old_days = {_d for _p in _prev.values() for _d in (_p.get("dates") or set())}
         _res = _write_batch("orders",
                             ["order_no", "store", "warehouse", "sku", "product_name", "barcode",
                              "quantity", "unit_price", "total_amount", "order_status",
@@ -847,7 +920,8 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         # 只在真有行写成功时登记(全失败还去重建, 等于拿没变的数据白跑一遍物化)
         try:
             if int(_res[0] or 0) > 0:
-                mark_agg_days(channel, _days, reason="order_import")
+                _nd = {_d for _d in (_days | _old_days) if _d}
+                mark_agg_days(channel, _nd, reason="order_import")
         except Exception as _em:
             # 标记失败不影响导入结果(数据已落库), 由每日 sweep 用 synced_at 反查补标记
             try_err('cleanse_write', '订单导入后登记重建降级', _em)
@@ -1073,7 +1147,9 @@ def _fill_warehouse_type(channel, cleaned, target):
 def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd", agg_sum=None, agg_overwrite=False, agg_key3=None):
     """批量写入: 仅保留存在的列; 冲突策略——
     inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
-    其他目标(order/inventory/product/supplier): 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)
+    inventory: 同键全列覆盖(快照, 重导=刷新此刻数量)
+    orders: 同键全列覆盖 + deleted_at 恢复(四维键 upsert, 重导幂等)  ← 2026-11-02 S2-5
+    product/supplier: 统一全列覆盖(对齐 PA ON CONFLICT DO UPDATE)
     2026-10-17 文件内同键聚合(新导入数据内部: 同组合键多行 → 合并, 不撞唯一键 1062):
     agg_sum=求和列集(数量/金额类——order/inventory/gmv_flow/inbound/outbound 同键多行求和一条);
     agg_overwrite=True(同键覆盖末行——product/supplier 档案类 upsert 语义); None=不聚合
@@ -1139,6 +1215,14 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
     #   在此之前没有唯一键, 重复导入是"另插一行"(行数翻倍, 肉眼可见); 加键之后若不声明 upsert
     #   语义, 会直接 1062 整行失败。两种都不对 —— 正确的是覆盖(同一份文件重导应幂等)。
     inv_upsert = table == "inventory"
+    # 2026-11-02 S2-5 订单 = 四维业务键(channel, order_no, sku, barcode) 上的 upsert:
+    #   重导同一份文件结果不变(不再整批 1062)。语义是**覆盖**不是累加 —— 订单行是"这笔订单的
+    #   这一行", 累加会让重导翻倍; 同键多行在批内已由 agg_sum 合并过了。
+    #   deleted_at 显式清空: 源文件里有这条就以源文件为准恢复。不清的话, upsert 会照常更新
+    #   各列但让行留在回收站 —— 用户看到"成功 N 条", 数据却不出现, 且无从察觉。
+    #   实测(TiDB, 2000 行/1000 一批): 纯 INSERT 2.14s vs upsert 1.03s —— 没有注释里说的
+    #   "ON DUP 慢 10 倍", 那条结论来自旧表结构, 不适用于有四维唯一键的现在。
+    ord_upsert = table == "orders"
     for i in range(0, len(cleaned), 500):
         chunk = cleaned[i:i + 500]
         rows = []
@@ -1170,7 +1254,8 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
             rows.append(row)
         if not rows:
             continue
-        # 2026-10-16 去写入层查重(前端提前检测已拦截重复——订单号+sku+69码组合——后端纯写入提速回 seed)
+        # 2026-10-16 写入层不再逐行查重(查重在入口/唯一键)——此处只拼一条 INSERT
+        # 2026-11-02: orders/inventory 走 ON DUPLICATE 覆盖, 其余(sum_mode 之外)靠唯一键兜底
         # 2026-10-16 列并集: 曾 cols=rows[0] 键——首行缺列(空值跳键)时后续行该列静默丢弃——
         # 并集 + .get 兜底(缺失补默认)保列完整(不丢数据)
         cols = list(dict.fromkeys(c for r in rows for c in (r.keys() if isinstance(r, dict) else [])))
@@ -1192,6 +1277,12 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                      if c not in ("id", "deleted_at")]
             if _iupd:
                 sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_iupd)
+        elif ord_upsert:
+            # 同键全列覆盖 + 软删恢复(见上方 ord_upsert 注释)
+            _oupd = ["`%s` = VALUES(`%s`)" % (c, c) for c in cols
+                     if c not in ("id", "deleted_at")]
+            _oupd.append("`deleted_at` = ''")
+            sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_oupd)
         else:
             # 2026-10-15 性能: 非 sum 模式已做已存在跳过(rows 全新键)——纯 INSERT 无 ON DUPLICATE(executemany+ON DUP 对 TiDB 慢 10 倍——seed 5000/批 36s vs 此处 5.5 分钟)
             pass

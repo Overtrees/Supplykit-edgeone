@@ -1271,10 +1271,14 @@ try:
 
     _cw = open('routes/cleanse_write.py', encoding='utf-8').read()
     check("S2-2 订单导入成功后登记重建",
-          "mark_agg_days(channel, _days" in _cw and "agg_sum=[\"quantity\"" in _cw, "cleanse_write.py")
+          "mark_agg_days(channel, _nd" in _cw and "agg_sum=[\"quantity\"" in _cw, "cleanse_write.py")
     check("S2-2 登记发生在写入之后(顺序反了会丢数据)",
-          _cw.index('_res = _write_batch("orders"') < _cw.index("mark_agg_days(channel, _days"),
+          _cw.index('_res = _write_batch("orders"') < _cw.index("mark_agg_days(channel, _nd"),
           "cleanse_write.py")
+    # 2026-11-02 S2-5: upsert 换日期时旧日期也得重建, 否则同一笔订单在两天各算一次
+    check("S2-5 旧业务日期并入重建集合",
+          "_old_days = {_d for _p in _prev.values()" in _cw
+          and "(_days | _old_days)" in _cw, "cleanse_write.py")
 
     _od = open('routes/orders.py', encoding='utf-8').read()
     check("S2-2 删单/恢复前先取受影响日期",
@@ -1310,6 +1314,58 @@ try:
     _db.executemany, _db.query, _db.one, _db.execute = _old_em4, _old_q4, _old_o4, _old_e4
 except Exception as _e11:
     check("S2-2 用例无异常", False, str(_e11)[:200])
+
+# ── 2026-11-02 S2-5 订单四维业务键(channel|order_no|sku|barcode) ──────────────
+try:
+    from routes import cleanse_write as _cs3
+    _SQL3, _ROWS3 = [], []
+    _old_em3 = _cs3.executemany
+    _cs3.executemany = lambda sql, seq: (_SQL3.append(sql), _ROWS3.extend(list(seq)))
+    _r3 = _cs3._write_batch("orders",
+                            ["order_no", "sku", "barcode", "quantity", "total_amount", "channel"],
+                            [{"order_no": "K1", "sku": "S1", "barcode": "69-1",
+                              "quantity": 2, "total_amount": 20, "channel": "jd"}],
+                            "sum", "order_no", "sku", agg_key3="barcode",
+                            agg_sum=["quantity", "total_amount"])
+    _sql3 = _SQL3[-1] if _SQL3 else ""
+    check("S2-5 订单写入是 upsert(重导不再整批 1062)",
+          "ON DUPLICATE KEY UPDATE" in _sql3 and _r3[0] == 1, _sql3[:120])
+    check("S2-5 upsert 覆盖各列但不碰代理键",
+          "`quantity` = VALUES(`quantity`)" in _sql3 and "`id` = VALUES" not in _sql3, _sql3[:160])
+    check("S2-5 upsert 显式恢复软删(deleted_at='')",
+          "`deleted_at` = ''" in _sql3, _sql3[:160])
+    _cs3.executemany = _old_em3
+
+    _sc3 = open('schema_create.py', encoding='utf-8').read()
+    check("S2-5 四维唯一键建在 channel|order_no|sku|barcode 上",
+          "uq_orders_biz (channel, order_no, sku, barcode)" in _sc3, "schema_create.py")
+    check("S2-5 先建新键再删旧键(中间不留裸奔窗口)",
+          _sc3.index("ADD UNIQUE KEY uq_orders_biz") < _sc3.index("DROP INDEX uq_orders_no_sku"),
+          "schema_create.py")
+    check("S2-5 建键前先合并四维重复(否则 ALTER 直接失败)",
+          "PARTITION BY channel, order_no, sku, barcode" in _sc3, "schema_create.py")
+
+    _cw3 = open('routes/cleanse_write.py', encoding='utf-8').read()
+    check("S2-5 写前对齐码(防止同一行因补码分叉成两行)",
+          "def _align_order_keys" in _cw3
+          and _cw3.index("_align_order_keys(channel, cleaned)") < _cw3.index('_res = _write_batch("orders"'),
+          "cleanse_write.py")
+    check("S2-5 对齐在补码之后(补码会改变键)",
+          _cw3.index("_fill_barcode_from_products(channel, cleaned)") < _cw3.index("_align_order_keys(channel, cleaned)"),
+          "cleanse_write.py")
+    check("S2-5 多码 SKU 不参与对齐(那本来就是多行)",
+          'len(_nonempty) == 1 and "" not in _codes' in _cw3, "cleanse_write.py")
+
+    _cl3 = open('routes/cleansing.py', encoding='utf-8').read()
+    check("S2-5 订单不再被入口查重拦死(否则覆盖逻辑成死代码)",
+          '"order": ("orders", "order_no", "sku", "")' not in _cl3, "cleansing.py")
+
+    _cp3 = open('../../frontend/src/pages/CleansingPage.tsx', encoding='utf-8').read()
+    check("S2-5 前端同键改为提示而不是跳过",
+          "将按本次文件覆盖更新" in _cp3 and "文件已导入过（同键全部已存在），已跳过" not in _cp3,
+          "CleansingPage.tsx")
+except Exception as _e12:
+    check("S2-5 用例无异常", False, str(_e12)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

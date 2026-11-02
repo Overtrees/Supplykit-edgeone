@@ -927,27 +927,24 @@ export default function CleansingPage() {
             fBuf ? new Blob([fBuf]) : f,
           )
           const dd = _dc.data
+          // 2026-11-02 S2-5 订单写入改为四维键(channel|order_no|sku|barcode) upsert, 重导幂等 ——
+          //   所以这里只做**提示**不做拦截。拦截会让"源文件改了再导一次"永远更新不进去,
+          //   覆盖逻辑变成死代码(与 2026-11-01 库存那次是同一类错误)。
           if (dd && dd.ok !== false) {
             if (dd.duplicate) {
-              setRes({
-                success: 0,
-                failed: dd.new + dd.overlap || 0,
-                message: '文件已导入过（同键全部已存在），已跳过',
-              })
-              goStep(3)
-              setBs('')
-              execLock.current = false
-              toast.warning('文件已导入过（同键全部已存在），已跳过')
-              return
-            }
-            if (dd.overlap) {
+              toast.warning(
+                '同键 ' +
+                  (dd.new + dd.overlap || 0) +
+                  ' 条均已存在，将按本次文件覆盖更新（不会重复计数）',
+              )
+            } else if (dd.overlap) {
               setOverlapAsk({
                 message:
-                  '部分数据已存在（已存在 ' +
+                  '其中 ' +
                   dd.overlap +
-                  ' 条，新增 ' +
+                  ' 条已存在（将覆盖更新），新增 ' +
                   dd.new +
-                  ' 条）——确认只写新增？',
+                  ' 条——确认导入？',
               })
               setBs('')
               execLock.current = false
@@ -1128,7 +1125,7 @@ export default function CleansingPage() {
     }
   }
 
-  // 部分重叠确认(底部弹窗): 确认→force_new 只写新增; 取消→停
+  // 部分重叠确认(底部弹窗): 确认→继续写入(同键由后端四维 upsert 覆盖, 不会翻倍)
   const confirmOverlap = async () => {
     if (!overlapAsk) return
     setOverlapAsk(null)

@@ -38,6 +38,9 @@ _TABLES = {
         "platform VARCHAR(32) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "data_source VARCHAR(32) DEFAULT '', supplier VARCHAR(64) DEFAULT '', remark VARCHAR(255) DEFAULT '', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
+        # 2026-11-02 S2-5 订单业务键 = 四维(channel, order_no, sku, barcode), 与写入层 upsert、
+        #   查重口径三者同一套键。旧 uq_orders_no_sku(order_no, sku) 比业务键窄, 见下方迁移注释。
+        "UNIQUE KEY uq_orders_biz (channel, order_no, sku, barcode), "
         "KEY idx_orders_channel_ordered (channel, ordered_at), "
         "KEY idx_orders_sku_ordered_at (sku, ordered_at, channel))"
     ),
@@ -281,17 +284,41 @@ def create_all_tables():
             ok_n += 1
         except Exception as e:
             try_err('schema', '建表失败 %s' % name, e)
-    # 2026-10-17 唯一索引兜底(职责: 前端三键检测拦截, 后端唯一索引兜底防并发/漏网):
-    # orders uq_orders_no_sku——seed 订单号已修全局唯一(不取模), 清洗导入天然唯一, 幂等补建
-    # (早前 seed 冲突源于 total%100000 轮回, 已修——现在补回兜底)
+    # 2026-11-02 S2-5 订单业务键: 旧键 uq_orders_no_sku(order_no, sku) → 新键
+    #   uq_orders_biz(channel, order_no, sku, barcode) —— 四维, 与写入层 upsert / 查重口径同一套。
+    #
+    # 为什么旧键不对(实测 2026-11-02):
+    #   · 不含 barcode: 同单同 SKU 两个 69 码(换包装/条码变更)本该是两行, 旧键只准一行 →
+    #     第二行 1062 → 单行降级计入 failed → 数量/金额**静默少算**, 而提示只有 "Duplicate entry"。
+    #   · 不含 channel: 跨渠道同订单号+SKU 互阻 —— 与 gmv_flows 修过的是同一个坑
+    #     (uq_platform_flow → uq_platform_flow_ch), orders 没跟着修。
+    #   · 不含 deleted_at 也没关系: 写入层已改 upsert 且显式 deleted_at='' —— 重导即恢复。
+    #
+    # 顺序: **先建新键, 再删旧键**。中间任何一步失败都还有一把约束在, 不会出现"裸奔"窗口;
+    #   反过来先删会有一段既没旧键也没新键的时间, 期间并发导入可直接写重。
+    # 建键前查四维重复: 有重则按"每组保留最新一行"(与 upsert 末次覆盖语义一致)合并并留痕;
+    #   组数过大不自动动手 —— 删数据的事宁可不做, 留给人判断。
     try:
-        from db import query as _q
-        _idx = {str(r.get("Key_name") or "") for r in
-                _q("SHOW INDEX FROM orders")}
-        if "uq_orders_no_sku" not in _idx:
-            execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_no_sku (order_no, sku)")
+        from db import query as _q, one as _q1
+        _idx = {str(r.get("Key_name") or "") for r in _q("SHOW INDEX FROM orders")}
+        if "uq_orders_biz" not in _idx:
+            _dup = _q1("SELECT COUNT(*) c FROM (SELECT 1 FROM orders "
+                       "GROUP BY channel, order_no, sku, barcode HAVING COUNT(*)>1) t")
+            _dn = int((_dup or {}).get("c") or 0)
+            if _dn > 5000:
+                raise RuntimeError("四维重复 %d 组 > 5000, 需人工清理后再建键" % _dn)
+            if _dn:
+                execute("DELETE FROM orders WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
+                        "(PARTITION BY channel, order_no, sku, barcode ORDER BY id DESC) rn "
+                        "FROM orders) t WHERE t.rn > 1)")
+                try_err('schema', '订单四维重复已合并(每组保留最新一行) %d 组' % _dn, '')
+            execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_biz "
+                    "(channel, order_no, sku, barcode)")
+        _idx2 = {str(r.get("Key_name") or "") for r in _q("SHOW INDEX FROM orders")}
+        if "uq_orders_no_sku" in _idx2:
+            execute("ALTER TABLE orders DROP INDEX uq_orders_no_sku")
     except Exception as e:
-        try_err('schema', 'orders 唯一索引兜底降级', e)
+        try_err('schema', 'orders 四维业务键迁移降级(旧键仍在, 行为与迁移前一致)', e)
     # 2026-10-27 模板表迁移(幂等): 旧 uk_tpl_name(name 唯一) → uk_tpl_name_type(name, doc_type)
     # ——曾订单/库存同名模板互相覆盖; 改双键后旧唯一键必须移除(否则同名跨类型保存撞键报错)
     try:

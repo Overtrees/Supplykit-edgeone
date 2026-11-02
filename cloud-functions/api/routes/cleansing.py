@@ -176,9 +176,10 @@ def _detect_columns(fname, data):
 async def cleansing_dup_check(request: Request, file: UploadFile = File(None),
                               q_target: str = Query(""), q_channel: str = Query(""),
                               q_mp: str = Query("")):
-    """2026-10-17 前端提前检测专用(职责: 前端拦截/后端写入): 三键优先(order_no|sku|barcode,
+    """2026-10-17 前端提前检测专用(职责: 前端提示/后端写入): 四维键优先(order_no|sku|barcode,
     空 barcode 落二键 order_no|sku)查库已存在——纯只读 SELECT 秒级, 不写入不建任务不拖导入性能
-    返回 {duplicate:n(全重), overlap:n(部分), new:n}; 前端据此拦截/弹窗 force_new"""
+    返回 {duplicate:n(全重), overlap:n(部分), new:n}; 2026-11-02 起订单写入是 upsert,
+    前端**只据此提示**(覆盖更新), 不再拦截 —— 详见 cleanse_write._write_batch ord_upsert"""
     try:
         _t = q_target or "order"
         if _t not in ("order", "gmv_flow"):
@@ -341,8 +342,12 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
             #   写入层已声明 inv_upsert = 同键全列覆盖(cleanse_write.py:961), 但查重挡在它前面 ——
             #   键存在就 return duplicate、根本不建任务 → 覆盖逻辑成了死代码,
             #   客户改完库存数量再导会被静默跳过, 库存永远停在首次导入的值(实测复现)。
-            _dup_cfg = {"order": ("orders", "order_no", "sku", ""),
-                        "gmv_flow": ("gmv_flows", "platform", "flow_no", ""),
+            # 2026-11-02 S2-5 订单**移出拦截**: 写入层已改成四维键 upsert(重导幂等), 再在入口
+            #   "键存在就 return duplicate、不建任务", 覆盖逻辑同样会变成死代码 —— 与 2026-11-01
+            #   库存那次是同一类错误。重导同批的正确结果是"覆盖更新", 而不是"被跳过"。
+            #   出入库 sum 模式是"累加"语义(重复导入=再入库一次, 合法), 也不拦截。
+            #   gmv_flow 仍是流水且写入层无 upsert → 保留拦截。
+            _dup_cfg = {"gmv_flow": ("gmv_flows", "platform", "flow_no", ""),
                         "inbound": ("inbound_records", "sku", "inbound_date", "barcode"),
                         "outbound": ("outbound_records", "sku", "outbound_date", "barcode")}
             # 出入库 sum 模式跳过拦截(累加语义)
