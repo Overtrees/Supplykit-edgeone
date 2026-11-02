@@ -41,6 +41,16 @@ def _cutoff():
     return (datetime.now(timezone.utc) - timedelta(days=_CUT_DAYS)).strftime("%Y-%m-%d")
 
 
+def _archive_day():
+    """一笔**今天下的订单**要等到哪天才会被归档
+
+    cron_archive 的判定是 `DATE(ordered_at) < today-365`(注意是严格小于), 所以 t 日下的
+    订单在 (t+366) 日第一次满足 —— 报"满 365 天后"是常见误读(实际第 366 天才搬)。
+    前端提示按这个日期算, 与 cron 的判定式逐字对齐, 不另立口径。
+    """
+    return (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def _shift(day, days):
     _d = datetime.strptime(str(day)[:10], "%Y-%m-%d") + timedelta(days=days)
     return _d.strftime("%Y-%m-%d")
@@ -122,6 +132,10 @@ def history_coverage(channel: str = ""):
     """
     def _build():
         out = {"cutoff": _cutoff(), "cut_days": _CUT_DAYS, "archive": None, "orders": None}
+        # 2026-11-02 S2-9: "新订单何时开始进归档" —— 前端把归档状态收进锤子菜单后,
+        #   顶部只剩一行覆盖摘要, 这句"哪天起自动归档"需要一份可信口径, 由后端给
+        #   (前端自己拿 cut_days 算时区/边界日容易差一天)。
+        out["archive_day"] = _archive_day()
         try:
             _w = " WHERE channel=%s" if channel else ""
             _p = [channel] if channel else []

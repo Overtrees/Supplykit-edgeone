@@ -163,24 +163,31 @@ export default function HistoryPage() {
   }, [series])
 
   // 来源 = 真的有数据的那段(后端按 src 分组统计), 不是"本来打算查的那段"。
+  // 2026-11-02 S2-9: 原来每段都带自己 "a ~ b" 日期, 与 hist-meta 首行的生效区间
+  //   逐字重复(用户点名的那条冗余)。这里改为"哪几段来源 + 各多少天": 覆盖到哪段
+  //   区间已由首行说明, 来源行只补"分了几段、各段多长"这层信息。
   const srcText = useMemo(() => {
     const s = sum?.sources || {}
     const unit = by === 'month' ? ' 个月' : ' 天'
     const parts: string[] = []
     const a = readSeg(s.archive)
     const o = readSeg(s.orders)
-    if (a) parts.push(`归档 ${a.from} ~ ${a.to}(${a.days}${unit})`)
-    if (o) parts.push(`订单 ${o.from} ~ ${o.to}(${o.days}${unit})`)
+    if (a) parts.push(`归档 ${a.days}${unit}`)
+    if (o) parts.push(`订单 ${o.days}${unit}`)
     return parts.join(' · ')
   }, [sum, by])
 
   return (
     <div className={'hist-page' + (loading ? ' is-loading' : '')}>
-      <div className="card">
+      {/* 2026-11-02 S2-9: 头部不再包卡片 —— "标题+覆盖摘要+区间"做成裸排版(与
+          section-title 同层级), 而其它内容卡片保留 card。原先是"卡片套标题",
+          视觉上像多了一层冗余容器; 且首卡片 4 个 card 里只有它没有可操作内容。 */}
+      <div className="hist-headcard">
         <div className="hist-head">
           <span className="hist-title">历史归档</span>
-          <span className="hist-sub">含 1 年以前</span>
         </div>
+        {/* note 本身就是一句完整结论("暂无归档：…" / "归档覆盖 a ~ b"), 前面再加
+            "暂无归档"标签是第三遍重复 + 两种标点 → 只渲染 note */}
         <div className="hist-note">
           {cov?.note || '加载中…'}
           {cov?.archive?.rows ? ` · ${fmtInt(cov.archive.rows)} 行` : ''}
@@ -191,7 +198,9 @@ export default function HistoryPage() {
 
         <div className="hist-meta">
           {/* 2026-11-02 S2-9: 接口偶发失败时 sum 是错误对象(无 start/end), 直接模板串
-              会渲染 "undefined ~ undefined" —— 缺字段整段不显示(本页既定原则) */}
+              会渲染 "undefined ~ undefined" —— 缺字段整段不显示(本页既定原则)
+              区间只在这里写一次: 来源行原本也带 "订单 a ~ b", 与首行逐字重复
+              (2026-11-02 用户指出), 现只描述"哪几段来源 + 各多少天" */}
           <span>
             {sum?.start && sum?.end
               ? `${sum.start} ~ ${sum.end}${sum?.clamped ? '（已截断至 400 天）' : ''}`

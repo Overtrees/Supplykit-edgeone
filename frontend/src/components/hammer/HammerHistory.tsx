@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAppStore } from '../../store/useAppStore'
+import { api } from '../../api/client'
 import { t } from '../../locale'
 
 /**
@@ -7,7 +8,7 @@ import { t } from '../../locale'
  *
  * 历史页的时间区间/粒度控件收敛于此, 布局对齐 HammerDashboard:
  *   hammer-header → 区间摘要(右对齐日期) → segmented(区间) → panel(自定义)
- *   → segmented(粒度) → (无操作按钮 —— 用户已在归档页, 入口按钮纯属多余)
+ *   → segmented(粒度) → footer(归档状态, 2026-11-02 从页面卡片移入)
  *
  * 间距规范(与看板逐项对齐):
  *   两行摘要标签统一样式(muted2 text-10 mb-4), segmented 与下一组标签间 marginTop 12,
@@ -28,6 +29,9 @@ export default function HammerHistory({ channel }: { channel: string }) {
   const [showCustom, setShowCustom] = useState(histPreset === 'custom')
   const [startDraft, setStartDraft] = useState(histStart)
   const [endDraft, setEndDraft] = useState(histEnd)
+  // 归档状态: 页面不再展示, 移到这里(菜单底部)。面板是"用时才挂载"的, 所以每次打开
+  // 拉一次 —— 与页面同接口、同 300s 缓存键, 不会多打一次库。
+  const [cov, setCov] = useState<any>(null)
 
   // 从外部进来时草稿要反映当前生效区间(否则看到上次残留草稿)
   useEffect(() => {
@@ -35,7 +39,21 @@ export default function HammerHistory({ channel }: { channel: string }) {
     setEndDraft(histEnd)
   }, [histStart, histEnd])
 
+  useEffect(() => {
+    let alive = true
+    api
+      .get(`/api/history/coverage?channel=${encodeURIComponent(channel || 'jd')}`)
+      .then(r => {
+        if (alive) setCov(r?.data || null)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [channel])
+
   const valid = !!startDraft && !!endDraft && startDraft <= endDraft
+  const hasArchive = Number(cov?.archive?.rows || 0) > 0
 
   return (
     <div>
@@ -139,6 +157,38 @@ export default function HammerHistory({ channel }: { channel: string }) {
             {k === 'day' ? t('hist.by.day') : t('hist.by.month')}
           </span>
         ))}
+      </div>
+
+      {/* 归档状态(2026-11-02 从页面卡片移入菜单底部)
+          间距: 上 12(与前一组 segmented 的分组间距一致) / 下 4(面板内容贴底留一口气) /
+          左右 2(与自定义面板里 "起始日期" 标签的左右缩进对齐, 不做成满宽顶格) */}
+      <div className="hist-arc">
+        <div className="hist-arc-row">
+          <span className="hist-arc-k">{t('hist.archive_state')}</span>
+          {!cov ? (
+            <span className="hist-arc-v hist-arc-muted">…</span>
+          ) : hasArchive ? (
+            <span className="hist-arc-v hist-arc-on">{t('hist.archive_on')}</span>
+          ) : (
+            <span className="hist-arc-v hist-arc-off">{t('hist.archive_none')}</span>
+          )}
+        </div>
+        {cov ? (
+          <div className="hist-arc-sub">
+            {hasArchive
+              ? t('hist.archive_cover')
+                  .replace('{a}', cov.archive?.min || '-')
+                  .replace('{b}', cov.archive?.max || '-')
+              : t('hist.archive_day')
+                  .replace('{d}', cov.archive_day || '-')
+                  .replace('{n}', String(cov.cut_days || 365))}
+          </div>
+        ) : null}
+        {cov?.stale_orders ? (
+          <div className="hist-arc-sub">
+            {t('hist.archive_stale').replace('{n}', String(cov.stale_orders))}
+          </div>
+        ) : null}
       </div>
     </div>
   )

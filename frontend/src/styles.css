@@ -2381,6 +2381,12 @@ input[type='file'] {
 /* ── 历史归档页(2026-11-02 S2-4/A) ─────────────────────────────────────
    整页样式集中在这里, 组件内不再写内联 style —— 否则同一个"卡片内小标题"在
    4 个卡片里会有 4 套 padding/字号, 改一处漏三处。间距统一按 4 的倍数取。 */
+/* 头部(标题+note+meta): 不包 card —— 2026-11-02 S2-9 用户要求标题去掉自身卡片样式,
+   改为裸排版。这里只负责给一个左右留白与页面上其它 card 对齐(card 的 padding 是 16,
+   裸排版也要 16, 否则文字会比下方卡片凸出去)。 */
+.hist-headcard {
+  padding: 4px var(--space-md) 0;
+}
 .hist-head {
   display: flex;
   align-items: baseline;
@@ -2393,11 +2399,7 @@ input[type='file'] {
   font-weight: 700;
   line-height: 1.3;
 }
-.hist-sub {
-  font-size: var(--font-xs);
-  font-weight: 400;
-  color: var(--muted);
-}
+/* 2026-11-02 S2-9: .hist-sub("含 1 年以前")已随文案删除, 样式一并移除 */
 .hist-note {
   font-size: var(--font-xs);
   color: var(--muted);
@@ -2405,30 +2407,9 @@ input[type='file'] {
   margin-top: 4px;
 }
 /* 筛选区: 预设 / 粒度 / 自定义日期 三行同构, 行间距统一 6px */
-.hist-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-.hist-row-label {
-  font-size: var(--font-xs);
-  color: var(--muted2);
-  flex: none;
-}
-.hist-pill {
-  cursor: pointer;
-  font-size: var(--font-xs);
-}
-.hist-date {
-  font-size: var(--font-sm);
-  padding: 4px 8px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--text);
-}
+/* 2026-11-02 S2-9: .hist-row / .hist-row-label / .hist-pill / .hist-date 四个类
+   随筛选控件一起移入锤子菜单(HammerHistory 用 hammer-segmented/hammer-input),
+   页面已无引用, 一并删除 —— 留着会让后来人以为页面还有一套自绘筛选行。 */
 /* 汇总四格: 桌面 4 列; 手机上 2 列 —— 4 列时金额(10,674,441.01)必溢出 */
 .hist-kpis {
   display: grid;
@@ -2615,4 +2596,41 @@ input[type='file'] {
   margin-top: 8px;
   font-size: var(--font-xs);
   color: var(--muted);
+}
+/* 归档状态(锤子菜单底部, 2026-11-02 从页面卡片移入)
+   上 12 = 与 hammer-segmented 之间沿用"分组间距"; 左右 2 = 与自定义面板内
+   "起始日期"标签的缩进对齐(hammer-input 自身 padding 之外再留 2px)。 */
+.hist-arc {
+  margin: 12px 2px 4px;
+}
+.hist-arc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.hist-arc-k {
+  font-size: var(--font-10);
+  color: var(--muted2);
+  flex: none;
+}
+.hist-arc-v {
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+.hist-arc-v.hist-arc-on {
+  color: var(--success);
+}
+.hist-arc-v.hist-arc-off {
+  /* 中性态: "暂无归档"是"还没到时候", 不是失败 —— 用灰不用红 */
+  color: var(--muted);
+}
+.hist-arc-v.hist-arc-muted {
+  color: var(--muted2);
+  font-weight: 400;
+}
+.hist-arc-sub {
+  margin-top: 3px;
+  font-size: var(--font-10);
+  color: var(--muted2);
+  line-height: 1.5;
 }
