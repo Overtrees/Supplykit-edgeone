@@ -838,10 +838,18 @@ def _build_aux(channel, mode):
     _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
     _wh_cond = " AND warehouse_type IN " + _wh_in
     # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
+    # 2026-11-02 拆回两条: low_stock 必须单独查 —— 实测 bbcc 模式下头 300 条 id DESC 全是
+    #   platform(逐仓,C 仓) 行, bc(B+C 合计) 行 id 比它小 6 万, 被整体挤出 300 条窗口;
+    #   白名单 (own, bc) 再一过滤 → 卡面 0 条, 而 alertCounts 走独立 COUNT 显示 160 条
+    #   ("标题有 N、卡面空白"的根因)。分开查 + 白名单后, bbcc 稳定拿到 bc 的 160 条。
     alerts = []
-    _ar = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
-                "ORDER BY id DESC LIMIT 300" % _AF, [channel])
-    _ls_c = _rp_c = _ot_c = 0
+    _sel = "SELECT %s FROM alerts WHERE channel=%%s AND status='active' " % _AF
+    _ls_rows = query(_sel + "AND alert_type='low_stock' AND warehouse_type IN " + _wh_in +
+                     " ORDER BY id DESC LIMIT 200", [channel])
+    _ar = query(_sel + "AND alert_type <> 'low_stock' ORDER BY id DESC LIMIT 300", [channel])
+    alerts.extend(_ls_rows)
+    _ls_c = len(_ls_rows)
+    _rp_c = _ot_c = 0
     # 2026-11-01 自有仓三条不进 aux 的 alerts 列表(其他组) ——
     #   它们由 ownHealth 专属块承载(看板「自有仓健康」卡), 再混进"其他告警"会双重计数且语义相悖
     _OWN_AT = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
@@ -849,11 +857,7 @@ def _build_aux(channel, mode):
         at = r.get("alert_type") or ""
         if at in _OWN_AT:
             continue
-        if at == "low_stock":
-            if _ls_c < 100 and str(r.get("warehouse_type") or "") in _wh_types:
-                alerts.append(r)
-                _ls_c += 1
-        elif at == "replenish":
+        if at == "replenish":
             if _rp_c < 100:
                 alerts.append(r)
                 _rp_c += 1

@@ -774,6 +774,17 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     }
     return out
   })()
+  // 弹窗与卡面同口径(2026-11-02): bbcc → B+C 合计行(bc) + 自有仓; traditional → C 仓(platform) + 自有仓。
+  //   后端 aux 的 low_stock 已按同一白名单取数(dashboard.py 同日注释); 但弹窗吃的是
+  //   /api/alerts 全量(1150 条), 不筛就会混入 990 条 C 仓逐仓明细, 与标题「共 160 条」对不上。
+  //   防御: 筛完为空(历史数据仓型不规范)时回落到不过滤 —— 不能再出现"卡上有数、弹窗空白"。
+  const lowStockModalRows = (() => {
+    const all = fullAlerts ? fullAlerts.filter(x => x.alert_type === 'low_stock') : lowStockAlerts
+    if (!fullAlerts) return all
+    const types = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
+    const hit = all.filter(x => types.includes(x.warehouse_type || ''))
+    return hit.length ? hit : all
+  })()
   // 看板「(N 严重)」等计数一律取后端 alertCounts(独立 COUNT)，不得从截断列表 filter 得出——
   // 列表每组各取 200 条，总数可能远大于此，filter 计数会系统性漏报
   const _acSev: Record<string, number> = (alertCounts && alertCounts.by_severity) || {}
@@ -1817,7 +1828,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 >
                   {/* 副行必须带仓库 —— 告警是"SKU×仓"粒度, 不带仓库时同一 SKU 多仓
                       的几行副行完全一样, 用户看到的仍是"重复的明细" */}
-                  {x.warehouse ? x.warehouse + ' · ' : ''}
+                  {x.warehouse ? fmtWh(x.warehouse) + ' · ' : ''}
                   {x.description}
                 </div>
               </div>
@@ -2034,17 +2045,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 >
                   低库存告警 · 共 {fmtInt(lowStockTotal)} 条
                 </div>
-                {/* 2026-11-01 修复「弹窗明细丢失」根因 —— 原过滤把 platform 排除在 bbcc 之外:
-                    `_replMode === 'bbcc' ? ['own','bc'] : ['own','platform']`
-                    但实测库内 low_stock 200 条 **warehouse_type 全是 'platform'**(B/C 仓行),
-                    从不存在 'bc' 类型的 low_stock 告警 → bbcc 模式下 filter 结果恒为空, 弹窗一条都不显示。
-                    而卡面(lowStockAlerts)没做这个过滤, 所以"卡上有数、弹窗空白"。
-                    现改为: 只按 alert_type 过滤, 不按 warehouse_type 筛 —— 卡面与弹窗同源同口径,
-                    且自有仓(own)本身不产生 low_stock(见 own_health 卡注释), 无需在此排除。 */}
-                {(fullAlerts
-                  ? fullAlerts.filter(x => x.alert_type === 'low_stock')
-                  : lowStockAlerts
-                ).map(function (x) {
+                {/* 2026-11-01 曾把 warehouse_type 过滤整个拿掉 —— 当时的实测结论是
+                    "库内 low_stock 200 条全是 platform, 没有 bc 类型", 于是 bbcc 下过滤恒空。
+                    2026-11-02 复查后发现真因不是"没有 bc 行", 而是 **bc 行的 id 比 platform 小 6 万**,
+                    后端混在一起 ORDER BY id DESC LIMIT 300 时被挤出窗口, 前端全量接口里其实有
+                    160 条 bc 行(dashboard.py 同日改为 low_stock 单独查)。所以过滤恢复了,
+                    但挪到 lowStockModalRows 里做, 且带"筛空则回落全量"的防御。 */}
+                {lowStockModalRows.map(function (x) {
                   return (
                     <div
                       key={x.id}

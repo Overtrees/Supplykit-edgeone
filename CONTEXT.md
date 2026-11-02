@@ -72,6 +72,9 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   轮内跳过已上卡的 SKU; 不满 5 条继续第二轮(3 个仓 = 3+2, 仍是 5 行)。
   **不要再做"每仓最多 1 条"的硬配额**(仓少时卡面塌成 3 行), **也不要只按仓轮转**
   (各仓头一条是同一个 SKU, 会变成同 SKU × 5 仓)。见 `docs/DEVELOPMENT.md` §15.108
+- ~~bbcc 模式低库存卡空白(标题 160 条 / 卡面 0 行)~~ **已修(2026-11-02)**: bc 行 id 比 platform 行
+  小 6 万, 混在 `ORDER BY id DESC LIMIT 300` 里被整体挤出窗口 → low_stock 拆成单独查询。
+  别再"从截断样本推断全量"(11-01 就误判成"库里没有 bc 行")。见 `docs/DEVELOPMENT.md` §15.108 第三节
 - 大卡弹窗为全量列表(自有仓 90 条全展示), `maxHeight:70vh` 滚动承接
 - `frontend/package-lock.json` 缺 esbuild 全平台可选依赖: npm 11 下 `npm ci` 直接 EUSAGE(CI 用 node20 暂不炸)
 
