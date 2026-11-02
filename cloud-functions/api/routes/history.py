@@ -84,13 +84,13 @@ def _union(channel, start, end, key=""):
         _e = min(end, _a_end)
         parts.append(
             "SELECT `date` AS d, gmv, order_count AS cnt, quantity AS qty" + _k +
-            " FROM daily_stats WHERE channel=%s AND `date`>=%s AND `date`<=%s")
+            ", 'a' AS src FROM daily_stats WHERE channel=%s AND `date`>=%s AND `date`<=%s")
         params += [channel, start, _e]
     if end >= _o_start:
         _s = max(start, _o_start)
         parts.append(
             "SELECT DATE(ordered_at) AS d, total_amount AS gmv, 1 AS cnt, quantity AS qty" + _k +
-            " FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+            ", 'o' AS src FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
             "AND ordered_at>=%s AND ordered_at<DATE_ADD(%s, INTERVAL 1 DAY)")
         params += [channel, _s, end]
     if not parts:
@@ -110,17 +110,6 @@ def _int(v):
         return int(v or 0)
     except Exception:
         return 0
-
-
-def _sources(channel, s, e):
-    """本次结果实际来自哪张表 —— 让"数据从哪来"可核对, 而不是靠猜"""
-    _cut = _cutoff()
-    out = {"orders": None, "archive": None}
-    if max(s, _cut) <= e:
-        out["orders"] = [max(s, _cut), e]
-    if s <= min(e, _shift(_cut, -1)):
-        out["archive"] = [s, min(e, _shift(_cut, -1))]
-    return out
 
 
 @router.get("/history/coverage")
@@ -178,14 +167,26 @@ def history_summary(channel: str = "jd", start: str = "", end: str = "", by: str
             return {"start": s, "end": e, "by": _by, "clamped": _clamped,
                     "totals": {"gmv": 0.0, "orders": 0, "qty": 0, "span_days": _days,
                                "active_days": 0, "avg_gmv_per_day": 0.0},
-                    "series": [], "sources": _sources(channel, s, e)}
+                    "series": [], "sources": {"orders": None, "archive": None}}
         # %% 是给 pymysql 的: 带 params 时它会对整条 SQL 做一次 % 格式化,
         # 写成 %Y 会被当成格式符 → ValueError('unsupported format character')。
         _k = "d" if _by == "day" else "DATE_FORMAT(d,'%%Y-%%m')"
-        rows = query("SELECT " + _k + " AS k, SUM(gmv) AS gmv, SUM(cnt) AS cnt, "
-                     "SUM(qty) AS qty FROM " + sql + " GROUP BY k ORDER BY k", params) or []
-        series = [{"date": str(r.get("k") or ""), "gmv": _num(r.get("gmv")),
-                   "orders": _int(r.get("cnt")), "qty": _int(r.get("qty"))} for r in rows]
+        rows = query("SELECT " + _k + " AS k, src, SUM(gmv) AS gmv, SUM(cnt) AS cnt, "
+                     "SUM(qty) AS qty FROM " + sql + " GROUP BY k, src ORDER BY k", params) or []
+        # 合并同一天的两个来源(切线两侧); 顺便记下每个来源自己的日期区间 —— 这样
+        # "来源"字段反映的是**真的有数据**的那段, 而不是"本来打算查的那段"。
+        _map, _src = {}, {}
+        for r in rows:
+            _key = str(r.get("k") or "")
+            _m = _map.setdefault(_key, {"date": _key, "gmv": 0.0, "orders": 0, "qty": 0})
+            _m["gmv"] = round(_m["gmv"] + _num(r.get("gmv")), 2)
+            _m["orders"] += _int(r.get("cnt"))
+            _m["qty"] += _int(r.get("qty"))
+            _code = r.get("src") or "o"
+            _b = _src.setdefault(_code, {"from": _key, "to": _key, "days": 0})
+            _b["from"], _b["to"] = min(_b["from"], _key), max(_b["to"], _key)
+            _b["days"] += 1
+        series = [_map[k] for k in sorted(_map)]
         _gmv = sum(x["gmv"] for x in series)
         _cnt = sum(x["orders"] for x in series)
         _qty = sum(x["qty"] for x in series)
@@ -193,7 +194,8 @@ def history_summary(channel: str = "jd", start: str = "", end: str = "", by: str
                 "totals": {"gmv": round(_gmv, 2), "orders": _cnt, "qty": _qty,
                            "span_days": _days, "active_days": len(series),
                            "avg_gmv_per_day": round(_gmv / _days, 2)},
-                "series": series, "sources": _sources(channel, s, e)}
+                "series": series,
+                "sources": {"orders": _src.get("o"), "archive": _src.get("a")}}
 
     return ok(_cache_get("history|summary|%s|%s|%s|%s" % (channel, s, e, _by), 120, _build))
 

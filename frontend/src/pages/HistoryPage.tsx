@@ -139,11 +139,13 @@ export default function HistoryPage() {
     }
   }, [series])
 
+  // 来源 = 真的有数据的那段(后端按 src 分组统计), 不是"本来打算查的那段" ——
+  // 否则查 2023 年时页面会写"来源: 归档表", 而归档表里一行都没有。
   const srcText = useMemo(() => {
     const s = sum?.sources || {}
     const parts: string[] = []
-    if (s.archive) parts.push(`归档表 ${s.archive[0]} ~ ${s.archive[1]}`)
-    if (s.orders) parts.push(`订单表 ${s.orders[0]} ~ ${s.orders[1]}`)
+    if (s.archive) parts.push(`归档表 ${s.archive.from} ~ ${s.archive.to}(${s.archive.days} 天)`)
+    if (s.orders) parts.push(`订单表 ${s.orders.from} ~ ${s.orders.to}(${s.orders.days} 天)`)
     return parts.join(' · ')
   }, [sum])
 

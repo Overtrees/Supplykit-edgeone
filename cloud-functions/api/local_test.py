@@ -35,6 +35,8 @@ _INV = [
 def fake_query(sql, params=None):
     # 2026-11-02 历史归档聚合(_H 的 summary/top): 真实聚合在 TiDB 侧, 这里只回形状
     if "SUM(gmv) AS gmv, SUM(cnt) AS cnt, SUM(qty) AS qty" in sql:
+        if "2023-01-01" in str(params or ""):
+            return []   # 模拟"这段区间两表都没有数据"(归档未生成 + 订单更早于保留期)
         if " AS k" in sql:
             return [{"k": "2026-10-01", "gmv": 100.0, "cnt": 2, "qty": 4, "total": 250.0},
                     {"k": "2026-10-02", "gmv": 150.0, "cnt": 3, "qty": 6, "total": 250.0}]
@@ -1205,6 +1207,12 @@ try:
     check("history/yoy 无去年数据时 has_prev=false 且不编造同比",
           _d.get("has_prev") is False and _d.get("delta") is None and "归档" in (_d.get("note") or ""),
           r.text[:200])
+
+    r = client.get("/history/summary?channel=jd&start=2023-01-01&end=2023-03-01", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/summary 无数据时不谎报来源(两段都为 null)",
+          (_d.get("sources") or {}).get("orders") is None
+          and (_d.get("sources") or {}).get("archive") is None, str(_d.get("sources")))
 
     r = client.get("/history/coverage?channel=jd", headers=_h)
     _d = r.json().get("data") or {}
