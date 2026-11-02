@@ -12,12 +12,12 @@
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 24 路由模块 · local_test 155 项     │
+│  FastAPI · 27 路由模块 · local_test 355 项     │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
 │  │        cleansing / rules(计算参数融合) /   │
-│  │        cron(7端点) / tasks(seed分步) / ... │
+│  │        cron(11端点) / tasks(seed分步) / ...│
 │  ├─ 核心: core/rules.py(表达式引擎+计算变量)  │
 │  │        biz/sales.py(三窗口日销融合)       │
 │  └─ 基础: db.py(TiDB 原生)                   │
@@ -28,7 +28,7 @@
 └──────────────────────────────────────────────┘
 ```
 
-### 后端路由一览（API 分组 · 18 个——拆分模块见项目结构, 属代码组织非路由）
+### 后端路由一览（API 分组 · 18 个 router / 27 个模块——拆分模块见项目结构, 属代码组织非路由）
 
 | 路由 | 前缀 | 功能 |
 |------|------|------|
@@ -46,28 +46,34 @@
 | `replenishment-config` | `/api/replenishment-config` | 补货参数(mode 前缀)/slow-cats/seasons/history |
 | `misc` | `/api/*` | quality-logs(分页)/monitor/db/diag |
 | `batches` | `/api/batches` | 批次明细 |
+| `channels` | `/api/channels` | 渠道 CRUD(启停/排序) |
+| `history` | `/api/history` | 归档查询面(coverage/summary/top/yoy), 365 天切线拼 orders + daily_stats |
 | `auth` | `/api/auth` | setup/login/check |
-| `cron` | `/api/cron` | 7 端点（snapshot/freshness/archive/cleanup/daily-rules/recycle/push-alerts） |
+| `cron` | `/api/cron` | 11 端点（snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts/ping/continue-tasks/agg-sweep/reconcile） |
 
 ### 项目结构
 
 ```
 frontend/src/
-├── pages/ (14个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
-│                 Products / Suppliers / Quality / Settings / Task / Login / ...
-├── components/ (11个): Chart / Sidebar / Toast / ErrorBoundary / Icons / dash/RiskCard 等 + hammer/(10 个锤子面板组件)
+├── pages/ (16个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
+│                 History / Channels / Recycle / Products / Suppliers / Quality /
+│                 Settings / Task / DevMode / Login
+├── components/ (40个): Chart / Sidebar / ListGroup / Toast / ErrorBoundary / Icons /
+│                 dash/RiskCard 等 + hammer/(10 个锤子面板 + configs)
 ├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态
 ├── api/client.ts                 Axios + 缓存 + 统一响应解包
 └── App.tsx / main.tsx / theme.ts / styles.css
 
 cloud-functions/api/
-├── index.py                      FastAPI 入口（行首 app=, 鉴权, 启动自愈 ALTER/补种/退役）
+├── index.py                      FastAPI 入口（行首 app=, 鉴权）
+├── schema_create.py              表/索引/补列声明单一真源 + SCHEMA_VERSION 版本门禁
 ├── db.py                         TiDB 原生数据层（pymysql DictCursor）
 ├── biz/sales.py                  三窗口日销滚动预测 + 逐仓/全国C仓双口径
 ├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
 ├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
-├── routes/ (24个)                业务路由(2026-10-11 模块化: dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed)
-└── local_test.py                 本地回归 155 项（mock db + TestClient）
+├── routes/ (31个)                路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
+├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
+└── local_test.py                 本地回归 355 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -110,7 +116,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 155 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出）
+cd cloud-functions/api && python3 local_test.py   # 355 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/S2 系列）
 ```
 
 ---
@@ -129,7 +135,7 @@ git push edgeone feat/edgeone
 # 构建状态查询 + 部署后冒烟 /api/health（部署确认/细粒度指纹方法见 docs/DEVELOPMENT）
 ```
 
-> **定时任务**：cron 7 端点由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
+> **定时任务**：cron 11 个端点中 10 个由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
 > **自愈**：index.py 启动幂等（补索引/补列/内置规则补种与退役）；cron freshness 守护快照。
 
 ---

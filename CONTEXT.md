@@ -27,6 +27,8 @@
 | 低库存卡口径: bbcc=BC 合计 / traditional=逐仓(轮转只服务后者) | `docs/DEVELOPMENT.md` §15.109 |
 | S0 止血: cron 执行次数护栏 / 连接池名额 / traceback 收口 / 前端泄漏 | `docs/DEVELOPMENT.md` §15.110 |
 | 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
+| S2-8/S2-9 启动优化(DDL 版本门禁/补列统一/迁移退役) | `docs/DEVELOPMENT.md` §15.122 / §15.123 |
+| 2026-11-02 午后 UI 批次(归档页二次收敛/渠道页样式上提/CI 修复) | `docs/DEVELOPMENT.md` §15.124 |
 
 ## 关键口径(不可破坏的业务约定)
 
@@ -45,7 +47,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 205 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 355 通过/0 失败
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
 - **文档同步**: 每项改动在 `docs/DEVELOPMENT.md` 追加 §15.10x, 写根因 + 实测数据
 
@@ -169,6 +171,13 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - **冗余清理 + 补列/探测统一(2026-11-02 S2-9)**: 4 个实证死代码删除; 三套补列合并为
   `_COLUMN_ADDS`(受门禁管); M0/M1/规则修复/退役四段**整体删除**(线上实证使命完成后定案),
   冷启动 7 条探测 SQL 归零; 90 天物化重建/69码补齐/规则恢复的复用做法见 §15.123 第三节
+- **历史归档页信息层级已二次定案(2026-11-02 §15.124 第五节)**: 首卡片去壳走裸排版
+  (`.hist-headcard`), 「含 1 年以前」删除 —— cron 是**严格小于** `today-365`, 实为第 366 天
+  才搬, 写死"1 年"会差一天; 归档状态(暂无归档/已归档)在**锤子菜单底部** `.hist-arc`,
+  "新订单哪天起进归档"由后端 `archive_day` 给(前端不自己算时区); 页面 `hist-meta` 只写一次
+  区间, 来源行降级为"归档 N 天 · 订单 M 天"。**不要再把归档状态搬回页面卡片**。
+- **CSS 死类要随手删**: 控件迁走(`.hist-row/.hist-pill/.hist-date/.hist-sub`)后留着,
+  后来人会以为页面还有一套自绘控件。改 UI 时顺手 `grep` 一遍引用。
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → ~~S2-9~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节

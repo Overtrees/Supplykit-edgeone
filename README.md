@@ -89,12 +89,18 @@
 ### 🧹 数据清洗，告别 Excel 手工
 
 - 上传 Excel/CSV → 自动识别 30+ 中文列名 → 可视化映射 → 模板复用
-- 6 类导入（订单/自有仓库存/平台仓库存/B仓库存/入库/出库/商品/供应商）+ 异步进度 + 去重保护
-- 导入自动联动：库存增减、规则评估、渠道归属
+- **9 类导入**：订单 / 自有仓库存 / 平台仓库存 / B仓库存 / 入库 / 出库 / 商品 / 供应商 / GMV 回款
+- 异步进度 + 去重保护（四维业务键 `channel|order_no|sku|barcode` 同键 upsert，重导幂等）
+- 导入自动联动：库存增减、规则评估、渠道归属、日销物化增量重建
 
 ### ↩️ 操作撤销 + 回收站
 
-删除规则/订单后 toast 5 秒撤销窗口；设置页回收站批量恢复/永久删除。
+删除规则/订单后 toast 5 秒撤销窗口；设置页回收站批量恢复/永久删除；**库存删除可恢复**（删除时整行冻结进归档表，恢复原样插回）。
+
+### 🗂️ 历史归档，跨年数据仍可查
+
+订单满 365 天后自动搬入归档表（`daily_stats`），历史页把两段拼成一个查询面（汇总 / 趋势 / Top 20 / 同比）。
+区间与粒度收进锤子菜单，归档状态（暂无归档 / 已归档）也在菜单底部，一句话说清"哪天起自动归档"。
 
 ### 📱 PWA + 首次引导
 
@@ -112,19 +118,26 @@
 | 📊 **看板** | GMV趋势 / 店铺/品牌GMV / 漏斗 / 健康度 / 断货三级 / 低库存(模式过滤) / 采购&补货 / 待处理 / 30s刷新+版本指纹 |
 | 💡 **补货建议** | BBCC 两步法（C缺口→B调拨）/ 传统逐仓 / 三窗口日销 / B仓仓储费 / 已下单标记 / 导出 |
 | 📦 **采购建议** | 14+28 融合日销 / 系统总库存 / 供应商级参数+MOQ聚合 / 采购告警 / 导出 |
-| 🧹 **数据清洗** | 6 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
+| 🧹 **数据清洗** | 9 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
 | ⚙️ **规则引擎** | 计算参数融合(断货/健康) / 计算变量字段 / or 多组 / 类型模板 / 告警开关 / 立即运行 / 审计 |
 | 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / 软删撤销+回收站 |
-| 📦 **进销存台账** | 自有/平台/B仓三视图(模式跟随) / 批次效期 / 当月进出 / 告警跳转定位 |
+| 🗂️ **历史归档** | 汇总/趋势/Top20/同比 / 365 天切线双表拼接 / 区间粒度收进锤子菜单 / 归档状态可查 |
+| 📦 **进销存台账** | 自有/平台/B仓三视图(模式跟随) / 批次效期 / 当月进出 / 删除可恢复 / 告警跳转定位 |
+| 🧭 **货品供应建议** | 自有仓三口径(调拨缺口/积压/效期) / 该采该停该清 |
 | 🏷️ **商品/供应商** | CRUD / 搜索 / 批次效期 |
 | ⚠️ **异常记录** | 数据质量日志（分页加载更多）/ 断货审计 |
+| 🎛️ **设置** | 渠道管理(启停/排序) / 回收站 / 系统信息 |
+| 🔑 **登录 / 首次引导** | JWT 登录 · 访客模式 · 欢迎页一键填充种子数据 |
 
 ### 大数据能力（万级 SKU 业务量）
 
 | 能力 | 说明 |
 |------|------|
 | 后端分页 + 前端滚动懒加载 | page/page_size + IntersectionObserver 哨兵逐页 |
-| 分析缓存四维保障 | 写操作 `invalidate_all()` 中央失效（不等 TTL）；缓存 key 含 channel/mode |
+| 分析缓存按域失效 | 写操作只清受影响的缓存族（`invalidate("<域>")` + 依赖关系反推），不等 TTL |
+| 日销/物化增量重建 | 脏日期队列（按**业务日期**，不是导入时间）+ 连续区间合并；>2000 SKU 才全量 |
+| 冷算降耗靠**减往返** | 合并同源查询，往返 22→14；线上冷算 1.45s → **0.57s**（不加缓存、不拖 TTL） |
+| 启动零 DDL | schema 声明收敛单一真源 + 版本门禁，热路径一条 SELECT |
 | 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s |
 | 实时性 | stock-risk 独立 30s TTL；aux 60s；事件驱动全链路刷新；30s 兜底 |
 
@@ -137,13 +150,16 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 155 项全过
+cd cloud-functions/api && python3 local_test.py        # 355 项全过
 
 # 前端
 cd frontend && npm install && npm run dev
 
 # 3.10 语法门禁（部署前）
 python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), feature_version=(3,10))"
+
+# 一键自检（语法 / pyflakes / 回归 / eslint / prettier / tsc 六步）
+bash scripts/preflight.sh
 ```
 
 环境变量（Makers 项目 env，部署时快照）：
@@ -153,13 +169,13 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 | `TIDB_HOST/PORT/USER/PASSWORD/DB/SSL` | TiDB Serverless 连接 |
 | `DB_BACKEND` | `tidb` |
 | `JWT_SECRET` | 环境变量必设（无 fallback——缺失即校验全拒；多实例同值） |
-| `CRON_SECRET` | 定时任务校验 |
+| `CRON_SECRET` | 定时任务密钥（`X-Cron-Secret` 头；配置后不带密钥的调用会记审计日志） |
 
----
+> 定时任务由 `edgeone.json` 的 `schedules` 声明（11 个，EdgeOne 平台调度），不依赖 GitHub Actions。
 
 ---
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [📝 变更日志](CHANGELOG.md) · [🔧 开发规范](docs/DEVELOPMENT.md)
+[📐 架构与路由](docs/ARCHITECTURE.md) · [📝 变更日志](CHANGELOG.md) · [🔧 开发规范](docs/DEVELOPMENT.md) · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

@@ -72,7 +72,6 @@ export default function HistoryPage() {
   const end = useAppStore(s => s.histEnd)
   const by = useAppStore(s => s.histBy)
   const [topBy, setTopBy] = useState<'sku' | 'store'>('sku')
-  const [cov, setCov] = useState<any>(null)
   const [sum, setSum] = useState<any>(null)
   const [top, setTop] = useState<any>(null)
   const [yoy, setYoy] = useState<any>(null)
@@ -84,7 +83,7 @@ export default function HistoryPage() {
     const my = ++seq.current
     setLoading(true)
     setErr(null)
-    // 2026-11-02 S2-9: 接入全局同步胶囊 —— 本页 4 个请求不在 store.loadAll 里,
+    // 2026-11-02 S2-9: 接入全局同步胶囊 —— 本页请求不在 store.loadAll 里,
     //   原本 header 胶囊对历史页一动不动, 用户点完锤子看不出"在拉数"。
     //   +1/-1 严格配对(含过期响应 early-return 分支), 否则胶囊永久转圈。
     const _st = useAppStore.getState()
@@ -97,16 +96,16 @@ export default function HistoryPage() {
     }
     const ch = encodeURIComponent(channel || 'jd')
     const q = `channel=${ch}&start=${start}&end=${end}&t=${freshStamp()}`
+    // 2026-11-02 S2-9(用户定案): coverage 不再由页面请求 —— 归档说明在页面上一处不留,
+    //   全部由锤子菜单(HammerHistory)自己拉自己渲染。页面少一次往返。
     Promise.allSettled([
-      api.get(`/api/history/coverage?channel=${ch}`),
       api.get(`/api/history/summary?${q}&by=${by}`),
       api.get(`/api/history/top?${q}&by=${topBy}&limit=20`),
       api.get(`/api/history/yoy?channel=${ch}&days=30&t=${freshStamp()}`),
     ])
-      .then(([c, s, t0, y]) => {
+      .then(([s, t0, y]) => {
         if (my !== seq.current) return
         const val = (r: any) => (r.status === 'fulfilled' ? r.value?.data : null)
-        setCov(val(c))
         setSum(val(s))
         setTop(val(t0))
         setYoy(val(y))
@@ -186,12 +185,9 @@ export default function HistoryPage() {
         <div className="hist-head">
           <span className="hist-title">历史归档</span>
         </div>
-        {/* note 本身就是一句完整结论("暂无归档：…" / "归档覆盖 a ~ b"), 前面再加
-            "暂无归档"标签是第三遍重复 + 两种标点 → 只渲染 note */}
-        <div className="hist-note">
-          {cov?.note || '加载中…'}
-          {cov?.archive?.rows ? ` · ${fmtInt(cov.archive.rows)} 行` : ''}
-        </div>
+        {/* 2026-11-02 S2-9(用户定案): 页面上不留任何归档说明 —— 状态、覆盖区间、
+            "订单自 X 起满 N 天后自动归档"全部由锤子菜单底部承接(.hist-arc)。
+            页面首屏只回答"现在查的是哪段区间"。 */}
 
         {/* 2026-11-02 S2-9: 区间/粒度控件收敛到锤子菜单; 页面不再重复回显
             (hist-meta 已有生效区间日期, 锤子按钮 header 常驻随时可调) */}
@@ -252,10 +248,9 @@ export default function HistoryPage() {
         {loading && !sum ? (
           <div className="skeleton hist-chart-skel" />
         ) : empty ? (
-          <div className="hist-empty">
-            <div>该区间没有数据</div>
-            {cov?.note ? <div className="hist-empty-sub">{cov.note}</div> : null}
-          </div>
+          // 2026-11-02 S2-9(用户定案): 页面不留任何归档说明 —— 空态只说"这段没数据",
+          // "为什么空/哪天起会有"统一由锤子菜单的归档状态承接, 不再做第二份兜底
+          <div className="hist-empty">该区间没有数据</div>
         ) : (
           <Chart option={chartOption} height={window.innerWidth <= 600 ? 220 : 260} />
         )}
