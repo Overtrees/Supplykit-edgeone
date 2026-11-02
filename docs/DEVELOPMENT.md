@@ -3250,7 +3250,7 @@ ON DUPLICATE KEY UPDATE
 | `max_bytes` 超限 | 不落表, 只本次返回 | ✅ 行数 0 |
 | 日销物化子集重建 | 只动该 SKU, 其余行数不变 | ✅ 6 行 → 6 行, 只有 B 的 ds7 从 1.57 涨到 3.71 |
 
-回归 **291 通过 / 0 失败**, preflight 六步全绿。线上 `ALTER TABLE analysis_cache ADD COLUMN tok` 0.6s。
+回归 **299 通过 / 0 失败**, preflight 六步全绿。线上 `ALTER TABLE analysis_cache ADD COLUMN tok` 0.6s。
 
 #### 七、调用点映射(35 处)
 
@@ -3269,3 +3269,49 @@ ON DUPLICATE KEY UPDATE
 | `tasks.py` 重建 agg | orders | |
 | `task_seed.py` 种子每步/重置 | all | 动了很多表 |
 | `misc.py` 主键迁移+物化重建 | all | |
+
+#### 八、收尾: "全量模式"必须和增量覆盖同一组物化(线上实测暴露)
+
+端到端验收时做的最后一件事是**删掉两笔测试订单**, 然后盯物化有没有跟着回收。结果抓到一个真的:
+
+```
+删单 → agg_dirty_days 1 条(2026-11-01 / order_delete)
+     → _drain_agg_dirty 跑完 left:1  (重建期间又被标记, 属预期)
+     → POST /cron/agg-sweep?hours=48 → rebuilt:120, pending:0, mode:"full"
+     → 但 daily_sales_snapshot WHERE sku LIKE 'ZZ-S21%' 仍 1 行, sku_sales_stats 仍 2 行
+```
+
+根因是**全量分支从设计上就少做两件事**:
+
+| 旧的全量分支 | 后果 |
+|---|---|
+| `_rebuild_day_agg(90)` 单条 upsert | upsert 只能更新出现的组合, **删不掉"软删订单留下的组合"** → agg 合计对了, 消失的状态/店组合还在 |
+| 只重建 agg + 日销三窗口, **没重建快照** | 快照残行 → 日销 30/60/90 窗口偏大 → 补货建议偏多, 且在订单页完全看不出来 |
+
+而"脏日期 > 80 天"这条分支恰恰是**删单/大批补录**才会触发的, 正是最容易留残留的场景。
+旧注释把 agg 残留推给"`_track_data` 窗口自愈", 但快照那条连兜底都没有:
+`_snapshot_reconcile` 只在每日维护里跑, 当天 `maintenance_log('daily')` 已占位就不会再跑第二次。
+
+修法不是加一次补偿重建, 而是**去掉分叉**: 全量 = 增量 + 不设批次上限。
+
+```python
+_full  = _pend > batch * 2
+_cap   = (_pend + 8) if _full else batch   # 一次取完, 不再按批
+_rounds = 1 if _full else max_rounds
+_budget = 24 if _full else 0               # 单轮最多 24 段(≈60s), 余下留队列续跑
+# 循环体完全共用: _rebuild_agg_range(区间 DELETE+INSERT)
+#                → _rebuild_snapshot_range(同区间) → rebuild_sku_stats_for_days(这些天的 SKU)
+```
+
+三个约束在这里同时成立:
+
+- **完整**: 脏日期一次全取, 不漏天。
+- **准确**: agg 与快照都是"组合粒度", 区间 `DELETE + INSERT` 才能删掉消失的组合。
+- **不做大事务**: 单段仍受 `_runs(span=7)` 限制(7 天/段), 不会重新踩 9004 锁超时。
+
+段预算用尽时**不假装完成**: 剩下的天留在 `agg_dirty_days`, `agg_dirty` 保持置位,
+看板继续降级直查(`LEFT:1` 的语义没变)。宁可慢一拍, 不可读半成品 —— 这是四维里"一致"的底线。
+
+回归新增 8 条(S2-1b): 静态 4 条盯住"别再用 upsert 覆盖全窗口 / 别整表清脏标记",
+动态 4 条桩掉 DB 断言 **agg 区间与快照区间一一对应**、90 个脏日期全部出队、
+日销三窗口跟着重算、400 个脏日期时段预算用尽后 `left > 0` 且 `agg_dirty` 仍置位。

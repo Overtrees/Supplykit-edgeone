@@ -1,6 +1,18 @@
 ## 2026-11-02: 缓存按域失效(S2-1) + 日销三窗口增量重建
 
-> 回归 291 通过 / 0 失败; preflight 六步全绿
+> 回归 299 通过 / 0 失败; preflight 六步全绿
+
+### 零、收尾: 全量重建漏建快照（S2-1b，线上实测暴露）
+- **现象**: 删掉两笔测试订单 → `agg_dirty_days` 正常消费、`agg` 合计正常, 但
+  `cron/agg-sweep?hours=48` 返回 `mode:"full"` 之后 `daily_sales_snapshot` 仍留 1 行、
+  `sku_sales_stats` 仍 2 行 → 补货/采购继续读旧日销
+- **根因**: "脏日期 > 80 天"的全量分支 `_rebuild_day_agg(90)` 是**单条 upsert**:
+  ① upsert 删不掉软删订单留下的组合(agg 与快照都是组合粒度);
+  ② 只重建 agg + 日销三窗口, **压根没重建快照**。而这条分支恰恰只有删单/大批补录才会触发
+- **修法**: 去掉分叉 —— 全量 = 增量 + 不设批次上限(`_cap=_pend+8`, `_rounds=1`, `_budget=24 段`)。
+  循环体完全共用: `_rebuild_agg_range` → `_rebuild_snapshot_range` → `rebuild_sku_stats_for_days`
+- **不假装完成**: 段预算用尽→余下留队列 + `agg_dirty` 保持置位 → 看板继续降级直查(慢但准)
+- 回归新增 8 条(S2-1b): agg 区间与快照区间必须一一对应; 400 天时预算用尽后 `left>0`
 
 ### 一、改一个供应商不再打掉全站缓存（S2-1）
 - **问题**: 35 个写入口共用 `invalidate_all()`(`DELETE FROM analysis_cache`), 改供应商联系人

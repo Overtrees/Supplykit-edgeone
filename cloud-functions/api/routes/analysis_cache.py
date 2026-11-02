@@ -178,55 +178,44 @@ def cache_get(key, ttl, builder, max_bytes=None):
 
 
 def _drain_agg_dirty(batch=40, max_rounds=6):
-    """消费 agg_dirty_days: 逐日精准重建「日聚合 + 日销快照」, 重建完出队
+    """消费 agg_dirty_days: 按渠道把脏日期合成 ≤7 天区间, 精准重建「日聚合 + 日销快照 + 日销三窗口」
 
-    为什么逐日而不是整段:
-      · 单日 DELETE + INSERT 走 (channel, ordered_at) 索引, 几十毫秒;
+    为什么按区间而不是整段:
+      · 单段 DELETE + INSERT 走 (channel, ordered_at) 索引, 几秒内完成;
         整段重建要扫全窗口(90 天 ≈ 20 万行), 且大事务持锁(实测 9004 锁超时)。
-      · 补录通常只涉及几天(某月月初/某个促销周), 逐日天然贴合实际改动量。
-    天数过多(> batch*2, 例如补录整个季度)才退化为全量一次 —— 逐日往返反而更慢。
+      · 补录通常只涉及几天(某月月初/某个促销周), 合区间天然贴合实际改动量。
+    脏日期过多(> batch*2, 例如补录整个季度)时 **不换算法**, 只放大单轮取数上限 ——
+      agg 与快照都是"组合粒度"(date×状态×店 / date×sku×码×仓), 只有 DELETE+INSERT 才能
+      删掉"软删订单留下的组合", 单条 upsert 删不掉。2026-11-02 线上实测旧全量分支两个硬伤:
+        ① `_rebuild_day_agg(90)` 只 upsert → 删 2 单后 agg 合计对了, 但**消失的组合仍残留**;
+        ② 只重建 agg + 日销三窗口, **压根没重建快照** → daily_sales_snapshot 留 1 行
+           (ZZ-S21-SKU2), 补货/采购继续读旧日销(30/60/90 天窗口全偏)。
+      两者都靠区间 DELETE+INSERT 覆盖, 所以"全量"现在只是"一次取完 + 不设批次上限"。
 
     出队用 ts 比较(见 common.clear_agg_day): 重建期间又有新写入 → 保留, 下轮再来。
     失败不出队, 且本轮立即停止(不原地打转, 留给下一次 invalidate / 每日 sweep)。
     """
     from routes.common import (take_agg_days, clear_agg_day, agg_pending, _runs,
-                               AGG_WINDOW_DAYS, track_run)
-    from routes.dashboard_maintain import (_rebuild_day_agg, _rebuild_agg_range,
-                                           _rebuild_snapshot_range,
+                               track_run)
+    from routes.dashboard_maintain import (_rebuild_agg_range, _rebuild_snapshot_range,
                                            _mark_agg_dirty, _clear_agg_dirty)
     _pend = agg_pending()
-    out = {"pending": _pend, "days": 0, "snap": 0, "failed": 0, "mode": "incremental"}
+    _full = _pend > batch * 2
+    out = {"pending": _pend, "days": 0, "snap": 0, "failed": 0,
+           "mode": "full" if _full else "incremental"}
     if not _pend:
         _clear_agg_dirty()
+        out["left"] = 0
         return out
     with track_run("agg_incremental", "all") as rec:
-        if _pend > batch * 2:
-            out["mode"] = "full"
-            _ok = _rebuild_day_agg(AGG_WINDOW_DAYS)
-            if _ok:
-                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-                from db import execute as _e
-                _cut = (_dt.now(_tz.utc) - _td(days=AGG_WINDOW_DAYS)).strftime("%Y-%m-%d")
-                # 只清窗口内的标记: 窗口外的日期 agg 本来就不服务(mark 侧已过滤, 这里是双保险)
-                _e("DELETE FROM agg_dirty_days WHERE `date` >= %s", [_cut])
-                _clear_agg_dirty()
-                out["days"] = _pend
-                # 大范围补录: 日销三窗口也一并全量重算(逐日算与全量同阶, 但往返多几十倍)
-                try:
-                    from biz.sales import _rebuild_sku_sales_stats as _rss
-                    from routes.common import ch_codes as _chs
-                    out["stats"] = sum(int(_rss(_c2, 90) or 0) for _c2 in _chs())
-                except Exception as _es3:
-                    try_err('analysis_cache', '日销三窗口全量重建降级', _es3)
-            else:
-                _mark_agg_dirty()
-                out["failed"] = 1
-            rec.rows = _pend if _ok else 0
-            rec.detail = {"mode": "full", "ok": bool(_ok), "pending": _pend}
-            out["left"] = 0 if _ok else _pend   # 出参给"剩余", 否则调用方会把入参当残留
-            return out
-        for _ in range(max_rounds):
-            items = take_agg_days(batch)
+        # 全量: 一次取完(不设批次上限), 单轮最多 24 段(≈60s, 云函数超时内) → 余下下次续跑;
+        #   队列未清空时 agg_dirty 保持置位, 看板继续降级直查(慢但准), 不会读到半成品。
+        _cap = (_pend + 8) if _full else batch
+        _rounds = 1 if _full else max_rounds
+        _budget = 24 if _full else 0
+        _nr = 0
+        for _ in range(_rounds):
+            items = take_agg_days(_cap)
             if not items:
                 break
             # 按渠道分组 → 每组内合成连续区间(补录通常是连续的几天/一周)
@@ -234,12 +223,14 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
             for (ch, day, ts) in items:
                 if ch and day:
                     by_ch.setdefault(ch, []).append((day, ts))
+            _stop = False
             for ch, pairs in by_ch.items():
                 _done_days = []
                 for (a, b) in _runs([d for (d, _t) in pairs], 7):
                     if not _rebuild_agg_range(ch, a, b):
                         out["failed"] += 1
                         break
+                    _nr += 1
                     try:
                         _rebuild_snapshot_range(ch, a, b)
                         out["snap"] += 1
@@ -251,6 +242,9 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                         if a <= d <= b and clear_agg_day(ch, d, t):
                             out["days"] += 1
                             _done_days.append(d)
+                    if _budget and _nr >= _budget:
+                        _stop = True   # 本轮预算用尽: 余下留队列, 下次续跑(agg_dirty 保持置位)
+                        break
                 # 2026-11-02 S2-1: 二阶物化(日销三窗口)跟着这批日期重算 —— 它从快照派生,
                 #   快照刚变, 不重算就等于"补货/采购读旧日销"。只算这些天出现过的 SKU。
                 if _done_days:
@@ -261,7 +255,9 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
                     except Exception as _es2:
                         # 失败不影响 agg 出队(已正确); 下次写操作/每日对账还会再来
                         try_err('analysis_cache', '日销三窗口重建降级(%s)' % ch, _es2)
-            if out["failed"] or len(items) < batch:
+                if _stop or out["failed"]:
+                    break
+            if out["failed"] or _stop or len(items) < _cap:
                 break
         _left = agg_pending()
         # 队列非空 = agg 仍可能落后 → 保持降级直查; 清空才恢复物化路径
@@ -270,7 +266,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
         else:
             _clear_agg_dirty()
         rec.rows = out["days"]
-        rec.detail = {"mode": "incremental", "pending": _pend, "left": _left,
+        rec.detail = {"mode": out["mode"], "pending": _pend, "left": _left,
                       "snap": out["snap"], "failed": out["failed"],
                       "stats": out.get("stats", 0)}
         out["left"] = _left

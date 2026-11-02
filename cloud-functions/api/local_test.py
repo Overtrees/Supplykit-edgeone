@@ -1464,5 +1464,107 @@ try:
 except Exception as _e13:
     check("S2-1 用例无异常", False, str(_e13)[:200])
 
+# ── 2026-11-02 S2-1b: 全量重建必须与增量覆盖同一组物化 ──────────────────
+# 线上实测缺陷: 脏日期 > batch*2 时走 `_rebuild_day_agg(90)` 单条 upsert ——
+#   ① upsert 删不掉"软删订单留下的组合"(agg/快照都是组合粒度);
+#   ② 只重建 agg + 日销三窗口, 没重建快照 → 删单后 daily_sales_snapshot 留残行,
+#      补货/采购继续读旧日销。修法: 全量只是"一次取完 + 不设批次上限", 算法与增量同一套。
+try:
+    _ac5 = open('routes/analysis_cache.py', encoding='utf-8').read()
+    check("S2-1b 全量模式不再用 upsert 覆盖全窗口(残留组合删不掉)",
+          "_rebuild_day_agg(AGG_WINDOW_DAYS)" not in _ac5, "analysis_cache.py")
+    check("S2-1b 全量模式不再整表清脏标记(清标记必须伴随重建)",
+          "DELETE FROM agg_dirty_days" not in _ac5, "analysis_cache.py")
+    check("S2-1b 全量/增量共用一条区间重建路径(agg+快照成对)",
+          "_cap = (_pend + 8) if _full else batch" in _ac5
+          and _ac5.count("_rebuild_snapshot_range(ch, a, b)") == 1, "analysis_cache.py")
+    check("S2-1b 全量单轮有段预算(防云函数超时, 余下留队列续跑)",
+          "_budget = 24 if _full else 0" in _ac5 and "if _budget and _nr >= _budget" in _ac5,
+          "analysis_cache.py")
+
+    # 动态: 桩掉 db, 90 个脏日期 → 每个 agg 区间都必须配一次快照重建, 且队列清空
+    from contextlib import contextmanager as _cm5
+    from datetime import date as _d5, timedelta as _td5
+    from routes import common as _cmn5, dashboard_maintain as _dmt5
+    import biz.sales as _bs5
+
+    class _Rec5(object):
+        rows = 0
+        detail = {}
+
+    @_cm5
+    def _fake_track5(*a, **k):
+        yield _Rec5()
+
+    def _mk_queue5(n):
+        _b = _d5(2026, 6, 1)
+        return [("CH1", (_b + _td5(days=_i)).strftime("%Y-%m-%d"), 1000 + _i) for _i in range(n)]
+
+    _q5 = _mk_queue5(90)
+    _seen5 = []
+    _orig5 = (_cmn5.agg_pending, _cmn5.take_agg_days, _cmn5.clear_agg_day, _cmn5.track_run,
+              _dmt5._rebuild_agg_range, _dmt5._rebuild_snapshot_range,
+              _dmt5._mark_agg_dirty, _dmt5._clear_agg_dirty,
+              _bs5.rebuild_sku_stats_for_days)
+    _cmn5.agg_pending = lambda channel=None: len(_q5)
+    _cmn5.take_agg_days = lambda limit=60: list(_q5[:limit])
+
+    def _clr5(ch, d, ts):
+        for _x in list(_q5):
+            if _x[0] == ch and _x[1] == d and _x[2] <= ts:
+                _q5.remove(_x)
+                return True
+        return False
+
+    _cmn5.clear_agg_day = _clr5
+    _cmn5.track_run = _fake_track5
+    _dmt5._rebuild_agg_range = lambda ch, a, b: (_seen5.append(("agg", ch, a, b)) or True)
+    _dmt5._rebuild_snapshot_range = lambda ch, a, b: _seen5.append(("snap", ch, a, b))
+    _dmt5._mark_agg_dirty = lambda: None
+    _dmt5._clear_agg_dirty = lambda: None
+    _bs5.rebuild_sku_stats_for_days = lambda ch, days, max_skus=2000: len(days)
+    try:
+        from routes.analysis_cache import _drain_agg_dirty as _dr5
+        _r5 = _dr5()
+    finally:
+        (_cmn5.agg_pending, _cmn5.take_agg_days, _cmn5.clear_agg_day, _cmn5.track_run,
+         _dmt5._rebuild_agg_range, _dmt5._rebuild_snapshot_range, _dmt5._mark_agg_dirty,
+         _dmt5._clear_agg_dirty, _bs5.rebuild_sku_stats_for_days) = _orig5
+
+    _aggs5 = [x for x in _seen5 if x[0] == "agg"]
+    _snps5 = [x for x in _seen5 if x[0] == "snap"]
+    check("S2-1b 全量模式 agg 与快照区间一一对应(漏一个就留残行)",
+          len(_aggs5) == len(_snps5) and len(_aggs5) > 0
+          and [x[1:] for x in _aggs5] == [x[1:] for x in _snps5],
+          "agg=%d snap=%d" % (len(_aggs5), len(_snps5)))
+    check("S2-1b 全量模式脏日期全部出队(mode=full)",
+          _r5.get("mode") == "full" and _r5.get("left") == 0 and _r5.get("days") == 90,
+          str({k: _r5.get(k) for k in ("mode", "days", "left")}))
+    check("S2-1b 全量模式顺带重算日销三窗口(否则补货读旧日销)",
+          int(_r5.get("stats") or 0) == 90, str(_r5.get("stats")))
+
+    # 段预算: 脏日期远超预算时不许"假完成"——余下必须留在队列, agg_dirty 保持置位
+    _q5 = _mk_queue5(400)
+    _seen5 = []
+    _marked5 = []
+    _dmt5._mark_agg_dirty = lambda: _marked5.append(1)
+    _cmn5.agg_pending = lambda channel=None: len(_q5)
+    _cmn5.take_agg_days = lambda limit=60: list(_q5[:limit])
+    _cmn5.clear_agg_day = _clr5
+    _cmn5.track_run = _fake_track5
+    _dmt5._rebuild_agg_range = lambda ch, a, b: (_seen5.append(("agg", ch, a, b)) or True)
+    _dmt5._rebuild_snapshot_range = lambda ch, a, b: _seen5.append(("snap", ch, a, b))
+    _bs5.rebuild_sku_stats_for_days = lambda ch, days, max_skus=2000: len(days)
+    try:
+        _r5b = _dr5()
+    finally:
+        _dmt5._mark_agg_dirty = lambda: None
+    check("S2-1b 段预算用尽不算完成(余下留队列 + agg_dirty 置位继续直查)",
+          int(_r5b.get("left") or 0) > 0 and _marked5
+          and len([x for x in _seen5 if x[0] == "agg"]) == 24,
+          str({k: _r5b.get(k) for k in ("mode", "days", "left")}))
+except Exception as _e15:
+    check("S2-1b 全量物化用例无异常", False, str(_e15)[:200])
+
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
