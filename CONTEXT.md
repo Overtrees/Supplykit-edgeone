@@ -142,6 +142,12 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - **硬删订单的日销孤儿行会清(2026-11-02 S2-1c)**: `sku_sales_stats` 是"有销量才建行", 软删能自愈,
   硬删后 SKU 既不在 orders 也不在快照 → "按受影响 SKU 重建"反查不到 → 旧日销行永久残留。
   现按 `日销表 SKU - (快照窗口 ∪ 订单窗口)` 差集清孤儿, 只在删单类原因下扫, 每日对账兜底一次
+- **待办(已定位未修): 自有仓健康的「采购在途」查询字段全错**。`dashboard_own_health.py` 里写的是
+  `SUM(IFNULL(qty,0)-IFNULL(received_qty,0))` + `status IN ('pending','in_transit','partial')`,
+  而 `purchase_orders` 实际只有 `suggested_qty / actual_qty / arrival_date / status`(无 qty/received_qty),
+  状态值由前端 PUT 自由填写 → 每次调用都 `Unknown column 'qty'` → 在途恒按 0 算(日志有, 数字看不出来)。
+  当前 `purchase_orders` 0 行, 无实际影响; 修之前要先定"在途"口径(actual_qty 还是 suggested_qty,
+  哪些 status 算在途) —— 归到 S3 与用户一起定
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
