@@ -144,10 +144,12 @@ export default function HistoryPage() {
   const srcText = useMemo(() => {
     const s = sum?.sources || {}
     const parts: string[] = []
-    if (s.archive) parts.push(`归档表 ${s.archive.from} ~ ${s.archive.to}(${s.archive.days} 天)`)
-    if (s.orders) parts.push(`订单表 ${s.orders.from} ~ ${s.orders.to}(${s.orders.days} 天)`)
+    const unit = by === 'month' ? ' 个月' : ' 天'
+    if (s.archive)
+      parts.push(`归档表 ${s.archive.from} ~ ${s.archive.to}(${s.archive.days}${unit})`)
+    if (s.orders) parts.push(`订单表 ${s.orders.from} ~ ${s.orders.to}(${s.orders.days}${unit})`)
     return parts.join(' · ')
-  }, [sum])
+  }, [sum, by])
 
   return (
     <div>
