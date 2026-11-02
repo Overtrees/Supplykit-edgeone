@@ -193,6 +193,21 @@ export default function OrdersPage() {
               days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
             />
           </span>
+          {/* 2026-11-02 S2-4/A: 订单只保留 365 天, 更早的在历史归档 —— 不给入口的话
+              用户查一年前订单只会看到"没有数据", 且不知道去哪查 */}
+          <span
+            className="clickable"
+            onClick={() => window.__setPage && window.__setPage('history')}
+            style={{
+              float: 'right',
+              fontSize: 'var(--font-xs)',
+              fontWeight: 400,
+              color: 'var(--primary)',
+              cursor: 'pointer',
+            }}
+          >
+            查 1 年前 →
+          </span>
         </div>
         {/* 2026-10-27 无感切回: 有旧数据(store 持久)时先显旧, 后台刷新不闪骨架; 仅无数据可显示才骨架 */}
         {orderLoading && orders.length === 0 ? (

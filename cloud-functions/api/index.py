@@ -34,6 +34,7 @@ from routes.cleansing import router as cleansing_router
 from routes.purchase import router as purchase_router
 from routes.cron import router as cron_router
 from routes.channels import router as channels_router
+from routes.history import router as history_router  # 2026-11-02 S2-4/A: daily_stats 读出口
 from routes.common import verify_token, try_err
 
 app = FastAPI()
@@ -271,6 +272,7 @@ app.include_router(cleansing_router)
 app.include_router(purchase_router)
 app.include_router(cron_router)
 app.include_router(channels_router)
+app.include_router(history_router)
 
 # ── 启动自动补索引(幂等, 免费额度 RU 优化: 看板 60 天范围查询走 (channel, ordered_at) 区间) ──
 _INDEXES = [

@@ -33,6 +33,12 @@ _INV = [
 
 
 def fake_query(sql, params=None):
+    # 2026-11-02 历史归档聚合(_H 的 summary/top): 真实聚合在 TiDB 侧, 这里只回形状
+    if "SUM(gmv) AS gmv, SUM(cnt) AS cnt, SUM(qty) AS qty" in sql:
+        if " AS k" in sql:
+            return [{"k": "2026-10-01", "gmv": 100.0, "cnt": 2, "qty": 4, "total": 250.0},
+                    {"k": "2026-10-02", "gmv": 150.0, "cnt": 3, "qty": 6, "total": 250.0}]
+        return [{"gmv": 250.0, "cnt": 5, "qty": 10}]
     # health_index 查询(须在 FROM inventory WHERE 分支前, 避免被 _FAKE_INV 抢占致 total=0)
     if "GROUP BY warehouse_type" in sql:
         return list(_INV)
@@ -89,6 +95,10 @@ def fake_query(sql, params=None):
 
 
 def fake_one(sql, params=None):
+    # 历史归档同比窗口: 只有沾到订单表的窗口才有数据(归档段=去年, 无数据)
+    if "SUM(gmv) AS gmv, SUM(cnt) AS cnt, SUM(qty) AS qty" in sql:
+        return ({"gmv": 250.0, "cnt": 5, "qty": 10} if "FROM orders" in sql
+                else {"gmv": 0, "cnt": 0, "qty": 0})
     if "FROM rules" in sql:
         rows = fake_query(sql, params)
         return rows[0] if rows else None
@@ -104,6 +114,9 @@ def fake_one(sql, params=None):
         return {"content": "SKU,商品名\nSKU0001,禾味调味料1号\n"}
     if "GROUP BY DATE(ordered_at)" in sql or "GROUP BY warehouse_type" in sql or "warehouse_type IN" in sql:
         return fake_query(sql, params)[0] if fake_query(sql, params) else {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
+    if "FROM daily_stats" in sql and "COUNT(*)" in sql:
+        # 归档为空(线上现状: 订单最早 2026-09-03, 365 天保留期) —— 走"暂无归档"提示分支
+        return {"c": 0, "mn": None, "mx": None, "skus": 0}
     if "COUNT(*)" in sql:
         return {"c": 3}
     if "SELECT 1" in sql:
@@ -1138,6 +1151,70 @@ try:
     check("prune 返回结构化结果", isinstance(_res, dict) and {"old", "cap", "total"} <= set(_res), str(_res))
 except Exception as _e9:
     check("日志保留用例无异常", False, str(_e9)[:200])
+
+# ── 历史归档查询(daily_stats 读出口, 2026-11-02 S2-4/A) ──
+try:
+    import routes.history as _H
+
+    _s, _e, _c = _H._range("", "")
+    check("history._range 缺省 30 天", _c is False and _H._shift(_e, -29) == _s, "%s~%s" % (_s, _e))
+
+    _s2, _e2, _ = _H._range("2026-10-31", "2026-10-01")
+    check("history._range 反序自动纠正", (_s2, _e2) == ("2026-10-01", "2026-10-31"), "%s~%s" % (_s2, _e2))
+
+    _s3, _e3, _c3 = _H._range("2020-01-01", "2026-11-01")
+    check("history._range 超 400 天截断并置 clamped",
+          _c3 and _H._shift(_s3, _H._MAX_SPAN - 1) == _e3, "%s~%s" % (_s3, _e3))
+
+    _s4, _e4, _ = _H._range("abc", "def")
+    check("history._range 脏输入回落为合法区间", len(_s4) == 10 and _s4 <= _e4, "%s~%s" % (_s4, _e4))
+
+    _cut = _H._cutoff()
+    _sq_a, _ = _H._union("jd", _H._shift(_cut, -60), _H._shift(_cut, -1))
+    check("history._union 全在归档段时只查 daily_stats",
+          "FROM daily_stats" in _sq_a and "FROM orders" not in _sq_a, _sq_a[:60])
+    _sq_o, _ = _H._union("jd", _cut, _H._shift(_cut, 10))
+    check("history._union 全在订单段时只查 orders",
+          "FROM orders" in _sq_o and "FROM daily_stats" not in _sq_o, _sq_o[:60])
+    _sq_x, _p_x = _H._union("jd", _H._shift(_cut, -5), _H._shift(_cut, 5))
+    check("history._union 跨切线两段都在(各 3 参)", "FROM daily_stats" in _sq_x
+          and "FROM orders" in _sq_x and len(_p_x) == 6, str(len(_p_x)))
+
+    _dl = _H._delta({"gmv": 150, "orders": 12, "qty": 30}, {"gmv": 100, "orders": 10, "qty": 0})
+    check("history._delta 正常算增幅", _dl["gmv"] == 50.0 and _dl["orders"] == 20.0, str(_dl))
+    check("history._delta 分母为 0 给 None(不显示 -100%)", _dl["qty"] is None, str(_dl))
+
+    _h = {"X-Auth-Token": TOKEN}
+    r = client.get("/history/summary?channel=jd&start=2026-10-01&end=2026-10-02", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/summary 返回汇总+序列",
+          bool(_d.get("totals")) and _d["totals"].get("gmv") == 250.0
+          and len(_d.get("series") or []) == 2, r.text[:160])
+    check("history/summary 带数据来源分段(可核对取自哪张表)",
+          isinstance(_d.get("sources"), dict) and _d["sources"].get("orders"), str(_d.get("sources")))
+
+    r = client.get("/history/top?channel=jd&start=2026-10-01&end=2026-10-02&by=sku", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/top 返回占比(Top 合计=100%)",
+          len(_d.get("items") or []) == 2
+          and abs(sum(x["share"] for x in _d["items"]) - 100.0) < 0.2, r.text[:160])
+
+    # end 取 2026-01-31: 去年同窗(2025-01-31~2025-03-01)整段落在归档侧, 才是"无去年数据"的干净用例
+    r = client.get("/history/yoy?channel=jd&days=30&end=2026-01-31", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/yoy 无去年数据时 has_prev=false 且不编造同比",
+          _d.get("has_prev") is False and _d.get("delta") is None and "归档" in (_d.get("note") or ""),
+          r.text[:200])
+
+    r = client.get("/history/coverage?channel=jd", headers=_h)
+    _d = r.json().get("data") or {}
+    check("history/coverage 归档为空时说清原因",
+          _d.get("archive", {}).get("rows") == 0 and "暂无归档" in (_d.get("note") or ""), r.text[:200])
+
+    r = client.get("/history/summary?channel=jd")
+    check("history/* 未登录被拦(业务数据不裸奔)", r.status_code == 401, str(r.status_code))
+except Exception as _e10:
+    check("历史归档用例无异常", False, str(_e10)[:200])
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

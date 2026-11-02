@@ -12,6 +12,7 @@ import RulesPage from './pages/RulesPage'
 import DashboardPage from './pages/DashboardPage'
 import ErrorBoundary from './components/ErrorBoundary'
 import OrdersPage from './pages/OrdersPage'
+import HistoryPage from './pages/HistoryPage'
 import InventoryPage from './pages/InventoryPage'
 import QualityPage from './pages/QualityPage'
 import DevModePage from './pages/DevModePage'
@@ -42,6 +43,7 @@ export const NAV = [
   { id: 'products', label: t('nav.products') },
   { id: 'suppliers', label: t('nav.suppliers') },
   { id: 'orders', label: '订单明细' },
+  { id: 'history', label: '历史归档' },
   { id: 'inv', label: t('nav.inv') },
   { id: 'insights', label: t('nav.insights') },
   { id: 'cleansing', label: '数据清洗及导入' },
@@ -832,6 +834,8 @@ export default function App() {
         return wrap(<SupplierPage key={pageId} />)
       case 'orders':
         return wrap(<OrdersPage key={pageId} />)
+      case 'history':
+        return wrap(<HistoryPage key={pageId} />)
       case 'inv':
         return wrap(
           <InventoryPage

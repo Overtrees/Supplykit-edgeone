@@ -553,6 +553,7 @@ export const NAV_ICONS: Record<string, React.FC<IconProps>> = {
   products: IconTag,
   suppliers: IconFactory,
   orders: IconClipboard,
+  history: IconFolder,
   inv: IconPackage,
   insights: IconLightbulb,
   cleansing: IconBroom,
