@@ -177,7 +177,7 @@ def classify_error(exc):
     if code is None:
         return "warn", None, str(exc)[:160]
     if code in _FATAL:
-        return "fatal", code, _FATAL[code]
+        return "fatal", code, "%s | %s" % (_FATAL[code], str(exc)[:140])
     return "warn", code, str(exc)[:160]
 
 
@@ -204,7 +204,7 @@ def _connect():
         port=int(os.environ.get("TIDB_PORT", "4000")),
         user=os.environ.get("TIDB_USER"),
         password=os.environ.get("TIDB_PASSWORD"),
-        database=os.environ.get("TIDB_DB", "supplykit"),
+        database=os.environ.get("TIDB_DB") or "supplykit",
         ssl={"ca": None} if os.environ.get("TIDB_SSL", "true").lower() != "false" else None,
         cursorclass=pymysql.cursors.DictCursor,
         charset="utf8mb4",
@@ -226,6 +226,29 @@ def _run(cur, sql, params):
     return False
 
 
+_CORE_TABLES = ("inventory", "orders", "rules")
+
+
+def probe_db(conn):
+    """目标库指纹: 核心表必须都在。
+
+    为什么需要: 凭据指向另一个集群/空库时, 260 条 SQL 会**一起**报 1146 —— 那不是 260 个
+    缺陷, 是一个环境错。先回答"这是不是本项目的库", 才谈得上逐条诊断。
+    (2026-11-03 CI 实际踩到: secrets 里的 TIDB_* 指向一个没有 channels/schema_state 的库。)
+    """
+    ph = ",".join(["%s"] * len(_CORE_TABLES))
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT DATABASE() AS db")
+        db = str((cur.fetchone() or {}).get("db") or "")
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.tables "
+                    "WHERE table_schema=DATABASE() AND table_name IN (%s)" % ph, _CORE_TABLES)
+        n = int((cur.fetchone() or {}).get("n") or 0)
+    finally:
+        cur.close()
+    return db, n
+
+
 def verify(verbose=False):
     """连库逐条 EXPLAIN。返回 (fail_list, warn_list, skipped, total)"""
     if not _SEEN:
@@ -241,6 +264,16 @@ def verify(verbose=False):
         conn = _connect()
     except Exception as e:
         return ([("connect", "连接失败: %s" % str(e)[:120], "")], [], 0, len(_SEEN))
+
+    _dbname, _ncore = probe_db(conn)
+    if _ncore < len(_CORE_TABLES):
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return ([("db", "目标库 `%s` 缺核心表 %d/%d(%s) —— 凭据指向的可能不是本项目的库, 或迁移未跑"
+                  % (_dbname, _ncore, len(_CORE_TABLES), "/".join(_CORE_TABLES)), "")],
+                [], 0, len(_SEEN))
 
     failed, warned, skipped, ok = [], [], 0, 0
     cur = conn.cursor()
@@ -311,6 +344,9 @@ def report(fail_n_before=0):
         print("  ⚠ 另有 %d 条告警未展开" % (len(warned) - 10))
 
     # 结构对账: DDL 跳过 125 条不代表"没问题", 只是 EXPLAIN 管不着 —— 换一种方式验
+    if any(c == "db" for c, _, _ in failed):
+        print("\n── schema 对账 ──\n  跳过: 目标库指纹不符(先修凭据, 逐条报错没有意义)")
+        return len(failed)
     try:
         _c2 = _connect()
         try:
@@ -414,6 +450,12 @@ def schema_diff(conn):
 
 
 def report_schema(conn):
+    db, n = probe_db(conn)
+    if n < len(_CORE_TABLES):
+        print("\n── schema 对账 ──")
+        print("  ✗ 目标库 `%s` 缺核心表 %d/%d(%s) —— 不是本项目的库, 对账无意义"
+              % (db, n, len(_CORE_TABLES), "/".join(_CORE_TABLES)))
+        return 1
     missing_cols, extra_cols, missing_idx, nt, nc = schema_diff(conn)
     print("\n── schema 对账(代码声明 vs 真实库) ──")
     print("  声明 %d 张表 / %d 列 / %d 个索引" % (nt, nc, len(_declared()[1])))

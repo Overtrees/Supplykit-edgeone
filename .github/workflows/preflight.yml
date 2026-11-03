@@ -44,6 +44,9 @@ jobs:
           TIDB_PORT: ${{ secrets.TIDB_PORT }}
           TIDB_USER: ${{ secrets.TIDB_USER }}
           TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+          # TIDB_DB 必须一起传: 漏了它 → 代码默认连 `supplykit`, 而该库在 CI 集群里可能是空的,
+          # 于是 260 条 SQL 一起报 1146(看起来像 260 个缺陷, 其实是一个环境错)
+          TIDB_DB: ${{ secrets.TIDB_DB }}
         run: |
           cd cloud-functions/api
           if [ -n "$TIDB_HOST" ]; then
