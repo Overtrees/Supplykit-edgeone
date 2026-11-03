@@ -36,7 +36,7 @@
 python3 -c "import ast;ast.parse(open('cloud-functions/api/routes/xxx.py').read(),feature_version=(3,10))"
 
 # ② 全量回归
-cd cloud-functions/api && python3 local_test.py   # 期望: 363 通过, 0 失败
+cd cloud-functions/api && python3 local_test.py   # 期望: 392 通过, 0 失败
 
 # ③ 规模 mock(单 SKU + 200 SKU 各跑一轮)
 python3 /tmp/verify_xxx.py

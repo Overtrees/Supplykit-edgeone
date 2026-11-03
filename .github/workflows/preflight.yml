@@ -38,22 +38,27 @@ jobs:
       # 校验器自身的正负例(不需要库): 防止有人改坏 explain_sql/classify_error 后
       # 冒烟"什么都验不出"却仍然报绿
       - run: cd cloud-functions/api && python3 sql_smoke.py --self-test
-      - name: 后端回归(+ 真实 SQL 冒烟)
+      # 数据库连接**不在 GitHub 里维护第二份**: 运行时从 EdgeOne 项目环境变量取,
+      # 线上用哪个库 CI 就验哪个库。改密码只改 EdgeOne 一处。
+      # 拉不到(fork PR 无 secret / token 失效)时回落到下面 FB_* 的旧副本, 只告警不失败。
+      - name: 解析数据库连接(EdgeOne 环境变量优先)
         env:
-          TIDB_HOST: ${{ secrets.TIDB_HOST }}
-          TIDB_PORT: ${{ secrets.TIDB_PORT }}
-          TIDB_USER: ${{ secrets.TIDB_USER }}
-          TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
-          # TIDB_DB 必须一起传: 漏了它 → 代码默认连 `supplykit`, 而该库在 CI 集群里可能是空的,
-          # 于是 260 条 SQL 一起报 1146(看起来像 260 个缺陷, 其实是一个环境错)
-          TIDB_DB: ${{ secrets.TIDB_DB }}
+          EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
+          FB_HOST: ${{ secrets.TIDB_HOST }}
+          FB_PORT: ${{ secrets.TIDB_PORT }}
+          FB_USER: ${{ secrets.TIDB_USER }}
+          FB_PASS: ${{ secrets.TIDB_PASSWORD }}
+          FB_DB: ${{ secrets.TIDB_DB }}
+          FB_SSL: ${{ secrets.TIDB_SSL }}
+        run: python3 scripts/ci_fetch_env.py
+      - name: 后端回归(+ 真实 SQL 冒烟)
         run: |
           cd cloud-functions/api
           if [ -n "$TIDB_HOST" ]; then
-            echo "TIDB 凭据已注入 → 同时做真实 SQL 冒烟(EXPLAIN + schema 对账)"
+            echo "凭据来源=$CI_ENV_SOURCE → 同时做真实 SQL 冒烟(EXPLAIN + schema 对账)"
             python3 local_test.py --sql-smoke
           else
-            echo "::warning title=真实 SQL 冒烟未执行::未配置 TIDB_* secrets —— 本轮 CI 没有验证表名/列名"
+            echo "::warning title=真实 SQL 冒烟未执行::未取到数据库连接 —— 本轮 CI 没有验证表名/列名"
             python3 local_test.py
           fi
       - run: cd cloud-functions/api && python3 test_audit.py

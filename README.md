@@ -158,7 +158,7 @@ cd frontend && npm install && npm run dev
 # 3.10 语法门禁（部署前）
 python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), feature_version=(3,10))"
 
-# 一键自检（语法 / pyflakes / 回归 / eslint / prettier / tsc 六步）
+# 一键自检（语法 / pyflakes / 回归+SQL冒烟 / eslint / prettier / tsc / vitest 七步）
 bash scripts/preflight.sh
 ```
 
