@@ -738,20 +738,22 @@ export default function RulesPage() {
         {/* ── 规则列表 ── */}
         {tab === 'rules' && (
           <>
-            <RuleEditForm
-              f={f}
-              cond={cond}
-              rParams={rParams}
-              editing={editing}
-              saveLoading={saveLoading}
-              setF={setF}
-              setCond={setCond}
-              setRParams={setRParams}
-              cancelEdit={cancelEdit}
-              save={save}
-              onTest={openRuleTest}
-              globalChannel={globalChannel}
-            />
+            {editing !== null && (
+              <RuleEditForm
+                f={f}
+                cond={cond}
+                rParams={rParams}
+                editing={editing}
+                saveLoading={saveLoading}
+                setF={setF}
+                setCond={setCond}
+                setRParams={setRParams}
+                cancelEdit={cancelEdit}
+                save={save}
+                onTest={openRuleTest}
+                globalChannel={globalChannel}
+              />
+            )}
             <RuleList
               filteredRules={filteredRules}
               rules={rules}
