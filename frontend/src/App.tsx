@@ -3,7 +3,7 @@ import { useAppStore, type Channel } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, ToastAutoClear } from './components/Toast'
-import { useFreshness, StaleDotInline, FreshPopover } from './components/Freshness'
+import { useFreshness } from './components/Freshness'
 import OpPill from './components/OpPill'
 import { notify } from './api/notify'
 import ProductPage from './pages/ProductPage'
@@ -24,18 +24,10 @@ import SettingsPage from './pages/SettingsPage'
 import TaskPage from './pages/TaskPage'
 import LoginPage from './pages/LoginPage'
 import Sidebar from './components/Sidebar'
+import Welcome from './components/Welcome'
+import AppHeader from './components/AppHeader'
 import HistorySheet from './components/hammer/HistorySheet'
 
-import HammerProducts from './components/hammer/HammerProducts'
-import HammerInsights from './components/hammer/HammerInsights'
-import HammerCleansing from './components/hammer/HammerCleansing'
-import HammerRules from './components/hammer/HammerRules'
-import HammerRecycle from './components/hammer/HammerRecycle'
-import HammerHistory from './components/hammer/HammerHistory'
-import HammerDashboard from './components/hammer/HammerDashboard'
-import HammerInventory from './components/hammer/HammerInventory'
-import HammerOrders from './components/hammer/HammerOrders'
-import HammerSuppliers from './components/hammer/HammerSuppliers'
 import useKeyboard from './hooks/useKeyboard'
 import useLightTracker from './hooks/useLightTracker'
 import useGlassRefraction from './hooks/useGlassRefraction'
@@ -993,265 +985,27 @@ export default function App() {
         <ToastProvider>
           <ToastAutoClear page={page} />
           {/* 主内容 — 侧边栏打开时显示菜单，关闭时显示页面 */}
-          <header style={{ display: showWelcome ? 'none' : '' }}>
-            <div className="header-inner">
-              {page === 'dash' ? (
-                /* 看板页：左侧渠道筛选+锤子按钮，右侧菜单按钮 */
-                <>
-                  <div className="header-left">
-                    <span className="header-status" style={{ position: 'relative' }}>
-                      <StaleDotInline
-                        level={fresh?.staleLevel || 0}
-                        days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
-                        onClick={() => setFreshOpen(v => !v)}
-                      />
-                      {freshOpen && (
-                        <FreshPopover data={fresh} onClose={() => setFreshOpen(false)} />
-                      )}
-                      <select
-                        value={channel}
-                        onChange={e => setChannel(e.target.value)}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          outline: 'none',
-                          color: 'inherit',
-                          fontSize: 'inherit',
-                          fontWeight: 'inherit',
-                          cursor: 'pointer',
-                          padding: 0,
-                          margin: 0,
-                          appearance: 'none',
-                          WebkitAppearance: 'none',
-                          MozAppearance: 'none',
-                        }}
-                      >
-                        {(channels && channels.length
-                          ? channels.filter(c => c.enabled !== 0)
-                          : [
-                              { code: 'jd', name: '京东渠道' },
-                              { code: 'other', name: '其他渠道' },
-                            ]
-                        ).map(c => (
-                          <option key={c.code} value={c.code}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      {/* 2026-10-27 同步中徽标(变量 syncBadge 统一, 与渠道文本同字号——曾看板分支残留旧内联 fontSize:12) */}
-                      {headerPill}
-                    </span>
-                    <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z" />
-                        <path d="M12 12h9" />
-                        <path d="m22 3-3 3" />
-                        <path d="m19 3-3 3" />
-                        <path d="M12 3v3" />
-                        <path d="M12 18v3" />
-                      </svg>
-                    </button>
-                  </div>
-                  <button className="menu-btn" onClick={toggleEditorMenu}>
-                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                      <rect x="2" y="4" width="16" height="1.5" rx=".75" fill="currentColor" />
-                      <rect x="2" y="9.25" width="16" height="1.5" rx=".75" fill="currentColor" />
-                      <rect x="2" y="14.5" width="16" height="1.5" rx=".75" fill="currentColor" />
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                /* 其他页：左侧返回按钮，右侧锤子按钮 + 渠道筛选 */
-                <>
-                  <div className="header-left">
-                    <button
-                      className="back-btn"
-                      onClick={() =>
-                        navigateTo(
-                          page === 'devmode' || page === 'recycle' || page === 'channels'
-                            ? 'settings'
-                            : 'dash',
-                        )
-                      }
-                    >
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <polyline points="19 12 5 12" />
-                        <polyline points="11 18 5 12 11 6" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M15 12a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h5a4 4 0 0 0 4-4v-4Z" />
-                        <path d="M12 12h9" />
-                        <path d="m22 3-3 3" />
-                        <path d="m19 3-3 3" />
-                        <path d="M12 3v3" />
-                        <path d="M12 18v3" />
-                      </svg>
-                    </button>
-                    <span className="header-status" style={{ position: 'relative' }}>
-                      <select
-                        value={channel}
-                        onChange={e => setChannel(e.target.value)}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          outline: 'none',
-                          color: 'inherit',
-                          fontSize: 'inherit',
-                          fontWeight: 'inherit',
-                          cursor: 'pointer',
-                          padding: 0,
-                          margin: 0,
-                          appearance: 'none',
-                          WebkitAppearance: 'none',
-                          MozAppearance: 'none',
-                        }}
-                      >
-                        {(channels && channels.length
-                          ? channels.filter(c => c.enabled !== 0)
-                          : [
-                              { code: 'jd', name: '京东渠道' },
-                              { code: 'other', name: '其他渠道' },
-                            ]
-                        ).map(c => (
-                          <option key={c.code} value={c.code}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      {/* 2026-10-27 其他页同步中徽标(与看板页同款, 按本布局 header-status 显示) */}
-                      {headerPill}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
-          </header>
-          {showHammerMenu && (
-            <>
-              <div
-                onPointerDown={closeHammerMenu}
-                style={{
-                  position: 'fixed',
-                  inset: 0,
-                  zIndex: 3001,
-                  background: 'transparent',
-                  transition: 'background 220ms ease',
-                }}
-              />
-              <div
-                ref={hammerMenuRef}
-                onPointerDown={e => e.stopPropagation()}
-                className="glass-edge"
-                style={{
-                  position: 'fixed',
-                  zIndex: 3002,
-                  right: 16,
-                  top: 'calc(env(safe-area-inset-top, 0px) + 7px + 46px + 6px)',
-                  width: 240,
-                  background: 'var(--glass-bg)',
-                  backdropFilter: 'var(--glass-filter)',
-                  WebkitBackdropFilter: 'var(--glass-filter)',
-                  border: '1px solid var(--glass-border)',
-                  boxShadow: 'var(--glass-shadow)',
-                  borderRadius: 26,
-                  overflow: 'hidden auto',
-                  maxHeight: 'calc(100vh - 120px)',
-                  opacity: hammerMenuClosing ? 0 : 1,
-                  transform: hammerMenuClosing
-                    ? 'translateY(-10px) scale(0.92)'
-                    : 'translateY(0) scale(1)',
-                  transformOrigin: '85% -18px',
-                  transition: 'opacity 180ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1)',
-                  willChange: 'opacity, transform',
-                  // 2026-10-13 PWA 底部留空根治: 面板 maxHeight 100vh-120(底不在 home indicator 区)——底部 safe-area padding 多余致 PWA 下按钮下 50px 空白; 统一 16px
-                  padding: '16px 16px 12px' /* 底部 16→12(导入等矮面板底部白条减) */,
-                }}
-              >
-                {page === 'dash' ? (
-                  <HammerDashboard channel={channel} />
-                ) : page === 'products' ? (
-                  <HammerProducts channel={channel} />
-                ) : page === 'suppliers' ? (
-                  <HammerSuppliers channel={channel} />
-                ) : page === 'orders' ? (
-                  <HammerOrders channel={channel} />
-                ) : page === 'inv' ? (
-                  <HammerInventory channel={channel} />
-                ) : page === 'insights' ? (
-                  <HammerInsights channel={channel} />
-                ) : page === 'cleansing' ? (
-                  <HammerCleansing channel={channel} />
-                ) : page === 'rules' ? (
-                  <HammerRules channel={channel} onShowHistory={loadHistory} />
-                ) : page === 'recycle' ? (
-                  <HammerRecycle />
-                ) : page === 'history' ? (
-                  <HammerHistory channel={channel} />
-                ) : (
-                  <div
-                    style={{
-                      color: 'var(--muted)',
-                      fontSize: 'var(--font-13)',
-                      textAlign: 'center',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 'var(--font-xs)',
-                        color: 'var(--muted2)',
-                        marginBottom: 4,
-                      }}
-                    >
-                      {_chLabel} · {page}
-                    </div>
-                    <div
-                      style={{ fontSize: 'var(--font-13)', color: 'var(--text)', marginBottom: 4 }}
-                    >
-                      {hammerData[channel]?.[page]
-                        ? `${hammerData[channel]?.[page]?.length ?? 0} 条记录`
-                        : '暂无数据'}
-                    </div>
-                    <div
-                      style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginTop: 8 }}
-                    >
-                      功能待添加
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+          <AppHeader
+            page={page}
+            channel={channel}
+            setChannel={setChannel}
+            channels={channels}
+            fresh={fresh}
+            freshOpen={freshOpen}
+            setFreshOpen={setFreshOpen}
+            headerPill={headerPill}
+            showWelcome={showWelcome}
+            showHammerMenu={showHammerMenu}
+            hammerMenuClosing={hammerMenuClosing}
+            hammerMenuRef={hammerMenuRef}
+            toggleHammerMenu={toggleHammerMenu}
+            closeHammerMenu={closeHammerMenu}
+            toggleEditorMenu={toggleEditorMenu}
+            navigateTo={navigateTo}
+            loadHistory={loadHistory}
+            hammerData={hammerData}
+            _chLabel={_chLabel}
+          />
           <Sidebar
             page={page}
             onClose={closeEditorMenu}
@@ -1263,192 +1017,7 @@ export default function App() {
             menuClosing={menuClosing}
             onBackdrop={closeEditorMenu}
           />
-          {/* 欢迎页 — 首次使用 */}
-          {showWelcome && (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                minHeight: '100svh',
-                padding:
-                  'calc(env(safe-area-inset-top, 0px) + 40px) 24px calc(24px + env(safe-area-inset-bottom, 20px))',
-                overflowY: 'auto',
-                boxSizing: 'border-box',
-              }}
-            >
-              <div
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                  maxWidth: 360,
-                  margin: '0 auto',
-                  width: '100%',
-                }}
-              >
-                <div style={{ textAlign: 'center', marginBottom: 32 }}>
-                  <div
-                    style={{
-                      fontSize: 32,
-                      fontWeight: 800,
-                      color: 'var(--text)',
-                      marginBottom: 8,
-                      letterSpacing: '-0.5px',
-                    }}
-                  >
-                    {t('welcome.title')}
-                  </div>
-                  <div
-                    style={{ fontSize: 'var(--font-15)', color: 'var(--muted2)', lineHeight: 1.5 }}
-                  >
-                    电商供应链数据清洗
-                    <br />
-                    与补货决策看板
-                  </div>
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: 14,
-                    marginBottom: 32,
-                  }}
-                >
-                  {[
-                    {
-                      svg: 'M3 12h4l2-9 4 18 2-9h4',
-                      title: '看数据',
-                      desc: '多维看板总览',
-                      page: 'dash',
-                    },
-                    {
-                      svg: 'M9 18h6M10 22h4M15.09 14c.6-.77 1.05-1.6 1.32-2.5A5.4 5.4 0 0 0 12 6a5.4 5.4 0 0 0-4.41 5.5c.27.9.72 1.73 1.32 2.5M9 18c0-1.5.5-2.9 1.5-4h3c1 1.1 1.5 2.5 1.5 4',
-                      title: '看补货',
-                      desc: '补货/采购建议',
-                      page: 'insights',
-                    },
-                    {
-                      svg: 'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',
-                      title: '导数据',
-                      desc: '数据清洗导入',
-                      page: 'cleansing',
-                    },
-                    {
-                      svg: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',
-                      title: '设规则',
-                      desc: '规则引擎配置',
-                      page: 'rules',
-                    },
-                  ].map(function (card) {
-                    return (
-                      <div
-                        key={card.page}
-                        className="clickable"
-                        style={{
-                          background: 'var(--card)',
-                          borderRadius: 'var(--radius-card-sm)',
-                          padding: 16,
-                          textAlign: 'center',
-                          cursor: 'default',
-                          border: '1px solid var(--border)',
-                        }}
-                      >
-                        <div style={{ marginBottom: 8 }}>
-                          <svg
-                            width="30"
-                            height="30"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="var(--primary)"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d={card.svg} />
-                          </svg>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 'var(--font-15)',
-                            fontWeight: 600,
-                            color: 'var(--text)',
-                            marginBottom: 3,
-                          }}
-                        >
-                          {card.title}
-                        </div>
-                        <div style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
-                          {card.desc}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                <button
-                  onClick={async function () {
-                    try {
-                      localStorage.setItem('c_welcome_seen', '1')
-                    } catch {}
-                    setShowWelcome(false)
-                    try {
-                      const r = await fetch(API + '/api/seed/fill', {
-                        headers: {
-                          'X-Auth-Token': (() => {
-                            try {
-                              return localStorage.getItem('c_token')
-                            } catch {
-                              return ''
-                            }
-                          })(),
-                        },
-                        method: 'POST',
-                      })
-                      const d = await r.json()
-                      if (d.ok) {
-                        if (d.data?.requires_reset) {
-                          notify.error('已有数据，请在设置页先「一键重置」')
-                          return
-                        }
-                        const taskId = d.data?.task_id
-                        if (taskId) {
-                          try {
-                            localStorage.setItem('c_seed_task', taskId)
-                          } catch {}
-                          notify.success('种子数据填充中，可前往任务管理查看进度')
-                        }
-                      } else notify.error('填充失败: ' + (d.error || ''))
-                    } catch (e) {}
-                  }}
-                  className="btn btn-primary"
-                  style={{
-                    width: '100%',
-                    padding: '14px',
-                    fontSize: 'var(--font-lg)',
-                    fontWeight: 600,
-                    marginBottom: 10,
-                  }}
-                >
-                  {t('welcome.start')}
-                </button>
-                <button
-                  onClick={function () {
-                    localStorage.setItem('c_welcome_seen', '1')
-                    setShowWelcome(false)
-                  }}
-                  className="btn btn-ghost clickable"
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    fontSize: 'var(--font-md)',
-                    color: 'var(--muted2)',
-                  }}
-                >
-                  {t('welcome.skip')}
-                </button>
-              </div>
-            </div>
-          )}
+          {showWelcome && <Welcome close={() => setShowWelcome(false)} />}
           <main
             className="container"
             style={{ display: showWelcome ? 'none' : '', animation: 'fadeIn 0.2s ease' }}
