@@ -249,6 +249,62 @@ function invalidateCache() {
   cache.clear()
 }
 
+// ── S3-2/S3-3 收口: 裸 fetch 统一通道 ──
+// 适用: 轮询/状态探测/文件下载/登录等**不吃缓存、不注入 channel**的场景。
+// 语义与裸 fetch 等价: 返回原始 body(await r.json()) 或 raw:true 时返回 Response,
+// 不解包 {ok,data}、不读写缓存、不进在途去重、不自动注入 channel(URL 由调用方拼全)。
+// 只补齐裸 fetch 缺的三件事: ①超时(默认 30s, 原生 fetch 无超时曾挂起 30s+)
+// ②X-Auth-Token 注入(省掉各调用点复制的 IIFE) ③与 axios 同口径拼 BASE(相对路径不再打到前端 origin)。
+// 网络层异常(含超时 AbortError)照常 throw → 调用方 catch 原逻辑不变, 且上报 api_http_error。
+// logger.reportError 仍用裸 fetch(client→logger 单向依赖, 收口会成环)。
+export async function apiJson(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  url: string,
+  opts: { data?: any; timeout?: number; signal?: AbortSignal; raw?: boolean } = {},
+): Promise<any> {
+  const token = (() => {
+    try {
+      return localStorage.getItem('c_token')
+    } catch {
+      return ''
+    }
+  })()
+  const target = /^https?:\/\//i.test(url) ? url : BASE + url
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), opts.timeout ?? 30000)
+  const onAbort = () => ctrl.abort()
+  if (opts.signal) {
+    if (opts.signal.aborted) ctrl.abort()
+    else opts.signal.addEventListener('abort', onAbort)
+  }
+  const hasBody = opts.data !== undefined
+  try {
+    const resp = await fetch(target, {
+      method,
+      body: hasBody ? JSON.stringify(opts.data) : undefined,
+      headers: {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { 'X-Auth-Token': token } : {}),
+      },
+      signal: ctrl.signal,
+    })
+    return opts.raw ? resp : await resp.json()
+  } catch (e: any) {
+    try {
+      reportError(
+        'api_http_error',
+        (String((e && e.message) || '') + ' ' + url).slice(0, 200),
+        'network-error',
+        'warning',
+      )
+    } catch {}
+    throw e
+  } finally {
+    clearTimeout(t)
+    if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
+  }
+}
+
 // 导出 api 对象，保持与原接口兼容
 // 2026-10-14 422 根治: iOS Safari 移动端 axios XHR FormData 发送 body 空(boundary 有内容无)——上传类改 fetch 原生(Safari fetch multipart 可靠)
 export async function uploadForm(url: string, fd: FormData, timeout = 90000): Promise<any> {

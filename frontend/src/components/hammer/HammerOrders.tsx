@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
@@ -45,21 +46,11 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     if (ids.length === 0) return
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(API + '/api/orders/batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-        body: JSON.stringify({ action, ids }),
+      // S3-2 收口: 批量是重操作, 超时 90s
+      const d = await apiJson('POST', API + '/api/orders/batch', {
+        timeout: 90000,
+        data: { action, ids },
       })
-      const d = await r.json()
       if (d.ok) {
         s.setOrderSelIds([])
         s.setOrderBatch(false)
@@ -79,19 +70,10 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     setExporting(true)
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(API + '/api/exports?type=orders&channel=' + channel, {
-        method: 'POST',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
+      // S3-2 收口: 导出是重操作, 超时 90s
+      const d = await apiJson('POST', API + '/api/exports?type=orders&channel=' + channel, {
+        timeout: 90000,
       })
-      const d = await r.json()
       if (d.ok && d.task_id)
         toast.add({
           type: 'success',

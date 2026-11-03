@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { api } from '../api/client'
+import { api, apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -62,9 +62,9 @@ export default function DevModePage() {
     setRefreshing(true)
     const start = performance.now()
     try {
-      const r = await fetch(API + '/api/insights/ping')
+      // S3-2 收口: 探测 5s 超时(原裸 fetch 无超时)
+      const d = await apiJson('GET', API + '/api/insights/ping', { timeout: 5000 })
       const ms = Math.round(performance.now() - start)
-      const d = await r.json()
       setStatus(d.ok ? '正常' : '异常')
       setPing(ms)
       setLastCheck(new Date().toLocaleTimeString())
@@ -100,19 +100,8 @@ export default function DevModePage() {
     setConfirm(null)
     setSeeding(true)
     try {
-      const r = await fetch(API + '/api/seed/fill', {
-        method: 'POST',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-      })
-      const d = await r.json()
+      // S3-2 收口: 填充是重操作, 超时对齐 postHeavy 90s
+      const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
       if (d.ok) {
         if (d.data?.requires_reset) {
           toast.error('已有数据，请先重置')
@@ -151,19 +140,8 @@ export default function DevModePage() {
     setConfirm(null)
     setResetting(true)
     try {
-      const r = await fetch(API + '/api/seed/reset', {
-        method: 'POST',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-      })
-      const d = await r.json()
+      // S3-2 收口: 重置是重操作, 超时对齐 postHeavy 90s
+      const d = await apiJson('POST', API + '/api/seed/reset', { timeout: 90000 })
       if (d.ok && d.data?.task_id) {
         try {
           localStorage.setItem('c_reset_task', d.data.task_id)
@@ -172,17 +150,7 @@ export default function DevModePage() {
         // 轮询等待重置完成
         const poll = setInterval(async () => {
           try {
-            const sr = await fetch(API + '/api/seed/fill/status?task_id=' + d.data.task_id, {
-              headers: {
-                'X-Auth-Token': (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
-              },
-            })
+            const sr = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + d.data.task_id)
             const sd = await sr.json()
             if (sd.data?.status === 'done' || sd.data?.status === 'error') {
               clearInterval(poll)

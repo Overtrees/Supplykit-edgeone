@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { Group, Row, ListItem } from '../components/ListGroup'
 import EmptyState from '../components/EmptyState'
@@ -25,22 +26,10 @@ export default function RecyclePage() {
 
   const loadData = () => {
     setLoading(true)
-    const _auth = {
-      'X-Auth-Token': (() => {
-        try {
-          return localStorage.getItem('c_token')
-        } catch {
-          return ''
-        }
-      })(),
-    }
+    // S3-2 收口: apiJson 直接返回 json(不再 .then(r => r.json()))
     Promise.all([
-      fetch(API + '/api/rules?channel=all&include_deleted=1', { headers: _auth }).then(r =>
-        r.json(),
-      ),
-      fetch(API + '/api/orders?page=1&page_size=200&include_deleted=1', { headers: _auth }).then(
-        r => r.json(),
-      ),
+      apiJson('GET', API + '/api/rules?channel=all&include_deleted=1'),
+      apiJson('GET', API + '/api/orders?page=1&page_size=200&include_deleted=1'),
     ])
       .then(([rData, oData]: any[]) => {
         const items = rData.data || rData || []
@@ -90,38 +79,23 @@ export default function RecyclePage() {
     }
     setBatchBusy(true)
     try {
-      const _auth = {
-        'X-Auth-Token': (() => {
-          try {
-            return localStorage.getItem('c_token')
-          } catch {
-            return ''
-          }
-        })(),
-        'Content-Type': 'application/json',
-      }
       // 规则: 永久删除走 batch purge(批量接口), 其余走单条
       if (ruleIds.length) {
         if (action === 'permanent-delete') {
-          await fetch(API + '/api/rules/batch', {
-            method: 'POST',
-            headers: _auth,
-            body: JSON.stringify({ action: 'purge', ids: ruleIds }),
+          await apiJson('POST', API + '/api/rules/batch', {
+            timeout: 90000,
+            data: { action: 'purge', ids: ruleIds },
           })
         } else {
           await Promise.all(
-            ruleIds.map(id =>
-              fetch(API + '/api/rules/' + id + '/' + action, { method: 'POST', headers: _auth }),
-            ),
+            ruleIds.map(id => apiJson('POST', API + '/api/rules/' + id + '/' + action)),
           )
         }
       }
       // 订单: 单条(restore/permanent-delete)
       if (orderIds.length) {
         await Promise.all(
-          orderIds.map(id =>
-            fetch(API + '/api/orders/' + id + '/' + action, { method: 'POST', headers: _auth }),
-          ),
+          orderIds.map(id => apiJson('POST', API + '/api/orders/' + id + '/' + action)),
         )
       }
       loadData()

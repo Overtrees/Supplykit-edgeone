@@ -1,4 +1,5 @@
 import { IconScale } from '../components/Icons'
+import { apiJson } from '../api/client'
 import React, { useState } from 'react'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -17,17 +18,12 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
     }
     setLoading(true)
     setError('')
-    // fetch 超时(15s): 无痕/弱网下原生 fetch 无超时曾挂起 30s+ 无反馈, 用户重复点击
-    const ctrl = new AbortController()
-    const _to = setTimeout(() => ctrl.abort(), 15000)
+    // 超时(15s): 无痕/弱网下曾挂起 30s+ 无反馈, 用户重复点击(S3-2 收口: apiJson timeout)
     try {
-      const r = await fetch(API + '/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-        signal: ctrl.signal,
+      const d = await apiJson('POST', API + '/api/auth/login', {
+        timeout: 15000,
+        data: { username, password },
       })
-      const d = await r.json()
       if (d.ok && d.token) {
         try {
           localStorage.setItem('c_token', d.token)
@@ -41,8 +37,6 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
       }
     } catch {
       setError('无法连接到服务器，请重试')
-    } finally {
-      clearTimeout(_to)
     }
     setLoading(false)
   }

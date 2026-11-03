@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
-import { clearCache, clearInflight } from './api/client'
+import { clearCache, clearInflight, apiJson } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, ToastAutoClear } from './components/Toast'
 import { useFreshness } from './components/Freshness'
@@ -111,11 +111,8 @@ export default function App() {
       try {
         for (let attempt = 0; attempt <= 2; attempt += 1) {
           try {
-            const r = await fetch(_chBase + '/api/channels?enabled_only=1', {
-              headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
-            })
-            if (!r.ok) throw new Error('HTTP ' + r.status)
-            const d: { data?: Channel[] } = await r.json()
+            // S3-2 收口: apiJson(超时+token 注入+BASE 口径), 网络错误照常 throw → 重试逻辑不变
+            const d: { data?: Channel[] } = await apiJson('GET', '/api/channels?enabled_only=1')
             const list: Channel[] = Array.isArray(d && d.data)
               ? (d as { data: Channel[] }).data
               : []
@@ -162,20 +159,10 @@ export default function App() {
     const targets = ops.filter(o => o.kind === 'rules' && o.taskId)
     if (!targets.length) return
     let alive = true
-    const _hdr = () => {
-      try {
-        return { 'X-Auth-Token': localStorage.getItem('c_token') || '' }
-      } catch {
-        return {}
-      }
-    }
     const check = async () => {
       for (const o of targets) {
         try {
-          const r = await fetch(API + '/api/rules/eval-status?task_id=' + o.taskId, {
-            headers: _hdr(),
-          })
-          const j = await r.json()
+          const j = await apiJson('GET', API + '/api/rules/eval-status?task_id=' + o.taskId)
           if (!alive) return
           const st = j?.data?.status
           if (st === 'done' || st === 'expired') {
@@ -327,18 +314,7 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
-            },
-          })
-          const d = await r.json()
+          const d = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + seedTask)
           if (document.visibilityState === 'hidden') return // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
             clearInterval(poll)
@@ -388,34 +364,21 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(
-            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000', // 小窗(实时进度——大窗 263s 超时积压教训)
-            {
-              headers: {
-                'X-Auth-Token': (() => {
-                  try {
-                    return localStorage.getItem('c_token')
-                  } catch {
-                    return ''
-                  }
-                })(),
-              },
-            },
+          // 小窗(实时进度——大窗 263s 超时积压教训)
+          const d = await apiJson(
+            'GET',
+            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000',
           )
-          const d = await r.json()
           if (document.visibilityState === 'hidden') return
           // 2026-10-15 App 级续跑: status 续跑一窗 + 写 driver=frontend——任意页面在线=前端推进(不再全靠后端保活)
           try {
-            fetch(
+            apiJson(
+              'POST',
               API +
                 '/api/cleansing/driver?task_id=' +
                 cleansingTask.task_id +
                 '&driver=frontend&channel=' +
                 (cleansingTask.channel || 'jd'),
-              {
-                method: 'POST',
-                headers: { 'X-Auth-Token': localStorage.getItem('c_token') || '' },
-              },
             )
           } catch {}
           if (d.status === 'done') {
@@ -467,18 +430,7 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
-            },
-          })
-          const d = await r.json()
+          const d = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + resetTask)
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
             clearInterval(poll)
@@ -514,18 +466,10 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
-            },
-          })
-          const d = await r.json()
+          const d = await apiJson(
+            'GET',
+            API + '/api/seed/fill/status?task_id=' + exportTask.task_id,
+          )
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done') {
             clearInterval(poll)
@@ -595,7 +539,7 @@ export default function App() {
           }
         })()
         if (!token) return
-        const r = await fetch(API + '/api/auth/check', { headers: { 'X-Auth-Token': token } })
+        const r = await apiJson('GET', API + '/api/auth/check', { raw: true })
         let ok = r.ok
         if (r.status === 200) {
           try {
@@ -633,7 +577,7 @@ export default function App() {
       setLoggedIn(false)
       return
     }
-    fetch(API + '/api/auth/check', { headers: { 'X-Auth-Token': token } })
+    apiJson('GET', API + '/api/auth/check', { raw: true })
       .then(async r => {
         // 401/500/SW offline 兜底(200 {ok:false}) 一律按失效处理 → 回登录页
         let ok = r.ok
@@ -664,22 +608,10 @@ export default function App() {
       setShowHistory(true)
       setHistLoading(true)
       try {
-        const API = import.meta.env.VITE_API_BASE_URL || ''
-        const r = await fetch(
+        const d = await apiJson(
+          'GET',
           API + '/api/replenishment-config/history?channel=' + (ch || channel) + '&limit=50',
-          {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
-            },
-          },
         )
-        const d = await r.json()
         setHistory(d.data || [])
       } catch (e) {
         setHistory([])
@@ -690,10 +622,7 @@ export default function App() {
   )
   const checkApi = useCallback(async () => {
     try {
-      const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 5000)
-      const r = await fetch(API + '/api/insights/ping', { signal: ctrl.signal })
-      const d = await r.json()
+      const d = await apiJson('GET', API + '/api/insights/ping', { timeout: 5000 })
       setApiStatus(d.ok ? 'ok' : 'slow')
     } catch {
       setApiStatus('error')
@@ -711,8 +640,7 @@ export default function App() {
   useEffect(() => {
     const poll = setInterval(async () => {
       try {
-        const r = await fetch(API + '/api/health')
-        const d = await r.json()
+        const d = await apiJson('GET', API + '/api/health')
         const v = d.version || 0
         if (versionRef.current !== 0 && versionRef.current !== v) {
           // 版本变化，清除前端缓存
@@ -883,17 +811,7 @@ export default function App() {
   // 2026-10-14: 回前台立即续跑 running 导入/填充/导出任务(后端 continue-tasks 兜底 + 前端恢复接力)
   useEffect(() => {
     const cont = () => {
-      fetch(API + '/api/cron/continue-tasks?task=manual', {
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token') || ''
-            } catch {
-              return ''
-            }
-          })(),
-        },
-      }).catch(() => {})
+      apiJson('POST', API + '/api/cron/continue-tasks?task=manual').catch(() => {})
     }
     // 2026-11-02 S0: 原写 addEventListener(..., 匿名函数) 但 removeEventListener(..., cont) ——
     // 引用不同, 移除永不生效。每次 App 重挂载都多一个常驻监听。

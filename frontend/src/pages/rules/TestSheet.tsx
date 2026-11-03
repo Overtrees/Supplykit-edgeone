@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { api } from '../../api/client'
+import { api, apiJson } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { IconCheck, IconClose, IconGear, IconLightning, IconLoading } from '../../components/Icons'
 import { IS } from './shared'
@@ -80,19 +80,10 @@ export default function RuleTestSheet({
     if (!rule) return
     setTestLoading(true)
     try {
-      const r = await fetch(API + '/api/rules/' + rule.id + '/test', {
-        method: 'POST',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      // S3-2 收口: 测试是重操作, 超时对齐 postHeavy 90s
+      const d = await apiJson('POST', API + '/api/rules/' + rule.id + '/test', {
+        timeout: 90000,
+        data: {
           inv: {
             available_qty: Number(testInv.available_qty) || 0,
             safety_qty: Number(testInv.safety_qty) || 0,
@@ -128,9 +119,8 @@ export default function RuleTestSheet({
                 ? 100
                 : Number(testInv.health_score),
           },
-        }),
+        },
       })
-      const d = await r.json()
       if (d.ok) setTestResult(d.data)
       else toast.error('测试失败: ' + (d.error || ''))
     } catch (e) {

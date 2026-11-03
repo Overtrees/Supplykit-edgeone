@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { apiJson } from '../api/client'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
@@ -46,17 +47,8 @@ export default function TaskPage() {
   const firstLoad = useRef(true) // 首载只记录历史完成, 不弹提示(避免进页一堆历史任务 toast)
   const loadTasks = async () => {
     try {
-      const r = await fetch(API + '/api/tasks?channel=' + channel, {
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-      })
+      // S3-2 收口: raw 保留 r.status(401 判断), apiJson 补超时/token/BASE
+      const r = await apiJson('GET', API + '/api/tasks?channel=' + channel, { raw: true })
       const d = await r.json()
       if (d.ok && Array.isArray(d.data)) {
         setTasks(d.data)
@@ -127,21 +119,11 @@ export default function TaskPage() {
   const download = async (taskId, filename) => {
     setDownloading(p => ({ ...p, [taskId]: true }))
     try {
-      const auth = {
-        'X-Auth-Token': (() => {
-          try {
-            return localStorage.getItem('c_token')
-          } catch {
-            return ''
-          }
-        })(),
-      }
       // 分片导出(EdgeOne 响应体 6MB 限制): 逐片下载合并(单片 ≤6MB), 文件名用正式名
       let parts: string[] = []
       let realName = filename
       try {
-        const st = await fetch(API + '/api/exports/status?task_id=' + filename, { headers: auth })
-        const sd = await st.json()
+        const sd = await apiJson('GET', API + '/api/exports/status?task_id=' + filename)
         if (sd.status === 'done') {
           parts = sd.parts || []
           realName = sd.name || filename
@@ -151,13 +133,20 @@ export default function TaskPage() {
       if (parts.length > 0) {
         const chunks: Blob[] = []
         for (const p of parts) {
-          const r = await fetch(API + '/api/exports/download/' + p, { headers: auth })
+          // S3-2 收口: blob 下载走 raw Response, apiJson 补超时(大文件 120s)
+          const r = await apiJson('GET', API + '/api/exports/download/' + p, {
+            raw: true,
+            timeout: 120000,
+          })
           if (!r.ok) throw new Error('分片下载失败')
           chunks.push(await r.blob())
         }
         blob = new Blob(chunks, { type: 'text/csv' })
       } else {
-        const dl = await fetch(API + '/api/exports/download/' + filename, { headers: auth })
+        const dl = await apiJson('GET', API + '/api/exports/download/' + filename, {
+          raw: true,
+          timeout: 120000,
+        })
         // 2026-10-30: 不检查 dl.ok 会静默下载"错误页 HTML"(文件名由前端命名, 内容却是 500 页)
         if (!dl.ok) throw new Error('导出下载失败(' + dl.status + ')')
         blob = await dl.blob()

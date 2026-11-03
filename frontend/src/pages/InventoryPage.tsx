@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react'
-import { api, clearCache, abortScope } from '../api/client'
+import { api, clearCache, abortScope, apiJson } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
@@ -252,18 +252,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   const delInv = async () => {
     if (!confirmDel) return
     try {
-      const r = await fetch(`${API}/api/inventory/${confirmDel}`, {
-        method: 'DELETE',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-      })
+      // S3-2 收口: raw 保留 r.ok 判断
+      const r = await apiJson('DELETE', `${API}/api/inventory/${confirmDel}`, { raw: true })
       if (r.ok) {
         toast.success('已删除')
         setConfirmDel(null)

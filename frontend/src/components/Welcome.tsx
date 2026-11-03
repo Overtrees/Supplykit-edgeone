@@ -1,4 +1,5 @@
 import { t } from '../locale'
+import { apiJson } from '../api/client'
 import { notify } from '../api/notify'
 
 const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
@@ -134,19 +135,8 @@ export default function Welcome({ close }: { close: () => void }) {
             } catch {}
             close()
             try {
-              const r = await fetch(API + '/api/seed/fill', {
-                headers: {
-                  'X-Auth-Token': (() => {
-                    try {
-                      return localStorage.getItem('c_token')
-                    } catch {
-                      return ''
-                    }
-                  })(),
-                },
-                method: 'POST',
-              })
-              const d = await r.json()
+              // S3-2 收口: 填充是重操作, 超时 90s
+              const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
               if (d.ok) {
                 if (d.data?.requires_reset) {
                   notify.error('已有数据，请在设置页先「一键重置」')

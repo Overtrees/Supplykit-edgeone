@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { api, clearCache, clearInflight, freshStamp } from '../api/client'
+import { api, clearCache, clearInflight, freshStamp, apiJson } from '../api/client'
 import { mutate } from '../api/mutate'
 import { useToast } from '../components/Toast'
 import ErrorRetry from '../components/ErrorRetry'
@@ -149,9 +149,8 @@ export default function RulesPage() {
           return ''
         }
       })()
-      const r = await fetch(API + '/api/rules?channel=' + c, {
-        headers: { 'X-Auth-Token': token },
-      })
+      // S3-2 收口: raw 保留 r.status(addDebug 记录用), apiJson 补超时/token/BASE
+      const r = await apiJson('GET', API + '/api/rules?channel=' + c, { raw: true })
       const d = await r.json()
       // 防御: 异常响应(401/500/结构异常)可能非数组 → setRules(object) 导致 rules.length
       // undefined → 渲染条件全 false → 空白无提示。数组校验+格式异常提示
@@ -442,26 +441,17 @@ export default function RulesPage() {
       const saved = await mutate({
         label: isNew ? '新建规则' : '保存规则',
         run: async () => {
-          const res = await fetch(url, {
-            method: isNew ? 'POST' : 'PUT',
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+          // S3-2 收口: 保存是重操作, 超时对齐 postHeavy 90s; raw 保留 res.ok 判断
+          const res = await apiJson(isNew ? 'POST' : 'PUT', url, {
+            timeout: 90000,
+            data: {
               ...f,
               // 2026-10-28 修复: '' 表示'全部'(合法值)——曾用 || 回退成旧 mode, 用户改回'全部'保存后又变 bbcc
               mode: f.mode ?? '',
               channel: globalChannel,
               condition_json: cj,
               params: rParams,
-            }),
+            },
           })
           if (!res.ok) {
             const err = await res.json().catch(() => ({}))
@@ -530,18 +520,8 @@ export default function RulesPage() {
     const okDel = await mutate({
       label: '删除规则',
       run: async () => {
-        const res = await fetch(API + '/api/rules/' + id, {
-          headers: {
-            'X-Auth-Token': (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-          },
-          method: 'DELETE',
-        })
+        // S3-2 收口: raw 保留 res.ok 判断
+        const res = await apiJson('DELETE', API + '/api/rules/' + id, { raw: true })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
           throw new Error(err.detail || 'HTTP ' + res.status)
@@ -558,18 +538,7 @@ export default function RulesPage() {
     addDebug('del load 完成')
     const timer = setTimeout(async function () {
       // no-link: 撤销窗口结束后的收尾删除 —— 规则行早已从列表消失, 无可观察联动
-      await fetch(API + '/api/rules/' + id + '/permanent-delete', {
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-        method: 'POST',
-      })
+      await apiJson('POST', API + '/api/rules/' + id + '/permanent-delete')
     }, 5000)
     toast.add({
       type: 'success',
@@ -584,17 +553,9 @@ export default function RulesPage() {
           const okUndo = await mutate({
             label: '恢复规则',
             run: async () => {
-              const res = await fetch(API + '/api/rules/' + id + '/restore', {
-                headers: {
-                  'X-Auth-Token': (() => {
-                    try {
-                      return localStorage.getItem('c_token')
-                    } catch {
-                      return ''
-                    }
-                  })(),
-                },
-                method: 'POST',
+              // S3-2 收口: raw 保留 res.ok 判断
+              const res = await apiJson('POST', API + '/api/rules/' + id + '/restore', {
+                raw: true,
               })
               if (!res.ok) throw new Error('HTTP ' + res.status)
               return true

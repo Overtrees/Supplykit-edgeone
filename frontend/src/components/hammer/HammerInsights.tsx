@@ -13,7 +13,7 @@ import {
   insDefVisTrad,
 } from './configs'
 import { IconExport, IconCheck, IconReturn, IconMoney, IconTag } from '../Icons'
-import { api } from '../../api/client'
+import { api, apiJson } from '../../api/client'
 interface HammerInsightsProps {
   channel: string
 }
@@ -102,22 +102,12 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             : type === 'replen'
               ? 'replen'
               : 'purchase'
-      const r = await fetch(
+      // S3-2 收口: 导出是重操作, 超时 90s
+      const d = await apiJson(
+        'POST',
         API + '/api/exports?type=' + _type + '&mode=' + _mode + '&channel=' + channel,
-        {
-          method: 'POST',
-          headers: {
-            'X-Auth-Token': (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-          },
-        },
+        { timeout: 90000 },
       )
-      const d = await r.json()
       if (d.ok && d.task_id) {
         toast.add({
           type: 'success',

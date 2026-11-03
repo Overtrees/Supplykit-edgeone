@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import { Group, LastRow } from '../components/ListGroup'
@@ -28,18 +29,8 @@ export default function SettingsPage() {
   useEffect(() => {
     ;(async () => {
       try {
-        const r = await fetch(API + '/api/replenishment-config?channel=jd', {
-          headers: {
-            'X-Auth-Token': (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-          },
-        })
-        const d = await r.json()
+        // S3-2 收口
+        const d = await apiJson('GET', API + '/api/replenishment-config?channel=jd')
         if (d?.data?.webhook_url) setWebhookUrl(d.data.webhook_url)
       } catch {}
     })()
@@ -47,21 +38,10 @@ export default function SettingsPage() {
   const saveWebhook = async () => {
     setWebhookSaving(true)
     try {
-      const r = await fetch(API + '/api/replenishment-config?channel=jd', {
-        method: 'PUT',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ webhook_url: webhookUrl.trim() }),
+      // S3-2 收口
+      const d = await apiJson('PUT', API + '/api/replenishment-config?channel=jd', {
+        data: { webhook_url: webhookUrl.trim() },
       })
-      const d = await r.json()
       if (d.ok)
         toast.success(webhookUrl.trim() ? '已保存，新告警将推送到该地址' : '已保存，告警推送已关闭')
       else toast.error('保存失败: ' + (d.error || ''))

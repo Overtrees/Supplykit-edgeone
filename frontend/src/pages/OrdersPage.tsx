@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, abortScope } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
@@ -129,21 +130,11 @@ export default function OrdersPage() {
   const doBatchOrder = async (action: string, ids: number[]) => {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(API + '/api/orders/batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-        },
-        body: JSON.stringify({ action, ids }),
+      // S3-2 收口: 批量是重操作, 超时 90s
+      const d = await apiJson('POST', API + '/api/orders/batch', {
+        timeout: 90000,
+        data: { action, ids },
       })
-      const d = await r.json()
       if (d.ok) {
         setOrderSelIds([])
         setOrderBatch(false)

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { apiJson } from '../../api/client'
 import { t } from '../../locale'
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
@@ -52,22 +53,12 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
     setExporting(true)
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
-      const r = await fetch(
+      // S3-2 收口: 导出是重操作, 超时 90s
+      const d = await apiJson(
+        'POST',
         API + '/api/exports?type=inventory&channel=' + channel + '&wh_type=' + hammerWhType,
-        {
-          method: 'POST',
-          headers: {
-            'X-Auth-Token': (() => {
-              try {
-                return localStorage.getItem('c_token')
-              } catch {
-                return ''
-              }
-            })(),
-          },
-        },
+        { timeout: 90000 },
       )
-      const d = await r.json()
       if (d.ok && d.task_id)
         toast.add({
           type: 'success',
