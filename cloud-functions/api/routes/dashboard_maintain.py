@@ -82,11 +82,14 @@ def _clear_agg_dirty():
             try_err('dashboard', 'agg_dirty 清位降级', _e)
 
 def _snapshot_step(channel, _db2):
+    # 2026-11-03 S3-4: 下面两处日志原来把 `"..." % (...)` 的**字符串**直接当 params 传,
+    #   pymysql 会逐字符当参数序列 → "not all arguments converted", 被 except 吞掉,
+    #   于是"快照续段"的诊断日志**从未写入过**。params 必须是 tuple(str,), 不是 str。
     try:
         from db import execute as _elog
         _elog("INSERT INTO quality_logs(log_type, level, message, source) "
               "VALUES('perf_debug','info',%s,'dash')",
-              ("快照续段: ch=%s db2=%s" % (channel, _db2)))
+              ("快照续段: ch=%s db2=%s" % (channel, _db2),))
     except Exception:
         pass
     """快照分段续跑(2026-10-10): 每 miss 推进 10 天(幂等 ON DUPLICATE)——12.6万行单次 INSERT 8-10s
@@ -113,7 +116,7 @@ def _snapshot_step(channel, _db2):
             from db import execute as _elog2
             _elog2("INSERT INTO quality_logs(log_type, level, message, source) "
                    "VALUES('perf_debug','info',%s,'dash')",
-                   ("快照续段完成: %s~%s" % (_frm.strftime('%Y-%m-%d'), _to.strftime('%Y-%m-%d'))))
+                   ("快照续段完成: %s~%s" % (_frm.strftime('%Y-%m-%d'), _to.strftime('%Y-%m-%d')),))
         except Exception:
             pass
     except Exception as _e:

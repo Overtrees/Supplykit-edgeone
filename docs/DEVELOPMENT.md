@@ -4477,3 +4477,175 @@ mutate 四件套 / 规则三条写路径 / 采购三条写路径 / 撤销补事�
 - 胶囊里的"隐藏"只从列表移除, 不影响后端任务 —— 文案已注明, 避免用户以为取消了任务。
 - 事件总线仍然是"触发重拉"而非"推送数据", 页面未挂载时事件会丢; 兜底是 mount 重拉 + 30s 静默 +
   `visibilitychange`。这条没有改, 因为改成持久化事件队列的复杂度远高于收益。
+
+---
+
+### 15.130 S3-4 真实 SQL 冒烟: 让测试第一次"问过数据库" (2026-11-03)
+
+审计报告把 S3-4 写成"测试策略: 真实 SQL 冒烟", 理由只有一句 —— 205 个用例全 mock 掉 db
+返回固定行, **表名/列名/GROUP BY 一个都测不出**。这次落地, 并且在第一次运行就抓到 3 个真缺陷
+(其中 2 个是"上线以来从未生效"的功能)。
+
+#### 一、为什么 mock 永远抓不到这类错
+
+`fake_query` 是**按 SQL 片段做模式匹配**的:
+
+```python
+if "FROM inventory WHERE" in sql or "FROM inventory i" in sql:
+    return [dict(x) for x in _FAKE_INV]
+```
+
+它匹配的是"我**期望**代码写出的 SQL", 不是"数据库**能执行**的 SQL"。所以:
+
+| 代码里的错 | mock 的反应 | 测试结论 |
+|---|---|---|
+| `WHERE qty=%s`(列不存在) | 片段仍匹配 → 返回假行 | ✅ 通过 |
+| `COALESCE((SELECT ...)), 0)`(多一个括号) | 片段仍匹配 → 返回假行 | ✅ 通过 |
+| `GROUP BY` 少一列 | 片段仍匹配 → 返回假行 | ✅ 通过 |
+
+更隐蔽的是**被 `try/except` 吞掉的那类**: 查询抛 1054 → except 记一条日志 → 按 0 降级 →
+业务继续跑。测试连异常都看不到, 线上也"不报错", 只是**数字一直是 0**。
+
+#### 二、方案: EXPLAIN, 不是"连库跑一遍"
+
+三条路对比, 选了代价最小、副作用为零的那条:
+
+| 方式 | 副作用 | 能否验 DML | 成本 |
+|---|---|---|---|
+| 直接执行 | 读数据(RU)、慢、可能写 | 能 | 高 |
+| 事务 + ROLLBACK | DML 可回滚, **DDL 隐式提交不可回滚** | 能 | 中 |
+| **`EXPLAIN <stmt>`** | **零**: 只做名称解析 + 计划, 不读行、不加锁、不执行 | 能(TiDB 支持 `EXPLAIN INSERT/UPDATE/DELETE`) | 每条约 30~80ms |
+
+动手前先实测了四件事(2026-11-03, 生产库):
+
+| 探针 | 结果 |
+|---|---|
+| `EXPLAIN SELECT sku, no_such_col FROM inventory` | 1054 Unknown column ✓ |
+| `EXPLAIN SELECT * FROM no_such_table` | 1146 Table doesn't exist ✓ |
+| `EXPLAIN SELECT sku, channel, SUM(x) FROM inventory GROUP BY sku` | 1055 ONLY_FULL_GROUP_BY ✓ |
+| `EXPLAIN DELETE FROM inventory` 前后 `COUNT(*)` | 均 17006, **未删任何行** ✓ |
+
+所以可以对着生产库跑, 不需要测试库、不需要造数据、不需要回滚。
+
+#### 三、怎么拿到 SQL: 包在"第一次绑定"处
+
+`routes/*.py` 全是 `from db import query` —— 名字在 **import 那一刻**绑定。这意味着:
+
+- 在 `local_test.py` 首次 import 路由**之前**包住 4 个 mock, 就能覆盖所有已 import 模块的调用;
+- 之后再改 `db.query` 对已 import 的模块**无效**(Python 名字绑定语义, 不是偷懒)。
+
+因此只在 6 个点加了 `_A(...)`: 4 个主注入 + `fake_agg_query`(紧接着 import dashboard) +
+`fake_query` 重绑(紧接着 import tasks)。后面那些 `_db.execute = lambda ...` 是测试自己的替身
+(用于截获 SQL 做断言), 不改变已 import 模块内的绑定 —— 不逐处包, 省 12 处噪音。
+
+**代价**: 包装必须一直在。若有人删掉 `_A`, 收集数会变 0 而 `--sql-smoke` 仍报"0 失败"。
+所以有两道护栏:
+
+1. `_MIN_SQL = 200`(基线 388): 收集数腰斩直接判失败, 不静默变绿;
+2. 回归里 4 条静态断言: 6 个注入点都带 `_A()` / 冒烟带覆盖率下限 / 两处已修缺陷不得复发。
+
+#### 四、第一次运行抓到的 3 个真缺陷
+
+**① `core/rule_eval.py` 采购在途恒 0(1054, 被 try 吞)**
+
+```sql
+SELECT sku, SUM(IFNULL(qty,0)-IFNULL(received_qty,0)) FROM purchase_orders ...
+```
+
+`purchase_orders` 的真实列是 `id/sku/store/product_name/suggested_qty/actual_qty/arrival_date/status/channel/created_at`
+—— **没有 `qty`/`received_qty`**。每次评估都 1054, 被 `except` 记成"按 0 降级", 于是
+`own.po_transit` 恒 0、`can_ship` 少算。
+
+**这条尤其值得记: 同一个错 2026-11-02 已在 `dashboard_own_health.py` 修过一次**
+(那里还留了 `"FROM purchase_orders" not in src` 的断言), 但 `rule_eval.py` 漏了 —— 又一次
+"修一处漏一处"。修法与 own_health 同源: 采购在途 = 库存导入的 `in_transit_qty`, 导入值即权威,
+再推一遍就是双计。所以 `po_transit` 与 `transit` 同源, `can_ship = available + transit`(只加一次)。
+
+> 线上 11 条规则**没有一条**引用 `own.po_transit`/`own.transit`, 所以这次语义修正对现网判定零影响。
+
+**② `routes/cron.py:478` 批次对账多一个右括号(1064)**
+
+```sql
+COALESCE((SELECT SUM(b.qty) FROM batches b WHERE ... AND COALESCE(b.barcode,'')=COALESCE(i.barcode,''))), 0) AS bq
+                                                                                                    ↑ 多这一个
+```
+
+后果比①更重: **D7 的四段对账里, 第④段(告警↔库存四维)之外的"批次四维对账"上线以来一次都没跑成过**
+—— 每次每日任务走到这里 1064, 被 `except` 记成"批次对账降级"。日志里只有一行警告, 没人追。
+
+**③ 3 处把 `str` 当 params 传(诊断日志从未落库)**
+
+```python
+_ed("INSERT ... VALUES(...,%s,...)",
+    ("detect 收到 file: %s" % (bool(file),)))     # ← 少了外层括号里的逗号
+```
+
+`"..." % (...)` 求值成**字符串**, pymysql 会把它逐字符当参数序列 → `not all arguments converted`
+→ 被 `except: pass` 吞掉。涉及 `routes/cleansing.py`(detect 收文件)、
+`routes/dashboard_maintain.py`(快照续段 ×2)。它们都是 2026-10 为定位问题临时加的诊断,
+**加了却没生效过**。改为 `(msg,)`。
+
+#### 五、DDL 管不着, 用 schema 对账补
+
+388 条唯一 SQL 里 125 条是 `create×50 / alter×53 / show×19 / drop×3` —— EXPLAIN 不支持,
+但"声明了却没建"是同一类事故(`SCHEMA_VERSION` 漏 bump、DDL 写错列名)。于是加 `--schema-diff`:
+
+```
+解析 schema_create._TABLES 的 CREATE TABLE → 提取列名(按括号深度切分, 跳过约束行)
++ _COLUMN_ADDS 的补列声明
+vs information_schema.columns / statistics
+```
+
+| 判定 | 含义 |
+|---|---|
+| 代码有、库无 | **✗ 失败**(迁移没跑 / 列名写错) |
+| 库有、代码无 | ⚠ 提示(历史遗留列不影响新代码执行) |
+
+首次结果: 41 表 / 391 列 / 13 索引, 全部存在; 库里有 3 列未声明
+(`replenishment_config.key` 等, 属历史遗留, 不判错)。
+
+#### 六、实测与接入
+
+| 指标 | 值 |
+|---|---|
+| 唯一 SQL | **388 条**, 覆盖 **31 个后端模块** |
+| EXPLAIN 通过 | 263 条, **0 失败 / 0 告警** |
+| 跳过 | 125 条(DDL/SHOW, 由 schema 对账覆盖) |
+| 单次耗时 | 约 65s(392 用例 + 263 次 EXPLAIN + 对账), 其中回归本身 ~2s |
+
+接入方式:
+
+```
+preflight [3/7]  有 TIDB 凭据 → python3 local_test.py --sql-smoke(同一个进程, 复用收集结果)
+                 无凭据     → 显式打印"⚠ 真实 SQL 冒烟未执行(表名/列名未验证)"
+CI backend job   secrets.TIDB_* 注入 → 跑; 未配置 → ::warning 显式标注"本轮没有验证表名/列名"
+                 另有 python3 sql_smoke.py --self-test(19 条正负例, 不需要库)
+```
+
+**"没有凭据就跳过"必须打印出来**: 静默跳过的门禁和没有门禁是一回事 —— 这正是 15.129 里
+"vitest 22 个用例从没被执行过"的同型问题。
+
+#### 七、零误报设计
+
+门禁只有"报出来的都是真错"才有人看。三条规则:
+
+1. **只有名称解析类错误码判失败**: 1054/1146/1051/1052/1055/1064/1109/1247/1210。
+   其余(1366 截断、超时、权限)记 ⚠ 并原样打印, 由人判断。
+2. **参数个数对不上先重试**: 用 `NULL` 填充所有 `%s/%d` 再跑一次, 通过则记 ⚠ 不记失败
+   —— mock 的参数形状与真实调用未必一致, 不该让它变成红。
+3. **报错必须给调用点**: `traceback` 取第一个非 `sql_smoke`/`local_test` 的栈帧,
+   输出 `core/rule_eval.py:349`。只报"Unknown column"而不说改哪个文件, 等于没报。
+
+自检锁住这些能力(`--self-test`, 19 条): `explain_sql` 的分类、错误码分级、`%s` 填充、
+列名解析(DECIMAL 里的逗号不能切断)。
+
+#### 八、边界
+
+- **只覆盖 mock 走到的分支**。388 条是"现有用例能触发的 SQL", 不是"代码里所有 SQL"。
+  某个 `except` 分支里的查询若从未被测试触发, 仍然验不到 —— 但这类查询通常也不会在生产触发。
+- **EXPLAIN 验的是"能不能执行", 不是"执行得快不快"**。执行计划质量(全表扫/笛卡尔积)
+  不在本门禁范围, 归 `ru_diag.sh`。
+- **不验数据正确性**。`WHERE` 写错但语法合法(如 `channel='jdd'`)仍会通过 —— 那是业务断言的
+  职责, 不是 SQL 冒烟的。
+- **EXPLAIN 有微小 RU 消耗**(只编译不读行), 263 条量级可忽略; 但不要把它塞进高频循环。
+- 无凭据时默认**打印"未执行"但不判失败**(本地无网不该红); 需要强制时设 `SQL_SMOKE_REQUIRED=1`。

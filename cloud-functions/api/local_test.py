@@ -1,7 +1,13 @@
 """本地回归测试: mock db + TestClient 跑全部路由(部署前置定位 Python 层 bug)
 
-用法: cd cloud-functions/api && python3 local_test.py
+用法:
+  python3 local_test.py                # 只跑回归(不连库, 沙箱/CI 默认)
+  python3 local_test.py --sql-smoke    # 回归 + 真实 SQL 冒烟(需 TIDB_* 凭据)
 覆盖: auth / dashboard summary(含 periods 环比/health_index/漏斗)
+
+--sql-smoke 做的是: 把 mock 层收到的每条 SQL 拿去真库 `EXPLAIN`, 只做名称解析与计划,
+不读数据行、不执行写入, 因此能安全地对着生产库跑。它要抓的是"表名/列名/GROUP BY
+写错了"这类 mock 永远测不出的错(§15.106 三个 NameError 的根因)。实现见 sql_smoke.py。
 """
 import sys
 import os
@@ -11,6 +17,16 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("JWT_SECRET", "local-test-secret")
+
+import sql_smoke as _sa                                    # noqa: E402
+
+_SQL_SMOKE = ("--sql-smoke" in sys.argv) or os.environ.get("SQL_SMOKE") == "1"
+_sa.ENABLED = _SQL_SMOKE
+
+
+def _A(fn):
+    """包一层 SQL 审计。只在 --sql-smoke 时生效(否则原样返回, 零开销零行为变化)。"""
+    return _sa.audit(fn)
 
 from datetime import datetime, timedelta, timezone
 
@@ -140,10 +156,15 @@ _db.conn = lambda: _FakeConn()
 _db._acquire = lambda: _FakeConn()  # 连接池取用 mock(transaction 用 _acquire——沙箱不真连库)
 _db._release = lambda c: None
 
-_db.query = fake_query
-_db.one = fake_one
-_db.execute = lambda sql, params=None: 1  # rowcount 语义(2026-11-02: 删除快照按 rowcount 判存在)
-_db.executemany = lambda sql, seq: None
+# ── 注入点必须在这里(所有 routes 首次 import 之前) ──
+# 原因: routes/*.py 全是 `from db import query`, 名字在 import 那一刻绑定;
+#   之后再改 db.query 对已 import 的模块无效。所以要审计 SQL, 只能包在"第一绑定"处。
+# 后面那些 `_db.execute = lambda ...` 是测试自己的替身(用于截获 SQL 做断言),
+#   它们只影响 _db.xxx 的直接调用者, 不改变已 import 模块内的绑定 —— 故不逐处包。
+_db.query = _A(fake_query)
+_db.one = _A(fake_one)
+_db.execute = _A(lambda sql, params=None: 1)  # rowcount 语义(2026-11-02: 删除快照按 rowcount 判存在)
+_db.executemany = _A(lambda sql, seq: None)
 
 
 # ── replenishment mock ──
@@ -750,7 +771,7 @@ def fake_agg_query(sql, params=None):
                  "g": 100.0, "sub": 5.0, "cnt": 2}]
     return fake_query(sql, params)
 
-_db.query = fake_agg_query
+_db.query = _A(fake_agg_query)   # 紧接其后 import routes.dashboard → 必须带审计, 否则该模块 SQL 漏检
 try:
     from routes.dashboard import dashboard_summary
     _ar = dashboard_summary(channel="jd", mode="bbcc")
@@ -765,7 +786,7 @@ _db.conn = lambda: _FakeConn()
 _db._acquire = lambda: _FakeConn()  # 连接池取用 mock(transaction 用 _acquire——沙箱不真连库)
 _db._release = lambda c: None
 
-_db.query = fake_query
+_db.query = _A(fake_query)   # 同上: 之后 import routes.tasks
 
 # ── 接力 status 双层 result 解析回归(2026-10-09: filename 曾取错层级致下载失败) ──
 from routes.tasks import export_status
@@ -2234,6 +2255,25 @@ try:
           and "INSERT INTO alerts" not in _cap24[0][0], str(_cap24[:1])[:160])
 except Exception as _e25:
     check("D8 动态用例无异常", False, str(_e25)[:200])
+
+# ── S3-4 真实 SQL 冒烟: 机制本身不许被拆掉 ────────────────────────────
+# 冒烟只在"真的收集到 SQL"时才有意义。若有人删掉 _A() 包装, 收集数会变 0,
+# 而 --sql-smoke 仍然"0 失败"—— 那就是又一条"不跑的测试"。这四条静态断言守的是这件事。
+try:
+    _lt_src = open('local_test.py', encoding='utf-8').read()
+    check("S3-4 db 注入点全部带 _A() 包装(否则唯一 SQL=0, 冒烟假绿)",
+          _lt_src.count('_db.query = _A(') >= 3 and '_db.one = _A(' in _lt_src
+          and '_db.execute = _A(' in _lt_src and '_db.executemany = _A(' in _lt_src)
+    _re_src = open('core/rule_eval.py', encoding='utf-8').read()
+    check("S3-4 采购在途不再从 purchase_orders 反推(该表只有 suggested_qty/actual_qty)",
+          'FROM purchase_orders' not in _re_src, "core/rule_eval.py")
+    check("S3-4 own.po_transit 与 own.transit 同源 + can_ship 不双计",
+          '"po_transit": _ot' in _re_src and '_can = _oa + _ot' in _re_src, "core/rule_eval.py")
+    _sm_src = open('sql_smoke.py', encoding='utf-8').read()
+    check("S3-4 冒烟带覆盖率下限(收集数腰斩即失败, 不静默变绿)",
+          '_MIN_SQL' in _sm_src and '低于基线' in _sm_src, "sql_smoke.py")
+except Exception as _e26:
+    check("S3-4 静态用例无异常", False, str(_e26)[:200])
 finally:
     try:
         _db.query, _db.execute = _oq24, _oe24
@@ -2241,6 +2281,12 @@ finally:
         _al24.execute = _oe24
     except Exception:
         pass
+
+# ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
+if _SQL_SMOKE:
+    FAIL += _sa.report()
+else:
+    print("\nℹ 真实 SQL 冒烟未运行(mock 测不出表名/列名; 加 --sql-smoke 开启)")
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

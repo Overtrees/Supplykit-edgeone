@@ -20,13 +20,14 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **388 通过 / 0 失败** |
+| 回归 | `local_test.py` **392 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(388 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
 python3 scripts/env_check.py                  # 换机/新会话第一条: 缺凭据一次性列全
-bash scripts/preflight.sh                     # 六步门禁, 全绿才算可推
+bash scripts/preflight.sh                     # 七步门禁, 全绿才算可推(有 TIDB 凭据时含 SQL 冒烟)
 cd cloud-functions/api && python3 local_test.py   # 单跑回归(注意目录!)
+cd cloud-functions/api && python3 local_test.py --sql-smoke  # 回归 + 真实 SQL 冒烟(需 TIDB_*)
 python3 scripts/push_api.py -m "feat(x): ..."     # 推送(= 触发部署)
 python3 scripts/deploy_status.py                  # 部署状态(最近 3 次)
 python3 scripts/smoke_check.py                    # 线上冒烟(health JSON + 首页 root + 业务接口)
@@ -126,7 +127,7 @@ push-alerts 08:30 / ping 13:55)。
 ```bash
 bash scripts/preflight.sh
 # [1/7] 后端 Python 3.10 语法   [2/7] pyflakes(undefined name / 重定义)
-# [3/7] local_test 回归 388      [4/7] ESLint  [5/7] Prettier  [6/7] tsc
+# [3/7] local_test 回归 392 (+SQL 冒烟)  [4/7] ESLint  [5/7] Prettier  [6/7] tsc
 # [7/7] vitest 单测(2026-11-03 纳入: 此前从未执行, 攒了 12 个长期失败)
 ```
 

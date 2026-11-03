@@ -330,12 +330,19 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         #   逐仓日销 ds=0 → 动态安全线=0 → 低库存口径恒不触发(口径错配, 非 bug)。
         #   自有仓该判的是供给侧三件事, 这里把判定所需的量都注入 ctx, 让规则可配置:
         #     own.available / own.transit        自有仓在仓/在途(逐 SKU 汇总)
-        #     own.po_transit                    采购在途(供应商已发未到)
-        #     own.can_ship                      可发量 = 在仓+在途+采购在途
+        #     own.po_transit                    采购在途 —— 与 own.transit 同源(见下)
+        #     own.can_ship                     可发量 = 在仓 + 在途
         #     own.need                          下游一个调拨周期的要货量 = 下游日销 × b2c_days × 覆盖倍数
         #     own.gap                           缺口 = need − can_ship(>0 即调拨覆盖不足)
         #     own.cover_days                    自有可用 ÷ 下游日销(积压判定)
         #   缺数据一律不给键(条件求值 None → 跳过), 不用 0 冒充。
+        #
+        # 2026-11-03 S3-4: 删除"从 purchase_orders 反推采购在途"的查询 —— 该表只有
+        #   suggested_qty/actual_qty, 没有 qty/received_qty, 每次执行必 1054, 被 except 吞成
+        #   "按 0 降级"。后果是 own.po_transit 恒 0、can_ship 少算, 而**日志里看不出来**。
+        #   同一个错误 2026-11-02 已在 dashboard_own_health 修过一次(那里也留了断言), 这里漏了。
+        #   口径按用户定案: 采购在途 = 库存导入的自有仓 in_transit_qty, 导入值即权威,
+        #   再推一遍就是双计 —— 所以 po_transit 与 transit 同源, can_ship 只加一次。
         _own_map = {}
         try:
             _wm = {}
@@ -346,15 +353,6 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                 _wm.setdefault(str(_ro.get("sku") or ""), {})[
                     str(_ro.get("warehouse_type") or "")] = (
                     int(_ro.get("av") or 0), int(_ro.get("tr") or 0))
-            _po_t = {}
-            try:
-                for _rpo in query(
-                        "SELECT sku, IFNULL(SUM(IFNULL(qty,0)-IFNULL(received_qty,0)),0) AS t "
-                        "FROM purchase_orders WHERE channel=%s "
-                        "AND status IN ('pending','in_transit','partial') GROUP BY sku", [channel]):
-                    _po_t[str(_rpo.get("sku") or "")] = int(_rpo.get("t") or 0)
-            except Exception as _epo:
-                try_err('core_rules', '采购在途加载降级(按 0)', _epo)
             # 阈值同样走规则 params(可配置): 这里只给"默认值", 规则条件用 params.* 覆盖
             _own_cover_mult = float(_rp.get("transfer_cover_mult", 1.0) or 1.0) if _rp else 1.0
             for _sk, _d in _wm.items():
@@ -365,9 +363,9 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                 _pbb = _d.get("platform_b", (0, 0))
                 _down_av = _pb[0] + _pbb[0] + _pb[1] + _pbb[1]
                 _ds_own = _ds_of(_sk, "", "")
-                _can = _oa + _ot + _po_t.get(_sk, 0)
+                _can = _oa + _ot
                 _own_map[_sk] = {
-                    "available": _oa, "transit": _ot, "po_transit": _po_t.get(_sk, 0),
+                    "available": _oa, "transit": _ot, "po_transit": _ot,
                     "can_ship": _can, "downstream_avail": _down_av,
                     "b2c_days": _lit_bbcc,
                     "cover_mult": _own_cover_mult,

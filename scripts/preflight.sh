@@ -17,8 +17,10 @@ for arg in "$@"; do
   case "$arg" in
     --skip-frontend) SKIP_FRONT=1 ;;
     --skip-backend) SKIP_BACK=1 ;;
+    --skip-sql-smoke) SKIP_SQL_SMOKE=1 ;;
   esac
 done
+SKIP_SQL_SMOKE="${SKIP_SQL_SMOKE:-0}"
 
 echo "════════ SupplyKit preflight ════════"
 
@@ -46,11 +48,24 @@ if [ "$SKIP_BACK" = "0" ]; then
   fi
 
   echo "── [3/7] local_test 回归 ──"
+  # 2026-11-03 S3-4: 有 TIDB 凭据时在同一个进程里顺带做真实 SQL 冒烟(EXPLAIN) ——
+  #   不能"另跑一遍", 冒烟复用的正是这次运行收集到的 SQL。没有凭据时显式说明未验证,
+  #   绝不静默当作通过(否则又是一条"不跑的测试")。
+  _SMOKE=""
+  if [ "$SKIP_SQL_SMOKE" = "1" ]; then
+    echo "  ⚠ 已显式跳过真实 SQL 冒烟(表名/列名未验证)"
+  elif grep -qs "^TIDB_HOST=." "$SK/.env" || [ -n "${TIDB_HOST:-}" ]; then
+    _SMOKE="--sql-smoke"
+    echo "  (检测到 TIDB 凭据 → 同时做真实 SQL 冒烟: EXPLAIN + schema 对账)"
+  else
+    echo "  ⚠ 无 TIDB 凭据: 真实 SQL 冒烟未执行(表名/列名未验证)"
+  fi
   # 2026-11-02 修误判: 原用 "行内含『失败』" 判定, 而汇总行本身就是"205 通过, 0 失败"
   #   → 永远命中, preflight 恒红(实测每次都在这一步报错)。改为: 退出码 + 失败数>0 才算失败。
-  _lt_out=$(cd "$API" && python3 local_test.py 2>&1)
+  _lt_out=$(cd "$API" && python3 local_test.py $_SMOKE 2>&1)
   _lt_rc=$?
-  echo "$_lt_out" | grep -E "本地回归:" | sed 's/^/  /'
+  # 只显示"结论行" —— 回归汇总 + 冒烟的三行摘要, 其余 388 条 ✅ 不刷屏
+  echo "$_lt_out" | grep -E "本地回归:|真实 SQL 冒烟|收集 [0-9]+ 次调用|校验 [0-9]+ 条|schema 对账|声明 [0-9]+ 张表|✓ 所有声明的|✗ |⚠ 未执行|未运行" | sed 's/^/  /'
   if [ "$_lt_rc" = "0" ] && echo "$_lt_out" | grep -qE "本地回归: [0-9]+ 通过, 0 失败"; then
     echo "  ✓ 回归通过"
   else

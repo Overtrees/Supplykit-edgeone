@@ -35,7 +35,24 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install -r cloud-functions/requirements.txt
-      - run: cd cloud-functions/api && python3 local_test.py
+      # 校验器自身的正负例(不需要库): 防止有人改坏 explain_sql/classify_error 后
+      # 冒烟"什么都验不出"却仍然报绿
+      - run: cd cloud-functions/api && python3 sql_smoke.py --self-test
+      - name: 后端回归(+ 真实 SQL 冒烟)
+        env:
+          TIDB_HOST: ${{ secrets.TIDB_HOST }}
+          TIDB_PORT: ${{ secrets.TIDB_PORT }}
+          TIDB_USER: ${{ secrets.TIDB_USER }}
+          TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+        run: |
+          cd cloud-functions/api
+          if [ -n "$TIDB_HOST" ]; then
+            echo "TIDB 凭据已注入 → 同时做真实 SQL 冒烟(EXPLAIN + schema 对账)"
+            python3 local_test.py --sql-smoke
+          else
+            echo "::warning title=真实 SQL 冒烟未执行::未配置 TIDB_* secrets —— 本轮 CI 没有验证表名/列名"
+            python3 local_test.py
+          fi
       - run: cd cloud-functions/api && python3 test_audit.py
 
   secrets:

@@ -250,11 +250,14 @@ async def cleansing_detect(request: Request, file: UploadFile = File(None)):
         if _raw:
             file = _mk_upload(_raw, "file.csv")   # 占位名统一 csv: 真 xlsx 由 _parse_table 内容嗅探纠正
     # 临时诊断(2026-10-14 422 file missing 定位): 记录请求表单/文件到达情况
+    # 2026-11-03 S3-4: 原来把 `"..." % (...)` 的**字符串**当 params 传 → pymysql 逐字符当参数
+    #   序列, 报 "not all arguments converted", 被 except 吞掉 —— 这条诊断从未落过库。
+    #   params 必须是 tuple(str,)。(同类错误在 dashboard_maintain._snapshot_step 有两处)
     try:
         from db import execute as _ed
         _ed("INSERT INTO quality_logs(log_type, level, message, source) VALUES('perf_debug','info',%s,'cleansing')",
             ("detect 收到 file: %s, filename: %s, size: %s" % (
-                bool(file), (file.filename or '')[:40], getattr(file, 'size', None))))
+                bool(file), (file.filename or '')[:40], getattr(file, 'size', None)),))
     except Exception:
         pass
     data, fname = _read_file_bytes(file)

@@ -485,7 +485,7 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
                 #   原为 "任一方为空 → 降级匹配", 属双向通配: 库存行有码 + 批次无码时,
                 #   会匹配上该仓**所有码**的批次, 偏差被别的码抵消 → 与本节"四维逐一、不能
                 #   抵消"的初衷自相矛盾, 等于给错配开了后门。空码只能匹配空码。
-                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,''))), 0) AS bq "
+                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'')), 0) AS bq "
                 "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
                 "HAVING ABS(qty - bq) > 1" % _ph,
                 [_ch] + list(_SELF))
