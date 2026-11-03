@@ -4995,3 +4995,41 @@ mb 10 vs 12)。预览页改为映射页同构后, 标题行 140–160 逐像素�
 
 效果图脚本曾显示改动"没生效", 排查半天 CSS 缓存 —— 实际是脚本默认 HOST 是
 **线上**(未部署, 当然是旧值)。验证改动是否生效, 先确认脚本连的是哪个环境。
+
+---
+
+### 15.136 S3-1 第四步: 建议页 2192 → 1543(2026-11-03)
+
+#### 一、两刀切法
+
+| 文件 | 行数 | 内容 | 备注 |
+|---|---|---|---|
+| `insights/shared.tsx` | 213 | EMOJI_MAP + renderNote + defVis/defVisTrad/getVis + Skeleton | 外提时删 3 个零调用死函数: `pillStyle`/`safeGet`/`safeSet` |
+| `insights/PurchaseTab.tsx` | 385 | 采购建议 tab 全量 | 9 个 props 全受控; 唯一写操作触底 +50 |
+| (页面剩余) | 1543 | replen(633) + slow(327) 两块待拆 | 依赖 25/16 项, 比 purchase(9) 重 |
+
+依赖形状依旧先行: 三个 tab 块的"块内定义 vs 自由变量"用脚本量完才动手,
+purchase 依赖最少(9 个 props)所以先拆它。**注意块内局部变量不是依赖**:
+`avgTurnover`/`timing`/`withPurchase` 都定义在块里, 不进 props。
+
+#### 二、两个工具性教训
+
+1. **嵌套三元手工括号配对必挂**。PurchaseTab 里有
+   `{tab === 'purchase' ? (14/28 天趋势) : (7/14 天趋势)}`, 块内 tab 恒真,
+   else 分支是从未渲染过的死代码。用 `depth++/--` 找 `) : (` 边界会在**内层**
+   三元的 `) : (` 上提前归零。改为 TypeScript AST: 定位 condition 为
+   `tab === 'purchase'` 的 ConditionalExpression, 直接 printer 输出 whenTrue 替换。
+2. **验证脚本先确认连的是哪个环境**(15.134 踩过一次, 这次又差点):
+   DOM 对比脚本固定 线上=拆分前 / 本地=拆分后, 两个 HOST 写在文件头。
+
+#### 三、验证
+
+线上(拆分前) vs 本地(拆分后), 同账号同后端, 建议页三 tab 逐节点 DOM 对比:
+replen **3180 = 3180**、purchase **1177 = 1177**、slow **1336 = 1336**, 零差异。
+(锤子菜单点击要点: 建议页 hammer-icon-btn 上有遮罩层, 须 `force=True`;
+菜单点了不会自动关, 下次循环先查 `.glass-edge` 是否还在再决定开不开。)
+
+#### 四、剩余
+
+replen(633) 与 slow(327) 两块依赖重(25/16), 其中 replen 含大量写操作
+(标记已订、改到货日期等), 拆法要按"只读渲染区 vs 交互区"再细分, 留下一轮。
