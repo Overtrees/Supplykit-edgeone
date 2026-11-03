@@ -22,21 +22,22 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
       {/* 2026-11-03 标题与映射页同构(flex 居中 + 14/11 + gap 6 + mb 10),
           替换原全局 .section-title(15px/700 + 12px baseline 混排), 两步标题口径统一。
           不带映射页源码里的 marginTop:2 —— 那在块流里与步骤条 margin 折叠(实际 14),
-          这里父容器是 flex 不折叠, 写 2 会让间距变 16。 */}
+          这里父容器是 flex 不折叠, 写 2 会让间距变 16。
+          主标题固定「清洗预览」, 行数/列数全放副标题: 原主标题带「前 N 行」+ 副标题
+          「仅展示前 50 行」重复; 且 390 宽 + 大文件(5000 行/13 列)时两段总宽 360px
+          超容器 326px → 副标题换行。合并后单行放得下(约 70+6+230)。 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>
-          清洗预览 · 前 {pv.preview?.length || 0} 行
-        </span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>清洗预览</span>
         {(() => {
           const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
-          const parts: string[] = []
-          if (pv.total > 50) parts.push(`共 ${pv.total} 行，仅展示前 50 行`)
+          const parts: string[] = [`共 ${pv.total} 行`]
+          if (pv.total > 50) parts.push('已展示前 50 行')
           if (n > 0) parts.push(`${n} 列`)
-          return parts.length ? (
+          return (
             <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
               {parts.join(' · ')}
             </span>
-          ) : null
+          )
         })()}
       </div>
       {(() => {
