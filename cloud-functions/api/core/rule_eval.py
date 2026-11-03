@@ -201,6 +201,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     _exp_map = {}      # sku → 最近到期剩余天数
     _sup_score = {}    # supplier_code → 评分
     _own_map = {}      # sku → 自有仓供给侧(need/gap/cover_days)
+    _prod_sup = {}     # sku → supplier_code(ctx 构造处无条件 get, 500 行外)
 
     def _ds_of(_sku, _bc, _wh):
         """日销取值: 该维该 69码 → 该维 SKU 合计 → 0(2026-11-01 收敛到 biz.sales.pick_ds)
