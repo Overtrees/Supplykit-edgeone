@@ -396,6 +396,29 @@ check("cron/recycle", r.json().get("ok") is not False, r.text[:150])
 r = client.post("/cron/push-alerts")
 check("cron/push-alerts(无webhook跳过)", r.json().get("ok") is not False, r.text[:150])
 
+# ── cron 时间窗守卫(2026-11-03): 窗口外 skipped 且零 SQL; 窗口内放行 ──
+# 背景: 平台 schedules 无法注入 header → 应用层认不出调用方, 于是再叠一层"时间窗",
+# 把残余风险从"随时可触发"收敛到"每日固定窗口内 + _claim 当日一次"。
+from routes.cron import _off_window, _WINDOWS  # noqa: E402
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa: E402
+
+_SH = _tz(_td(hours=8))
+_arch = _WINDOWS.get("archive")
+check("cron 窗口: 覆盖 8 个重任务", len(_WINDOWS) == 8, str(sorted(_WINDOWS)))
+check("cron 窗口: archive = 00:30-04:00 CST", _arch == (0, 30, 4, 0), str(_arch))
+check("cron 窗口: ping/continue_tasks 不设窗(续跑靠请求驱动直接调用)",
+      _off_window("ping") is None and _off_window("continue_tasks") is None, "不应被挡")
+_now = _dt.now(_SH)
+_cur = _now.hour * 60 + _now.minute
+_lo, _hi = _arch[0] * 60 + _arch[1], _arch[2] * 60 + _arch[3]
+check("cron 窗口: archive 判定与区间一致",
+      (_off_window("archive") is None) == (_lo <= _cur <= _hi),
+      "cur=%d lo=%d hi=%d" % (_cur, _lo, _hi))
+# 防漏接: 窗口表里每个任务都必须在端点上真调用了守卫(加新任务忘接 = 静默失效)
+_src = open("routes/cron.py", encoding="utf-8").read()
+_missing = [t for t in _WINDOWS if ('_off_window("%s")' % t) not in _src]
+check("cron 窗口: 8 个任务都接了守卫(防漏接)", not _missing, str(_missing))
+
 # ── A1 规则引擎: 表达式解析 / 条件评估 / test 端点 / evaluate 触发告警 ──
 from core.rules import _check_condition, _resolve_value, evaluate
 check("rules 表达式解析(加法)", _resolve_value("inv.available_qty + inv.in_transit_qty",

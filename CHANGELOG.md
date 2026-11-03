@@ -4,6 +4,9 @@
 |---|---|---|
 | 项目技能 | 本轮 | `docs/SKILL.md` 由 9 月 Makers 初版重构为当前入口：校正六处硬冲突（路径/回归 358/22 路由/无 backend/生产免签/push_api）、保留框架十坑、新增七步闭环与失败黑名单 12 条 |
 | 导航 | 本轮 | `CONTEXT.md` 索引首位 + `README.md` 架构行加 SKILL 入口；`WBY_WORKFLOW.md` 回归数 184→358 |
+| cron 时间窗 | 本轮 | 8 个重任务加 `_off_window`：窗口外**零 SQL** 直接 skipped，把"随时可触发"收敛到"每日窗口内 + 当日一次"；窗口边界来自 `pipeline_runs` 实测（平台触发稳定早 57~60s） |
+| 密钥审计自动化 | 本轮 | `audit_secrets.py` 默认扫 **git 全历史**（blob + commit message + reflog 脱分支），输出脱敏；CI 加 `secrets` job（`fetch-depth: 0` + 每周一）→ "只能人工复查"不再成立 |
+| 安全定案 | 本轮 | `security.md` 重写为「已根治 / 平台终态 / 泄漏责任」三段；`X-Auth-Token` 标终态 + 30 秒验证法；回归 358→363 |
 
 ---
 

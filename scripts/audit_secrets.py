@@ -37,10 +37,24 @@ MED_PATTERNS = [
 ]
 
 SKIP_DIRS = ("node_modules", "vendor", "dist", ".git", "__pycache__", "export_files",
-             "offloads", "screenshots", ".venv")
+             "offloads", "screenshots", ".venv",
+             # 凭据存放目录(本就 gitignored): 扫它必然命中, 且命中不等于"硬编码"
+             # —— 那是运行时读的密钥本体, 该由 [2] .env 跟踪审计 与 [3] gitignore 覆盖来管
+             ".edgeone")
 SKIP_FILES = ("package-lock.json", "package.json", ".env.example", "CHANGELOG.md",
               "local_test.py", "README.md", "preflight.sh", "audit_secrets.py",
               "smoke_check.py")
+
+
+def _redact(text):
+    """把疑似密钥值脱敏后再输出 —— 审计报告的用途是"指出位置", 不是"复述密钥"。
+    打印完整值等于把泄露面从 git 搬到 CI 日志/终端历史/对话记录里。"""
+    def _mask(m):
+        v = m.group(2)
+        return m.group(1) + (v[:4] + "***" + ("(%d位)" % len(v)) if len(v) > 4 else "***")
+    return re.sub(r"((?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|"
+                  r"jwt[_-]?secret|GITHUB_TOKEN|token)\w*\s*[:=]\s*[\"']?)([^\"'\s,;]{6,})",
+                  _mask, text, flags=re.I)
 
 
 def _walk():
@@ -52,6 +66,10 @@ def _walk():
         for f in files:
             if f in SKIP_FILES or f.endswith(binaries):
                 continue
+            # .env 家族是"密钥本体"(非模板), 已在 SKIP_FILES 里排除 .env.example;
+            # 其余 .env* 直接跳过 —— 把真实值打印到终端/CI 日志本身就是一次泄露
+            if f.startswith(".env") and not f.endswith((".example", ".sample", ".template")):
+                continue
             yield os.path.join(root, f)
 
 
@@ -59,17 +77,24 @@ def scan_hardcoded():
     """扫描硬编码密钥, 返回 [(file, line_no, level, kind, snippet)]"""
     findings = []
     for path in _walk():
+        rel = os.path.relpath(path, REPO)
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 for i, line in enumerate(fh, 1):
                     for pat, kind in HIGH_PATTERNS + MED_PATTERNS:
-                        if re.search(pat, line):
-                            lvl = "HIGH" if pat in [p for p, _ in HIGH_PATTERNS] else "MED"
-                            snippet = line.strip()[:90]
-                            # 排除 .env.example 等空值模板与注释样例
-                            if re.search(r"['\"]\s*['\"]|xxxx|your-|example|demo", snippet):
-                                continue
-                            findings.append((os.path.relpath(path, REPO), i, lvl, kind, snippet))
+                        m = re.search(pat, line)
+                        if not m:
+                            continue
+                        # 与历史扫描共用同一套误报抑制 —— 否则"文档里写 JWT_SECRET=" 这类
+                        # 描述规则的句子会被当成密钥(实测: 本文档自己就命中过)
+                        if _looks_placeholder(rel, m.group(0)):
+                            continue
+                        lvl = "HIGH" if pat in [p for p, _ in HIGH_PATTERNS] else "MED"
+                        snippet = _redact(line.strip()[:90])
+                        # 排除 .env.example 等空值模板与注释样例
+                        if re.search(r"['\"]\s*['\"]|xxxx|your-|example|demo", snippet):
+                            continue
+                        findings.append((rel, i, lvl, kind, snippet))
         except (OSError, UnicodeDecodeError):
             continue
     return findings
@@ -118,11 +143,110 @@ def env_usage():
     return refs
 
 
+# ── git 历史扫描(2026-11-03 新增) ────────────────────────────────────────────
+# 为什么必须做: 密钥一旦进过历史就等于已泄露 —— 删文件 / amend 只改当前树,
+# blob 仍躺在 .git 里, 任何 clone 都能 `git cat-file` 捞出来。此前 security.md 把这条
+# 记为"需人工定期复查", 实际是**可自动化**的: 仓库只有几百个对象, 全扫几秒钟。
+# 三个面: ① 提交信息 ② 所有历史 blob ③ reflog 里已脱离分支的提交(amend/force-push 残留)
+BINARY_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf",
+              ".zip", ".gz", ".tar", ".pdf", ".xlsx", ".xls", ".docx", ".mp4", ".pyc",
+              ".so", ".dll", ".exe", ".bin")
+MAX_BLOB = 300 * 1024      # 单 blob 超过 300KB 跳过(配置/源码不会这么大, 大的是数据/产物)
+PLACEHOLDER = (".env.example", ".env.sample", ".env.template")
+
+
+def _git(*args, **kw):
+    return subprocess.run(["git", "-C", REPO] + list(args),
+                          capture_output=True, text=True, **kw)
+
+
+def _looks_placeholder(path, matched):
+    """抑制误报, 只保留"真像密钥"的命中。
+
+    三类噪声(实测): 模板文件里的空值(`JWT_SECRET=`)、变量拼接(`'Auth-Token: ' + AT`)、
+    以及 `...secret = os.environ.get(...)` 这种"取值语句"本身。
+    """
+    if os.path.basename(path) in PLACEHOLDER:
+        return True
+    tail = matched.split("=", 1)[-1].split(":", 1)[-1] if ("=" in matched or ":" in matched) else matched
+    tail = tail.strip()
+    if not tail:                      # KEY= 后面什么都没有 → 占位
+        return True
+    if any(mark in matched for mark in ("' +", "+ '", '" +', '+ "', "%s", "{", "os.environ")):
+        return True                   # 拼接 / 格式化 / 读环境变量 → 不是硬编码
+    return False
+
+
+def _scan_text(text, path, where, out):
+    for pat, kind in HIGH_PATTERNS + MED_PATTERNS:
+        for m in re.finditer(pat, text):
+            if _looks_placeholder(path, m.group(0)):
+                continue
+            lvl = "HIGH" if (pat, kind) in HIGH_PATTERNS else "MED"
+            out.append((where, path, lvl, kind, m.group(0)[:60].replace("\n", " ")))
+
+
+def scan_history():
+    """扫 git 全历史。返回 (命中列表, 统计 dict)"""
+    hits = []
+    stat = {"commits": 0, "blobs": 0, "dangling": 0, "shallow": False}
+
+    if _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        stat["shallow"] = True          # CI 忘了 fetch-depth: 0 → 历史不全, 必须先说清楚
+
+    # ① 提交信息(密码/密钥被写进 message 是真实发生过的)
+    log = _git("log", "--all", "--format=%h", "-n", "100000").stdout.split()
+    stat["commits"] = len(log)
+    for h in log:
+        body = _git("show", "-s", "--format=%B", h).stdout
+        _scan_text(body, "commit:" + h, "message", hits)
+
+    # ② 所有历史 blob(按 sha 去重 —— 同一内容被多次修改不留重复命中)
+    objs = _git("rev-list", "--objects", "--all").stdout.strip().split("\n")
+    seen_sha = set()
+    for row in objs:
+        if " " not in row:
+            continue
+        sha, path = row.split(" ", 1)
+        if sha in seen_sha or path.lower().endswith(BINARY_EXT):
+            continue
+        seen_sha.add(sha)
+        if _git("cat-file", "-t", sha).stdout.strip() != "blob":
+            continue
+        size = _git("cat-file", "-s", sha).stdout.strip()
+        if size.isdigit() and int(size) > MAX_BLOB:
+            continue
+        text = _git("cat-file", "-p", sha).stdout
+        if not text or "\x00" in text[:1000]:
+            continue
+        stat["blobs"] += 1
+        _scan_text(text, path, "blob:" + sha[:8], hits)
+
+    # ③ reflog 中已不在任何分支上的提交(amend / reset 的残留)
+    all_c = set(_git("rev-list", "--all").stdout.split())
+    reflog = set()
+    for line in _git("reflog", "--all", "--format=%H").stdout.split("\n"):
+        if line.strip():
+            reflog.add(line.split()[0])
+    for sha in reflog - all_c:
+        body = _git("show", "-s", "--format=%B", sha).stdout
+        if not body:
+            continue
+        stat["dangling"] += 1
+        _scan_text(body, "dangling:" + sha[:8], "message", hits)
+
+    return hits, stat
+
+
 def main():
     global REPO
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--json", action="store_true", help="输出 JSON 报告")
+    ap.add_argument("--history", dest="history", action="store_true", default=True,
+                    help="扫 git 全历史 blob/commit message(默认开)")
+    ap.add_argument("--no-history", dest="history", action="store_false",
+                    help="跳过历史扫描(仓库很大时用)")
     args = ap.parse_args()
     REPO = args.repo
 
@@ -131,6 +255,7 @@ def main():
     env_tracked = git_ls_env_files()
     miss_ign = check_gitignore()
     envs = env_usage()
+    hist, hstat = (scan_history() if args.history else ([], {}))
 
     if hc:
         issues.append("硬编码密钥 %d 处" % len(hc))
@@ -138,12 +263,16 @@ def main():
         issues.append(".env 被 git 跟踪(%s)" % ", ".join(env_tracked))
     if miss_ign:
         issues.append(".gitignore 未覆盖: %s" % ", ".join(miss_ign))
+    if hist:
+        issues.append("git 历史密钥 %d 处" % len(hist))
 
     report = {
         "hardcoded_secrets": hc,
         "env_files_tracked": env_tracked,
         "gitignore_missing": miss_ign,
         "required_env": sorted(envs.keys()),
+        "history_hits": hist,
+        "history_stat": hstat,
         "issues": issues,
         "pass": len(issues) == 0,
     }
@@ -162,6 +291,19 @@ def main():
         print("\n[4] 后端必需环境变量清单(%d 个, 部署 env 必须覆盖):" % len(envs))
         for k in sorted(envs):
             print("  - %s  (used by %s)" % (k, ", ".join(sorted(set(envs[k]))[:3])))
+        print("\n[5] git 历史扫描:", end=" ")
+        if not args.history:
+            print("已跳过(--no-history)")
+        else:
+            if hstat.get("shallow"):
+                print("⚠ 浅克隆, 历史不完整(CI 需 fetch-depth: 0)")
+            print("    commit %d 条 / blob %d 个 / 脱分支提交 %d 个"
+                  % (hstat.get("commits", 0), hstat.get("blobs", 0), hstat.get("dangling", 0)))
+            if hist:
+                for where, f, lvl, kind, sn in hist:
+                    print("  ✗ %s %s [%s] %s: %s" % (where, f, lvl, kind, sn))
+            else:
+                print("  ✓ 历史中无密钥残留")
         print("\n结果:", "✗ " + " | ".join(issues) if issues else "✓ 全部通过")
     sys.exit(0 if not issues else 1)
 

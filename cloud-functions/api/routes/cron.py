@@ -142,9 +142,61 @@ def _unclaim(task):
         try_err('cron', '回滚抢占标记失败', _e)
 
 
+# ── 时间窗守卫(2026-11-03): 把"谁在调"换成"现在是不是这个任务该跑的时候" ──────
+# 上面已定案: 平台 schedules 无法注入 header, 应用层拿不到可靠身份。既然认不出人,
+# 就再叠一层"时间窗" —— 每个任务只在自己的调度窗口内有效, 窗口外直接 skipped 且
+# **一行 SQL 都不发**(零 RU)。这让"鉴权缺失"的残余风险从"任何时候可被触发"收敛到
+# "只在每日固定窗口内可被触发, 且被 _claim 锁成当日一次": 外部扫描即使猜中路径,
+# 在错误时间调用没有任何副作用, 在窗口内抢先调用也只是把该跑的任务提前跑了。
+#
+# 窗口按 Asia/Shanghai 显式计算 —— 容器跑在 overseas 区域(ap-singapore), 不能依赖 TZ。
+# 窗口边界依据(2026-11-03 查 pipeline_runs 实测, 不是拍脑袋):
+#   archive 配置 01:05 CST → 实跑 17:04:03 UTC(= 01:04:03 CST)
+#   cleanup 03:05→19:04:02 / freshness 03:10→19:09:00 / snapshot 03:35→19:34:01
+#   daily-rules 04:05→20:04:01 —— 六个任务**一致地早 57~60 秒**(平台按分钟取整 + 排队)。
+# 所以每个窗口两端各留 ≥1.5 小时余量, 既不会被 1 分钟偏差误杀, 也不会把大半天的
+# 任意时刻都算作"窗口内"。
+_SH_TZ = timezone(timedelta(hours=8))
+_WINDOWS = {
+    "archive":      (0, 30, 4, 0),
+    "cleanup_logs": (2, 30, 5, 30),
+    "freshness":    (2, 30, 5, 30),
+    "snapshot":     (2, 30, 5, 30),
+    "daily_rules":  (3, 30, 6, 0),
+    "reconcile":    (3, 30, 6, 0),
+    "recycle":      (4, 0, 6, 30),
+    "push_alerts":  (8, 0, 10, 0),
+}
+# 不设窗的两个:
+#   ping            —— 保活用, 全天触发无害, 且 UptimeRobot 也在打
+#   continue_tasks  —— 被 index.py 请求驱动**直接调用**(不走 HTTP), 设窗会连带打死续跑
+
+
+def _off_window(task):
+    """None = 在窗口内(可执行); 否则返回 skip 响应体。未登记的任务一律放行。"""
+    w = _WINDOWS.get(task)
+    if not w:
+        return None
+    now = datetime.now(_SH_TZ)
+    cur = now.hour * 60 + now.minute
+    lo, hi = w[0] * 60 + w[1], w[2] * 60 + w[3]
+    if lo <= cur <= hi:
+        return None
+    # 窗口外被拒要**留痕**: 万一哪天平台调度时间变了(或配置被改), 任务会静默停跑 ——
+    # 这是本守卫唯一的新增风险, 所以每小时最多记一条 warning(限频, 防外部扫描刷日志)。
+    # 看到 "在窗口外被拒" 连续出现 = 窗口该改, 不是"攻击"。
+    if _throttle("offwin:" + task, 3600):
+        try:
+            _log("warning", "cron %s 在窗口外被拒: now=%02d:%02d CST, window=%02d:%02d-%02d:%02d"
+                 % ((task, now.hour, now.minute) + w))
+        except Exception:
+            pass
+    return {"skipped": True, "reason": "窗口外(非调度时段)",
+            "window": "%02d:%02d-%02d:%02d CST" % w}
+
+
 async def _authed(request: Request) -> bool:
     """cron 鉴权(2026-11-01 定案: 定时任务迁回平台 schedules)。
-
     EdgeOne schedules 的 schema 只有 name/cron/timezone/method/path/payload, **无法注入自定义请求头**;
     官方文档确认 payload 不支持环境变量插值, 而 edgeone.json 进公开仓库 —— 用 payload 传密钥
     等于把密钥公开(实测网关也不会为普通请求改写 Authorization, 故 q-sign 判据同样不可用)。
@@ -225,6 +277,9 @@ async def cron_snapshot(request: Request):
     """日销快照构建。2026-11-02 S0: 全量重建 90 天是 RU 最重的操作之一, 加当日一次性抢占"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("snapshot")
+    if _off:
+        return ok(_off)
     if not _throttle("snapshot", 300):
         return ok({"skipped": True, "reason": "5 分钟内已执行"})
     if not _claim("snapshot"):
@@ -250,6 +305,9 @@ async def cron_freshness(request: Request):
     改为"先判断, 确实要重建才抢占"。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("freshness")
+    if _off:
+        return ok(_off)
     r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot") or {}
     m = str(r.get("m") or "")
     stale_limit = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
@@ -275,6 +333,9 @@ async def cron_archive(request: Request):
     2026-11-02 S0: 全表拉取 + 逐条 INSERT, 是本项目最重的操作; 加当日一次性抢占。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("archive")
+    if _off:
+        return ok(_off)
     if not _throttle("archive", 600):
         return ok({"skipped": True, "reason": "10 分钟内已执行"})
     if not _claim("cron:archive"):
@@ -323,6 +384,9 @@ async def cron_cleanup_logs(request: Request):
     """
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("cleanup_logs")
+    if _off:
+        return ok(_off)
     if not _claim("cron:cleanup_logs"):
         return ok({"skipped": True, "reason": "今天已清理"})
     from routes.common import prune_quality_logs
@@ -472,6 +536,9 @@ async def cron_daily_rules(request: Request, force: int = 0):
       ② 执行失败回滚抢占标记 —— 原实现失败后当天不再重试(dashboard._daily_maintenance 同款问题)。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("daily_rules")
+    if _off:
+        return ok(_off)
     if force:
         _sec = os.environ.get("CRON_SECRET", "")
         _h = request.headers.get("X-Cron-Secret", "")
@@ -512,6 +579,9 @@ async def cron_recycle(request: Request):
     2026-11-02 S0: 不可逆删除, 加当日一次性抢占; 幂等(DELETE 按条件), 失败可安全回滚重试"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("recycle")
+    if _off:
+        return ok(_off)
     if not _claim("cron:recycle"):
         return ok({"skipped": True, "reason": "今天已清理"})
     # 2026-11-02 S2-2: 永久删会改变物化, 受影响日期必须在删之前取出来
@@ -557,6 +627,9 @@ async def cron_push_alerts(request: Request):
     不设当日抢占 —— pushed 标记本身幂等, 推送失败需要重试。"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("push_alerts")
+    if _off:
+        return ok(_off)
     if not _throttle("push-alerts", 300):
         return ok({"skipped": True, "reason": "5 分钟内已推送"})
     try:
@@ -759,6 +832,9 @@ async def cron_reconcile(request: Request, days: int = 90):
     2026-11-02 S0: 加 5 分钟限频(只读, 重复执行无害但耗 RU); days 已在 run_reconcile 内 clamp 到 [1,365]"""
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("reconcile")
+    if _off:
+        return ok(_off)
     if not _throttle("reconcile", 300):
         return ok({"skipped": True, "reason": "5 分钟内已对账"})
     return ok(run_reconcile(days))

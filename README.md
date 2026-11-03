@@ -150,7 +150,7 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 358 项全过
+cd cloud-functions/api && python3 local_test.py        # 363 项全过
 
 # 前端
 cd frontend && npm install && npm run dev

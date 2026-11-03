@@ -12,7 +12,7 @@
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 27 路由模块 · local_test 358 项     │
+│  FastAPI · 22 路由 · 31 模块 · 回归 363 项    │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -28,7 +28,7 @@
 └──────────────────────────────────────────────┘
 ```
 
-### 后端路由一览（API 分组 · 18 个 router / 27 个模块——拆分模块见项目结构, 属代码组织非路由）
+### 后端路由一览（API 分组 · 22 个 router / 31 个模块——其中 9 个是支撑模块, 属代码组织非路由）
 
 | 路由 | 前缀 | 功能 |
 |------|------|------|
@@ -71,9 +71,9 @@ cloud-functions/api/
 ├── biz/sales.py                  三窗口日销滚动预测 + 逐仓/全国C仓双口径
 ├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
 ├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
-├── routes/ (31个)                路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
+├── routes/ (31个 = 22 router + 9 支撑)  路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
-└── local_test.py                 本地回归 358 项（mock db + TestClient）
+└── local_test.py                 本地回归 363 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -116,7 +116,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 358 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/S2 系列）
+cd cloud-functions/api && python3 local_test.py   # 363 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/cron窗口/S2 系列）
 ```
 
 ---

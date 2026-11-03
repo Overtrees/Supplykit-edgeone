@@ -11,10 +11,10 @@
 |---|---|---|
 | 仓库 | `Overtrees/Supplykit-edgeone`, 默认分支 **feat/edgeone** | `git branch --show-current` |
 | 平台 | EdgeOne Makers, 项目 `makers-8gstkvheqm2c` | `edgeone makers list` |
-| 部署方式 | **Provider=Github → 只能 git push**, `makers deploy` 被拒 | 推送后查部署记录 |
+| 部署方式 | **Provider=Github → 只能 push 触发**, `makers deploy` 被拒 | 推送后 `deploy_status.py` |
 | 线上 | `https://supplykit.top` | `curl /api/health` |
-| 沙箱网络 | `github.com` 大流量易超时; `api.github.com` 稳定 | 失败改用 `gh api` |
-| 凭据 | `~/.git-credentials`、`~/.config/gh/hosts.yml`、`.env.local`(EDGEONE_API_TOKEN)、`.env`(运行变量) | 均为 600, 且 `.env` 已 gitignore |
+| 沙箱网络 | **`github.com:443` 不可达**(131s TLS 断); `api.github.com` 稳定 | 推送只能走 `push_api.py` |
+| 凭据 | `.edgeone/auth.json`(`EDGEONE_PAGES_API_TOKEN` + `GITHUB_TOKEN`)、`.env`(运行变量) | `python3 scripts/env_check.py` 一次性体检 |
 | 数据库 | TiDB Cloud Serverless, 变量在 `.env`(6×TIDB_* + DB_BACKEND + JWT_SECRET) | 只读连接测试 |
 
 **禁止**: `edgeone makers env ls` —— 会明文回显 `TIDB_PASSWORD` / `JWT_SECRET`。需要值时读本地 `.env`。
@@ -36,7 +36,7 @@
 python3 -c "import ast;ast.parse(open('cloud-functions/api/routes/xxx.py').read(),feature_version=(3,10))"
 
 # ② 全量回归
-cd cloud-functions/api && python3 local_test.py   # 期望: 358 通过, 0 失败
+cd cloud-functions/api && python3 local_test.py   # 期望: 363 通过, 0 失败
 
 # ③ 规模 mock(单 SKU + 200 SKU 各跑一轮)
 python3 /tmp/verify_xxx.py
@@ -50,32 +50,33 @@ python3 /tmp/verify_xxx.py
 - body 写清 **根因 → 修法 → 验证**, 带实测数字(便于日后回溯"当时凭什么判断好了");
 - 绝不提交 `.env` / `.edgeone/` / 任何密钥。
 
-### 2.4 推送(网络不稳, 需重试)
+### 2.4 推送(`github.com:443` 不可达 → 只能走 API)
 
 ```bash
 cd /workspace/supplykit
-for i in 1 2 3; do
-  if timeout 100 git -c http.version=HTTP/1.1 push origin feat/edgeone; then break; fi
-  sleep 3
-done
-gh api repos/Overtrees/Supplykit-edgeone/branches/feat/edgeone --jq '.commit.sha[0:7]'
+python3 scripts/push_api.py -m "fix(x): ..."       # 一次推送 = 远端一个 squash 提交
+python3 scripts/push_api.py -m "..." --dry-run     # 只列差异文件, 不真推
 ```
 
-- **坑**: `git push | tail -2` 的退出码是 `tail` 的 0, 会把失败当成功; 必须直接判断 `git push` 的退出码。
-- **只认远端 SHA**: push 输出为空/TLS 报错都可能"其实已成功", 一律用 `gh api` 复核。
+- **不要用 `git push`**：本沙箱到 `github.com:443` 的 TLS 在 131s 断开，重试 3 次只是白等 ~7 分钟，
+  且退出码还会被管道吃掉（`git push | tail -2` 返回的是 `tail` 的 0）。`api.github.com` 是稳定的，
+  脚本走 Git Data API 把"提交→传 blob→建 tree→建 commit→移 ref"手工走一遍。
+- **代价**：本地 commit SHA ≠ 远端 SHA（author/committer 时间戳不同）。所以"`Commit == 本地 HEAD`"
+  这条判据在这里**不成立**，别拿它判断失败。
+- **判据改为**：脚本结束打印的 `逐文件复核: 一致`（按 blob 内容比对远端 HEAD 树 vs 本地 HEAD 树）。
+- 若将来 `git push` 恢复可用，两者可无损混用（脚本按内容 diff，不看本地历史）。
 
 ### 2.5 部署确认
 
 ```bash
-TOKEN=$(grep -m1 '^EDGEONE_API_TOKEN=' .env.local | cut -d= -f2-)
-curl -s -X POST https://pages-api.cloud.tencent.com/v1 \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"Action":"DescribePagesDeployments","ProjectId":"makers-8gstkvheqm2c","Offset":0,"Limit":1,"OrderBy":"CreatedOn","Order":"desc"}'
+python3 scripts/deploy_status.py        # 最近 3 次; 传数字看更多
+python3 scripts/deploy_status.py 10
 ```
 
-- 只认 **`Status=Success` 且 `RepoCommitHash` = 本地 SHA**;
-- **不需要腾讯云 SecretId/SecretKey** —— 这一点曾误判, 已纠正;
-- 构建耗时 2~4 分钟, 轮询间隔 15s。
+- 脚本读 `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN` 与 `.edgeone/project.json` 的 `ProjectId`
+  （**不需要腾讯云 SecretId/SecretKey** —— 这一点曾误判，已纠正）；
+- 判据：`Status=Success` + `Prod=yes`；提交哈希按第 2.4 节改为"逐文件一致"而非"等于本地 HEAD"；
+- 构建耗时 2~2.5 分钟；`DescribePagesDeployments` 偶发连不上时先跑 `scripts/env_check.py` 定位。
 
 ### 2.6 线上验证
 
@@ -140,7 +141,7 @@ seed step6(生成流水) → _recalc_own_inventory(重算可用) → _rebuild_ow
 
 ## 6. 交付前检查清单
 
-- [ ] `local_test.py` 358 通过 0 失败
+- [ ] `local_test.py` 363 通过 0 失败
 - [ ] 语法门禁 3.10 通过
 - [ ] 规模 mock(≥200 SKU)通过
 - [ ] **四维**: 准确 / 实时 / 完整 / 可靠 —— 每项有实测证据, 不能只写"应该没问题"
@@ -157,12 +158,12 @@ seed step6(生成流水) → _recalc_own_inventory(重算可用) → _rebuild_ow
 
 | 现象 | 根因 | 动作 |
 |---|---|---|
-| `GnuTLS recv error (-110)` | 沙箱到 github.com 连接被断 | 重试 ≤3 次 + `http.version=HTTP/1.1`; 仍失败改 `gh api` 提交 |
-| push 显示成功但远端没变 | 管道退出码误导 / 实际失败 | 用 `gh api` 查远端 SHA |
+| `Failed to connect github.com port 443` / `GnuTLS recv error` | 沙箱到 github.com 不可达(131s 断) | 不要重试, 直接 `python3 scripts/push_api.py` |
+| push_api 报错或远端 HEAD 未变 | 凭据缺 `repo contents:write` / 网络抖动 | `python3 scripts/env_check.py` 看 PUSH 项; 脚本可重跑(按内容 diff, 幂等) |
 | 长任务"卡住"不动 | `tail` 缓冲 / 连接挂起 | 查 `information_schema.processlist`; 改 `flush=True` 写文件 |
 | 对账全量偏差 | 重灌顺序错(漏 recalc) / 两进程并发 | 按 3.1 顺序重跑, 先确认无残留进程 |
 | seed 单步超时 | 逐条 UPDATE 往返太慢 | 改单条 `JOIN UPDATE`(200s → 0.3s) |
-| 部署状态查不到 | 误以为需要 SecretKey | 用 Bearer + `DescribePagesDeployments` |
+| 部署状态查不到 | 误以为需要 SecretKey / token 失效 | `python3 scripts/env_check.py` 看 DEPLOY 项; 或 `scripts/deploy_status.py` |
 | 改完线上数字没变 | 缓存 TTL 未过 / 未 invalidate | 等 TTL 或触发一次写操作 |
 | 配置类数据滞后 | localStorage 缓存 | 配置不缓存(§15.92) |
 

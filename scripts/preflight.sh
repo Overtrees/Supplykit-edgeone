@@ -89,4 +89,7 @@ if [ "${#FAILS[@]}" -gt 0 ]; then
   exit 1
 fi
 echo "✓ preflight 全部通过, 可 push"
+# 密钥/历史泄露审计不占六步名额(要 3~4s, 且 CI 每次推送+每周一定时强制跑),
+# 但改过配置/凭据/文档示例行时应当手动过一遍 —— 它扫的是全历史 blob, 不只是工作区
+echo "  提示: python3 scripts/audit_secrets.py  (硬编码 / .env 跟踪 / git 全历史)"
 exit 0

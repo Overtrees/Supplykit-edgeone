@@ -5,6 +5,11 @@ on:
     branches: [feat/edgeone, main]
   pull_request:
     branches: [main]
+  # 密钥审计是"会随时间腐化"的检查(依赖轮换/平台变更), 必须定时重跑,
+  # 不能只在有人推代码时才看 —— 每周一 01:00 UTC(09:00 CST)
+  schedule:
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
 
 jobs:
   frontend:
@@ -31,6 +36,28 @@ jobs:
       - run: pip install -r cloud-functions/requirements.txt
       - run: cd cloud-functions/api && python3 local_test.py
       - run: cd cloud-functions/api && python3 test_audit.py
+
+  secrets:
+    name: 密钥审计(含 git 全历史)
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 是硬要求 —— 浅克隆只能扫到最近若干提交, 而密钥泄露
+      # 往往发生在很久以前(删了文件也还在 .git 里)。脚本会检测浅克隆并告警。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: 跑审计(硬编码 / .env 跟踪 / .gitignore / 历史 blob + commit message + reflog)
+        run: python3 scripts/audit_secrets.py
+      - name: 确认历史确实扫全了(浅克隆会让上一步"通过"变得没有意义)
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            echo "::error::仓库是浅克隆, 历史扫描不完整 —— 检查 fetch-depth: 0"
+            exit 1
+          fi
+          echo "完整历史: $(git rev-list --all --count) 个提交"
 
   notify:
     name: 失败通知

@@ -20,7 +20,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **358 通过 / 0 失败** |
+| 回归 | `local_test.py` **363 通过 / 0 失败** |
 
 ```bash
 cd /workspace/supplykit
@@ -74,9 +74,12 @@ cloud-functions/api/
 freshness 03:10 / snapshot 03:35 / daily-rules 04:05 / reconcile 04:10 / recycle 04:35 / continue-tasks 05:05 /
 push-alerts 08:30 / ping 13:55)。
 平台 schedules **无法注入 header**(schema 只有 name/cron/timezone/method/path/payload, 且 `edgeone.json`
-进公开仓库, 用 payload 传密钥等于公开), 所以 `_authed` **不做强校验**: 配了 `CRON_SECRET` 时带对密钥放行、
-不带也放行但记审计(`CRON_STRICT=1` 才恢复强拒, 代价是平台调度失效)。
-真正防线是每个端点的 `_throttle`(进程内限频) + `_claim`(当日抢占) —— 即使放行也不会重复执行。
+进公开仓库, 用 payload 传密钥等于公开) → **"鉴权"根治不了**, 所以守的是"危害":
+① `_throttle` 进程内限频 ② `_claim` DB 当日抢占(多实例安全) ③ **时间窗守卫** ——
+8 个重任务只在各自调度窗口内有效, 窗口外**零 SQL** 直接 skipped ④ 失败 `_unclaim` 回滚。
+时间窗按 `Asia/Shanghai` 显式计算(容器在新加坡), 边界来自实测: 平台触发稳定**早 57~60 秒**,
+所以窗口两端各留 ≥1.5 小时。`ping`/`continue_tasks` 不设窗(后者被请求驱动直接调用, 设窗会打死续跑)。
+外部调用者的能力上限 = 在窗口内把任务提前几分钟触发一次, `_claim` 保证当日仍只跑一次。
 
 **前端**: React + Vite, `frontend/src/pages/*.tsx` 16 页; 筛选/区间控件集中在
 `components/hammer/*.tsx`(锤子面板); `.menu-btn` 是侧边栏汉堡, 别和锤子混。
@@ -116,7 +119,7 @@ push-alerts 08:30 / ping 13:55)。
 ```bash
 bash scripts/preflight.sh
 # [1/6] 后端 Python 3.10 语法   [2/6] pyflakes(undefined name / 重定义)
-# [3/6] local_test 回归 358      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
+# [3/6] local_test 回归 363      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
 ```
 
 **规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。
@@ -239,6 +242,9 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - 凭据分布: `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN`(查部署) 与 `GITHUB_TOKEN`(推送, 需
   `repo contents:write`); TiDB 连接串在 `.env`
 - **密码/secret 永不进 commit message、对话、日志**; 泄露即刻 amend + 改密 + 同步 Makers env 与 GitHub Secrets
+- **审计脚本**: `python3 scripts/audit_secrets.py` —— 硬编码 / `.env` 是否入库 / `.gitignore` 覆盖 /
+  **git 全历史 blob + commit message + reflog 脱分支提交**。CI 每次推送 + 每周一定时跑, `fetch-depth: 0`。
+  输出已脱敏(只留前 4 位), 不会把值打到日志里
 - 生产写操作前先只读确认影响面, 并记下回滚点(行数 / Σ 金额)
 - 日志三面收口: 用户侧 `GET /quality-logs` 分页筛选 + 导出; 开发者侧 `/quality-logs/file(s)` /
   `/debug/list`; 前端 `reportError()`, 后端 `try_err()`, 业务错误统一 `ok:false` → `business_error`

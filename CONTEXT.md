@@ -30,6 +30,8 @@
 | 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
 | S2-8/S2-9 启动优化(DDL 版本门禁/补列统一/迁移退役) | `docs/DEVELOPMENT.md` §15.122 / §15.123 |
 | 2026-11-02 午后 UI 批次(归档页二次收敛/渠道页样式上提/CI 修复) | `docs/DEVELOPMENT.md` §15.124 |
+| **安全: 已根治 / 平台终态 / 轮换步骤** | `docs/security.md` |
+| 安全三件事能不能根治(cron 时间窗/历史扫描/认证头定案) | `docs/DEVELOPMENT.md` §15.127 |
 
 ## 关键口径(不可破坏的业务约定)
 
@@ -48,7 +50,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 358 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 363 通过/0 失败
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
 - **文档同步**: 每项改动在 `docs/DEVELOPMENT.md` 追加 §15.10x, 写根因 + 实测数据
 
@@ -191,6 +193,20 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - **本地起后端的正确姿势**: `.env` 凭据 + `uvicorn`, 生产由 Makers 框架剥 `/api` 而 uvicorn
   不剥 → 套一层 ASGI 中间件改 `scope["path"]`。**dev 代理指向线上时, 线上跑的是旧代码**,
   排查"改了没生效"先直连后端验接口。验证完 `git checkout -- frontend/vite.config.js`。
+- **cron 有第四道锁: 时间窗(2026-11-03 §15.127)**: 平台 schedules 注不了 header → 鉴权做不了,
+  于是守"危害": `_throttle` + `_claim` + **`_off_window`** + 失败 `_unclaim`。窗口按 `Asia/Shanghai`
+  显式算, 边界来自实测(平台触发稳定早 57~60 秒), 窗口外**零 SQL**。
+  **加新 cron 任务必须同时接窗**(`_WINDOWS` 登记 + 端点调 `_off_window`), `local_test` 有"防漏接"断言。
+  `ping` 与 `continue_tasks` 永远不要设窗 —— 后者被请求驱动直接调用, 设窗会打死续跑。
+- **"只能人工复查"要先量规模(2026-11-03 §15.127)**: git 历史扫描曾被写成"受 refs 限制只能人工",
+  实测 424 个 blob 扫完只要 3.4 秒。现 `audit_secrets.py` 默认扫三个面(历史 blob / commit message /
+  reflog 脱分支), CI `fetch-depth: 0` + 每周一定时。**下次想写"无法自动化"时先跑一遍再下结论。**
+- **安全工具的输也要脱敏**: 审计脚本初版把 `.env` 与 `.edgeone/auth.json` 的真实值打到了终端 ——
+  比不扫更糟。凡是要打日志/终端的疑似密钥一律 `前4位***(位数)`; 密钥本体目录(`.env*`、`.edgeone/`)
+  不参与"硬编码"判定, 它们由"是否入库"来管。
+- **`X-Auth-Token` 是终态, 不再讨论回退(2026-11-03 补)**: 网关改写 `Authorization` 是平台行为,
+  应用层改不了; 加 Bearer 回退会让"是否 401"变成随机现象。重估条件与 30 秒验证法见
+  `docs/decisions/0001` —— **没有验证方法的"终态"就是懒惰**。
 - 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → ~~S2-9~~ → S3(页面拆分/async 化)
 - ~~lockfile 缺 esbuild 平台包~~ **已修(2026-11-02)**: `npm install --package-lock-only` 补齐 22 个
   `@esbuild/*` 可选包, 删除 0 / 版本漂移 0, `npm ci` 真实执行通过。见 §15.109 第三节
