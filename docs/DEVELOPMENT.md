@@ -4133,12 +4133,12 @@ blob 就炸。修法: `_git()` 统一 `errors="replace"` —— 替换字符不�
 
 #### 七之二、审计工具自己成了误报源(第二次 CI 迭代)
 
-修完解码崩, CI 又报 6 处:
+修完解码崩, CI 又报 6 处(下面**手动二次脱敏**, 只留结构 —— 见本节末尾的"同一个坑踩了两次"):
 
 ```
-✗ blob:99568e11 scripts/audit_secrets.py [HIGH] AWS Access Key: AKIAIOSFODNN7REALKEY
-✗ blob:99568e11 scripts/audit_secrets.py [HIGH] 硬编码密码: password = "Str0ngP@ssw0rd!"
-✗ blob:1760cf55 frontend/node_modules/axios/README.md [HIGH] 硬编码密码: password: 's00pers3cret'
+✗ blob:99568e11 scripts/audit_secrets.py [HIGH] AWS Access Key: ****
+✗ blob:99568e11 scripts/audit_secrets.py [HIGH] 硬编码密码: password = "****"
+✗ blob:1760cf55 frontend/node_modules/axios/README.md [HIGH] 硬编码密码: password: '****'
 ```
 
 两类, 都不是真密钥:
@@ -4150,6 +4150,11 @@ blob 就炸。修法: `_git()` 统一 `errors="replace"` —— 替换字符不�
 
 另外把 `audit_secrets.py` 自身的历史版本整体排除: **审计工具的自检样例必然是"密钥形状"**,
 这是设计而非妥协(工具本身不含真密钥 —— 真密钥在 `.env`/`.edgeone`, 已由"是否入库"那两项管)。
+
+**同一个坑踩了两次**: 第一次是把 `.env` 的真实值贴进本节, 第二次是把 CI 日志**原样**贴进来
+(日志里含自检样例的明文)。两次都被 `audit_secrets.py` 自己抓出来, 位置是 `docs/DEVELOPMENT.md` ——
+**公开仓库里的文档当然算源码**。结论: 引用审计报告一律**二次脱敏**, 连样例串都不能留,
+否则"记录泄露"本身变成新的泄露。这条已写进 `docs/security.md` 与 SKILL 第 9 节。
 
 **三次迭代的共同点**: 每次都是"审计的完整性"和"误报率"在打架。教训是——**审计规则必须先写正负例**:
 `--selftest` 现在锁住 3 正例(必须抓到)+ 3 负例(必须不报), 后续任何人改模式, CI 立刻告诉他

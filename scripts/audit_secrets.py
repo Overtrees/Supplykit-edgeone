@@ -155,6 +155,12 @@ BINARY_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2
               ".so", ".dll", ".exe", ".bin")
 MAX_BLOB = 300 * 1024      # 单 blob 超过 300KB 跳过(配置/源码不会这么大, 大的是数据/产物)
 PLACEHOLDER = (".env.example", ".env.sample", ".env.template")
+# 已人工确认的误报(精确串, 不用正则): 目前只有第三方 README 的文档示例密码。
+# 加新条目必须在注释里写清楚"在哪、为什么不是我们的密钥" —— 这是 baseline, 不是免检后门。
+KNOWN_SAFE = (
+    "password: 's00pers3cret'",   # axios README 示例(历史误提交 node_modules)
+    "password: 'rapunz3l'",       # 同上
+)
 
 
 def _git(*args, **kw):
@@ -172,6 +178,8 @@ def _looks_placeholder(path, matched):
     以及 `...secret = os.environ.get(...)` 这种"取值语句"本身。
     """
     if os.path.basename(path) in PLACEHOLDER:
+        return True
+    if any(k in matched for k in KNOWN_SAFE):
         return True
     tail = matched.split("=", 1)[-1].split(":", 1)[-1] if ("=" in matched or ":" in matched) else matched
     tail = tail.strip()
