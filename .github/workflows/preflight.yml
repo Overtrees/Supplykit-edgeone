@@ -49,6 +49,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      - name: 检测规则自检(正负例 —— 防止改模式后"什么都抓不到"或"天天误报")
+        run: python3 scripts/audit_secrets.py --selftest
       - name: 跑审计(硬编码 / .env 跟踪 / .gitignore / 历史 blob + commit message + reflog)
         run: python3 scripts/audit_secrets.py
       - name: 确认历史确实扫全了(浅克隆会让上一步"通过"变得没有意义)

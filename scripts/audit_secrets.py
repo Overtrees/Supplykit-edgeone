@@ -25,8 +25,10 @@ HIGH_PATTERNS = [
     (r"AKIA[0-9A-Z]{16}", "AWS Access Key"),
     (r"AIza[0-9A-Za-z_\-]{35}", "Google API Key"),
     (r"sk-(live|test|proj)-[0-9A-Za-z\-_]{20,}", "Stripe/OpenAI 风格密钥"),
-    (r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{8,}['\"]", "硬编码密码"),
-    (r"(?i)(secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*['\"][^'\"]{16,}['\"]", "密钥/令牌"),
+    # 引号内必须是"类密钥字符集"(无空白/无中文) —— 用 [^'"]{16,} 会把
+    # 注释里的中文解释("...JWT_SECRET=" 这类描述规则的句子")当成密钥, 实测反复误报
+    (r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"][^\s'\"\u4e00-\u9fff]{8,}['\"]", "硬编码密码"),
+    (r"(?i)(secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*['\"][^\s'\"\u4e00-\u9fff]{16,}['\"]", "密钥/令牌"),
     (r"ghp_[0-9A-Za-z]{36}", "GitHub PAT"),
     (r"xox[baprs]-[0-9A-Za-z\-]{10,}", "Slack token"),
 ]
@@ -156,8 +158,11 @@ PLACEHOLDER = (".env.example", ".env.sample", ".env.template")
 
 
 def _git(*args, **kw):
+    # errors="replace" 是必需的: `cat-file -p` 会吐出二进制 blob(图片/字体/压缩包),
+    # 默认严格 utf-8 解码会直接 UnicodeDecodeError 崩掉整个审计(CI 实测踩到)。
+    # 替换字符不影响匹配 —— 密钥都是 ASCII。
     return subprocess.run(["git", "-C", REPO] + list(args),
-                          capture_output=True, text=True, **kw)
+                          capture_output=True, text=True, errors="replace", **kw)
 
 
 def _looks_placeholder(path, matched):
@@ -238,6 +243,29 @@ def scan_history():
     return hits, stat
 
 
+def selftest():
+    """检测能力的正负例 —— 防止改模式时把"能抓真密钥"改成"什么都抓不到",
+    或者反过来把中文注释当密钥天天误报。CI 里与全量审计一起跑。"""
+    cases = [
+        (True, 'GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"', "硬编码 GitHub PAT"),
+        (True, 'password = "Str0ngP@ssw0rd!"', "硬编码密码"),
+        (True, 'api_key: "AKIAIOSFODNN7REALKEY0"', "硬编码 api_key"),
+        (False, 'JWT_SECRET=', "空值占位(键名后无值)"),
+        (False, 'secret = os.environ.get("JWT_SECRET")', "读环境变量(非硬编码)"),
+        (False, '否则"文档里写 JWT_SECRET=" 这类描述规则的句子', "中文注释/文档描述"),
+    ]
+    bad = 0
+    print("═══ 审计规则自检 ═══")
+    for expect, text, name in cases:
+        hits = []
+        _scan_text(text, "selftest", "t", hits)
+        ok = bool(hits) == expect
+        print(("  ✓ " if ok else "  ✗ ") + name + " (期望%s)" % ("命中" if expect else "不命中"))
+        bad += 0 if ok else 1
+    print("\n结果:", "✓ 六例全部符合预期" if bad == 0 else "✗ %d 例不符" % bad)
+    return bad
+
+
 def main():
     global REPO
     ap = argparse.ArgumentParser()
@@ -247,8 +275,13 @@ def main():
                     help="扫 git 全历史 blob/commit message(默认开)")
     ap.add_argument("--no-history", dest="history", action="store_false",
                     help="跳过历史扫描(仓库很大时用)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="只跑检测规则自检(正负例), 用于 CI 守住审计能力")
     args = ap.parse_args()
     REPO = args.repo
+
+    if args.selftest:
+        sys.exit(0 if selftest() == 0 else 1)
 
     issues = []
     hc = scan_hardcoded()

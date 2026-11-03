@@ -4113,6 +4113,24 @@ daily_rules   20:04:01 UTC = 04:04:01 CST   (配置 04:05)
 最小化(env 只放 12 个必需项, 审计脚本 [4] 段自动列出) / 不外泄(禁 `env ls`) / 轮换(5 步,
 含"改完必须重新部署 —— env 是部署时快照"这一最易漏的点)。轮换步骤写进 `docs/security.md` C 节。
 
-#### 七、回归
+#### 七、CI 才暴露的那个 bug: 浅克隆测不出完整历史
+
+本地扫 424 个 blob 全绿, 推到 CI 后 `secrets` job 直接崩:
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x82 in position 98
+  File "scripts/audit_secrets.py", line 219, in scan_history
+    text = _git("cat-file", "-p", sha).stdout
+```
+
+`subprocess.run(text=True)` 默认严格 utf-8 解码, 而 `cat-file -p` 会吐**二进制 blob**
+(图片/字体/压缩包)。本地历史干净(只有文本), 所以一次都没触发; CI 是完整历史, 第一个二进制
+blob 就炸。修法: `_git()` 统一 `errors="replace"` —— 替换字符不影响匹配(密钥都是 ASCII)。
+
+**这条值得记的不是修法, 是"本地通过 ≠ 完整历史通过"**: 凡是**只在 CI 才有完整输入**的检查
+(历史扫描 / 全量数据 / 跨分支依赖), 本地绿灯只能算预检, 必须看 CI 结果才算数。
+也说明把审计放进 CI 是对的选择 —— 放本地的话, 这个 bug 会一直潜伏到某天有人完整 clone。
+
+#### 八、回归
 
 358 → **363**(+5 条 cron 窗口用例), `preflight` 六步全绿。
