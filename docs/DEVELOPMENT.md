@@ -4780,3 +4780,16 @@ GitHub Secrets **只写不可读**。所以 `scripts/sync_ci_secret.py` 只能�
 | 凭据来源 | 人工同步, 会漂移 | 运行时取自 EdgeOne Production 档 |
 | CI 实际连的库 | 另一个集群的空库 → 60 条 1146 | 线上同库 → 263 条 EXPLAIN 全过, schema 对账 41 表/391 列/13 索引全在 |
 | 轮换密码要改几处 | 2 处(GitHub + EdgeOne) | 1 处 |
+
+#### 九、收尾清理(同日下午)
+
+| secret | 处理 | 理由 |
+|---|---|---|
+| `CRON_SECRET` | **已删** | 仓库里唯一的工作流 `preflight.yml` 从不引用它; 定时任务跑在 EdgeOne, 用的是项目环境变量里那一份 |
+| `JWT_SECRET` | **已删** | 同上。GitHub 里这份既不会被读到, 又是完整能力的签名密钥副本 |
+| `TIDB_SSL` | **从未存在** | 上一版 workflow 里写了 `FB_SSL: ${{ secrets.TIDB_SSL }}`, 一直是空串。`db.py` / `sql_smoke.py` 对缺省值就是开 TLS(`os.environ.get("TIDB_SSL","true")`), 留空与显式 `true` 等价 → 直接删掉这个映射项, 免得后人以为它有用 |
+| `TIDB_*` ×4 | **保留** | 降级路径: 新 token 失效/fork PR 时仍能跑冒烟 |
+
+> 一条通用判据: **secret 的"存在"本身就是成本** —— 多一份就可能过期、可能填错、可能被误认为生效。
+> 判断该不该留, 不看"以后会不会用", 只看"现在有没有代码读它"。没有读取点的 secret 一律删,
+> 需要时再加回来比留着烂在那儿便宜。

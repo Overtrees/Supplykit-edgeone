@@ -64,9 +64,14 @@ def fetch_envs(token, pid):
 
 
 def fallback():
-    """GitHub Secrets 副本(由 workflow 以 FB_ 前缀传入)。"""
+    """GitHub Secrets 副本(由 workflow 以 FB_ 前缀传入)。
+
+    不含 TIDB_SSL: 仓库里从来没有这个 secret, 而 db.py/sql_smoke 对缺省值就是
+    "开 TLS"(`os.environ.get("TIDB_SSL","true")`), 回落时留空与显式 true 等价。
+    写一个永远读到空串的映射项, 只会让人以为它有用。
+    """
     m = {"FB_HOST": "TIDB_HOST", "FB_PORT": "TIDB_PORT", "FB_USER": "TIDB_USER",
-         "FB_PASS": "TIDB_PASSWORD", "FB_DB": "TIDB_DB", "FB_SSL": "TIDB_SSL"}
+         "FB_PASS": "TIDB_PASSWORD", "FB_DB": "TIDB_DB"}
     return {dst: os.environ.get(src, "") for src, dst in m.items() if os.environ.get(src)}
 
 

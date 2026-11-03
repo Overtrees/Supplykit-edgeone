@@ -53,7 +53,6 @@ jobs:
           FB_USER: ${{ secrets.TIDB_USER }}
           FB_PASS: ${{ secrets.TIDB_PASSWORD }}
           FB_DB: ${{ secrets.TIDB_DB }}
-          FB_SSL: ${{ secrets.TIDB_SSL }}
         run: python3 scripts/ci_fetch_env.py
       - name: 后端回归(+ 真实 SQL 冒烟)
         run: |

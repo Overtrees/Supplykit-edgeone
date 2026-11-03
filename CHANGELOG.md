@@ -21,6 +21,7 @@
 | 改法 | `scripts/ci_fetch_env.py` 启动时调 `DescribePagesProjectEnvs` 取 TIDB_*（只取 Production 档）写进 `$GITHUB_ENV`；GitHub 侧只留一个 `EDGEONE_PAGES_API_TOKEN` |
 | 踩坑 | ① `>> $GITHUB_ENV` 会把 `::add-mask::` 一起写进环境文件 → 掩码失效；② 掩码粒度过粗（连 `4000`/`supplykit` 都打码）会毁掉排查线索；③ `.edgeone/` 被 gitignore，CI 读不到 ProjectId 就会安静回落到旧 secrets |
 | 结果 | CI 日志 `数据库连接来源: edgeone`；263 条 EXPLAIN 全过、schema 对账 41 表/391 列/13 索引全在；轮换密码从改 2 处变 1 处 |
+| 清理 | 删除 `CRON_SECRET`/`JWT_SECRET`（无任何工作流引用）；`TIDB_SSL` 映射项一并删除（仓库里从无此 secret，缺省即开 TLS）；`TIDB_*` 保留作降级 |
 
 ### S3-4 详解: 让测试第一次"问过数据库"
 
