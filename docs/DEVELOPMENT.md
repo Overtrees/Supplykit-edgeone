@@ -5048,6 +5048,33 @@ replen(633) 与 slow(327) 两块依赖重(25/16), 其中 replen 含大量写操�
 本轮补回, 否则 replen 的 5 个 state 依赖会被漏掉; ② 组件级函数体里的局部变量
 (seq/data 在 loadReplen 体内)不算依赖, 要看块内出现位置而不是名字。
 
+### 15.138 S3-1 续: 两个大头拆到底 —— Rules 2769 → 840, Dashboard 2070 → 1143(2026-11-03)
+
+用户问「为什么还有两个大头、能否继续拆」→ 量化后确认两大页主体仍是一整个组件函数,
+剩余块依赖已可承受, 三刀拆完:
+
+| 刀 | 外提 | 行数 | props | 模式 |
+|---|---|---|---|---|
+| Rules ① | `rules/TestSheet.tsx` | 626 | 3 | **状态随迁**: test* 7 个状态+runTest 只服务弹窗; 父级仅留 testRule 开关, 打开时按 `__testParams/__testInv` 初始化(编辑按钮打包写入), own/batch/样本SKU 保留上次输入(与原实现一致) |
+| Rules ① | `rules/labels.tsx` | 284 | — | 纯移动: VARS/LF/OPS/fieldLbl/opLbl/renderTmpl/pc/defaultTestInv |
+| Rules ② | `rules/EditForm.tsx` | 959 | 12 | **全受控**: f/cond/rParams/editing/set*/cancelEdit/save/saveLoading 同名 props; 「测试」按钮改 onTest 闭包; TYPE_TEMPLATE/defaultParams 随迁(仅表单用) |
+| Rules ② | `rules/List.tsx` | 175 | 11 | 全受控: 点卡片→onEdit(rule)/空态新建→onNew 闭包; sevCls/sevLbl 随迁 |
+| Dash ③ | `dashboard/StatCards.tsx` | 743 | 9/10/11 | 全受控: GmvCard/AlertSummaryCard/HealthCard |
+| Dash ③ | `dashboard/ChartRows.tsx` | 348 | 7/13 | 全受控: MidCharts/ChartRow3 |
+
+**选择「状态随迁」还是「全受控」的判据**: 状态簇是否封闭(块外只有 set 入口、无读取)
+且每次打开都显式重置 → 随迁(TestSheet); 状态被页面多处读写(save/save 回填/列表)
+→ 全受控, 状态一行不搬, 写操作以同名 props 上抛。
+
+**坑**: ① VARS 段(38–126)里混着含 JSX 的 renderTmpl, 搬出的文件必须 .tsx;
+② 模板骨架与搬运段重复了 `const runTest` 声明行 → 括号平衡报 EOF, 拼接类脚本
+要先 diff 新旧片段确认只差预期替换; ③ 行号断言用 startswith 而非 ==, 防手抄锚点
+截断; ④ DOM 对比要连跑 3 次——数据加载时序会让健康卡/弹窗出现假差异(60~150 节点),
+稳定一致才算过(204/204/217 节点)。
+
+**页面新增闭包**: RulesPage 的 openRuleTest(打包 setTestRule)/openEdit(点卡片回填)/
+newRuleBlank(空态新建), 业务逻辑零变更。
+
 闭包函数作为 props 传递(loadReplen/toggleOrdered/setArrivalDate)比拆成
 "props 数据 + 组件内重新实现"安全 —— 写操作的真源在页面, 组件零业务逻辑。
 
