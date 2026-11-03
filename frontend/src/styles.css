@@ -2328,11 +2328,13 @@ input[type='file'] {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* 176 = page.top(140: container pt70 + card pt16 + 步骤条 40 + 其 margin-bottom 14)
-     + card pb 16 + container pb 20。
-     2026-11-03: 曾用 margin-top:-24 + 这里扣 152 的"上移"方案, 见下方注释, 已回退。 */
+  /* 181 = page.top(140: container pt70 + card pt16 + 步骤条 40 + 其 margin-bottom 14)
+     + card pb 16 + container pb 20 + 5(与进销存台账卡对齐, 见下)。
+     2026-11-03: 曾用 margin-top:-24 + 这里扣 152 的"上移"方案, 见下方注释, 已回退。
+     卡片总高 = 100svh − 115, 与进销存台账卡(16+21+12+(100vh−180)+16)逐像素齐平:
+       390×844: 729 (70–799)   1440×900: 785 (70–855) */
   height: calc(
-    100svh - 176px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
+    100svh - 181px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
   );
 }
 .clean-preview-page .clean-preview-body {
@@ -2358,7 +2360,10 @@ input[type='file'] {
      margin-top:-24 → 实际 top 116 → 重叠 10px
    回退: 去掉负 margin, 高度公式同步 152→176, page 的 top/bottom 合计不变
    (top 116→140, height 少 24), 底部按钮位置不动, 只是表格可视高度少 24px。
-   要再省这 24px 只能从步骤条 padding 或 card padding 上取, 不能从标题上取。 */
+   要再省这 24px 只能从步骤条 padding 或 card padding 上取, 不能从标题上取。
+   2026-11-03 第二轮: 按用户要求与进销存台账卡逐像素对齐, 公式 176→181 ——
+   预览卡原本 = 100svh−110, 进销存卡 = 100svh−115, 每页都差 5px(底边 804 vs 799),
+   换页时卡片底边会跳。扣 181 后两者同为 100svh−115。 */
 @media (max-height: 500px) {
   .clean-preview-page {
     /* 横屏(用户 2026-11-01 指示)回退 2026-10-28 行为: 页面回文档流滚动。

@@ -19,19 +19,25 @@ interface Props {
 export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onExecute }: Props) {
   return (
     <div className="clean-preview-page">
-      <div className="section-title">
-        清洗预览 · 前 {pv.preview?.length || 0} 行
-        {pv.total > 50 ? (
-          <span className="small muted"> · 共 {pv.total} 行，仅展示前 50 行</span>
-        ) : (
-          ''
-        )}
-        {pv.preview?.length > 0 && (
-          <span className="small muted">
-            {' '}
-            · {Object.keys(pv.preview[0]).filter(k => k !== '_source').length} 列
-          </span>
-        )}
+      {/* 2026-11-03 标题与映射页同构(flex 居中 + 14/11 + gap 6 + mb 10),
+          替换原全局 .section-title(15px/700 + 12px baseline 混排), 两步标题口径统一。
+          不带映射页源码里的 marginTop:2 —— 那在块流里与步骤条 margin 折叠(实际 14),
+          这里父容器是 flex 不折叠, 写 2 会让间距变 16。 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>
+          清洗预览 · 前 {pv.preview?.length || 0} 行
+        </span>
+        {(() => {
+          const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
+          const parts: string[] = []
+          if (pv.total > 50) parts.push(`共 ${pv.total} 行，仅展示前 50 行`)
+          if (n > 0) parts.push(`${n} 列`)
+          return parts.length ? (
+            <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
+              {parts.join(' · ')}
+            </span>
+          ) : null
+        })()}
       </div>
       {(() => {
         // 脏数据预检: 缺SKU/重复SKU 统计(导入前发现)
