@@ -9,7 +9,7 @@ import {
   presetExample,
   presetRequired,
   DOC_TYPE_NAMES,
-} from '../pages/CleansingPage'
+} from '../pages/cleansing/fields'
 
 interface Props {
   tt: string

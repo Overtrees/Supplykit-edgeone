@@ -311,8 +311,12 @@ export async function uploadRawBytes(
   })()
   const controller = new AbortController()
   const t = setTimeout(() => controller.abort(), timeout)
+  // 2026-11-03 修: 原样 fetch(url) 只对"前端与 API 同源"成立。只要设了
+  // VITE_API_BASE_URL(本地 dev 连测试环境/前后端分离部署), 上传就会打到前端自己的
+  // origin → 404, 且被上层 catch 吞掉只留"识别失败"。与 axios 实例同口径拼 BASE。
+  const target = /^https?:\/\//i.test(url) ? url : BASE + url
   try {
-    const resp = await fetch(url, {
+    const resp = await fetch(target, {
       method: 'POST',
       body: data,
       headers: { 'X-Auth-Token': token || '', 'Content-Type': 'application/octet-stream' },

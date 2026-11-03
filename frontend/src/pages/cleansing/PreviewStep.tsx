@@ -1,0 +1,241 @@
+import { IconWarning } from '../../components/Icons'
+import { TARGET_FIELDS, SYS_FIELDS } from './fields'
+
+interface Props {
+  pv: any
+  mp: Record<string, any>
+  cols: any[]
+  tr: number
+  tt: string
+  bs: string
+  /** 自定义字段(页面 state, 预览里用作兜底标签) */
+  cf: any[]
+  onBack: () => void
+  onExecute: () => void
+}
+
+/** 第 3 步清洗预览。从 CleansingPage 外提: 只读 pv/mp 渲染, 两个出口动作上抛。
+ *  口径: 缺 SKU / 重复 SKU 在预览层先标红, 写入前 doExecute 仍会硬拦。 */
+export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onExecute }: Props) {
+  return (
+    <div className="clean-preview-page">
+      <div className="section-title">
+        清洗预览 · 前 {pv.preview?.length || 0} 行
+        {pv.total > 50 ? (
+          <span className="small muted"> · 共 {pv.total} 行，仅展示前 50 行</span>
+        ) : (
+          ''
+        )}
+        {pv.preview?.length > 0 && (
+          <span className="small muted">
+            {' '}
+            · {Object.keys(pv.preview[0]).filter(k => k !== '_source').length} 列
+          </span>
+        )}
+      </div>
+      {(() => {
+        // 脏数据预检: 缺SKU/重复SKU 统计(导入前发现)
+        const skuCol = Object.entries(mp).find(([, cfg]) => cfg && cfg.target === 'sku')
+        if (!skuCol) return null
+        const skuVals = (pv.preview || []).map(r => String(r[skuCol[1].target] || ''))
+        const seen = new Map()
+        const dupSkus = new Set()
+        skuVals.forEach(v => {
+          if (v === '') return
+          seen.set(v, (seen.get(v) || 0) + 1)
+          if (seen.get(v) > 1) dupSkus.add(v)
+        })
+        const missing = skuVals.filter(v => v === '').length
+        if (missing === 0 && dupSkus.size === 0) return null
+        return (
+          <div
+            style={{
+              fontSize: 'var(--font-xs)',
+              color: 'var(--danger)',
+              background: 'rgba(239,68,68,0.06)',
+              border: '1px solid rgba(239,68,68,0.2)',
+              borderRadius: 'var(--radius-card)',
+              padding: '9px 12px',
+              marginBottom: 10,
+              display: 'flex',
+              gap: 6,
+              alignItems: 'flex-start',
+              lineHeight: 1.5,
+            }}
+          >
+            <IconWarning size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）——
+              建议返回修正后导入
+            </span>
+          </div>
+        )
+      })()}
+      {(() => {
+        if (!pv.preview?.length) return null
+        // 按来源列显示：只显示有映射的列（target 非空），unmap 的列直接不出现
+        const mappedSources = Object.entries(mp).filter(([, v]) => v && v.target)
+        const cols = mappedSources.map(([src, cfg]) => {
+          const sf =
+            (TARGET_FIELDS[tt] || SYS_FIELDS).find(x => x.t === cfg.target) ||
+            cf.find(x => x.t === cfg.target)
+          return { src, target: cfg.target, label: sf ? sf.l : cfg.target }
+        })
+        // 脏数据预检: 重复 SKU 集合(表体行标红用)
+        const _skuCol = cols.find(c => c.target === 'sku')
+        const _skuVals = (pv.preview || []).map(r =>
+          _skuCol ? String(r[_skuCol.target] || '') : '',
+        )
+        const _seen = new Map()
+        const dupSkus = new Set()
+        _skuVals.forEach(v => {
+          if (!v) return
+          _seen.set(v, (_seen.get(v) || 0) + 1)
+          if (_seen.get(v) > 1) dupSkus.add(v)
+        })
+        if (cols.length === 0)
+          return (
+            <div className="small muted" style={{ padding: 20, textAlign: 'center' }}>
+              没有已映射的字段，请返回并设置字段映射
+            </div>
+          )
+        return (
+          <div className="clean-preview-body" style={{ marginBottom: 12 }}>
+            <div
+              className="clean-preview-hint"
+              style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginBottom: 4 }}
+            >
+              ← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →
+            </div>
+            {/* 2026-10-28 安全区根治: 50 行表格曾把页面撑高 → iOS 地址栏联动 → 顶部露出 chrome 纯色条;
+                    改表格内部限高滚动(避免整页高度突变), 纵向滚 table / 横向滚外层 */}
+            <div
+              className="clean-preview-scroll"
+              style={{
+                overflowX: 'auto',
+                /* 2026-11-01 高度不再用 calc(100dvh - 340px)/clamp: 改由 .clean-preview-page
+                       的 flex 分配(表格吃剩余空间, 底部按钮常驻)。dvh 随地址栏变化, iOS 首帧还可能
+                       算出 0/负值 → 竖屏首屏不绘制、横屏与 min-height 打架撑出视口 → 顶部遮挡。 */
+                minHeight: 0,
+                overflowY: 'auto',
+                WebkitOverflowScrolling:
+                  'touch' /* 恢复: 隐藏滚动条+去惯性曾致 iOS 首帧不绘制内容 */,
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+              }}
+            >
+              <table>
+                <thead>
+                  <tr style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
+                    {cols.map(col => (
+                      <th
+                        key={col.src}
+                        style={{ minWidth: 80, whiteSpace: 'nowrap', verticalAlign: 'top' }}
+                      >
+                        {col.label}
+                        <div
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 400,
+                            color: 'var(--muted2)',
+                            marginTop: 1,
+                          }}
+                        >
+                          ← {col.src}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pv.preview.map((r, i) => {
+                    // 脏数据预检: 关键字段(sku)缺失/重复 → 行标红(导入前发现, 非执行后才知道)
+                    const skuCol = cols.find(c => c.target === 'sku')
+                    const skuVal = skuCol ? String(r[skuCol.target] || '') : ''
+                    const issue = skuVal === '' ? '缺SKU' : dupSkus.has(skuVal) ? '重复SKU' : ''
+                    return (
+                      <tr
+                        key={i}
+                        style={issue ? { background: 'rgba(239,68,68,0.06)' } : undefined}
+                      >
+                        {cols.map(col => (
+                          <td
+                            key={col.src}
+                            style={{
+                              minWidth: 80,
+                              whiteSpace: 'nowrap',
+                              maxWidth: 200,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              color: issue && col.target === 'sku' ? 'var(--danger)' : undefined,
+                            }}
+                          >
+                            {String(r[col.target] || '')}
+                            {issue && col.target === 'sku' ? (
+                              <span
+                                style={{
+                                  fontSize: 'var(--font-9)',
+                                  color: 'var(--danger)',
+                                  marginLeft: 4,
+                                }}
+                              >
+                                <IconWarning size={11} style={{ verticalAlign: -2 }} />
+                                {issue}
+                              </span>
+                            ) : null}
+                          </td>
+                        ))}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
+      {/* 2026-10-27: 底部操作对齐其余步骤(左返回固定宽 + 右主操作 primary——写入非'成功'语义) */}
+      <div className="clean-preview-actions" style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          className="clickable"
+          onClick={() => {
+            onBack()
+          }}
+          disabled={!!bs}
+          style={{
+            flex: '0 0 96px',
+            minHeight: 44,
+            borderRadius: 'var(--radius-full)',
+            border: '1px solid var(--border)',
+            background: 'var(--card)',
+            color: 'var(--text)',
+            fontSize: 'var(--font-md)',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          ← 返回
+        </button>
+        <button
+          className="clickable"
+          onClick={() => onExecute()}
+          disabled={!!bs}
+          style={{
+            flex: 1,
+            minHeight: 44,
+            borderRadius: 'var(--radius-full)',
+            border: 'none',
+            background: 'var(--primary)',
+            color: '#fff',
+            fontSize: 'var(--font-md)',
+            fontWeight: 600,
+            cursor: 'pointer',
+            opacity: bs ? 0.6 : 1,
+          }}
+        >
+          确认写入 {pv.total} 条
+        </button>
+      </div>
+    </div>
+  )
+}
