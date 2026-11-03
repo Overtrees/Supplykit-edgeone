@@ -5075,6 +5075,20 @@ replen(633) 与 slow(327) 两块依赖重(25/16), 其中 replen 含大量写操�
 **页面新增闭包**: RulesPage 的 openRuleTest(打包 setTestRule)/openEdit(点卡片回填)/
 newRuleBlank(空态新建), 业务逻辑零变更。
 
+**本轮三连坑(§15.138 补记, 23d65f9)**:
+1. **剥条件外壳必须补判空**: EditForm 外提时剥掉 `{editing !== null && (…)}` 外壳,
+   组件无条件渲染, editing=null 时 `editing.id` 崩 → 线上规则页整页 ErrorBoundary。
+   外壳不是包装噪音, 是渲染守卫; 外提后要么原样保留在父级, 要么组件内 `if (!prop) return null`。
+2. **本地 dev 被残留进程占端口 = 假验证**: 8099 被陈年 `python3 http.server` 占用,
+   vite `--strictPort` 一直没真正起来, 前几轮「DOM 完全一致」比的是**旧代码**(假阳性)。
+   验证前先 `curl /src/…tsx | grep 新符号` 确认 serve 的是当前代码; 起服务用
+   `ss -tlnp` 复核监听进程。dev 连线上 API 需 `/api` 代理(vite.config 无 proxy,
+   用临时 `-c` 配置, 验证完删)。
+3. **对比脚本的噪音归一**: `is-refraction-active`(玻璃折射渐进增强, useEffect 异步
+   加 class)与告警计数到达时序会让骨架对比随机分叉; **同代码自对比也分叉**是识别
+   环境噪音的决定性测试。归一装饰 class + 同代码对照后, 以 43f2686 基准 worktree
+   vs 当前代码: list 162 / edit 317 / 测试弹窗 347 / 关闭后 162 全部一致。
+
 闭包函数作为 props 传递(loadReplen/toggleOrdered/setArrivalDate)比拆成
 "props 数据 + 组件内重新实现"安全 —— 写操作的真源在页面, 组件零业务逻辑。
 
