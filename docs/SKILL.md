@@ -250,6 +250,9 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - `.env`(运行变量)、`.edgeone/`(token)已 gitignore; 提交前 `git status` 复核
 - 凭据分布: `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN`(查部署) 与 `GITHUB_TOKEN`(推送, 需
   `repo contents:write`); TiDB 连接串在 `.env`
+- **数据库连接只有一份真相源 = EdgeOne 项目环境变量**(Production 档)。CI 不存 TIDB_*,
+  启动时由 `scripts/ci_fetch_env.py` 现取(日志显示 `数据库连接来源: edgeone`); 轮换密码只改
+  EdgeOne 一处。见 `DEVELOPMENT.md` 15.131
 - **密码/secret 永不进 commit message、对话、日志**; 泄露即刻 amend + 改密 + 同步 Makers env 与 GitHub Secrets
 - **审计脚本**: `python3 scripts/audit_secrets.py` —— 硬编码 / `.env` 是否入库 / `.gitignore` 覆盖 /
   **git 全历史 blob + commit message + reflog 脱分支提交**。CI 每次推送 + 每周一定时跑, `fetch-depth: 0`。

@@ -4757,3 +4757,26 @@ GitHub Secrets **只写不可读**。所以 `scripts/sync_ci_secret.py` 只能�
 - **不覆盖 Preview 档差异**: 若某天需要验证预发库, 应另起一个 job 显式取 `Preview`, 不要
   让同一个 job 两档混用。
 - 原有 `TIDB_*` secrets **暂不删除**: 它们是回落路径, 等 `来源=edgeone` 稳定跑若干次后再清理。
+
+#### 七、这次改动自己又踩了两个坑(都值一条经验)
+
+**1. `.edgeone/` 在 .gitignore 第 23 行, CI 里根本没有 `project.json`。**
+第一版脚本从 `.edgeone/project.json` 读 ProjectId, 本地测得好好的, 到了 CI 就是
+`无 ProjectId → 回落 secrets → 又是那 60 条 1146` —— 而日志看起来"脚本跑成功了"
+(step 是绿的), 因为降级路径设计成不失败。教训: **降级路径会让失败变安静**,
+它的日志必须显式写出"我现在用的是次优方案, 原因是 X"(这一版已改成 `::warning::` 带原因)。
+修法: ProjectId 不是秘密(还得有 token 才能调), 直接写进 workflow 的 env。
+
+**2. `print("CI_ENV_SOURCE=...")` 不会进环境。**
+脚本写 `$GITHUB_ENV` 用的是文件追加, 而 `CI_ENV_SOURCE` 这一行顺手用了 print。
+下一个 step 里 `echo "凭据来源=$CI_ENV_SOURCE"` 打出空值, 日志成了 `凭据来源= →`。
+同一个文件里两种输出通道混着用, 就会漏一个。
+
+#### 八、结果
+
+| | 改前 | 改后 |
+|---|---|---|
+| GitHub Secrets 里的数据库凭据 | 5 个, 各自独立 | 0 个(回落用, 待清理) |
+| 凭据来源 | 人工同步, 会漂移 | 运行时取自 EdgeOne Production 档 |
+| CI 实际连的库 | 另一个集群的空库 → 60 条 1146 | 线上同库 → 263 条 EXPLAIN 全过, schema 对账 41 表/391 列/13 索引全在 |
+| 轮换密码要改几处 | 2 处(GitHub + EdgeOne) | 1 处 |

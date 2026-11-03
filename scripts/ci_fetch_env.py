@@ -130,8 +130,11 @@ def main():
         print("  来源:", src)
         return 0
 
-    print("CI_ENV_SOURCE=%s" % src)
-    emit({k: pairs.get(k, "") for k in WANT})
+    # 来源也写进 env: 只 print 的话下一个 step 读不到(第一次改完日志里就是
+    # `凭据来源= →` 空一格), 排查时反而要多翻一屏找上一 step 的输出。
+    env_out = {k: pairs.get(k, "") for k in WANT}
+    env_out["CI_ENV_SOURCE"] = src
+    emit(env_out)
     # 只打非敏感项, 让 CI 日志能直接看出"连的是哪个库" —— 上次就是这里没有线索
     print("── 数据库连接来源: %s ──" % src, file=sys.stderr)
     print("   host=%s db=%s user=%s" % (pairs.get("TIDB_HOST", "?"), pairs.get("TIDB_DB", "?"),

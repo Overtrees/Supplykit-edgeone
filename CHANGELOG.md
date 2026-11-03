@@ -13,6 +13,15 @@
 | vitest 进门禁 | `89cc45f` | 22 个用例从未被执行，攒了 12 个长期失败；修完纳入 preflight `[7/7]` 与 CI |
 | **S3-4 真实 SQL 冒烟** | 本轮 | `EXPLAIN` 对生产库做名称解析（零副作用），388 条唯一 SQL / 31 个模块；**首跑抓到 3 个真缺陷** |
 
+### CI 凭据: 不再维护第二份 TiDB 副本
+
+| 项 | 内容 |
+|---|---|
+| 问题 | GitHub Secrets 与 EdgeOne 项目环境变量是两套独立副本，改一边不会同步另一边。CI 首跑 60 条 `1146` 就是这个漂移：CI 连的是另一个集群的空库 |
+| 改法 | `scripts/ci_fetch_env.py` 启动时调 `DescribePagesProjectEnvs` 取 TIDB_*（只取 Production 档）写进 `$GITHUB_ENV`；GitHub 侧只留一个 `EDGEONE_PAGES_API_TOKEN` |
+| 踩坑 | ① `>> $GITHUB_ENV` 会把 `::add-mask::` 一起写进环境文件 → 掩码失效；② 掩码粒度过粗（连 `4000`/`supplykit` 都打码）会毁掉排查线索；③ `.edgeone/` 被 gitignore，CI 读不到 ProjectId 就会安静回落到旧 secrets |
+| 结果 | CI 日志 `数据库连接来源: edgeone`；263 条 EXPLAIN 全过、schema 对账 41 表/391 列/13 索引全在；轮换密码从改 2 处变 1 处 |
+
 ### S3-4 详解: 让测试第一次"问过数据库"
 
 | 项 | 内容 |
