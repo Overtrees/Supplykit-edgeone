@@ -5033,3 +5033,28 @@ replen **3180 = 3180**、purchase **1177 = 1177**、slow **1336 = 1336**, 零差
 
 replen(633) 与 slow(327) 两块依赖重(25/16), 其中 replen 含大量写操作
 (标记已订、改到货日期等), 拆法要按"只读渲染区 vs 交互区"再细分, 留下一轮。
+
+---
+
+### 15.137 S3-1 收尾: 建议页 1543 → 618, 四 tab 全部组件化(2026-11-03)
+
+| 文件 | 行数 | props | 要点 |
+|---|---|---|---|
+| `insights/ReplenTab.tsx` | 691 | 18 | 依赖最重; toggleOrdered/setArrivalDate 写操作全上抛 |
+| `insights/SlowTab.tsx` | 371 | 14 | 行选择走 useAppStore.getState() 同源调用; 分页闭包留页面 |
+| (页面剩余) | 618 | — | 只剩 state/数据流/三 tab 装配 |
+
+**量依赖的两个坑**: ① `const (\w+)` 正则漏 useState 解构(`const [replen, …]`),
+本轮补回, 否则 replen 的 5 个 state 依赖会被漏掉; ② 组件级函数体里的局部变量
+(seq/data 在 loadReplen 体内)不算依赖, 要看块内出现位置而不是名字。
+
+闭包函数作为 props 传递(loadReplen/toggleOrdered/setArrivalDate)比拆成
+"props 数据 + 组件内重新实现"安全 —— 写操作的真源在页面, 组件零业务逻辑。
+
+验证: 线上(拆分前) vs 本地 DOM 逐节点一致(replen 3180 / purchase 1177 /
+slow 1336), 部署后线上复测三组数字全部命中。preflight 全绿。
+上轮 PreviewStep 漏跑 format:check 被本轮 preflight 拦下, 顺带补齐 ——
+门禁有效, 但要在**每轮提交前**跑而不是攒到下一轮。
+
+至此 S3-1 四个大页全部拆完: Dashboard 3014→2017 · Rules 3407→2769 ·
+清洗 2398→1005 · 建议 2192→618。
