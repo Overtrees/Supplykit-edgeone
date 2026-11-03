@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api, abortScope } from '../api/client'
+import { mutate } from '../api/mutate'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import { useToast } from '../components/Toast'
 import EmptyState from '../components/EmptyState'
@@ -576,28 +577,32 @@ export default function InsightsPage() {
     if (isOrdered) {
       setOrderedKeys(prev => prev.filter(k => k !== key))
       setOrderedItems(prev => prev.filter(x => x.sku !== sku || x.store !== store))
-      api
-        .delete(
-          '/api/purchase-orders?sku=' +
-            encodeURIComponent(sku) +
-            '&store=' +
-            encodeURIComponent(store) +
-            '&channel=' +
-            globalChannel,
+      // 2026-11-03 走 mutate: 原来只弹 toast, 既不清缓存也不通知其它页 ——
+      //   而采购建议接口会关闭 purchase_need 告警, 看板计数因此滞后到下一次 30s 静默刷新。
+      mutate({
+        label: '取消下单',
+        run: () =>
+          api.delete(
+            '/api/purchase-orders?sku=' +
+              encodeURIComponent(sku) +
+              '&store=' +
+              encodeURIComponent(store) +
+              '&channel=' +
+              globalChannel,
+          ),
+        success: '已取消下单',
+        errorPrefix: '取消失败',
+        events: ['insights-refresh', 'rules-changed'],
+      }).then(ok => {
+        if (ok) return
+        // 失败: 本地回滚(恢复该行)——状态立即回到后端事实; 不重拉
+        setOrderedKeys(prev => (prev.includes(key) ? prev : [...prev, key]))
+        setOrderedItems(prev =>
+          rowBackup && !prev.some(x => x.sku === sku && x.store === store)
+            ? [...prev, rowBackup]
+            : prev,
         )
-        .then(() => {
-          toast.success('已取消下单')
-        })
-        .catch(() => {
-          // 失败: 本地回滚(恢复该行)——状态立即回到后端事实; 不重拉
-          setOrderedKeys(prev => (prev.includes(key) ? prev : [...prev, key]))
-          setOrderedItems(prev =>
-            rowBackup && !prev.some(x => x.sku === sku && x.store === store)
-              ? [...prev, rowBackup]
-              : prev,
-          )
-          toast.error('取消失败')
-        })
+      })
     } else {
       const newItem = {
         sku,
@@ -608,41 +613,45 @@ export default function InsightsPage() {
       }
       setOrderedKeys(prev => [...prev, key])
       setOrderedItems(prev => [...prev, newItem])
-      api
-        .post(
-          '/api/purchase-orders?sku=' +
-            encodeURIComponent(sku) +
-            '&store=' +
-            encodeURIComponent(store) +
-            '&product_name=' +
-            encodeURIComponent(product_name || '') +
-            '&suggested_qty=' +
-            (suggested_qty || 0) +
-            '&channel=' +
-            globalChannel,
-        )
-        .then(r => {
-          // 后端真实行(含 id)→ 同键替换乐观项(日期更新 PUT 安全)
-          const real = r?.data
-          const row =
-            real && real.id != null
-              ? real
-              : {
-                  sku,
-                  store,
-                  product_name: product_name || '',
-                  suggested_qty: suggested_qty || 0,
-                  arrival_date: '',
-                }
-          setOrderedItems(prev => prev.map(x => (x.sku === sku && x.store === store ? row : x)))
-          toast.success('已下单')
-        })
-        .catch(() => {
+      mutate({
+        label: '下单',
+        run: () =>
+          api.post(
+            '/api/purchase-orders?sku=' +
+              encodeURIComponent(sku) +
+              '&store=' +
+              encodeURIComponent(store) +
+              '&product_name=' +
+              encodeURIComponent(product_name || '') +
+              '&suggested_qty=' +
+              (suggested_qty || 0) +
+              '&channel=' +
+              globalChannel,
+          ),
+        success: '已下单',
+        errorPrefix: '下单失败',
+        events: ['insights-refresh', 'rules-changed'],
+      }).then(r => {
+        if (!r) {
           // 失败: 本地回滚(移除乐观项)——状态立即回到后端事实; 不重拉
           setOrderedKeys(prev => prev.filter(k => k !== key))
           setOrderedItems(prev => prev.filter(x => !(x.sku === sku && x.store === store)))
-          toast.error('下单失败')
-        })
+          return
+        }
+        // 后端真实行(含 id)→ 同键替换乐观项(日期更新 PUT 安全)
+        const real = (r as { data?: { id?: number } })?.data
+        const row =
+          real && real.id != null
+            ? real
+            : {
+                sku,
+                store,
+                product_name: product_name || '',
+                suggested_qty: suggested_qty || 0,
+                arrival_date: '',
+              }
+        setOrderedItems(prev => prev.map(x => (x.sku === sku && x.store === store ? row : x)))
+      })
     }
   }
 
@@ -655,7 +664,14 @@ export default function InsightsPage() {
     }
     // 乐观更新
     setOrderedItems(prev => prev.map(x => (x.id === item.id ? { ...x, arrival_date: date } : x)))
-    api.put('/api/purchase-orders/' + item.id, { arrival_date: date }).catch(() => loadOrdered())
+    mutate({
+      label: '更新到仓日期',
+      run: () => api.put('/api/purchase-orders/' + item.id, { arrival_date: date }),
+      events: ['insights-refresh', 'rules-changed'],
+      errorPrefix: '更新失败',
+    }).then(ok => {
+      if (!ok) loadOrdered()
+    })
   }
 
   const todayStr = new Date().toISOString().slice(0, 10)

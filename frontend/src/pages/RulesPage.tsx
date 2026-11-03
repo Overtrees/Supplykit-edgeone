@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight, freshStamp } from '../api/client'
+import { mutate } from '../api/mutate'
 import { useToast } from '../components/Toast'
 import ErrorRetry from '../components/ErrorRetry'
 import EmptyState from '../components/EmptyState'
@@ -23,34 +24,6 @@ import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
-/** 2026-11-03 D5: 轮询规则评估任务, 直到 done/error/expired 或超时
- *  为什么必须等: 保存后立刻刷新看板拿到的是评估前的告警, 用户会以为没生效并重复保存。
- *  超时返回 'timeout' —— 不阻塞 UI, 由看板的"重算中"标记兜底。 */
-async function waitEvalDone(
-  tid: number,
-  maxMs = 20000,
-): Promise<'done' | 'error' | 'expired' | 'timeout'> {
-  const t0 = Date.now()
-  const _hdr = (() => {
-    try {
-      return { 'X-Auth-Token': localStorage.getItem('c_token') || '' }
-    } catch {
-      return {}
-    }
-  })()
-  while (Date.now() - t0 < maxMs) {
-    await new Promise(r => setTimeout(r, 700))
-    try {
-      const res = await fetch(API + '/api/rules/eval-status?task_id=' + tid, { headers: _hdr })
-      const j = await res.json()
-      const st = j?.data?.status
-      if (st === 'done' || st === 'error' || st === 'expired') return st
-    } catch {
-      return 'error'
-    }
-  }
-  return 'timeout'
-}
 const EVENTS = [
   { value: 'inventory.changed', label: '库存变动' },
   { value: 'order.created', label: '订单创建' },
@@ -942,53 +915,70 @@ export default function RulesPage() {
       })
       const isNew = !editing || !editing.id
       const url = isNew ? API + '/api/rules' : API + '/api/rules/' + editing.id
-      const r = await fetch(url, {
-        method: isNew ? 'POST' : 'PUT',
-        headers: {
-          'X-Auth-Token': (() => {
-            try {
-              return localStorage.getItem('c_token')
-            } catch {
-              return ''
-            }
-          })(),
-          'Content-Type': 'application/json',
+      // 2026-11-03 统一走 mutate: 提示/缓存/事件三件套一次声明, 不再各写各的。
+      //   op 的语义: HTTP 200 只代表"已受理", 真正的告警变更发生在后台评估 ——
+      //   所以 op 必须活到 eval_tasks 变成终态(由 App 层 OpsWatcher 移除), 不能在这里 finally 清掉。
+      const saved = await mutate({
+        label: isNew ? '新建规则' : '保存规则',
+        run: async () => {
+          const res = await fetch(url, {
+            method: isNew ? 'POST' : 'PUT',
+            headers: {
+              'X-Auth-Token': (() => {
+                try {
+                  return localStorage.getItem('c_token')
+                } catch {
+                  return ''
+                }
+              })(),
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ...f,
+              // 2026-10-28 修复: '' 表示'全部'(合法值)——曾用 || 回退成旧 mode, 用户改回'全部'保存后又变 bbcc
+              mode: f.mode ?? '',
+              channel: globalChannel,
+              condition_json: cj,
+              params: rParams,
+            }),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(err.detail || 'HTTP ' + res.status)
+          }
+          let tid = 0
+          try {
+            const body = await res.json()
+            tid = Number(body?.data?.eval_task_id || 0)
+          } catch {
+            tid = 0
+          }
+          return { tid }
         },
-        body: JSON.stringify({
-          ...f,
-          // 2026-10-28 修复: '' 表示'全部'(合法值)——曾用 || 回退成旧 mode, 用户改回'全部'保存后又变 bbcc
-          mode: f.mode ?? '',
-          channel: globalChannel,
-          condition_json: cj,
-          params: rParams,
-        }),
+        // 文案类保存不触发评估(tid=0) —— 提示要诚实, 不能一律说"正在重算"
+        success: r => (r.tid ? '已保存，正在重算告警' : '已保存'),
+        events: ['rules-changed'],
+        invalidate: '*',
+        op: r =>
+          r.tid
+            ? {
+                id: 'rules:' + r.tid,
+                kind: 'rules',
+                label: '规则重算',
+                scope: globalChannel,
+                taskId: r.tid,
+                startedAt: Date.now(),
+              }
+            : null,
+        opPersist: true,
       })
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}))
-        throw new Error(err.detail || 'HTTP ' + r.status)
+      if (!saved) {
+        setSaveLoading(false)
+        return
       }
-      // 2026-11-03 D5: 后端返回评估任务 id —— 等它真正跑完再刷新看板。
-      //   原实现保存后立刻 dispatch('rules-changed'), 前端拿到的是**评估前**的告警,
-      //   用户切回看板看到旧数据 → 以为没生效 → 再保存一次(越改越乱)。
-      let _tid = 0
-      try {
-        const _okBody = await r.json()
-        _tid = Number(_okBody?.data?.eval_task_id || 0)
-      } catch {
-        _tid = 0
-      }
-      if (_tid) {
-        const _st = await waitEvalDone(_tid)
-        addDebug('评估完成', { taskId: _tid, status: _st })
-        if (_st === 'timeout') toast.warning('规则已保存，后台评估仍在进行（看板将显示「重算中」）')
-        else if (_st === 'error') toast.warning('规则已保存，但评估失败，请查看质量页日志')
-      }
-      toast.success(isNew ? '规则已创建' : '规则已更新')
-      addDebug('save 成功', { isNew, id: editing?.id })
-      clearCache()
+      addDebug('save 成功', { isNew, id: editing?.id, tid: saved.tid })
       cancelEdit()
       await load(globalChannel)
-      window.dispatchEvent(new Event('rules-changed'))
       // 本地即时更新 mode 显示，不等 API 返回（避免旧 state 渲染导致 mode 显示"全部"）
       if (!isNew)
         setRules(prev =>
@@ -1016,24 +1006,37 @@ export default function RulesPage() {
   }
   const del = async id => {
     addDebug('del 开始', { id })
-    await fetch(API + '/api/rules/' + id, {
-      headers: {
-        'X-Auth-Token': (() => {
-          try {
-            return localStorage.getItem('c_token')
-          } catch {
-            return ''
-          }
-        })(),
+    const okDel = await mutate({
+      label: '删除规则',
+      run: async () => {
+        const res = await fetch(API + '/api/rules/' + id, {
+          headers: {
+            'X-Auth-Token': (() => {
+              try {
+                return localStorage.getItem('c_token')
+              } catch {
+                return ''
+              }
+            })(),
+          },
+          method: 'DELETE',
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || 'HTTP ' + res.status)
+        }
+        return true
       },
-      method: 'DELETE',
+      // 不用 mutate 的 success: 删除的提示必须带"撤销", 由下方 toast.add 统一弹
+      events: ['rules-changed'],
+      invalidate: '*',
     })
+    if (!okDel) return
     addDebug('del 删除请求完成')
-    clearCache()
     await load(globalChannel)
-    window.dispatchEvent(new Event('rules-changed'))
     addDebug('del load 完成')
     const timer = setTimeout(async function () {
+      // no-link: 撤销窗口结束后的收尾删除 —— 规则行早已从列表消失, 无可观察联动
       await fetch(API + '/api/rules/' + id + '/permanent-delete', {
         headers: {
           'X-Auth-Token': (() => {
@@ -1055,19 +1058,31 @@ export default function RulesPage() {
         label: t('undo.undo'),
         handler: async function () {
           clearTimeout(timer)
-          await fetch(API + '/api/rules/' + id + '/restore', {
-            headers: {
-              'X-Auth-Token': (() => {
-                try {
-                  return localStorage.getItem('c_token')
-                } catch {
-                  return ''
-                }
-              })(),
+          // 2026-11-03 修: 原来只 load 自身, 既没清缓存也没发事件 —— 撤销后看板要等 30s
+          //   或切页重挂才知道告警回来了。恢复同样走 mutate 三件套。
+          const okUndo = await mutate({
+            label: '恢复规则',
+            run: async () => {
+              const res = await fetch(API + '/api/rules/' + id + '/restore', {
+                headers: {
+                  'X-Auth-Token': (() => {
+                    try {
+                      return localStorage.getItem('c_token')
+                    } catch {
+                      return ''
+                    }
+                  })(),
+                },
+                method: 'POST',
+              })
+              if (!res.ok) throw new Error('HTTP ' + res.status)
+              return true
             },
-            method: 'POST',
+            success: '规则已恢复，正在重算告警',
+            events: ['rules-changed'],
+            invalidate: '*',
           })
-          load(globalChannel)
+          if (okUndo) load(globalChannel)
         },
       },
     })

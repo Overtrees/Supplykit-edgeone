@@ -2148,9 +2148,10 @@ try:
     check("D5 aux 的 evaluating 在缓存之外读",
           "FROM eval_tasks WHERE status IN ('pending','running')" in _dash_src,
           "routes/dashboard.py")
-    check("D5 前端保存后轮询到 done 再刷新",
-          "waitEvalDone" in open('../../frontend/src/pages/RulesPage.tsx', encoding='utf-8').read(),
-          "RulesPage.tsx")
+    check("D5 前端按真实状态等待(ops 轮询, 不再页面内阻塞 20s)",
+          "waitEvalDone" not in open('../../frontend/src/pages/RulesPage.tsx', encoding='utf-8').read()
+          and "/api/rules/eval-status" in open('../../frontend/src/App.tsx', encoding='utf-8').read(),
+          "RulesPage/App")
 
     # ── D8: 生命周期单一入口(维度键/关闭原因/重开不新增行) ──
     check("D8 维度键单一真源(5 维: 类型/SKU/仓/渠道/69码)",
@@ -2170,6 +2171,41 @@ try:
             if "UPDATE alerts" in _ln and "status='inactive'" in _ln and "closed_reason" not in _ln:
                 _bare.append(_f + ": " + _ln.strip()[:50])
     check("D8 全库无「裸关」告警语句(必经 close() 或带 reason)", not _bare, str(_bare[:2]))
+
+    # ── 2026-11-03 全局操作态 + 写操作三件套(提示/缓存/事件) ──
+    #    背景: 规则保存/导入/采购下单各自手写三件套 → 撤销漏事件、下单只弹 toast;
+    #    而 App 顶层在 ToastProvider 之外, 任务完成提示调的是 no-op(从未显示)。
+    _fe25 = "../../frontend/src/"
+    _store25 = open(_fe25 + "store/useAppStore.ts", encoding="utf-8").read()
+    _mut25 = open(_fe25 + "api/mutate.ts", encoding="utf-8").read()
+    _app25 = open(_fe25 + "App.tsx", encoding="utf-8").read()
+    _rp25 = open(_fe25 + "pages/RulesPage.tsx", encoding="utf-8").read()
+    _ins25 = open(_fe25 + "pages/InsightsPage.tsx", encoding="utf-8").read()
+    _tst25 = open(_fe25 + "components/Toast.tsx", encoding="utf-8").read()
+
+    check("OPS 操作态与取数态分离(ops != syncing, 各自生命周期)",
+          "ops: loadOps()" in _store25 and "'rules' | 'ingest' | 'write'" in _store25,
+          "useAppStore.ts")
+    check("OPS 由后端真实状态驱动移除(轮询 eval-status, 不靠计时猜)",
+          "/api/rules/eval-status" in _app25 and "opDone(o.id)" in _app25, "App.tsx")
+    check("OPS 胶囊优先于同步徽标(后端在算时不显示'同步中')",
+          "headerPill" in _app25 and "ops.length > 0 ? <OpPill />" in _app25, "App.tsx")
+    check("OPS 刷新可恢复 + 陈旧淘汰(15min)",
+          "c_ops" in _store25 and "OPS_TTL_MS" in _store25, "useAppStore.ts")
+    check("写操作统一出口: 提示/缓存/事件/操作态一次声明",
+          "export async function mutate" in _mut25
+          and all(k in _mut25 for k in ("clearCache", "dispatchEvent", "notify.success")),
+          "api/mutate.ts")
+    check("规则写路径接入 mutate(保存/删除/撤销)",
+          _rp25.count("mutate(") >= 3, "RulesPage.tsx=%d" % _rp25.count("mutate("))
+    check("采购写路径接入 mutate(下单/取消/到仓日期)",
+          _ins25.count("mutate(") >= 3, "InsightsPage.tsx=%d" % _ins25.count("mutate("))
+    check("撤销删除补发联动事件(原实现只 load 自身)",
+          "label: '恢复规则'" in _rp25 and "events: ['rules-changed']" in _rp25, "RulesPage.tsx")
+    check("顶层提示改走 notify(Provider 外的 useToast 是 no-op)",
+          "toast." not in _app25 and "bindNotify" in _tst25, "App.tsx / Toast.tsx")
+    check("裸写豁免必须显式标注(// no-link: 理由)",
+          "// no-link:" in _rp25, "RulesPage.tsx")
 except Exception as _e24:
     check("D4/D5/D8 静态用例无异常", False, str(_e24)[:200])
 

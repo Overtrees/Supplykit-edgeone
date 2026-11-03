@@ -1,7 +1,6 @@
 import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { ToastProvider, useToast } from '../components/Toast'
 
 function TestButton() {
@@ -13,6 +12,9 @@ describe('Toast 组件', () => {
   beforeEach(() => {
     vi.useFakeTimers()
   })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('显示成功消息', async () => {
     render(
@@ -20,7 +22,7 @@ describe('Toast 组件', () => {
         <TestButton />
       </ToastProvider>,
     )
-    await userEvent.click(screen.getByText('显示Toast'))
+    fireEvent.click(screen.getByText('显示Toast'))
     expect(screen.getByText('测试消息')).toBeInTheDocument()
   })
 
@@ -30,7 +32,7 @@ describe('Toast 组件', () => {
         <TestButton />
       </ToastProvider>,
     )
-    await userEvent.click(screen.getByText('显示Toast'))
+    fireEvent.click(screen.getByText('显示Toast'))
     expect(screen.getByText('测试消息')).toBeInTheDocument()
     act(() => {
       vi.advanceTimersByTime(3000)
@@ -62,10 +64,10 @@ describe('Toast 组件', () => {
         <TestUndo />
       </ToastProvider>,
     )
-    await userEvent.click(screen.getByText('删除'))
+    fireEvent.click(screen.getByText('删除'))
     expect(screen.getByText('已删除')).toBeInTheDocument()
     expect(screen.getByText('撤销')).toBeInTheDocument()
-    await userEvent.click(screen.getByText('撤销'))
+    fireEvent.click(screen.getByText('撤销'))
     expect(handler).toHaveBeenCalled()
   })
 })

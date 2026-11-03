@@ -1,4 +1,5 @@
 import React, { useState, createContext, useContext, useEffect, useRef } from 'react'
+import { bindNotify } from '../api/notify'
 
 interface ToastItem {
   id: number
@@ -47,6 +48,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const warning = (msg: string) => add({ type: 'warning', title: msg })
   const info = (msg: string) => add({ type: 'info', title: msg })
   const clear = () => setToasts([])
+
+  // 2026-11-03 把实现注册到全局出口: App 顶层(header/任务轮询)在 Provider 之外,
+  //   useToast() 拿到的是 no-op —— 跨页任务提示此前从未显示过。注册后 notify.* 可用。
+  useEffect(() => {
+    bindNotify({ success, error, warning, info })
+    return () => bindNotify(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 各类型配色（与全局语义色对齐: success 绿 / error 红 / warning 琥珀 / info 蓝）
   const TONE = {

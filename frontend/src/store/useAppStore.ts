@@ -32,6 +32,53 @@ import { api, clearCache, clearInflight, freshStamp } from '../api/client'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
 
+/**
+ * 全局操作态(2026-11-03)
+ *
+ * 与 syncing 的分工必须分清, 否则会重犯"一个变量表达两件事"的错:
+ *   syncing  = 前端正在取数(→ 胶囊「同步中/加载中」)
+ *   ops      = 后端正在算/在导(→ 胶囊「规则重算中/N 项处理中」)
+ *
+ * 不塞进 syncing 的三个理由:
+ *   1. syncing 有 20s 强制归零兜底(App.tsx), 长任务会被"显示完成";
+ *   2. syncing 只是计数, 说不出在算什么、算多久;
+ *   3. 二者生命周期不同 —— 取数秒级, 计算/导入分钟级, 混用后无法分别判断。
+ */
+export type AppOp = {
+  id: string
+  kind: 'rules' | 'ingest' | 'write'
+  label: string
+  scope?: string
+  /** 后端任务 id(用于轮询真实状态, 不靠前端计时猜) */
+  taskId?: string | number
+  startedAt: number
+}
+
+const OPS_KEY = 'c_ops'
+// 刷新页面后仍显示"处理中"的上限: 超过即视为陈旧(后端任务早已结束或失败), 不再纠缠
+const OPS_TTL_MS = 15 * 60 * 1000
+
+function loadOps(): AppOp[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(OPS_KEY) || '[]')
+    if (!Array.isArray(arr)) return []
+    const now = Date.now()
+    return arr.filter(
+      (o: AppOp) => o && o.id && now - Number(o.startedAt || 0) < OPS_TTL_MS,
+    ) as AppOp[]
+  } catch {
+    return []
+  }
+}
+
+function saveOps(ops: AppOp[]) {
+  try {
+    localStorage.setItem(OPS_KEY, JSON.stringify(ops))
+  } catch {
+    /* 隐私模式/超配额: 只影响刷新后恢复, 不影响当前会话 */
+  }
+}
+
 const POLL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS || 60000)
 const WS_URL = import.meta.env.VITE_WS_URL || ''
 
@@ -97,6 +144,29 @@ const initAppStore = (set, get) => ({
   // 2026-10-27 同步场景: true=有旧值渲染后台拉新(徽标'同步中') / false=首载骨架(徽标'加载中')
   syncOld: false,
   setSyncOld: (v: boolean) => set({ syncOld: v }),
+  // 2026-11-03 全局操作态: 后端在算/在导(跨页可见, 刷新可恢复)
+  ops: loadOps(),
+  opAdd: (o: AppOp) =>
+    set(s => {
+      // 同 id 重复登记(任务轮询 effect 重建)保留原始开始时间, 否则耗时显示会被重置成 0s
+      const old = s.ops.find(x => x.id === o.id)
+      const next = [
+        ...s.ops.filter(x => x.id !== o.id),
+        old ? { ...o, startedAt: old.startedAt } : o,
+      ]
+      saveOps(next)
+      return { ops: next }
+    }),
+  opDone: (id: string) =>
+    set(s => {
+      const next = s.ops.filter(x => x.id !== id)
+      if (next.length !== s.ops.length) saveOps(next)
+      return { ops: next }
+    }),
+  opClear: () => {
+    saveOps([])
+    set({ ops: [] })
+  },
   sidebarOpen: false,
   // ── 历史归档页共享状态(2026-11-02 S2-9: 时间控件收敛到锤子菜单, 页面与锤子同源) ──
   // 与看板 setHammerDashPeriod 同思路: 落 localStorage(按渠道), 切页面/刷新都不丢。

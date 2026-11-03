@@ -20,7 +20,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **378 通过 / 0 失败** |
+| 回归 | `local_test.py` **388 通过 / 0 失败** |
 
 ```bash
 cd /workspace/supplykit
@@ -51,6 +51,11 @@ python3 scripts/smoke_check.py                    # 线上冒烟(health JSON + �
 
 配套: **金额口径分两套**。看板 GMV = 已支付; 历史归档金额 = 订单原价全状态
 (`total_amount` 含未支付/退款)。所以历史页挂着「非 GMV 口径」胶囊, 不要统一成一个数。
+
+前端配套(2026-11-03): **所有写操作走 `api/mutate.ts`** —— 提示 / 缓存失效 / 联动事件 / 操作态
+一次声明, 不再手写三件套(规则撤销曾因此漏发事件、采购下单曾只弹 toast)。**`syncing` 只表示
+"前端在取数", 后端在算/在导用 `ops`**, 二者不可混用 —— `syncing` 有 20s 强制归零, 长任务会被
+显示成已完成。`App` 顶层在 `ToastProvider` 之外, 那里 `useToast()` 是 no-op, 必须用 `notify.*`。
 
 ---
 
@@ -116,12 +121,13 @@ push-alerts 08:30 / ping 13:55)。
 - **先把验收指标写成数字**("四维偏差 0 项" / "日均从 71.16 万降到 16.01 万"), 否则无法判断改完;
 - 涉及口径改动: 先确认六条口径哪条被触碰。
 
-### ② 本地验证(preflight 六步)
+### ② 本地验证(preflight 七步)
 
 ```bash
 bash scripts/preflight.sh
-# [1/6] 后端 Python 3.10 语法   [2/6] pyflakes(undefined name / 重定义)
-# [3/6] local_test 回归 378      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
+# [1/7] 后端 Python 3.10 语法   [2/7] pyflakes(undefined name / 重定义)
+# [3/7] local_test 回归 388      [4/7] ESLint  [5/7] Prettier  [6/7] tsc
+# [7/7] vitest 单测(2026-11-03 纳入: 此前从未执行, 攒了 12 个长期失败)
 ```
 
 **规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。

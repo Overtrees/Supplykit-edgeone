@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
 import { clearCache, clearInflight } from './api/client'
 import { reportError } from './api/logger'
-import { ToastProvider, useToast, ToastAutoClear } from './components/Toast'
+import { ToastProvider, ToastAutoClear } from './components/Toast'
 import { useFreshness, StaleDotInline, FreshPopover } from './components/Freshness'
+import OpPill from './components/OpPill'
+import { notify } from './api/notify'
 import ProductPage from './pages/ProductPage'
 import SupplierPage from './pages/SupplierPage'
 import InsightsPage from './pages/InsightsPage'
@@ -103,7 +105,9 @@ export default function App() {
     hammerData,
     setHammerPanel,
   } = useAppStore()
+  const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   const syncing = useAppStore(s => s.syncing)
+  const ops = useAppStore(s => s.ops)
   // 2026-10-30 渠道注册表: 走项目既有「同步中/加载中」机制 + 失败重试 2 次 + 留痕
   //   (配置类数据不缓存 → 禁用/改名即时生效; 首屏文案由 _chLabel 兜底保证正确)
   useEffect(() => {
@@ -158,6 +162,62 @@ export default function App() {
     const t = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
     return () => clearTimeout(t)
   }, [syncing])
+  // 2026-11-03 操作态看守(OpsWatcher): 后端任务不靠前端计时猜, 轮询真实状态。
+  //   为什么必须在 App 层而不是规则页: 用户保存后切页, 规则页卸载 → 页面内轮询就没了,
+  //   胶囊会永远停在"规则重算中"。挂在 App 层才能跨页 + 刷新后恢复(localStorage)。
+  const opsKey = ops.map(o => o.id + ':' + String(o.taskId ?? '')).join('|')
+  useEffect(() => {
+    const targets = ops.filter(o => o.kind === 'rules' && o.taskId)
+    if (!targets.length) return
+    let alive = true
+    const _hdr = () => {
+      try {
+        return { 'X-Auth-Token': localStorage.getItem('c_token') || '' }
+      } catch {
+        return {}
+      }
+    }
+    const check = async () => {
+      for (const o of targets) {
+        try {
+          const r = await fetch(API + '/api/rules/eval-status?task_id=' + o.taskId, {
+            headers: _hdr(),
+          })
+          const j = await r.json()
+          if (!alive) return
+          const st = j?.data?.status
+          if (st === 'done' || st === 'expired') {
+            useAppStore.getState().opDone(o.id)
+            // 评估写完 alerts 才算"变了" —— 此时通知各页重拉, 看板的"重算中"同步消失
+            window.dispatchEvent(new Event('rules-changed'))
+          } else if (st === 'error') {
+            useAppStore.getState().opDone(o.id)
+            notify.error('规则重算失败，告警可能未更新（详情见质量页日志）')
+          }
+        } catch {
+          /* 网络抖动: 保留 op 等下一轮, 不误清 */
+        }
+      }
+    }
+    check()
+    const t = setInterval(check, 2500)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opsKey, API])
+  // 陈旧兜底: 刷新恢复的 op 若后端任务早已消失, 15 分钟后自动清 —— 防"永远处理中"
+  useEffect(() => {
+    if (!ops.length) return
+    const t = setInterval(() => {
+      const now = Date.now()
+      useAppStore.getState().ops.forEach(o => {
+        if (now - o.startedAt > 15 * 60 * 1000) useAppStore.getState().opDone(o.id)
+      })
+    }, 30000)
+    return () => clearInterval(t)
+  }, [ops.length])
   // 全局同步徽标(看板页/其他页 header-status 共用——任一拉新/30s 静默进行时显示, 完成自动消失)
   // 文案按场景: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; syncOld=false(首载无旧值, 骨架)=「加载中」
   // 仅图标旋转(animation 挂 svg, 文字不转); 字号继承渠道文本(inherit)
@@ -189,8 +249,10 @@ export default function App() {
         {syncOld ? '同步中' : '加载中'}
       </span>
     ) : null
-  const toast = useToast() // Provider 外为 no-op(不崩); 页面切换清理由 ToastProvider 内 ToastAutoClear 负责
-  const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+  // 2026-11-03 操作态优先于取数态: 后端正在算时不显示"同步中"(那是前端在取数),
+  //   两者叠加会让用户以为"一直在加载"。ops 空时回落到原来的同步徽标。
+  const headerPill = ops.length > 0 ? <OpPill /> : syncBadge
+  // 2026-11-03 顶层提示统一走 notify(Provider 在下方, 这里的 useToast 只会拿到 no-op)
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
   const refreshAll = () => {
     clearCache()
@@ -262,6 +324,15 @@ export default function App() {
       }
     })()
     if (seedTask) {
+      const _opId = 'seed:' + seedTask
+      // 2026-11-03 进全局操作态: 跨页可见, 不再只有任务卡能看到
+      useAppStore.getState().opAdd({
+        id: _opId,
+        kind: 'ingest',
+        label: '种子数据填充',
+        taskId: seedTask,
+        startedAt: Date.now(),
+      })
       const poll = setInterval(async () => {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + seedTask, {
@@ -282,7 +353,8 @@ export default function App() {
             try {
               localStorage.removeItem('c_seed_task')
             } catch {}
-            toast.success('种子数据填充完成')
+            useAppStore.getState().opDone(_opId)
+            notify.success('种子数据填充完成')
             window.dispatchEvent(new Event('seed-done'))
             refreshAll()
           } else if (d.data?.status === 'error' || d.data?.status === 'not_found') {
@@ -297,7 +369,8 @@ export default function App() {
               localStorage.removeItem('c_seed_task')
             } catch {}
             window.__seedMissCount = 0
-            if (d.data?.status === 'error') toast.error('种子数据填充失败')
+            useAppStore.getState().opDone(_opId)
+            if (d.data?.status === 'error') notify.error('种子数据填充失败')
           }
         } catch {}
       }, 5000)
@@ -312,6 +385,15 @@ export default function App() {
       }
     })()
     if (cleansingTask && cleansingTask.task_id) {
+      const _opId = 'clean:' + cleansingTask.task_id
+      useAppStore.getState().opAdd({
+        id: _opId,
+        kind: 'ingest',
+        label: '数据清洗',
+        scope: cleansingTask.channel || '',
+        taskId: cleansingTask.task_id,
+        startedAt: Date.now(),
+      })
       const poll = setInterval(async () => {
         try {
           const r = await fetch(
@@ -349,14 +431,16 @@ export default function App() {
             try {
               localStorage.removeItem('c_cleansing_task')
             } catch {}
-            toast.success('数据清洗完成')
+            useAppStore.getState().opDone(_opId)
+            notify.success('数据清洗完成')
             refreshAll()
           } else if (d.status === 'error') {
             clearInterval(poll)
             try {
               localStorage.removeItem('c_cleansing_task')
             } catch {}
-            toast.error('数据清洗失败')
+            useAppStore.getState().opDone(_opId)
+            notify.error('数据清洗失败')
           } else if (d.status === 'not_found') {
             // 容错：刚提交的任务可能还没入库，重试 3 次
             const missCount = (window.__cleanMissCount || 0) + 1
@@ -381,6 +465,14 @@ export default function App() {
       }
     })()
     if (resetTask) {
+      const _opId = 'reset:' + resetTask
+      useAppStore.getState().opAdd({
+        id: _opId,
+        kind: 'ingest',
+        label: '数据重置',
+        taskId: resetTask,
+        startedAt: Date.now(),
+      })
       const poll = setInterval(async () => {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + resetTask, {
@@ -401,8 +493,9 @@ export default function App() {
             try {
               localStorage.removeItem('c_reset_task')
             } catch {}
+            useAppStore.getState().opDone(_opId)
             if (d.data?.status === 'done') {
-              toast.success('数据重置完成')
+              notify.success('数据重置完成')
               refreshAll()
             }
           }
@@ -419,6 +512,14 @@ export default function App() {
       }
     })()
     if (exportTask && exportTask.task_id) {
+      const _opId = 'export:' + exportTask.task_id
+      useAppStore.getState().opAdd({
+        id: _opId,
+        kind: 'ingest',
+        label: '数据导出',
+        taskId: exportTask.task_id,
+        startedAt: Date.now(),
+      })
       const poll = setInterval(async () => {
         try {
           const r = await fetch(API + '/api/seed/fill/status?task_id=' + exportTask.task_id, {
@@ -439,13 +540,15 @@ export default function App() {
             try {
               localStorage.removeItem('c_export_task')
             } catch {}
-            toast.success('导出完成，可在质量日志查看下载')
+            useAppStore.getState().opDone(_opId)
+            notify.success('导出完成，可在质量日志查看下载')
           } else if (d.data?.status === 'error') {
             clearInterval(poll)
             try {
               localStorage.removeItem('c_export_task')
             } catch {}
-            toast.error('导出失败')
+            useAppStore.getState().opDone(_opId)
+            notify.error('导出失败')
           }
         } catch {}
       }, 5000)
@@ -936,7 +1039,7 @@ export default function App() {
                         ))}
                       </select>
                       {/* 2026-10-27 同步中徽标(变量 syncBadge 统一, 与渠道文本同字号——曾看板分支残留旧内联 fontSize:12) */}
-                      {syncBadge}
+                      {headerPill}
                     </span>
                     <button className="hammer-icon-btn" onClick={toggleHammerMenu}>
                       <svg
@@ -1047,7 +1150,7 @@ export default function App() {
                         ))}
                       </select>
                       {/* 2026-10-27 其他页同步中徽标(与看板页同款, 按本布局 header-status 显示) */}
-                      {syncBadge}
+                      {headerPill}
                     </span>
                   </div>
                 </>
@@ -1304,7 +1407,7 @@ export default function App() {
                       const d = await r.json()
                       if (d.ok) {
                         if (d.data?.requires_reset) {
-                          toast.error('已有数据，请在设置页先「一键重置」')
+                          notify.error('已有数据，请在设置页先「一键重置」')
                           return
                         }
                         const taskId = d.data?.task_id
@@ -1312,9 +1415,9 @@ export default function App() {
                           try {
                             localStorage.setItem('c_seed_task', taskId)
                           } catch {}
-                          toast.success('种子数据填充中，可前往任务管理查看进度')
+                          notify.success('种子数据填充中，可前往任务管理查看进度')
                         }
-                      } else toast.error('填充失败: ' + (d.error || ''))
+                      } else notify.error('填充失败: ' + (d.error || ''))
                     } catch (e) {}
                   }}
                   className="btn btn-primary"

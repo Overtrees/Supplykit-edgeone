@@ -12,7 +12,7 @@
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 22 路由 · 32 模块 · 回归 378 项    │
+│  FastAPI · 22 路由 · 32 模块 · 回归 388 项    │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -58,10 +58,12 @@ frontend/src/
 ├── pages/ (16个): Dashboard / Insights / Cleansing / Rules / Orders / Inventory /
 │                 History / Channels / Recycle / Products / Suppliers / Quality /
 │                 Settings / Task / DevMode / Login
-├── components/ (40个): Chart / Sidebar / ListGroup / Toast / ErrorBoundary / Icons /
-│                 dash/RiskCard 等 + hammer/(10 个锤子面板 + configs)
-├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态
+├── components/ (41个): Chart / Sidebar / ListGroup / Toast / OpPill / ErrorBoundary /
+│                 Icons / dash/RiskCard 等 + hammer/(10 个锤子面板 + configs)
+├── store/useAppStore.ts          Zustand + 渠道/模式/批量状态 + 全局操作态 ops
 ├── api/client.ts                 Axios + 缓存 + 统一响应解包
+├── api/mutate.ts                 写操作统一出口(提示/缓存/事件/操作态)
+├── api/notify.ts                 全局提示注册表(Provider 外的唯一可用通道)
 └── App.tsx / main.tsx / theme.ts / styles.css
 
 cloud-functions/api/
@@ -74,7 +76,7 @@ cloud-functions/api/
 ├── core/alert_lifecycle.py       告警生命周期单一入口(维度键/关闭原因/重开复用, 2026-11-03 D8)
 ├── routes/ (31个 = 22 router + 9 支撑)  路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
-└── local_test.py                 本地回归 378 项（mock db + TestClient）
+└── local_test.py                 本地回归 388 项（mock db + TestClient）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
 ```
@@ -117,7 +119,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 378 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/cron窗口/S2 系列）
+cd cloud-functions/api && python3 local_test.py   # 388 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/cron窗口/S2 系列）
 ```
 
 ---

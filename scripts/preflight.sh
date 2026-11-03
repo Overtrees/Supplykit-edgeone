@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SupplyKit 本地质量门禁(preflight)
-# 用途: push/部署前强制检查 —— 后端 3.10 语法 + pyflakes 静态分析 + local_test 回归; 前端 lint + tsc
+# 用途: push/部署前强制检查 —— 后端 3.10 语法 + pyflakes 静态分析 + local_test 回归; 前端 lint + 格式 + tsc + 单测
 # 依赖: python3, pyflakes(apk add pyflakes); node, npm, eslint, typescript
 # 用法: scripts/preflight.sh [--skip-frontend] [--skip-backend]
 # 退出码: 0=全部通过(可 push)  1=存在失败(禁止 push)
@@ -23,7 +23,7 @@ done
 echo "════════ SupplyKit preflight ════════"
 
 if [ "$SKIP_BACK" = "0" ]; then
-  echo "── [1/6] 后端 Python 3.10 语法门禁 ──"
+  echo "── [1/7] 后端 Python 3.10 语法门禁 ──"
   BAD=0
   for f in $(find "$API" -name "*.py"); do
     if ! python3 -c "import ast; ast.parse(open('$f').read(), feature_version=(3,10))" 2>"$API/../.syntax_err"; then
@@ -33,7 +33,7 @@ if [ "$SKIP_BACK" = "0" ]; then
   rm -f "$API/../.syntax_err"
   [ "$BAD" = "0" ] && echo "  ✓ 全部 .py 通过" || FAILS+=("后端语法")
 
-  echo "── [2/6] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
+  echo "── [2/7] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
   if command -v pyflakes >/dev/null 2>&1; then
     ERR=$(cd "$API" && pyflakes . 2>&1 | grep -vE "imported but unused|unable to detect undefined names" | grep -E "undefined name|redefin|used before assignment" || true)
     if [ -n "$ERR" ]; then
@@ -45,7 +45,7 @@ if [ "$SKIP_BACK" = "0" ]; then
     echo "  ⚠ pyflakes 未安装(apk add pyflakes)——跳过"
   fi
 
-  echo "── [3/6] local_test 回归 ──"
+  echo "── [3/7] local_test 回归 ──"
   # 2026-11-02 修误判: 原用 "行内含『失败』" 判定, 而汇总行本身就是"205 通过, 0 失败"
   #   → 永远命中, preflight 恒红(实测每次都在这一步报错)。改为: 退出码 + 失败数>0 才算失败。
   _lt_out=$(cd "$API" && python3 local_test.py 2>&1)
@@ -60,7 +60,7 @@ if [ "$SKIP_BACK" = "0" ]; then
 fi
 
 if [ "$SKIP_FRONT" = "0" ]; then
-  echo "── [4/6] 前端 ESLint(默认 --max-warnings 0, 无警告才通过) ──"
+  echo "── [4/7] 前端 ESLint(默认 --max-warnings 0, 无警告才通过) ──"
   echo "  ⚠ iSH 沙箱内存受限, 全量扫描可能假通过/崩溃——权威 lint 门禁以 GitHub Actions(CI) 为准"
   if (cd "$FRONT" && npm run lint 2>&1 | grep -vE "expose_wasm|^$|^>" | grep -E "error|warning|✖|problem" ); then
     FAILS+=("eslint")
@@ -68,18 +68,31 @@ if [ "$SKIP_FRONT" = "0" ]; then
     echo "  ✓ lint 通过"
   fi
 
-  echo "── [5/6] 前端 Prettier 格式检查 ──"
+  echo "── [5/7] 前端 Prettier 格式检查 ──"
   if (cd "$FRONT" && npm run format:check 2>&1 | grep -vE "expose_wasm|^$|^>" | grep -iE "warn|error" ); then
     FAILS+=("prettier")
   else
     echo "  ✓ 格式合规"
   fi
 
-  echo "── [6/6] TypeScript 类型检查(tsc --noEmit) ──"
+  echo "── [6/7] TypeScript 类型检查(tsc --noEmit) ──"
   if (cd "$FRONT" && npx tsc --noEmit 2>&1 | grep -vE "expose_wasm" | grep -E "error TS"); then
     FAILS+=("tsc")
   else
     echo "  ✓ tsc 通过"
+  fi
+
+  echo "── [7/7] 前端单元测试(vitest) ──"
+  # 2026-11-03 纳入门禁: 这套测试此前**从未被 preflight/CI 执行**, 于是攒下 12 个
+  #   长期失败(Toast 假定时器 3 个 + 列定义数字过时 9 个)却无人知晓 —— 不跑的测试等于没有。
+  _vt_out=$(cd "$FRONT" && npx vitest run 2>&1)
+  _vt_rc=$?
+  echo "$_vt_out" | grep -E "Test Files|Tests " | sed 's/^/  /'
+  if [ "$_vt_rc" = "0" ]; then
+    echo "  ✓ 单测通过"
+  else
+    echo "$_vt_out" | grep -E "FAIL|AssertionError|×" | head -8
+    FAILS+=("vitest")
   fi
 fi
 
