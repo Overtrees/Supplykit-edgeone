@@ -4210,6 +4210,18 @@ JSON 比较必须先 `json.loads` 再 `dumps(sort_keys=True)` —— 否则用�
 
 **③ 执行与等待(什么时候算完)** —— 见 D5。
 
+**实测对比**(线上 `pipeline_runs` / `eval_tasks`, 2026-11-03):
+
+| 场景 | 耗时 | 说明 |
+|---|---|---|
+| 每日全量 jd | **4119ms** | 2:51 那次, 全规则 + 全渠道循环 |
+| 每日全量 other | **4206ms** | 同一轮, 两渠道合计 ≈ 8.3s |
+| 浅档(单规则 d8_probe, jd) | **420ms** | 含 10 万行库存扫描; 约为全量的 1/10 |
+| 文案类保存 | **~0 评估** | 只发一条 `UPDATE alerts SET title/description/severity` |
+
+注意 8.3s 还只是"评估"本身 —— 原来的保存路径还要叠加 3 条全表 UPDATE、批次对账与健康快照,
+而这三块的代价都不在 `rule_eval` 的计时里。
+
 #### 二、D5: 从"猜 N 秒"到"任务可查询"
 
 原实现用 `eval_pending` 单行脏标记。标记只能回答"要不要跑", 回答不了:
@@ -4289,7 +4301,30 @@ ALERT_DIM = ("alert_type", "related_sku", "warehouse", "channel", "barcode")
 `idx_snapshot_ch_date_full` 与 `idx_orders_ch_ordered_at` 支撑)。两段都进
 `cron/reconcile` 的每日档, 差异写 error 日志进质量页。
 
-#### 五、踩坑: `%` 格式化把占位符吃了
+#### 五、踩坑: 浅档路径两次 NameError —— 本地测不到的"块跳过"缺陷
+
+`evaluate_stock_skus` 里有一段"计算变量注入", 包在 `if _need_calc:` 里。每日全量时它总为真
+(内置断货/健康规则引用了 `inv.adj_dos` 等计算变量), 所以**从来没有被执行过"跳过"分支**。
+`only_ats` 过滤后, 探针规则不引用任何计算变量 → 整块跳过 → 但块内初始化的
+`_exp_map` / `_prod_sup` 在下面 ctx 构造时是**无条件 get** 的:
+
+```
+线上探针第 1 次: local variable '_exp_map' referenced before assignment (390ms)
+修完第 2 次:     local variable '_prod_sup' referenced before assignment (429ms)
+第 3 次:         done (420ms)
+```
+
+两次是同一个根因的两个实例。教训不是"再补一个变量", 而是:
+
+1. **改动"可能被跳过"的分支时, 要用 AST 或脚本把该块内 `Store` 的名字与块外 `Load` 求交集**,
+   而不是撞一个补一个(我第一次只补了 `_exp_map`, 第二次才被 `_prod_sup` 打脸)。
+2. **本地 mock 测试覆盖不到这种路径** —— `local_test` 的 fake_query 让 `rows` 为空直接 return,
+   走不到 ctx 构造。所以门禁改成源码顺序断言: 四个映射的 `= {}` 必须出现在 `if _need_calc:` 之前。
+3. **线上探针比"部署 Success"有用**: 三次探针把"路由/表/任务/评估"整条链跑通,
+   每次失败都精确到变量名。探针规则 `is_active=0` + 条件恒假(`available_qty < -1`),
+   不产生任何告警, 用完即删。
+
+#### 六、踩坑: `%` 格式化把占位符吃了
 
 `close()` 初版写成:
 
@@ -4304,7 +4339,7 @@ sql = "... WHERE status='active' AND (%s)" % cond   # cond 自身含 %s
 用 `%` 把一个含占位符的片段"塞进"另一个模板, 等于让两层占位符互相干扰。
 `open_or_reopen` 的 UPDATE 也踩了同一个坑(SET 片段含 `%s`), 一并改成 `+` 拼接。
 
-#### 六、回归
+#### 七、回归
 
 363 → **378**(+15): D4 四条(三参数/浅档跳过/only_ats/文案不评估)、D5 四条(表结构/接口/缓存外读/前端轮询)、
 D8 六条(维度键/统一写 reason/重开不新增/全库无裸关/参数顺序/重开走 UPDATE),
