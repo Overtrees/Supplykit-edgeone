@@ -5099,3 +5099,38 @@ slow 1336), 部署后线上复测三组数字全部命中。preflight 全绿。
 
 至此 S3-1 四个大页全部拆完: Dashboard 3014→2017 · Rules 3407→2769 ·
 清洗 2398→1005 · 建议 2192→618。
+
+### 15.139 S3-1 续4: App.tsx 顶栏+锤子抽屉 / 首启引导外提, 1471 → 1040(2026-11-03)
+
+**为什么拆这两块**: 拆完四大页后行数 top 变为 App 1471 / Inventory 1146 / Dashboard 1143。
+按依赖形状量化: App 的 Welcome 块仅 **6 个自由变量**(纯展示, 理想单元),
+header+锤子抽屉 259 行 **20 个**(全受控 props 可承受); 而 App 的控制器区
+(~860 行, 18 个 useEffect 编排路由/渠道同步/轮询)与 Inventory 整表(777 行/21 依赖,
+行内闭包密集)属于「props 最少的一端已找不到」的硬拆区, **明确止步**。
+
+**产物**:
+- `components/AppHeader.tsx`(323): `<header>` 顶栏 + 锤子菜单抽屉**整体**外提(全受控)。
+  19 个 props 同名注入(channel/setChannel/fresh/freshOpen/headerPill/showHammerMenu/
+  hammerMenuClosing/hammerMenuRef/toggle*/navigateTo/loadHistory/hammerData/_chLabel/...),
+  抽屉按 page 渲染 Hammer* 面板的 11 分支原样随迁。抽屉与顶栏是一体单元——
+  抽屉只被顶栏按钮触发, 拆开反而多传一遍 props。
+- `components/Welcome.tsx`(196): 首启引导页(纯展示)。种子数据填充 onClick 原样随迁
+  (notify/API 均为模块导入, 可直接引); 两个按钮结束时回调 `close()`,
+  App 侧仅留 `showWelcome` 开关。
+
+**对比基建新教训(两条)**:
+1. **双 vite 并发必须各自 cacheDir**: 基准 worktree 软链主仓库 node_modules 后,
+   两个 vite 进程并发写 `node_modules/.vite/deps` 预构建缓存互踩 → 基准页
+   `Cannot read properties of null (reading 'useEffect')`(两份 React)。
+   配置里 `cacheDir: '/tmp/vite_cache_<tag>'` 各自隔离即愈。
+2. **骨架对比必须等数据渲染完成**: `wait_for_function('.card-value')` 作为前置,
+   否则稳定判据(连续两次抓取相同)会各自稳定在 skeleton/loaded 两个不同阶段,
+   产生整卡片的假差异。另: OpPill 同步徽标的「加载中」span 出现时序随机,
+   在骨架提取器里归一化跳过(与 is-refraction-active 同类噪音)。
+
+**验证**: 基准 23d8acc worktree vs 拆分后, 同 token 四状态
+(welcome 274 / main 270 / hammer 288 / products 1897 节点)连续两轮全部一致, 零页错误;
+部署后线上四状态节点数逐一命中基线。
+
+至此 App.tsx 拆完可拆部分。S3-1 累计: Dashboard 3014→1143 · Rules 3407→840 ·
+清洗 2398→1005 · 建议 2192→618 · **App 1471→1040**。
