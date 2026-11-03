@@ -1,0 +1,357 @@
+import { IconCheck } from '../../components/Icons'
+import EmptyState from '../../components/EmptyState'
+import { useAppStore } from '../../store/useAppStore'
+import { INS_SLOW_COLS as SLOW_COLS } from '../../components/hammer/configs'
+import { Skeleton } from './shared'
+
+interface Props {
+  disposals: any[]
+  disposalsLoading: boolean
+  filteredDisp: any[]
+  showDisposed: boolean
+  setShowDisposed: (v: boolean) => void
+  slowVisCols: string[]
+  slowTotal: number
+  slowLoadingMore: boolean
+  /** 分页门闩(ref, 页面持有), 传引用不复制 */
+  slowLoadingRef: { current: boolean }
+  slowSentinelRef: { current: any }
+  loadSlowMore: () => void
+  insightSearch: string
+  prodSelIds: string[]
+  prodBatch: boolean
+}
+
+/** 滞销预警 tab(SLU×仓库处置建议)。从 InsightsPage 外提(第三刀, 见 15.137):
+ *  全受控。行选择直接走 useAppStore.getState().setProdBatchSel(与页面同源),
+ *  分页翻页/加载更多由页面的 loadSlowMore 承担, 这里只调用。 */
+export default function SlowTab(props: Props) {
+  const {
+    disposals,
+    disposalsLoading,
+    filteredDisp,
+    showDisposed,
+    setShowDisposed,
+    slowVisCols,
+    slowTotal,
+    slowLoadingMore,
+    slowLoadingRef,
+    slowSentinelRef,
+    loadSlowMore,
+    insightSearch,
+    prodSelIds,
+    prodBatch,
+  } = props
+  return (
+    <div className="card">
+      <div
+        className="section-title"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
+      >
+        <span>滞销预警</span>
+        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
+          已加载 {Math.min(filteredDisp.length, slowTotal || filteredDisp.length)}/
+          {slowTotal || filteredDisp.length} 条 · 显示 {slowVisCols.length}/{SLOW_COLS.length} 列
+          {insightSearch ? ` · "${insightSearch}"` : ''}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flexWrap: 'wrap',
+          marginBottom: 8,
+        }}
+      >
+        <span className="muted2" style={{ fontSize: 'var(--font-xs)' }}>
+          按 SKU×仓库 · 品类滞销线 + 临期 + B仓仓储费
+        </span>
+        <span
+          onClick={() => setShowDisposed(!showDisposed)}
+          className="clickable"
+          style={{
+            marginLeft: 'auto',
+            fontSize: 'var(--font-sm)',
+            padding: '4px 12px',
+            borderRadius: 'var(--radius-full)',
+            border: '1px solid var(--border)',
+            background: 'var(--card)',
+            cursor: 'pointer',
+          }}
+        >
+          {showDisposed ? '隐藏已处理' : '查看已处理'}
+        </span>
+      </div>
+      {disposalsLoading && disposals.length === 0 ? (
+        <div>
+          {[1, 2, 3].map(i => (
+            <Skeleton key={i} height={36} style={{ marginBottom: 4 }} />
+          ))}
+        </div>
+      ) : filteredDisp.length === 0 ? (
+        <EmptyState icon="tag" title={showDisposed ? '暂无处置记录' : '暂无滞销'} />
+      ) : (
+        <>
+          <div
+            style={{ overflow: 'auto', maxHeight: 'calc(100vh - 180px)' }}
+            onScroll={function (e) {
+              const el = e.target as HTMLElement
+              // IntersectionObserver 仅在交叉状态变化时回调——持续在视口不重复触发导致卡加载
+              // 改用滚动监听: 每次滚动检测接近底部即加载下一页
+              if (
+                el.scrollTop + el.clientHeight >= el.scrollHeight - 250 &&
+                !slowLoadingMore &&
+                (slowTotal === 0 || filteredDisp.length < slowTotal)
+              ) {
+                loadSlowMore()
+              }
+            }}
+          >
+            <table>
+              <colgroup>
+                {slowVisCols.map(id => {
+                  const col = SLOW_COLS.find(c => c.id === id)
+                  return col ? <col key={col.id} /> : null
+                })}
+              </colgroup>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
+                <tr>
+                  {prodBatch && <th style={{ width: 30 }}></th>}
+                  {slowVisCols.map(id => {
+                    const col = SLOW_COLS.find(c => c.id === id)
+                    return col ? (
+                      <th
+                        style={{
+                          whiteSpace: 'nowrap',
+                          fontSize: 'var(--font-xs)',
+                          padding: '8px 4px',
+                        }}
+                        key={col.id}
+                      >
+                        {col.label}
+                      </th>
+                    ) : null
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredDisp.map((x, i) => {
+                  const key = x.sku + '|' + x.warehouse
+                  const isSel = (prodSelIds || []).includes(key)
+                  const s = useAppStore.getState()
+                  const done = !!x.disposed
+                  return (
+                    <tr
+                      key={key}
+                      onClick={() => {
+                        if (prodBatch && !done) {
+                          s.setProdBatchSel(
+                            isSel ? s.prodSelIds.filter(k => k !== key) : [...s.prodSelIds, key],
+                          )
+                        }
+                      }}
+                      style={{
+                        opacity: done ? 0.4 : 1,
+                        background: prodBatch && isSel ? 'rgba(29,78,216,0.08)' : 'transparent',
+                        cursor: prodBatch && !done ? 'pointer' : 'default',
+                      }}
+                    >
+                      {prodBatch && (
+                        <td
+                          onClick={e => {
+                            e.stopPropagation()
+                            if (!done) {
+                              s.setProdBatchSel(
+                                isSel
+                                  ? s.prodSelIds.filter(k => k !== key)
+                                  : [...s.prodSelIds, key],
+                              )
+                            }
+                          }}
+                          style={{ padding: '9px 12px', minHeight: 32, textAlign: 'center' }}
+                        >
+                          <span
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 'var(--radius-xs)',
+                              border: '1.5px solid',
+                              borderColor: isSel
+                                ? 'var(--primary)'
+                                : done
+                                  ? 'var(--border)'
+                                  : 'var(--border)',
+                              background: isSel
+                                ? 'var(--primary)'
+                                : done
+                                  ? 'rgba(148,163,184,0.15)'
+                                  : 'transparent',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#fff',
+                              fontSize: 'var(--font-xs)',
+                              opacity: done ? 0.35 : 1,
+                            }}
+                          >
+                            {done ? <IconCheck size={12} /> : isSel ? <IconCheck size={12} /> : ''}
+                          </span>
+                        </td>
+                      )}
+                      {slowVisCols.map(id => {
+                        const col = SLOW_COLS.find(c => c.id === id)
+                        if (!col) return <td key={id}></td>
+                        if (col.id === 'processed')
+                          return (
+                            <td key={id}>
+                              {x.disposed ? (
+                                <span
+                                  style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
+                                >
+                                  <IconCheck size={12} style={{ verticalAlign: -2 }} /> 已处理
+                                </span>
+                              ) : (
+                                <span
+                                  style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
+                                >
+                                  -
+                                </span>
+                              )}
+                            </td>
+                          )
+                        if (col.id === 'brand')
+                          return (
+                            <td key={id} style={{ fontSize: 'var(--font-sm)' }}>
+                              {x.brand || '-'}
+                            </td>
+                          )
+                        if (col.id === 'sku')
+                          return (
+                            <td key={id} className="mono" style={{ fontSize: 'var(--font-sm)' }}>
+                              {x.sku}
+                            </td>
+                          )
+                        if (col.id === 'name')
+                          return (
+                            <td key={id} style={{ fontSize: 'var(--font-13)' }}>
+                              {x.product_name}
+                            </td>
+                          )
+                        if (col.id === 'warehouse')
+                          return (
+                            <td key={id} style={{ fontSize: 'var(--font-sm)' }}>
+                              {x.warehouse}
+                            </td>
+                          )
+                        if (col.id === 'days')
+                          return (
+                            <td
+                              key={id}
+                              style={{
+                                fontWeight: 600,
+                                color:
+                                  x.days_zero >= 90
+                                    ? 'var(--danger)'
+                                    : x.days_zero >= 30
+                                      ? 'var(--warning)'
+                                      : 'var(--muted)',
+                                fontSize: 'var(--font-sm)',
+                              }}
+                            >
+                              {x.days_zero == 999 ? '∞' : x.days_zero}天
+                            </td>
+                          )
+                        if (col.id === 'stock')
+                          return (
+                            <td key={id} style={{ fontSize: 'var(--font-sm)' }}>
+                              {x.stock}
+                            </td>
+                          )
+                        if (col.id === 'level')
+                          return (
+                            <td key={id} style={{ textAlign: 'center' }}>
+                              <span
+                                className={`pill ${x.level === 'black' ? 'danger' : x.level === 'red' ? 'danger' : x.level === 'yellow' ? 'warning' : 'info'}`}
+                                style={{
+                                  fontSize: 'var(--font-10)',
+                                  padding: '8px 10px',
+                                  minHeight: 'auto',
+                                  lineHeight: '18px',
+                                }}
+                              >
+                                {x.level === 'black'
+                                  ? '紧急'
+                                  : x.level === 'red'
+                                    ? '处置'
+                                    : x.level === 'yellow'
+                                      ? '滞销'
+                                      : '观察'}
+                              </span>
+                            </td>
+                          )
+                        if (col.id === 'note')
+                          return (
+                            <td
+                              key={id}
+                              style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
+                            >
+                              {(x.reason || []).join(' · ')}
+                              <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                                {' '}
+                                → {x.suggestion}
+                              </span>
+                            </td>
+                          )
+                        return <td key={id}></td>
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* IntersectionObserver 哨兵(自动加载, 无固定占位): 触发时 disconnect 防重复,
+                  加载完成 finally 重新 observe(状态变化循环)。onScroll 冗余已去 */}
+          <div
+            style={{ height: 1 }}
+            ref={function (el) {
+              if (el && !el._obs) {
+                el._obs = new IntersectionObserver(
+                  function (entries) {
+                    // ref 门闩(最新, 非闭包旧state)——触发后表增长哨兵移出视口,
+                    // 用户滚动再进入触发(补货同模式), 无需 reobserve
+                    if (
+                      entries[0].isIntersecting &&
+                      !slowLoadingRef.current &&
+                      (slowTotal === 0 || filteredDisp.length < slowTotal)
+                    ) {
+                      el._obs.disconnect()
+                      loadSlowMore()
+                    }
+                  },
+                  { rootMargin: '200px' },
+                )
+                el._obs.observe(el)
+                slowSentinelRef.current = el
+              }
+            }}
+          />
+          {slowLoadingMore && (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '6px 0',
+                fontSize: 'var(--font-xs)',
+                color: 'var(--muted2)',
+              }}
+            >
+              加载中...
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}

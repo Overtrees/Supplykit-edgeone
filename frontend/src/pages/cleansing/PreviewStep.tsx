@@ -26,7 +26,15 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           主标题固定「清洗预览」, 行数/列数全放副标题: 原主标题带「前 N 行」+ 副标题
           「仅展示前 50 行」重复; 且 390 宽 + 大文件(5000 行/13 列)时两段总宽 360px
           超容器 326px → 副标题换行。合并后单行放得下(约 70+6+230)。 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 10,
+          flexWrap: 'wrap',
+        }}
+      >
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>清洗预览</span>
         {(() => {
           const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
