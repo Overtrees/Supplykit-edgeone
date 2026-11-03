@@ -2129,6 +2129,12 @@ try:
     check("D4 文案类变更不触发评估(实质变更才调度, 否则只同步显示字段)",
           "_changed_materially(d, _rl)" in _rules_src and "_sync_rule_text(rid)" in _rules_src,
           "routes/rules.py")
+    # 浅档可能整块跳过"计算变量注入" → 三个映射必须在块外初始化, 否则 NameError
+    # (线上实测: only_ats 过滤后无规则引用 calc 变量, 任务 390ms 内 error)
+    _i_init = _re_src.find("\n    _exp_map = {}")
+    _i_use = _re_src.find("if sku in _exp_map:")
+    check("D4 浅档路径映射先初始化后使用(_exp_map 在 ctx 构造之前)",
+          0 < _i_init < _i_use, "core/rule_eval.py init=%d use=%d" % (_i_init, _i_use))
 
     # ── D5: 评估任务化 + 可查询(不再让前端猜时间) ──
     check("D5 eval_tasks 表含 状态/行数/耗时/错误",

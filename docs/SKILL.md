@@ -20,7 +20,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **377 通过 / 0 失败** |
+| 回归 | `local_test.py` **378 通过 / 0 失败** |
 
 ```bash
 cd /workspace/supplykit
@@ -121,7 +121,7 @@ push-alerts 08:30 / ping 13:55)。
 ```bash
 bash scripts/preflight.sh
 # [1/6] 后端 Python 3.10 语法   [2/6] pyflakes(undefined name / 重定义)
-# [3/6] local_test 回归 377      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
+# [3/6] local_test 回归 378      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
 ```
 
 **规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。

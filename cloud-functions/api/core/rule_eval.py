@@ -194,6 +194,13 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     # 2026-10-29 按 69码: 两套映射 —— ①按码行 ②合计行(空码); 取值按码优先, 再合计, 最后全国兜底
     _ds_bc = {}    # (sku, barcode, warehouse) → ds28(含 __ALL__/__C__/__BC__ 哨兵)
     _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
+    # 2026-11-03 D4: 下面"计算变量注入"整块可能被跳过(only_ats 过滤后没有规则引用计算变量),
+    #   但这三个映射在 ctx 构造时被**无条件**引用。必须在块外先初始化 ——
+    #   否则浅档评估第一次就 `local variable '_exp_map' referenced before assignment`
+    #   (线上实测: 任务 390ms 内 error, 且只影响"没有规则引用 calc 变量"的窄路径, 很难复现)。
+    _exp_map = {}      # sku → 最近到期剩余天数
+    _sup_score = {}    # supplier_code → 评分
+    _own_map = {}      # sku → 自有仓供给侧(need/gap/cover_days)
 
     def _ds_of(_sku, _bc, _wh):
         """日销取值: 该维该 69码 → 该维 SKU 合计 → 0(2026-11-01 收敛到 biz.sales.pick_ds)
