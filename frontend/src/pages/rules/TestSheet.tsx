@@ -4,7 +4,7 @@ import { api, apiJson } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { IconCheck, IconClose, IconGear, IconLightning, IconLoading } from '../../components/Icons'
 import { IS } from './shared'
-import { fieldLbl, opLbl, defaultTestInv } from './labels'
+import { fieldLbl, opLbl } from './labels'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 

@@ -905,7 +905,15 @@ try:
     _ru = _rf("core/rules.py")
     check("告警: 去重/写入均带 barcode", "COALESCE(barcode,'') AS bc" in _ru and "channel, barcode)" in _ru, "rules.py")
     check("采购: 可售不再重复计 own", "_avl_all = sys_total" in _rf("routes/purchase_calc.py"), "purchase_calc.py")
-    _rp = _rf("../../frontend/src/pages/RulesPage.tsx")
+    # 2026-11-03 S3-1 拆分后 RulesPage 主体外提到 pages/rules/ 子组件,
+    # 静态断言改为扫「主页面 + rules/ 目录全部组件」拼接文本(内容断言与拆分位置解耦)
+    def _rules_src():
+        import glob as _glob
+        _txt = _io.open(_os.path.join(_HERE, "../../frontend/src/pages/RulesPage.tsx"), encoding="utf-8").read()
+        for _f in sorted(_glob.glob(_os.path.join(_HERE, "../../frontend/src/pages/rules/*.tsx"))):
+            _txt += "\n" + _io.open(_f, encoding="utf-8").read()
+        return _txt
+    _rp = _rules_src()
     check("规则页: 字段路径与 ctx 一致(无 inv.days_since_last/inv.stock)",
           "inv.days_since_last" not in _rp and "inv.stock" not in _rp, "RulesPage.tsx")
     check("规则页: 仓储选项含 BC 合计", "BC合计(BBCC)" in _rp, "RulesPage.tsx")
@@ -1032,6 +1040,10 @@ try:
     #    内置自有仓规则是 `warehouse_type==own and {own.gap>N}` 结构, 前端原只序列化 or →
     #    用户一编辑保存 and 就被静默删除, 语义永久变更。
     _rp = open("../../frontend/src/pages/RulesPage.tsx", encoding="utf-8").read()
+    # 同上: 拼上 rules/ 子组件再断言
+    import glob as _glob
+    for _f in sorted(_glob.glob("../../frontend/src/pages/rules/*.tsx")):
+        _rp += "\n" + open(_f, encoding="utf-8").read()
     check("规则保存: 前端保留 and 子条件",
           "and: cond.and" in _rp and "and: andSub" in _rp, "RulesPage.tsx")
     # 9. 规则页必须给自有仓三条暴露可编辑阈值(否则只能在测试弹窗临时覆盖)

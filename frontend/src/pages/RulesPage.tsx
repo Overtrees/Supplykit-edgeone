@@ -2,24 +2,10 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight, freshStamp, apiJson } from '../api/client'
 import { mutate } from '../api/mutate'
 import { useToast } from '../components/Toast'
-import ErrorRetry from '../components/ErrorRetry'
-import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
-import {
-  IconClipboard,
-  IconScale,
-  IconSave,
-  IconLoading,
-  IconAlert,
-  IconClose,
-  IconGear,
-  IconCheck,
-  IconLightning,
-} from '../components/Icons'
 import { t } from '../locale'
-import { IS } from './rules/shared'
 import RuleTestSheet from './rules/TestSheet'
-import { fieldLbl, opLbl, pc, defaultTestInv, LF, VARS, OPS, renderTmpl } from './rules/labels'
+import { pc, defaultTestInv } from './rules/labels'
 import RuleEditForm from './rules/EditForm'
 import RuleList from './rules/List'
 import RulesSlowPanel from './rules/SlowPanel'
