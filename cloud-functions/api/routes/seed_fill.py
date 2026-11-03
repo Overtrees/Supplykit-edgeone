@@ -6,6 +6,7 @@
 当月出入库记录、库存月汇总、补货参数+内置规则、规则引擎告警、日销快照
 """
 from routes.common import try_err, SALES_SQL
+from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8
 import json
 import random
 
@@ -739,13 +740,13 @@ def _seed_alerts():
     """
     closed = 0
     for ch in ('jd', 'other'):
-        cur = execute(
-            "UPDATE alerts SET status='closed' WHERE source='rules_engine' AND channel=%s "
-            "AND status='active' AND alert_type IN ('low_stock','replenish') "
+        closed += int(_close_alerts(
+            "source='rules_engine' AND channel=%s "
+            "AND alert_type IN ('low_stock','replenish') "
             "AND related_sku IS NOT NULL AND related_sku != '' AND NOT EXISTS ("
             "SELECT 1 FROM inventory i WHERE i.channel=%s AND i.sku=alerts.related_sku "  # no-barcode-ok: 存在性判断(SELECT 1)
-            "AND i.warehouse=alerts.warehouse AND i.available_qty < i.safety_qty)", (ch, ch))
-        closed += int(cur or 0)
+            "AND i.warehouse=alerts.warehouse AND i.available_qty < i.safety_qty)",
+            [ch, ch], "seed_reset", status="closed") or 0)
     existing = set()
     for r in query("SELECT alert_type, channel, related_sku, warehouse, source FROM alerts WHERE status='active'"):
         existing.add((r.get('alert_type'), r.get('channel') or 'jd', r.get('related_sku'),

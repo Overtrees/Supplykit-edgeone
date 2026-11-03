@@ -22,6 +22,35 @@ import { createPortal } from 'react-dom'
 import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
+
+/** 2026-11-03 D5: 轮询规则评估任务, 直到 done/error/expired 或超时
+ *  为什么必须等: 保存后立刻刷新看板拿到的是评估前的告警, 用户会以为没生效并重复保存。
+ *  超时返回 'timeout' —— 不阻塞 UI, 由看板的"重算中"标记兜底。 */
+async function waitEvalDone(
+  tid: number,
+  maxMs = 20000,
+): Promise<'done' | 'error' | 'expired' | 'timeout'> {
+  const t0 = Date.now()
+  const _hdr = (() => {
+    try {
+      return { 'X-Auth-Token': localStorage.getItem('c_token') || '' }
+    } catch {
+      return {}
+    }
+  })()
+  while (Date.now() - t0 < maxMs) {
+    await new Promise(r => setTimeout(r, 700))
+    try {
+      const res = await fetch(API + '/api/rules/eval-status?task_id=' + tid, { headers: _hdr })
+      const j = await res.json()
+      const st = j?.data?.status
+      if (st === 'done' || st === 'error' || st === 'expired') return st
+    } catch {
+      return 'error'
+    }
+  }
+  return 'timeout'
+}
 const EVENTS = [
   { value: 'inventory.changed', label: '库存变动' },
   { value: 'order.created', label: '订单创建' },
@@ -937,6 +966,22 @@ export default function RulesPage() {
       if (!r.ok) {
         const err = await r.json().catch(() => ({}))
         throw new Error(err.detail || 'HTTP ' + r.status)
+      }
+      // 2026-11-03 D5: 后端返回评估任务 id —— 等它真正跑完再刷新看板。
+      //   原实现保存后立刻 dispatch('rules-changed'), 前端拿到的是**评估前**的告警,
+      //   用户切回看板看到旧数据 → 以为没生效 → 再保存一次(越改越乱)。
+      let _tid = 0
+      try {
+        const _okBody = await r.json()
+        _tid = Number(_okBody?.data?.eval_task_id || 0)
+      } catch {
+        _tid = 0
+      }
+      if (_tid) {
+        const _st = await waitEvalDone(_tid)
+        addDebug('评估完成', { taskId: _tid, status: _st })
+        if (_st === 'timeout') toast.warning('规则已保存，后台评估仍在进行（看板将显示「重算中」）')
+        else if (_st === 'error') toast.warning('规则已保存，但评估失败，请查看质量页日志')
       }
       toast.success(isNew ? '规则已创建' : '规则已更新')
       addDebug('save 成功', { isNew, id: editing?.id })

@@ -36,11 +36,6 @@ def _action_create_alert(ctx):
         sku = ctx.get("sku", "")
         channel = ctx.get("channel", "jd")
         wh = (ctx.get("inv") or {}).get("warehouse", "")
-        dup = one("SELECT COUNT(*) AS c FROM alerts WHERE alert_type=%s AND related_sku=%s "
-                  "AND status='active' AND channel=%s AND source='rules_engine' AND warehouse=%s",
-                  [rule.get("alert_type", ""), sku, channel, wh]) or {}
-        if int(dup.get("c") or 0) > 0:
-            return
         title_tpl = rule.get("alert_title", "") or ""
         desc_tpl = rule.get("alert_desc", "") or ""
         try:
@@ -48,13 +43,13 @@ def _action_create_alert(ctx):
             desc = desc_tpl.format(**ctx) if "{" in desc_tpl else desc_tpl
         except Exception:
             title, desc = title_tpl, desc_tpl
-        execute("INSERT INTO alerts(alert_type, title, description, severity, status, source, "
-                "related_sku, related_rule_id, warehouse_type, warehouse, channel, barcode) "
-                "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s,%s)",
-                (rule.get("alert_type", ""), title, desc, rule.get("severity", "warning"),
-                 sku, int(rule.get("id") or 0),
-                 (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel,
-                 str(ctx.get("barcode") or "")))
+        # 2026-11-03 D8: 去重 + 重开 收敛到生命周期入口(同维度已关 → 重开, 不新增行)
+        from core.alert_lifecycle import open_or_reopen as _oor
+        _oor({"alert_type": rule.get("alert_type", ""), "related_sku": sku, "warehouse": wh,
+              "channel": channel, "barcode": str(ctx.get("barcode") or "")},
+             {"title": title, "description": desc, "severity": rule.get("severity", "warning"),
+              "source": "rules_engine", "related_rule_id": int(rule.get("id") or 0),
+              "warehouse_type": (ctx.get("inv") or {}).get("warehouse_type", "")})
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
 
@@ -95,7 +90,19 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                    "FROM alerts WHERE status='active' AND source='rules_engine'"):
         existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel"),
                       r.get("warehouse") or "", str(r.get("bc") or "")))
+    # 2026-11-03 D8: 已关闭但可能"重开"的维度 —— 只取近 7 天(抖动是短周期现象;
+    #   全量取历史关闭行会把表扫大, 而 7 天外的重开按新行插入, 语义上可接受)。
+    #   重开的理由: 同一格库存的同一个问题只该有一条"当前状态", 原实现每次恢复→再触发都
+    #   插一条新行 → 表按抖动次数膨胀, 且"抖了多少次"永远数不出来。
+    closed_map = {}
+    for r in query("SELECT id, alert_type, related_sku, channel, warehouse, COALESCE(barcode,'') AS bc "
+                   "FROM alerts WHERE status<>'active' AND source='rules_engine' "
+                   "AND closed_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY id DESC"):
+        _k = (r.get("alert_type"), r.get("related_sku"), r.get("channel"),
+              r.get("warehouse") or "", str(r.get("bc") or ""))
+        closed_map.setdefault(_k, r.get("id"))  # DESC 保证取最新一条
     inserts = []
+    reopens = []
     triggered = []
     hits = set()
     for ctx in contexts:
@@ -163,11 +170,27 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 #   改为留痕, 便于发现规则模板与 ctx 键不匹配。
                 title, desc = title_tpl, desc_tpl
                 try_err("rules", "告警模板渲染失败(变量未匹配 ctx): %s" % (at,), _etpl)
-            inserts.append((at, title, desc, rule.get("severity", "warning"),
-                            sku, int(rule.get("id") or 0),
-                            (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
+            # 2026-11-03 D8: 已关闭的同一维度 → 重开(不新增行, reopen_count+1)
+            _rid_old = closed_map.pop(key, None)
+            if _rid_old:
+                reopens.append((title, desc, rule.get("severity", "warning"),
+                                int(rule.get("id") or 0),
+                                (ctx.get("inv") or {}).get("warehouse_type", ""), _rid_old))
+            else:
+                inserts.append((at, title, desc, rule.get("severity", "warning"),
+                                sku, int(rule.get("id") or 0),
+                                (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
             triggered.append(rule.get("name") or str(rule.get("id")))
             hits.add((at, sku, wh, channel_x, bc_x))
+    if reopens:
+        for i in range(0, len(reopens), 100):
+            try:
+                executemany("UPDATE alerts SET status='active', closed_reason='', closed_at=NULL, "
+                            "reopen_count=COALESCE(reopen_count,0)+1, created_at=NOW(), "
+                            "title=%s, description=%s, severity=%s, related_rule_id=%s, "
+                            "warehouse_type=%s WHERE id=%s", reopens[i:i + 100])
+            except Exception as _e:
+                try_err("rules", "告警重开失败(%d条)" % len(reopens[i:i + 100]), _e)
     if inserts:
         for i in range(0, len(inserts), 100):
             try:

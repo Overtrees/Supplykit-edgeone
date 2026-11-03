@@ -118,8 +118,14 @@ _TABLES = {
         "related_rule_id BIGINT DEFAULT 0, warehouse_type VARCHAR(20) DEFAULT '', "
         "warehouse VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', pushed INT DEFAULT 0, "
         "barcode VARCHAR(64) DEFAULT '', "
+        # 2026-11-03 D8: 告警生命周期留痕 —— 关掉的原因与时间(原 8 个入口只改 status,
+        #   "这条为什么消失"无法回答; 多入口竞争与"关了又开"抖动也无法识别)
+        "closed_reason VARCHAR(32) DEFAULT '', closed_at DATETIME NULL, "
+        # 抖动可数: 同一维度"恢复→再触发"的重开次数(0=首次开启)
+        "reopen_count INT DEFAULT 0, "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
         "KEY idx_alerts_ch_status_created (channel, status, created_at), "
+        "KEY idx_alerts_dim (alert_type, channel, related_sku, warehouse), "
         "KEY idx_alerts_status_source (status, source))"
     ),
     "rules": (
@@ -308,6 +314,20 @@ _TABLES = {
         "CREATE TABLE IF NOT EXISTS eval_pending ("
         "`task` VARCHAR(32) PRIMARY KEY, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))"
     ),
+    # 2026-11-03 D4/D5: 规则评估任务化 —— 取代"只存一个脏标记"的做法。
+    #   标记只能回答"要不要跑", 回答不了"跑了没有/跑了多久/影响了多少行/前端该等谁"。
+    #   scope 是 JSON: {"channels": [...], "ats": [...], "deep": false}
+    "eval_tasks": (
+        "CREATE TABLE IF NOT EXISTS eval_tasks ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+        "scope VARCHAR(255) DEFAULT '', "
+        "status VARCHAR(16) DEFAULT 'pending', "
+        "rows_out INT DEFAULT 0, duration_ms INT DEFAULT 0, "
+        "error VARCHAR(255) DEFAULT '', "
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "started_at DATETIME NULL, finished_at DATETIME NULL, "
+        "KEY idx_eval_status (status, created_at))"
+    ),
     "migration_log": (
         "CREATE TABLE IF NOT EXISTS migration_log "
         "(name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
@@ -365,6 +385,8 @@ _ADD_INDEXES = [
     ("idx_outbound_ch_date", "outbound_records", "(channel, outbound_date)"),
     ("idx_alerts_status_source", "alerts", "(status, source)"),
     ("idx_products_barcode_ch", "products", "(barcode, channel)"),
+    # 2026-11-03 D8: 告警按维度查(重开判定 / 关闭匹配) —— 没有它每次写告警都要扫全表
+    ("idx_alerts_dim", "alerts", "(alert_type, channel, related_sku, warehouse)"),
 ]
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),        # 被 idx_orders_sku_ordered_at 前缀覆盖
@@ -423,7 +445,12 @@ _COLUMN_ADDS = {
     "suppliers": [("ext_json", "TEXT")],
     # 2026-10-29 告警逐仓化 + 按 69码 去重(SKU×码 各自独立)
     "alerts": [("warehouse", "VARCHAR(64) DEFAULT ''"),
-               ("barcode", "VARCHAR(64) DEFAULT ''")],
+               ("barcode", "VARCHAR(64) DEFAULT ''"),
+               # 2026-11-03 D8: 关闭留痕(新库见 _TABLES.alerts) —— 同表多列已合并为一条,
+               #   不可另起 "alerts" 键(dict 重复键会覆盖前一条, 直接丢掉 warehouse/barcode 补列)
+               ("closed_reason", "VARCHAR(32) DEFAULT ''"),
+               ("closed_at", "DATETIME NULL"),
+               ("reopen_count", "INT DEFAULT 0")],
     # 规则携带业务计算参数(断货/健康看板逻辑融合进规则配置)
     "rules": [("params", "TEXT")],
     # 2026-11-01 库存指纹(治"一天只评估一次"致看板停旧快照)
@@ -433,7 +460,8 @@ _COLUMN_ADDS = {
 }
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
-SCHEMA_VERSION = 3
+# v4(2026-11-03 D8): alerts 增 closed_reason/closed_at/reopen_count + 维度索引
+SCHEMA_VERSION = 4
 
 
 def table_ddl(name):

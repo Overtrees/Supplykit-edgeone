@@ -2065,7 +2065,7 @@ try:
           and "SHOW COLUMNS" not in _src9b, "schema_create.py / index.py")
     check("S2-9 补列走版本门禁(在 ensure_schema 全量路径内, 缺才 ALTER)",
           "for _t, _cols in _COLUMN_ADDS.items()" in _src9
-          and "if _c in _have:" in _src9 and "SCHEMA_VERSION = 3" in _src9, "schema_create.py")
+          and "if _c in _have:" in _src9 and "SCHEMA_VERSION = 4" in _src9, "schema_create.py")
     check("S2-9 同表多列合并不覆盖(dict 无重复键)",
           _src9.count('"inventory": [') == 1 and _src9.count('"products": [') == 1,
           "schema_create.py")
@@ -2108,6 +2108,96 @@ try:
           "§15.123" in _src9b, "index.py")
 except Exception as _e23:
     check("S2-9 探测统一用例无异常", False, str(_e23)[:200])
+
+# ── D4/D5/D8(2026-11-03): 规则评估任务化 + 告警生命周期单一入口 ──
+try:
+    _rules_src = open('routes/rules.py', encoding='utf-8').read()
+    _cron_src = open('routes/cron.py', encoding='utf-8').read()
+    _re_src = open('core/rule_eval.py', encoding='utf-8').read()
+    _sc_src = open('schema_create.py', encoding='utf-8').read()
+    _al_src = open('core/alert_lifecycle.py', encoding='utf-8').read()
+    _dash_src = open('routes/dashboard.py', encoding='utf-8').read()
+
+    # ── D4: 改一条规则 ≠ 跑一整套每日任务 ──
+    check("D4 run_daily_rules 三参数(channels/deep/alert_types)",
+          "def run_daily_rules(channels=None, deep=True, alert_types=None)" in _cron_src,
+          "routes/cron.py")
+    check("D4 浅档真的跳过重活(循环范围判空, 不是注释)",
+          _cron_src.count("(_chs if deep else [])") >= 2, "routes/cron.py")
+    check("D4 可按 alert_type 精确评估(only_ats 过滤三组规则)",
+          "only_ats" in _re_src and "_want_ats" in _re_src, "core/rule_eval.py")
+    check("D4 文案类变更不触发评估(实质变更才调度, 否则只同步显示字段)",
+          "_changed_materially(d, _rl)" in _rules_src and "_sync_rule_text(rid)" in _rules_src,
+          "routes/rules.py")
+
+    # ── D5: 评估任务化 + 可查询(不再让前端猜时间) ──
+    check("D5 eval_tasks 表含 状态/行数/耗时/错误",
+          "CREATE TABLE IF NOT EXISTS eval_tasks" in _sc_src
+          and all(k in _sc_src for k in ("duration_ms", "rows_out", "started_at")),
+          "schema_create.py")
+    check("D5 保存返回 eval_task_id 且提供状态接口",
+          '"eval_task_id": _tid' in _rules_src and "/rules/eval-status" in _rules_src,
+          "routes/rules.py")
+    check("D5 aux 的 evaluating 在缓存之外读",
+          "FROM eval_tasks WHERE status IN ('pending','running')" in _dash_src,
+          "routes/dashboard.py")
+    check("D5 前端保存后轮询到 done 再刷新",
+          "waitEvalDone" in open('../../frontend/src/pages/RulesPage.tsx', encoding='utf-8').read(),
+          "RulesPage.tsx")
+
+    # ── D8: 生命周期单一入口(维度键/关闭原因/重开不新增行) ──
+    check("D8 维度键单一真源(5 维: 类型/SKU/仓/渠道/69码)",
+          'ALERT_DIM = ("alert_type", "related_sku", "warehouse", "channel", "barcode")' in _al_src,
+          "core/alert_lifecycle.py")
+    check("D8 关闭统一写 closed_reason/closed_at",
+          "closed_reason=%s, closed_at=NOW()" in _al_src, "core/alert_lifecycle.py")
+    check("D8 重开复用同维度行(reopen_count+1, 不新增)",
+          "reopen_count=COALESCE(reopen_count,0)+1" in _al_src and 'return "reopened"' in _al_src,
+          "core/alert_lifecycle.py")
+    import glob as _g24
+    _bare = []
+    for _f in _g24.glob('**/*.py', recursive=True):
+        if "__pycache__" in _f or _f.startswith('.') or _f.endswith('alert_lifecycle.py'):
+            continue  # 生命周期模块本身是唯一合法实现(其 docstring 会引用旧写法)
+        for _ln in open(_f, encoding='utf-8', errors='replace').read().splitlines():
+            if "UPDATE alerts" in _ln and "status='inactive'" in _ln and "closed_reason" not in _ln:
+                _bare.append(_f + ": " + _ln.strip()[:50])
+    check("D8 全库无「裸关」告警语句(必经 close() 或带 reason)", not _bare, str(_bare[:2]))
+except Exception as _e24:
+    check("D4/D5/D8 静态用例无异常", False, str(_e24)[:200])
+
+# 动态: close() 参数顺序 + open_or_reopen 走重开而非插入
+try:
+    import core.alert_lifecycle as _al24
+    _oq24, _oe24, _oqy24 = _db.query, _db.execute, _al24.query
+    _cap24 = []
+    _db.execute = lambda sql, p=None: (_cap24.append((str(sql), list(p or []))) or 3)
+    _al24.execute = _db.execute
+    _n24 = _al24.close("channel=%s AND alert_type=%s", ["jd", "low_stock"], "rule_unhit")
+    check("D8 close() 参数顺序: SET(inactive,reason) 在前, WHERE 条件在后",
+          _n24 == 3 and _cap24 and _cap24[0][1][:2] == ["inactive", "rule_unhit"]
+          and _cap24[0][1][2:] == ["jd", "low_stock"], str(_cap24[:1])[:160])
+
+    _cap24.clear()
+    _db.query = lambda sql, p=None: ([{"id": 7, "status": "inactive", "reopen_count": 1}]
+                                     if "FROM alerts" in str(sql) else [])
+    _al24.query = _db.query
+    _r24 = _al24.open_or_reopen(
+        {"alert_type": "low_stock", "related_sku": "S1", "warehouse": "W1",
+         "channel": "jd", "barcode": "69"},
+        {"title": "t", "description": "d", "severity": "warning", "source": "rules_engine"})
+    check("D8 已关闭维度 → 重开(UPDATE ... reopen_count+1), 不插新行",
+          _r24 == "reopened" and _cap24 and "reopen_count=COALESCE(reopen_count,0)+1" in _cap24[0][0]
+          and "INSERT INTO alerts" not in _cap24[0][0], str(_cap24[:1])[:160])
+except Exception as _e25:
+    check("D8 动态用例无异常", False, str(_e25)[:200])
+finally:
+    try:
+        _db.query, _db.execute = _oq24, _oe24
+        _al24.query = _oqy24
+        _al24.execute = _oe24
+    except Exception:
+        pass
 
 print("\n本地回归: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

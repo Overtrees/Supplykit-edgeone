@@ -122,6 +122,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // 采购&补货告警卡(重构): 补货建议需补(接口) + 采购建议需采(接口), 行标签区分, 跟随补货模式
   const [procList, setProcList] = useState([])
   const [procLoading, setProcLoading] = useState(true)
+  // 2026-11-03 D5: 后端规则评估是否仍在跑(aux.evaluating) —— 在跑就提示并自动重拉,
+  //   否则用户看到的是"评估前"的告警, 会误判规则没生效。
+  const [evaluating, setEvaluating] = useState(false)
+  const _evalPolls = useRef(0)
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
@@ -361,6 +365,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           const dash = dashOk ? s.value.data : null
           setDashErr(s.status === 'rejected' || !dashOk ? '加载失败，数据可能正在处理中' : '')
           const aux = ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}
+          setEvaluating(Boolean(aux.evaluating))
           const alerts = aux.alerts || []
           // stockRisk 双形态(数组|对象) → 归一化后统一消费; 对象形态缺省键消费前补齐
           const stockRisk: unknown[] | StockRiskShim =
@@ -498,6 +503,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           api.get('/api/dashboard/stock-risk?channel=' + channel + '&' + _t, { timeout: 60000 }),
         ])
         const aux = ax.data || {}
+        setEvaluating(Boolean(aux.evaluating))
         useAppStore.setState({
           dashboard: s.data,
           // 2026-10-30 抖动修复: aux 偶发失败时不再把 alerts 置空(数字取自 alertCounts 保留值,
@@ -520,6 +526,20 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     }, 30000)
     return () => clearInterval(timer)
   }, [channel])
+  // 2026-11-03 D5: 规则重算中 → 每 4s 重拉(最多 6 次), 评估完成后告警自动出现。
+  //   没有这个, 用户保存规则后看到的是"评估前"的告警, 会重复保存(越改越乱)。
+  useEffect(() => {
+    if (!evaluating) {
+      _evalPolls.current = 0
+      return
+    }
+    if (_evalPolls.current >= 6) return
+    const t = setTimeout(() => {
+      _evalPolls.current += 1
+      window.dispatchEvent(new Event('rules-changed'))
+    }, 4000)
+    return () => clearTimeout(t)
+  }, [evaluating])
   const periodTrend = dashboard?.periods?.[periodTab + '_trend'] || dashboard?.trend || []
   // GMV 卡维度字段映射(总/净/回款 → 趋势字段名+显示名)
   const gmvKey = gmvView === 'net' ? 'net_gmv' : gmvView === 'payout' ? 'payout' : 'GMV'
@@ -980,6 +1000,24 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     )
   return (
     <>
+      {evaluating && (
+        <div
+          className="small muted"
+          role="status"
+          style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 3,
+              background: 'var(--accent, #4c8dff)',
+              display: 'inline-block',
+            }}
+          />
+          规则重算中，告警数据稍后自动更新
+        </div>
+      )}
       <div className="card-grid" style={{ marginBottom: 16 }}>
         {/* 1. GMV 卡 — 加环比微趋势线 + 日均 */}
         <div className="card stat-card">

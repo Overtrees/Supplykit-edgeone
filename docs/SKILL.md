@@ -20,7 +20,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **363 通过 / 0 失败** |
+| 回归 | `local_test.py` **377 通过 / 0 失败** |
 
 ```bash
 cd /workspace/supplykit
@@ -42,7 +42,9 @@ python3 scripts/smoke_check.py                    # 线上冒烟(health JSON + �
    调拨缺口 `own_transfer_gap` / 积压 `own_overstock` / 效期 `own_expiry_risk`
 2. **补货模式**: `bbcc`(B→C 一盘) / `traditional`(C 仓逐仓); 日销统一走 `biz.sales.pick_ds`,
    **绝不拿全国合计兜底**(兜底会掩盖"该仓没数据")
-3. **告警是「SKU × 仓」粒度** —— 同 SKU 多仓各一条; **卡面去重, 弹窗全量**
+3. **告警是「SKU × 仓」粒度** —— 同 SKU 多仓各一条; **卡面去重, 弹窗全量**。
+   维度键 5 维(`alert_type`+渠道+SKU+69码+仓), 与库存四维对账同构;
+   **关闭必须经 `core.alert_lifecycle.close()` 带 reason**, 重开复用同维度行(`reopen_count`)
 4. **计数与列表分离** —— 卡面 `(N)` 用后端独立 COUNT, 列表可截断, 二者天然不等; 不要"对齐"它们
 5. **库存月汇总** = 仓型 × SKU × 69码 × 仓, 聚合后**先清零再覆盖**
 6. **效期三态** —— `expiry_managed` 是→FEFO 精确批次, 否→到货序 FIFO
@@ -119,7 +121,7 @@ push-alerts 08:30 / ping 13:55)。
 ```bash
 bash scripts/preflight.sh
 # [1/6] 后端 Python 3.10 语法   [2/6] pyflakes(undefined name / 重定义)
-# [3/6] local_test 回归 363      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
+# [3/6] local_test 回归 377      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
 ```
 
 **规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。

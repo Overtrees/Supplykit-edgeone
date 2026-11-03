@@ -4163,3 +4163,149 @@ blob 就炸。修法: `_git()` 统一 `errors="replace"` —— 替换字符不�
 #### 八、回归
 
 358 → **363**(+5 条 cron 窗口用例), `preflight` 六步全绿。
+
+---
+
+### 15.128 规则变更链路上的三个「看起来做了、其实没做」(2026-11-03, D4/D5/D8 根治)
+
+11-02 的架构审计列了 9 个断点(D1~D9)。S0~S2 把 D1/D2/D3/D6/D7/D9 都落了地, D4/D5/D8 却从
+《改动优先级》的 21 条里消失了 —— 既没做, 也没写"为什么不做"。这不是排期问题, 是**合并去重时丢了**。
+本次按"影响面 → 可观测 → 状态机"的顺序补齐, 并顺手把对账扩到四维。
+
+#### 一、D4: 改一条规则 ≠ 跑一整套每日任务
+
+原实现: `create_rule` / `update_rule` / `restore` / 批量操作, 全都调 `_schedule_rule_eval()`,
+而它无条件执行 `run_daily_rules()` —— 那个函数是**完整的每日任务**:
+
+| 步骤 | 成本 | 与"改了一条规则"的关系 |
+|---|---|---|
+| 孤儿清理 3 条全表 UPDATE | 扫全表 alerts | 只有第 1 条有关 |
+| 旧 SKU 级清理 / 无需求兜底 | 全表 + 3 个 NOT EXISTS 子查询 | 迁移性清理, 一次即可 |
+| 全渠道 × 10 万行库存评估 | 最贵的一步 | 只需**本渠道 × 本 alert_type** |
+| 批次四维对账(全表 HAVING) | 扫 inventory × batches | 无关 |
+| 健康快照 + risk_summary | 每渠道 2 次聚合 | 按天唯一, 每日一次就够 |
+
+用户改个错别字, 要付上面全部代价; 而且**改完还不知道跑没跑完**。
+
+根治分三层, 缺一层就还是"小修小补":
+
+**① 影响面判定(要不要评)** —— `_changed_materially(d, old)` 比较**规范化后**的值:
+
+| 变更字段 | 是否影响告警集合 | 处理 |
+|---|---|---|
+| `condition` / `params` | 是(命中条件变了) | 重算 |
+| `is_active` / `channel` / `mode` / `event` / `alert_type` | 是(参与范围变了) | 重算 |
+| `name` / `alert_title` / `alert_desc` / `severity` | 否(只影响展示) | `_sync_rule_text()` 一条 UPDATE 同步存量告警 |
+
+JSON 比较必须先 `json.loads` 再 `dumps(sort_keys=True)` —— 否则用户"点开又保存"(键序/空格变化)
+会被误判成实质变更, 等于没优化。
+
+**② 评估范围(评多少)** —— `run_daily_rules(channels, deep, alert_types)` 三参数:
+- `channels` 收窄渠道, `alert_types` 收窄到受影响规则, `deep=False` 跳过 3 条全表 UPDATE、
+  批次对账、健康快照。
+- `evaluate_stock_skus(only_ats=...)` 在**规则加载之后、评估之前**过滤三组规则(日/库存/订单)。
+- **安全性靠既有设计保证**: "未命中即关闭"只针对 `_evaluated_ats`(本次实际评估过的 alert_type),
+  被过滤掉的规则不在集合里 → 绝不会因为"没评它"而把它的告警批量关掉。这一条不成立的话,
+  收窄范围就是灾难, 所以回归里专门盯了它。
+
+**③ 执行与等待(什么时候算完)** —— 见 D5。
+
+#### 二、D5: 从"猜 N 秒"到"任务可查询"
+
+原实现用 `eval_pending` 单行脏标记。标记只能回答"要不要跑", 回答不了:
+
+- 跑了没有? 跑了多久? 影响多少行? 失败了吗?
+- 前端保存后该等谁? 只能 `setTimeout(2000)` 猜 —— 猜短了看到旧数据, 猜长了白等。
+
+新建 `eval_tasks`(id / scope / status / rows_out / duration_ms / error / 三个时间戳):
+
+```
+保存规则 → INSERT eval_tasks(scope={"channels":["jd"],"ats":["low_stock"],"deep":false})
+        → 返回 eval_task_id
+后台线程 → UPDATE status='running' WHERE status='pending'   ← 抢占, 多实例只有一个成功
+        → run_daily_rules(**scope) → status='done' / 'error'
+前端     → GET /api/rules/eval-status?task_id=N 轮询 → done 才 dispatch('rules-changed')
+```
+
+三个细节:
+
+1. **合并**: 同 scope 且仍 pending/running 的任务直接复用 id。用户连点三次保存只评一次,
+   前端轮询的也是同一个任务 —— 不会出现"三个任务排队、每个都扫 10 万行"。
+2. **不阻塞**: 线程用 `_WORKER_ON` 保证同时只有一个; 退出前再查一次 pending, 防止
+   "刚退出又来了新任务"导致任务躺到下次保存。
+3. **兜底**: 轮询 20s 未完成 → 前端不再等, 但看板 `aux.evaluating=true` 会显示"规则重算中"
+   并每 4s 自动重拉(最多 6 次)。**两个机制都要有** —— 只有轮询, 用户切页就断了;
+   只有 evaluating, 用户要盯着看板等。
+
+`aux.evaluating` 必须在**缓存之外**读: 进了 60s 缓存就会出现"评估完了还显示重算中",
+或者"开始评估了还显示已完成"。
+
+#### 三、D8: 11 个关闭入口 → 一个状态机
+
+原状态: 11 处 `UPDATE alerts SET status='inactive'`, 各写各的 WHERE。三个后果:
+
+1. **答不了"这条为什么没了"** —— 没有 `closed_reason`/`closed_at`。
+2. **关了又开 = 插新行** —— 写入侧是"查 active 去重, 没有就 INSERT"。告警被关后再次命中,
+   插入全新行 → 同一格库存在表里反复增殖, **抖动频次永远数不出来**。
+3. **维度键散落** —— 去重键在 `core/rules.py` 写一遍、关闭条件在各路由再写一遍, 少一维就误关
+   (典型: 按 SKU 关掉所有仓, 而实际只有 B 仓恢复)。
+
+新建 `core/alert_lifecycle.py`, 把三件事钉成单一真源:
+
+```python
+ALERT_DIM = ("alert_type", "related_sku", "warehouse", "channel", "barcode")
+```
+
+**为什么是这 5 维**: 前 4 维与库存/批次的四维对账同构(渠道 + SKU + 69码 + 仓), 第 5 维
+`alert_type` 是"问题种类"。`warehouse_type` 刻意**不进**身份 —— bc 合计行与 own 明细行
+可能同 SKU 同仓名, 但仓型是判定产物, 不是身份。
+
+| 能力 | 实现 | 解决什么 |
+|---|---|---|
+| `close(cond, params, reason)` | 统一 `SET status, closed_reason, closed_at` | 11 处入口全部改调; reason 是稳定枚举(13 个) |
+| `close_by_ids(ids, reason)` | 评估未命中场景(命中集已在内存) | 免去再拼维度条件 |
+| `open_or_reopen(dim, fields)` | 同维度取最近一行: active→只刷展示; 已关→**重开**(`reopen_count+1`); 无→插入 | 抖动不再增殖, 且次数可数 |
+
+写入侧两处(`_action_create_alert` 单条、`evaluate_many` 批量)都改了。批量路径的取舍:
+**只预载近 7 天已关闭维度**。原因: 全量拉历史关闭行会把结果集拉大; 7 天外的重开按新行插入,
+语义上可接受(那条告警已经"冷"了)。这不是妥协, 是给"抖动"下了定义 —— 抖动是短周期现象。
+
+**回归门禁**: 全库扫描, 任何 `UPDATE alerts ... status='inactive'` 不带 `closed_reason` 即失败。
+这条断言比人工 review 可靠: 新增关闭入口的人不一定会读这个模块的 docstring。
+
+#### 四、四维保障: 对账从 2 段扩到 4 段
+
+用户要求"保障数据四维"。原 `run_reconcile` 只有日销总量 + GMV 两段, 都是**汇总级**:
+总量相等但个别维度错位时发现不了。
+
+| 段 | 断言 | 能发现什么 |
+|---|---|---|
+| ① 日销 | Σ快照 order_count == Σ订单 quantity | 整体漏算/重复 |
+| ② GMV | agg.gmv/cnt == 源表重算 | 金额口径漂移(10-29 那次 +72% 的类型) |
+| ③ **告警四维** | active 低库存/补货告警的 (渠道,SKU,69码,仓) 必须存在于 inventory | 孤儿告警(关闭链路漏了一条) |
+| ④ **快照抽样** | 近 7 天量最大的 50 个 (渠道,SKU,69码) 逐个比对 | 总量相等但个别 SKU 错位 |
+
+③ 用一次 LEFT JOIN 扫完(零 N+1), ④ 用两个聚合子查询 + LEFT JOIN(有
+`idx_snapshot_ch_date_full` 与 `idx_orders_ch_ordered_at` 支撑)。两段都进
+`cron/reconcile` 的每日档, 差异写 error 日志进质量页。
+
+#### 五、踩坑: `%` 格式化把占位符吃了
+
+`close()` 初版写成:
+
+```python
+sql = "... WHERE status='active' AND (%s)" % cond   # cond 自身含 %s
+```
+
+`cond` 里有 2 个 `%s`, 加上 SET 侧的 2 个 → 格式串共 4 个占位符, 只给了 1 个参数 →
+`TypeError: not enough arguments for format string`。动态用例当场抓到。
+
+教训: **拼 SQL 时, "模板"和"参数"必须分开** —— 要么全部用 `+` 拼接, 要么参数化到底;
+用 `%` 把一个含占位符的片段"塞进"另一个模板, 等于让两层占位符互相干扰。
+`open_or_reopen` 的 UPDATE 也踩了同一个坑(SET 片段含 `%s`), 一并改成 `+` 拼接。
+
+#### 六、回归
+
+363 → **377**(+14): D4 四条(三参数/浅档跳过/only_ats/文案不评估)、D5 四条(表结构/接口/缓存外读/前端轮询)、
+D8 六条(维度键/统一写 reason/重开不新增/全库无裸关/参数顺序/重开走 UPDATE)。
+其中"全库无裸关"是**扫描型断言**, 新增第 12 个关闭入口时会立刻变红。

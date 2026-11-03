@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from db import query, one, execute, executemany
 from routes.common import ok, fail, traced, try_err
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
+from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8
 
 
 # 内置默认滞销品类线(2026-10-25 抽取公共共享——get_slow_cats 接口与 disposal 计算同源, 防两处漂移)
@@ -290,9 +291,8 @@ def _build_purchase(channel, mode, days=28):
         if upd:
             ph = ",".join(["%s"] * len(upd))
             # ph 为本函数生成的 %s 占位符串(非用户数据), 直接拼接安全; channel 走参数化
-            execute("UPDATE alerts SET status='closed' WHERE alert_type='purchase_need' "
-                    "AND related_sku IN (" + ph + ") AND status='active' AND channel=%s",
-                    upd + [channel])
+            _close_alerts("alert_type='purchase_need' AND related_sku IN (" + ph + ") AND channel=%s",
+                          upd + [channel], "purchase_converted", status="closed")
     except Exception as _e:
             try_err('purchase', '静默降级', _e)
 

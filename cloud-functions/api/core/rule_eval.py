@@ -9,6 +9,8 @@ import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import
 from db import query, one, execute
 from routes.common import try_err
 from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛)
+# 2026-11-03 D8: 关闭一律走生命周期入口(写 closed_reason/closed_at, 状态机单一真源)
+from core.alert_lifecycle import close as _close_alerts, close_by_ids as _close_ids
 
 
 def close_orphan_for_skus(skus, channel="jd"):
@@ -36,8 +38,8 @@ def close_orphan_for_skus(skus, channel="jd"):
         _ls_orphan = [s for s in _skus if not _live.get(s) and s not in _infile]
         if _ls_orphan:
             _ph3 = ",".join(["%s"] * len(_ls_orphan))
-            _e("UPDATE alerts SET status='inactive' WHERE alert_type='low_stock' AND status='active' "
-               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph3), [channel] + _ls_orphan)
+            _close_alerts("alert_type='low_stock' AND channel=%s AND related_sku IN (%s)"
+                          % ("%s", _ph3), [channel] + _ls_orphan, "ls_orphan_no_demand")
         # 通用: 该 SKU active 告警 → 规则 event → 重评估(基于现有订单)——命中保留/未命中关
         _al = _q("SELECT DISTINCT alert_type FROM alerts WHERE status='active' AND channel=%s AND source='rules_engine' "
                  "AND related_sku IN (%s)" % ("%s", _ph), [channel] + _skus)
@@ -73,8 +75,8 @@ def close_orphan_for_skus(skus, channel="jd"):
             _close_sk = [sk for sk in _skus if sk not in _hit_skus]
             if _close_sk:
                 _ph4 = ",".join(["%s"] * len(_close_sk))
-                _e("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND status='active' "
-                   "AND channel=%s AND related_sku IN (%s)" % ("%s", "%s", _ph4), [_at, channel] + _close_sk)
+                _close_alerts("alert_type=%s AND channel=%s AND related_sku IN (%s)"
+                              % ("%s", "%s", _ph4), [_at, channel] + _close_sk, "rule_unhit")
     except Exception as _e2:
         _terr('core_rules', 'close_orphan 降级', _e2)
 
@@ -98,8 +100,8 @@ def close_oversell_for_skus(skus, channel="jd"):
         _close_sku = [s for s in set(skus) if float(_live.get(s, 0) or 0) <= float(_avail.get(s, 0) or 0)]
         if _close_sku:
             _ph2 = ",".join(["%s"] * len(_close_sku))
-            _e("UPDATE alerts SET status='inactive' WHERE alert_type='oversell' AND status='active' "
-               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph2), [channel] + _close_sku)
+            _close_alerts("alert_type='oversell' AND channel=%s AND related_sku IN (%s)"
+                          % ("%s", _ph2), [channel] + _close_sku, "oversell_cleared")
         # low_stock 孤儿(2026-10-15 修正): 无未删订单 且 无在档(products/inventory 均无——只有订单页有——订单删了告警孤儿)才关;
         # 有在档(商品/进销存有该 SKU——即使 avail 0 真缺货)保留——不误伤
         _ph_in = ",".join(["%s"] * len(set(skus)))
@@ -110,12 +112,12 @@ def close_oversell_for_skus(skus, channel="jd"):
         _ls_orphan = [s for s in set(skus) if not _live.get(s) and s not in _infile]
         if _ls_orphan:
             _ph3 = ",".join(["%s"] * len(_ls_orphan))
-            _e("UPDATE alerts SET status='inactive' WHERE alert_type='low_stock' AND status='active' "
-               "AND channel=%s AND related_sku IN (%s)" % ("%s", _ph3), [channel] + _ls_orphan)
+            _close_alerts("alert_type='low_stock' AND channel=%s AND related_sku IN (%s)"
+                          % ("%s", _ph3), [channel] + _ls_orphan, "ls_orphan_no_demand")
     except Exception as _e2:
         _terr('core_rules', 'close_oversell 降级', _e2)
 
-def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
+def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=None):
     import time as _t
     _t0 = _t.time()
     # 2026-10-29 分段计时(仅日志, 零数据影响): 先实测再决定是否下推 SQL
@@ -165,6 +167,15 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
     # 2026-10-29 每日兜底补 order.created(超卖): 原只评 inventory.changed + scheduled.daily
     # → 超卖仅靠"订单导入"触发, 不导入就永不生成/不校正(待处理"其他"恒 0 的根因之一)
     _order_rules = [r for r in load_rules_for("order.created", channel, mode) if _is_alert_rule(r)]
+    # 2026-11-03 D4: 只评受影响的 alert_type —— 规则保存时"改了一条规则的阈值",
+    #   就该只算这条规则的 SKU, 而不是把同渠道所有规则重算一遍。
+    #   安全性: 下方"未命中即关闭"只针对 _evaluated_ats(本次实际评估的 alert_type),
+    #   被过滤掉的不在集合里 → 不会被误关。
+    if only_ats:
+        _want_ats = {str(x) for x in only_ats if x}
+        _daily_rules = [r for r in _daily_rules if str(r.get("alert_type") or "") in _want_ats]
+        _inv_rules = [r for r in _inv_rules if str(r.get("alert_type") or "") in _want_ats]
+        _order_rules = [r for r in _order_rules if str(r.get("alert_type") or "") in _want_ats]
     _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
     _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)
@@ -616,11 +627,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None):
                     except Exception:
                         pass
                     continue
-                for _i in range(0, len(_close), 200):
-                    _b = _close[_i:_i + 200]
-                    if _b:
-                        execute("UPDATE alerts SET status='inactive' WHERE id IN (%s)"
-                                % ",".join(["%s"] * len(_b)), _b)
+                if _close:
+                    _close_ids(_close, "eval_unhit")
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
     # 2026-10-29 评估审计(只增日志, 零数据影响): 事件数/ctx 数/命中数/耗时

@@ -923,7 +923,17 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
     traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
     """
     _key = "dash_aux|%s|%s" % (channel, mode)
-    return ok(_cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode)))
+    _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode))
+    # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
+    #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
+    #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
+    try:
+        _pend = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE status IN ('pending','running')") or {}
+        _data = dict(_data or {})
+        _data["evaluating"] = bool(int(_pend.get("c") or 0))
+    except Exception as _e:
+        try_err('dashboard', '重算标记读取降级(不影响主数据)', _e)
+    return ok(_data)
 
 
 def _build_aux(channel, mode):

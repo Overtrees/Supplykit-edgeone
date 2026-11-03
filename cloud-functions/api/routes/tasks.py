@@ -40,7 +40,8 @@ _TABLES_RESET = ["orders", "inventory", "products", "daily_sales_snapshot", "sku
                  "cleansing_templates", "custom_fields", "events", "inbound_records",
                  "outbound_records", "daily_stats", "warehouse_registry", "sync_tasks",
                  "orders_day_agg", "health_snapshot", "maintenance_log", "log_archives",
-                 "gmv_flows", "data_freshness", "export_files", "eval_pending", "agg_dirty"]
+                 "gmv_flows", "data_freshness", "export_files", "eval_pending", "agg_dirty",
+                 "eval_tasks"]
 
 _BRANDS_FOOD = ["禾味", "山泉", "椒香", "酱乡", "醋乡", "味源", "禾田", "青禾", "禾风",
                 "谷香", "醇味", "鲜禾", "禾记"]

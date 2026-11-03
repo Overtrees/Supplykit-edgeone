@@ -220,12 +220,26 @@ def prune_quality_logs(keep_days=None, hard_cap=None):
         if _k.get("id"):
             out["cap"] = int(_e("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")]) or 0)
     out["total"] = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
-    # pipeline_runs 同生命周期(30 天): 链路运行流水只用于"最近一次/最近几天"排查
+    # pipeline_runs / eval_tasks 同生命周期(30 天): 运行流水只用于"最近一次/最近几天"排查
     if _kd > 0:
         try:
             _e("DELETE FROM pipeline_runs WHERE started_at < DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd)
         except Exception:
             pass  # 表可能尚未建(首次启动) —— 静默
+        try:
+            _e("DELETE FROM eval_tasks WHERE created_at < DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd)
+        except Exception:
+            pass
+    # 评估任务硬上限(500 条): 防"每天保存几十次规则"把任务表堆成日志; 只留最近的
+    try:
+        _et = _o("SELECT COUNT(*) AS c FROM eval_tasks") or {}
+        if int(_et.get("c") or 0) > 500:
+            _ek = _o("SELECT id FROM eval_tasks ORDER BY id DESC LIMIT 500") or {}
+            if _ek.get("id"):
+                _e("DELETE FROM eval_tasks WHERE id < %s AND status NOT IN ('pending','running')",
+                   [_ek.get("id")])
+    except Exception:
+        pass
     return out
 
 

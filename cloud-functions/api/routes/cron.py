@@ -4,7 +4,7 @@ PA 版 APScheduler 10 任务中, TiDB 场景需要外部化的核心任务(备�
 - snapshot:          每天构建日销快照(增量补全最近 90 天)
 - freshness:         每小时检查快照新鲜度(>2 天陈旧自动重建)
 - archive:           每天归档 90 天前订单 → daily_stats(写入失败保护不删)
-- cleanup-logs:      每天清理 quality_logs 保留最近 500
+- cleanup-logs:      每天清理 quality_logs(按天保留 30 天 + 2 万条硬上限)
 - daily-rules:       每天滞销识别告警 + 孤儿告警清理
 - recycle:           每天清理超 30 天软删数据(订单/规则)
 - push-alerts:       每 30 分钟推送新告警到 webhook(设置页 webhook_url)
@@ -26,6 +26,7 @@ from routes.common import pipeline_run as _pipe  # 2026-11-02 S1-2: 运行流水
 from routes.common import ch_codes as _CHANNELS  # 2026-11-02 S1-5: 渠道数据驱动(原各处硬编码 ("jd","other"))
 from routes.common import ch_conf as _CH_CONF
 from routes.common import SALES_SQL as _PAID_SQL  # 2026-10-29 销量池单一真源(原硬编码 已完成)
+from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8: 关闭统一入口
 
 router = APIRouter(tags=["cron"])
 @router.get("/cron/continue-tasks")
@@ -396,64 +397,84 @@ async def cron_cleanup_logs(request: Request):
     return ok(r)
 
 
-def run_daily_rules() -> dict:
-    """每日规则全量评估(同步, 供 cron 路由与应用层兜底共用):
-    孤儿告警清理 + 旧 SKU 级告警清理 + 双渠道全量规则评估 + 健康分快照 + risk_summary 审计日志"""
+def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
+    """规则评估 —— 两档(2026-11-03 D4: 改一条规则不该等于跑一整套每日任务)
+
+    deep=True  每日任务口径: 孤儿全表清理 + 旧 SKU 级清理 + 无需求兜底 + 全渠道评估
+               + 批次对账 + 健康快照。(cron/daily-rules、应用层兜底走这档)
+    deep=False 规则变更口径: 只评指定渠道 + 该渠道孤儿清理; 跳过三条全表 UPDATE、
+               批次对账与健康快照 —— 后者与"改了一条规则"毫无关系, 却占了几乎全部成本。
+    channels   None=全渠道
+    alert_types 只评这些 alert_type(规则变更时精确到受影响规则; None=全部规则)
+
+    证据: 规则保存原来无条件调本函数, 一次文案修改 = 3 条全表 UPDATE(孤儿清理)
+            + 10 万行 × N 渠道评估 + 全表 HAVING 对账 + 健康快照。
+    """
+    _chs = [c for c in (channels or _CHANNELS()) if c] or list(_CHANNELS())
+    _ats = [str(a) for a in (alert_types or []) if a]
+    _in_ch = "(" + ",".join(["%s"] * len(_chs)) + ")"
     # 1. 孤儿告警清理: active 且 source in (rules_engine,event_bus) 的 alert_type 已无 active 规则 → inactive
     cleaned = 0
-    for r in query("SELECT DISTINCT alert_type, channel FROM alerts "
-                   "WHERE status='active' AND source IN ('rules_engine','event_bus')"):
+    _orphan_rows = query(
+        "SELECT DISTINCT alert_type, channel FROM alerts "
+        "WHERE status='active' AND source IN ('rules_engine','event_bus')"
+        + ("" if deep else " AND channel IN " + _in_ch),
+        [] if deep else _chs)
+    for r in _orphan_rows:
         at = r.get("alert_type")
         ch = r.get("channel") or "jd"
         has = one("SELECT COUNT(*) AS c FROM rules WHERE alert_type=%s AND channel=%s AND is_active=1 "
                   "AND (deleted_at IS NULL OR deleted_at='')", [at, ch]) or {}
         if not int(has.get("c") or 0):
-            execute("UPDATE alerts SET status='inactive' WHERE alert_type=%s AND channel=%s "
-                    "AND status='active' AND source IN ('rules_engine','event_bus')", [at, ch])
-            cleaned += 1
-    # 1.5 旧 SKU 级规则告警(warehouse 为空)清理 —— 告警已逐仓化(SKU×仓), 旧的 SKU 聚合
-    #     告警由下方全量评估重新生成逐仓版, 先关闭避免新旧混杂致看板计数翻倍
-    try:
-        _old = execute("UPDATE alerts SET status='inactive' WHERE status='active' "
-                       "AND source IN ('rules_engine','event_bus') "
-                       "AND (warehouse IS NULL OR warehouse='')")
-        cleaned += int(_old or 0)
-    except Exception as _e:
+            cleaned += int(_close_alerts(
+                "alert_type=%s AND channel=%s AND source IN ('rules_engine','event_bus')",
+                [at, ch], "orphan_rule_missing") or 0)
+    if deep:
+        # 1.5 旧 SKU 级规则告警(warehouse 为空)清理 —— 告警已逐仓化(SKU×仓), 旧的 SKU 聚合
+        #     告警由下方全量评估重新生成逐仓版, 先关闭避免新旧混杂致看板计数翻倍
+        #     (迁移性清理: 一次即可, 不该在每次保存规则时重跑)
+        try:
+            cleaned += int(_close_alerts(
+                "source IN ('rules_engine','event_bus') AND (warehouse IS NULL OR warehouse='')",
+                [], "legacy_sku_level") or 0)
+        except Exception as _e:
             try_err('cron', '静默降级', _e)
-    # 1.6 无需求告警兜底(2026-10-15): 无未删订单 且 无在档(products/inventory 均无) 的 active rules_engine 告警 → inactive
-    #     ——SKU 只有订单页有(订单删了=无需求)——告警孤儿(删单联动同口径; 有在档保留——真缺货/低库存不误伤; 解存量 TypeError 期孤儿)
-    try:
-        _c2 = execute(
-            "UPDATE alerts a SET a.status='inactive' WHERE a.status='active' AND a.source='rules_engine' "
-            "AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.sku=a.related_sku AND o.channel=a.channel "
-            "AND (o.deleted_at IS NULL OR o.deleted_at='')) "
-            "AND NOT EXISTS (SELECT 1 FROM products p WHERE p.sku=a.related_sku AND p.channel=a.channel "
-            "AND (p.deleted_at IS NULL OR p.deleted_at='')) "
-            "AND NOT EXISTS (SELECT 1 FROM inventory i WHERE i.sku=a.related_sku AND i.channel=a.channel)")
-        cleaned += int(_c2 or 0)
-    except Exception as _e:
+        # 1.6 无需求告警兜底(2026-10-15): 无未删订单 且 无在档(products/inventory 均无) 的 active
+        #     rules_engine 告警 → inactive —— SKU 只有订单页有(订单删了=无需求)——告警孤儿
+        #     注: 去掉表别名, 让 SET 侧(close 统一实现)与子查询同时成立
+        try:
+            cleaned += int(_close_alerts(
+                "source='rules_engine' "
+                "AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.sku=alerts.related_sku AND o.channel=alerts.channel "
+                "AND (o.deleted_at IS NULL OR o.deleted_at='')) "
+                "AND NOT EXISTS (SELECT 1 FROM products p WHERE p.sku=alerts.related_sku AND p.channel=alerts.channel "
+                "AND (p.deleted_at IS NULL OR p.deleted_at='')) "
+                "AND NOT EXISTS (SELECT 1 FROM inventory i WHERE i.sku=alerts.related_sku AND i.channel=alerts.channel)",
+                [], "no_demand") or 0)
+        except Exception as _e:
             try_err('cron', '静默降级', _e)
     # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存行
     #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
     from core.rules import evaluate_stock_skus
     triggered = []
     from routes.common import track_run as _tr
-    for _ch in _CHANNELS():
+    for _ch in _chs:
         # 2026-11-02 S1-2: 逐渠道留一条运行记录(scope=渠道) —— 出问题时一眼看出哪个渠道没评估到
         with _tr("rule_eval", _ch) as _rec:
-            _hits = evaluate_stock_skus(_ch, limit=100000)
+            _hits = evaluate_stock_skus(_ch, limit=100000, only_ats=_ats or None)
             _rec.rows = len(_hits or [])
-            _rec.detail = {"triggered": len(_hits or [])}
+            _rec.detail = {"triggered": len(_hits or []), "deep": bool(deep), "ats": _ats}
         triggered.extend(_hits or [])
     # 2026-10-29 批次对账(四维逐一, 用户定案): 
     #   对每个 (仓库类型, SKU, 69码, 仓库) 校验 Σ(batches.qty) ≡ inventory.available_qty
     #   **不能按 SKU 汇总核对** —— 不同仓/不同码的偏差会互相抵消(A 多 100 与 B 少 100 汇总后为 0),
     #   掩盖真实错配。四维逐一比对才能定位到具体仓/具体码。
     #   偏差只告警不自动修(自动修会掩盖导入遗漏/仓名错/批次未填等根因)
+    #   D4: 这是全表 HAVING, 只在每日档跑 —— 规则变更不影响批次与库存的一致性
     try:
         from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
         _ph = ",".join(["%s"] * len(_SELF))
-        for _ch in _CHANNELS():
+        for _ch in (_chs if deep else []):
             _bad = query(
                 "SELECT i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
                 "  i.available_qty AS qty, "
@@ -480,12 +501,14 @@ def run_daily_rules() -> dict:
                             _s0.get("warehouse"), _s0.get("qty"), _s0.get("bq")),))
     except Exception as _e_rc:
         try_err('cron', '批次对账降级', _e_rc)
-    _log("info", "每日规则: 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
-        cleaned, len(triggered), ",".join(str(t)[:20] for t in triggered[:8])))
+    _log("info", "规则评估[%s]: 渠道 %s, 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
+        "每日" if deep else "变更", ",".join(_chs), cleaned, len(triggered),
+        ",".join(str(t)[:20] for t in triggered[:8])))
     # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)
+    # D4: 健康快照按天唯一(ON DUPLICATE), 每日写一次即可 —— 规则变更档不重复写
     try:
         from routes.dashboard import _stock_risk, _health_index
-        for _ch in _CHANNELS():
+        for _ch in (_chs if deep else []):
             _rk = _stock_risk(_ch)
             _hi = _health_index(_ch)
             _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
@@ -519,7 +542,8 @@ def run_daily_rules() -> dict:
                     "VALUES('risk_summary','info',%s,'cron')", (_msg,))
     except Exception as _e:
             try_err('cron', '静默降级', _e)
-    return {"orphan_cleaned": cleaned, "rules_triggered": triggered}
+    return {"orphan_cleaned": cleaned, "rules_triggered": triggered,
+            "scope": "deep" if deep else "light", "channels": _chs, "ats": _ats}
 
 
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
@@ -696,7 +720,7 @@ def _reconcile_gmv(channel, start, end):
 
 
 def run_reconcile(days=90):
-    """对账核心(同步, 供 cron 端点与应用层兜底共用) —— 2026-11-02 S2-3 扩为两段
+    """对账核心(同步, 供 cron 端点与应用层兜底共用) —— 2026-11-03 扩为四段
 
     ① 日销: [今-days, 昨] 内 SUM(快照 order_count) == SUM(订单 quantity)
        · 排除当天: 当天订单仍在增长, 快照可能滞后(差异属正常)
@@ -706,9 +730,14 @@ def run_reconcile(days=90):
        · 窗口比日销段晚一天收口(到 today-2): 软删残留靠 _rebuild_agg_day 单日精准自愈,
          最近两天可能还没自愈, 报出来是噪音而非数据错
 
-    第三段(SKU 统计 sku_sales_stats)刻意不做: 它是从快照派生的二阶物化, 源头已被①覆盖,
-    而全量重算 90 天 SKU 日销的成本远高于它能发现的问题 —— 真要查, 用
-    /api/health?detail=1 看 mat_rebuild 的耗时与行数是否异常。
+    ③ 告警四维一致性: active 低库存/补货告警的 (渠道, SKU, 69码, 仓) 必须能在 inventory
+       找到对应的"格"。找不到 = 孤儿告警, 说明某条关闭链路漏了(规则停用/删单/换码都会造成)。
+    ④ 快照抽样到 SKU×69码(而非只比总量): 总量相等但个别 SKU 错位时 ① 段发现不了。
+       取近 7 天量最大的 50 个维度比对 —— 高频 SKU 错一位就影响补货, 低频的影响小。
+
+    第三段(SKU 统计 sku_sales_stats)仍不在本函数内: 它是从快照派生的二阶物化, 源头已被①
+    覆盖, 全量重算 90 天的成本远高于它能发现的问题 —— 要查请看
+    /api/health?detail=1 的 mat_rebuild 耗时与行数。
 
     差异 ≠ 0 → error 日志(source=cron), 前端质量页可见。
     """
@@ -723,6 +752,7 @@ def run_reconcile(days=90):
     # 比进去只会产生"看起来是数据错、其实是还没自愈"的噪音。
     _end_gmv = (_now - timedelta(days=2)).strftime("%Y-%m-%d")
     out = {}
+    _extra = {}   # 2026-11-03 D8: 告警四维孤儿 / 快照抽样(与渠道维度平级, 不能混进 out)
     _bad = 0
     for _ch in _CHANNELS():
         try:
@@ -757,11 +787,56 @@ def run_reconcile(days=90):
         except Exception as _e:
             out[_ch]["gmv_error"] = str(_e)[:150]
             try_err('cron', 'GMV 对账降级(%s)' % _ch, _e)
+    # ③ 告警 ↔ 库存 四维一致性(2026-11-03 D8): active 低库存/补货告警的
+    #    (channel, sku, 69码, 仓) 必须能在 inventory 找到"格"。找不到 = 孤儿告警,
+    #    说明关闭链路漏了一条(规则停用/删单/换码都会造成)。用 LEFT JOIN 一次扫完, 零 N+1。
+    try:
+        _orph = query(
+            "SELECT a.alert_type, a.channel, a.related_sku, COALESCE(a.barcode,'') AS bc, a.warehouse "
+            "FROM alerts a LEFT JOIN inventory i ON i.channel=a.channel AND i.sku=a.related_sku "
+            "  AND COALESCE(i.barcode,'')=COALESCE(a.barcode,'') AND i.warehouse=a.warehouse "
+            "WHERE a.status='active' AND a.source='rules_engine' "
+            "  AND a.alert_type IN ('low_stock','replenish') AND i.id IS NULL LIMIT 200") or []
+        _extra["orphan_alerts"] = len(_orph)
+        if _orph:
+            _bad += 1
+            _s = _orph[0]
+            _log("error", "告警四维孤儿 %d 条(库存已无该 格): 例 type=%s ch=%s sku=%s 码=%s 仓=%s"
+                 % (len(_orph), _s.get("alert_type"), _s.get("channel"), _s.get("related_sku"),
+                    _s.get("bc") or "-", _s.get("warehouse")))
+    except Exception as _e:
+        _extra["orphan_alerts"] = "error: %s" % str(_e)[:120]
+        try_err('cron', '告警四维对账降级', _e)
+    # ④ 快照 ↔ 订单 抽样到 SKU×69码(而不是总量): 总量相等但个别 SKU 错位, ①段发现不了。
+    #    取近 7 天量最大的 50 个维度比对 —— 高频 SKU 错一位就影响补货, 低频的错位影响小。
+    try:
+        _d1 = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        _sample = query(
+            "SELECT s.channel, s.sku, s.bc, s.q1, COALESCE(o.q2, 0) AS q2 FROM ("
+            "  SELECT channel, sku, COALESCE(barcode,'') AS bc, SUM(order_count) AS q1 "
+            "  FROM daily_sales_snapshot WHERE `date`>=%s AND `date`<=%s "
+            "  GROUP BY channel, sku, barcode ORDER BY q1 DESC LIMIT 50) s "
+            "LEFT JOIN ("
+            "  SELECT channel, sku, COALESCE(barcode,'') AS bc, SUM(quantity) AS q2 "
+            "  FROM orders WHERE order_status IN (" + _PAID_SQL + ") "
+            "    AND (deleted_at IS NULL OR deleted_at='') AND ordered_at>=%s "
+            "  GROUP BY channel, sku, barcode) o "
+            "  ON o.channel=s.channel AND o.sku=s.sku AND o.bc=s.bc", [_d1, _end, _d1]) or []
+        _diff = [r for r in _sample if int(r.get("q1") or 0) != int(r.get("q2") or 0)]
+        _extra["sku_sample"] = {"n": len(_sample), "diff": len(_diff)}
+        if _diff:
+            _bad += 1
+            _log("error", "快照抽样对账不一致 %d/%d: 例 ch=%s sku=%s 码=%s 快照=%s 订单=%s"
+                 % (len(_diff), len(_sample), _diff[0].get("channel"), _diff[0].get("sku"),
+                    _diff[0].get("bc") or "-", _diff[0].get("q1"), _diff[0].get("q2")))
+    except Exception as _e:
+        _extra["sku_sample"] = "error: %s" % str(_e)[:120]
+        try_err('cron', '快照抽样对账降级', _e)
     if not _bad:
         _log("info", "日销对账一致 %s~%s: %s" % (
             _start, _end,
             " / ".join("%s=%d" % (k, v.get("snapshot", 0)) for k, v in out.items() if "snapshot" in v)))
-    return {"range": [_start, _end], "channels": out, "mismatch": _bad}
+    return {"range": [_start, _end], "channels": out, "mismatch": _bad, **_extra}
 
 
 def run_agg_sweep(hours=48):
