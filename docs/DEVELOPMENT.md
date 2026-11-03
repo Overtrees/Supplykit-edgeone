@@ -5134,3 +5134,36 @@ header+锤子抽屉 259 行 **20 个**(全受控 props 可承受); 而 App 的�
 
 至此 App.tsx 拆完可拆部分。S3-1 累计: Dashboard 3014→1143 · Rules 3407→840 ·
 清洗 2398→1005 · 建议 2192→618 · **App 1471→1040**。
+
+### 15.140 S3-2/S3-3: 42 处裸 fetch 收口到统一通道 apiJson(2026-11-03)
+
+**审计口径修正**: 记录一直是"35 处", 实查 43 处(含后几轮新增的 Welcome/Hammer 等)。
+收口 42 处, logger.ts 1 处**刻意保留**——client 拦截器依赖 reportError, 收口会成环。
+
+**为什么不是全部换成 api.get/post**: 裸 fetch 的现存调用点几乎全是**轮询/状态探测/
+文件下载/登录**——统一通道的 30s 缓存和 channel 自动注入对它们都是**行为改变**:
+seed/task/eval-status 轮询吃缓存会拿到 30s 内旧值; login/check 注入 channel 是凭空加参。
+所以新增 `apiJson`(与裸 fetch 语义等价: 返回原始 body 不解包、不读写缓存、不进在途
+去重、不注入 channel), 只补齐裸 fetch 缺的三件事: ①超时(默认 30s) ②X-Auth-Token
+注入(去掉 17 处复制的 IIFE) ③与 axios 同口径拼 BASE(相对路径不打到前端 origin)。
+`raw:true` 返回 Response, 调用点的 `r.ok/r.status/r.blob` 判断原样保留——
+需要 status 的 4 处(load/tasks/download/delInv)走 raw, 其余 38 处直接拿 json。
+
+**超时取值**: 轮询/探测 30s(ping 5s 与原手动 abort 一致), 重操作(seed 填充/重置/
+导出/批量/规则保存)对齐 postHeavy 90s, 文件下载 120s(大 CSV)。
+
+**改写时三个坑**:
+1. 后续代码引用 `r.status`(addDebug 记录/401 判断)的, 头部换成"默认 json 模式"会
+   编译错——要么 raw 要么删引用, 逐处过, 别信批量替换。
+2. TestSheet 的 `JSON.stringify({...})` 大对象搬进 `data:` 时, 尾部 `})` 剥离要数清
+   括号(对象里有 IIFE `})()`), 机械 rstrip 会留孤儿括号。
+3. LoginPage 的手动 `AbortController+setTimeout` 换 `timeout` 参数后, `finally` 里的
+   `clearTimeout(_to)` 成了悬空引用——删超时器要连 finally 一起清。
+
+**行为冒烟**(本地 dev 连线上 API + 部署后线上复测): 登录/看板轮询/规则页 load/
+规则测试弹窗 runTest/任务页/回收站/设置页 全通过, 零页错误。
+注意冒烟脚本自身的假阴性: 干净 context 登录后停在**欢迎页**, main 是 display:none,
+"card-value 出现/规则卡可见"全查不到——登录态 context 必须预置 `c_welcome_seen=1`;
+切页断言也要等数据返回(4s 不够, 6s 稳)。
+
+净删 236 行(169+/405-)。S3-2/S3-3 完成, 审计主线只剩 S3-5(迁移框架)。
