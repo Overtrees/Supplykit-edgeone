@@ -4674,3 +4674,86 @@ CI backend job   secrets.TIDB_* 注入 → 跑; 未配置 → ::warning 显式�
   职责, 不是 SQL 冒烟的。
 - **EXPLAIN 有微小 RU 消耗**(只编译不读行), 263 条量级可忽略; 但不要把它塞进高频循环。
 - 无凭据时默认**打印"未执行"但不判失败**(本地无网不该红); 需要强制时设 `SQL_SMOKE_REQUIRED=1`。
+
+### 15.131 CI 的数据库凭据: 从「补传一个变量」到「不再维护第二份」(2026-11-03)
+
+#### 一、上一轮的修法是错的方向
+
+15.130 里 CI 首跑 60 条 `1146`, 我加了库指纹、又补传 `TIDB_DB`。当时看似修好了, 但只是
+把**这一处**差异填平:
+
+```
+GitHub Secrets  ─┐
+                 ├── 两份独立副本, 谁也不知道对方改过
+EdgeOne 项目环境 ─┘
+```
+
+改密码、换实例、加库名 —— 任何一次变动都会让两边分叉, 而下一次分叉只会在**又一次 CI 首跑**
+时才暴露。这和"手写提示三件套必然漏一处"(`15.129`)是同一类问题: 靠人记得同步的东西,
+迟早不同步。
+
+#### 二、改成单一真相源
+
+CI 不再持有 TIDB 凭据, 改为**启动时现取**:
+
+```
+GitHub Secrets: EDGEONE_PAGES_API_TOKEN  (唯一)
+        │
+        ▼
+scripts/ci_fetch_env.py ──► DescribePagesProjectEnvs(ProjectId)
+        │                        只取 Production 档的 6 个连接键
+        ▼
+   $GITHUB_ENV  →  后续 step 直接用 $TIDB_HOST
+```
+
+线上用什么库, CI 就验什么库。轮换密码只改 EdgeOne 一处, 下一次 CI 自动跟随。
+顺带把 secrets 数量从 5 个降到 1 个 —— 少一个可泄露、可过期、可填错的值。
+
+#### 三、三个实现上的坑(都不是"写代码"层面的)
+
+**1. `>> $GITHUB_ENV` 会吃掉 workflow 命令。**
+最自然的写法是 `python3 ci_fetch_env.py >> $GITHUB_ENV`, 但脚本要输出 `::add-mask::` 和
+`::warning::` 才能生效, 而这两个必须**出现在 stdout 被 runner 解析**。重定向后它们被写进
+环境文件, 结果是: 掩码失效(密码明文进日志) + 环境文件里多出两行非法变量。
+→ 脚本自己打开 `$GITHUB_ENV` 追加, stdout 留给 workflow 命令。
+
+**2. 掩码粒度决定日志还有没有用。**
+第一版把 6 个值全登记为掩码, 于是 `4000`、`supplykit`、`true` 也成了敏感词 —— 日志里
+`host=*** db=***`, 连"连的是哪个库"都看不见。而这恰好是上次排查**唯一缺的线索**
+(`15.130` 第八节花了整节讲这件事)。→ 只掩 `TIDB_PASSWORD`。host/user 是连接目标不是口令。
+
+**3. 只取 Production 档。**
+`EnvVars` 每条带 `Env: ["Production","Preview"]`。Preview 可能是另一套库或另一套密码,
+CI 要验的是线上那套, 混用等于把"预发能过、线上不能过"变成"CI 绿但线上挂"。
+
+#### 四、降级路径(不能因为拿不到凭据就让门禁红)
+
+| 情况 | 行为 |
+|---|---|
+| 正常 | `凭据来源=edgeone`, 跑 `--sql-smoke` |
+| token 失效 / fork PR 读不到 secret | `::warning::` + 回落旧 secrets, 仍尝试跑冒烟 |
+| 两者都没有 | `::warning::` + `CI_ENV_SOURCE=none`, 只跑回归, 明确写"本轮未验证表名/列名" |
+
+理由: 回归 392 条**不依赖数据库**, 缺凭据只该让冒烟跳过。把环境问题变成门禁红, 结果是
+大家习惯性忽略红色 —— 比不跑更糟。
+
+#### 五、校验只能靠"下一次 CI"
+
+GitHub Secrets **只写不可读**。所以 `scripts/sync_ci_secret.py` 只能确保"已写入",
+无法回读比对。真正的验证是 CI 日志里那一行:
+
+```
+── 数据库连接来源: edgeone ──
+   host=gateway01... db=supplykit user=3Numc6***
+```
+
+出现 `来源: secrets` 就说明 token 没生效, 正在用一份可能过期的副本。
+
+#### 六、边界
+
+- **public 仓库里放平台 token 的代价**: 一旦该 secret 泄露, 攻击面等于"能读项目环境变量"
+  (含 JWT_SECRET/CRON_SECRET)。相比原本的 5 个 TIDB 值, 面变大了 —— 取舍是"少一处漂移"
+  换"多一分集中风险"。若将来在意, 可改为只给 CI 一个专用的只读 token。
+- **不覆盖 Preview 档差异**: 若某天需要验证预发库, 应另起一个 job 显式取 `Preview`, 不要
+  让同一个 job 两档混用。
+- 原有 `TIDB_*` secrets **暂不删除**: 它们是回落路径, 等 `来源=edgeone` 稳定跑若干次后再清理。

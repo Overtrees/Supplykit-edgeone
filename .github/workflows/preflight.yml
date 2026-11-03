@@ -44,6 +44,10 @@ jobs:
       - name: 解析数据库连接(EdgeOne 环境变量优先)
         env:
           EDGEONE_PAGES_API_TOKEN: ${{ secrets.EDGEONE_PAGES_API_TOKEN }}
+          # ProjectId 不是秘密(拿到它还得有 token 才能调), 但它存在 .edgeone/ 里,
+          # 而那个目录是 gitignore 的 —— 不显式传进来, CI 就只会报"无 ProjectId"
+          # 然后悄悄回落到旧 secrets(第一次改完就是这样, 白跑一趟)。
+          EDGEONE_PROJECT_ID: makers-8gstkvheqm2c
           FB_HOST: ${{ secrets.TIDB_HOST }}
           FB_PORT: ${{ secrets.TIDB_PORT }}
           FB_USER: ${{ secrets.TIDB_USER }}

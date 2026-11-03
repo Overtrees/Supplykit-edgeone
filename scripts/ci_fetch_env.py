@@ -100,7 +100,7 @@ def main():
     if not token:
         why = "无 EDGEONE_PAGES_API_TOKEN"
     elif not pid:
-        why = "无 ProjectId"
+        why = "无 ProjectId(.edgeone/ 被 gitignore, CI 需显式传 EDGEONE_PROJECT_ID)"
     else:
         try:
             envs = fetch_envs(token, pid)
