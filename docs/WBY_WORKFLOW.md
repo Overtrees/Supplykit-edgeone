@@ -36,7 +36,7 @@
 python3 -c "import ast;ast.parse(open('cloud-functions/api/routes/xxx.py').read(),feature_version=(3,10))"
 
 # ② 全量回归
-cd cloud-functions/api && python3 local_test.py   # 期望: 184 通过, 0 失败
+cd cloud-functions/api && python3 local_test.py   # 期望: 358 通过, 0 失败
 
 # ③ 规模 mock(单 SKU + 200 SKU 各跑一轮)
 python3 /tmp/verify_xxx.py
@@ -140,7 +140,7 @@ seed step6(生成流水) → _recalc_own_inventory(重算可用) → _rebuild_ow
 
 ## 6. 交付前检查清单
 
-- [ ] `local_test.py` 184 通过 0 失败
+- [ ] `local_test.py` 358 通过 0 失败
 - [ ] 语法门禁 3.10 通过
 - [ ] 规模 mock(≥200 SKU)通过
 - [ ] **四维**: 准确 / 实时 / 完整 / 可靠 —— 每项有实测证据, 不能只写"应该没问题"

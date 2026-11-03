@@ -1,0 +1,256 @@
+---
+name: supplykit
+description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条业务口径、22 个路由的架构事实、Makers 框架坑位、七步交付闭环(preflight → 回归 → push_api → 部署判据 → 冒烟)、缓存/切线与 schema 版本铁律、UI 规范要点、失败模式黑名单。当用户提到 SupplyKit、补货建议、采购建议、数据清洗、规则引擎、看板、BBCC/传统补货、滞销、进销存、告警、GMV、TiDB、EdgeOne Makers、supplykit.top 时触发。"
+---
+
+# SupplyKit 开发手册
+
+> 这是**入口索引**, 不是全量文档。每条只给判据、命令、禁止项; 根因与实测数据在
+> `docs/DEVELOPMENT.md §15.x`, 改动前按第 8 节索引精读对应章节。
+> 冲突时以**代码 + 用户最新指令**为准, 本文与 `CONTEXT.md` 同步维护。
+
+## 0. 一屏速览
+
+| 项 | 值 |
+|---|---|
+| 本地根 | `/workspace/supplykit` (`frontend/` + `cloud-functions/api/`) |
+| 仓库 / 分支 | `Overtrees/Supplykit-edgeone` / **feat/edgeone** |
+| 线上 | `https://supplykit.top` (**免签名公开访问**, admin/admin123 写, demo/demo123 只读) |
+| 平台 | EdgeOne Makers, ProjectId `makers-8gstkvheqm2c`(名 supplykit, Area=overseas 免备案) |
+| 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
+| 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
+| 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
+| 回归 | `local_test.py` **358 通过 / 0 失败** |
+
+```bash
+cd /workspace/supplykit
+python3 scripts/env_check.py                  # 换机/新会话第一条: 缺凭据一次性列全
+bash scripts/preflight.sh                     # 六步门禁, 全绿才算可推
+cd cloud-functions/api && python3 local_test.py   # 单跑回归(注意目录!)
+python3 scripts/push_api.py -m "feat(x): ..."     # 推送(= 触发部署)
+python3 scripts/deploy_status.py                  # 部署状态(最近 3 次)
+python3 scripts/smoke_check.py                    # 线上冒烟(health JSON + 首页 root + 业务接口)
+```
+
+---
+
+## 1. 六条业务口径(不可破坏)
+
+改任何计算前先对照; 违反其中一条 = 数据错了, 不是"显示问题"。
+
+1. **自有仓(集货仓)不产生销售** —— 低库存/断货口径在自有仓**恒不触发**。自有仓只走供给侧三口径:
+   调拨缺口 `own_transfer_gap` / 积压 `own_overstock` / 效期 `own_expiry_risk`
+2. **补货模式**: `bbcc`(B→C 一盘) / `traditional`(C 仓逐仓); 日销统一走 `biz.sales.pick_ds`,
+   **绝不拿全国合计兜底**(兜底会掩盖"该仓没数据")
+3. **告警是「SKU × 仓」粒度** —— 同 SKU 多仓各一条; **卡面去重, 弹窗全量**
+4. **计数与列表分离** —— 卡面 `(N)` 用后端独立 COUNT, 列表可截断, 二者天然不等; 不要"对齐"它们
+5. **库存月汇总** = 仓型 × SKU × 69码 × 仓, 聚合后**先清零再覆盖**
+6. **效期三态** —— `expiry_managed` 是→FEFO 精确批次, 否→到货序 FIFO
+
+配套: **金额口径分两套**。看板 GMV = 已支付; 历史归档金额 = 订单原价全状态
+(`total_amount` 含未支付/退款)。所以历史页挂着「非 GMV 口径」胶囊, 不要统一成一个数。
+
+---
+
+## 2. 架构事实
+
+```
+cloud-functions/api/
+  index.py          唯一入口: 行首 app = FastAPI(); 鉴权中间件; /health
+  db.py             原生数据层: pymysql DictCursor + 连接池(BoundedSemaphore 名额)
+  schema_create.py  表/索引声明 + SCHEMA_VERSION 门禁(热路径零 DDL)
+  biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判)
+  routes/common.py  @traced(异常统一 200 + ok:false) / try_err / 日志落库
+  routes/*.py       22 个 APIRouter: auth dashboard orders products inventory replenishment
+                    purchase alerts insights history cleansing channels rules suppliers tasks
+                    batches ops misc debug cron task_seed task_export
+  local_test.py     回归; test_audit.py 静态审计(CI 也跑)
+```
+
+**鉴权**: 只认 `X-Auth-Token`(网关把 `Authorization` 改写成 `q-sign`, 用 Bearer 会登录成功但全接口 401)。
+`auth` / `health` / `debug` / `insights/ping` / `cron` / `logs/frontend` 免鉴权; demo 用户写操作返回 403。
+
+**cron**: `routes/cron.py` 10 端点, 由 `edgeone.json` 的 `schedules` 驱动(archive 01:05 / cleanup 03:05 /
+freshness 03:10 / snapshot 03:35 / daily-rules 04:05 / reconcile 04:10 / recycle 04:35 / continue-tasks 05:05 /
+push-alerts 08:30 / ping 13:55)。
+平台 schedules **无法注入 header**(schema 只有 name/cron/timezone/method/path/payload, 且 `edgeone.json`
+进公开仓库, 用 payload 传密钥等于公开), 所以 `_authed` **不做强校验**: 配了 `CRON_SECRET` 时带对密钥放行、
+不带也放行但记审计(`CRON_STRICT=1` 才恢复强拒, 代价是平台调度失效)。
+真正防线是每个端点的 `_throttle`(进程内限频) + `_claim`(当日抢占) —— 即使放行也不会重复执行。
+
+**前端**: React + Vite, `frontend/src/pages/*.tsx` 16 页; 筛选/区间控件集中在
+`components/hammer/*.tsx`(锤子面板); `.menu-btn` 是侧边栏汉堡, 别和锤子混。
+
+---
+
+## 3. Makers 框架坑位(血泪, 逐条都要记)
+
+| # | 坑 | 判据 |
+|---|---|---|
+| 1 | **路由没有 `/api` 前缀** | 框架按 `root_path=/api` 剥 path; 代码里写 `/api/x` 在生产 404, 本地 uvicorn 反而通 |
+| 2 | **入口必须行首 `app =`** | 构建器按 `/^app\s*=/m` 找; 缩进即"函数未构建", 线上表现为边缘 404 / health 返回 SPA HTML |
+| 3 | **`sys.path` 只有函数根** | 同目录 `db.py`/`routes/*` 必须 `sys.path.insert(0, os.path.dirname(__file__))`, 否则 ModuleNotFoundError 被表现成 plain "Not Found" |
+| 4 | **文件系统只读** | 模块级 `mkdir` 要可写探测 + 回退 `/tmp` |
+| 5 | **标量参数默认读 query** | POST 的 JSON body 必须 `await request.json()` 手动解析 |
+| 6 | **TiDB 返回 `date`/`datetime` 对象** | 与字符串比较/拼接前 `str(x)[:10]` |
+| 7 | **500 会变成"函数崩溃"HTML 页** | 业务异常统一 **200 + `{ok:false, error, detail}`**; 堆栈只写 `quality_logs`, 不回浏览器 |
+| 8 | **env 是部署时快照** | 改 env 必须重新部署才生效; `JWT_SECRET` 必须固定值(否则多实例互相踢) |
+| 9 | **TiDB DDL 是异步的** | DROP 后立刻 CREATE INDEX 会 `Duplicate key name` → 索引一律并入 `CREATE TABLE` 声明 |
+| 10 | **本地 uvicorn 不剥 `/api`** | 本地起后端要套 ASGI 中间件改 `scope["path"]`; 否则前端代理全 404 |
+
+**预览域名要签名**(3h 会话): `supplykit-8rgbtjfx.edgeone.dev` 需 `DescribePagesEncipherToken`
+(Text 传**域名**, 不是 ProjectId) 换 cookie。**生产域名 supplykit.top 免签**, 直接 curl。
+
+---
+
+## 4. 七步交付闭环
+
+### ① 改前(缺一步都会返工)
+
+- `git status --short` 干净; 读 `DEVELOPMENT.md §15.8` 十条数据原则 + 同日 `CHANGELOG` 条目;
+- **先把验收指标写成数字**("四维偏差 0 项" / "日均从 71.16 万降到 16.01 万"), 否则无法判断改完;
+- 涉及口径改动: 先确认六条口径哪条被触碰。
+
+### ② 本地验证(preflight 六步)
+
+```bash
+bash scripts/preflight.sh
+# [1/6] 后端 Python 3.10 语法   [2/6] pyflakes(undefined name / 重定义)
+# [3/6] local_test 回归 358      [4/6] ESLint  [5/6] Prettier  [6/6] tsc --noEmit
+```
+
+**规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。
+
+**逻辑调试优先本地直连**, 别靠部署试:
+```bash
+python3 scripts/local_api.py GET  /health
+python3 scripts/local_api.py POST /seed/step '{"from_step":7}'
+```
+(进程内 TestClient, 连 `.env` 的库; 冷加载约 40s, 之后毫秒级。云函数 wall clock 120s 硬限。)
+
+### ③ 提交
+
+`fix|feat|perf(scope): 主题`; body 写 **根因 → 修法 → 实测数字**。绝不提交 `.env` / `.edgeone/`。
+
+### ④ 推送
+
+`github.com:443` 在本沙箱**不可达**(131s TLS 断开, 重试无意义), 只能:
+```bash
+python3 scripts/push_api.py -m "fix(x): ..."       # Git Data API, 一次 = 一个 squash 提交
+python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
+```
+代价: **本地 SHA ≠ 远端 SHA**(author/committer 时间戳不同), 这是预期, 不是失败。
+
+### ⑤ 部署判据
+
+| 推送方式 | 判据 |
+|---|---|
+| 若走 `git push`(本沙箱通常不行) | `Commit == 本地 HEAD` |
+| **走 `push_api.py`(实际路径)** | **远端 HEAD 与本地 HEAD 逐文件一致**(脚本结束自检打印) |
+
+外加 `Status=Success` + `Prod=yes`。**部署成功 ≠ 功能生效**。
+
+### ⑥ 线上验证
+
+`smoke_check.py`(health 必须 JSON 且 status=ok —— 变 HTML 就是路由丢了) → 逐接口实测返回结构/新字段 →
+写路径改动查 `quality_logs` 最近 2 小时。**没数据触发的分支必须明说"当前无数据触发", 不能声称已验证。**
+
+### ⑦ 落文档
+
+`docs/DEVELOPMENT.md` 追加 §15.1xx(根因 + 实测数据 + 踩坑), 同步 `CHANGELOG.md` 索引与相关数字。
+文档里的数字(回归数/路由数/页面数)是**门禁的一部分**, 改了必须全库同步。
+
+---
+
+## 5. 数据与缓存铁律
+
+- **键要含全部维度**: 业务键四维 `(channel, order_no, sku, barcode)`; 库存 `(仓型, SKU, 69码, 仓)`;
+  缺一维就是"同单同 SKU 换码被 1062 降级 → 少算"这类静默错账
+- **加会改变结果的入参, 必须同步改缓存 key**: `yoy` 加 `start` 后 key 补 `_s`; 否则同 `end` 不同起点
+  共用结果, **只在命中缓存时复现**, 本地几乎抓不到
+- **缓存按域失效**: 写入口用 `invalidate("<域>")`, `analysis_cache._FAMILY_DEPS` 反推要清的族。
+  未登记域名 → 全清(兜底); 失效是**打墓碑**(`created_at=1970` + `tok`), 防"重建期间被失效 → 旧值覆盖"
+- **归档切线 365 天严格小于**: cron 判定 `< today-365`, 所以 t 日订单第 366 天才搬。
+  `history._CUT_DAYS` 与 archive cutoff **必须同步改**, 两表互斥是不变量
+- **改 schema 必 bump `SCHEMA_VERSION`**, 否则存量实例不执行新声明(加表/索引 = 改声明 + bump, 不写迁移)
+- **增量重建按业务日期**: 数据入口是文件导入(可横跨任意日期), 重建范围只能由 `ordered_at` 决定,
+  不能由导入时间推导。删单后日销孤儿行按"日销表 SKU − 快照窗口 − 订单窗口"差集清
+- **事务/幂等**: archive 失败**刻意不回滚**(逐条累加非幂等, 重跑会把金额算两遍); 其余可回滚
+
+---
+
+## 6. UI 规范要点(动手前读 `docs/UI_DESIGN.md`)
+
+- **卡片内边距分档**: 详情卡 `14px 16px` / 密集列表 `12px 14px` / 弹窗控件 `9px 12px` + `min-height:40px`
+- **底部 16px 几何恒等**: 禁差异化 margin、禁负 margin 下沉、禁少行放大字号(会截断)
+- **动效只有 opacity**: `transform` 破坏 `fixed` 与安全区; 弹窗一律 `createPortal`, zIndex 9998/9999
+- **玻璃三档差异化**(light/dark 不同参数, 否则 250% 饱和残留): `--blur-thin` / `--blur-regular` / `--glass-filter`
+- **数字降维是换单位不是缩字号**: `fmtBig` 金额 2 位小数; `fmtInt` 计数窄屏(≤932px)≥1 万、宽屏 ≥10 万
+  降整数万, 否则普通数字(**不加千分位逗号**)
+- **页面只管"数据长什么样", 锤子菜单只管"查什么 + 口径"** —— 两侧零重复, 任何提示只出现一处
+- **死 CSS 随手删**: 控件迁走后残留样式会让后人以为还有一套自绘控件
+
+---
+
+## 7. 失败模式黑名单(见过就不该再见)
+
+| 别做 | 为什么 |
+|---|---|
+| 前端兜底掩盖口径问题 | 用户明确要求"彻底根治"; 兜底会把"库里有 vs 算错了"两种故障混成一种 |
+| 从截断样本推断全量 | `ORDER BY id DESC LIMIT 300` 里 id 小的行被整体挤出 → 曾误判"库里没有这些行" |
+| 前端自己算时间窗口 | 后端一截断(>400 天)标题就显示假窗口; 一律取接口 `cur.start/end` |
+| 同页并存两个时间口径 | 90 天汇总 vs 写死 30 天同比, 用户会拿去直接比 |
+| 写死"满 365 天归档" | cron 是严格小于, 差一天; 用后端 `archive_day` |
+| `except: pass` | 静默吞异常 = 事故源; 一律 `try_err(src, what, exc)`(10s 同源限频) |
+| `t = Date.now()` 全局替换 | 只替换**出现在 URL 查询串里**的; 日期差/唯一 id/React key 必须原样(误伤过 3 处) |
+| 反复大批量导入验证性能 | 单月烧 60M RU 的教训; 用 `ru_diag.sh`(只读 EXPLAIN + GET) + 3~10 行小文件冒烟 |
+| 跑 `edgeone makers env ls` | 明文回显 `TIDB_PASSWORD` / `JWT_SECRET`; 要值读本地 `.env` |
+| 只信 `git push \| tail -2` 的退出码 | 那是 `tail` 的 0; 失败会被当成功 |
+| 两个重灌进程并发 | 批次删除是整段 DELETE, 会互相清表 |
+| 照 `DEVELOPMENT.md` 一~九章施工 | 那是 PA + SQLite 时代的旧架构(写 `backend/`、19 路由、90 天归档), 与现状冲突; 现行判据只看 §15.10x 之后 + `ARCHITECTURE.md` |
+
+**重灌顺序(错必出偏差)**: `seed step6 → _recalc_own_inventory → _rebuild_own_batches → best_before 回写`。
+
+---
+
+## 8. 按需精读索引
+
+| 场景 | 先读这份 |
+|---|---|
+| 任何改动 | `docs/DEVELOPMENT.md §15.8`(数据四维十条) + `§15.9`(生产红线) |
+| 接手/换机 | `CONTEXT.md`(口径 + 已知遗留逐条) |
+| 改 UI | `docs/UI_DESIGN.md`(卡片分档/动效/数字格式) |
+| 改路由/数据流 | `docs/ARCHITECTURE.md` |
+| 平台 API / 签名 | `docs/MAKERS_API.md` |
+| 密钥与权限边界 | `docs/security.md`、`docs/decisions/0001-x-auth-token.md` |
+| 交付顺序与门禁 | `docs/WBY_WORKFLOW.md`(本文第 4 节的展开) |
+| 看板/补货/告警口径 | §15.84 / §15.102 / §15.104 / §15.109 |
+| 导入与 69 码 | §15.97(补码两道闸) / §15.98(职责边界) / §15.116(四维业务键) |
+| 缓存与性能 | §15.117(按域失效) / §15.120(降往返不加缓存) |
+| 归档与同比 | §15.113(切线双表) / §15.124(信息层级) / §15.125(同口径) |
+| 启动与 schema | §15.122(版本门禁) / §15.123(冗余清理) |
+| 定时任务 | §15.101(平台 schedules) / §15.110(cron 护栏) |
+
+---
+
+## 9. 环境红线
+
+- `.env`(运行变量)、`.edgeone/`(token)已 gitignore; 提交前 `git status` 复核
+- 凭据分布: `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN`(查部署) 与 `GITHUB_TOKEN`(推送, 需
+  `repo contents:write`); TiDB 连接串在 `.env`
+- **密码/secret 永不进 commit message、对话、日志**; 泄露即刻 amend + 改密 + 同步 Makers env 与 GitHub Secrets
+- 生产写操作前先只读确认影响面, 并记下回滚点(行数 / Σ 金额)
+- 日志三面收口: 用户侧 `GET /quality-logs` 分页筛选 + 导出; 开发者侧 `/quality-logs/file(s)` /
+  `/debug/list`; 前端 `reportError()`, 后端 `try_err()`, 业务错误统一 `ok:false` → `business_error`
+
+---
+
+## 10. 用户偏好(影响交付方式, 不只影响代码)
+
+- **中文交流**; 需要拍板时给选项 + 推荐 + 理由, 但最终由用户决定
+- **要"彻底根治", 不接受前端兜底糊弄**; 出问题先怀疑口径而不是先加兜底提示
+- **实测优先于推断**: 间距/颜色/请求参数一律用浏览器或直连接口量出来, 不靠估算("应该差不多"会被追问)
+- **敢说"我判断错了"并回滚** —— 比硬撑一个错结论有价值
+- UI 改动**先读 `docs/UI_DESIGN.md`**, 改完给截图; 信息结构有疑问时先画结构图再动手
+- 文档数字与描述必须与代码一致; 发现过时描述要主动报告, 而不是照着过时描述干活
+

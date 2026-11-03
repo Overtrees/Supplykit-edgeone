@@ -177,5 +177,5 @@ bash scripts/preflight.sh
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [📝 变更日志](CHANGELOG.md) · [🔧 开发规范](docs/DEVELOPMENT.md) · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [📝 变更日志](CHANGELOG.md) · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：口径/坑位/交付闭环） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 
