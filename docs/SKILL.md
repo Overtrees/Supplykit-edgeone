@@ -244,7 +244,8 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - **密码/secret 永不进 commit message、对话、日志**; 泄露即刻 amend + 改密 + 同步 Makers env 与 GitHub Secrets
 - **审计脚本**: `python3 scripts/audit_secrets.py` —— 硬编码 / `.env` 是否入库 / `.gitignore` 覆盖 /
   **git 全历史 blob + commit message + reflog 脱分支提交**。CI 每次推送 + 每周一定时跑, `fetch-depth: 0`。
-  输出已脱敏(只留前 4 位), 不会把值打到日志里
+  输出已脱敏(只留前 4 位), 不会把值打到日志里。**引用审计报告到文档/issue 时要二次脱敏** ——
+  公开仓库的文档也算源码, 连样例串都不能留(实测踩过两次, 都是文档自己被判成硬编码)
 - 生产写操作前先只读确认影响面, 并记下回滚点(行数 / Σ 金额)
 - 日志三面收口: 用户侧 `GET /quality-logs` 分页筛选 + 导出; 开发者侧 `/quality-logs/file(s)` /
   `/debug/list`; 前端 `reportError()`, 后端 `try_err()`, 业务错误统一 `ok:false` → `business_error`
