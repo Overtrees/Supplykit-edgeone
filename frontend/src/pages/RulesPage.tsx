@@ -6,9 +6,6 @@ import ErrorRetry from '../components/ErrorRetry'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import {
-  IconPackage,
-  IconTag,
-  IconFactory,
   IconClipboard,
   IconScale,
   IconSave,
@@ -21,6 +18,11 @@ import {
 } from '../components/Icons'
 import { createPortal } from 'react-dom'
 import { t } from '../locale'
+import { IS } from './rules/shared'
+import RulesSlowPanel from './rules/SlowPanel'
+import RulesReplenishPanel from './rules/ReplenishPanel'
+import RulesPurchasePanel from './rules/PurchasePanel'
+import RulesSeasonPanel from './rules/SeasonPanel'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -121,17 +123,6 @@ const renderTmpl = text => {
     if (i % 3 === 2) return null
     return <span key={i}>{p}</span>
   })
-}
-const IS: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  fontSize: 'var(--font-lg)',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-lg)',
-  marginTop: 4,
-  outline: 'none',
-  background: 'var(--card)',
-  boxSizing: 'border-box',
 }
 
 const LF = [
@@ -2192,691 +2183,62 @@ export default function RulesPage() {
 
         {/* ── 补货参数 ── */}
         {tab === 'params' && (
-          <div>
-            {isBBCC ? (
-              <>
-                <div
-                  className="section-title"
-                  style={{
-                    fontSize: 'var(--font-md)',
-                    marginBottom: 10,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <IconPackage size={14} /> C 仓
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: 14,
-                    marginBottom: 20,
-                  }}
-                >
-                  {cParams.map(({ k, l, h }) => (
-                    <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-                      {l}
-                      <input
-                        value={String(cfg[k] || '')}
-                        onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
-                        style={IS}
-                      />
-                      {h && (
-                        <div
-                          className="small muted"
-                          style={{ fontSize: 'var(--font-xs)', marginTop: 2 }}
-                        >
-                          {h}
-                        </div>
-                      )}
-                    </label>
-                  ))}
-                </div>
-                <div
-                  className="section-title"
-                  style={{
-                    fontSize: 'var(--font-md)',
-                    marginBottom: 10,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <IconFactory size={14} /> B 仓
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1fr',
-                    gap: 14,
-                    marginBottom: 20,
-                  }}
-                >
-                  {bParams.map(({ k, l }) => (
-                    <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-                      {l}
-                      <input
-                        value={String(cfg[k] || '')}
-                        onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
-                        style={IS}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr',
-                  gap: 14,
-                  marginBottom: 20,
-                }}
-              >
-                {paramFields.map(({ k, l }) => (
-                  <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-                    {l}
-                    <input
-                      value={String(cfg[k] || '')}
-                      onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
-                      style={IS}
-                    />
-                  </label>
-                ))}
-              </div>
-            )}
-            <button
-              disabled={saving}
-              onClick={async () => {
-                setSaving(true)
-                const m = cfg.replenishment_mode || 'bbcc'
-                const ch = globalChannel
-                try {
-                  const toSave = {}
-                  ;[...cParams, ...bParams, ...paramFields].forEach(f => {
-                    if (cfg[f.k] !== undefined) toSave[f.k] = cfg[f.k]
-                  })
-                  await api.put('/api/replenishment-config?mode=' + m + '&channel=' + ch, toSave)
-                  setCfg(p => ({ ...p, ...toSave }))
-                  toast.success('已保存')
-                  window.dispatchEvent(new Event('rules-changed'))
-                } catch (e) {
-                  saveErr(e)
-                }
-                setSaving(false)
-              }}
-              className="btn btn-primary"
-              style={{
-                width: '100%',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                justifyContent: 'center',
-                minHeight: 42,
-              }}
-            >
-              {saving ? (
-                <>
-                  <IconLoading size={14} /> 保存中...
-                </>
-              ) : (
-                <>
-                  <IconSave size={14} /> 保存
-                </>
-              )}
-            </button>
-          </div>
+          <RulesReplenishPanel
+            channel={globalChannel}
+            isBBCC={isBBCC}
+            cParams={cParams}
+            bParams={bParams}
+            paramFields={paramFields}
+            cfg={cfg}
+            setCfg={setCfg}
+            saving={saving}
+            setSaving={setSaving}
+            saveErr={saveErr}
+          />
         )}
 
         {/* ── 采购参数 ── */}
         {tab === 'purchase' && (
-          <div>
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)', marginBottom: 8 }}>
-              供应商起订（可选）
-            </div>
-            <div className="hammer-btn-row" style={{ marginBottom: 12 }}>
-              <select
-                value={selectedSupplier}
-                onChange={e => {
-                  setSelectedSupplier(e.target.value)
-                  try {
-                    localStorage.setItem('c_supplier_' + globalChannel, e.target.value)
-                  } catch {}
-                }}
-                className="hammer-select"
-              >
-                <option value="">通用（所有供应商）</option>
-                {suppliers.map(s => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="hammer-params-grid">
-              {purchaseFields.map(({ k, l }) => {
-                const isSupKey =
-                  k === 'moq' || k === 'purchase_lead_days' || k === 'purchase_safety_days'
-                const actualKey = selectedSupplier && isSupKey ? `${k}_${selectedSupplier}` : k
-                return (
-                  <label key={actualKey} style={{ fontSize: 'var(--font-13)' }}>
-                    {l}
-                    {selectedSupplier && isSupKey && (
-                      <span className="small muted">（{selectedSupplier}）</span>
-                    )}
-                    <input
-                      value={String(cfg[actualKey] || '')}
-                      onChange={e => setCfg(p => ({ ...p, [actualKey]: e.target.value }))}
-                      className="hammer-input"
-                    />
-                  </label>
-                )
-              })}
-            </div>
-            <button
-              disabled={saving}
-              onClick={async () => {
-                setSaving(true)
-                const ch = globalChannel
-                try {
-                  const toSave = {}
-                  purchaseFields.forEach(f => {
-                    const isSupKey =
-                      f.k === 'moq' ||
-                      f.k === 'purchase_lead_days' ||
-                      f.k === 'purchase_safety_days'
-                    const k = selectedSupplier && isSupKey ? `${f.k}_${selectedSupplier}` : f.k
-                    if (cfg[k] !== undefined) toSave[k] = cfg[k]
-                  })
-                  await api.put('/api/replenishment-config?channel=' + ch, toSave)
-                  setCfg(p => ({ ...p, ...toSave }))
-                  toast.success('已保存')
-                  window.dispatchEvent(new Event('rules-changed'))
-                } catch (e) {
-                  saveErr(e)
-                }
-                setSaving(false)
-              }}
-              className="btn btn-primary"
-              style={{
-                width: '100%',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                justifyContent: 'center',
-                minHeight: 42,
-              }}
-            >
-              {saving ? (
-                <>
-                  <IconLoading size={14} /> 保存中...
-                </>
-              ) : (
-                <>
-                  <IconSave size={14} /> 保存
-                </>
-              )}
-            </button>
-          </div>
+          <RulesPurchasePanel
+            channel={globalChannel}
+            selectedSupplier={selectedSupplier}
+            setSelectedSupplier={setSelectedSupplier}
+            suppliers={suppliers}
+            purchaseFields={purchaseFields}
+            cfg={cfg}
+            setCfg={setCfg}
+            saving={saving}
+            setSaving={setSaving}
+            saveErr={saveErr}
+          />
         )}
 
         {/* ── 滞销参数（自定义品类条目，仿活动系数） ── */}
         {tab === 'slow' && (
-          <div>
-            <div className="small muted" style={{ marginBottom: 10, fontSize: 'var(--font-sm)' }}>
-              按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段
-            </div>
-            {slowCats.map((s, i) => (
-              <div
-                key={s.key || i}
-                style={{
-                  padding: '10px 14px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-lg)',
-                  marginBottom: 8,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <input
-                    value={s.name}
-                    onChange={e =>
-                      setSlowCats(p =>
-                        p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
-                      )
-                    }
-                    placeholder="品类名(如 食品)"
-                    style={{
-                      flex: 1,
-                      minWidth: 80,
-                      fontSize: 'var(--font-lg)',
-                      padding: '6px 10px',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-lg)',
-                      outline: 'none',
-                    }}
-                  />
-                  <label
-                    style={{
-                      fontSize: 'var(--font-sm)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                    onClick={() =>
-                      setSlowCats(p =>
-                        p.map((x, j) => (j === i ? { ...x, enabled: !(x.enabled !== false) } : x)),
-                      )
-                    }
-                  >
-                    <svg width="20" height="20" viewBox="0 0 18 18" style={{ flexShrink: 0 }}>
-                      {s.enabled !== false ? (
-                        <>
-                          <circle cx="9" cy="9" r="8" fill="var(--primary)" />
-                          <path
-                            d="M5.5 9.5l2 2 3.5-3.5"
-                            stroke="#fff"
-                            strokeWidth="2"
-                            fill="none"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </>
-                      ) : (
-                        <circle
-                          cx="9"
-                          cy="9"
-                          r="8"
-                          fill="none"
-                          stroke="var(--border)"
-                          strokeWidth="1.5"
-                        />
-                      )}
-                    </svg>
-                  </label>
-                  <span
-                    onClick={() => setSlowCats(p => p.filter((_, j) => j !== i))}
-                    className="clickable"
-                    style={{
-                      color: 'var(--danger)',
-                      fontSize: 'var(--font-lg)',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
-                    ×
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                  <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-                    滞销线(天)
-                    <input
-                      type="number"
-                      value={s.slow_days}
-                      onChange={e =>
-                        setSlowCats(p =>
-                          p.map((x, j) =>
-                            j === i ? { ...x, slow_days: parseInt(e.target.value) || 30 } : x,
-                          ),
-                        )
-                      }
-                      style={{ ...IS, marginTop: 2 }}
-                    />
-                  </label>
-                  <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-                    观察线(天) <span style={{ color: 'var(--muted2)' }}>留空自动</span>
-                    <input
-                      type="number"
-                      value={s.observe_days ?? ''}
-                      placeholder={String(
-                        Math.max(Math.floor(parseInt(s.slow_days || 30) / 2), 15),
-                      )}
-                      onChange={e =>
-                        setSlowCats(p =>
-                          p.map((x, j) =>
-                            j === i
-                              ? {
-                                  ...x,
-                                  observe_days:
-                                    e.target.value === '' ? '' : parseInt(e.target.value) || '',
-                                }
-                              : x,
-                          ),
-                        )
-                      }
-                      style={{ ...IS, marginTop: 2 }}
-                    />
-                  </label>
-                  <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-                    临期线(月)
-                    <input
-                      type="number"
-                      value={s.shelf_months}
-                      onChange={e =>
-                        setSlowCats(p =>
-                          p.map((x, j) =>
-                            j === i ? { ...x, shelf_months: parseInt(e.target.value) || 3 } : x,
-                          ),
-                        )
-                      }
-                      style={{ ...IS, marginTop: 2 }}
-                    />
-                  </label>
-                </div>
-                <label style={{ fontSize: 'var(--font-sm)', display: 'block' }}>
-                  品类名单（逗号分隔，匹配商品"分类"字段）
-                  <input
-                    value={s.cats || ''}
-                    onChange={e =>
-                      setSlowCats(p =>
-                        p.map((x, j) => (j === i ? { ...x, cats: e.target.value } : x)),
-                      )
-                    }
-                    placeholder="酱油,薯片,糖果..."
-                    style={{ ...IS, marginTop: 2 }}
-                  />
-                </label>
-              </div>
-            ))}
-            <div style={{ marginTop: 16 }}>
-              <label
-                style={{
-                  fontSize: 'var(--font-13)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-              >
-                物流在途(天)
-                <input
-                  value={transitDays}
-                  onChange={e => setTransitDays(e.target.value)}
-                  style={{ ...IS, width: 80, fontSize: 'var(--font-md)', textAlign: 'center' }}
-                />
-                <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-                  库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3
-                  标临近）
-                </span>
-              </label>
-              <label
-                style={{
-                  fontSize: 'var(--font-13)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  marginTop: 8,
-                }}
-              >
-                资金占用线(¥)
-                <input
-                  value={fundThreshold}
-                  onChange={e => setFundThreshold(e.target.value)}
-                  style={{ ...IS, width: 80, fontSize: 'var(--font-md)', textAlign: 'center' }}
-                />
-                <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-                  滞销品资金占用(库存×单价)超此线 → 升级「处置」等级(默认 10000)
-                </span>
-              </label>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <button
-                onClick={() =>
-                  setSlowCats(p => [
-                    ...p,
-                    {
-                      key: 'new' + Date.now(),
-                      name: '新品类',
-                      slow_days: 30,
-                      observe_days: '',
-                      shelf_months: 3,
-                      cats: '',
-                      enabled: true,
-                    },
-                  ])
-                }
-                className="btn btn-ghost clickable"
-                style={{
-                  fontSize: 'var(--font-13)',
-                  padding: '8px 16px',
-                  width: '100%',
-                  minHeight: 40,
-                }}
-              >
-                + 添加品类
-              </button>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <button
-                disabled={saving}
-                onClick={async () => {
-                  setSaving(true)
-                  const ch = globalChannel
-                  try {
-                    const r = await api.put('/api/replenishment-config/slow-cats?channel=' + ch, {
-                      items: slowCats,
-                    })
-                    await api.put('/api/replenishment-config?channel=' + ch, {
-                      transit_days: transitDays || '',
-                      slow_fund_threshold: fundThreshold || '',
-                    })
-                    toast.success('已保存')
-                    window.dispatchEvent(new Event('rules-changed'))
-                  } catch (e) {
-                    saveErr(e)
-                  }
-                  setSaving(false)
-                }}
-                className="btn btn-primary"
-                style={{
-                  width: '100%',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  justifyContent: 'center',
-                  minHeight: 42,
-                }}
-              >
-                {saving ? (
-                  <>
-                    <IconLoading size={14} /> 保存中...
-                  </>
-                ) : (
-                  <>
-                    <IconSave size={14} /> 保存
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
+          <RulesSlowPanel
+            channel={globalChannel}
+            slowCats={slowCats}
+            setSlowCats={setSlowCats}
+            transitDays={transitDays}
+            setTransitDays={setTransitDays}
+            fundThreshold={fundThreshold}
+            setFundThreshold={setFundThreshold}
+            saving={saving}
+            setSaving={setSaving}
+            saveErr={saveErr}
+          />
         )}
         {tab === 'params' && (
-          <>
-            <div
-              className="section-title"
-              style={{
-                marginTop: 16,
-                marginBottom: 8,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-              }}
-            >
-              <IconTag size={14} /> 活动系数
-            </div>
-            {seasons.map((s, i) => (
-              <div
-                key={s.key || i}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 14px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-lg)',
-                  marginBottom: 8,
-                }}
-              >
-                <input
-                  value={s.name}
-                  onChange={e =>
-                    setSeasons(p => p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
-                  }
-                  placeholder="618大促"
-                  style={{
-                    flex: 1,
-                    minWidth: 80,
-                    fontSize: 'var(--font-lg)',
-                    padding: '6px 10px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    outline: 'none',
-                  }}
-                />
-                <span className="small muted">×</span>
-                <input
-                  type="number"
-                  value={s.factor}
-                  onChange={e =>
-                    setSeasons(p =>
-                      p.map((x, j) =>
-                        j === i ? { ...x, factor: parseFloat(e.target.value) || 1 } : x,
-                      ),
-                    )
-                  }
-                  step="0.1"
-                  min="1"
-                  max="3"
-                  style={{
-                    width: 70,
-                    fontSize: 'var(--font-lg)',
-                    padding: '6px 10px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-lg)',
-                    outline: 'none',
-                  }}
-                />
-                <span className="small muted">倍</span>
-                <label
-                  style={{
-                    fontSize: 'var(--font-sm)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                  }}
-                  onClick={() =>
-                    setSeasons(p =>
-                      p.map((x, j) => (j === i ? { ...x, enabled: !(x.enabled !== false) } : x)),
-                    )
-                  }
-                >
-                  <svg width="20" height="20" viewBox="0 0 18 18" style={{ flexShrink: 0 }}>
-                    {s.enabled !== false ? (
-                      <>
-                        <circle cx="9" cy="9" r="8" fill="var(--primary)" />
-                        <path
-                          d="M5.5 9.5l2 2 3.5-3.5"
-                          stroke="#fff"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </>
-                    ) : (
-                      <circle
-                        cx="9"
-                        cy="9"
-                        r="8"
-                        fill="none"
-                        stroke="var(--border)"
-                        strokeWidth="1.5"
-                      />
-                    )}
-                  </svg>
-                  启用
-                </label>
-                <button
-                  onClick={() => setSeasons(p => p.filter((_, j) => j !== i))}
-                  className="clickable"
-                  style={{
-                    fontSize: 'var(--font-13)',
-                    padding: '6px 14px',
-                    minHeight: 36,
-                    borderRadius: 'var(--radius-full)',
-                    border: 'none',
-                    background: 'var(--danger)',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    flexShrink: 0,
-                  }}
-                >
-                  删除
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={() =>
-                setSeasons(p => [...p, { key: 'new', name: '新活动', factor: 1.2, enabled: true }])
-              }
-              className="btn btn-ghost clickable"
-              style={{
-                fontSize: 'var(--font-13)',
-                padding: '8px 16px',
-                width: '100%',
-                minHeight: 40,
-              }}
-            >
-              + 添加活动
-            </button>
-            <div style={{ marginTop: 12 }}>
-              <button
-                disabled={seasonsSaving}
-                onClick={async () => {
-                  setSeasonsSaving(true)
-                  const m = cfg.replenishment_mode || 'bbcc'
-                  const ch = globalChannel
-                  try {
-                    await api.put(
-                      '/api/replenishment-config/seasons?mode=' + m + '&channel=' + ch,
-                      { items: seasons },
-                    )
-                    await loadCfg(m, ch)
-                    toast.success('已保存')
-                    window.dispatchEvent(new Event('rules-changed'))
-                  } catch (e) {
-                    saveErr(e)
-                  }
-                  setSeasonsSaving(false)
-                }}
-                className="btn btn-primary"
-                style={{
-                  width: '100%',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  justifyContent: 'center',
-                  minHeight: 42,
-                  opacity: seasonsSaving ? 0.6 : 1,
-                }}
-              >
-                {seasonsSaving ? (
-                  <>
-                    <IconLoading size={14} /> 保存中...
-                  </>
-                ) : (
-                  <>
-                    <IconSave size={14} /> 保存
-                  </>
-                )}
-              </button>
-            </div>
-          </>
+          <RulesSeasonPanel
+            channel={globalChannel}
+            seasons={seasons}
+            setSeasons={setSeasons}
+            seasonsSaving={seasonsSaving}
+            setSeasonsSaving={setSeasonsSaving}
+            cfg={cfg}
+            saveErr={saveErr}
+            loadCfg={loadCfg}
+          />
         )}
 
         {/* ── 规则测试弹窗（可视化调试：输入模拟数据判断是否触发）—— 底部 sheet 标准模板(2026-09-11 对齐看板弹窗) ── */}
