@@ -27,6 +27,8 @@
 
 > 清洗页拆分顺带修了一个只在非同源部署下才炸的缺陷：`uploadRawBytes()` 裸 `fetch(url)`，设了 `VITE_API_BASE_URL` 时上传打到前端自己的 origin → 404，被上层 catch 吞成"识别失败"。线上同源所以从未暴露。
 
+> **预览页标题贴步骤条**：`.clean-preview-page` 的 `margin-top:-24px` 想把容器 padding 让给表格，但负 margin 压的是整块，先撞上紧邻的步骤条 —— 标题 top=116 而步骤条 bottom=126，重叠 10px（1440 与 390 同样）。回退上移、高度公式 152→176 抵消，底部按钮位置不变，代价是表格少 24px。
+
 ### CI 凭据: 不再维护第二份 TiDB 副本
 
 | 项 | 内容 |

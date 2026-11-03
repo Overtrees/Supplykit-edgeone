@@ -2328,11 +2328,11 @@ input[type='file'] {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* 公式 = 原 176 − 上移的 24(见 margin-top 注释) = 152。
-     176 的来历: page.top 140(container pt70 + card pt16 + 卡内头部54) + card pb 16 + container pb 20。
-     上移 24 后实际占位 top 变为 116, 故扣 152。改 margin-top 必须同步改这里。 */
+  /* 176 = page.top(140: container pt70 + card pt16 + 步骤条 40 + 其 margin-bottom 14)
+     + card pb 16 + container pb 20。
+     2026-11-03: 曾用 margin-top:-24 + 这里扣 152 的"上移"方案, 见下方注释, 已回退。 */
   height: calc(
-    100svh - 152px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
+    100svh - 176px - env(safe-area-inset-top, 0px) - max(20px, env(safe-area-inset-bottom, 0px))
   );
 }
 .clean-preview-page .clean-preview-body {
@@ -2349,23 +2349,21 @@ input[type='file'] {
 .clean-preview-page .clean-preview-actions {
   flex: 0 0 auto;
 }
-/* 竖屏预览态收窄顶部留白(等效 70→46, 省 24px 全给表格):
-   不用 :has() —— 实测选择器未命中(容器仍是 pt70), 且 :has 在旧 WebKit 上不可用。
-   改为给预览页自身加负 margin-top, 让它上移吃掉容器的 padding 顶部, 等价效果且兼容性好。
-   步骤条与卡片内 padding 一律不动。横屏(下方 media)还原。 */
-.clean-preview-page {
-  margin-top: -24px;
-}
-/* 横屏恢复 2026-10-28 行为(用户指示 2026-11-01: 横屏回退旧代码, 仅竖屏用 flex+svh):
-   页面回文档流滚动, 表格容器限高 clamp —— 横屏竖直空间太小(390px), 锁高会把表格挤死;
-   竖屏(>500px)保持 .clean-preview-page 的 flex+svh 方案(实测不再需要手动滚动才显示)。 */
+/* 2026-11-03 回退 margin-top:-24px 的"上移省空间"方案。
+   原方案想让预览区上移 24px 吃掉容器 padding 顶部(等效 70→46), 把空间让给表格;
+   但负 margin 作用在整个块上, 上移时最先撞上的是紧邻的步骤条 —— 步骤条只留了 14px
+   间距(.step-indicator margin-bottom), 上移 24px 后标题 top=116 而步骤条 bottom=126,
+   两者重叠 10px, 表现为"标题贴在步骤条上"。实测(390×844 与 1440×900 一致):
+     步骤条 86–126 / step margin-bottom 14 → 标题自然 top 140
+     margin-top:-24 → 实际 top 116 → 重叠 10px
+   回退: 去掉负 margin, 高度公式同步 152→176, page 的 top/bottom 合计不变
+   (top 116→140, height 少 24), 底部按钮位置不动, 只是表格可视高度少 24px。
+   要再省这 24px 只能从步骤条 padding 或 card padding 上取, 不能从标题上取。 */
 @media (max-height: 500px) {
   .clean-preview-page {
-    height: auto; /* 解除竖屏的 100svh 锁高 */
-  }
-  /* 竖屏收窄的顶部留白在横屏还原(用户指示: 横屏回退旧代码, 只动竖屏) */
-  .clean-preview-page {
-    margin-top: 0;
+    /* 横屏(用户 2026-11-01 指示)回退 2026-10-28 行为: 页面回文档流滚动。
+       横屏竖直空间太小(390px), 锁高会把表格挤死; 竖屏保持上面的 flex+svh 方案。 */
+    height: auto;
   }
   .clean-preview-page .clean-preview-scroll {
     /* 覆盖竖屏规则的 min-height:0/max-height:none(同为 !important, 靠源码顺序取胜) */
