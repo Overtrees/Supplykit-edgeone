@@ -4131,6 +4131,30 @@ blob 就炸。修法: `_git()` 统一 `errors="replace"` —— 替换字符不�
 (历史扫描 / 全量数据 / 跨分支依赖), 本地绿灯只能算预检, 必须看 CI 结果才算数。
 也说明把审计放进 CI 是对的选择 —— 放本地的话, 这个 bug 会一直潜伏到某天有人完整 clone。
 
+#### 七之二、审计工具自己成了误报源(第二次 CI 迭代)
+
+修完解码崩, CI 又报 6 处:
+
+```
+✗ blob:99568e11 scripts/audit_secrets.py [HIGH] AWS Access Key: AKIAIOSFODNN7REALKEY
+✗ blob:99568e11 scripts/audit_secrets.py [HIGH] 硬编码密码: password = "Str0ngP@ssw0rd!"
+✗ blob:1760cf55 frontend/node_modules/axios/README.md [HIGH] 硬编码密码: password: 's00pers3cret'
+```
+
+两类, 都不是真密钥:
+
+1. **`--selftest` 的正例写在源码里** → 脚本把自己报成了硬编码密钥。而且已经提交, 历史 blob 永久存在
+   → 每次 CI 都会红。修法: 样例串**运行时拼接**(`"ghp_" + "a"*36`), 源码里不出现完整模式串。
+2. **历史里的 `node_modules/axios/README.md`** —— 早期误提交过依赖目录, 文档里的示例密码被当密钥。
+   修法: 历史扫描加路径过滤(`node_modules/` / `vendor/` / `dist/` / `.venv/`), 与工作区扫描同一套规则。
+
+另外把 `audit_secrets.py` 自身的历史版本整体排除: **审计工具的自检样例必然是"密钥形状"**,
+这是设计而非妥协(工具本身不含真密钥 —— 真密钥在 `.env`/`.edgeone`, 已由"是否入库"那两项管)。
+
+**三次迭代的共同点**: 每次都是"审计的完整性"和"误报率"在打架。教训是——**审计规则必须先写正负例**:
+`--selftest` 现在锁住 3 正例(必须抓到)+ 3 负例(必须不报), 后续任何人改模式, CI 立刻告诉他
+"你是把能力改没了, 还是把噪声放进来了"。
+
 #### 八、回归
 
 358 → **363**(+5 条 cron 窗口用例), `preflight` 六步全绿。

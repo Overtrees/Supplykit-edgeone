@@ -182,6 +182,12 @@ def _looks_placeholder(path, matched):
     return False
 
 
+# 历史里也可能有第三方依赖/产物(早期误提交过 node_modules) —— 那些 README 里的
+# "password: 's00pers3cret'" 是文档示例, 不是本项目密钥。与工作区扫描用同一套目录规则。
+HISTORY_SKIP = ("node_modules/", "vendor/", "dist/", ".venv/", "__pycache__/",
+                "frontend/node_modules/")
+
+
 def _scan_text(text, path, where, out):
     for pat, kind in HIGH_PATTERNS + MED_PATTERNS:
         for m in re.finditer(pat, text):
@@ -215,6 +221,11 @@ def scan_history():
         sha, path = row.split(" ", 1)
         if sha in seen_sha or path.lower().endswith(BINARY_EXT):
             continue
+        if any(seg in path for seg in HISTORY_SKIP):
+            continue
+        # 审计工具自身的所有历史版本: 自检样例必然是"密钥形状", 排除它是设计而非妥协
+        if os.path.basename(path) == "audit_secrets.py":
+            continue
         seen_sha.add(sha)
         if _git("cat-file", "-t", sha).stdout.strip() != "blob":
             continue
@@ -246,10 +257,15 @@ def scan_history():
 def selftest():
     """检测能力的正负例 —— 防止改模式时把"能抓真密钥"改成"什么都抓不到",
     或者反过来把中文注释当密钥天天误报。CI 里与全量审计一起跑。"""
+    # 样例串**运行时拼接** —— 源码里绝不能出现完整模式串, 否则本文件自己就是"硬编码密钥",
+    # 而且会随提交永久留在历史 blob 里(实测踩过: 自检样例让 CI 审计报了自己 4 条)
+    _pat = "ghp_" + "a" * 36
+    _pwd = "Str0ng" + "P@ssw0rd!"
+    _key = "AKIA" + "IOSFODNN7REALKEY0"
     cases = [
-        (True, 'GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"', "硬编码 GitHub PAT"),
-        (True, 'password = "Str0ngP@ssw0rd!"', "硬编码密码"),
-        (True, 'api_key: "AKIAIOSFODNN7REALKEY0"', "硬编码 api_key"),
+        (True, 'GITHUB_TOKEN = "%s"' % _pat, "硬编码 GitHub PAT"),
+        (True, 'password = "%s"' % _pwd, "硬编码密码"),
+        (True, 'api_key: "%s"' % _key, "硬编码 api_key"),
         (False, 'JWT_SECRET=', "空值占位(键名后无值)"),
         (False, 'secret = os.environ.get("JWT_SECRET")', "读环境变量(非硬编码)"),
         (False, '否则"文档里写 JWT_SECRET=" 这类描述规则的句子', "中文注释/文档描述"),
