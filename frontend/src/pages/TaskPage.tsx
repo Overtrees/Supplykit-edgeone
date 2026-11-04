@@ -55,7 +55,9 @@ export default function TaskPage() {
   const loadTasks = async () => {
     try {
       // S3-2 收口: raw 保留 r.status(401 判断), apiJson 补超时/token/BASE
-      const r = await apiJson('GET', API + '/api/tasks?channel=' + channel, { raw: true })
+      const r = await apiJson<Response>('GET', API + '/api/tasks?channel=' + channel, {
+        raw: true,
+      })
       const d = await r.json()
       if (d.ok && Array.isArray(d.data)) {
         setTasks(d.data)
@@ -131,7 +133,10 @@ export default function TaskPage() {
       let parts: string[] = []
       let realName = filename
       try {
-        const sd = await apiJson('GET', API + '/api/exports/status?task_id=' + filename)
+        const sd = await apiJson<{ status?: string; parts?: string[]; name?: string }>(
+          'GET',
+          API + '/api/exports/status?task_id=' + filename,
+        )
         if (sd.status === 'done') {
           parts = sd.parts || []
           realName = sd.name || filename
@@ -142,7 +147,7 @@ export default function TaskPage() {
         const chunks: Blob[] = []
         for (const p of parts) {
           // S3-2 收口: blob 下载走 raw Response, apiJson 补超时(大文件 120s)
-          const r = await apiJson('GET', API + '/api/exports/download/' + p, {
+          const r = await apiJson<Response>('GET', API + '/api/exports/download/' + p, {
             raw: true,
             timeout: 120000,
           })
@@ -151,7 +156,7 @@ export default function TaskPage() {
         }
         blob = new Blob(chunks, { type: 'text/csv' })
       } else {
-        const dl = await apiJson('GET', API + '/api/exports/download/' + filename, {
+        const dl = await apiJson<Response>('GET', API + '/api/exports/download/' + filename, {
           raw: true,
           timeout: 120000,
         })
@@ -199,12 +204,8 @@ export default function TaskPage() {
         ) : (
           (() => {
             /* 2026-10-27 已完成折叠: running/pending 全显, done/error 默认 10 条(列表曾无限增长) */
-            const _active = tasks.filter(
-              (t: any) => t.status === 'running' || t.status === 'pending',
-            )
-            const _finished = tasks.filter(
-              (t: any) => t.status !== 'running' && t.status !== 'pending',
-            )
+            const _active = tasks.filter(t => t.status === 'running' || t.status === 'pending')
+            const _finished = tasks.filter(t => t.status !== 'running' && t.status !== 'pending')
             const _shown = showAllDone ? _finished : _finished.slice(0, 10)
             return (
               <>
@@ -219,7 +220,10 @@ export default function TaskPage() {
                           : task.task_type === 'cleansing_eval'
                             ? 'cleansing_eval'
                             : 'cleansing'
-                  const meta = TYPE_LABEL[type] || { label: 'task.type_unknown', Icon: IconClipboard }
+                  const meta = TYPE_LABEL[type] || {
+                    label: 'task.type_unknown',
+                    Icon: IconClipboard,
+                  }
                   const result = task.result
                     ? typeof task.result === 'string'
                       ? safeParse(task.result)
@@ -256,7 +260,7 @@ export default function TaskPage() {
                       textAlign: 'center',
                       padding: '10px 0',
                       fontSize: 'var(--font-13)',
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       color: 'var(--primary)',
                       cursor: 'pointer',
                     }}

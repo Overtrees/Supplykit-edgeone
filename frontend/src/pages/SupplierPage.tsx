@@ -39,6 +39,13 @@ function Skeleton() {
 
 import { useAppStore } from '../store/useAppStore'
 import { t } from '../locale'
+
+/** 供应商列表响应(data.items 或 data 本身为行数组; 动态字段走 unknown 索引签名) */
+interface SupplierResp {
+  items?: Record<string, unknown>[]
+  [k: string]: unknown
+}
+
 export default function SupplierPage() {
   const [list, setList] = useState([])
   const [ld, setLd] = useState(true)
@@ -48,9 +55,9 @@ export default function SupplierPage() {
   const loadSuppliers = () => {
     setLd(true)
     api
-      .get('/api/suppliers?channel=' + (useAppStore.getState().channel || 'jd'))
+      .get<SupplierResp>('/api/suppliers?channel=' + (useAppStore.getState().channel || 'jd'))
       .then(r => {
-        const d = r.data?.items || r.data || []
+        const d = (r.data?.items || r.data || []) as Record<string, unknown>[]
         setList(d)
         setLoadErr('')
         setLd(false)

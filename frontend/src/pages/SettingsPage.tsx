@@ -31,7 +31,10 @@ export default function SettingsPage() {
     ;(async () => {
       try {
         // S3-2 收口
-        const d = await apiJson('GET', API + '/api/replenishment-config?channel=jd')
+        const d = await apiJson<{ data?: { webhook_url?: string } }>(
+          'GET',
+          API + '/api/replenishment-config?channel=jd',
+        )
         if (d?.data?.webhook_url) setWebhookUrl(d.data.webhook_url)
       } catch {}
     })()
@@ -40,13 +43,15 @@ export default function SettingsPage() {
     setWebhookSaving(true)
     try {
       // S3-2 收口
-      const d = await apiJson('PUT', API + '/api/replenishment-config?channel=jd', {
-        data: { webhook_url: webhookUrl.trim() },
-      })
+      const d = await apiJson<{ ok?: boolean; error?: string }>(
+        'PUT',
+        API + '/api/replenishment-config?channel=jd',
+        {
+          data: { webhook_url: webhookUrl.trim() },
+        },
+      )
       if (d.ok)
-        toast.success(
-          webhookUrl.trim() ? t('set.webhook_saved_on') : t('set.webhook_saved_off'),
-        )
+        toast.success(webhookUrl.trim() ? t('set.webhook_saved_on') : t('set.webhook_saved_off'))
       else toast.error(t('set.save_failed', { msg: d.error || '' }))
     } catch (e) {
       toast.error(t('set.save_failed', { msg: e.message }))
@@ -63,7 +68,7 @@ export default function SettingsPage() {
             sub={t('set.recycle_sub')}
             onClick={() => {
               try {
-                ;(window as any).__setPage && (window as any).__setPage('recycle')
+                window.__setPage && window.__setPage('recycle')
               } catch (e) {}
             }}
           />
@@ -72,7 +77,7 @@ export default function SettingsPage() {
             sub={t('set.channels_sub')}
             onClick={() => {
               try {
-                ;(window as any).__setPage && (window as any).__setPage('channels')
+                window.__setPage && window.__setPage('channels')
               } catch (e) {}
             }}
           />
@@ -82,7 +87,7 @@ export default function SettingsPage() {
               sub={t('set.devmode_sub')}
               onClick={() => {
                 try {
-                  ;(window as any).__setPage && (window as any).__setPage('devmode')
+                  window.__setPage && window.__setPage('devmode')
                 } catch (e) {}
               }}
             />
@@ -123,7 +128,13 @@ export default function SettingsPage() {
 
         <Group title={t('set.alert_push')}>
           <div style={{ padding: 14 }}>
-            <div style={{ fontSize: 'var(--font-13)', fontWeight: "var(--fw-semibold)", marginBottom: 4 }}>
+            <div
+              style={{
+                fontSize: 'var(--font-13)',
+                fontWeight: 'var(--fw-semibold)',
+                marginBottom: 4,
+              }}
+            >
               {t('set.webhook')}
             </div>
             <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>

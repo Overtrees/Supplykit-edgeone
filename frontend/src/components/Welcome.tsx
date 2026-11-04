@@ -1,6 +1,13 @@
 import { t } from '../locale'
 import { apiJson } from '../api/client'
+import type { OkResponse } from '../api/types'
 import { notify } from '../api/notify'
+
+interface SeedFillData {
+  requires_reset?: boolean
+  task_id?: string
+  [k: string]: unknown
+}
 
 const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -36,7 +43,7 @@ export default function Welcome({ close }: { close: () => void }) {
           <div
             style={{
               fontSize: 32,
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               color: 'var(--text)',
               marginBottom: 8,
               letterSpacing: '-0.5px',
@@ -114,7 +121,7 @@ export default function Welcome({ close }: { close: () => void }) {
                 <div
                   style={{
                     fontSize: 'var(--font-15)',
-                    fontWeight: "var(--fw-semibold)",
+                    fontWeight: 'var(--fw-semibold)',
                     color: 'var(--text)',
                     marginBottom: 3,
                   }}
@@ -136,7 +143,9 @@ export default function Welcome({ close }: { close: () => void }) {
             close()
             try {
               // S3-2 收口: 填充是重操作, 超时 90s
-              const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
+              const d = await apiJson<OkResponse<SeedFillData>>('POST', API + '/api/seed/fill', {
+                timeout: 90000,
+              })
               if (d.ok) {
                 if (d.data?.requires_reset) {
                   notify.error(t('welcome.seed_exists'))
@@ -157,7 +166,7 @@ export default function Welcome({ close }: { close: () => void }) {
             width: '100%',
             padding: '14px',
             fontSize: 'var(--font-lg)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             marginBottom: 10,
           }}
         >

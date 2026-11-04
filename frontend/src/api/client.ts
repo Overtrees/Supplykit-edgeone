@@ -1,11 +1,13 @@
 import axios from 'axios'
+import type { AxiosError, AxiosRequestConfig } from 'axios'
 import { reportError } from './logger'
+import type { ApiResult, ApiGetConfig, CacheEntry, InflightEntry } from './types'
 
 /* eslint-disable no-console -- API 调试日志(开发期保留, 便于追接口链路) */
 const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 // 响应缓存（内存）
-const cache = new Map()
+const cache = new Map<string, CacheEntry>()
 const CACHE_TTL = 30_000 // 30s 内复用缓存
 // 缓存条目上限: 以前 cache 只写不删, 而看板 URL 带 t=<时间戳>(每轮询一次就多一个 key),
 // 一天下来上万个条目常驻内存。这里在写入路径上做 LRU 回收(见 pruneCache)。
@@ -41,8 +43,8 @@ function pruneCache() {
   }
 }
 
-function cacheKey(method, url, params) {
-  return method + ':' + url + ':' + JSON.stringify(params || {})
+function cacheKey(method?: string, url?: string, params?: unknown) {
+  return (method ?? '') + ':' + (url ?? '') + ':' + JSON.stringify(params || {})
 }
 
 // 底层 axios 实例
@@ -52,7 +54,7 @@ const instance = axios.create({
 })
 
 // 请求拦截器：自动注入全局 channel 参数 + 认证 token
-instance.interceptors.request.use((config: any) => {
+instance.interceptors.request.use(config => {
   if (!config.params || !config.params.channel) {
     const ch = localStorage.getItem('c_channel') || 'jd'
     if (config.params) {
@@ -70,9 +72,11 @@ instance.interceptors.request.use((config: any) => {
     }
   })()
   if (token) {
-    config.headers = config.headers || {}
     // 2026-10-13: 网关改写 Authorization(q-sign)——token 走 X-Auth-Token 自定义头
-    config.headers['X-Auth-Token'] = token
+    // headers 由 axios 提供, 这里只在原生索引签名上赋值(不引入 any)
+    const headers = (config.headers || {}) as unknown as Record<string, string>
+    headers['X-Auth-Token'] = token
+    config.headers = headers as unknown as typeof config.headers
   }
   return config
 })
@@ -81,7 +85,7 @@ instance.interceptors.request.use((config: any) => {
 // ⚠ 挂起兜底: Makers 函数慢/冷启动时请求可能 30s+ 未完成, 若无限复用挂起 promise,
 //   后续同 URL 请求全部卡死(loadCfg 等永不返回 → UI 显示旧值, 重进页面才恢复)
 //   → 超过 INFLIGHT_TTL 的在途视为挂起, 删除并重新发起
-const inflight = new Map()
+const inflight = new Map<string, InflightEntry<ApiResult<unknown>>>()
 const INFLIGHT_TTL = 15000
 
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
@@ -124,16 +128,17 @@ instance.interceptors.response.use(
     return response
   },
   error => {
+    const err = error as AxiosError
     // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
-    if (axios.isCancel(error)) {
-      return Promise.reject(error)
+    if (axios.isCancel(err)) {
+      return Promise.reject(err)
     }
-    const cfg = (error.config || {}) as any
+    const cfg: AxiosRequestConfig = err.config || {}
     const key = cacheKey(cfg.method || 'get', cfg.url || '', cfg.params)
     inflight.delete(key)
-    console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${error.message}`)
+    console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${err.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
-    const status = (error.response || {}).status
+    const status = err.response?.status
     // 401 先标记, 不立即踢(防偶发: 冷实例/慢网络下单接口 401 误伤——曾直接 auth:expired 踢出登录页清空输入)
     // App 收 may-expired 后调 /auth/check 确认, 真失效才 setLoggedIn(false)
     if (status === 401) {
@@ -145,33 +150,35 @@ instance.interceptors.response.use(
     if (!status || status >= 400) {
       reportError(
         'api_http_error',
-        ((error.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
+        ((err.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
         status
-          ? 'HTTP ' + status + ' ' + JSON.stringify(error.response?.data || '').slice(0, 400)
+          ? 'HTTP ' + status + ' ' + JSON.stringify(err.response?.data || '').slice(0, 400)
           : 'network-error',
         status && status >= 500 ? 'error' : 'warning',
       )
     }
-    return Promise.reject(error)
+    return Promise.reject(err)
   },
 )
 
 // 导出带缓存的 get
-const apiGet = async <T = any>(
+// 2026-11-04 any 治理: 泛型默认值 unknown(不再是 any), 调用方用 api.get<T>(...) 显式声明形状,
+// 或在边界处 String()/Number() 收敛 —— 符合 docs/DEVELOPMENT.md §15.38「不造假严格」。
+const apiGet = async <T = unknown>(
   url: string,
-  config: Record<string, any> = {},
-): Promise<{ data: T; status: number; statusText: string; headers: any; config: any }> => {
+  config: ApiGetConfig = {},
+): Promise<ApiResult<T>> => {
   const key = cacheKey('get', url, config.params)
 
   // 1) 缓存命中
   const hit = cache.get(key)
   if (hit && Date.now() - hit.ts < CACHE_TTL) {
     // 缓存命中也需解包统一格式 {ok,data}（与拦截器一致）
-    let _d = hit.data
+    let _d: unknown = hit.data
     if (_d && typeof _d === 'object' && 'ok' in _d && 'data' in _d) {
-      _d = _d.data
+      _d = (_d as Record<string, unknown>).data
     }
-    return { data: _d, status: 200, statusText: 'OK', headers: {}, config }
+    return { data: _d as T, status: 200, statusText: 'OK', headers: {}, config }
   }
 
   // 2) 在途去重(挂起兜底: 超 INFLIGHT_TTL 的旧在途不再复用, 防慢请求卡死后续刷新)
@@ -179,14 +186,14 @@ const apiGet = async <T = any>(
   // (旧接口 30-60s 才超时) → 新页卡骨架等旧 promise。对复用 promise 设等待上限: 剩余 TTL 内未完成
   // → 自动发起新请求替换(旧 promise 作废), 保证"切回最多等~15s 后必成功刷新", 不再无限期挂。
   if (inflight.has(key)) {
-    const p: any = inflight.get(key)
+    const p = inflight.get(key)
     if (p && p.__ts && Date.now() - p.__ts > INFLIGHT_TTL) {
       inflight.delete(key)
     } else if (p) {
       const remain = INFLIGHT_TTL - (Date.now() - (p.__ts || Date.now()))
       const waiter = Promise.race([
         p,
-        new Promise((_, rej) =>
+        new Promise<never>((_, rej) =>
           setTimeout(() => rej(new Error('INFLIGHT_STALE')), Math.max(remain, 500)),
         ),
       ])
@@ -194,36 +201,49 @@ const apiGet = async <T = any>(
         if (!p.__dead && inflight.get(key) === p) {
           p.__dead = true
           inflight.delete(key)
-          const np: any = instance.get(url, config).then(r => ({
-            data: r.data,
-            status: r.status,
-            statusText: r.statusText,
-            headers: r.headers,
-            config: r.config,
-          }))
-          np.__ts = Date.now()
+          // Object.assign 给原生 Promise 挂元数据, 与旧版 `promise.__ts = ...` 同一对象、零行为差异
+          const np = Object.assign(
+            instance.get(url, config).then(r => ({
+              data: r.data as unknown,
+              status: r.status,
+              statusText: r.statusText,
+              headers: r.headers as unknown,
+              config: r.config as unknown,
+            })),
+            {
+              __ts: Date.now(),
+              __scope: '',
+              __ac: undefined as AbortController | undefined,
+              __dead: false,
+            },
+          )
           inflight.set(key, np)
           return np
         }
         return p
-      })
+      }) as unknown as Promise<ApiResult<T>>
     }
   }
 
   // 3) 发起新请求
   const ac = new AbortController()
-  const promise: any = instance.get(url, { ...config, signal: ac.signal }).then(r => ({
-    data: r.data,
-    status: r.status,
-    statusText: r.statusText,
-    headers: r.headers,
-    config: r.config,
-  }))
-  promise.__ts = Date.now()
-  promise.__scope = config.scope || ''
-  promise.__ac = ac
+  const promise = Object.assign(
+    instance.get(url, { ...config, signal: ac.signal }).then(r => ({
+      data: r.data as unknown,
+      status: r.status,
+      statusText: r.statusText,
+      headers: r.headers as unknown,
+      config: r.config as unknown,
+    })),
+    {
+      __ts: Date.now(),
+      __scope: config.scope || '',
+      __ac: ac,
+      __dead: false,
+    },
+  )
   inflight.set(key, promise)
-  return promise
+  return promise as unknown as Promise<ApiResult<T>>
 }
 
 // 2026-10-27 页面卸载取消在途(根治快速切换卡骨架): 切走页面调用 abortScope(scope)
@@ -232,12 +252,9 @@ const apiGet = async <T = any>(
 export function abortScope(scope: string) {
   if (!scope) return
   for (const [k, p] of inflight) {
-    const anyp = p as any
-    if (anyp && anyp.__scope === scope) {
+    if (p && p.__scope === scope) {
       try {
-        if (anyp.__ac && (anyp.__ac as AbortController).abort) {
-          ;(anyp.__ac as AbortController).abort()
-        }
+        if (p.__ac && typeof p.__ac.abort === 'function') p.__ac.abort()
       } catch {}
       inflight.delete(k)
     }
@@ -257,11 +274,11 @@ function invalidateCache() {
 // ②X-Auth-Token 注入(省掉各调用点复制的 IIFE) ③与 axios 同口径拼 BASE(相对路径不再打到前端 origin)。
 // 网络层异常(含超时 AbortError)照常 throw → 调用方 catch 原逻辑不变, 且上报 api_http_error。
 // logger.reportError 仍用裸 fetch(client→logger 单向依赖, 收口会成环)。
-export async function apiJson(
+export async function apiJson<T = unknown>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
-  opts: { data?: any; timeout?: number; signal?: AbortSignal; raw?: boolean } = {},
-): Promise<any> {
+  opts: { data?: unknown; timeout?: number; signal?: AbortSignal; raw?: boolean } = {},
+): Promise<T> {
   const token = (() => {
     try {
       return localStorage.getItem('c_token')
@@ -288,15 +305,11 @@ export async function apiJson(
       },
       signal: ctrl.signal,
     })
-    return opts.raw ? resp : await resp.json()
-  } catch (e: any) {
+    return (opts.raw ? resp : await resp.json()) as T
+  } catch (e: unknown) {
     try {
-      reportError(
-        'api_http_error',
-        (String((e && e.message) || '') + ' ' + url).slice(0, 200),
-        'network-error',
-        'warning',
-      )
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : ''
+      reportError('api_http_error', (msg + ' ' + url).slice(0, 200), 'network-error', 'warning')
     } catch {}
     throw e
   } finally {
@@ -307,7 +320,11 @@ export async function apiJson(
 
 // 导出 api 对象，保持与原接口兼容
 // 2026-10-14 422 根治: iOS Safari 移动端 axios XHR FormData 发送 body 空(boundary 有内容无)——上传类改 fetch 原生(Safari fetch multipart 可靠)
-export async function uploadForm(url: string, fd: FormData, timeout = 90000): Promise<any> {
+export async function uploadForm<T = unknown>(
+  url: string,
+  fd: FormData,
+  timeout = 90000,
+): Promise<{ data: T; status: number }> {
   const token = (() => {
     try {
       return localStorage.getItem('c_token')
@@ -346,18 +363,18 @@ export async function uploadForm(url: string, fd: FormData, timeout = 90000): Pr
         reportError('business_error', (data.error + ' ' + url).slice(0, 200), 'HTTP 200', 'warning')
       throw err
     }
-    return { data: 'data' in data ? data.data : data, status: resp.status }
+    return { data: ('data' in data ? data.data : data) as T, status: resp.status }
   } finally {
     clearTimeout(_tid)
   }
 }
 
 // 2026-10-14 间断性 422 根治: iOS Safari multipart body 空(File 引用时效/Blob 序列化)——raw bytes 直传(CT octet-stream)
-export async function uploadRawBytes(
+export async function uploadRawBytes<T = unknown>(
   url: string,
   data: ArrayBuffer | Blob,
   timeout = 90000,
-): Promise<any> {
+): Promise<{ data: T; status: number }> {
   const token = (() => {
     try {
       return localStorage.getItem('c_token')
@@ -398,7 +415,7 @@ export async function uploadRawBytes(
         reportError('business_error', (d.error + ' ' + url).slice(0, 200), 'HTTP 200', 'warning')
       throw err
     }
-    return { data: 'data' in d ? d.data : d, status: resp.status }
+    return { data: ('data' in d ? d.data : d) as T, status: resp.status }
   } finally {
     clearTimeout(_tid)
   }
@@ -406,25 +423,25 @@ export async function uploadRawBytes(
 
 export const api = {
   get: apiGet,
-  post: async (url, data?, config = {}) => {
+  post: async (url: string, data?: unknown, config: AxiosRequestConfig = {}) => {
     const merged = { timeout: 30000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
   },
   // 批量/重写操作：宽松超时（PA 单 worker 排队时单请求可能 >30s）
-  postHeavy: async (url, data?, config = {}) => {
+  postHeavy: async (url: string, data?: unknown, config: AxiosRequestConfig = {}) => {
     const merged = { timeout: 90000, ...config }
     const r = await instance.post(url, data, merged)
     invalidateCache()
     return r
   },
-  put: async (url, data, config = {}) => {
+  put: async (url: string, data?: unknown, config: AxiosRequestConfig = {}) => {
     const r = await instance.put(url, data, config)
     invalidateCache()
     return r
   },
-  delete: async (url, config = {}) => {
+  delete: async (url: string, config: AxiosRequestConfig = {}) => {
     const r = await instance.delete(url, config)
     invalidateCache()
     return r
@@ -432,7 +449,7 @@ export const api = {
 }
 
 // 清除缓存
-export function clearCache(pattern?) {
+export function clearCache(pattern?: string) {
   if (!pattern) {
     cache.clear()
     return

@@ -1,16 +1,18 @@
 import type { Dispatch, SetStateAction } from 'react'
+import type { ColMapRow } from './fields'
 import { IconCheck, IconClipboard, IconClose } from '../../components/Icons'
 import { t } from '../../locale'
 
 interface Props {
-  colMap: Record<string, any[]>
-  setColMap: Dispatch<SetStateAction<Record<string, any[]>>>
+  colMap: Record<string, ColMapRow[]>
+  setColMap: Dispatch<SetStateAction<Record<string, ColMapRow[]>>>
   colMapCol: string
   setColMapCol: Dispatch<SetStateAction<string>>
   colMapSaving: boolean
   channel: string
   onClose: () => void
   onSave: () => void
+  [k: string]: unknown
 }
 
 /** 表格列状态映射弹窗(底部 sheet)。
@@ -55,7 +57,7 @@ export default function ColMapSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               marginBottom: 12,
               textAlign: 'center',
             }}
@@ -75,7 +77,13 @@ export default function ColMapSheet(props: Props) {
             })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: 'var(--font-13)', fontWeight: "var(--fw-semibold)", flexShrink: 0 }}>
+            <span
+              style={{
+                fontSize: 'var(--font-13)',
+                fontWeight: 'var(--fw-semibold)',
+                flexShrink: 0,
+              }}
+            >
               {t('cm.map_col')}
             </span>
             <select
@@ -200,7 +208,7 @@ export default function ColMapSheet(props: Props) {
                       }}
                     >
                       <Icon size={12} />
-                  {t(label)}
+                      {t(label)}
                     </span>
                   )
                 })}
@@ -256,9 +264,9 @@ export default function ColMapSheet(props: Props) {
                     { name: '运输中', group: 'blocked' },
                     { name: '在途', group: 'blocked' },
                   ]
-                  const _cur: any[] = (p as any).order_status || []
-                  const _names = new Set(_cur.map((x: any) => x.name))
-                  const _merged = [..._cur, ..._def.filter((d: any) => !_names.has(d.name))]
+                  const _cur: ColMapRow[] = p.order_status || []
+                  const _names = new Set(_cur.map(x => x.name))
+                  const _merged: ColMapRow[] = [..._cur, ..._def.filter(d => !_names.has(d.name))]
                   return { ...p, order_status: _merged }
                 })
               }
@@ -271,7 +279,7 @@ export default function ColMapSheet(props: Props) {
               onClick={() =>
                 setColMap(p => ({
                   ...p,
-                  [colMapCol]: (p[colMapCol] || []).map((x: any) => ({ ...x, group: 'sale' })),
+                  [colMapCol]: (p[colMapCol] || []).map(x => ({ ...x, group: 'sale' })),
                 }))
               }
               className="btn btn-ghost clickable"
@@ -283,7 +291,7 @@ export default function ColMapSheet(props: Props) {
               onClick={() =>
                 setColMap(p => ({
                   ...p,
-                  [colMapCol]: (p[colMapCol] || []).map((x: any) => ({ ...x, group: 'blocked' })),
+                  [colMapCol]: (p[colMapCol] || []).map(x => ({ ...x, group: 'blocked' })),
                 }))
               }
               className="btn btn-ghost clickable"
@@ -294,7 +302,7 @@ export default function ColMapSheet(props: Props) {
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <div onClick={() => onClose()} className="clickable sheet-cancel" style={{ flex: 1 }}>
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)" }}>
+              <span style={{ fontSize: 'var(--font-15)', fontWeight: 'var(--fw-semibold)' }}>
                 {t('common.cancel')}
               </span>
             </div>
@@ -305,7 +313,7 @@ export default function ColMapSheet(props: Props) {
               className="clickable sheet-close"
               style={{ flex: 1, opacity: colMapSaving ? 0.6 : 1 }}
             >
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)" }}>
+              <span style={{ fontSize: 'var(--font-15)', fontWeight: 'var(--fw-semibold)' }}>
                 {colMapSaving ? t('cm.saving') : t('common.save')}
               </span>
             </div>

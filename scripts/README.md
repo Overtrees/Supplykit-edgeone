@@ -33,6 +33,7 @@
 |---|---|
 | `ui_shot_matrix.py` | **4 视口 × 双语全页面快照**: 查横向溢出 / 未解析词条键 / 英文界面残留中文 |
 | `ui_overlap_check.py` | **单元格叠印检测**: 逐格比「文字实际宽 vs 内容区宽」, 抓文字压到邻列的情况(快照测不出) |
+| `ui_note_icon_check.py` | **备注 emoji→SVG 回归**: 双语 × 4 视口检查 `td.col-note` 渲染出 `<svg>` 且不残留 emoji 字符/中文 |
 | `ui_own_card_measure.py` | 自有库存卡面实测 |
 | `ui_preview_measure.py` | 清洗预览页 overhead 分解 |
 | `ui_preview_inject.py` | 往预览页注入测试数据 |

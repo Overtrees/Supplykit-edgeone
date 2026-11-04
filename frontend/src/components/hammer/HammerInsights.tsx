@@ -14,6 +14,7 @@ import {
 } from './configs'
 import { IconExport, IconCheck, IconReturn, IconMoney, IconTag } from '../Icons'
 import { api, apiJson } from '../../api/client'
+import type { OkResponse } from '../../api/types'
 import { colLabel } from '../colLabels'
 interface HammerInsightsProps {
   channel: string
@@ -104,7 +105,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
               ? 'replen'
               : 'purchase'
       // S3-2 收口: 导出是重操作, 超时 90s
-      const d = await apiJson(
+      const d = await apiJson<OkResponse>(
         'POST',
         API + '/api/exports?type=' + _type + '&mode=' + _mode + '&channel=' + channel,
         { timeout: 90000 },
@@ -168,9 +169,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
     const _a = DISPOSE_ACTIONS[bpAction] || DISPOSE_ACTIONS.mark
     if (
       bpAction !== 'mark' &&
-      !window.confirm(
-        t('hm.dispose_confirm', { n: ids.length, action: t(_a.label) }),
-      )
+      !window.confirm(t('hm.dispose_confirm', { n: ids.length, action: t(_a.label) }))
     )
       return
     setBpBusy(true)

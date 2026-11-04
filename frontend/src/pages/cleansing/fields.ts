@@ -5,6 +5,75 @@ import { t } from '../../locale'
  * 从 CleansingPage 外提: 原文件 2398 行里约 490 行是这类常量, 与渲染无关。
  * 口径说明保留原位注释(必填列为什么这么定、别名为什么这么归一), 改动前先读。
  */
+
+/** 列名信息(detect 接口返回的列) */
+export interface ColumnInfo {
+  name?: string
+  [k: string]: unknown
+}
+
+/** 列映射条目(导入清洗): target/t 为映射目标字段, 动态列配置走 unknown */
+export interface ColMapItem {
+  target?: string
+  t?: string
+  [k: string]: unknown
+}
+
+/** 用户自定义字段(映射/预览下拉末尾追加) */
+export interface CustomField {
+  t?: string
+  l?: string
+  tp?: string
+  [k: string]: unknown
+}
+
+/** 表格列状态映射行(值→销量池/仅记录) */
+export interface ColMapRow {
+  name?: string
+  group?: string
+  [k: string]: unknown
+}
+
+/** 失败明细行 */
+export interface FailDetail {
+  sku?: string
+  reason?: string
+  [k: string]: unknown
+}
+
+/** 清洗各接口(detect/preview/execute/status/dup-check)的统一响应形状:
+ *  已知字段精确类型, 动态扩展字段在边界处收敛为 unknown。 */
+export interface CleanseData {
+  ok?: boolean
+  error?: string
+  message?: string
+  columns?: ColumnInfo[]
+  total?: number
+  preview?: Record<string, unknown>[]
+  success?: number
+  failed?: number
+  duplicate?: boolean
+  overlap_partial?: boolean
+  total_rows?: number
+  task_id?: string
+  async?: boolean
+  submitted?: number | string
+  failed_details?: FailDetail[]
+  status?: string
+  page?: number
+  new?: number
+  overlap?: number
+  [k: string]: unknown
+}
+
+/** 字段字典条目(TARGET_FIELDS 各数组元素) */
+export interface FieldDef {
+  t: string
+  l: string
+  tp: string
+  [k: string]: unknown
+}
+
 export const INV_FIELDS = [
   { t: 'warehouse', l: 'warehouse', tp: 'string' },
   { t: 'sku', l: 'sku', tp: 'string' },
@@ -288,7 +357,7 @@ export const TARGET_FIELDS = {
 }
 // 预设映射(内置): label→target 全字段(与下载模板表头同源)
 export const presetMapping = (tt: string): Record<string, string> => {
-  const fields = (TARGET_FIELDS as Record<string, any>)[tt] || []
+  const fields = (TARGET_FIELDS as Record<string, FieldDef[]>)[tt] || []
   const m: Record<string, string> = {}
   for (const f of fields) m[f.l] = f.t
   return m
@@ -341,12 +410,12 @@ export const presetRequired = (tt: string): string[] => PRESET_REQUIRED[tt] || [
 // 拦截散落在 doExecute 的 4 个专项检查里, 用户没点"写入"就永远看不到提示(实测反馈:
 // 商品未映射「是否做效期管理」列, 映射页/预览页全程无提示)。preview 入口先 toast 预警
 // (可继续预览数据), 预览页常驻警示条, 写入时硬拦; 专项检查保留(带业务解释的文案优先)。
-export const missingRequired = (tt: string, mp: Record<string, any>): string[] => {
-  const fields = (TARGET_FIELDS as Record<string, any>)[tt] || []
+export const missingRequired = (tt: string, mp: Record<string, ColMapItem>): string[] => {
+  const fields = (TARGET_FIELDS as Record<string, FieldDef[]>)[tt] || []
   const miss: string[] = []
   for (const t of PRESET_REQUIRED[tt] || []) {
     const ok = Object.values(mp || {}).some(m => m && (m.target === t || m.t === t))
-    if (!ok) miss.push((fields.find((f: any) => f.t === t) || {}).l || t)
+    if (!ok) miss.push((fields.find(f => f.t === t) || ({} as FieldDef)).l || t)
   }
   return miss
 }
@@ -363,8 +432,7 @@ export const DOC_TYPE_NAMES: Record<string, string> = {
   gmv_flow: 'cl.dt_gmv_flow',
 }
 /** 导入类型的中文名词(未知类型原样返回 code) */
-export const docTypeLabel = (tt: string) =>
-  DOC_TYPE_NAMES[tt] ? t(DOC_TYPE_NAMES[tt]) : tt
+export const docTypeLabel = (tt: string) => (DOC_TYPE_NAMES[tt] ? t(DOC_TYPE_NAMES[tt]) : tt)
 export const TARGET_TARGETS = {}
 for (const _k in TARGET_FIELDS) TARGET_TARGETS[_k] = TARGET_FIELDS[_k].map(f => f.t)
 

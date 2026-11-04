@@ -21,7 +21,12 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
     setError('')
     // 超时(15s): 无痕/弱网下曾挂起 30s+ 无反馈, 用户重复点击(S3-2 收口: apiJson timeout)
     try {
-      const d = await apiJson('POST', API + '/api/auth/login', {
+      const d = await apiJson<{
+        ok?: boolean
+        token?: string
+        user?: string
+        detail?: string
+      }>('POST', API + '/api/auth/login', {
         timeout: 15000,
         data: { username, password },
       })
@@ -66,10 +71,19 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
         }}
       >
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontSize: 28, fontWeight: "var(--fw-bold)", color: 'var(--text)', marginBottom: 8 }}>
+          <div
+            style={{
+              fontSize: 28,
+              fontWeight: 'var(--fw-bold)',
+              color: 'var(--text)',
+              marginBottom: 8,
+            }}
+          >
             SupplyKit
           </div>
-          <div style={{ fontSize: 'var(--font-md)', color: 'var(--muted2)' }}>{t('login.subtitle')}</div>
+          <div style={{ fontSize: 'var(--font-md)', color: 'var(--muted2)' }}>
+            {t('login.subtitle')}
+          </div>
         </div>
         <div
           style={{
@@ -79,7 +93,15 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             boxShadow: 'var(--shadow-card)',
           }}
         >
-          <div style={{ fontSize: 'var(--font-lg)', fontWeight: "var(--fw-semibold)", marginBottom: 20 }}>{t('login.title')}</div>
+          <div
+            style={{
+              fontSize: 'var(--font-lg)',
+              fontWeight: 'var(--fw-semibold)',
+              marginBottom: 20,
+            }}
+          >
+            {t('login.title')}
+          </div>
           <input
             value={username}
             onChange={e => setUsername(e.target.value)}
@@ -137,7 +159,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               width: '100%',
               padding: '14px',
               fontSize: 'var(--font-lg)',
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               border: 'none',
               borderRadius: 'var(--radius-lg)',
               cursor: 'pointer',
@@ -159,7 +181,9 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               textAlign: 'center',
             }}
           >
-            {t('login.guest')}<b>demo</b> / <b>demo123</b>{t('login.guest_hint')}
+            {t('login.guest')}
+            <b>demo</b> / <b>demo123</b>
+            {t('login.guest_hint')}
           </div>
           <div
             style={{
@@ -172,8 +196,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               borderTop: '1px solid var(--border)',
             }}
           >
-            <IconScale size={12} style={{ verticalAlign: -2 }} />{' '}
-            {t('login.disclaimer')}
+            <IconScale size={12} style={{ verticalAlign: -2 }} /> {t('login.disclaimer')}
           </div>
         </div>
       </div>

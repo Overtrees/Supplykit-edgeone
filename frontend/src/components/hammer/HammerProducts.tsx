@@ -42,8 +42,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
       toast.error(t('hx.pick_prod'))
       return
     }
-    if (action === 'delete' && !window.confirm(t('hx.prod_del_confirm', { n: ids.length })))
-      return
+    if (action === 'delete' && !window.confirm(t('hx.prod_del_confirm', { n: ids.length }))) return
     setBatchBusy(true)
     try {
       // 统一走 api.post：自动注入 token/channel + 响应解包 + 缓存失效

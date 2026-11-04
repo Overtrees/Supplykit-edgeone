@@ -4,17 +4,30 @@ import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { t } from '../../locale'
 
+/** 补货配置(后端动态键): 已知字段精确枚举, 动态键走 unknown 索引(边界用 String/Number 收敛) */
+interface ReplenConfig {
+  replenishment_mode?: string
+  transit_days?: string
+  slow_fund_threshold?: string
+  [k: string]: unknown
+}
+/** 采购参数字段(字典项) */
+interface PurchaseField {
+  k: string
+  l: string
+}
+
 interface Props {
   channel: string
-  selectedSupplier: any
-  setSelectedSupplier: Dispatch<SetStateAction<any>>
-  suppliers: any[]
-  purchaseFields: any[]
-  cfg: any
-  setCfg: Dispatch<SetStateAction<any>>
+  selectedSupplier: string
+  setSelectedSupplier: Dispatch<SetStateAction<string>>
+  suppliers: string[]
+  purchaseFields: PurchaseField[]
+  cfg: ReplenConfig
+  setCfg: Dispatch<SetStateAction<ReplenConfig>>
   saving: boolean
   setSaving: Dispatch<SetStateAction<boolean>>
-  saveErr: any
+  saveErr: (e: unknown) => void
 }
 
 export default function RulesPurchasePanel(props: Props) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { apiJson } from '../../api/client'
+import type { OkResponse } from '../../api/types'
 import { t } from '../../locale'
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
@@ -60,7 +61,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       // S3-2 收口: 导出是重操作, 超时 90s
-      const d = await apiJson(
+      const d = await apiJson<OkResponse>(
         'POST',
         API + '/api/exports?type=inventory&channel=' + channel + '&wh_type=' + hammerWhType,
         { timeout: 90000 },

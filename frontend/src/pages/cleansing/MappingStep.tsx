@@ -1,20 +1,23 @@
+import type { Dispatch, SetStateAction } from 'react'
 import { IconCheck, IconLightning } from '../../components/Icons'
 import { ALIAS, PRESET_REQUIRED, SYS_FIELDS, TARGET_FIELDS } from './fields'
+import type { ColumnInfo, ColMapItem, CustomField } from './fields'
 import { fieldLabel } from './fieldNames'
 import { t } from '../../locale'
 
 interface Props {
-  cols: any[]
-  mp: Record<string, any>
-  setMp: (fn: (p: Record<string, any>) => Record<string, any>) => void
+  cols: ColumnInfo[]
+  mp: Record<string, ColMapItem>
+  setMp: Dispatch<SetStateAction<Record<string, ColMapItem>>>
   tt: string
   /** 自定义字段(页面 state): 下拉末尾追加, 标签兜底 */
-  cf: any[]
+  cf: CustomField[]
   onBack: () => void
   onPreview: () => void
   onQuick: () => void
   /** 记住列名→字段(页面写 localStorage 别名表) */
   saveAlias: (col: string, target: string) => void
+  [k: string]: unknown
 }
 
 /** 第 2 步列映射 + 底部动作。从 CleansingPage 外提: 映射状态仍留页面(受控)。
@@ -42,7 +45,9 @@ export default function MappingStep({
             marginBottom: 10,
           }}
         >
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: "var(--fw-bold)" }}>{t('clean.mapping')}</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 'var(--fw-bold)' }}>
+            {t('clean.mapping')}
+          </span>
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
             {t('clean.mapping_desc')}
           </span>
@@ -180,7 +185,7 @@ export default function MappingStep({
             borderRadius: 'var(--radius-full)',
             background: 'var(--card)',
             cursor: 'pointer',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             minHeight: 42,
             whiteSpace: 'nowrap',
           }}
@@ -199,7 +204,7 @@ export default function MappingStep({
             background: 'var(--primary)',
             color: '#fff',
             cursor: 'pointer',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             minHeight: 42,
             display: 'inline-flex',
             alignItems: 'center',
@@ -222,7 +227,7 @@ export default function MappingStep({
             background: 'var(--success)',
             color: '#fff',
             cursor: 'pointer',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             minHeight: 42,
             display: 'inline-flex',
             alignItems: 'center',

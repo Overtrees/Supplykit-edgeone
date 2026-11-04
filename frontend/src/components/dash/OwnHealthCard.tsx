@@ -200,7 +200,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 6,
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       fontSize: 'var(--font-sm)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -226,7 +226,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                   <span
                     style={{
                       flexShrink: 0,
-                      fontWeight: "var(--fw-bold)",
+                      fontWeight: 'var(--fw-bold)',
                       fontSize: 'var(--font-sm)',
                       color: m.c,
                       fontVariantNumeric: 'tabular-nums',

@@ -12,31 +12,80 @@ import { t } from '../../locale'
 import { colLabel } from '../../components/colLabels'
 import { renderNote, Skeleton } from './shared'
 import type { MutableRefObject } from 'react'
+import type { NoteSeg } from '../../api/types'
+import type { ColumnDef } from '../../components/hammer/configs'
+import type { FreshData } from '../../components/Freshness'
+
+/** 补货建议行: 已知字段精确类型, 动态扩展字段收敛为 unknown */
+export interface ReplenRow {
+  sku?: string
+  store?: string
+  brand?: string
+  barcode?: string
+  product_name?: string
+  warehouse?: string
+  note?: string
+  note_segs?: unknown
+  available_qty?: number
+  b_transit?: number
+  b_stock?: number
+  c_stock?: number
+  c_transit?: number
+  in_transit_qty?: number
+  daily_sales?: number
+  daily_sales_7?: number
+  daily_sales_14?: number
+  daily_sales_28?: number
+  daily_sales_60?: number
+  c_turnover?: number
+  transit_turnover?: number
+  safety_qty?: number
+  days_to_empty?: number
+  suggested_qty?: number
+  b_suggested?: number
+  combined_turnover_current?: number
+  combined_turnover?: number
+  after_turnover?: number
+  [k: string]: unknown
+}
+
+/** 已下单明细行(展示到货日期/在库天数) */
+export interface OrderedItem {
+  id?: number
+  sku?: string
+  store?: string
+  product_name?: string
+  suggested_qty?: number
+  actual_qty?: number
+  arrival_date?: string
+  [k: string]: unknown
+}
 
 interface Props {
   /** 列表数据与加载态 */
-  replen: any[]
+  replen: ReplenRow[]
   replenLoading: boolean
   replenTotal: number
   replenLoadingMore: boolean
-  replenError: any
-  filteredReplen: any[]
+  replenError: string
+  filteredReplen: ReplenRow[]
   /** 列配置与可见列 */
-  currentCols: any[]
+  currentCols: ColumnDef[]
   visCols: string[]
   replenMode: string
   /** 订购台账(已下单的行做标记/撤销) */
   orderedKeys: string[]
-  orderedItems: any[]
+  orderedItems: OrderedItem[]
   /** 交互回调: 触底加载/标记已订/撤销/改到货日期, 闭包都在页面 */
   loadReplen: (mode?: string, ch?: string, page?: number) => void
   toggleOrdered: (sku: string, store: string, name?: string, qty?: number) => void
-  setArrivalDate: (item: any, date: string) => void
+  setArrivalDate: (item: OrderedItem, date: string) => void
   replenPageRef: MutableRefObject<number>
   insightSearch: string
   globalChannel: string
   /** 新鲜度对象(StaleDot 渲染用) */
-  fresh: any
+  fresh: FreshData | null
+  [k: string]: unknown
 }
 
 /** 补货建议 tab。从 InsightsPage 外提(第四刀, 见 15.137): 全受控, 写操作
@@ -70,7 +119,10 @@ export default function ReplenTab(props: Props) {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
         <span>{t('ins_r.title')}</span>
-        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
+        <span
+          className="muted2"
+          style={{ fontSize: 'var(--font-xs)', fontWeight: 'var(--fw-regular)' }}
+        >
           {t('ins.loaded_n_of_m', {
             n: Math.min(replen.length, replenTotal || replen.length),
             m: replenTotal || replen.length,
@@ -211,7 +263,7 @@ export default function ReplenTab(props: Props) {
                         // 现有(TRAD)
                         if (col.id === 'avail')
                           return (
-                            <td key={col.id} style={{ fontWeight: "var(--fw-semibold)" }}>
+                            <td key={col.id} style={{ fontWeight: 'var(--fw-semibold)' }}>
                               {x.available_qty}
                             </td>
                           )
@@ -228,7 +280,10 @@ export default function ReplenTab(props: Props) {
                         // B仓可用库存
                         if (col.id === 'b_stock')
                           return (
-                            <td key={col.id} style={{ color: 'var(--primary)', fontWeight: "var(--fw-semibold)" }}>
+                            <td
+                              key={col.id}
+                              style={{ color: 'var(--primary)', fontWeight: 'var(--fw-semibold)' }}
+                            >
                               {x.b_stock ?? '-'}
                             </td>
                           )
@@ -239,7 +294,7 @@ export default function ReplenTab(props: Props) {
                               key={col.id}
                               style={{
                                 fontSize: 'var(--font-xs)',
-                                fontWeight: "var(--fw-semibold)",
+                                fontWeight: 'var(--fw-semibold)',
                                 color:
                                   x.b_stock > 0 &&
                                   (x.daily_sales > 0 ? x.b_stock / x.daily_sales : Infinity) > 15
@@ -263,7 +318,7 @@ export default function ReplenTab(props: Props) {
                         // C仓总和可用
                         if (col.id === 'c_stock')
                           return (
-                            <td key={col.id} style={{ fontWeight: "var(--fw-semibold)" }}>
+                            <td key={col.id} style={{ fontWeight: 'var(--fw-semibold)' }}>
                               {x.c_stock ?? x.available_qty}
                             </td>
                           )
@@ -283,7 +338,7 @@ export default function ReplenTab(props: Props) {
                               key={col.id}
                               style={{
                                 fontSize: 'var(--font-xs)',
-                                fontWeight: "var(--fw-semibold)",
+                                fontWeight: 'var(--fw-semibold)',
                                 whiteSpace: 'nowrap',
                               }}
                             >
@@ -291,7 +346,7 @@ export default function ReplenTab(props: Props) {
                               <span
                                 style={{
                                   fontSize: 'var(--font-10)',
-                                  fontWeight: "var(--fw-regular)",
+                                  fontWeight: 'var(--fw-regular)',
                                   color: 'var(--muted2)',
                                 }}
                               >
@@ -424,14 +479,20 @@ export default function ReplenTab(props: Props) {
                         // C仓建议补
                         if (col.id === 'suggest')
                           return (
-                            <td key={col.id} style={{ color: 'var(--primary)', fontWeight: "var(--fw-semibold)" }}>
+                            <td
+                              key={col.id}
+                              style={{ color: 'var(--primary)', fontWeight: 'var(--fw-semibold)' }}
+                            >
                               {x.suggested_qty > 0 ? x.suggested_qty : '-'}
                             </td>
                           )
                         // B仓需补
                         if (col.id === 'b_suggest')
                           return (
-                            <td key={col.id} style={{ color: 'var(--success)', fontWeight: "var(--fw-bold)" }}>
+                            <td
+                              key={col.id}
+                              style={{ color: 'var(--success)', fontWeight: 'var(--fw-bold)' }}
+                            >
                               {x.b_suggested > 0 ? x.b_suggested : '-'}
                             </td>
                           )
@@ -451,7 +512,7 @@ export default function ReplenTab(props: Props) {
                               key={col.id}
                               style={{
                                 fontSize: 'var(--font-xs)',
-                                fontWeight: "var(--fw-bold)",
+                                fontWeight: 'var(--fw-bold)',
                                 color:
                                   replenMode === 'bbcc'
                                     ? x.combined_turnover != null && x.combined_turnover > 90
@@ -481,10 +542,11 @@ export default function ReplenTab(props: Props) {
                           return (
                             <td
                               key={col.id}
-                              className="col-note" onClick={e => e.currentTarget.classList.toggle('col-note-open')}
+                              className="col-note"
+                              onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                               title={x.note || ''}
                             >
-                              {renderNote(x.note, x.note_segs)}
+                              {renderNote(x.note, x.note_segs as NoteSeg[] | null)}
                             </td>
                           )
                         // 标记操作
@@ -615,7 +677,11 @@ export default function ReplenTab(props: Props) {
         <details style={{ marginTop: 12 }}>
           <summary
             className="small muted"
-            style={{ cursor: 'pointer', fontSize: 'var(--font-sm)', fontWeight: "var(--fw-semibold)" }}
+            style={{
+              cursor: 'pointer',
+              fontSize: 'var(--font-sm)',
+              fontWeight: 'var(--fw-semibold)',
+            }}
           >
             <IconPackage size={14} style={{ verticalAlign: -3 }} />{' '}
             {t('ins_r.ordered_detail', { n: orderedItems.length })} ·{' '}
@@ -659,7 +725,10 @@ export default function ReplenTab(props: Props) {
                     </span>
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <span className="small" style={{ color: stayColor, fontWeight: "var(--fw-semibold)" }}>
+                    <span
+                      className="small"
+                      style={{ color: stayColor, fontWeight: 'var(--fw-semibold)' }}
+                    >
                       {daysSinceArrival != null
                         ? t('ins.days_n', { n: daysSinceArrival })
                         : t('ins_r.pending_arrival')}

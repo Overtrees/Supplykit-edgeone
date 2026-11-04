@@ -2,19 +2,43 @@ import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, RISK_LV } from '../format'
 import { t } from '../../../locale'
 
+type RiskFilter = 'all' | 'red' | 'orange' | 'yellow'
+
+/** 濒临断货明细行: 已知字段精确声明, 动态扩展字段 unknown(索引签名兜底) */
+interface RiskRow {
+  sku?: string
+  product_name?: string
+  level?: string
+  warehouse?: string
+  type?: string
+  daily_sales?: number
+  available_qty?: number
+  days_to_empty?: number
+  [k: string]: unknown
+}
+
+/** 弹窗数据源: 看板派生的 StockRiskShim / C+自有合并对象 */
+interface RiskData {
+  total?: number
+  critical?: number
+  warning?: number
+  items?: RiskRow[]
+  _full?: RiskRow[]
+}
+
 interface Props {
   open: boolean
   onClose: () => void
   replMode?: string
-  riskFilter: string
-  setRiskFilter: (v: any) => void
+  riskFilter: RiskFilter
+  setRiskFilter: (v: RiskFilter) => void
   riskCritical: number
   riskWarning: number
-  riskTabs: any[]
-  fullRisk: any[] | null
-  riskData: any
+  riskTabs: Array<[RiskFilter, string, string]>
+  fullRisk: RiskRow[] | null
+  riskData: RiskData
   showOwn: boolean
-  onAlert?: (sku?: any, whType?: any, wh?: any) => void
+  onAlert?: (sku?: string, whType?: string, wh?: string) => void
 }
 
 export default function RiskSheet(props: Props) {
@@ -73,7 +97,7 @@ export default function RiskSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               marginBottom: 6,
               textAlign: 'center',
               color: 'var(--text)',
@@ -179,7 +203,7 @@ export default function RiskSheet(props: Props) {
                         display: 'flex',
                         alignItems: 'center',
                         gap: 4,
-                        fontWeight: "var(--fw-semibold)",
+                        fontWeight: 'var(--fw-semibold)',
                         fontSize: 'var(--font-sm)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -231,7 +255,7 @@ export default function RiskSheet(props: Props) {
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       color: lv ? lv.c : 'var(--danger)',
                       flexShrink: 0,
                       minWidth: 38,
@@ -250,9 +274,15 @@ export default function RiskSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-<span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
-                  {t('dash.close')}
-                </span>
+            <span
+              style={{
+                fontSize: 'var(--font-15)',
+                fontWeight: 'var(--fw-semibold)',
+                color: '#fff',
+              }}
+            >
+              {t('dash.close')}
+            </span>
           </div>
         </div>
       </div>

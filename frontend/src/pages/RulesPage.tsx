@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { api, clearCache, clearInflight, freshStamp, apiJson } from '../api/client'
+import type { ApiObject } from '../api/types'
 import { mutate } from '../api/mutate'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
@@ -14,6 +15,22 @@ import RulesPurchasePanel from './rules/PurchasePanel'
 import RulesSeasonPanel from './rules/SeasonPanel'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
+
+/** 规则行(列表/编辑共用, 后端动态字段兜底) */
+interface Rule {
+  id?: number | string
+  name?: string
+  event?: string
+  alert_type?: string
+  alert_title?: string
+  alert_desc?: string
+  severity?: string
+  mode?: string
+  condition_json?: string
+  params?: Record<string, string>
+  is_active?: number | boolean
+  [k: string]: unknown
+}
 
 export default function RulesPage() {
   const toast = useToast()
@@ -109,7 +126,7 @@ export default function RulesPage() {
   } = useAppStore()
   useEffect(() => {
     api
-      .get('/api/replenishment-config/slow-cats?channel=' + globalChannel)
+      .get<ApiObject[]>('/api/replenishment-config/slow-cats?channel=' + globalChannel)
       .then(r => {
         if (Array.isArray(r.data)) setSlowCats(r.data)
       })
@@ -136,7 +153,7 @@ export default function RulesPage() {
         }
       })()
       // S3-2 收口: raw 保留 r.status(addDebug 记录用), apiJson 补超时/token/BASE
-      const r = await apiJson('GET', API + '/api/rules?channel=' + c, { raw: true })
+      const r = await apiJson<Response>('GET', API + '/api/rules?channel=' + c, { raw: true })
       const d = await r.json()
       // 防御: 异常响应(401/500/结构异常)可能非数组 → setRules(object) 导致 rules.length
       // undefined → 渲染条件全 false → 空白无提示。数组校验+格式异常提示
@@ -155,11 +172,7 @@ export default function RulesPage() {
       })
       useAppStore.setState({ batchStateMap: _m })
       setRulesErr(
-        Array.isArray(rawData)
-          ? ''
-          : r.status !== 200
-            ? t('rp.load_failed')
-            : t('rp.bad_payload'),
+        Array.isArray(rawData) ? '' : r.status !== 200 ? t('rp.load_failed') : t('rp.bad_payload'),
       )
       addDebug('setRules 完成', { 条数: newData.length })
     } catch (e) {
@@ -176,7 +189,7 @@ export default function RulesPage() {
     try {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
-      const r = await api.get(
+      const r = await api.get<ReplenConfig>(
         '/api/replenishment-config?mode=' + m + '&channel=' + c + '&t=' + freshStamp(),
       )
       if (r.data && Object.keys(r.data).length > 0) {
@@ -187,7 +200,9 @@ export default function RulesPage() {
         })
         setCfg(p => ({ ...p, ...r.data, ...mD, replenishment_mode: m }))
       } else if (c !== 'jd') {
-        const fallback = await api.get('/api/replenishment-config?mode=' + m + '&channel=jd')
+        const fallback = await api.get<ReplenConfig>(
+          '/api/replenishment-config?mode=' + m + '&channel=jd',
+        )
         if (fallback.data) setCfg(p => ({ ...p, ...fallback.data, replenishment_mode: m }))
       }
       setCfg(p => ({ ...p, replenishment_mode: m }))
@@ -200,7 +215,7 @@ export default function RulesPage() {
     try {
       const m = mode || cfg.replenishment_mode || 'bbcc'
       const c = ch || globalChannel
-      const r = await api.get(
+      const r = await api.get<ApiObject[]>(
         '/api/replenishment-config/seasons?mode=' + m + '&channel=' + c + '&t=' + freshStamp(),
       )
       setSeasons(r.data || [])
@@ -210,8 +225,10 @@ export default function RulesPage() {
     try {
       const c = globalChannel
       const [rc, rf] = await Promise.all([
-        api.get('/api/replenishment-config/slow-cats?channel=' + c + '&t=' + freshStamp()),
-        api.get('/api/replenishment-config?channel=' + c + '&t=' + freshStamp()),
+        api.get<ApiObject[]>(
+          '/api/replenishment-config/slow-cats?channel=' + c + '&t=' + freshStamp(),
+        ),
+        api.get<ReplenConfig>('/api/replenishment-config?channel=' + c + '&t=' + freshStamp()),
       ])
       if (rc.data) setSlowCats(Array.isArray(rc.data) ? rc.data : [])
       if (rf.data) {
@@ -245,7 +262,7 @@ export default function RulesPage() {
       })(),
       (async () => {
         try {
-          const flat = await api.get('/api/replenishment-config?channel=' + c)
+          const flat = await api.get<ReplenConfig>('/api/replenishment-config?channel=' + c)
           if (flat.data) {
             setCfg(p => {
               const mP = 'mode_' + m + '_'
@@ -257,12 +274,12 @@ export default function RulesPage() {
             })
             const sK = 'season_config_' + m
             try {
-              const sd = JSON.parse(flat.data[sK] || '[]')
+              const sd = JSON.parse((flat.data[sK] as string) || '[]')
               setSeasons(Array.isArray(sd) ? sd : [])
             } catch {}
             try {
               if (flat.data.slow_cats) {
-                const sc = JSON.parse(flat.data.slow_cats)
+                const sc = JSON.parse(flat.data.slow_cats as string)
                 setSlowCats(Array.isArray(sc) ? sc : [])
               }
               if (flat.data.transit_days) setTransitDays(flat.data.transit_days)
@@ -273,7 +290,7 @@ export default function RulesPage() {
       })(),
       (async () => {
         try {
-          const sr = await api.get('/api/suppliers?channel=' + c)
+          const sr = await api.get<ApiObject[]>('/api/suppliers?channel=' + c)
           if (sr.data) setSuppliers(sr.data.map(x => x.supplier_code).filter(Boolean))
         } catch (e) {}
       })(),
@@ -362,7 +379,7 @@ export default function RulesPage() {
     })
   }
   // 列表点卡片 → 进入编辑(回填表单状态)
-  const openEdit = (rule: any) => {
+  const openEdit = (rule: Rule) => {
     if (!prodBatch) {
       const c = pc(rule.condition_json || '{}')
       setEditing(rule)
@@ -434,7 +451,7 @@ export default function RulesPage() {
         label: isNew ? t('rp.new_rule') : t('rp.save_rule'),
         run: async () => {
           // S3-2 收口: 保存是重操作, 超时对齐 postHeavy 90s; raw 保留 res.ok 判断
-          const res = await apiJson(isNew ? 'POST' : 'PUT', url, {
+          const res = await apiJson<Response>(isNew ? 'POST' : 'PUT', url, {
             timeout: 90000,
             data: {
               ...f,
@@ -499,8 +516,7 @@ export default function RulesPage() {
         const _miss = _pm
           .map(m => m.split('.')[1])
           .filter(k => !(rParams[k] !== undefined && rParams[k] !== ''))
-        if (_miss.length)
-          toast.warning(t('rp.warn_param_missing', { keys: _miss.join('/') }))
+        if (_miss.length) toast.warning(t('rp.warn_param_missing', { keys: _miss.join('/') }))
       }
     } catch (e) {
       toast.error(t('rp.save_failed', { msg: e.message }))
@@ -513,7 +529,7 @@ export default function RulesPage() {
       label: t('rp.delete_rule_op'),
       run: async () => {
         // S3-2 收口: raw 保留 res.ok 判断
-        const res = await apiJson('DELETE', API + '/api/rules/' + id, { raw: true })
+        const res = await apiJson<Response>('DELETE', API + '/api/rules/' + id, { raw: true })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
           throw new Error(err.detail || 'HTTP ' + res.status)
@@ -546,7 +562,7 @@ export default function RulesPage() {
             label: t('rp.restore_rule'),
             run: async () => {
               // S3-2 收口: raw 保留 res.ok 判断
-              const res = await apiJson('POST', API + '/api/rules/' + id + '/restore', {
+              const res = await apiJson<Response>('POST', API + '/api/rules/' + id + '/restore', {
                 raw: true,
               })
               if (!res.ok) throw new Error('HTTP ' + res.status)
@@ -649,9 +665,7 @@ export default function RulesPage() {
             fontFamily: 'monospace',
           }}
         >
-          <div style={{ fontWeight: "var(--fw-bold)", marginBottom: 4 }}>
-            {t('rp.debug_title')}
-          </div>
+          <div style={{ fontWeight: 'var(--fw-bold)', marginBottom: 4 }}>{t('rp.debug_title')}</div>
           <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
             {t('rp.debug_state', { n: rules.length })} |{' '}
             {t('rp.debug_filtered', { n: filteredRules.length })} |{' '}

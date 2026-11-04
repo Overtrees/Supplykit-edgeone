@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api, apiJson } from '../../api/client'
+import type { InventoryRow, OkResponse } from '../../api/types'
 import { useToast } from '../../components/Toast'
 import { IconCheck, IconClose, IconGear, IconLightning, IconLoading } from '../../components/Icons'
 import { IS } from './shared'
@@ -8,6 +9,20 @@ import { fieldLbl, opLbl, whLbl } from './labels'
 import { t } from '../../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
+
+/** 待测规则(携带编辑态打包的初始模拟值) */
+interface TestRule {
+  id?: number | string
+  name?: string
+  condition_json?: string
+  __testInv?: Record<string, unknown>
+  __testParams?: Record<string, unknown>
+  [k: string]: unknown
+}
+/** /api/rules/:id/test 的 data(展示用动态结构, 字段在边界处收敛) */
+interface TestResult {
+  [k: string]: unknown
+}
 
 /**
  * 规则测试弹窗(可视化调试: 输入模拟数据判断是否触发) —— 自 RulesPage.tsx 外提(S3-1 续)。
@@ -21,7 +36,7 @@ export default function RuleTestSheet({
   onClose,
   globalChannel,
 }: {
-  rule: any
+  rule: TestRule | null
   onClose: () => void
   globalChannel: string
 }) {
@@ -82,46 +97,50 @@ export default function RuleTestSheet({
     setTestLoading(true)
     try {
       // S3-2 收口: 测试是重操作, 超时对齐 postHeavy 90s
-      const d = await apiJson('POST', API + '/api/rules/' + rule.id + '/test', {
-        timeout: 90000,
-        data: {
-          inv: {
-            available_qty: Number(testInv.available_qty) || 0,
-            safety_qty: Number(testInv.safety_qty) || 0,
-            in_transit_qty: Number(testInv.in_transit_qty) || 0,
-            warehouse_type: testInv.warehouse_type,
-            days_since_last: Number(testInv.days_since_last) || 0,
-            adj_dos: Number(testInv.adj_dos) || 0,
-            buffer: Number(testInv.buffer) || 0,
-          },
-          order: { quantity: Number(testInv.order_quantity) || 0 },
-          params: testParams,
-          // 2026-11-01 own./batch. 模拟值透传 —— 不传后端也会给默认, 但用户需要能改数观察触发
-          own: (() => {
-            const o: Record<string, number> = {}
-            for (const k of Object.keys(testOwn)) {
-              const v = testOwn[k]
-              if (v === '' || v === undefined || v === null) continue
-              const n = Number(v)
-              if (!isNaN(n)) o[k] = n
-            }
-            // need/gap/cover_days 留空时由后端按下游日销×周期 / 可用÷日销 推导, 不硬塞 0
-            return o
-          })(),
-          batch: (() => {
-            const v = testBatch.days_to_expire
-            return v === '' || v === undefined || v === null
-              ? undefined
-              : { days_to_expire: Number(v) }
-          })(),
-          health: {
-            score:
-              testInv.health_score === undefined || testInv.health_score === ''
-                ? 100
-                : Number(testInv.health_score),
+      const d = await apiJson<OkResponse<TestResult>>(
+        'POST',
+        API + '/api/rules/' + rule.id + '/test',
+        {
+          timeout: 90000,
+          data: {
+            inv: {
+              available_qty: Number(testInv.available_qty) || 0,
+              safety_qty: Number(testInv.safety_qty) || 0,
+              in_transit_qty: Number(testInv.in_transit_qty) || 0,
+              warehouse_type: testInv.warehouse_type,
+              days_since_last: Number(testInv.days_since_last) || 0,
+              adj_dos: Number(testInv.adj_dos) || 0,
+              buffer: Number(testInv.buffer) || 0,
+            },
+            order: { quantity: Number(testInv.order_quantity) || 0 },
+            params: testParams,
+            // 2026-11-01 own./batch. 模拟值透传 —— 不传后端也会给默认, 但用户需要能改数观察触发
+            own: (() => {
+              const o: Record<string, number> = {}
+              for (const k of Object.keys(testOwn)) {
+                const v = testOwn[k]
+                if (v === '' || v === undefined || v === null) continue
+                const n = Number(v)
+                if (!isNaN(n)) o[k] = n
+              }
+              // need/gap/cover_days 留空时由后端按下游日销×周期 / 可用÷日销 推导, 不硬塞 0
+              return o
+            })(),
+            batch: (() => {
+              const v = testBatch.days_to_expire
+              return v === '' || v === undefined || v === null
+                ? undefined
+                : { days_to_expire: Number(v) }
+            })(),
+            health: {
+              score:
+                testInv.health_score === undefined || testInv.health_score === ''
+                  ? 100
+                  : Number(testInv.health_score),
+            },
           },
         },
-      })
+      )
       if (d.ok) setTestResult(d.data)
       else toast.error(t('rt.failed', { msg: d.error || '' }))
     } catch (e) {
@@ -175,7 +194,7 @@ export default function RuleTestSheet({
               marginBottom: 12,
               textAlign: 'center',
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               color: 'var(--text)',
               maxWidth: '100%',
               whiteSpace: 'nowrap',
@@ -200,7 +219,9 @@ export default function RuleTestSheet({
               <button
                 onClick={async () => {
                   try {
-                    const r = await api.get('/api/inventory/sample?channel=' + globalChannel)
+                    const r = await api.get<InventoryRow>(
+                      '/api/inventory/sample?channel=' + globalChannel,
+                    )
                     const d = r.data || {}
                     if (d.sku) {
                       setTestInv(p => ({
@@ -224,7 +245,7 @@ export default function RuleTestSheet({
                   background: 'var(--card)',
                   color: 'var(--primary)',
                   cursor: 'pointer',
-                  fontWeight: "var(--fw-semibold)",
+                  fontWeight: 'var(--fw-semibold)',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
@@ -334,9 +355,14 @@ export default function RuleTestSheet({
                     border: '1px solid var(--border)',
                   }}
                 >
-                  <div style={{ fontWeight: "var(--fw-semibold)", fontSize: 'var(--font-sm)', marginBottom: 8 }}>
-                    <IconGear size={14} style={{ verticalAlign: -2 }} />{' '}
-                    {t('rt.calc_vars')}
+                  <div
+                    style={{
+                      fontWeight: 'var(--fw-semibold)',
+                      fontSize: 'var(--font-sm)',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <IconGear size={14} style={{ verticalAlign: -2 }} /> {t('rt.calc_vars')}
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {_needAdj && (
@@ -505,7 +531,7 @@ export default function RuleTestSheet({
               >
                 <div
                   style={{
-                    fontWeight: "var(--fw-bold)",
+                    fontWeight: 'var(--fw-bold)',
                     fontSize: 'var(--font-15)',
                     color: testResult.triggered ? 'var(--success)' : 'var(--danger)',
                     marginBottom: 6,
@@ -567,7 +593,7 @@ export default function RuleTestSheet({
                         <span
                           style={{
                             color: testResult.detail.and.hit ? 'var(--success)' : 'var(--danger)',
-                            fontWeight: "var(--fw-semibold)",
+                            fontWeight: 'var(--fw-semibold)',
                           }}
                         >
                           {testResult.detail.and.hit ? t('rt.hit') : t('rt.miss')}
@@ -589,7 +615,7 @@ export default function RuleTestSheet({
                             <span
                               style={{
                                 color: o.hit ? 'var(--success)' : 'var(--danger)',
-                                fontWeight: "var(--fw-semibold)",
+                                fontWeight: 'var(--fw-semibold)',
                               }}
                             >
                               {o.hit ? t('rt.hit') : t('rt.miss')}

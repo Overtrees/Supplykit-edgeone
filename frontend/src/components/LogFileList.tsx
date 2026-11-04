@@ -3,19 +3,44 @@ import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import { t } from '../locale'
 
+interface LogFile {
+  date: string
+  count?: number
+  [k: string]: unknown
+}
+
+interface LogFileResponse {
+  items?: LogFile[]
+  [k: string]: unknown
+}
+
+interface LogDetail {
+  markdown?: string
+  count?: number
+  [k: string]: unknown
+}
+
+interface Preview {
+  date: string
+  markdown: string
+  count: number
+  loading: boolean
+  error?: boolean
+}
+
 /** 日志文件列表(iPhone 日志分析式): 按天平铺 log_archives 归档, 点击行 → 底部弹窗预览当日 md, 系统分享 API 导出
  * 用于: 质量日志页直接平铺(scope=user) + 开发者模式日志弹窗(scope=dev) */
 export default function LogFileList({ scope = 'user' }: { scope?: string }) {
-  const [files, setFiles] = useState<any[]>([])
+  const [files, setFiles] = useState<LogFile[]>([])
   const [ld, setLd] = useState(true)
-  const [preview, setPreview] = useState<any>(null) // {date, markdown, count, loading} — 底部弹窗
+  const [preview, setPreview] = useState<Preview | null>(null) // {date, markdown, count, loading} — 底部弹窗
   const [sharing, setSharing] = useState(false)
 
   const load = () => {
     setLd(true)
     api
-      .get('/api/quality-logs/files?days=30&scope=' + scope)
-      .then((r: any) => {
+      .get<LogFileResponse>('/api/quality-logs/files?days=30&scope=' + scope)
+      .then(r => {
         setFiles(r.data?.items || [])
         setLd(false)
       })
@@ -32,7 +57,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
   const openPreview = async (date: string, retry = 0) => {
     setPreview({ date, markdown: '', count: 0, loading: true })
     try {
-      const r = await api.get(
+      const r = await api.get<LogDetail>(
         '/api/quality-logs/file?date=' +
           date +
           '&scope=' +
@@ -66,7 +91,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
     setSharing(true)
     const name = `quality-logs-${preview.date}-${scope}.md`
     const file = new File([preview.markdown], name, { type: 'text/markdown;charset=utf-8' })
-    const nav = navigator as any
+    const nav = navigator
     if (nav.share && nav.canShare && nav.canShare({ files: [file] })) {
       try {
         await nav.share({ files: [file], title: name })
@@ -113,7 +138,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
           {t('log.empty')}
         </div>
       ) : (
-        files.map((f: any, i: number) => (
+        files.map((f, i) => (
           <div
             key={f.date || i}
             onClick={() => openPreview(f.date)}
@@ -129,7 +154,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             <span
               style={{
                 fontSize: 'var(--font-13)',
-                fontWeight: "var(--fw-semibold)",
+                fontWeight: 'var(--fw-semibold)',
                 fontVariantNumeric: 'tabular-nums',
                 flexShrink: 0,
               }}
@@ -196,7 +221,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                 <div
                   style={{
                     fontSize: 'var(--font-18)',
-                    fontWeight: "var(--fw-bold)",
+                    fontWeight: 'var(--fw-bold)',
                     marginBottom: 4,
                     textAlign: 'center',
                     color: 'var(--text)',
@@ -204,7 +229,11 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                 >
                   {t('log.title', { date: preview.date })}{' '}
                   <span
-                    style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', fontWeight: "var(--fw-regular)" }}
+                    style={{
+                      fontSize: 'var(--font-xs)',
+                      color: 'var(--muted2)',
+                      fontWeight: 'var(--fw-regular)',
+                    }}
                   >
                     {t('log.n_items', { n: preview.count })}
                   </span>

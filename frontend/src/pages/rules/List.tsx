@@ -4,6 +4,26 @@ import EmptyState from '../../components/EmptyState'
 import { t } from '../../locale'
 import { pc, fieldLbl, modeLbl, opLbl, renderTmpl, whLbl } from './labels'
 
+/** 规则行(后端动态字段兜底) */
+interface Rule {
+  id?: number | string
+  name?: string
+  is_active?: number | boolean
+  severity?: string
+  mode?: string
+  condition_json?: string
+  alert_title?: string
+  alert_desc?: string
+  [k: string]: unknown
+}
+/** 条件片段(供右侧值格式化, 字段为动态 API 数据) */
+interface CondRight {
+  rightType?: string
+  right?: string | number
+  pctValue?: string | number
+  [k: string]: unknown
+}
+
 /**
  * 规则列表(全受控) —— 自 RulesPage.tsx 外提(S3-1 续2)。
  * 点卡片进入编辑由 onEdit(rule) 回调页面; 空态新建由 onNew 回调。
@@ -22,21 +42,25 @@ export default function RuleList({
   onEdit,
   onNew,
 }: {
-  filteredRules: any[]
-  rules: any[]
+  filteredRules: Rule[]
+  rules: Rule[]
   rulesErr: string
   selIds: (number | string)[]
-  setSelIds: (v: any) => void
+  setSelIds: (v: (number | string)[]) => void
   prodBatch: boolean
   hammerSearch: string
   load: (ch?: string) => void
   globalChannel: string
-  onEdit: (rule: any) => void
+  onEdit: (rule: Rule) => void
   onNew: () => void
 }) {
-  const sevCls = s => (s === 'error' ? 'danger' : s === 'info' ? 'info' : 'warning')
-  const sevLbl = s =>
-    s === 'error' ? t('rules.severity_error') : s === 'info' ? t('rules.severity_info') : t('rules.severity_warning')
+  const sevCls = (s: string) => (s === 'error' ? 'danger' : s === 'info' ? 'info' : 'warning')
+  const sevLbl = (s: string) =>
+    s === 'error'
+      ? t('rules.severity_error')
+      : s === 'info'
+        ? t('rules.severity_info')
+        : t('rules.severity_warning')
 
   return (
     <>
@@ -51,14 +75,16 @@ export default function RuleList({
         //  ② and 子条件原**完全不显示** → 列表里只看得到前置、看不到真正的判据(缺口>阈值);
         //     现在把 and/or 串进文案, 与编辑区一致。
         const _isWhField = condInfo.left === 'inv.warehouse_type'
-        const _fmtR = (c: any) =>
+        const _fmtR = (c: CondRight) =>
           c.rightType === 'pct'
             ? t('rules.pct_of', { field: fieldLbl(c.right), pct: c.pctValue })
             : c.rightType === 'field'
               ? fieldLbl(c.right)
               : c.right
         const condText =
-          (condInfo.warehouse && !_isWhField ? t('rules.when_wh', { wh: _whLbl }) : t('rules.when')) +
+          (condInfo.warehouse && !_isWhField
+            ? t('rules.when_wh', { wh: _whLbl })
+            : t('rules.when')) +
           `${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${_fmtR(condInfo)}` +
           (condInfo.and
             ? ' ' +
@@ -70,7 +96,7 @@ export default function RuleList({
             ? ' ' +
               t('rules.or', {
                 cond: condInfo.or
-                  .map((o: any) => `${fieldLbl(o.left)} ${opLbl(o.op)} ${_fmtR(o)}`)
+                  .map(o => `${fieldLbl(o.left)} ${opLbl(o.op)} ${_fmtR(o)}`)
                   .join(' / '),
               })
             : '')
@@ -101,7 +127,7 @@ export default function RuleList({
                 <span className={'rule-check' + (selIds.includes(rule.id) ? ' on' : '')}>
                   {selIds.includes(rule.id) ? <IconCheck size={12} /> : ''}
                 </span>
-<span style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
                   {t('rules.select')}
                 </span>
               </span>
@@ -154,11 +180,7 @@ export default function RuleList({
         ) : (
           <EmptyState
             icon="tag"
-            title={
-              rules.length === 0
-                ? t('rules.empty')
-                : t('rules.no_match', { q: hammerSearch })
-            }
+            title={rules.length === 0 ? t('rules.empty') : t('rules.no_match', { q: hammerSearch })}
             desc={rules.length === 0 ? t('rules.empty_desc') : undefined}
             action={
               rules.length === 0 ? (

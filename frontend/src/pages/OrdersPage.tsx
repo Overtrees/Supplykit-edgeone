@@ -137,7 +137,7 @@ export default function OrdersPage() {
     const out: Record<string, ReturnType<typeof codeColWidth>> = {}
     for (const id of visCols) {
       if (id !== 'order_no' && id !== 'barcode') continue
-      out[id] = codeColWidth(orders.map((x: any) => (id === 'order_no' ? x.order_no : x.barcode)))
+      out[id] = codeColWidth(orders.map(x => (id === 'order_no' ? x.order_no : x.barcode)))
     }
     return out
   }, [orders, visCols])
@@ -147,7 +147,7 @@ export default function OrdersPage() {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       // S3-2 收口: 批量是重操作, 超时 90s
-      const d = await apiJson('POST', API + '/api/orders/batch', {
+      const d = await apiJson<{ ok?: boolean; error?: string }>('POST', API + '/api/orders/batch', {
         timeout: 90000,
         data: { action, ids },
       })
@@ -192,9 +192,12 @@ export default function OrdersPage() {
         </div>
       )}
       <div className="card">
-        <div style={{ fontSize: 'var(--font-18)', fontWeight: "var(--fw-bold)", marginBottom: 8 }}>
+        <div style={{ fontSize: 'var(--font-18)', fontWeight: 'var(--fw-bold)', marginBottom: 8 }}>
           {t('nav.orders')} {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
-          <span className="small muted" style={{ fontWeight: "var(--fw-regular)", fontSize: 'var(--font-xs)' }}>
+          <span
+            className="small muted"
+            style={{ fontWeight: 'var(--fw-regular)', fontSize: 'var(--font-xs)' }}
+          >
             {t('oms.loaded', {
               a: Math.min(orders.length, orderTotal || orders.length),
               b: orderTotal || orders.length,
@@ -214,7 +217,7 @@ export default function OrdersPage() {
             style={{
               float: 'right',
               fontSize: 'var(--font-xs)',
-              fontWeight: "var(--fw-regular)",
+              fontWeight: 'var(--fw-regular)',
               color: 'var(--primary)',
               cursor: 'pointer',
             }}

@@ -5,17 +5,29 @@ import { useToast } from '../../components/Toast'
 import { IS } from './shared'
 import { t } from '../../locale'
 
+/** 滞销品类条目(编辑期数值字段为字符串, 故 number|string) */
+interface SlowCat {
+  key?: string
+  name?: string
+  enabled?: boolean
+  slow_days?: number | string
+  observe_days?: number | string
+  shelf_months?: number | string
+  cats?: string
+  [k: string]: unknown
+}
+
 interface Props {
   channel: string
-  slowCats: any[]
-  setSlowCats: Dispatch<SetStateAction<any[]>>
-  transitDays: any
-  setTransitDays: Dispatch<SetStateAction<any>>
-  fundThreshold: any
-  setFundThreshold: Dispatch<SetStateAction<any>>
+  slowCats: SlowCat[]
+  setSlowCats: Dispatch<SetStateAction<SlowCat[]>>
+  transitDays: string
+  setTransitDays: Dispatch<SetStateAction<string>>
+  fundThreshold: string
+  setFundThreshold: Dispatch<SetStateAction<string>>
   saving: boolean
   setSaving: Dispatch<SetStateAction<boolean>>
-  saveErr: any
+  saveErr: (e: unknown) => void
 }
 
 export default function RulesSlowPanel(props: Props) {
@@ -139,7 +151,9 @@ export default function RulesSlowPanel(props: Props) {
               <input
                 type="number"
                 value={s.observe_days ?? ''}
-                placeholder={String(Math.max(Math.floor(parseInt(s.slow_days || 30) / 2), 15))}
+                placeholder={String(
+                  Math.max(Math.floor(parseInt((s.slow_days || 30) as string) / 2), 15),
+                )}
                 onChange={e =>
                   setSlowCats(p =>
                     p.map((x, j) =>

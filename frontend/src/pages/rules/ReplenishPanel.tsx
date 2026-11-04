@@ -5,17 +5,31 @@ import { useToast } from '../../components/Toast'
 import { IS } from './shared'
 import { t } from '../../locale'
 
+/** 补货配置(后端动态键): 已知字段精确枚举, 动态键走 unknown 索引 */
+interface ReplenConfig {
+  replenishment_mode?: string
+  transit_days?: string
+  slow_fund_threshold?: string
+  [k: string]: unknown
+}
+/** 参数字段(字典项, h 为可选提示词条) */
+interface ParamField {
+  k: string
+  l: string
+  h?: string
+}
+
 interface Props {
   channel: string
   isBBCC: boolean
-  cParams: any
-  bParams: any
-  paramFields: any[]
-  cfg: any
-  setCfg: Dispatch<SetStateAction<any>>
+  cParams: ParamField[]
+  bParams: ParamField[]
+  paramFields: ParamField[]
+  cfg: ReplenConfig
+  setCfg: Dispatch<SetStateAction<ReplenConfig>>
   saving: boolean
   setSaving: Dispatch<SetStateAction<boolean>>
-  saveErr: any
+  saveErr: (e: unknown) => void
 }
 
 export default function RulesReplenishPanel(props: Props) {

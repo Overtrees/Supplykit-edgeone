@@ -10,6 +10,61 @@ import { fmtInt, fmtWh } from './format'
  * 中图两卡(GMV 走势/店铺盘子) + 第三行(低库存明细/自有仓健康)。
  */
 
+/** 低库存/告警明细行: 已知字段精确声明, 动态扩展字段 unknown */
+interface LowStockRow {
+  id?: number | string
+  title?: string
+  description?: string
+  severity?: string
+  related_sku?: string
+  warehouse?: string
+  warehouse_type?: string
+  [k: string]: unknown
+}
+
+/** 采购/补货卡行 */
+interface ProcRow {
+  sku?: string
+  product_name?: string
+  kind?: string
+  qty?: number
+  note?: string
+  wh?: string
+  days_to_empty?: number
+  [k: string]: unknown
+}
+
+interface MidChartsProps {
+  dashboard?: unknown
+  gmvView?: string
+  /** ECharts 动态配置对象(第三方结构, 不造假严格) */
+  barOption?: Record<string, unknown>
+  storeOption?: Record<string, unknown>
+  storeDataLen?: number
+  _storeDim?: string
+  setStoreDim?: (v: string) => void
+  funnelLen?: number
+  [k: string]: unknown
+}
+
+interface ChartRow3Props {
+  dashboard?: unknown
+  /** 供给侧健康数据(OwnHealthData 形状, 边界处断言收敛) */
+  ownHealth?: unknown
+  lowStockShown?: LowStockRow[]
+  lowStockTotal?: number
+  procList?: ProcRow[]
+  procLoading?: boolean
+  procTotal?: number
+  loadFullAlerts?: () => void
+  setShowAllLowStock?: (v: boolean) => void
+  setShowAllOwn?: (v: boolean) => void
+  setShowAllProc?: (v: boolean) => void
+  onAlert?: (sku?: string, whType?: string, wh?: string) => void
+  onGoInsights?: (tab: string, sku?: string) => void
+  [k: string]: unknown
+}
+
 /** mid-chart-grid: GMV 趋势 + 店铺盘子(维度切换 _storeDim 留页面) */
 export function MidCharts({
   dashboard,
@@ -20,7 +75,7 @@ export function MidCharts({
   _storeDim,
   setStoreDim,
   funnelLen = 6,
-}: any) {
+}: MidChartsProps) {
   // 订单阶段分布: 档数随库里的 order_status 取值变化(现为 6: 总订单+5 状态)。
   // 固定 200px 在 6 档时每档只剩 30px, 轴标签会挤在一起 —— 按档数给高, 每档保底 30px。
   const funnelH = Math.max(200, funnelLen * 30 + 24)
@@ -115,7 +170,7 @@ export function ChartRow3({
   setShowAllProc,
   onAlert,
   onGoInsights,
-}: any) {
+}: ChartRow3Props) {
   return (
     <div className="chart-row-3">
       <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
@@ -153,7 +208,7 @@ export function ChartRow3({
               >
                 <span
                   style={{
-                    fontWeight: "var(--fw-semibold)",
+                    fontWeight: 'var(--fw-semibold)',
                     fontSize: 'var(--font-sm)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -252,7 +307,7 @@ export function ChartRow3({
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    fontWeight: "var(--fw-semibold)",
+                    fontWeight: 'var(--fw-semibold)',
                     fontSize: 'var(--font-sm)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -279,7 +334,7 @@ export function ChartRow3({
                   <span
                     style={{
                       flexShrink: 0,
-                      fontWeight: "var(--fw-bold)",
+                      fontWeight: 'var(--fw-bold)',
                       fontSize: 'var(--font-sm)',
                       color: x.kind === 'purchase' ? 'var(--warning)' : 'var(--danger)',
                     }}

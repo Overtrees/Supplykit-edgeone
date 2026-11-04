@@ -6,10 +6,25 @@ import { Skeleton } from './shared'
 import { t } from '../../locale'
 import { colLabel } from '../../components/colLabels'
 
+/** 滞销处置建议行(SKU×仓库粒度): 已知字段精确类型, 动态扩展字段收敛为 unknown */
+export interface DisposalRow {
+  sku?: string
+  warehouse?: string
+  product_name?: string
+  brand?: string
+  level?: string
+  reason?: string[]
+  suggestion?: string
+  disposed?: boolean
+  days_zero?: number
+  stock?: number
+  [k: string]: unknown
+}
+
 interface Props {
-  disposals: any[]
+  disposals: DisposalRow[]
   disposalsLoading: boolean
-  filteredDisp: any[]
+  filteredDisp: DisposalRow[]
   showDisposed: boolean
   setShowDisposed: (v: boolean) => void
   slowVisCols: string[]
@@ -17,11 +32,12 @@ interface Props {
   slowLoadingMore: boolean
   /** 分页门闩(ref, 页面持有), 传引用不复制 */
   slowLoadingRef: { current: boolean }
-  slowSentinelRef: { current: any }
+  slowSentinelRef: { current: unknown }
   loadSlowMore: () => void
   insightSearch: string
   prodSelIds: string[]
   prodBatch: boolean
+  [k: string]: unknown
 }
 
 /** 滞销预警 tab(SLU×仓库处置建议)。从 InsightsPage 外提(第三刀, 见 15.137):
@@ -51,13 +67,15 @@ export default function SlowTab(props: Props) {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
         <span>{t('insights.slow')}</span>
-        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
+        <span
+          className="muted2"
+          style={{ fontSize: 'var(--font-xs)', fontWeight: 'var(--fw-regular)' }}
+        >
           {t('ins.loaded_n_of_m', {
             n: Math.min(filteredDisp.length, slowTotal || filteredDisp.length),
             m: slowTotal || filteredDisp.length,
           })}{' '}
-          ·{' '}
-          {t('ins.showing_cols', { v: slowVisCols.length, all: SLOW_COLS.length })}
+          · {t('ins.showing_cols', { v: slowVisCols.length, all: SLOW_COLS.length })}
           {insightSearch ? ` · "${insightSearch}"` : ''}
         </span>
       </div>
@@ -219,7 +237,8 @@ export default function SlowTab(props: Props) {
                                 <span
                                   style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
                                 >
-                                  <IconCheck size={12} style={{ verticalAlign: -2 }} /> {t('ins_s.disposed')}
+                                  <IconCheck size={12} style={{ verticalAlign: -2 }} />{' '}
+                                  {t('ins_s.disposed')}
                                 </span>
                               ) : (
                                 <span
@@ -259,7 +278,7 @@ export default function SlowTab(props: Props) {
                             <td
                               key={id}
                               style={{
-                                fontWeight: "var(--fw-semibold)",
+                                fontWeight: 'var(--fw-semibold)',
                                 color:
                                   x.days_zero >= 90
                                     ? 'var(--danger)'
@@ -311,7 +330,9 @@ export default function SlowTab(props: Props) {
                                 .join(' → ')}
                             >
                               {(x.reason || []).join(' · ')}
-                              <span style={{ color: 'var(--text)', fontWeight: "var(--fw-semibold)" }}>
+                              <span
+                                style={{ color: 'var(--text)', fontWeight: 'var(--fw-semibold)' }}
+                              >
                                 {' '}
                                 → {x.suggestion}
                               </span>

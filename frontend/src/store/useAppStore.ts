@@ -445,7 +445,7 @@ const initAppStore = (set, get) => ({
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
       if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
       // ⚠️ 合并而非替换: part=main 不含 charts —— 若整体替换, 静默刷新时图表会闪空等 charts 回填
-      const _prev: any = get().dashboard || {}
+      const _prev: Record<string, unknown> = get().dashboard || {}
       set({
         dashboard: dashboard.data ? { ..._prev, ...dashboard.data } : _prev,
         loading: false,
@@ -460,9 +460,9 @@ const initAppStore = (set, get) => ({
             _getCharts().catch(() => null),
           )
         })
-        .then((rc: any) => {
+        .then(rc => {
           if (_mySeq !== this._loadSeq) return
-          const cur: any = get().dashboard || {}
+          const cur: Record<string, unknown> = get().dashboard || {}
           set({ dashboard: { ...cur, ...(rc?.data || {}) } })
         })
         .catch(() => {})

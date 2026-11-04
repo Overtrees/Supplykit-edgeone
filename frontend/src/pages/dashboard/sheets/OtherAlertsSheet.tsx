@@ -2,13 +2,27 @@ import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, alertAge, whTag } from '../format'
 import { t } from '../../../locale'
 
+/** 告警明细行: 已知字段精确声明, 动态扩展字段 unknown(索引签名兜底) */
+interface AlertRow {
+  id?: number | string
+  alert_type?: string
+  title?: string
+  description?: string
+  severity?: string
+  created_at?: string
+  related_sku?: string
+  warehouse?: string
+  warehouse_type?: string
+  [k: string]: unknown
+}
+
 interface Props {
   open: boolean
   onClose: () => void
   otherTotal: number
-  fullAlerts: any[]
+  fullAlerts: AlertRow[]
   replMode?: string
-  onAlert?: (sku?: any, whType?: any, wh?: any) => void
+  onAlert?: (sku?: string, whType?: string, wh?: string) => void
 }
 
 export default function OtherAlertsSheet(props: Props) {
@@ -56,7 +70,7 @@ export default function OtherAlertsSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -95,7 +109,7 @@ export default function OtherAlertsSheet(props: Props) {
                 >
                   <span
                     style={{
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       fontSize: 'var(--font-sm)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -152,7 +166,15 @@ export default function OtherAlertsSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>{t('common.close')}</span>
+            <span
+              style={{
+                fontSize: 'var(--font-15)',
+                fontWeight: 'var(--fw-semibold)',
+                color: '#fff',
+              }}
+            >
+              {t('common.close')}
+            </span>
           </div>
         </div>
       </div>

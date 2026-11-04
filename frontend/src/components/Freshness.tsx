@@ -34,8 +34,10 @@ export function useFreshness(channel?: string) {
   useEffect(() => {
     let alive = true
     api
-      .get(`/api/data-freshness?channel=${channel || 'jd'}&t=${freshStamp()}`, { timeout: 20000 })
-      .then((r: any) => {
+      .get<FreshData>(`/api/data-freshness?channel=${channel || 'jd'}&t=${freshStamp()}`, {
+        timeout: 20000,
+      })
+      .then(r => {
         if (alive) setData(r?.data || null)
       })
       .catch(() => {})

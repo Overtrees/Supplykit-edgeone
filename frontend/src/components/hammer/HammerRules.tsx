@@ -58,8 +58,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
       toast.error(t('hr.pick_rules'))
       return
     }
-    if (action === 'delete' && !window.confirm(t('hr.confirm_delete', { n: ids.length })))
-      return
+    if (action === 'delete' && !window.confirm(t('hr.confirm_delete', { n: ids.length }))) return
     setBatchBusy(true)
     try {
       // 统一走 api.post：自动注入 token/channel + 响应解包 + 缓存失效
@@ -273,11 +272,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               </div>
               <div className="muted2 text-10" style={{ marginTop: 8 }}>
                 {t('hr.batch_hint')}
-                {allActive
-                  ? t('hr.all_active')
-                  : allInactive
-                    ? t('hr.all_inactive')
-                    : ''}
+                {allActive ? t('hr.all_active') : allInactive ? t('hr.all_inactive') : ''}
               </div>
             </div>
           )}
@@ -308,7 +303,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               onClick={() => setHammerRulesMode('bbcc')}
               className={'hammer-tab' + (hammerRulesMode === 'bbcc' ? ' active' : '')}
             >
-            {t('hr.mode_bbcc')}
+              {t('hr.mode_bbcc')}
             </span>
           )}
           <span

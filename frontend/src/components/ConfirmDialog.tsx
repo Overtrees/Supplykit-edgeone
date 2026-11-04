@@ -72,7 +72,7 @@ export default function ConfirmDialog({
               style={{
                 textAlign: 'center',
                 fontSize: 'var(--font-18)',
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 marginBottom: 12,
                 color: 'var(--text)',
               }}
@@ -101,7 +101,13 @@ export default function ConfirmDialog({
           <div style={{ display: 'flex', gap: 8 }}>
             {/* 取消按钮 */}
             <div onClick={onCancel} className="clickable sheet-close" style={{ flex: 1 }}>
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
+              <span
+                style={{
+                  fontSize: 'var(--font-15)',
+                  fontWeight: 'var(--fw-semibold)',
+                  color: '#fff',
+                }}
+              >
                 {cancelLabel}
               </span>
             </div>
@@ -111,7 +117,9 @@ export default function ConfirmDialog({
               className={'clickable sheet-danger' + (confirming ? ' disabled' : '')}
               style={{ flex: 1, opacity: confirming ? 0.55 : 1 }}
             >
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-bold)", color: '#fff' }}>
+              <span
+                style={{ fontSize: 'var(--font-15)', fontWeight: 'var(--fw-bold)', color: '#fff' }}
+              >
                 {confirming ? t('common.processing') : confirmLabel}
               </span>
             </div>

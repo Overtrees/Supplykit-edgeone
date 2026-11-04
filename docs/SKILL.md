@@ -278,9 +278,9 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 ---
 
-## 11. 两条代码红线(2026-11-04 用户定案, 与业务口径同级)
+## 11. 三条代码红线(2026-11-04 用户定案, 与业务口径同级)
 
-> 这两条不是"建议", 是**准入条件**。违反的改动不予提交, 已有代码顺手改到合规。
+> 这三条不是"建议", 是**准入条件**。违反的改动不予提交, 已有代码顺手改到合规。
 
 ### 红线 A: 非内联优先, 不造上帝文件
 
@@ -311,4 +311,28 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - 回归: `local_test.py` 的 "i18n 键中英对齐" 用例会拦 zh/en 键集合不一致。
 
 **为什么较真**: 项目已有中英双份字典(173 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
+
+### 红线 C: 禁用显式 any, 按 TS 原生类型写
+
+**源码里不得出现 `any` 类型关键字**(`: any` / `as any` / `any[]` / `Record<string, any>` /
+`Promise<any>` / `<T = any>` / `api.get<any>()`)。这是 `docs/DEVELOPMENT.md §4.1` 与 `§15.38`
+早就写下的红线 —— 但 `.eslintrc.cjs` 一直把 `no-explicit-any` 设成 `off`(注释「历史大量 any,
+逐步治理」), 于是历史存量涨到 194 处。2026-11-04 全仓清零并升为**准入门禁**。
+
+| 场景 | 写法 |
+|---|---|
+| 组件 props / store 状态 | 精确 `interface` + 动态字段 `[k: string]: unknown` 索引签名 |
+| API 动态数据 | `api.get<T>()` / `apiJson<T>()` 显式泛型; 兜底 `Record<string, unknown>` + `String()`/`Number()` 边界收敛 |
+| 回调参数 | 删掉 `: any`, 让 TS 从数组元素类型推断 |
+| 异常 | `catch (e: unknown)` + `e instanceof Error` / `'message' in e` 守卫 |
+| 全局对象扩展 | 写 `global.d.ts`, 不要 `(window as any)` |
+| Promise 挂元数据 | `Object.assign(promise, {...})` 交叉类型, 不要 `const p: any = promise` |
+
+- **门禁**: `frontend/.eslintrc.cjs` 的 `@typescript-eslint/no-explicit-any` 为 `error`,
+  `npx eslint src` 必须 0 error; 共享契约集中放 `frontend/src/api/types.ts`。
+- **不许绕过**: `as unknown as any`、`@ts-ignore`、`// eslint-disable ...no-explicit-any` 一律视为违规。
+- **不造假严格**(§15.38): 动态数据用 `unknown` 索引签名如实表达"不知道", 不要为了过编译
+  把字段声明成假的具体类型, 也不要用 `ReturnType<typeof JSON.parse>` 之类的 any 替身。
+- **类型改动 = 运行时零变化**: 类型标注/泛型/断言在编译期擦除; 整改时只动类型层,
+  禁止顺手改表达式、条件、字符串值与函数体逻辑。
 

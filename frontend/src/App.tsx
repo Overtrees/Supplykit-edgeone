@@ -34,6 +34,9 @@ import useGlassRefraction from './hooks/useGlassRefraction'
 import { t } from './locale'
 import { channelName } from './components/channels'
 
+// 轮询/健康检查等接口响应的最小形状(纯类型层; API 动态数据不造假严格)
+type JobStatusResp = { data?: { status?: string } }
+
 export const NAV = [
   { id: 'dash', label: t('nav.dash') },
   { id: 'products', label: t('nav.products') },
@@ -161,7 +164,10 @@ export default function App() {
     const check = async () => {
       for (const o of targets) {
         try {
-          const j = await apiJson('GET', API + '/api/rules/eval-status?task_id=' + o.taskId)
+          const j = await apiJson<JobStatusResp>(
+            'GET',
+            API + '/api/rules/eval-status?task_id=' + o.taskId,
+          )
           if (!alive) return
           const st = j?.data?.status
           if (st === 'done' || st === 'expired') {
@@ -313,7 +319,10 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const d = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + seedTask)
+          const d = await apiJson<JobStatusResp>(
+            'GET',
+            API + '/api/seed/fill/status?task_id=' + seedTask,
+          )
           if (document.visibilityState === 'hidden') return // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
             clearInterval(poll)
@@ -364,7 +373,7 @@ export default function App() {
       const poll = setInterval(async () => {
         try {
           // 小窗(实时进度——大窗 263s 超时积压教训)
-          const d = await apiJson(
+          const d = await apiJson<{ status?: string }>(
             'GET',
             API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000',
           )
@@ -429,7 +438,10 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const d = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + resetTask)
+          const d = await apiJson<JobStatusResp>(
+            'GET',
+            API + '/api/seed/fill/status?task_id=' + resetTask,
+          )
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
             clearInterval(poll)
@@ -465,7 +477,7 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          const d = await apiJson(
+          const d = await apiJson<JobStatusResp>(
             'GET',
             API + '/api/seed/fill/status?task_id=' + exportTask.task_id,
           )
@@ -538,7 +550,7 @@ export default function App() {
           }
         })()
         if (!token) return
-        const r = await apiJson('GET', API + '/api/auth/check', { raw: true })
+        const r = await apiJson<Response>('GET', API + '/api/auth/check', { raw: true })
         let ok = r.ok
         if (r.status === 200) {
           try {
@@ -576,7 +588,7 @@ export default function App() {
       setLoggedIn(false)
       return
     }
-    apiJson('GET', API + '/api/auth/check', { raw: true })
+    apiJson<Response>('GET', API + '/api/auth/check', { raw: true })
       .then(async r => {
         // 401/500/SW offline 兜底(200 {ok:false}) 一律按失效处理 → 回登录页
         let ok = r.ok
@@ -607,7 +619,7 @@ export default function App() {
       setShowHistory(true)
       setHistLoading(true)
       try {
-        const d = await apiJson(
+        const d = await apiJson<{ data?: unknown[] }>(
           'GET',
           API + '/api/replenishment-config/history?channel=' + (ch || channel) + '&limit=50',
         )
@@ -621,7 +633,9 @@ export default function App() {
   )
   const checkApi = useCallback(async () => {
     try {
-      const d = await apiJson('GET', API + '/api/insights/ping', { timeout: 5000 })
+      const d = await apiJson<{ ok?: boolean }>('GET', API + '/api/insights/ping', {
+        timeout: 5000,
+      })
       setApiStatus(d.ok ? 'ok' : 'slow')
     } catch {
       setApiStatus('error')
@@ -639,7 +653,7 @@ export default function App() {
   useEffect(() => {
     const poll = setInterval(async () => {
       try {
-        const d = await apiJson('GET', API + '/api/health')
+        const d = await apiJson<{ version?: number }>('GET', API + '/api/health')
         const v = d.version || 0
         if (versionRef.current !== 0 && versionRef.current !== v) {
           // 版本变化，清除前端缓存

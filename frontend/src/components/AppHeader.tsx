@@ -1,5 +1,6 @@
-import type { MutableRefObject } from 'react'
+import type { MutableRefObject, Dispatch, SetStateAction, ReactNode } from 'react'
 import { StaleDotInline, FreshPopover } from './Freshness'
+import type { FreshData } from './Freshness'
 import { channelName } from './channels'
 import { t } from '../locale'
 import HammerDashboard from './hammer/HammerDashboard'
@@ -12,6 +13,36 @@ import HammerCleansing from './hammer/HammerCleansing'
 import HammerRules from './hammer/HammerRules'
 import HammerRecycle from './hammer/HammerRecycle'
 import HammerHistory from './hammer/HammerHistory'
+
+interface HeaderChannel {
+  code?: string
+  name?: string
+  name_key?: string
+  enabled?: number
+}
+
+interface AppHeaderProps {
+  page: string
+  channel: string
+  setChannel: (v: string) => void
+  channels: HeaderChannel[]
+  fresh: FreshData | null
+  freshOpen: boolean
+  setFreshOpen: Dispatch<SetStateAction<boolean>>
+  headerPill: ReactNode
+  showWelcome: boolean
+  showHammerMenu: boolean
+  hammerMenuClosing: boolean
+  hammerMenuRef: MutableRefObject<HTMLDivElement | null>
+  toggleHammerMenu: () => void
+  closeHammerMenu: () => void
+  toggleEditorMenu: () => void
+  navigateTo: (p: string) => void
+  loadHistory: (ch?: string) => void
+  hammerData: Record<string, Record<string, unknown[]>>
+  _chLabel: string
+  [k: string]: unknown
+}
 
 /**
  * 顶栏 + 锤子菜单抽屉 —— 自 App.tsx 外提(全受控, 状态一行不搬)。
@@ -38,27 +69,7 @@ export default function AppHeader({
   loadHistory,
   hammerData,
   _chLabel,
-}: {
-  page: string
-  channel: string
-  setChannel: (v: string) => void
-  channels: any[]
-  fresh: any
-  freshOpen: boolean
-  setFreshOpen: (v: any) => void
-  headerPill: React.ReactNode
-  showWelcome: boolean
-  showHammerMenu: boolean
-  hammerMenuClosing: boolean
-  hammerMenuRef: MutableRefObject<HTMLDivElement | null>
-  toggleHammerMenu: () => void
-  closeHammerMenu: () => void
-  toggleEditorMenu: () => void
-  navigateTo: (p: string) => void
-  loadHistory: (ch?: any) => void
-  hammerData: any
-  _chLabel: string
-}) {
+}: AppHeaderProps) {
   return (
     <>
       <header style={{ display: showWelcome ? 'none' : '' }}>

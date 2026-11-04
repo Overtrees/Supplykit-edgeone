@@ -4,11 +4,40 @@ import { t } from '../../locale'
 import { colLabel } from '../../components/colLabels'
 import { INS_PURCHASE_COLS as PURCHASE_COLS } from '../../components/hammer/configs'
 import { renderNote, Skeleton } from './shared'
+import type { NoteSeg } from '../../api/types'
+
+/** 采购建议行: 已知字段精确类型, 动态扩展字段收敛为 unknown */
+export interface PurchaseRow {
+  sku?: string
+  store?: string
+  brand?: string
+  barcode?: string
+  product_name?: string
+  warehouse?: string
+  note?: string
+  note_segs?: unknown
+  purchase_qty?: number
+  after_turnover?: number
+  target_turnover?: number
+  sys_available?: number
+  own_available?: number
+  b_available?: number
+  plat_available?: number
+  sys_transit?: number
+  own_transit?: number
+  b_transit?: number
+  plat_transit?: number
+  daily_sales?: number
+  daily_sales_14?: number
+  daily_sales_28?: number
+  actual_purchase?: number
+  [k: string]: unknown
+}
 
 interface Props {
   /** 原始数组(判断 loading/空态) */
-  purchase: any[]
-  filteredPurchase: any[]
+  purchase: PurchaseRow[]
+  filteredPurchase: PurchaseRow[]
   purchaseLoading: boolean
   purchaseLimit: number
   setPurchaseLimit: (fn: (p: number) => number) => void
@@ -16,6 +45,7 @@ interface Props {
   insightSearch: string
   replenMode: string
   globalChannel: string
+  [k: string]: unknown
 }
 
 /** 采购建议 tab。从 InsightsPage 外提(第二刀, 见 15.136): 全受控, 唯一写操作是
@@ -46,8 +76,8 @@ export default function PurchaseTab(props: Props) {
           lineHeight: 1.7,
         }}
       >
-        <IconLightbulb size={13} style={{ verticalAlign: -2 }} />{' '}
-        <b>{t('ins_p.banner_1')}</b>：{t('ins_p.banner_pre')}
+        <IconLightbulb size={13} style={{ verticalAlign: -2 }} /> <b>{t('ins_p.banner_1')}</b>：
+        {t('ins_p.banner_pre')}
         <b>{t('ins_p.banner_2')}</b>
         {t('ins_p.banner_mid')}
       </div>
@@ -69,7 +99,10 @@ export default function PurchaseTab(props: Props) {
             {replenMode === 'bbcc' ? t('ins_p.mode_bbcc') : t('ins_p.mode_trad')}
           </span>
         )}
-        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
+        <span
+          className="muted2"
+          style={{ fontSize: 'var(--font-xs)', fontWeight: 'var(--fw-regular)' }}
+        >
           {t('ins.showing_cols', {
             v: purchaseVisCols.length,
             all: PURCHASE_COLS.length,
@@ -171,7 +204,7 @@ export default function PurchaseTab(props: Props) {
                             key={col.id}
                             style={{
                               fontSize: 'var(--font-sm)',
-                              fontWeight: "var(--fw-semibold)",
+                              fontWeight: 'var(--fw-semibold)',
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -179,7 +212,7 @@ export default function PurchaseTab(props: Props) {
                             <span
                               style={{
                                 fontSize: 'var(--font-10)',
-                                fontWeight: "var(--fw-regular)",
+                                fontWeight: 'var(--fw-regular)',
                                 color: 'var(--muted2)',
                               }}
                             >
@@ -197,7 +230,7 @@ export default function PurchaseTab(props: Props) {
                             style={{
                               fontSize: 'var(--font-sm)',
                               color: 'var(--muted)',
-                              fontWeight: "var(--fw-regular)",
+                              fontWeight: 'var(--fw-regular)',
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -205,7 +238,9 @@ export default function PurchaseTab(props: Props) {
                             <span style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>
                               {' '}
                               {t('ins_p.own_transit', { a: x.own_transit || 0 })}
-                              {replenMode === 'bbcc' ? t('ins_p.b_in_transit', { b: x.b_transit || 0 }) : ''}
+                              {replenMode === 'bbcc'
+                                ? t('ins_p.b_in_transit', { b: x.b_transit || 0 })
+                                : ''}
                               {t('ins_p.c_in_transit', { c: x.plat_transit || 0 })})
                             </span>
                           </td>
@@ -216,7 +251,7 @@ export default function PurchaseTab(props: Props) {
                             key={col.id}
                             style={{
                               fontSize: 'var(--font-sm)',
-                              fontWeight: "var(--fw-semibold)",
+                              fontWeight: 'var(--fw-semibold)',
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -224,7 +259,7 @@ export default function PurchaseTab(props: Props) {
                             <span
                               style={{
                                 fontSize: 'var(--font-10)',
-                                fontWeight: "var(--fw-regular)",
+                                fontWeight: 'var(--fw-regular)',
                                 color: 'var(--muted2)',
                               }}
                             >
@@ -271,7 +306,7 @@ export default function PurchaseTab(props: Props) {
                           <td
                             key={col.id}
                             style={{
-                              fontWeight: "var(--fw-bold)",
+                              fontWeight: 'var(--fw-bold)',
                               color: x.actual_purchase > 0 ? 'var(--success)' : 'var(--muted2)',
                             }}
                           >
@@ -287,7 +322,7 @@ export default function PurchaseTab(props: Props) {
                           <td
                             key={col.id}
                             style={{
-                              fontWeight: "var(--fw-semibold)",
+                              fontWeight: 'var(--fw-semibold)',
                               color:
                                 x.actual_purchase > 0
                                   ? x.target_turnover > 0 && x.after_turnover > x.target_turnover
@@ -303,18 +338,18 @@ export default function PurchaseTab(props: Props) {
                         return (
                           <td
                             key={col.id}
-                            className="col-note" onClick={e => e.currentTarget.classList.toggle('col-note-open')}
+                            className="col-note"
+                            onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                             title={x.note || ''}
                           >
-                            {renderNote(x.note, x.note_segs) || t('insights.no_purchase_needed')}
+                            {renderNote(x.note, x.note_segs as NoteSeg[] | null) ||
+                              t('insights.no_purchase_needed')}
                           </td>
                         )
                       if (col.id === 'timing')
                         return (
                           <td key={col.id} style={{ textAlign: 'center' }}>
-                            <span
-                              className={`pill ${timing === 'suggest' ? 'warning' : 'info'}`}
-                            >
+                            <span className={`pill ${timing === 'suggest' ? 'warning' : 'info'}`}>
                               {timing === 'suggest'
                                 ? t('ins_p.timing_suggest')
                                 : t('ins_p.timing_enough')}
@@ -328,7 +363,7 @@ export default function PurchaseTab(props: Props) {
               })}
             </tbody>
             <tfoot>
-              <tr style={{ fontWeight: "var(--fw-bold)", borderTop: '2px solid var(--border)' }}>
+              <tr style={{ fontWeight: 'var(--fw-bold)', borderTop: '2px solid var(--border)' }}>
                 {purchaseVisCols.includes('actual_purchase') && (
                   <>
                     <td

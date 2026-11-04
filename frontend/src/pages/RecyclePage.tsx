@@ -7,6 +7,38 @@ import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
+/** 回收站行(规则/订单/库存归档共用最小字段集; 动态扩展字段走索引签名) */
+interface RecycleRow {
+  id: number
+  name?: string
+  order_no?: string
+  product_name?: string
+  sku?: string
+  barcode?: string
+  warehouse?: string
+  archived_at?: string
+  deleted_at?: string
+  [k: string]: unknown
+}
+
+/** 列表/归档接口响应(data 或 items 承载行数组) */
+interface RecycleListResp {
+  data?: RecycleRow[]
+  items?: RecycleRow[]
+  [k: string]: unknown
+}
+
+/** 库存批量恢复逐条结果 */
+interface RestoreFailed {
+  id: number
+  reason: string
+}
+interface BatchRestoreResp {
+  ok?: boolean
+  error?: string
+  data?: { restored?: number; failed?: RestoreFailed[] }
+}
+
 /** 已选条数后缀(0 条不显示, 避免"已选 0"噪音); 文案走 i18n, 不拼中文字面量 */
 const selSuffix = (n: number) => (n > 0 ? ' ' + t('recycle.selected_suffix', { n }) : '')
 
@@ -19,9 +51,9 @@ const selSuffix = (n: number) => (n > 0 ? ' ' + t('recycle.selected_suffix', { n
  */
 export default function RecyclePage() {
   const { setRecycleSel, setRecycleBusy } = useAppStore()
-  const [rules, setRules] = useState<any[]>([])
-  const [orders, setOrders] = useState<any[]>([])
-  const [inventories, setInventories] = useState<any[]>([])
+  const [rules, setRules] = useState<RecycleRow[]>([])
+  const [orders, setOrders] = useState<RecycleRow[]>([])
+  const [inventories, setInventories] = useState<RecycleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [batchBusy, setBatchBusy] = useState(false)
   const [selected, setSelected] = useState<{
@@ -44,20 +76,20 @@ export default function RecyclePage() {
     // S3-2 收口: apiJson 直接返回 json(不再 .then(r => r.json()))
     // 库存归档按 channel 存储, 回收站要"看全部"就两个渠道各取一次再合并
     Promise.all([
-      apiJson('GET', API + '/api/rules?channel=all&include_deleted=1'),
-      apiJson('GET', API + '/api/orders?page=1&page_size=200&include_deleted=1'),
-      apiJson('GET', API + '/api/inventory/archive?channel=jd&limit=200'),
-      apiJson('GET', API + '/api/inventory/archive?channel=other&limit=200'),
+      apiJson<RecycleListResp>('GET', API + '/api/rules?channel=all&include_deleted=1'),
+      apiJson<RecycleListResp>('GET', API + '/api/orders?page=1&page_size=200&include_deleted=1'),
+      apiJson<RecycleListResp>('GET', API + '/api/inventory/archive?channel=jd&limit=200'),
+      apiJson<RecycleListResp>('GET', API + '/api/inventory/archive?channel=other&limit=200'),
     ])
-      .then(([rData, oData, iJd, iOt]: any[]) => {
-        const items = rData.data || rData || []
-        setRules(items.filter((x: any) => x.deleted_at))
-        const o = oData.data || oData || []
+      .then(([rData, oData, iJd, iOt]) => {
+        const items = (rData.data || rData || []) as RecycleRow[]
+        setRules(items.filter(x => x.deleted_at))
+        const o: RecycleRow[] | RecycleListResp = oData.data || oData || []
         // 响应结构 {items,total}——取 items(原生 fetch 未解包 axios 层)
         const orderItems = Array.isArray(o) ? o : Array.isArray(o.items) ? o.items : []
-        setOrders(orderItems.filter((x: any) => x.deleted_at))
+        setOrders(orderItems.filter(x => x.deleted_at))
         const _inv = [...((iJd && iJd.data) || []), ...((iOt && iOt.data) || [])]
-        _inv.sort((a: any, b: any) => String(b.archived_at).localeCompare(String(a.archived_at)))
+        _inv.sort((a, b) => String(b.archived_at).localeCompare(String(a.archived_at)))
         setInventories(_inv)
         setLoading(false)
       })
@@ -125,7 +157,7 @@ export default function RecyclePage() {
       // 库存: 只有"恢复"一种动作(归档行没有永久删除入口), 走批量接口拿逐条结果
       if (invIds.length) {
         if (action !== 'restore') throw new Error(t('recycle.err_inv_action'))
-        const d = await apiJson('POST', API + '/api/inventory/batch', {
+        const d = await apiJson<BatchRestoreResp>('POST', API + '/api/inventory/batch', {
           timeout: 90000,
           data: { action: 'restore', ids: invIds },
         })
@@ -136,7 +168,7 @@ export default function RecyclePage() {
           // 部分成功要如实回报 —— 这是与订单批量最大的差异(订单任一失败整批抛出)
           const _head = _failed
             .slice(0, 8)
-            .map((f: any) => '· id ' + f.id + ': ' + f.reason)
+            .map(f => '· id ' + f.id + ': ' + f.reason)
             .join('\n')
           alert(
             t('recycle.inv_restore_partial', { ok: _ok, fail: _failed.length }) +
@@ -150,8 +182,13 @@ export default function RecyclePage() {
       }
       loadData()
       syncSel({ rules: new Set(), orders: new Set(), inventory: new Set() })
-    } catch (e: any) {
-      alert(t('recycle.action_failed', { label, msg: e.message }))
+    } catch (e: unknown) {
+      alert(
+        t('recycle.action_failed', {
+          label,
+          msg: e && typeof e === 'object' && 'message' in e ? String(e.message) : '',
+        }),
+      )
     }
     setBatchBusy(false)
   }
@@ -197,7 +234,7 @@ export default function RecyclePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const renderList = (type: 'rules' | 'orders' | 'inventory', items: any[]) => {
+  const renderList = (type: 'rules' | 'orders' | 'inventory', items: RecycleRow[]) => {
     if (items.length === 0)
       return (
         <EmptyState
@@ -213,7 +250,7 @@ export default function RecyclePage() {
       )
     return (
       <>
-        {items.map((x: any, i: number) => (
+        {items.map((x, i) => (
           <ListItem
             key={x.id}
             // 库存是四维键(仓型×SKU×69码×仓): 只写 SKU 会分不清"同 SKU 多仓"

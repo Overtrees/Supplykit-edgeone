@@ -13,6 +13,28 @@ const VERSION =
 const BUILD = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__ ? __BUILD_DATE__ : ''
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
+/** 运行概况 / 质量日志行 / 种子操作响应(动态字段走 unknown 索引签名) */
+interface MonitorResp {
+  totals?: { error?: number; slow?: number }
+  today?: { error?: number; slow?: number }
+  [k: string]: unknown
+}
+interface QualityLogRow {
+  created_at?: string
+  [k: string]: unknown
+}
+interface SeedActionData {
+  requires_reset?: boolean
+  task_id?: string
+  [k: string]: unknown
+}
+interface SeedActionResp {
+  ok?: boolean
+  error?: string
+  data?: SeedActionData
+  [k: string]: unknown
+}
+
 // 2026-11-04 日志排查清理: 原 DEV_LABEL / LEVEL_LABEL(12 个 dev.k_* / dev.lv_* 词条键)
 // 是日志明细改成"按天文件 + Markdown 预览"后遗留的死代码 —— 两个常量定义后从未被引用,
 // 对应 12 个词条也成了死键。类型/级别标签现在由后端 _export_md 在 Markdown 里直接给出。
@@ -25,7 +47,7 @@ export default function DevModePage() {
   const [ping, setPing] = useState(0)
   const [lastCheck, setLastCheck] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [mon, setMon] = useState<any>(null)
+  const [mon, setMon] = useState<MonitorResp | null>(null)
   const [showLogs, setShowLogs] = useState(false)
   const [todayLogs, setTodayLogs] = useState<number | null>(null) // 2026-10-27 日志分析角标(今日条数)
   // 种子数据(从设置页移入): 填充/重置为数据操作工具, 归开发者维度
@@ -55,7 +77,9 @@ export default function DevModePage() {
     const start = performance.now()
     try {
       // S3-2 收口: 探测 5s 超时(原裸 fetch 无超时)
-      const d = await apiJson('GET', API + '/api/insights/ping', { timeout: 5000 })
+      const d = await apiJson<{ ok?: boolean }>('GET', API + '/api/insights/ping', {
+        timeout: 5000,
+      })
       const ms = Math.round(performance.now() - start)
       setStatus(d.ok ? t('dev.ok') : t('dev.abnormal'))
       setPing(ms)
@@ -71,16 +95,16 @@ export default function DevModePage() {
   useEffect(() => {
     checkConnection()
     api
-      .get('/api/monitor')
-      .then((r: any) => setMon(r.data))
+      .get<MonitorResp>('/api/monitor')
+      .then(r => setMon(r.data))
       .catch(() => {})
     // 今日开发者日志条数(角标, 提升日志分析可发现性)
     api
-      .get('/api/quality-logs?scope=dev&limit=200')
-      .then((r: any) => {
+      .get<QualityLogRow[]>('/api/quality-logs?scope=dev&limit=200')
+      .then(r => {
         const _today = new Date().toISOString().slice(0, 10)
         const _n = (r.data || []).filter(
-          (x: any) => String(x.created_at || '').slice(0, 10) === _today,
+          x => String(x.created_at || '').slice(0, 10) === _today,
         ).length
         setTodayLogs(_n)
       })
@@ -93,7 +117,7 @@ export default function DevModePage() {
     setSeeding(true)
     try {
       // S3-2 收口: 填充是重操作, 超时对齐 postHeavy 90s
-      const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
+      const d = await apiJson<SeedActionResp>('POST', API + '/api/seed/fill', { timeout: 90000 })
       if (d.ok) {
         if (d.data?.requires_reset) {
           toast.error(t('dev.has_data'))
@@ -133,7 +157,7 @@ export default function DevModePage() {
     setResetting(true)
     try {
       // S3-2 收口: 重置是重操作, 超时对齐 postHeavy 90s
-      const d = await apiJson('POST', API + '/api/seed/reset', { timeout: 90000 })
+      const d = await apiJson<SeedActionResp>('POST', API + '/api/seed/reset', { timeout: 90000 })
       if (d.ok && d.data?.task_id) {
         try {
           localStorage.setItem('c_reset_task', d.data.task_id)
@@ -142,7 +166,10 @@ export default function DevModePage() {
         // 轮询等待重置完成
         const poll = setInterval(async () => {
           try {
-            const sr = await apiJson('GET', API + '/api/seed/fill/status?task_id=' + d.data.task_id)
+            const sr = await apiJson<Response>(
+              'GET',
+              API + '/api/seed/fill/status?task_id=' + d.data.task_id,
+            )
             const sd = await sr.json()
             if (sd.data?.status === 'done' || sd.data?.status === 'error') {
               clearInterval(poll)
@@ -225,7 +252,11 @@ export default function DevModePage() {
               color: 'var(--danger)',
             },
             { n: mon ? mon.totals?.slow || 0 : '-', c: t('dev.slow_req'), color: 'var(--warning)' },
-            { n: mon ? mon.today?.error || 0 : '-', c: t('dev.today_errors'), color: 'var(--text)' },
+            {
+              n: mon ? mon.today?.error || 0 : '-',
+              c: t('dev.today_errors'),
+              color: 'var(--text)',
+            },
             { n: mon ? mon.today?.slow || 0 : '-', c: t('dev.today_slow'), color: 'var(--text)' },
           ]}
         />
@@ -304,7 +335,7 @@ export default function DevModePage() {
               <div
                 style={{
                   fontSize: 'var(--font-18)',
-                  fontWeight: "var(--fw-bold)",
+                  fontWeight: 'var(--fw-bold)',
                   marginBottom: 12,
                   textAlign: 'center',
                   color: 'var(--text)',
@@ -344,7 +375,7 @@ export default function DevModePage() {
 }
 
 /** 运行概况统计块(2026-10-27 抽离: 数字 24px tabular + 标签 11px, 消除 4 处重复内联) */
-function StatsRow({ items }: { items: { n: any; c: string; color: string }[] }) {
+function StatsRow({ items }: { items: { n: number | string; c: string; color: string }[] }) {
   return (
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '10px 16px 12px' }}>
       {items.map((it, i) => (
@@ -362,7 +393,7 @@ function StatsRow({ items }: { items: { n: any; c: string; color: string }[] }) 
           <div
             style={{
               fontSize: 24,
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               lineHeight: 1.1,
               color: it.color,
               fontVariantNumeric: 'tabular-nums',

@@ -1,12 +1,13 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh } from '../format'
+import type { InventoryRow } from '../../../api/types'
 import { t } from '../../../locale'
 
 interface Props {
   open: boolean
   onClose: () => void
-  fullOut: any[] | null
-  oosSrc: any[] | null
+  fullOut: InventoryRow[] | null
+  oosSrc: InventoryRow[] | null
   healthTab: string
 }
 
@@ -53,7 +54,7 @@ export default function OosSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -79,7 +80,7 @@ export default function OosSheet(props: Props) {
               >
                 <div
                   style={{
-                    fontWeight: "var(--fw-semibold)",
+                    fontWeight: 'var(--fw-semibold)',
                     fontSize: 'var(--font-sm)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -118,7 +119,15 @@ export default function OosSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>{t('common.close')}</span>
+            <span
+              style={{
+                fontSize: 'var(--font-15)',
+                fontWeight: 'var(--fw-semibold)',
+                color: '#fff',
+              }}
+            >
+              {t('common.close')}
+            </span>
           </div>
         </div>
       </div>

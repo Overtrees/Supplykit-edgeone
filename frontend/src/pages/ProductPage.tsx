@@ -10,6 +10,18 @@ import { clearCache } from '../api/client'
 import { t } from '../locale'
 import { PRODUCT_COLS as COLS } from '../components/hammer/configs'
 import { colLabel } from '../components/colLabels'
+/** 商品列表响应 / 行(动态字段走 unknown 索引签名, 边界处收敛) */
+interface ProductRow {
+  id?: string | number
+  is_active?: number | boolean
+  [k: string]: unknown
+}
+interface ProductResp {
+  items?: ProductRow[]
+  total?: number
+  [k: string]: unknown
+}
+
 const COL_KEY = () => 'c_cols_products_' + (useAppStore.getState().channel || 'jd')
 const getVis = () => {
   try {
@@ -76,7 +88,7 @@ export default function ProductPage() {
     if (p === 1) setLd(true)
     else setLoadingMore(true)
     api
-      .get(
+      .get<ProductResp>(
         '/api/products?page=' +
           p +
           '&page_size=100&channel=' +
@@ -87,9 +99,9 @@ export default function ProductPage() {
       )
       .then(r => {
         if (seq !== reqSeq.current) return
-        const d = r.data || {}
+        const d: ProductResp = r.data || {}
         // 数组兜底(2026-10-10: 偶发响应结构异常曾致 fl.map 非函数——渲染崩溃)
-        const items = Array.isArray(d.items) ? d.items : Array.isArray(d) ? d : []
+        const items = (Array.isArray(d.items) ? d.items : Array.isArray(d) ? d : []) as ProductRow[]
         setPgTotal(d.total || items.length || 0)
         setPg(p)
         pgRef.current = p
@@ -166,7 +178,10 @@ export default function ProductPage() {
       >
         <span>
           {t('prd.title')}{' '}
-          <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
+          <span
+            className="small muted"
+            style={{ fontSize: 'var(--font-xs)', fontWeight: 'var(--fw-regular)' }}
+          >
             {t('prd.loaded', {
               a: Math.min(list.length, pgTotal || list.length),
               b: pgTotal || list.length,
@@ -351,7 +366,9 @@ export default function ProductPage() {
                           <span
                             className={'pill ' + (x.status === 'active' ? 'success' : 'warning')}
                           >
-                            {x.status === 'active' ? t('prd.status_active') : t('prd.status_inactive')}
+                            {x.status === 'active'
+                              ? t('prd.status_active')
+                              : t('prd.status_inactive')}
                           </span>
                         </td>
                       )
@@ -367,10 +384,7 @@ export default function ProductPage() {
                             : { txt: t('prd.em_unset'), cls: 'warning', tip: t('prd.em_unset_tip') }
                       return (
                         <td key={col.id} style={{ textAlign: 'center' }}>
-                          <span
-                            className={'pill ' + _map.cls}
-                            title={_map.tip}
-                          >
+                          <span className={'pill ' + _map.cls} title={_map.tip}>
                             {_map.txt}
                           </span>
                         </td>
@@ -413,8 +427,7 @@ export default function ProductPage() {
                 className="btn btn-ghost"
                 style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
               >
-                {loadingMore ? t('common.loading') : ''}({Math.min(list.length, pgTotal)}/
-                {pgTotal})
+                {loadingMore ? t('common.loading') : ''}({Math.min(list.length, pgTotal)}/{pgTotal})
               </span>
             </div>
           )}

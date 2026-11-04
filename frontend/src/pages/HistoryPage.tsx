@@ -4,6 +4,7 @@ import ErrorRetry from '../components/ErrorRetry'
 import { api, freshStamp } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { t } from '../locale'
+import type { ApiResult } from '../api/types'
 
 /**
  * 历史归档(2026-11-02 S2-4 方案 A)
@@ -51,6 +52,58 @@ const fmtInt = (n: number): string => {
 // 2026-11-02 S2-9: readSeg(来源结构兼容层)随页面上的"来源 归档 N 天 · 订单 M 天"
 // 一起删除 —— 该行已移出页面, 区间与来源信息统一由锤子菜单的统计区间摘要表达。
 
+/** 历史汇总/排行/同比响应(动态扩展字段一律 unknown 索引签名, 边界处收敛) */
+interface HistSeriesPoint {
+  date?: string
+  gmv?: number
+  orders?: number
+  qty?: number
+  [k: string]: unknown
+}
+interface HistTotals {
+  gmv?: number
+  orders?: number
+  qty?: number
+  avg_gmv_per_day?: number
+  [k: string]: unknown
+}
+interface HistSummary {
+  series?: HistSeriesPoint[]
+  totals?: HistTotals
+  [k: string]: unknown
+}
+interface HistTopItem {
+  key?: string
+  gmv?: number
+  share?: number | string
+  [k: string]: unknown
+}
+interface HistTop {
+  items?: HistTopItem[]
+  [k: string]: unknown
+}
+interface HistYoyPeriod {
+  start?: string
+  end?: string
+  gmv?: number
+  orders?: number
+  qty?: number
+  [k: string]: unknown
+}
+interface HistYoyDelta {
+  gmv?: number | null
+  orders?: number | null
+  qty?: number | null
+  [k: string]: unknown
+}
+interface HistYoy {
+  cur?: HistYoyPeriod
+  prev?: HistYoyPeriod
+  delta?: HistYoyDelta
+  has_prev?: boolean
+  [k: string]: unknown
+}
+
 export default function HistoryPage() {
   const channel = useAppStore(s => s.channel)
   // 2026-11-02 S2-9: 时间区间/粒度改由锤子菜单(HammerHistory)控制, 页面只读 store。
@@ -60,11 +113,11 @@ export default function HistoryPage() {
   const end = useAppStore(s => s.histEnd)
   const by = useAppStore(s => s.histBy)
   const [topBy, setTopBy] = useState<'sku' | 'store'>('sku')
-  const [sum, setSum] = useState<any>(null)
-  const [top, setTop] = useState<any>(null)
-  const [yoy, setYoy] = useState<any>(null)
+  const [sum, setSum] = useState<HistSummary | null>(null)
+  const [top, setTop] = useState<HistTop | null>(null)
+  const [yoy, setYoy] = useState<HistYoy | null>(null)
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<any>(null)
+  const [err, setErr] = useState<string | null>(null)
   const seq = useRef(0)
 
   const load = () => {
@@ -87,13 +140,14 @@ export default function HistoryPage() {
     // 2026-11-02 S2-9(用户定案): coverage 不再由页面请求 —— 归档说明在页面上一处不留,
     //   全部由锤子菜单(HammerHistory)自己拉自己渲染。页面少一次往返。
     Promise.allSettled([
-      api.get(`/api/history/summary?${q}&by=${by}`),
-      api.get(`/api/history/top?${q}&by=${topBy}&limit=20`),
-      api.get(`/api/history/yoy?${q}`),
+      api.get<HistSummary>(`/api/history/summary?${q}&by=${by}`),
+      api.get<HistTop>(`/api/history/top?${q}&by=${topBy}&limit=20`),
+      api.get<HistYoy>(`/api/history/yoy?${q}`),
     ])
       .then(([s, t0, y]) => {
         if (my !== seq.current) return
-        const val = (r: any) => (r.status === 'fulfilled' ? r.value?.data : null)
+        const val = <T,>(r: PromiseSettledResult<ApiResult<T>>): T | null =>
+          r.status === 'fulfilled' ? r.value?.data : null
         setSum(val(s))
         setTop(val(t0))
         setYoy(val(y))
@@ -109,18 +163,18 @@ export default function HistoryPage() {
   }, [channel, start, end, by, topBy])
 
   const series = sum?.series || []
-  const totals = sum?.totals || {}
+  const totals: HistTotals = sum?.totals || {}
   const empty = !series.length || !totals.orders
 
   const chartOption = useMemo(() => {
-    const names = series.map((x: any) => x.date)
-    const values = series.map((x: any) => x.gmv)
+    const names = series.map(x => x.date)
+    const values = series.map(x => x.gmv)
     return {
       tooltip: {
         trigger: 'axis',
-        formatter: (p: any) => {
+        formatter: (p: { dataIndex?: number }[]) => {
           const i = p[0]?.dataIndex ?? 0
-          const r = series[i] || {}
+          const r: HistSeriesPoint = series[i] || {}
           return t('hist.tip_axis', {
             d: r.date,
             g: fmtMoney(r.gmv),
@@ -244,7 +298,7 @@ export default function HistoryPage() {
         {(top?.items || []).length === 0 ? (
           <div className="hist-empty">{t('hist.empty_short')}</div>
         ) : (
-          (top.items as any[]).map((it, i) => (
+          (top.items as HistTopItem[]).map((it, i) => (
             <div key={it.key + i} className="hist-row-item">
               <span className="hist-rank">{i + 1}</span>
               <span className="hist-name" title={it.key}>

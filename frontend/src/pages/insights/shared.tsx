@@ -6,6 +6,7 @@
 import React from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { t } from '../../locale'
+import type { NoteSeg } from '../../api/types'
 
 // 备注中 emoji 转 SVG 图标
 const EMOJI_MAP = {
@@ -132,65 +133,13 @@ const EMOJI_MAP = {
 const TREND_EMOJI: Record<string, string> = { up: '📈', down: '📉', flat: '➡️' }
 
 /**
- * 结构化备注片段渲染(2026-11-04): 后端 note_segs = [{k:'b_sug', n:120, ...}, ...],
- * 文案走 `t('seg.'+k, params)` 出双语; 返回 null 表示无片段(调用方回落旧 note 渲染)。
- * 特殊键: trend(t7/t14 → emoji)、turn_over/turn_near(w=after/cur → 本地化周转名)。
+ * 文案里的 emoji 标记 → 内联 SVG 图标(全站统一图标规范, 见 CHANGELOG「emoji→SVG 化」)。
+ * 2026-11-04 从 renderNote 抽出: 结构化片段(renderNoteSegs)与旧 note 字符串共用同一层转换。
+ * 词条/后端 note 仍保留 emoji 字符作为数据标记(Excel 导出/历史快照/告警文本依赖它),
+ * 只在渲染层替换 —— 不能为了去 emoji 改词条或 note, 否则导出/历史文案会漂。
  */
-export function renderNoteSegs(segs?: any): React.ReactNode {
-  if (!Array.isArray(segs) || segs.length === 0) return null
-  // 防键名泄漏(本轮铁律): 后端可能先于前端部署, 或未来新增片段类型 —— 只要有一个键
-  // 没词条, t() 会回落到 'seg.xxx' 原文, 界面就冒出英文键名(同 RiskSheet 的 dash.urgent)。
-  // 此时整段返回 null, 由 renderNote 回落到完整可读的 note 字符串, 而不是显示半个键名。
-  const hasSeg = (k: string) => t('seg.' + k) !== 'seg.' + k
-  for (const sg of segs) {
-    const k = String(sg?.k || '')
-    if (!k || !hasSeg(k)) return null
-    if (k === 'trend' && sg.x && !hasSeg('trend_x_' + sg.x)) return null
-  }
-  return segs.map((sg: any, i: number) => {
-    const k = String(sg?.k || '')
-    const tail = i < segs.length - 1 ? ' · ' : ''
-    if (k === 'trend') {
-      const s = t('seg.trend', {
-        t7: TREND_EMOJI[sg.t7] || '➡️',
-        t14: TREND_EMOJI[sg.t14] || '➡️',
-      })
-      const x = sg.x ? ' ' + t('seg.trend_x_' + sg.x) : ''
-      return (
-        <React.Fragment key={i}>
-          {s}
-          {x}
-          {tail}
-        </React.Fragment>
-      )
-    }
-    if (k === 'turn_over' || k === 'turn_near') {
-      return (
-        <React.Fragment key={i}>
-          {t('seg.' + k, {
-            w: t(sg.w === 'after' ? 'seg.w_after' : 'seg.w_cur'),
-            v: sg.v,
-            t: sg.t,
-          })}
-          {tail}
-        </React.Fragment>
-      )
-    }
-    return (
-      <React.Fragment key={i}>
-        {t('seg.' + k, sg)}
-        {tail}
-      </React.Fragment>
-    )
-  })
-}
-
-export function renderNote(text, segs?) {
-  // 2026-11-04 结构化优先: 后端新数据带 note_segs(键+参数) → i18n 双语;
-  // 旧数据/导出兜底走原 note 字符串(emoji 转 SVG)
-  const segNodes = renderNoteSegs(segs)
-  if (segNodes) return segNodes
-  if (!text) return '-'
+export function svgizeText(text: string): React.ReactNode {
+  if (!text) return ''
   const parts = []
   let i = 0
   while (i < text.length) {
@@ -213,6 +162,73 @@ export function renderNote(text, segs?) {
     }
   }
   return parts.length === 1 ? parts[0] : parts
+}
+
+/**
+ * 结构化备注片段渲染(2026-11-04): 后端 note_segs = [{k:'b_sug', n:120, ...}, ...],
+ * 文案走 `t('seg.'+k, params)` 出双语; 返回 null 表示无片段(调用方回落旧 note 渲染)。
+ * 特殊键: trend(t7/t14 → emoji)、turn_over/turn_near(w=after/cur → 本地化周转名)。
+ * 每段文案都过 svgizeText —— 词条里带 🔴/⚠️/📉 等标记, 必须和旧路径一样渲染成 SVG,
+ * 否则结构化路径会直接把 emoji 字符吐给浏览器, 退化成彩色原生 emoji(2026-11-04 回归)。
+ */
+export function renderNoteSegs(segs?: NoteSeg[] | null): React.ReactNode {
+  if (!Array.isArray(segs) || segs.length === 0) return null
+  // 防键名泄漏(本轮铁律): 后端可能先于前端部署, 或未来新增片段类型 —— 只要有一个键
+  // 没词条, t() 会回落到 'seg.xxx' 原文, 界面就冒出英文键名(同 RiskSheet 的 dash.urgent)。
+  // 此时整段返回 null, 由 renderNote 回落到完整可读的 note 字符串, 而不是显示半个键名。
+  const hasSeg = (k: string) => t('seg.' + k) !== 'seg.' + k
+  for (const sg of segs) {
+    const k = String(sg?.k || '')
+    if (!k || !hasSeg(k)) return null
+    if (k === 'trend' && sg.x && !hasSeg('trend_x_' + sg.x)) return null
+  }
+  return segs.map((sg, i) => {
+    const k = String(sg?.k || '')
+    const tail = i < segs.length - 1 ? ' · ' : ''
+    if (k === 'trend') {
+      const s = t('seg.trend', {
+        t7: TREND_EMOJI[String(sg.t7)] || '➡️',
+        t14: TREND_EMOJI[String(sg.t14)] || '➡️',
+      })
+      return (
+        <React.Fragment key={i}>
+          {svgizeText(s)}
+          {sg.x ? ' ' : ''}
+          {sg.x ? svgizeText(t('seg.trend_x_' + sg.x)) : null}
+          {tail}
+        </React.Fragment>
+      )
+    }
+    if (k === 'turn_over' || k === 'turn_near') {
+      return (
+        <React.Fragment key={i}>
+          {svgizeText(
+            t('seg.' + k, {
+              w: t(sg.w === 'after' ? 'seg.w_after' : 'seg.w_cur'),
+              v: sg.v,
+              t: sg.t,
+            }),
+          )}
+          {tail}
+        </React.Fragment>
+      )
+    }
+    return (
+      <React.Fragment key={i}>
+        {svgizeText(t('seg.' + k, sg))}
+        {tail}
+      </React.Fragment>
+    )
+  })
+}
+
+export function renderNote(text?: string | null, segs?: NoteSeg[] | null) {
+  // 2026-11-04 结构化优先: 后端新数据带 note_segs(键+参数) → i18n 双语;
+  // 旧数据/导出兜底走原 note 字符串。两条路径都必须过 emoji→SVG 转换层。
+  const segNodes = renderNoteSegs(segs)
+  if (segNodes) return segNodes
+  if (!text) return '-'
+  return svgizeText(String(text))
 }
 
 export const defVis = cols => {
@@ -265,7 +281,7 @@ const pillStyle = (cond, yes = 'danger', no = 'info') => ({
   padding: '2px 8px',
   borderRadius: 99,
   fontSize: 12,
-  fontWeight: "var(--fw-semibold)",
+  fontWeight: 'var(--fw-semibold)',
   background: cond ? 'rgba(225,29,72,0.08)' : 'rgba(29,78,216,0.08)',
   color: cond ? 'var(--danger)' : 'var(--primary)',
 })

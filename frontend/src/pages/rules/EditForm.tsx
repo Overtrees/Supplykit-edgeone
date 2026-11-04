@@ -1,3 +1,4 @@
+import type { Dispatch, SetStateAction } from 'react'
 import {
   IconAlert,
   IconClipboard,
@@ -9,18 +10,33 @@ import {
   IconScale,
 } from '../../components/Icons'
 import { t } from '../../locale'
-import {
-  EVENTS,
-  LF,
-  MODES,
-  OPS,
-  WHS,
-  fieldLbl,
-  opLbl,
-  renderTmpl,
-  whLbl,
-} from './labels'
+import { EVENTS, LF, MODES, OPS, WHS, fieldLbl, opLbl, renderTmpl, whLbl } from './labels'
 import { IS } from './shared'
+
+/** 规则表单字段(动态扩展键兜底) */
+interface RuleForm {
+  id?: number | string
+  name?: string
+  event?: string
+  alert_type?: string
+  alert_title?: string
+  alert_desc?: string
+  severity?: string
+  mode?: string
+  condition_json?: string
+  [k: string]: unknown
+}
+/** 条件编辑器状态(子条件 or 数组同构) */
+interface CondState {
+  left?: string
+  op?: string
+  right?: string
+  rightType?: string
+  pctValue?: number | string
+  warehouse?: string
+  or?: CondState[]
+  [k: string]: unknown
+}
 
 /**
  * 规则编辑表单(全受控) —— 自 RulesPage.tsx 外提(S3-1 续2)。
@@ -42,13 +58,13 @@ export default function RuleEditForm({
   onTest,
   globalChannel,
 }: {
-  f: any
-  cond: any
+  f: RuleForm
+  cond: CondState
   rParams: Record<string, string>
-  editing: any
+  editing: RuleForm | null
   saveLoading: boolean
-  setF: (v: any) => void
-  setCond: (v: any) => void
+  setF: Dispatch<SetStateAction<RuleForm>>
+  setCond: Dispatch<SetStateAction<CondState>>
   setRParams: (v: Record<string, string>) => void
   cancelEdit: () => void
   save: () => void
@@ -184,7 +200,7 @@ export default function RuleEditForm({
         marginBottom: 16,
       }}
     >
-      <div style={{ fontWeight: "var(--fw-semibold)", marginBottom: 12 }}>
+      <div style={{ fontWeight: 'var(--fw-semibold)', marginBottom: 12 }}>
         {editing.id ? t('rules.edit') : t('rules.new_btn') + t('rfm.suffix_rule')}
       </div>
 
@@ -320,7 +336,7 @@ export default function RuleEditForm({
       >
         <div
           style={{
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             fontSize: 'var(--font-13)',
             marginBottom: 10,
             display: 'flex',
@@ -399,7 +415,7 @@ export default function RuleEditForm({
               style={{
                 fontSize: 'var(--font-13)',
                 color: 'var(--muted2)',
-                fontWeight: "var(--fw-medium)",
+                fontWeight: 'var(--fw-medium)',
                 whiteSpace: 'nowrap',
               }}
             >
@@ -600,7 +616,7 @@ export default function RuleEditForm({
       >
         <div
           style={{
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             fontSize: 'var(--font-13)',
             marginBottom: 10,
             display: 'flex',
@@ -785,7 +801,7 @@ export default function RuleEditForm({
         >
           <div
             style={{
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               fontSize: 'var(--font-13)',
               marginBottom: 4,
               display: 'flex',
@@ -860,7 +876,7 @@ export default function RuleEditForm({
         >
           <div
             style={{
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               fontSize: 'var(--font-13)',
               marginBottom: 4,
               display: 'flex',

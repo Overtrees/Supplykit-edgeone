@@ -80,7 +80,10 @@ Supplykit/
 ### 4.1 TypeScript
 
 - **组件 Props 接口**：`interface XxxProps { ... }`
-- **避免 `any` 类型**：优先使用具体类型或泛型
+- **禁用 `any` 类型(红线 C, 2026-11-04 全仓清零)**: 源码不得出现 `any` 关键字; 精确
+  `interface` + `[k:string]:unknown` 索引签名 + `String()`/`Number()` 边界收敛, API 动态数据
+  用 `api.get<T>()` 显式泛型; 门禁 `.eslintrc.cjs` `no-explicit-any: error`, `npx eslint src` 必须 0 error。
+  见 `docs/SKILL.md` §11 红线 C 与 `§15.38`「不造假严格」
 - **Store 状态有接口定义**：`AppState` / `AppActions`
 - **全文件覆盖 100%**：31 个 TS 文件均已添加类型定义
 - 核心类型：`ColumnDef`、`WarehouseType`、`ToastItem`、`OrderItem`、`ChartProps` 等

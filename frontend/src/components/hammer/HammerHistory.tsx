@@ -3,6 +3,19 @@ import { useAppStore } from '../../store/useAppStore'
 import { api } from '../../api/client'
 import { t } from '../../locale'
 
+interface Coverage {
+  archive?: {
+    rows?: number
+    min?: string
+    max?: string
+    [k: string]: unknown
+  }
+  archive_day?: string
+  cut_days?: number
+  stale_orders?: number
+  [k: string]: unknown
+}
+
 /**
  * 历史归档页锤子菜单(2026-11-02 S2-9; 同日 UI 收敛: 去按钮/短文案/间距对齐看板)
  *
@@ -31,7 +44,7 @@ export default function HammerHistory({ channel }: { channel: string }) {
   const [endDraft, setEndDraft] = useState(histEnd)
   // 归档状态: 页面不再展示, 移到这里(菜单底部)。面板是"用时才挂载"的, 所以每次打开
   // 拉一次 —— 与页面同接口、同 300s 缓存键, 不会多打一次库。
-  const [cov, setCov] = useState<any>(null)
+  const [cov, setCov] = useState<Coverage | null>(null)
 
   // 从外部进来时草稿要反映当前生效区间(否则看到上次残留草稿)
   useEffect(() => {
@@ -42,7 +55,7 @@ export default function HammerHistory({ channel }: { channel: string }) {
   useEffect(() => {
     let alive = true
     api
-      .get(`/api/history/coverage?channel=${encodeURIComponent(channel || 'jd')}`)
+      .get<Coverage>(`/api/history/coverage?channel=${encodeURIComponent(channel || 'jd')}`)
       .then(r => {
         if (alive) setCov(r?.data || null)
       })

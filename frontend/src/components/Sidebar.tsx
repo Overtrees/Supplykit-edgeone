@@ -112,7 +112,7 @@ export default function Sidebar({
                     fontFamily: 'inherit',
                     cursor: 'pointer',
                     textAlign: 'left',
-                    fontWeight: "var(--fw-regular)",
+                    fontWeight: 'var(--fw-regular)',
                     marginBottom: 2,
                   }}
                 >
@@ -136,7 +136,7 @@ export default function Sidebar({
                       style={{
                         display: 'block',
                         fontSize: 'var(--font-15)',
-                        fontWeight: "var(--fw-regular)",
+                        fontWeight: 'var(--fw-regular)',
                         letterSpacing: '-0.1px',
                       }}
                     >
@@ -170,7 +170,7 @@ export default function Sidebar({
                         color: '#fff',
                         borderRadius: 'var(--radius-full)',
                         fontSize: 'var(--font-xs)',
-                        fontWeight: "var(--fw-bold)",
+                        fontWeight: 'var(--fw-bold)',
                         padding: '1px 7px',
                         minWidth: 20,
                         textAlign: 'center',
@@ -186,7 +186,7 @@ export default function Sidebar({
                         color: '#fff',
                         borderRadius: 'var(--radius-full)',
                         fontSize: 'var(--font-xs)',
-                        fontWeight: "var(--fw-bold)",
+                        fontWeight: 'var(--fw-bold)',
                         padding: '1px 7px',
                         minWidth: 20,
                         textAlign: 'center',

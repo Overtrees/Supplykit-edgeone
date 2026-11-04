@@ -4,15 +4,31 @@ import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { t } from '../../locale'
 
+/** 补货配置(后端动态键): 已知字段精确枚举, 动态键走 unknown 索引 */
+interface ReplenConfig {
+  replenishment_mode?: string
+  transit_days?: string
+  slow_fund_threshold?: string
+  [k: string]: unknown
+}
+/** 活动系数条目(编辑期数值字段为字符串, 故 number|string) */
+interface Season {
+  key?: string
+  name?: string
+  factor?: number | string
+  enabled?: boolean
+  [k: string]: unknown
+}
+
 interface Props {
   channel: string
-  seasons: any[]
-  setSeasons: Dispatch<SetStateAction<any[]>>
+  seasons: Season[]
+  setSeasons: Dispatch<SetStateAction<Season[]>>
   seasonsSaving: boolean
   setSeasonsSaving: Dispatch<SetStateAction<boolean>>
-  cfg: any
-  saveErr: any
-  loadCfg: (mode?: any, ch?: any) => Promise<any>
+  cfg: ReplenConfig
+  saveErr: (e: unknown) => void
+  loadCfg: (mode?: string, ch?: string) => Promise<unknown>
 }
 
 export default function RulesSeasonPanel(props: Props) {
@@ -138,7 +154,7 @@ export default function RulesSeasonPanel(props: Props) {
               background: 'var(--danger)',
               color: '#fff',
               cursor: 'pointer',
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               flexShrink: 0,
             }}
           >
@@ -148,7 +164,10 @@ export default function RulesSeasonPanel(props: Props) {
       ))}
       <button
         onClick={() =>
-          setSeasons(p => [...p, { key: 'new', name: t('sp.new_name'), factor: 1.2, enabled: true }])
+          setSeasons(p => [
+            ...p,
+            { key: 'new', name: t('sp.new_name'), factor: 1.2, enabled: true },
+          ])
         }
         className="btn btn-ghost clickable"
         style={{

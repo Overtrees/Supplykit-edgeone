@@ -1,19 +1,21 @@
 import { IconWarning } from '../../components/Icons'
 import { TARGET_FIELDS, SYS_FIELDS } from './fields'
+import type { CleanseData, ColumnInfo, ColMapItem, CustomField } from './fields'
 import { fieldLabel } from './fieldNames'
 import { t } from '../../locale'
 
 interface Props {
-  pv: any
-  mp: Record<string, any>
-  cols: any[]
+  pv: CleanseData
+  mp: Record<string, ColMapItem>
+  cols: ColumnInfo[]
   tr: number
   tt: string
   bs: string
   /** 自定义字段(页面 state, 预览里用作兜底标签) */
-  cf: any[]
+  cf: CustomField[]
   onBack: () => void
   onExecute: () => void
+  [k: string]: unknown
 }
 
 /** 第 3 步清洗预览。从 CleansingPage 外提: 只读 pv/mp 渲染, 两个出口动作上抛。
@@ -37,7 +39,9 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: "var(--fw-bold)" }}>{t('cw.preview_title')}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 'var(--fw-bold)' }}>
+          {t('cw.preview_title')}
+        </span>
         {(() => {
           const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
           const parts: string[] = [t('cw.pv_total', { n: pv.total })]
@@ -82,7 +86,11 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           >
             <IconWarning size={13} style={{ flexShrink: 0, marginTop: 1 }} />
             <span>
-              {t('cw.pv_issue_pre')}<b>{missing}</b>{t('cw.pv_issue_sku')}<b>{dupSkus.size}</b>{t('cw.pv_issue_dup')}
+              {t('cw.pv_issue_pre')}
+              <b>{missing}</b>
+              {t('cw.pv_issue_sku')}
+              <b>{dupSkus.size}</b>
+              {t('cw.pv_issue_dup')}
               {t('cw.pv_issue_suf')}
             </span>
           </div>
@@ -153,7 +161,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
                         <div
                           style={{
                             fontSize: 10,
-                            fontWeight: "var(--fw-regular)",
+                            fontWeight: 'var(--fw-regular)',
                             color: 'var(--muted2)',
                             marginTop: 1,
                           }}
@@ -170,11 +178,11 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
                     const skuCol = cols.find(c => c.target === 'sku')
                     const skuVal = skuCol ? String(r[skuCol.target] || '') : ''
                     const issue =
-                skuVal === ''
-                  ? t('cw.issue_no_sku')
-                  : dupSkus.has(skuVal)
-                    ? t('cw.issue_dup_sku')
-                    : ''
+                      skuVal === ''
+                        ? t('cw.issue_no_sku')
+                        : dupSkus.has(skuVal)
+                          ? t('cw.issue_dup_sku')
+                          : ''
                     return (
                       <tr
                         key={i}
@@ -232,7 +240,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             background: 'var(--card)',
             color: 'var(--text)',
             fontSize: 'var(--font-md)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             cursor: 'pointer',
           }}
         >
@@ -250,7 +258,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             background: 'var(--primary)',
             color: '#fff',
             fontSize: 'var(--font-md)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             cursor: 'pointer',
             opacity: bs ? 0.6 : 1,
           }}

@@ -58,8 +58,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                 lineHeight: 1.3 /* 行高收紧——内容完整不裁 */,
               }}
             >
-              <IconWarning size={13} style={{ verticalAlign: -2 }} />{' '}
-              {t('cw.subject_warn_pre')}
+              <IconWarning size={13} style={{ verticalAlign: -2 }} /> {t('cw.subject_warn_pre')}
               {channel === 'jd' ? t('channel.jd') : t('channel.other')}
               {t('cw.subject_warn_suf')}
             </div>
@@ -69,7 +68,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
               <div
                 style={{
                   fontSize: 'var(--font-sm)',
-                  fontWeight: "var(--fw-semibold)",
+                  fontWeight: 'var(--fw-semibold)',
                   textAlign: 'center',
                   marginBottom: 8,
                 }}

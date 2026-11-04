@@ -450,7 +450,7 @@ tbody tr:nth-child(even):hover td {
 }
 @supports (-webkit-touch-callout: none) {
   :root {
-    --fw-medium: 510;   /* SF Pro: 510 比 500 稍实, 600 原生已准 */
+    --fw-medium: 510; /* SF Pro: 510 比 500 稍实, 600 原生已准 */
     --fw-semibold: 590; /* iOS 上 600 观感偏重, 590 是"视觉半粗" */
   }
 }

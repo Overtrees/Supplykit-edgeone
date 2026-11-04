@@ -4,6 +4,27 @@ import { api, freshStamp } from '../api/client'
 import { IconTrash } from './Icons'
 import { t } from '../locale'
 
+interface FlowRow {
+  id: number
+  date?: string
+  sku?: string
+  warehouse?: string
+  warehouse_type: string
+  prod_date?: string
+  exp_date?: string
+  quantity?: number
+  extra?: string
+  remark?: string
+  [k: string]: unknown
+}
+
+interface FlowListResponse {
+  items?: FlowRow[]
+  total?: number
+  extra_label?: string
+  [k: string]: unknown
+}
+
 /**
  * 出入库明细弹窗(2026-10-29)
  * 复用底部 sheet 标准: 遮罩 fixed inset:0 zIndex 9998 / 面板 material-regular zIndex 9999
@@ -19,7 +40,7 @@ export default function FlowRecordsSheet({
   channel?: string
 }) {
   const [tab, setTab] = useState<'inbound' | 'outbound'>('inbound')
-  const [items, setItems] = useState<any[]>([])
+  const [items, setItems] = useState<FlowRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
@@ -44,7 +65,7 @@ export default function FlowRecordsSheet({
     setLoading(true)
     setErr('')
     try {
-      const r = await api.get(
+      const r = await api.get<FlowListResponse>(
         `/api/flow-records/list?target=${target}&page=${p}&page_size=${PS}&channel=${channel}` +
           (dateFrom ? `&date_from=${dateFrom}` : '') +
           (dateTo ? `&date_to=${dateTo}` : '') +
@@ -60,8 +81,13 @@ export default function FlowRecordsSheet({
           (target === 'inbound' ? t('flw.default_supplier') : t('flw.default_target_wh')),
       )
       setPage(p)
-    } catch (e: any) {
-      setErr(String(e?.message || e).slice(0, 80))
+    } catch (e: unknown) {
+      setErr(
+        String((e && typeof e === 'object' && 'message' in e ? e.message : undefined) || e).slice(
+          0,
+          80,
+        ),
+      )
     } finally {
       setLoading(false)
     }
@@ -79,7 +105,7 @@ export default function FlowRecordsSheet({
   const doDelete = async (id: number) => {
     setDelId(id)
     try {
-      const r: any = await api.post('/api/flow-records/batch', {
+      const r = await api.post('/api/flow-records/batch', {
         target: tab,
         ids: [id],
         reason: '出入库明细弹窗手动删除',
@@ -87,8 +113,13 @@ export default function FlowRecordsSheet({
       if (r?.data?.ok === false) throw new Error(r?.data?.error || t('common.delete_failed'))
       setItems(prev => prev.filter(x => x.id !== id))
       setTotal(t => Math.max(0, t - 1))
-    } catch (e: any) {
-      setErr(String(e?.message || e).slice(0, 80))
+    } catch (e: unknown) {
+      setErr(
+        String((e && typeof e === 'object' && 'message' in e ? e.message : undefined) || e).slice(
+          0,
+          80,
+        ),
+      )
     } finally {
       setDelId(null)
     }
@@ -140,7 +171,7 @@ export default function FlowRecordsSheet({
               ).map(([k, l]) => (
                 <span
                   key={k}
-                  onClick={() => setTab(k as any)}
+                  onClick={() => setTab(k)}
                   className={'hammer-segment' + (tab === k ? ' active' : '')}
                   style={{ fontSize: 'var(--font-xs)', cursor: 'pointer' }}
                 >

@@ -59,7 +59,7 @@ export default function OpPill() {
   const label = rules.length
     ? t('op.rules_running')
     : ops.length > 1
-    ? t('op.n_processing', { n: ops.length })
+      ? t('op.n_processing', { n: ops.length })
       : ops[0].label
 
   return (
@@ -128,7 +128,7 @@ export default function OpPill() {
                     marginBottom: 10,
                   }}
                 >
-                  <span style={{ fontWeight: "var(--fw-bold)" }}>{t('op.panel_title')}</span>
+                  <span style={{ fontWeight: 'var(--fw-bold)' }}>{t('op.panel_title')}</span>
                   <span className="small muted" style={{ cursor: 'pointer' }}>
                     {t('common.close')}
                   </span>

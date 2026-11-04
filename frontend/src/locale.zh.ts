@@ -86,7 +86,8 @@ export const zh: Record<string, string> = {
   'login.loading': '登录中...',
   'login.guest': '访客模式：',
   'login.guest_hint': '（仅可查看，无需注册）',
-  'login.disclaimer': '声明：系统所使用的演示数据涉及品牌、商品、供应商为虚构，与任何真实企业或个人无关',
+  'login.disclaimer':
+    '声明：系统所使用的演示数据涉及品牌、商品、供应商为虚构，与任何真实企业或个人无关',
   'hs.title': '配置变更历史',
   'hs.empty': '暂无变更记录',
   'hs.mode_bbcc': 'BBCC',
@@ -828,7 +829,7 @@ export const zh: Record<string, string> = {
   'dash.other_n': '● 其他 {n}',
   'dash.other_zero': '其他 0',
   'dash.slow_n': '● 滞销 {n}',
-  'dash.health_of': '库存{t(\'dash.healthy\')}度',
+  'dash.health_of': "库存{t('dash.healthy')}度",
   'dash.health_title': '库存健康度',
   'dash.healthy_n': '● {n}健康',
   'dash.score_tip': '{d} {v}分',
@@ -947,7 +948,8 @@ export const zh: Record<string, string> = {
   'ch.create_failed': '创建失败',
   'ch.saved': '已保存',
   'ch.save_failed': '保存失败',
-  'ch.disable_confirm': '禁用渠道「{code}」？\n\n禁用后下拉不再出现，但已有数据保留（可再次启用）。',
+  'ch.disable_confirm':
+    '禁用渠道「{code}」？\n\n禁用后下拉不再出现，但已有数据保留（可再次启用）。',
   'ch.disabled': '已禁用',
   'ch.disable_failed': '禁用失败',
   'ch.empty': '暂无渠道',
@@ -1183,10 +1185,13 @@ export const zh: Record<string, string> = {
   'rfm.var_hint_ph': '输入文字，点击下方按钮插入变量',
   'rfm.param_stockout': '断货计算参数(看板断货卡同源)',
   'rfm.param_health': '健康分档参数(看板健康卡同源)',
-  'rfm.param_stockout_hint': '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值',
-  'rfm.param_health_hint': '配置后看板库存健康度分档(good/warning)即时按此计算，停用/删除本规则则回默认值',
+  'rfm.param_stockout_hint':
+    '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值',
+  'rfm.param_health_hint':
+    '配置后看板库存健康度分档(good/warning)即时按此计算，停用/删除本规则则回默认值',
   'rfm.param_own': '自有仓口径参数(看板同源)',
-  'rfm.param_own_gap_hint': '缺口 = 下游日销 × 调拨周期 − 自有可发(在仓+在途+采购在途)；小于阈值不报，避免零头噪音',
+  'rfm.param_own_gap_hint':
+    '缺口 = 下游日销 × 调拨周期 − 自有可发(在仓+在途+采购在途)；小于阈值不报，避免零头噪音',
   'rfm.param_own_overstock_hint': '可撑天数 = 自有可用 ÷ 下游日销；超过阈值判积压(占用资金与库位)',
   'rfm.param_own_expiry_hint': '距过期天数低于缓冲即报；另含"按当前消化速度赶不上效期"的加速预警',
   'rfm.param_default_ph': '默认值',
@@ -1242,7 +1247,8 @@ export const zh: Record<string, string> = {
   'rp.debug_tab': 'tab: {v}',
   'rp.debug_clear': '清空日志',
   'rp.debug_empty': '暂无操作日志',
-  'slow.hint': '按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段',
+  'slow.hint':
+    '按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段',
   'slow.name_ph': '品类名(如 食品)',
   'slow.slow_days': '滞销线(天)',
   'slow.observe_days': '观察线(天)',
@@ -1251,7 +1257,8 @@ export const zh: Record<string, string> = {
   'slow.cats_label': '品类名单（逗号分隔，匹配商品“分类”字段）',
   'slow.cats_ph': '酱油,薯片,糖果...',
   'slow.transit': '物流在途(天)',
-  'slow.transit_hint': '库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3 标临近）',
+  'slow.transit_hint':
+    '库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3 标临近）',
   'slow.fund': '资金占用线(¥)',
   'slow.fund_hint': '滞销品资金占用(库存×单价)超此线 → 升级「处置」等级(默认 10000)',
   'slow.new_cat': '新品类',
@@ -1265,22 +1272,27 @@ export const zh: Record<string, string> = {
   'cl.detect_ing': '识别中',
   'cl.detect_failed': '识别失败',
   'cl.detected_n': '已自动识别 {n} 列（未识别的列请在下方手工选择目标字段）',
-  'cl.detect_none': '未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）',
+  'cl.detect_none':
+    '未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）',
   'cl.req_error': '请求异常: {msg}',
   'cl.need_file': '请先选择文件后再预览',
   'cl.previewing': '预览中',
   'cl.preview_failed': '预览失败',
   'cl.preview_failed_msg': '预览失败: {msg}',
   'cl.req_failed': '请求失败',
-  'cl.miss_required': '未映射必填列: {cols} —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
+  'cl.miss_required':
+    '未映射必填列: {cols} —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
   'cl.colmap_saved': '列映射已保存，导入时即时生效',
   'cl.save_failed': '保存失败: {msg}',
   'cl.cleansing': '清洗中...',
-  'cl.miss_before_write': '写入前必须映射必填列: {cols}（缺失将导致整批跳过或核算错误），请返回上一步补映射',
+  'cl.miss_before_write':
+    '写入前必须映射必填列: {cols}（缺失将导致整批跳过或核算错误），请返回上一步补映射',
   'cl.need_wh_inv': '导入库存必须映射「仓库」列，否则传统多仓无法按仓库维度核算',
-  'cl.need_wh_order': '导入订单必须映射「仓库」列，否则传统补货模式按仓库维度核算日销时会丢失该订单销量',
+  'cl.need_wh_order':
+    '导入订单必须映射「仓库」列，否则传统补货模式按仓库维度核算日销时会丢失该订单销量',
   'cl.need_sku_order': '导入订单必须映射「SKU/商品编号」列（写入唯一键），否则整批订单将被跳过',
-  'cl.need_expiry': '导入商品必须映射「是否做效期管理」列（填 是/否），否则后续出入库无法判断按效期扣减还是按到货顺序扣减',
+  'cl.need_expiry':
+    '导入商品必须映射「是否做效期管理」列（填 是/否），否则后续出入库无法判断按效期扣减还是按到货顺序扣减',
   'cl.need_platform': '导入 GMV 回款必须映射「平台」列（与流水号组成去重键）',
   'cl.need_flow': '导入 GMV 回款必须映射「流水号」列（与平台组成去重键），否则整批将被跳过',
   'cl.dup_all': '同键 {n} 条均已存在，将按本次文件覆盖更新（不会重复计数）',
@@ -1346,7 +1358,8 @@ export const zh: Record<string, string> = {
   'dev.slow_req': '慢请求',
   'dev.today_errors': '今日异常',
   'dev.today_slow': '今日慢请求',
-  'dev.overview_note': '异常/慢请求留痕于 quality_logs(开发者维度), 控制台「日志分析」为平台请求级(24h 保留)',
+  'dev.overview_note':
+    '异常/慢请求留痕于 quality_logs(开发者维度), 控制台「日志分析」为平台请求级(24h 保留)',
   'dev.log_analysis': '日志分析',
   'dev.log_analysis_sub': '按日日志文件 · 点击预览当日明细',
   'dev.seed': '种子数据',
@@ -1514,7 +1527,8 @@ export const zh: Record<string, string> = {
   'hr.mode_bbcc': 'BBCC 送仓',
   'hr.mode_trad': '传统多仓',
   'cm.title': '表格列状态映射',
-  'cm.desc': '按列配置 值→档位，导入时自动归一化 · 渠道：{ch}（全局主体隔离） 计入销量池=日销/GMV 都算；仅订单记录=写订单可见，GMV 按状态（已发货类算），不计日销补货',
+  'cm.desc':
+    '按列配置 值→档位，导入时自动归一化 · 渠道：{ch}（全局主体隔离） 计入销量池=日销/GMV 都算；仅订单记录=写订单可见，GMV 按状态（已发货类算），不计日销补货',
   'cm.ch_jd': '京东',
   'cm.ch_other': '其他渠道',
   'cm.map_col': '映射列',

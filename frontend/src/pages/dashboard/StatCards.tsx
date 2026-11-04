@@ -6,6 +6,83 @@ import { periodLabel, fmtBig, fmtInt } from './format'
  * 状态一行不搬: gmvView/healthTab/bcMenuOpen 等 set* 与派生值全部同名 props 注入。
  */
 
+/** 健康卡各维度指标 */
+interface HealthIndexData {
+  level?: string
+  score?: number
+  healthy?: number
+  warning?: number
+  out_of_stock?: number
+  total?: number
+  [k: string]: unknown
+}
+
+/** dashboard 在本页消费到的字段(其余动态字段 unknown) */
+interface DashboardData {
+  summary?: { refund_amount?: number; [k: string]: unknown }
+  health_index?: Record<string, HealthIndexData>
+  [k: string]: unknown
+}
+
+/** 周期指标(总/净/回款及各自环比基准) */
+interface PeriodMeta {
+  gmv?: number
+  net_gmv?: number | null
+  payout?: number | null
+  orders?: number
+  prev_gmv?: number
+  prev_net_gmv?: number
+  prev_payout?: number
+  [k: string]: unknown
+}
+
+/** 微趋势/健康趋势数据点(数值字段为主, date 等由 String() 收敛) */
+type TrendPoint = Record<string, number>
+
+interface GmvCardProps {
+  dashboard?: DashboardData
+  gmvView?: string
+  setGmvView?: (v: string) => void
+  gmvColor?: string
+  gmvKey?: string
+  gmvPayoutOk?: boolean
+  periodMeta?: PeriodMeta
+  periodTrend?: TrendPoint[]
+  periodDays?: number
+  /** 当前未由看板注入, 保留可选以免影响既有渲染 */
+  periodTab?: string
+  [k: string]: unknown
+}
+
+interface AlertSummaryCardProps {
+  dashboard?: unknown
+  detailFont?: string
+  loadFullAlerts?: () => void
+  lowStockTotal?: number
+  otherTotal?: number
+  pendingTotal?: number
+  procBuyN?: number
+  procRepN?: number
+  setShowAllOther?: (v: boolean) => void
+  slowMovingTotal?: number
+  [k: string]: unknown
+}
+
+interface HealthCardProps {
+  dashboard?: DashboardData
+  healthTab?: string
+  healthTrend?: TrendPoint[]
+  channel?: string
+  bcMenuOpen?: boolean
+  setBcMenuOpen?: (v: boolean) => void
+  setHealthWithSave?: (tab: string) => void
+  setShowAllOut?: (v: boolean) => void
+  loadFullOut?: () => void
+  _oosSrc?: unknown[]
+  _replMode?: string
+  [k: string]: unknown
+}
+
 /** 1. GMV 卡 — 加环比微趋势线 + 日均 */
 export function GmvCard({
   dashboard,
@@ -18,7 +95,7 @@ export function GmvCard({
   periodTrend,
   periodDays,
   periodTab,
-}: any) {
+}: GmvCardProps) {
   return (
     <div className="card stat-card">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -87,7 +164,7 @@ export function GmvCard({
           className="card-value"
           style={{
             fontSize: 'clamp(17px,8cqi,28px)',
-            fontWeight: "var(--fw-bold)",
+            fontWeight: 'var(--fw-bold)',
             lineHeight: 1.15,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
@@ -108,9 +185,11 @@ export function GmvCard({
                   : periodMeta.gmv
             if (gmvView === 'payout' && _g == null)
               return (
-                <span style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: "var(--fw-medium)" }}>
-                    {t('dash.payout_pending_short')}
-                  </span>
+                <span
+                  style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: 'var(--fw-medium)' }}
+                >
+                  {t('dash.payout_pending_short')}
+                </span>
               )
             return '¥' + fmtBig(_g || 0)
           })()}
@@ -159,13 +238,17 @@ export function GmvCard({
               <span
                 style={{
                   fontSize: 'var(--font-xs)',
-                  fontWeight: "var(--fw-semibold)",
+                  fontWeight: 'var(--fw-semibold)',
                   color: pct >= 0 ? 'var(--success)' : 'var(--danger)',
                 }}
               >
                 {pct >= 0 ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}%{' '}
                 <span
-                  style={{ fontSize: 'var(--font-9)', fontWeight: "var(--fw-regular)", color: 'var(--muted2)' }}
+                  style={{
+                    fontSize: 'var(--font-9)',
+                    fontWeight: 'var(--fw-regular)',
+                    color: 'var(--muted2)',
+                  }}
                 >
                   {_cmpLabel}
                 </span>
@@ -188,7 +271,7 @@ export function GmvCard({
                     : periodMeta.gmv
               if (_g == null)
                 return (
-                  <span style={{ color: 'var(--muted2)', fontWeight: "var(--fw-medium)" }}>
+                  <span style={{ color: 'var(--muted2)', fontWeight: 'var(--fw-medium)' }}>
                     {t('dash.payout_pending_short')}
                   </span>
                 )
@@ -245,7 +328,7 @@ export function AlertSummaryCard({
   procRepN,
   setShowAllOther,
   slowMovingTotal,
-}: any) {
+}: AlertSummaryCardProps) {
   return (
     <div className="card stat-card">
       <div
@@ -259,7 +342,7 @@ export function AlertSummaryCard({
         <div
           style={{
             fontSize: 'var(--font-sm)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             color: 'var(--muted)',
             letterSpacing: 0.2,
             lineHeight: 1.2,
@@ -306,7 +389,13 @@ export function AlertSummaryCard({
               <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
           </div>
-          <div style={{ fontSize: 'var(--font-sm)', fontWeight: "var(--fw-medium)", color: 'var(--muted2)' }}>
+          <div
+            style={{
+              fontSize: 'var(--font-sm)',
+              fontWeight: 'var(--fw-medium)',
+              color: 'var(--muted2)',
+            }}
+          >
             {t('dash.no_alerts')}
           </div>
         </div>
@@ -324,7 +413,7 @@ export function AlertSummaryCard({
               className="card-value"
               style={{
                 fontSize: 'clamp(17px,8cqi,28px)',
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 lineHeight: 1.15,
                 color:
                   pendingTotal > 10
@@ -362,10 +451,10 @@ export function AlertSummaryCard({
                   2026-11-04 允许换行: 中文「● 采购 7 ● 补货 137」一行放得下, 英文
                   「● Purchase 7 ● Replenish 137」比中文长约 60%, 强制 nowrap 会被卡片裁掉
                   (4 视口验证发现 "Replenish 1…"), 故这里 wrap、收紧 gap。 */}
-              <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
+              <span style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--warning)' }}>
                 {t('dash.line_purchase', { n: fmtInt(procBuyN) })}
               </span>
-              <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
+              <span style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--warning)' }}>
                 {t('dash.line_replenish', { n: fmtInt(procRepN) })}
               </span>
             </div>
@@ -384,7 +473,7 @@ export function AlertSummaryCard({
             }}
           >
             {/* 总览第三行: 低库存 + 其他(聚合超卖等规则评估, 点击弹窗明细) */}
-            <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
+            <span style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--warning)' }}>
               {t('dash.line_low_stock', { n: fmtInt(lowStockTotal) })}
             </span>
             {otherTotal > 0 ? (
@@ -395,7 +484,7 @@ export function AlertSummaryCard({
                   setShowAllOther(true)
                 }}
                 className="clickable"
-                style={{ color: '#007AFF', fontWeight: "var(--fw-semibold)", cursor: 'pointer' }}
+                style={{ color: '#007AFF', fontWeight: 'var(--fw-semibold)', cursor: 'pointer' }}
               >
                 {t('dash.line_other', { n: fmtInt(otherTotal) })}
               </span>
@@ -427,7 +516,7 @@ export function HealthCard({
   loadFullOut,
   _oosSrc,
   _replMode,
-}: any) {
+}: HealthCardProps) {
   return (
     <div key={'hlth' + healthTab} className="card stat-card fade-in">
       {(() => {
@@ -622,7 +711,7 @@ export function HealthCard({
                 className="card-value"
                 style={{
                   fontSize: 'clamp(17px,8cqi,28px)',
-                  fontWeight: "var(--fw-bold)",
+                  fontWeight: 'var(--fw-bold)',
                   lineHeight: 1.15,
                   fontVariantNumeric: 'tabular-nums',
                   color:
@@ -654,7 +743,7 @@ export function HealthCard({
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       color: 'var(--success)',
                     }}
                   >
@@ -663,7 +752,7 @@ export function HealthCard({
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       color: 'var(--warning)',
                     }}
                   >
@@ -678,7 +767,7 @@ export function HealthCard({
                     className="clickable"
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: "var(--fw-semibold)",
+                      fontWeight: 'var(--fw-semibold)',
                       color: 'var(--danger)',
                       cursor: _oosSrc.length > 0 ? 'pointer' : 'default',
                     }}

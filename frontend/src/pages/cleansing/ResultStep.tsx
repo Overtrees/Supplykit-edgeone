@@ -1,12 +1,14 @@
 import { IconAlert, IconCheck, IconFolder } from '../../components/Icons'
 import { t } from '../../locale'
+import type { CleanseData } from './fields'
 
 interface Props {
-  res: any
+  res: CleanseData
   fileName: string
   onRestart: () => void
   /** 选到同格式文件: 交回页面重跑识别(页面需要写 fBuf 并调 detect, 故整段上抛) */
   onFile: (file: File, buf: ArrayBuffer) => void
+  [k: string]: unknown
 }
 
 /** 第 4 步完成页。从 CleansingPage 外提: 只读 res 渲染统计与两个出口动作。 */
@@ -42,7 +44,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
         )
       })()}
       {/* 标题语义化(原 res.message 直出) */}
-      <div style={{ fontSize: 16, fontWeight: "var(--fw-bold)", marginBottom: 4 }}>
+      <div style={{ fontSize: 16, fontWeight: 'var(--fw-bold)', marginBottom: 4 }}>
         {res.async ? t('cw.res_async') : res.success > 0 ? t('cw.res_ok') : t('cw.res_partial')}
       </div>
       {fileName ? (
@@ -71,7 +73,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 color: 'var(--primary)',
                 fontVariantNumeric: 'tabular-nums',
                 lineHeight: 1.1,
@@ -85,7 +87,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 lineHeight: 1.1,
                 color: 'var(--muted2)',
               }}
@@ -101,7 +103,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 color: 'var(--success)',
                 fontVariantNumeric: 'tabular-nums',
                 lineHeight: 1.1,
@@ -115,7 +117,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: "var(--fw-bold)",
+                fontWeight: 'var(--fw-bold)',
                 lineHeight: 1.1,
                 fontVariantNumeric: 'tabular-nums',
                 color: res.failed > 0 ? 'var(--danger)' : 'var(--muted2)',
@@ -150,7 +152,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
         >
           <div
             style={{
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               fontSize: 'var(--font-sm)',
               marginBottom: 6,
               color: 'var(--danger)',
@@ -195,7 +197,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             background: 'var(--card)',
             color: 'var(--text)',
             fontSize: 'var(--font-md)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             cursor: 'pointer',
           }}
         >
@@ -210,7 +212,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             background: 'var(--success)',
             color: '#fff',
             fontSize: 'var(--font-md)',
-            fontWeight: "var(--fw-semibold)",
+            fontWeight: 'var(--fw-semibold)',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',

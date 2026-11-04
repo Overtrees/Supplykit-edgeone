@@ -1,15 +1,30 @@
 import React from 'react'
 import { IconCheck } from './Icons'
 
+interface ListRowProps {
+  title?: React.ReactNode
+  children?: React.ReactNode
+  label?: React.ReactNode
+  value?: React.ReactNode
+  sub?: React.ReactNode
+  right?: React.ReactNode
+  onClick?: React.MouseEventHandler<HTMLDivElement>
+  danger?: boolean
+  loading?: boolean
+  last?: boolean
+  isSel?: boolean
+  [k: string]: unknown
+}
+
 // 全局列表分组组件(2026-09-15 抽公共: 设置页/开发者页/回收页三处复用, 视觉统一)
 // 结构: Group(title uppercase) > card(radius-lg) > Row(padding 0 16 / minHeight 48 / borderBottom)
-export const Group = ({ title, children }: any) => (
+export const Group = ({ title, children }: ListRowProps) => (
   <div style={{ marginBottom: 20 }}>
     {title && (
       <div
         style={{
           fontSize: 'var(--font-13)',
-          fontWeight: "var(--fw-regular)",
+          fontWeight: 'var(--fw-regular)',
           color: 'var(--muted2)',
           textTransform: 'uppercase',
           letterSpacing: 0.3,
@@ -29,7 +44,7 @@ export const Group = ({ title, children }: any) => (
 
 // last=true: 末行不画底部分割线 —— 卡片自身 overflow:hidden 收边, 末行再画线会紧贴卡片
 //   圆角底边, 视觉上是"卡片被切开一道"(2026-11-02 S2-9: 渠道管理停用卡片实证)
-export const Row = ({ label, value, sub, onClick, danger, loading, last }: any) => (
+export const Row = ({ label, value, sub, onClick, danger, loading, last }: ListRowProps) => (
   <div
     onClick={loading ? undefined : onClick}
     className={onClick && !loading ? 'clickable' : ''}
@@ -106,7 +121,7 @@ export const Row = ({ label, value, sub, onClick, danger, loading, last }: any) 
   </div>
 )
 
-export const LastRow = ({ label, value, sub, onClick, danger }: any) => (
+export const LastRow = ({ label, value, sub, onClick, danger }: ListRowProps) => (
   <div
     onClick={onClick}
     className={onClick ? 'clickable' : ''}
@@ -160,7 +175,7 @@ export const LastRow = ({ label, value, sub, onClick, danger }: any) => (
 )
 
 // 可选中列表行(2026-10-06: 回收页等批量选择场景)——与 Row 同构(padding 0 16 / 内层 14px 0 / minHeight 48 / borderBottom 缩进), 选中高亮 + 复选框
-export const ListItem = ({ label, isSel, onClick, right, last }: any) => (
+export const ListItem = ({ label, isSel, onClick, right, last }: ListRowProps) => (
   <div
     onClick={onClick}
     className={onClick ? 'clickable' : ''}

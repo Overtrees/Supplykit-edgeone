@@ -1,10 +1,21 @@
 import React from 'react'
 import { t } from '../../locale'
 
+interface HistoryRow {
+  key: string
+  id?: string | number
+  mode?: string
+  channel?: string
+  created_at?: string
+  old_value?: string
+  new_value?: string
+  [k: string]: unknown
+}
+
 interface HistorySheetProps {
   show: boolean
   loading: boolean
-  data: any[]
+  data: HistoryRow[]
   onClose: () => void
 }
 
@@ -50,7 +61,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: "var(--fw-bold)",
+              fontWeight: 'var(--fw-bold)',
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -97,7 +108,11 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {data.map((h, i) => {
                 const key = h.key.replace(/^mode_(bbcc|traditional)_/, '')
-                const modeInfo = h.mode ? (h.mode === 'bbcc' ? t('hs.mode_bbcc') : t('hs.mode_trad')) : ''
+                const modeInfo = h.mode
+                  ? h.mode === 'bbcc'
+                    ? t('hs.mode_bbcc')
+                    : t('hs.mode_trad')
+                  : ''
                 return (
                   <div
                     key={h.id || i}
@@ -121,7 +136,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
                         {modeInfo ? ` (${modeInfo})` : ''}
                         <span
                           style={{
-                            fontWeight: "var(--fw-regular)",
+                            fontWeight: 'var(--fw-regular)',
                             fontSize: 'var(--font-10)',
                             color: 'var(--muted2)',
                             marginLeft: 4,
@@ -153,7 +168,9 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
                         {h.old_value || t('hs.empty_value')}
                       </span>
                       <span className="muted2">→</span>
-                      <span style={{ color: 'var(--success)' }}>{h.new_value || t('hs.empty_value')}</span>
+                      <span style={{ color: 'var(--success)' }}>
+                        {h.new_value || t('hs.empty_value')}
+                      </span>
                     </div>
                   </div>
                 )
@@ -169,7 +186,13 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
                 }}
                 className="clickable sheet-close"
               >
-                <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
+                <span
+                  style={{
+                    fontSize: 'var(--font-15)',
+                    fontWeight: 'var(--fw-semibold)',
+                    color: '#fff',
+                  }}
+                >
                   {t('hs.close')}
                 </span>
               </div>

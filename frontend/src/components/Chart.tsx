@@ -1,7 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 
+interface ChartSub {
+  textStyle?: Record<string, unknown>
+  [k: string]: unknown
+}
+
+interface ChartSeries {
+  label?: ChartSub
+  [k: string]: unknown
+}
+
+interface ChartOption {
+  textStyle?: ChartSub
+  title?: ChartSub
+  legend?: ChartSub
+  tooltip?: ChartSub
+  series?: ChartSeries | ChartSeries[]
+  [k: string]: unknown
+}
+
 interface ChartProps {
-  option: Record<string, any>
+  option: ChartOption
   height?: number
 }
 // 按需引入 ECharts 组件，减少打包体积

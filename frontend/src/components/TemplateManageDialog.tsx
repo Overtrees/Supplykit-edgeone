@@ -17,9 +17,18 @@ interface Props {
   onClose: () => void
 }
 
+interface Template {
+  id: string | number
+  name: string
+  doc_type: string
+  mapping: unknown
+  cf_meta?: unknown
+  [k: string]: unknown
+}
+
 export default function TemplateManageDialog({ tt, onClose }: Props) {
   const toast = useToast()
-  const [templates, setTemplates] = useState([])
+  const [templates, setTemplates] = useState<Template[]>([])
   const [tmplName, setTmplName] = useState('')
   const [selId, setSelId] = useState<string | number>('')
   const [cfOpen, setCfOpen] = useState(false) // 自定义字段默认收起(与模板语义分离)
@@ -39,7 +48,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
 
   const loadTemplates = async () => {
     try {
-      const r = await api.get('/api/cleansing/templates')
+      const r = await api.get<Template[]>('/api/cleansing/templates')
       setTemplates(r.data || [])
     } catch (e) {}
   }
@@ -52,8 +61,8 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
     window.dispatchEvent(new Event('custom-fields-changed'))
   }
   // 2026-10-27: 模板应用抽为函数(下拉 + 列表点击共用)
-  const applyTemplate = (tid: any) => {
-    const tpl: any = templates.find((t: any) => t.id == tid)
+  const applyTemplate = (tid: string | number) => {
+    const tpl = templates.find(t => t.id == tid)
     if (!tpl) return
     try {
       const m = typeof tpl.mapping === 'string' ? JSON.parse(tpl.mapping) : tpl.mapping
@@ -70,7 +79,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
         })()
         const _merged = [..._cur]
         for (const f of _cfm) {
-          if (f?.t && !_merged.some((x: any) => x.t === f.t)) _merged.push(f)
+          if (f?.t && !_merged.some(x => x.t === f.t)) _merged.push(f)
         }
         localStorage.setItem('c_cf', JSON.stringify(_merged))
         window.dispatchEvent(new Event('custom-fields-changed'))
@@ -79,7 +88,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
       toast.success(t('tpl.applied'))
     } catch {}
   }
-  const delTemplate = async (tid: any, name: string) => {
+  const delTemplate = async (tid: string | number, name: string) => {
     if (!window.confirm(t('tpl.del_confirm', { name }))) return
     try {
       await api.delete('/api/cleansing/templates/' + tid)
@@ -91,13 +100,10 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
     }
   }
   const addField = () =>
-    changeCf([
-      ...cf,
-      { t: 'field_' + Date.now(), l: t('tpl.cf'), tp: 'string' },
-    ])
+    changeCf([...cf, { t: 'field_' + Date.now(), l: t('tpl.cf'), tp: 'string' }])
   const delField = i => changeCf(cf.filter((_, k) => k !== i))
 
-  const fieldStyle: any = {
+  const fieldStyle: React.CSSProperties = {
     fontSize: 15,
     padding: '9px 12px',
     border: '1px solid var(--border)',
@@ -105,7 +111,12 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
     outline: 'none',
     background: 'var(--card)',
   }
-  const btnG: any = { fontSize: 13, borderRadius: 99, cursor: 'pointer', minHeight: 38 }
+  const btnG: React.CSSProperties = {
+    fontSize: 13,
+    borderRadius: 99,
+    cursor: 'pointer',
+    minHeight: 38,
+  }
 
   return createPortal(
     <>
@@ -158,8 +169,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 // 表头: 列名(必)/(选)——必选按业务导入链去重键/汇总必需字段
                 const head = _cols.map(
                   ([label, target]) =>
-                    label +
-                    (_req.includes(String(target)) ? t('tpl.req') : t('tpl.opt')),
+                    label + (_req.includes(String(target)) ? t('tpl.req') : t('tpl.opt')),
                 )
                 // 第二行示例: 仅必选列给样例, 可选列留空
                 const sample = _cols.map(([, target]) => _ex[String(target)] || '')
@@ -184,7 +194,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           <div style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <select
-                value={selId as any}
+                value={selId}
                 onChange={e => {
                   const v = e.target.value
                   if (v) applyTemplate(v)
@@ -213,7 +223,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               </select>
             </div>
             {/* 2026-10-27: 已存模板列表移除(下拉即选即应用, 列表冗余); 仅保留空态引导 */}
-            {templates.filter((t: any) => t.doc_type === tt).length === 0 && (
+            {templates.filter(t => t.doc_type === tt).length === 0 && (
               <div className="tpl-empty">{t('tpl.empty')}</div>
             )}
           </div>
@@ -232,18 +242,18 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               onClick={async () => {
                 const n = tmplName.trim()
                 if (!n) return toast.error(t('tpl.need_name'))
-                const _mp = (window as any).__curMp || {}
+                const _mp = window.__curMp || {}
                 if (!_mp || Object.keys(_mp).length === 0) {
                   return toast.error(t('tpl.need_mapping'))
                 }
                 // 2026-10-27 根治: 模板内嵌被引用的自定义字段定义——跨设备/清缓存后仍能还原字段名
                 // (曾只存 mapping, cf 存本机 localStorage, 换设备后 target 无中文名)
                 const _usedTargets = Object.values(_mp)
-                  .map((v: any) => v && v.target)
+                  .map((v: MappingCell) => v && v.target)
                   .filter(Boolean)
                 const cfMeta = cf.filter(f => f.t && _usedTargets.includes(f.t))
                 // 2026-10-27 同名覆盖二次确认(曾静默覆盖已有模板——手滑改名即改掉别人/自己的模板)
-                const _dup = templates.find((t: any) => t.name === n && t.doc_type === tt)
+                const _dup = templates.find(t => t.name === n && t.doc_type === tt)
                 if (_dup) {
                   const okOverwrite = window.confirm(
                     t('tpl.dup_confirm', { name: n, type: docTypeLabel(tt) }),
@@ -261,19 +271,17 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   setTmplName('')
                   // 一次拉取: 刷新列表 + 自动选中刚保存的模板(name+doc_type 定位)
                   try {
-                    const rr = await api.get('/api/cleansing/templates')
+                    const rr = await api.get<Template[]>('/api/cleansing/templates')
                     const _list = rr.data || []
                     setTemplates(_list)
-                    const _hit = _list.find((t: any) => t.name === n && t.doc_type === tt)
+                    const _hit = _list.find(t => t.name === n && t.doc_type === tt)
                     if (_hit) setSelId(_hit.id)
                   } catch {
                     loadTemplates()
                   }
                   toast.success(msg)
                 } catch (e) {
-                  toast.error(
-                    t('tpl.save_failed', { msg: e.response?.data?.detail || e.message }),
-                  )
+                  toast.error(t('tpl.save_failed', { msg: e.response?.data?.detail || e.message }))
                 }
               }}
               className="clickable tpl-btn tpl-btn-primary"
@@ -297,7 +305,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               {t('tpl.cf')}
               <span
                 className="small muted"
-                style={{ fontSize: 11, fontWeight: "var(--fw-regular)", marginLeft: 6 }}
+                style={{ fontSize: 11, fontWeight: 'var(--fw-regular)', marginLeft: 6 }}
               >
                 {cf.length ? t('tpl.cf_n', { n: cf.length }) : t('tpl.cf_none')}
               </span>

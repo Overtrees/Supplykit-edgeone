@@ -9,6 +9,10 @@ import { defVis, defVisTrad, getVis } from './insights/shared'
 import PurchaseTab from './insights/PurchaseTab'
 import SlowTab from './insights/SlowTab'
 import ReplenTab from './insights/ReplenTab'
+import type { ListResponse } from '../api/types'
+import type { ReplenRow } from './insights/ReplenTab'
+import type { PurchaseRow } from './insights/PurchaseTab'
+import type { DisposalRow } from './insights/SlowTab'
 
 // ── 列配置 ──────────────────────────────────────────────────────────────
 import {
@@ -23,7 +27,14 @@ const PURCHASE_COLS = INS_PURCHASE_COLS
 const SLOW_COLS = INS_SLOW_COLS
 
 // 2026-10-27 页面快照(切回秒显旧值/后台静默更新; 写事件清——不看旧): 建议页三态
-let _snapIns: { replen?: any[]; purchase?: any[]; disposals?: any[] } = {}
+let _snapIns: { replen?: ReplenRow[]; purchase?: PurchaseRow[]; disposals?: DisposalRow[] } = {}
+
+/** 采购订单行的已知字段(动态扩展字段收敛为 unknown) */
+interface OrderedRow {
+  sku?: string
+  store?: string
+  [k: string]: unknown
+}
 
 export default function InsightsPage() {
   const toast = useToast()
@@ -173,23 +184,25 @@ export default function InsightsPage() {
         useAppStore.getState().setSyncing(1)
         useAppStore.getState().setSyncOld(purchase.length > 0)
         api
-          .get(
+          .get<Record<string, unknown>>(
             '/api/insights/purchase?days=28&mode=' +
               (useAppStore.getState().hammerReplenMode || 'bbcc') +
               '&channel=' +
               ch,
           )
-          .then(r => setPurchase(r.data?.suggestions || r.data || []))
+          .then(r => setPurchase((r.data?.suggestions || r.data || []) as PurchaseRow[]))
           .catch(() => {})
           .finally(() => useAppStore.getState().setSyncing(-1))
       } else if (_tab === 'slow') {
         useAppStore.getState().setSyncing(1)
         useAppStore.getState().setSyncOld(disposals.length > 0)
         api
-          .get('/api/insights/disposal-suggestions?channel=' + ch + '&page=1&page_size=100')
+          .get<ListResponse<DisposalRow>>(
+            '/api/insights/disposal-suggestions?channel=' + ch + '&page=1&page_size=100',
+          )
           .then(r => {
-            const d = r.data || {}
-            setDisposals(d.items || d || [])
+            const d = (r.data || {}) as ListResponse<DisposalRow>
+            setDisposals((d.items || d || []) as DisposalRow[])
             setSlowTotal(d.total || (d.items || []).length || 0)
           })
           .catch(() => {})
@@ -257,7 +270,7 @@ export default function InsightsPage() {
     else setReplenLoadingMore(true)
     setReplenError('')
     try {
-      const r = await api.get(
+      const r = await api.get<ListResponse<ReplenRow>>(
         '/api/insights/replenishment?days=28&mode=' +
           mode +
           '&channel=' +
@@ -317,7 +330,7 @@ export default function InsightsPage() {
   // 已有成功值失败 → 保留现值不覆盖(防旧 fallback 误导"已下单"角标)
   const loadOrdered = async (silent = false) => {
     try {
-      const r = await api.get('/api/purchase-orders?channel=' + globalChannel)
+      const r = await api.get<OrderedRow[]>('/api/purchase-orders?channel=' + globalChannel)
       const items = r.data || []
       // 存两份：orderedKeys 用于快速判断，orderedItems 用于展示详情
       setOrderedKeys(items.map(x => x.sku + '|' + x.store))
@@ -473,7 +486,7 @@ export default function InsightsPage() {
       // 仅拉采购建议
       setPurchaseLoading(true)
       api
-        .get(
+        .get<Record<string, unknown>>(
           '/api/insights/purchase?days=28&mode=' +
             replenMode +
             '&channel=' +
@@ -486,7 +499,7 @@ export default function InsightsPage() {
             setPurchaseLoading(false)
             return
           }
-          setPurchase(r.data?.suggestions || r.data || [])
+          setPurchase((r.data?.suggestions || r.data || []) as PurchaseRow[])
           setPurchaseLoading(false)
         })
         .catch(() => setPurchaseLoading(false))
@@ -495,7 +508,7 @@ export default function InsightsPage() {
       setDisposalsLoading(true)
       setSlowPage(1)
       api
-        .get(
+        .get<ListResponse<DisposalRow>>(
           '/api/insights/disposal-suggestions?channel=' +
             globalChannel +
             '&page=1&page_size=100&search=' +
@@ -506,8 +519,8 @@ export default function InsightsPage() {
             setDisposalsLoading(false)
             return
           }
-          const d = r.data || {}
-          const items = d.items || d || []
+          const d = (r.data || {}) as ListResponse<DisposalRow>
+          const items = (d.items || d || []) as DisposalRow[]
           setDisposals(items)
           setSlowTotal(d.total || items.length || 0)
           setDisposalsLoading(false)
@@ -527,7 +540,7 @@ export default function InsightsPage() {
     slowLoadingRef.current = true
     setSlowLoadingMore(true)
     api
-      .get(
+      .get<ListResponse<DisposalRow>>(
         '/api/insights/disposal-suggestions?channel=' +
           globalChannel +
           '&page=' +
@@ -536,7 +549,7 @@ export default function InsightsPage() {
           encodeURIComponent(insightSearch),
       )
       .then(r => {
-        const d = r.data || {}
+        const d = (r.data || {}) as ListResponse<DisposalRow>
         const items = d.items || []
         setDisposals(prev => [...prev, ...items])
         setSlowPage(prev => prev + 1)

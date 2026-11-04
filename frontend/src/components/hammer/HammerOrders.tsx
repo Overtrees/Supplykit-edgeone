@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { apiJson } from '../../api/client'
+import type { OkResponse } from '../../api/types'
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
@@ -49,7 +50,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       // S3-2 收口: 批量是重操作, 超时 90s
-      const d = await apiJson('POST', API + '/api/orders/batch', {
+      const d = await apiJson<OkResponse>('POST', API + '/api/orders/batch', {
         timeout: 90000,
         data: { action, ids },
       })
@@ -75,9 +76,13 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       // S3-2 收口: 导出是重操作, 超时 90s
-      const d = await apiJson('POST', API + '/api/exports?type=orders&channel=' + channel, {
-        timeout: 90000,
-      })
+      const d = await apiJson<OkResponse>(
+        'POST',
+        API + '/api/exports?type=orders&channel=' + channel,
+        {
+          timeout: 90000,
+        },
+      )
       if (d.ok && d.task_id)
         toast.add({
           type: 'success',

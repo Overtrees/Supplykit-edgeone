@@ -22,7 +22,8 @@ module.exports = {
   ],
   rules: {
     // ── TypeScript 原生适配(宽松期: 不阻塞, 持续收敛) ──
-    '@typescript-eslint/no-explicit-any': 'off',            // 历史大量 any, 逐步治理
+    // 2026-11-04 全仓 any 治理收口: 文档 §4.1/§15.38 已定为红线, 这里从「逐步治理」升为准入门禁
+    '@typescript-eslint/no-explicit-any': 'error',
     '@typescript-eslint/ban-ts-comment': 'off',             // @ts-ignore 兼容
     '@typescript-eslint/no-non-null-assertion': 'off',      // ! 断言兼容
     '@typescript-eslint/no-unused-vars': 'off',             // 由 unused-imports/no-unused-vars 接管(避免双报)

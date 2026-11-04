@@ -44,7 +44,8 @@ export const en: Record<string, string> = {
   'op.export_fail': 'Export failed',
   'op.title': 'View background tasks',
   'op.panel_title': 'Running in background',
-  'op.panel_hint': 'These keep running on the server; you can leave this page. Dashboards and lists refresh when done.',
+  'op.panel_hint':
+    'These keep running on the server; you can leave this page. Dashboards and lists refresh when done.',
   'op.hide': 'Hide',
   'op.hide_tip': 'Remove from list only (task keeps running)',
   'er.net_fluctuation': 'Network hiccup',
@@ -80,7 +81,8 @@ export const en: Record<string, string> = {
   'login.loading': 'Signing in...',
   'login.guest': 'Guest mode: ',
   'login.guest_hint': ' (view only, no sign-up)',
-  'login.disclaimer': 'Note: demo brands, products and suppliers are fictional and unrelated to any real business or person',
+  'login.disclaimer':
+    'Note: demo brands, products and suppliers are fictional and unrelated to any real business or person',
   'hs.title': 'Configuration change history',
   'hs.empty': 'No changes yet',
   'hs.mode_bbcc': 'BBCC',
@@ -186,11 +188,13 @@ export const en: Record<string, string> = {
   'ins_p.c_in_transit': '+C in-transit {c}',
   'ins_r.title': 'Replenishment',
   'ins_r.ordered_n': '{n} ordered',
-  'ins_r.over_90_confirm': 'Post-replenishment turnover is {n} days, beyond the 90-day red line. Mark anyway?',
+  'ins_r.over_90_confirm':
+    'Post-replenishment turnover is {n} days, beyond the 90-day red line. Mark anyway?',
   'ins_r.ordered_detail': '{n} ordered',
   'ins_r.ordered_detail_hint': 'Tap to see arrival date and storage days',
   'ins_r.pending_arrival': 'Awaiting arrival',
-  'ins_s.subtitle': 'By SKU × warehouse · category slow line + near-expiry + B warehouse storage fee',
+  'ins_s.subtitle':
+    'By SKU × warehouse · category slow line + near-expiry + B warehouse storage fee',
   'ins_s.hide_disposed': 'Hide processed',
   'ins_s.show_disposed': 'Show processed',
   'ins_s.empty_disposed': 'No disposal records',
@@ -301,7 +305,8 @@ export const en: Record<string, string> = {
   'hx.batch_enable': 'Batch enable',
   'hx.batch_disable': 'Batch disable',
   'hx.search_prod_ph': 'Search SKU / product name...',
-  'hx.order_batch_hint': 'Select orders to batch operate here · Delete is soft (restorable from recycle bin)',
+  'hx.order_batch_hint':
+    'Select orders to batch operate here · Delete is soft (restorable from recycle bin)',
   'hx.purge': 'Delete permanently',
   'hx.purge_title': 'Permanently delete orders',
   'hx.purge_desc': 'Permanently delete {n} order(s)? This cannot be undone',
@@ -738,7 +743,8 @@ export const en: Record<string, string> = {
   'prd.em_unset': 'Not set',
   'prd.em_yes_tip': 'Outbound matches batches exactly; falls back to FEFO when missing',
   'prd.em_no_tip': 'Outbound follows arrival order (FIFO); batches carry no date',
-  'prd.em_unset_tip': 'Not set → in/outbound is treated as expiry-managed and raises alerts; set it in the product import',
+  'prd.em_unset_tip':
+    'Not set → in/outbound is treated as expiry-managed and raises alerts; set it in the product import',
   'prd.unit_default': 'btl',
   'sup.title': 'Suppliers',
   'sup.loaded': 'Loaded {a}/{b} · {c}/{d} columns',
@@ -919,7 +925,8 @@ export const en: Record<string, string> = {
   'set.save_failed': 'Save failed: {msg}',
   'set.recycle_sub': 'View deleted rules and orders — restore or purge permanently',
   'set.channels': 'Channels',
-  'set.channels_sub': 'Add or disable channels without a release; copy rules and params from an existing one',
+  'set.channels_sub':
+    'Add or disable channels without a release; copy rules and params from an existing one',
   'set.devmode': 'Developer mode',
   'set.devmode_sub': 'Version & build info · error log analysis',
   'set.version': 'Version',
@@ -930,7 +937,8 @@ export const en: Record<string, string> = {
   'set.welcome_reset': 'Welcome guide reset',
   'set.alert_push': 'Alert push',
   'set.webhook': 'Webhook URL',
-  'set.webhook_hint': 'DingTalk / WeCom bot URL. New alerts are pushed there every 30 minutes (leave empty to disable)',
+  'set.webhook_hint':
+    'DingTalk / WeCom bot URL. New alerts are pushed there every 30 minutes (leave empty to disable)',
   'set.saving': 'Saving...',
   'set.footer': 'SupplyKit · Supply chain data workbench',
   'welcome.tagline1': 'E-commerce supply chain data cleansing',
@@ -945,7 +953,8 @@ export const en: Record<string, string> = {
   'ch.create_failed': 'Create failed',
   'ch.saved': 'Saved',
   'ch.save_failed': 'Save failed',
-  'ch.disable_confirm': 'Disable channel “{code}”?\n\nIt disappears from dropdowns, but existing data is kept (you can re-enable it).',
+  'ch.disable_confirm':
+    'Disable channel “{code}”?\n\nIt disappears from dropdowns, but existing data is kept (you can re-enable it).',
   'ch.disabled': 'Disabled',
   'ch.disable_failed': 'Failed to disable',
   'ch.empty': 'No channels yet',
@@ -957,7 +966,8 @@ export const en: Record<string, string> = {
   'ch.with_b': ' · incl. B warehouse',
   'ch.collapse': 'Collapse',
   'ch.add': 'Add channel',
-  'ch.add_sub': 'Takes effect without a release: it shows up in dropdowns, and you can copy rules and params from an existing channel',
+  'ch.add_sub':
+    'Takes effect without a release: it shows up in dropdowns, and you can copy rules and params from an existing channel',
   'ch.code_label': 'Channel code (lowercase, immutable)',
   'ch.code_ph': 'e.g. tmall / pdd / douyin',
   'ch.name_label': 'Display name',
@@ -1108,12 +1118,14 @@ export const en: Record<string, string> = {
   'rt.sample': 'Sample: {sku}',
   'rt.avail': 'Available',
   'rt.safety': 'Safety line',
-  'rt.safety_hint': 'Injected at runtime as daily sales × lead time (use the value below for simulation)',
+  'rt.safety_hint':
+    'Injected at runtime as daily sales × lead time (use the value below for simulation)',
   'rt.transit': 'In transit',
   'rt.idle_days': 'Days since last sale',
   'rt.order_qty': 'Order qty',
   'rt.warehouse': 'Warehouse',
-  'rt.calc_vars': 'Computed variables / rule params (same source as the dashboard; tune to preview)',
+  'rt.calc_vars':
+    'Computed variables / rule params (same source as the dashboard; tune to preview)',
   'rt.adj_dos': 'Adj-DOS',
   'rt.buffer': 'Buffer ratio',
   'rt.health': 'Health score',
@@ -1181,12 +1193,17 @@ export const en: Record<string, string> = {
   'rfm.var_hint_ph': 'Type text and tap a variable below',
   'rfm.param_stockout': 'Stockout params (same source as the OOS card)',
   'rfm.param_health': 'Health params (same source as the health card)',
-  'rfm.param_stockout_hint': 'The dashboard stockout logic (Adj-DOS / OTIF / dynamic SS / tier thresholds) follows these values immediately; disabling or deleting the rule restores defaults',
-  'rfm.param_health_hint': 'Dashboard health tiers (good / warning) follow these values immediately; disabling or deleting the rule restores defaults',
+  'rfm.param_stockout_hint':
+    'The dashboard stockout logic (Adj-DOS / OTIF / dynamic SS / tier thresholds) follows these values immediately; disabling or deleting the rule restores defaults',
+  'rfm.param_health_hint':
+    'Dashboard health tiers (good / warning) follow these values immediately; disabling or deleting the rule restores defaults',
   'rfm.param_own': 'Own-warehouse params (dashboard source)',
-  'rfm.param_own_gap_hint': 'Gap = downstream daily sales × transfer lead time − own shippable (on hand + transit + PO). Below the floor no alert is raised, avoiding rounding noise',
-  'rfm.param_own_overstock_hint': 'Days of supply = own available ÷ downstream daily sales. Above the threshold it counts as overstock (tied-up cash and space)',
-  'rfm.param_own_expiry_hint': 'Alerts when days to expiry falls under the buffer, plus an acceleration warning when the current burn rate cannot beat the expiry date',
+  'rfm.param_own_gap_hint':
+    'Gap = downstream daily sales × transfer lead time − own shippable (on hand + transit + PO). Below the floor no alert is raised, avoiding rounding noise',
+  'rfm.param_own_overstock_hint':
+    'Days of supply = own available ÷ downstream daily sales. Above the threshold it counts as overstock (tied-up cash and space)',
+  'rfm.param_own_expiry_hint':
+    'Alerts when days to expiry falls under the buffer, plus an acceleration warning when the current burn rate cannot beat the expiry date',
   'rfm.param_default_ph': 'default',
   'rfm.test': 'Test',
   'rfm.saving': 'Saving...',
@@ -1216,8 +1233,10 @@ export const en: Record<string, string> = {
   'rp.saved_recalc': 'Saved — recalculating alerts',
   'rp.saved': 'Saved',
   'rp.recalc_op': 'Rule recalculation',
-  'rp.warn_order_event': 'The condition references order.* but the event is not “Order created” — this rule may never fire',
-  'rp.warn_param_missing': 'The condition references parameter {keys} without a value — it will be treated as 0 when evaluated',
+  'rp.warn_order_event':
+    'The condition references order.* but the event is not “Order created” — this rule may never fire',
+  'rp.warn_param_missing':
+    'The condition references parameter {keys} without a value — it will be treated as 0 when evaluated',
   'rp.restore_rule': 'Restore rule',
   'rp.restored': 'Rule restored — recalculating alerts',
   'rp.param_b_to_c': 'B→C transfer (days)',
@@ -1240,7 +1259,8 @@ export const en: Record<string, string> = {
   'rp.debug_tab': 'tab: {v}',
   'rp.debug_clear': 'Clear log',
   'rp.debug_empty': 'No operation log yet',
-  'slow.hint': 'Define slow-moving rules per category: set a slow-moving line (days) and a near-expiry line (months) for each; the category list matches the product\'s category field',
+  'slow.hint':
+    "Define slow-moving rules per category: set a slow-moving line (days) and a near-expiry line (months) for each; the category list matches the product's category field",
   'slow.name_ph': 'Category name (e.g. Food)',
   'slow.slow_days': 'Slow-moving line (days)',
   'slow.observe_days': 'Watch line (days)',
@@ -1249,9 +1269,11 @@ export const en: Record<string, string> = {
   'slow.cats_label': 'Category list (comma separated, matches the product “category” field)',
   'slow.cats_ph': 'Soy sauce, chips, candy...',
   'slow.transit': 'Transit time (days)',
-  'slow.transit_hint': 'Shipping days from warehouse outbound to customer or inbound. Default 3 (used by expiry alerts: consumed + in transit &gt; 1/3 marks near-expiry)',
+  'slow.transit_hint':
+    'Shipping days from warehouse outbound to customer or inbound. Default 3 (used by expiry alerts: consumed + in transit &gt; 1/3 marks near-expiry)',
   'slow.fund': 'Capital tie-up line (¥)',
-  'slow.fund_hint': 'Slow-mover capital tie-up (stock × unit price) above this line escalates to “dispose” (default 10000)',
+  'slow.fund_hint':
+    'Slow-mover capital tie-up (stock × unit price) above this line escalates to “dispose” (default 10000)',
   'slow.new_cat': 'New category',
   'slow.add_cat': '+ Add category',
   'rpn.c_wh': 'C warehouse',
@@ -1263,25 +1285,35 @@ export const en: Record<string, string> = {
   'cl.detect_ing': 'Detecting',
   'cl.detect_failed': 'Detection failed',
   'cl.detected_n': 'Auto-detected {n} columns (pick target fields for the rest below)',
-  'cl.detect_none': 'No columns detected automatically — please map each column by hand (the app remembers it and matches by column name next time)',
+  'cl.detect_none':
+    'No columns detected automatically — please map each column by hand (the app remembers it and matches by column name next time)',
   'cl.req_error': 'Request failed: {msg}',
   'cl.need_file': 'Select a file before previewing',
   'cl.previewing': 'Previewing',
   'cl.preview_failed': 'Preview failed',
   'cl.preview_failed_msg': 'Preview failed: {msg}',
   'cl.req_failed': 'Request failed',
-  'cl.miss_required': 'Required columns unmapped: {cols} — map them below (fields marked “(required)”) and preview again',
+  'cl.miss_required':
+    'Required columns unmapped: {cols} — map them below (fields marked “(required)”) and preview again',
   'cl.colmap_saved': 'Column mapping saved — takes effect on the next import',
   'cl.save_failed': 'Save failed: {msg}',
   'cl.cleansing': 'Cleansing...',
-  'cl.miss_before_write': 'Map required columns before writing: {cols} (missing ones skip the whole batch or corrupt the calculation). Go back and map them',
-  'cl.need_wh_inv': 'Inventory import requires the “warehouse” column, otherwise traditional multi-warehouse cannot calculate per warehouse',
-  'cl.need_wh_order': 'Order import requires the “warehouse” column, otherwise per-warehouse daily sales in traditional mode will miss this order',
-  'cl.need_sku_order': 'Order import requires the “SKU / product code” column (part of the unique key), otherwise the whole batch is skipped',
-  'cl.need_expiry': 'Product import requires the “expiry managed” column (yes/no), otherwise inbound/outbound cannot tell whether to deduct by expiry or by arrival order',
-  'cl.need_platform': 'GMV import requires the “platform” column (with the flow number it forms the dedupe key)',
-  'cl.need_flow': 'GMV import requires the “flow no.” column (with the platform it forms the dedupe key), otherwise the whole batch is skipped',
-  'cl.dup_all': 'All {n} rows with the same key already exist — this file will overwrite them (no double counting)',
+  'cl.miss_before_write':
+    'Map required columns before writing: {cols} (missing ones skip the whole batch or corrupt the calculation). Go back and map them',
+  'cl.need_wh_inv':
+    'Inventory import requires the “warehouse” column, otherwise traditional multi-warehouse cannot calculate per warehouse',
+  'cl.need_wh_order':
+    'Order import requires the “warehouse” column, otherwise per-warehouse daily sales in traditional mode will miss this order',
+  'cl.need_sku_order':
+    'Order import requires the “SKU / product code” column (part of the unique key), otherwise the whole batch is skipped',
+  'cl.need_expiry':
+    'Product import requires the “expiry managed” column (yes/no), otherwise inbound/outbound cannot tell whether to deduct by expiry or by arrival order',
+  'cl.need_platform':
+    'GMV import requires the “platform” column (with the flow number it forms the dedupe key)',
+  'cl.need_flow':
+    'GMV import requires the “flow no.” column (with the platform it forms the dedupe key), otherwise the whole batch is skipped',
+  'cl.dup_all':
+    'All {n} rows with the same key already exist — this file will overwrite them (no double counting)',
   'cl.overlap_ask': '{o} rows already exist (will be overwritten) and {n} are new — import now?',
   'cl.submit_failed': 'Submit failed',
   'cl.imported_before': 'This file was already imported',
@@ -1344,19 +1376,22 @@ export const en: Record<string, string> = {
   'dev.slow_req': 'Slow requests',
   'dev.today_errors': 'Errors today',
   'dev.today_slow': 'Slow today',
-  'dev.overview_note': 'Errors and slow requests are logged to quality_logs (developer scope); the console log analysis is request-level with 24h retention',
+  'dev.overview_note':
+    'Errors and slow requests are logged to quality_logs (developer scope); the console log analysis is request-level with 24h retention',
   'dev.log_analysis': 'Log analysis',
-  'dev.log_analysis_sub': 'Daily log files · tap to preview today\'s detail',
+  'dev.log_analysis_sub': "Daily log files · tap to preview today's detail",
   'dev.seed': 'Seed data',
   'dev.seed_fill': 'Fill demo data',
   'dev.seed_fill_sub': 'Generate 2,000 SKUs × 60 days × 100k simulated rows',
   'dev.seed_reset': 'Reset all',
   'dev.seed_reset_sub': 'Clear all data and restore the initial state',
   'dev.confirm_fill_title': 'Generate seed data?',
-  'dev.confirm_fill_desc': 'This creates 160 products, 60 days of orders and 9 warehouses of inventory, overwriting existing data.',
+  'dev.confirm_fill_desc':
+    'This creates 160 products, 60 days of orders and 9 warehouses of inventory, overwriting existing data.',
   'dev.confirm_fill_ok': 'Generate',
   'dev.confirm_reset_title': 'Reset all data?',
-  'dev.confirm_reset_desc': 'This cannot be undone. Orders, inventory, products and rules will all be cleared.',
+  'dev.confirm_reset_desc':
+    'This cannot be undone. Orders, inventory, products and rules will all be cleared.',
   'dev.confirm_reset_ok': 'Reset',
   'common.suggestions': 'Suggestions',
   'hm.export_submitted': 'Export task submitted',
@@ -1512,7 +1547,8 @@ export const en: Record<string, string> = {
   'hr.mode_bbcc': 'BBCC delivery',
   'hr.mode_trad': 'Traditional multi-WH',
   'cm.title': 'Column value mapping',
-  'cm.desc': 'Map each column\'s values to a tier; normalized on import · Channel: {ch} (isolated per entity) In sales pool = counted in daily sales and GMV; Record only = visible in orders, GMV by status (shipped-like counts), excluded from daily sales and replenishment',
+  'cm.desc':
+    "Map each column's values to a tier; normalized on import · Channel: {ch} (isolated per entity) In sales pool = counted in daily sales and GMV; Record only = visible in orders, GMV by status (shipped-like counts), excluded from daily sales and replenishment",
   'cm.ch_jd': 'JD',
   'cm.ch_other': 'Other channels',
   'cm.map_col': 'Column',
@@ -1547,7 +1583,8 @@ export const en: Record<string, string> = {
   'seg.no_sales_b': 'no sales in 30d, B stock piling up',
   'seg.no_sales_c': 'no sales in 30d, C stock piling up',
   'seg.no_sales': '⚪ no sales in 30d',
-  'seg.safety_bc_urgent': 'BC total below dynamic safety line: {d}d left < {p}d cycle — replenish B soon',
+  'seg.safety_bc_urgent':
+    'BC total below dynamic safety line: {d}d left < {p}d cycle — replenish B soon',
   'seg.safety_bc_near': '⚠️ near safety line: ~{d}d left (cycle {p}d)',
   'seg.need': 'replenish {n} units',
   'seg.unecon_t': '⚠️ gap < 1 unit, box rounding uneconomical — hold',

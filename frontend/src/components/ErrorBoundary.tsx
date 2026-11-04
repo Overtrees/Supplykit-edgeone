@@ -51,7 +51,14 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
           <div style={{ fontSize: 20, marginBottom: 8 }}>
             <IconAlert size={20} />
           </div>
-          <div style={{ fontWeight: "var(--fw-bold)", fontSize: 15, color: 'var(--danger)', marginBottom: 4 }}>
+          <div
+            style={{
+              fontWeight: 'var(--fw-bold)',
+              fontSize: 15,
+              color: 'var(--danger)',
+              marginBottom: 4,
+            }}
+          >
             {t('eb.title')}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted2)', marginBottom: 10 }}>

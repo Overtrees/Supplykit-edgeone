@@ -21,13 +21,20 @@ import {
   missingRequired,
   _nk,
 } from './cleansing/fields'
+import type {
+  CleanseData,
+  ColumnInfo,
+  ColMapItem,
+  ColMapRow,
+  CustomField,
+} from './cleansing/fields'
 
 export default function CleansingPage() {
   const toast = useToast()
   const [s, setS] = useState(0)
   const [f, setF] = useState(null)
   const [fBuf, setFBuf] = useState<ArrayBuffer | null>(null) // 间断 422 根治: iOS multipart body 空——raw bytes 直传
-  const [cols, setCols] = useState([])
+  const [cols, setCols] = useState<ColumnInfo[]>([])
   const [tr, setTr] = useState(0)
   const [tt, setTt] = useState('order')
   const { setHammerCleansingTarget, hammerCleansingConflict } = useAppStore()
@@ -41,20 +48,14 @@ export default function CleansingPage() {
     // 2026-11-01 持久拦截提示(必填未映射)在离开当前步时清掉(用户流程: 补映射→跳转→提示消失)
     toast.clear()
   }
-  // 列映射条目(导入清洗): target/t 为映射目标字段, 动态列配置走 unknown
-  interface ColMapItem {
-    target?: string
-    t?: string
-    [k: string]: unknown
-  }
   const [mp, setMp] = useState<Record<string, ColMapItem>>({})
   // 映射页当前映射同步(模板管理弹窗保存用) + 模板应用/自定义字段变更事件
   useEffect(() => {
-    ;(window as any).__curMp = mp
+    window.__curMp = mp
   }, [mp])
   useEffect(() => {
-    const onApply = (e: any) => {
-      const d = e.detail
+    const onApply = (e: Event) => {
+      const d = (e as CustomEvent<Record<string, ColMapItem>>).detail
       if (d && typeof d === 'object') setMp(d)
     }
     const onCfChanged = () => {
@@ -62,10 +63,10 @@ export default function CleansingPage() {
         setCf(JSON.parse(localStorage.getItem('c_cf') || '[]'))
       } catch {}
     }
-    window.addEventListener('apply-template', onApply as any)
+    window.addEventListener('apply-template', onApply)
     window.addEventListener('custom-fields-changed', onCfChanged)
     return () => {
-      window.removeEventListener('apply-template', onApply as any)
+      window.removeEventListener('apply-template', onApply)
       window.removeEventListener('custom-fields-changed', onCfChanged)
     }
   }, [])
@@ -93,18 +94,18 @@ export default function CleansingPage() {
     window.addEventListener('orientationchange', onOrient)
     return () => window.removeEventListener('orientationchange', onOrient)
   }, [])
-  const [pv, setPv] = useState(null)
-  const [res, setRes] = useState(null)
+  const [pv, setPv] = useState<CleanseData | null>(null)
+  const [res, setRes] = useState<CleanseData | null>(null)
   const [bs, setBs] = useState('')
-  const [cf, setCf] = useState(() => {
+  const [cf, setCf] = useState<CustomField[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('c_cf') || '[]')
     } catch {
       return []
     }
   })
-  const [templates, setTemplates] = useState([]) // 模板管理已移至锤子菜单弹窗(此处仅兼容引用)
-  const saveCf = v => {
+  const [templates, setTemplates] = useState<unknown[]>([]) // 模板管理已移至锤子菜单弹窗(此处仅兼容引用)
+  const saveCf = (v: CustomField[]) => {
     setCf(v)
     try {
       localStorage.setItem('c_cf', JSON.stringify(v))
@@ -113,7 +114,7 @@ export default function CleansingPage() {
 
   const loadTemplates = async () => {
     try {
-      const r = await api.get('/api/cleansing/templates')
+      const r = await api.get<unknown[]>('/api/cleansing/templates')
       setTemplates(r.data || [])
     } catch (e) {}
   }
@@ -167,7 +168,7 @@ export default function CleansingPage() {
     setBs(t('cl.detect_ing'))
 
     try {
-      const r = await uploadRawBytes(
+      const r = await uploadRawBytes<CleanseData>(
         '/api/cleansing/detect',
         buf || (fBuf ? new Blob([fBuf]) : file),
         60000,
@@ -222,8 +223,7 @@ export default function CleansingPage() {
       setMp(a)
       goStep(1) // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
       setBs('')
-      if (Object.keys(a).length > 0)
-        toast.success(t('cl.detected_n', { n: Object.keys(a).length }))
+      if (Object.keys(a).length > 0) toast.success(t('cl.detected_n', { n: Object.keys(a).length }))
       else toast.warning(t('cl.detect_none'))
     } catch (e) {
       toast.error(
@@ -247,7 +247,7 @@ export default function CleansingPage() {
     }
     setBs(t('cl.previewing'))
     try {
-      const r = await uploadRawBytes(
+      const r = await uploadRawBytes<CleanseData>(
         '/api/cleansing/preview?q_target=' +
           tt +
           '&q_channel=' +
@@ -290,12 +290,12 @@ export default function CleansingPage() {
 
   // 表格列状态映射(清洗页锤子菜单入口; 渠道级隔离; 通用列值→档位, 当前 order_status)
   const [colMapOpen, setColMapOpen] = useState(false)
-  const [colMap, setColMap] = useState<Record<string, any[]>>({})
+  const [colMap, setColMap] = useState<Record<string, ColMapRow[]>>({})
   const [colMapSaving, setColMapSaving] = useState(false)
   const [colMapCol, setColMapCol] = useState('order_status')
   const loadColMap = async () => {
     try {
-      const r = await api.get(
+      const r = await api.get<Record<string, ColMapRow[]>>(
         '/api/replenishment-config/column-value-map?channel=' + ch + '&t=' + freshStamp(),
       )
       setColMap(r.data && typeof r.data === 'object' ? r.data : {})
@@ -420,7 +420,7 @@ export default function CleansingPage() {
       // 空 barcode 落二键兜底——dup-check 纯只读秒级; 全重→拦截提示, 部分重叠→force_new 弹窗
       if (tt === 'order') {
         try {
-          const _dc = await uploadRawBytes(
+          const _dc = await uploadRawBytes<CleanseData>(
             '/api/cleansing/dup-check?q_target=order&q_channel=' +
               ch +
               '&q_mp=' +
@@ -448,7 +448,7 @@ export default function CleansingPage() {
         }
       }
       try {
-        const r = await uploadRawBytes(
+        const r = await uploadRawBytes<CleanseData>(
           '/api/cleansing/execute-async?q_target=' +
             tt +
             '&q_channel=' +
@@ -492,7 +492,7 @@ export default function CleansingPage() {
           goStep(3)
           setBs('')
           execLock.current = false
-          toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
+          toast.success(t('cl.done_into', { ch: channelName({ code: ch }) }))
           return
         }
         const totalRows = d.total_rows || d.total || '?'
@@ -550,7 +550,7 @@ export default function CleansingPage() {
           if (finished) return
           try {
             // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
-            const sr = await api.get(
+            const sr = await api.get<CleanseData>(
               '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000',
               { timeout: 150000 },
             ) // 2026-10-15 回小窗(1000): 四维评估大窗 263s+轮询超时积压(9分钟) vs 小窗每窗<40s 实时进度无积压——小窗优; 联动批量修复已使每窗更快
@@ -573,7 +573,7 @@ export default function CleansingPage() {
               })
               goStep(3)
               setBs('')
-              toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
+              toast.success(t('cl.done_into', { ch: channelName({ code: ch }) }))
             } else if (sd.status === 'error') {
               finished = true
               clearTimeout(threshold)
@@ -654,7 +654,7 @@ export default function CleansingPage() {
         goStep(3)
         setBs('')
         execLock.current = false
-        toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
+        toast.success(t('cl.done_into', { ch: channelName({ code: ch }) }))
         return
       }
       setRes({
@@ -675,7 +675,7 @@ export default function CleansingPage() {
   const quickExecute = async () => {
     setBs(t('cl.executing'))
     try {
-      const r = await uploadRawBytes(
+      const r = await uploadRawBytes<CleanseData>(
         '/api/cleansing/preview?q_target=' +
           tt +
           '&q_channel=' +
@@ -730,19 +730,24 @@ export default function CleansingPage() {
     <div className="card">
       {s > 0 && (
         <div className="step-indicator">
-          {[t('cl.step_upload'), t('cl.step_map'), t('cl.step_preview'), t('cl.step_done')].map((l, i) => (
-            <span key={i} className={'step' + (s === i ? ' active' : '') + (s > i ? ' done' : '')}>
-              {s > i ? (
-                <IconCheck
-                  size={12}
-                  style={{ display: 'inline', verticalAlign: 'middle', marginRight: 2 }}
-                />
-              ) : (
-                ''
-              )}
-              {l}
-            </span>
-          ))}
+          {[t('cl.step_upload'), t('cl.step_map'), t('cl.step_preview'), t('cl.step_done')].map(
+            (l, i) => (
+              <span
+                key={i}
+                className={'step' + (s === i ? ' active' : '') + (s > i ? ' done' : '')}
+              >
+                {s > i ? (
+                  <IconCheck
+                    size={12}
+                    style={{ display: 'inline', verticalAlign: 'middle', marginRight: 2 }}
+                  />
+                ) : (
+                  ''
+                )}
+                {l}
+              </span>
+            ),
+          )}
           {bs &&
             (bs.includes('%') ? (
               <div className="step w-full">
@@ -797,7 +802,7 @@ export default function CleansingPage() {
 
       {s === 0 && (
         <div style={{ textAlign: 'center', padding: '28px 16px' }}>
-          <div style={{ fontSize: 16, fontWeight: "var(--fw-bold)", marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 'var(--fw-bold)', marginBottom: 6 }}>
             {t('cl.pick_type')}
           </div>
           <div
@@ -856,7 +861,7 @@ export default function CleansingPage() {
               gap: 6,
               borderRadius: 'var(--radius-full)',
               fontSize: 'var(--font-15)',
-              fontWeight: "var(--fw-semibold)",
+              fontWeight: 'var(--fw-semibold)',
               opacity: bs ? 0.65 : 1,
               pointerEvents: bs ? 'none' : 'auto',
             }}

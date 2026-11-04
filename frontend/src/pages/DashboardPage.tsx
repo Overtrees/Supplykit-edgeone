@@ -3,7 +3,7 @@ import RiskCard from '../components/dash/RiskCard'
 import { GmvCard, AlertSummaryCard, HealthCard } from './dashboard/StatCards'
 import { MidCharts, ChartRow3 } from './dashboard/ChartRows'
 import { api, freshStamp } from '../api/client'
-import type { InventoryRow, StockRiskShim } from '../api/types'
+import type { ApiObject, InventoryRow, ListResponse, StockRiskShim } from '../api/types'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
 import { t } from '../locale'
@@ -16,6 +16,51 @@ import ProcSheet from './dashboard/sheets/ProcSheet'
 import OtherAlertsSheet from './dashboard/sheets/OtherAlertsSheet'
 import RiskSheet from './dashboard/sheets/RiskSheet'
 import OosSheet from './dashboard/sheets/OosSheet'
+
+/** /api/dashboard/summary 响应: 已知键精确声明, 动态扩展字段 unknown */
+interface SummaryResponse {
+  summary?: unknown
+  [k: string]: unknown
+}
+
+/** alertCounts 的形状(与 store 内声明一致) */
+interface AlertCountsData {
+  by_type?: Record<string, number>
+  by_severity?: Record<string, number>
+  ls_warehouse?: Record<string, number>
+  rp_warehouse?: Record<string, number>
+}
+
+/** /api/dashboard/aux 响应 */
+interface AuxResponse {
+  evaluating?: boolean
+  alerts?: ApiObject[]
+  stockOverview?: { items?: ApiObject[]; [k: string]: unknown }
+  alertCounts?: AlertCountsData | null
+  ownHealth?: unknown
+  bcOutOfStock?: ApiObject[]
+  [k: string]: unknown
+}
+
+/** /api/insights/replenishment|purchase 行 */
+interface ProcRow {
+  sku?: string
+  product_name?: string
+  suggested_qty?: number
+  b_suggested?: number
+  actual_purchase?: number
+  note?: string
+  days_to_empty?: number
+  warehouse?: string
+  [k: string]: unknown
+}
+
+/** /api/insights/replenishment|purchase 响应(数组或对象形态) */
+interface ProcResponse {
+  items?: ProcRow[]
+  suggestions?: ProcRow[]
+  [k: string]: unknown
+}
 
 interface DashboardPageProps {
   onAlert?: (sku: string, whType?: string, wh?: string) => void
@@ -94,7 +139,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
-  const [fullOut, setFullOut] = useState<any[] | null>(null) // 缺货弹窗完整数据(点击时按当前维度拉取)
+  const [fullOut, setFullOut] = useState<InventoryRow[] | null>(null) // 缺货弹窗完整数据(点击时按当前维度拉取)
   const [oosList, setOosList] = useState(null) // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [healthTrend, setHealthTrend] = useState([]) // 健康分数趋势(近14天, health-trend 接口)
   const [fullAlerts, setFullAlerts] = useState(null) // 告警弹窗完整数据(点击时拉取)
@@ -106,7 +151,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // 弹窗数据加载(四维完整性): 告警用大 limit 分组配额拿全量; 濒临断货用 full=1; 缺货按维度拉全量
   const loadFullAlerts = async () => {
     try {
-      const r = await api.get('/api/alerts?channel=' + channel + '&limit=20000', { timeout: 60000 })
+      const r = await api.get<ApiObject[]>('/api/alerts?channel=' + channel + '&limit=20000', {
+        timeout: 60000,
+      })
       const _d = r.data
       // 只在拿到**非空数组**时覆盖 —— 请求失败/返回空时保持 null, 让卡面回落 alertsList。
       // 曾 `catch → setFullAlerts([])`: 网络抖动一次, 卡面(fullAlerts 优先)立刻变空,
@@ -118,14 +165,17 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }
   const loadFullRisk = async () => {
     try {
-      const r = await api.get('/api/dashboard/stock-risk?channel=' + channel + '&full=1', {
-        timeout: 60000,
-      })
+      const r = await api.get<StockRiskShim | InventoryRow[]>(
+        '/api/dashboard/stock-risk?channel=' + channel + '&full=1',
+        {
+          timeout: 60000,
+        },
+      )
       const _m =
         channel !== 'jd' && (hammerReplenMode || '') !== 'traditional'
           ? 'traditional'
           : hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional')
-      const _d = r.data || {}
+      const _d = (r.data || {}) as StockRiskShim | InventoryRow[]
       // bbcc→BC合计(b仓+全国c); traditional→C仓+自有/三方仓(不涉B)——取数必须与模式维度一致
       const _lst = Array.isArray(_d)
         ? _d
@@ -147,7 +197,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             ? 'platform'
             : 'platform_b'
     try {
-      const r = await api.get(
+      const r = await api.get<InventoryRow[] | ListResponse<InventoryRow>>(
         '/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000',
         { timeout: 60000 },
       )
@@ -169,9 +219,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             ? 'platform'
             : 'platform_b'
     api
-      .get('/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000', {
-        timeout: 60000,
-      })
+      .get<InventoryRow[] | ListResponse<InventoryRow>>(
+        '/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000',
+        {
+          timeout: 60000,
+        },
+      )
       .then(r => {
         const d = Array.isArray(r.data) ? r.data : (r.data && r.data.items) || []
         setOosList(d)
@@ -179,9 +232,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       .catch(() => setOosList([]))
     // 健康分数趋势(近14天, health-trend 接口; 快照由 summary/cron 每日记录)
     api
-      .get('/api/dashboard/health-trend?channel=' + channel + '&days=14&t=' + freshStamp(), {
-        timeout: 30000,
-      })
+      .get<ApiObject[]>(
+        '/api/dashboard/health-trend?channel=' + channel + '&days=14&t=' + freshStamp(),
+        {
+          timeout: 30000,
+        },
+      )
       .then(r => {
         setHealthTrend(Array.isArray(r.data) ? r.data : [])
       })
@@ -198,7 +254,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     setProcLoading(true)
     try {
       const [r, p] = await Promise.allSettled([
-        api.get(
+        api.get<ProcResponse>(
           '/api/insights/replenishment?days=28&mode=' +
             _replMode +
             '&channel=' +
@@ -206,7 +262,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             '&need_only=1',
           { timeout: 90000 },
         ),
-        api.get(
+        api.get<ProcResponse>(
           '/api/insights/purchase?days=28&mode=' +
             _replMode +
             '&channel=' +
@@ -302,9 +358,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           let _u = '/api/dashboard/summary?t=' + freshStamp()
           if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
             _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
-          return api.get(_u, { timeout: 60000 })
+          return api.get<SummaryResponse>(_u, { timeout: 60000 })
         })(),
-        api.get(
+        api.get<AuxResponse>(
           '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + freshStamp(),
           { timeout: 60000 },
         ),
@@ -318,10 +374,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
           const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
           const dash = dashOk ? s.value.data : null
-          setDashErr(
-        s.status === 'rejected' || !dashOk ? t('dash.load_fail_processing') : '',
-      )
-          const aux = ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}
+          setDashErr(s.status === 'rejected' || !dashOk ? t('dash.load_fail_processing') : '')
+          const aux = (ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}) as AuxResponse
           setEvaluating(Boolean(aux.evaluating))
           const alerts = aux.alerts || []
           // stockRisk 双形态(数组|对象) → 归一化后统一消费; 对象形态缺省键消费前补齐
@@ -370,9 +424,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                   let _u = '/api/dashboard/summary?' + _rt
                   if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
                     _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
-                  return api.get(_u)
+                  return api.get<SummaryResponse>(_u)
                 })(),
-                api.get('/api/dashboard/stock-risk?' + _rt),
+                api.get<StockRiskShim | InventoryRow[]>('/api/dashboard/stock-risk?' + _rt),
               ]).then(([s2, r2]) => {
                 if (seq !== reqSeq.current) {
                   clearInterval(timer)
@@ -393,7 +447,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                     ? rv2
                     : useAppStore.getState().stockRisk,
                 })
-                if (d2 && rv2.length) clearInterval(timer)
+                if (d2 && (rv2 as InventoryRow[]).length) clearInterval(timer)
               })
             }, 3000)
           }
@@ -402,9 +456,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         .finally(() => useAppStore.getState().setSyncing(-1))
       // stock-risk 后置(独立 30s TTL 接口, 不阻塞首屏骨架; 到达后更新断货卡)
       api
-        .get('/api/dashboard/stock-risk?channel=' + channel + '&t=' + freshStamp(), {
-          timeout: 60000,
-        })
+        .get<StockRiskShim | InventoryRow[]>(
+          '/api/dashboard/stock-risk?channel=' + channel + '&t=' + freshStamp(),
+          {
+            timeout: 60000,
+          },
+        )
         .then(r => {
           if (seq === reqSeq.current && r.data) useAppStore.setState({ stockRisk: r.data })
         })
@@ -452,21 +509,28 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             let _u = '/api/dashboard/summary?' + _t
             if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
               _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
-            return api.get(_u, { timeout: 60000 })
+            return api.get<SummaryResponse>(_u, { timeout: 60000 })
           })(),
-          api.get('/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t, {
-            timeout: 60000,
-          }),
-          api.get('/api/dashboard/stock-risk?channel=' + channel + '&' + _t, { timeout: 60000 }),
+          api.get<AuxResponse>(
+            '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t,
+            {
+              timeout: 60000,
+            },
+          ),
+          api.get<StockRiskShim | InventoryRow[]>(
+            '/api/dashboard/stock-risk?channel=' + channel + '&' + _t,
+            { timeout: 60000 },
+          ),
         ])
-        const aux = ax.data || {}
+        const aux = (ax.data || {}) as AuxResponse
         setEvaluating(Boolean(aux.evaluating))
         useAppStore.setState({
           dashboard: s.data,
           // 2026-10-30 抖动修复: aux 偶发失败时不再把 alerts 置空(数字取自 alertCounts 保留值,
           //   列表却被清空 → 卡片「有数字无明细」); 只在 aux 成功返回时覆盖
           alerts: aux.alerts || useAppStore.getState().alerts || [],
-          stockRisk: (sr && sr.data) || useAppStore.getState().stockRisk || {},
+          stockRisk: ((sr && sr.data) || useAppStore.getState().stockRisk || {}) as
+            StockRiskShim | unknown[],
           alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
           // 自有仓健康(2026-11-01): 供给侧口径块(调拨缺口/积压/效期), 抖动时保留上次值
           ownHealth: aux.ownHealth || useAppStore.getState().ownHealth || null,
@@ -725,9 +789,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const lowStockAlerts = useMemo(() => {
     const types = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
     const raw = fullAlerts
-      ? fullAlerts.filter((x: any) => x.alert_type === 'low_stock')
-      : alertsList.filter((x: any) => x.alert_type === 'low_stock')
-    const byMode = raw.filter((x: any) => types.includes(String(x.warehouse_type || '')))
+      ? fullAlerts.filter(x => x.alert_type === 'low_stock')
+      : alertsList.filter(x => x.alert_type === 'low_stock')
+    const byMode = raw.filter(x => types.includes(String(x.warehouse_type || '')))
     return byMode.length ? byMode : raw
   }, [fullAlerts, alertsList, _replMode])
   // 卡面 5 行取数(2026-11-02 改「按仓轮转 + 轮内 SKU 去重」):
@@ -800,7 +864,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
   // 2026-10-27 总览聚合: 待处理卡大数字 = 全部待处理动作(低库存/采购/补货/其他/滞销)——
   // 分卡=明细; 采购/补货条数来自实时接口 procList(同"采购&补货"卡源, tag 区分)
-  const procBuyN = (Array.isArray(procList) ? procList : []).filter(x => x.kind === 'purchase').length
+  const procBuyN = (Array.isArray(procList) ? procList : []).filter(
+    x => x.kind === 'purchase',
+  ).length
   const procRepN = (Array.isArray(procList) ? procList : []).filter(x => x.kind === 'replen').length
   const pendingTotal = lowStockTotal + procBuyN + procRepN + otherTotal + slowMovingTotal
   // 2026-10-16 自然口径: 后端 periods.days 已是实际窗口天数(上周=7/上月=自然月实际天数 28-31)
