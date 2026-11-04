@@ -58,6 +58,21 @@ def period_days(period):
     return int(b[-2:])
 
 
+def period_bounds_excl(period):
+    """'YYYY-MM' → (期初日, **下月 1 日**) —— 右开区间
+
+    流水表的时间列是 DATETIME。写 `inbound_date <= '2026-10-31'` 只会覆盖到
+    10-31 00:00:00, **整天的流水被静默丢掉**: 实测 2026-10-31 当天就有
+    19,405 入库 / 23,704 出库, 结账期末因此少 42,809。所以统一用
+    `>= 期初日 AND < 下月 1 日`, 不依赖当日最后一秒的精度写法。
+    """
+    start, _ = period_bounds(period)
+    nxt = shift_period(period, 1)
+    if not start or not nxt:
+        return "", ""
+    return start, "%s-01" % nxt
+
+
 def elapsed_days(period):
     """该账期**已过**的自然日数 —— 当月未满时算周转必须用它, 否则分母只有几天出库、
     分子却乘整月天数, 周转虚高数倍(11-04 用 4 天出库配 30 天, 实测虚高约 7 倍)。
@@ -137,7 +152,8 @@ def close_check(period, channel, warehouse_type=OWN_WT):
     判据: 入库/出库流水在该账期内的**最后一天**距期末不超过容差天数。
     宁可拒绝结账, 也不结一个缺两天流水的假账(期末会偏大, 且会结转进下月期初)。
     """
-    start, end = period_bounds(period)
+    start, end_x = period_bounds_excl(period)
+    end = period_bounds(period)[1]
     if not start:
         return False, "账期格式非法: %s" % period
     if period >= period_of():
@@ -145,8 +161,8 @@ def close_check(period, channel, warehouse_type=OWN_WT):
     for table, col, label in (("inbound_records", "inbound_date", "入库"),
                               ("outbound_records", "outbound_date", "出库")):
         try:
-            row = one("SELECT MAX(%s) AS mx FROM %s WHERE channel=%%s AND %s >= %%s AND %s <= %%s"
-                      % (col, table, col, col), [channel, start, end]) or {}
+            row = one("SELECT MAX(%s) AS mx FROM %s WHERE channel=%%s AND %s >= %%s AND %s < %%s"
+                      % (col, table, col, col), [channel, start, end_x]) or {}
         except Exception as e:
             return False, "体检失败(%s): %s" % (label, e)
         mx = str(row.get("mx") or "")[:10]
@@ -171,20 +187,45 @@ def _days_between(a, b):
 # ── 结账主体 ──────────────────────────────────────────────────────────────
 
 def _flow_agg(table, date_col, period, channel, wh_types):
-    """按 五维(sku+69码+仓+仓型) 归集某账期流水; 返回 {(sku,bc,wh,wt): qty} + 无仓型兜底键"""
-    start, end = period_bounds(period)
+    """按 五维(sku+69码+仓+仓型) 归集某账期流水; 返回 {(sku,bc,wh,wt): qty} + 无仓型兜底键
+
+    日期用右开区间 `< 下月 1 日`: 见 period_bounds_excl 的说明(末日整天会被 `<=` 吞掉)。
+    """
+    start, end_x = period_bounds_excl(period)
     ph = ",".join(["%s"] * len(wh_types))
     rows = query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, "
                  "COALESCE(warehouse_type,'') AS wt, SUM(quantity) AS q "
                  "FROM `%s` WHERE channel=%%s "
                  "AND (COALESCE(warehouse_type,'')='' OR warehouse_type IN (%s)) "
-                 "AND `%s` >= %%s AND `%s` <= %%s "
+                 "AND `%s` >= %%s AND `%s` < %%s "
                  "GROUP BY sku, bc, warehouse, wt" % (table, ph, date_col, date_col),
-                 [channel] + list(wh_types) + [start, end]) or []
+                 [channel] + list(wh_types) + [start, end_x]) or []
     out = {}
     for r in rows:
         out[(str(r.get("sku") or ""), str(r.get("bc") or ""),
              str(r.get("warehouse") or ""), str(r.get("wt") or ""))] = int(r.get("q") or 0)
+    return out
+
+
+def _net_before(channel, warehouse_type, start):
+    """账期起点**之前**的累计净流水(入 − 出), key = (sku, 69码, 仓)
+
+    只给首次建账(bootstrap)用。原因: `beginning_stock` 不是"上月期末", 而是
+    **流水起点之前的基线**(可用 = 基线 + 全期流水 是系统恒等式, 实测吻合)。
+    直接拿它当某个月期初, 会把"基线之后、该月之前"整段流水漏掉 ——
+    实测 2026-10 会因此少 79,315(8 月 +10,565 / 9 月 +68,750)。
+    """
+    out = {}
+    for table, col, sign in (("inbound_records", "inbound_date", 1),
+                             ("outbound_records", "outbound_date", -1)):
+        rows = query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
+                     "FROM `%s` WHERE channel=%%s AND `%s` < %%s "
+                     "AND (COALESCE(warehouse_type,'')='' OR warehouse_type=%%s) "
+                     "GROUP BY sku, bc, warehouse" % (table, col),
+                     [channel, start, warehouse_type]) or []
+        for r in rows:
+            k = (str(r.get("sku") or ""), str(r.get("bc") or ""), str(r.get("warehouse") or ""))
+            out[k] = out.get(k, 0) + sign * int(r.get("q") or 0)
     return out
 
 
@@ -199,7 +240,10 @@ def _pick(agg, sku, bc, wh, wt):
 def build_rows(period, channel, warehouse_type=OWN_WT):
     """算出该账期每一行的 期初/入/出/期末(不写库), 供 dry-run 与结账共用
 
-    期初来源: 上月期末(已结)→ inventory_month; 未结→ inventory.beginning_stock(首次建账基线)
+    期初来源, 按优先级:
+      ① 上月已结账 → 直接取 inventory_month 的 end_qty(结转, 会计等价)
+      ② 首次建账(没结过) → beginning_stock(流水起点之前的基线) **+ 基线之后到
+         账期起点之前的净流水**。少了后半段, 期初会低估一整段历史流水。
     """
     start, _end = period_bounds(period)
     prev = shift_period(period, -1)
@@ -212,6 +256,8 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
                        [prev, channel, warehouse_type]) or []:
             prev_end[(str(r.get("sku") or ""), str(r.get("barcode") or ""),
                       str(r.get("warehouse") or ""))] = int(r.get("end_qty") or 0)
+    # 首次建账(没有任何上期账期行): 期初 = 基线 + 基线之后、账期之前的净流水
+    boot_net = _net_before(channel, warehouse_type, start) if not prev_end else {}
     rows = []
     for r in query("SELECT id, sku, COALESCE(barcode,'') AS bc, warehouse, "
                    "COALESCE(beginning_stock,0) AS beg FROM inventory "
@@ -222,7 +268,7 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
         bc = str(r.get("bc") or "")
         wh = str(r.get("warehouse") or "")
         k3 = (sku, bc, wh)
-        beg = prev_end[k3] if k3 in prev_end else int(r.get("beg") or 0)
+        beg = prev_end[k3] if k3 in prev_end else int(r.get("beg") or 0) + boot_net.get(k3, 0)
         mi = _pick(ins, sku, bc, wh, warehouse_type)
         mo = _pick(outs, sku, bc, wh, warehouse_type)
         rows.append({"id": r.get("id"), "sku": sku, "barcode": bc, "warehouse": wh,

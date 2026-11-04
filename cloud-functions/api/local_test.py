@@ -2717,6 +2717,20 @@ try:
           is_current(_cur) and not is_current(shift_period(_cur, -1)))
     check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
           _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
+    # 右开区间: 流水列是 DATETIME, 写 `<= '2026-10-31'` 只会覆盖到当天 00:00:00,
+    #   整天流水被静默丢掉(线上实测 10-31 当天入 19,405 / 出 23,704, 期末少 42,809)
+    from core.ledger import period_bounds_excl
+    check("账期: 流水区间右开(末日整天不能丢)",
+          period_bounds_excl("2026-10") == ("2026-10-01", "2026-11-01")
+          and period_bounds_excl("2026-12") == ("2026-12-01", "2027-01-01")
+          and period_bounds_excl("2024-02") == ("2024-02-01", "2024-03-01"),
+          str(period_bounds_excl("2026-10")))
+    _lg = open("core/ledger.py").read()
+    check("账期: 归集流水与体检都用 `< 下月1日`, 不再有 `<= 月末日`",
+          "<= %%s" not in _lg, "core/ledger.py")
+    # 首次建账期初 = 基线 + 基线之后、账期之前的净流水; 少了它会低估一整段历史流水
+    check("账期: bootstrap 期初回算账期前的净流水(_net_before)",
+          "def _net_before" in _lg and "boot_net = _net_before(" in _lg, "core/ledger.py")
     # 批次月初余额必须带日期: 少了它, 上月批次到本月退化成无日期期初批次, 指定批次出库失效
     _cw = open("routes/cleanse_write.py").read()
     check("账期: 批次池期初读 batch_opening(带日期), 不是只读 beginning_stock",
