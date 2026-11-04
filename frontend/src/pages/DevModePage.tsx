@@ -13,23 +13,9 @@ const VERSION =
 const BUILD = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__ ? __BUILD_DATE__ : ''
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
-// 词表化: 存键不存文案, 渲染时 t() 解析(切语言立即生效)
-const DEV_LABEL: Record<string, string> = {
-  api_error: 'dev.k_api_error',
-  slow_request: 'dev.k_slow',
-  cache_error: 'dev.k_cache',
-  quiet_error: 'dev.k_quiet',
-  frontend_error: 'dev.k_frontend',
-  window_error: 'dev.k_js',
-  unhandled_rejection: 'dev.k_rejection',
-  component_error: 'dev.k_render',
-  api_http_error: 'dev.k_http',
-}
-const LEVEL_LABEL: Record<string, string> = {
-  warning: 'dev.lv_warning',
-  error: 'dev.lv_error',
-  info: 'dev.lv_info',
-}
+// 2026-11-04 日志排查清理: 原 DEV_LABEL / LEVEL_LABEL(12 个 dev.k_* / dev.lv_* 词条键)
+// 是日志明细改成"按天文件 + Markdown 预览"后遗留的死代码 —— 两个常量定义后从未被引用,
+// 对应 12 个词条也成了死键。类型/级别标签现在由后端 _export_md 在 Markdown 里直接给出。
 
 /** 开发者模式页(设置页·点版本号 6 次开启): 连接状态/环境信息/运行概况/日志分析/种子数据(开发工具) */
 export default function DevModePage() {

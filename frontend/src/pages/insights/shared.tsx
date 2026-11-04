@@ -5,6 +5,7 @@
  */
 import React from 'react'
 import { useAppStore } from '../../store/useAppStore'
+import { t } from '../../locale'
 
 // 备注中 emoji 转 SVG 图标
 const EMOJI_MAP = {
@@ -127,7 +128,68 @@ const EMOJI_MAP = {
     </svg>
   ),
 }
-export function renderNote(text) {
+/** 趋势方向 → emoji(所有语言通用, 不进词条; 后端 seg.t7/t14 取值 up/down/flat) */
+const TREND_EMOJI: Record<string, string> = { up: '📈', down: '📉', flat: '➡️' }
+
+/**
+ * 结构化备注片段渲染(2026-11-04): 后端 note_segs = [{k:'b_sug', n:120, ...}, ...],
+ * 文案走 `t('seg.'+k, params)` 出双语; 返回 null 表示无片段(调用方回落旧 note 渲染)。
+ * 特殊键: trend(t7/t14 → emoji)、turn_over/turn_near(w=after/cur → 本地化周转名)。
+ */
+export function renderNoteSegs(segs?: any): React.ReactNode {
+  if (!Array.isArray(segs) || segs.length === 0) return null
+  // 防键名泄漏(本轮铁律): 后端可能先于前端部署, 或未来新增片段类型 —— 只要有一个键
+  // 没词条, t() 会回落到 'seg.xxx' 原文, 界面就冒出英文键名(同 RiskSheet 的 dash.urgent)。
+  // 此时整段返回 null, 由 renderNote 回落到完整可读的 note 字符串, 而不是显示半个键名。
+  const hasSeg = (k: string) => t('seg.' + k) !== 'seg.' + k
+  for (const sg of segs) {
+    const k = String(sg?.k || '')
+    if (!k || !hasSeg(k)) return null
+    if (k === 'trend' && sg.x && !hasSeg('trend_x_' + sg.x)) return null
+  }
+  return segs.map((sg: any, i: number) => {
+    const k = String(sg?.k || '')
+    const tail = i < segs.length - 1 ? ' · ' : ''
+    if (k === 'trend') {
+      const s = t('seg.trend', {
+        t7: TREND_EMOJI[sg.t7] || '➡️',
+        t14: TREND_EMOJI[sg.t14] || '➡️',
+      })
+      const x = sg.x ? ' ' + t('seg.trend_x_' + sg.x) : ''
+      return (
+        <React.Fragment key={i}>
+          {s}
+          {x}
+          {tail}
+        </React.Fragment>
+      )
+    }
+    if (k === 'turn_over' || k === 'turn_near') {
+      return (
+        <React.Fragment key={i}>
+          {t('seg.' + k, {
+            w: t(sg.w === 'after' ? 'seg.w_after' : 'seg.w_cur'),
+            v: sg.v,
+            t: sg.t,
+          })}
+          {tail}
+        </React.Fragment>
+      )
+    }
+    return (
+      <React.Fragment key={i}>
+        {t('seg.' + k, sg)}
+        {tail}
+      </React.Fragment>
+    )
+  })
+}
+
+export function renderNote(text, segs?) {
+  // 2026-11-04 结构化优先: 后端新数据带 note_segs(键+参数) → i18n 双语;
+  // 旧数据/导出兜底走原 note 字符串(emoji 转 SVG)
+  const segNodes = renderNoteSegs(segs)
+  if (segNodes) return segNodes
   if (!text) return '-'
   const parts = []
   let i = 0

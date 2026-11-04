@@ -10,6 +10,7 @@ from db import query, one, execute, executemany
 from routes.common import ok, fail, traced, try_err
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8
+from core.note_segs import zh_note  # 2026-11-04 结构化备注: segs 单一真源, note=zh_note(segs)
 
 
 # 内置默认滞销品类线(2026-10-25 抽取公共共享——get_slow_cats 接口与 disposal 计算同源, 防两处漂移)
@@ -201,7 +202,8 @@ def _build_purchase(channel, mode, days=28):
         after_stock = st["own_avail"] + st["own_transit"] + actual_purchase
         after_turnover = round(after_stock / ds, 1) if ds > 0 else 999
         c_consume = round(ds * _lead)
-        note = ""
+        # 2026-11-04 结构化: segs 唯一真源 → note=zh_note(segs); 前端按 note_segs 走 i18n
+        segs = []
         # 动态安全线预警(采购周期, 供应商级参数优先; 可售=系统仓+自有仓; 只提示不参与计算)
         _purchase_period = int(_lead) + int(_safe_days)
         if _purchase_period > 0:
@@ -210,19 +212,22 @@ def _build_purchase(channel, mode, days=28):
             _avl_all = sys_total
             _dl = _avl_all / ds
             if _dl <= _purchase_period:
-                note = "🔴 库存告急：只够卖%s天（采购需%s天），将断货" % (round(_dl), _purchase_period)
+                segs.append({"k": "p_urgent", "d": round(_dl), "p": _purchase_period})
             elif _dl <= _purchase_period + 2:
-                note = "⚠️ 约剩%s天（采购周期%s天），建议备货" % (round(_dl), _purchase_period)
+                segs.append({"k": "p_near", "d": round(_dl), "p": _purchase_period})
         if purchase_qty > 0:
             # 通俗格式(对齐 bbcc 风格): 需采购N件(箱规,实购) · 补后周转
-            _buy_note = "需采购%d件" % purchase_qty
             if box_qty > 1:
-                _buy_note += "（箱规%d件，实购%d件）" % (box_qty, actual_purchase)
+                segs.append({"k": "p_need_box", "n": purchase_qty, "box": box_qty,
+                             "act": actual_purchase})
+            else:
+                segs.append({"k": "p_need", "n": purchase_qty})
             if target_turn > 0:
-                _buy_note += " · 补后周转%d天%s" % (after_turnover,
-                                                ">目标%d天" % target_turn if after_turnover > target_turn
-                                                else "<目标%d天" % target_turn)
-            note = note + " · " + _buy_note if note else _buy_note
+                segs.append({"k": "p_turn", "v": after_turnover, "target": target_turn,
+                             "cmp": ">" if after_turnover > target_turn else "<"})
+        if not segs:
+            segs.append({"k": "ok"})
+        note = zh_note(segs)
         result.append({
             "sku": sku, "barcode": _bc or prod.get("barcode", ""),
             "product_name": prod.get("product_name") or sku, "brand": prod.get("brand", ""),
@@ -239,7 +244,7 @@ def _build_purchase(channel, mode, days=28):
             "purchase_qty": purchase_qty, "box_qty": box_qty, "actual_purchase": actual_purchase,
             "after_stock": after_stock, "after_turnover": after_turnover,
             "target_turnover": target_turn, "days_to_empty": days_to_empty,
-            "note": note if note else "库存充足",
+            "note": note, "note_segs": segs,
         })
 
     # 供应商 MOQ 聚合: 同供应商采购量合计 < MOQ 时按占比放大到起订量
@@ -261,9 +266,11 @@ def _build_purchase(channel, mode, days=28):
                 if _r["purchase_qty"] > 0:
                     _box = _r.get("box_qty") or 1
                     _r["actual_purchase"] = (_r["purchase_qty"] + _box - 1) // _box * _box
-                _r["note"] = "%s · 供应商%s起订%d件, 该供应商合计%d件不足, 按占比%d/%d提升至%d件" % (
-                    _r.get("note", ""), _sup, g["moq"], g["total_raw"], _old,
-                    g["total_raw"], _r["purchase_qty"])
+                # 2026-11-04 结构化: 追加 MOQ 片段并重派 note(不再手拼字符串, 防两份漂移)
+                _r.setdefault("note_segs", []).append({
+                    "k": "p_moq", "sup": _sup, "moq": g["moq"], "tot": g["total_raw"],
+                    "old": _old, "new": _r["purchase_qty"]})
+                _r["note"] = zh_note(_r["note_segs"])
 
     # 采购告警 purchase_need(批量: 需采购且可撑<14天 → active; 无需 → closed)
     try:

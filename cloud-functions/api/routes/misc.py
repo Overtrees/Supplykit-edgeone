@@ -13,14 +13,25 @@ router.include_router(debug_router)  # 2026-10-13 调试端点统一收口(debug
 # ── 日志收口分级白名单(2026-10-17 统一收敛: 曾 3 处重复定义漂移——export 多 detect_debug/business_error,
 #    其余 2 处缺——且 5 个实际产生类型(cache_invalidate/cleansing_eval/config_history/migration/rule_action)
 #    任何维度都看不到) ─────────────────────────────────────
+# ⚠️ 2026-11-04 日志排查补两类"写了但看不见"的 error 级日志(与上述历史 bug 同构):
+#   · rule_guard    (core/rule_eval.py 告警批量关闭拦截, error, 需人工介入 → 归 user)
+#   · api_unhandled (index.py 全局 500 兜底, error → 归 dev)
+# 二者此前不在任何白名单 → 质量日志页(scope=user)/开发者页(scope=dev)/Markdown 导出/归档
+# 全都过滤掉, 只躺在库里, 恰恰是最该被看到的两类错误。
+# ⚠️ 新增 log_type 必须同时登记到本表, 否则写了等于没写 —— 已加自检见 local_test.py
+#    `check("日志类型全部收口", ...)`(扫描全部 INSERT 字面量 vs 本表)。
+# 表中 duplicate_* / format_error / field_* / mapping_info / detect_debug / business_error /
+# migration / task / cleansing 为历史或数据驱动写入的类型, 当前代码无字面量产生点但保留兼容
+# (历史 quality_logs / log_archives 里可能仍有这些类型, 删了旧日志就查不出来)。
 _LOG_SCOPE_TYPES = {
     "user": ("risk_summary", "cron", "maint", "cleansing", "cleansing_eval", "task",
              "duplicate_order", "duplicate_sku", "format_error", "field_warning",
-             "field_error", "mapping_info", "config_history", "rule_action", "mat_rebuild"),
-    "dev": ("api_error", "slow_request", "cache_error", "cache_invalidate", "quiet_error",
-            "perf_debug", "detect_debug", "slow_alert", "frontend_error", "window_error",
-            "unhandled_rejection", "component_error", "api_http_error", "business_error",
-            "migration"),
+             "field_error", "mapping_info", "config_history", "rule_action", "mat_rebuild",
+             "rule_guard"),
+    "dev": ("api_error", "api_unhandled", "slow_request", "cache_error", "cache_invalidate",
+            "quiet_error", "perf_debug", "detect_debug", "slow_alert", "frontend_error",
+            "window_error", "unhandled_rejection", "component_error", "api_http_error",
+            "business_error", "migration"),
 }
 
 
@@ -208,13 +219,19 @@ async def frontend_log(request: Request):
     if not msg:
         return ok({})
     lt = (d.get("log_type") or "frontend_error")[:40]
+    # 2026-11-04 日志排查: 本端点鉴权放行, lt 由调用方任意给 —— 若给了白名单外的类型,
+    # 写进库后 user/dev 两维度 + Markdown 导出 + 归档全都过滤掉(与 rule_guard 同类
+    # "写了等于没写")。这里收口: 不在 dev 白名单一律归到 frontend_error, 保证任何上报都可见;
+    # level 同样只认三档, 防外部传怪值污染 monitor 的按级别聚合口径。
+    if lt not in _LOG_SCOPE_TYPES["dev"]:
+        lt = "frontend_error"
+    _lv = d.get("level") if d.get("level") in ("error", "warning", "info") else "error"
     det = (d.get("details") or "")[:800]
     _url = (d.get("url") or "")[:200]
     try:
         execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                 "VALUES(%s,%s,%s,%s,'frontend')",
-                (lt, d.get("level") or "error",
-                 msg + (" @" + _url[-80:] if _url else ""), det))
+                (lt, _lv, msg + (" @" + _url[-80:] if _url else ""), det))
     except Exception as _e:
             try_err('misc', '静默降级', _e)
     return ok({})

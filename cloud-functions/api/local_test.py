@@ -275,8 +275,25 @@ else:
     check("replenish 返回列表", isinstance(items, list), str(d)[:150])
     check("replenish SKU0001 充足无建议", not any(i.get("sku") == "SKU0001" and (i.get("suggested_qty") or 0) > 0 for i in items), str(items)[:300])
     check("replenish SKU0002 有建议(缺货)", any(i.get("sku") == "SKU0002" for i in items))
+# 2026-11-04 结构化备注: note_segs(键+参数)与 note(中文字符串)必须成对且一致
+#   note_segs 是前端 i18n 双语渲染的契约; note 是导出/历史/告警的兼容字段, 不可删
+def _check_note_segs(items, tag):
+    it = next((i for i in items if i.get("note")), None)
+    if not it:
+        return
+    segs = it.get("note_segs")
+    check(f"{tag} note_segs 为非空数组", isinstance(segs, list) and len(segs) >= 1,
+          str(segs)[:120])
+    if isinstance(segs, list) and segs:
+        check(f"{tag} seg 均含键 k", all(isinstance(x, dict) and x.get("k") for x in segs),
+              str(segs)[:120])
+    check(f"{tag} note 非空(导出/历史兼容)", bool(str(it.get("note") or "").strip()),
+          str(it.get("note"))[:80])
+
+_check_note_segs(d.get("data") or [], "replenish bbcc")
 r = client.get("/insights/replenishment?channel=jd&mode=traditional", headers={"X-Auth-Token": TOKEN})
 check("replenish traditional 200", r.status_code == 200, r.text[:120])
+_check_note_segs((r.json().get("data") or {} if isinstance(r.json().get("data"), dict) else r.json().get("data")) or [], "replenish trad")
 
 # orders / products / insights
 r = client.get("/orders?page=1&page_size=5", headers={"X-Auth-Token": TOKEN})
@@ -719,21 +736,34 @@ check("门控: 缺口0.6件<1 → 0", _trad_suggested(0.2, 3, 0, 0, 0) == 0)
 check("门控: 缺口1.2件≥1 → round=1", _trad_suggested(0.2, 3, 3, 0, 0) == 1)
 
 # ── 传统逐仓备注语境(2026-10-07: 对齐 bbcc——无销量/低需求说明) ──
+# 2026-11-04 结构化: _trad_note 返回 (note, segs); note 断言不变, 新增 segs 结构断言
 from routes.replenishment import _trad_note
-check("备注: 日销0+有库存 → 无销量积压", "近30天无销量，库存积压" in _trad_note(0, 0, 0, 0, 100, 196, 0, 0))
-check("备注: 日销0+无库存 → ⚪无销量", "⚪ 近30天无销量" in _trad_note(0, 0, 0, 0, 0, 196, 0, 0))
-check("备注: 需求低场景由动态安全线提示接管", "库存低于安全线，但需求低暂不补" not in _trad_note(0.02, 0, 0, 0.1, 2, 196, 0, 0))
-check("备注: 正常补货 → 濒临前置+需补量", _trad_note(5, 5.1, 4.5, 4, 2, 196, 216, 209).startswith("🔴 已濒临") and "需补216件" in _trad_note(5, 5.1, 4.5, 4, 2, 196, 216, 209))
-check("备注: 正常不补+库存充足 → 仅趋势", _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0) == "近7➡️ 近14➡️")
+_n0, _s0 = _trad_note(0, 0, 0, 0, 100, 196, 0, 0)
+check("备注: 日销0+有库存 → 无销量积压", "近30天无销量，库存积压" in _n0)
+check("备注: segs 结构(无销量积压)", _s0[0] == {"k": "no_sales_stock"}, str(_s0))
+_n1, _s1 = _trad_note(0, 0, 0, 0, 0, 196, 0, 0)
+check("备注: 日销0+无库存 → ⚪无销量", "⚪ 近30天无销量" in _n1)
+check("备注: segs 结构(⚪)", _s1 == [{"k": "no_sales"}], str(_s1))
+check("备注: 需求低场景由动态安全线提示接管", "库存低于安全线，但需求低暂不补" not in _trad_note(0.02, 0, 0, 0.1, 2, 196, 0, 0)[0])
+_n2, _s2 = _trad_note(5, 5.1, 4.5, 4, 2, 196, 216, 209)
+check("备注: 正常补货 → 濒临前置+需补量", _n2.startswith("🔴 已濒临") and "需补216件" in _n2)
+check("备注: segs 结构(濒临前置+need)", _s2[0] == {"k": "critical"} and {"k": "need", "n": 216} in _s2, str(_s2))
+_n3, _s3 = _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0)
+check("备注: 正常不补+库存充足 → 仅趋势", _n3 == "近7➡️ 近14➡️")
+check("备注: segs 结构(仅趋势)", _s3 == [{"k": "trend", "t7": "flat", "t14": "flat"}], str(_s3))
 # 周转红线(对齐 bbcc 综转 90 天)
-check("备注: 补后综转超90天 → 🔴红线前置", "🔴 补后综转120天超90天" in _trad_note(1, 1.1, 1, 1, 30, 196, 96, 90, after_turnover=120, tw90=90))
-check("备注: 当前综转接近90天 → ⚠️", "⚠️ 当前综转80天接近90天" in _trad_note(1, 1.1, 1, 1, 30, 196, 0, 0, after_turnover=80, tw90=90))
-check("备注: 无销量不显示周转(无意义)", "综转" not in _trad_note(0, 0, 0, 0, 100, 196, 0, 0, after_turnover=999, tw90=90))
-# 动态安全线提示(2026-10-07: 只提示不参与计算)
-_h = "🔴 库存低于动态安全线：可撑3天<周期6天，存在断货风险，建议尽快补货"
-check("备注: 动态安全线提示接入", _h in _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0, safety_hint=_h))
-_h2 = "⚠️ 接近动态安全线：约剩5天（周期6天），建议关注补货"
-check("备注: 接近提示接入", _h2 in _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0, safety_hint=_h2))
+_n4, _s4 = _trad_note(1, 1.1, 1, 1, 30, 196, 96, 90, after_turnover=120, tw90=90)
+check("备注: 补后综转超90天 → 🔴红线前置", "🔴 补后综转120天超90天" in _n4)
+check("备注: segs 结构(turn_over after)", {"k": "turn_over", "w": "after", "v": 120, "t": 90} in _s4, str(_s4))
+_n5, _s5 = _trad_note(1, 1.1, 1, 1, 30, 196, 0, 0, after_turnover=80, tw90=90)
+check("备注: 当前综转接近90天 → ⚠️", "⚠️ 当前综转80天接近90天" in _n5)
+check("备注: segs 结构(turn_near cur)", {"k": "turn_near", "w": "cur", "v": 80, "t": 90} in _s5, str(_s5))
+check("备注: 无销量不显示周转(无意义)", "综转" not in _trad_note(0, 0, 0, 0, 100, 196, 0, 0, after_turnover=999, tw90=90)[0])
+# 动态安全线提示(2026-10-07: 只提示不参与计算; 现传 seg dict)
+_n6, _s6 = _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0, safety_seg={"k": "safety_urgent", "d": 3, "p": 6})
+check("备注: 动态安全线提示接入", "库存告急" in _n6 and {"k": "safety_urgent", "d": 3, "p": 6} in _s6, str(_n6))
+_n7, _s7 = _trad_note(5, 5.1, 4.5, 4, 500, 196, 0, 0, safety_seg={"k": "safety_near", "d": 5, "p": 6})
+check("备注: 接近提示接入", "约剩5天" in _n7 and {"k": "safety_near", "d": 5, "p": 6} in _s7, str(_n7))
 
 # ── 配置键引用完整性审计(2026-10-07: mode_traditional_safety_multiplier 配了但代码没用——静态安全线遗留) ──
 # 扫描 replenishment.py 中 _config 读取的键名, 确保每个 cfg.get 键都有配置写入方(seed/清洗写入的键集)
@@ -2621,6 +2651,41 @@ try:
           "locales[currentLocale]?.[key] || locales['zh'][key] || key" in _loc_src, "locale.ts")
 except Exception as _e23:
     check("i18n 用例无异常", False, str(_e23)[:200])
+
+# ── 日志类型收口自检(2026-11-04 日志排查) ──────────────────────────
+# 历史 bug 复发过: 写入方新增 log_type 却没登记 routes.misc._LOG_SCOPE_TYPES,
+# 该日志在质量日志页(user)/开发者页(dev)/Markdown 导出/归档里全被 IN 白名单过滤掉,
+# 只躺在 quality_logs 表里 —— "写了等于没写", 且恰恰常是 error 级。
+# 本轮实测抓到两类: rule_guard(告警批量关闭拦截) / api_unhandled(全局 500 兜底)。
+# 静态扫描所有 INSERT INTO quality_logs 的字面量类型, 强制都在白名单内(防再次复发)。
+try:
+    import re as _re, glob as _glob
+    from routes.misc import _LOG_SCOPE_TYPES as _SCOPE
+    _wl = set(_SCOPE["user"]) | set(_SCOPE["dev"])
+    _found = {}
+    _root = os.path.dirname(os.path.abspath(__file__))
+    for _p in _glob.glob(os.path.join(_root, "**", "*.py"), recursive=True):
+        if os.path.basename(_p) == "local_test.py":
+            continue  # 本文件含扫描规则说明文本, 跳过防自匹配
+        _src2 = open(_p, encoding="utf-8").read()
+        for _m in _re.finditer(r"INSERT INTO quality_logs", _src2):
+            _w = _src2[_m.start():_m.start() + 700]
+            # ① VALUES 后直接跟字面量类型
+            _v = _re.search(r"VALUES\s*\(\s*'([a-z][a-z0-9_]*)'", _w)
+            # ② VALUES 全占位符 + 后续参数元组首项为字面量类型
+            if not _v:
+                _v = _re.search(r"VALUES\s*\(\s*%s[^)]*\)\s*,\s*\(\s*'([a-z][a-z0-9_]*)'",
+                                _w, _re.S)
+            if _v:
+                _found.setdefault(_v.group(1), set()).add(os.path.relpath(_p, _root))
+    _miss = {k: sorted(v) for k, v in _found.items() if k not in _wl}
+    check("日志类型全部收口(无'写了看不见')", not _miss, str(_miss))
+    # 自检本身必须真的扫到东西, 否则正则失效会假绿(同 i18n_audit 自检的教训)
+    check("日志收口自检确实扫到类型", len(_found) >= 10, str(sorted(_found)))
+    check("rule_guard 已收口到 user 维度", "rule_guard" in _SCOPE["user"])
+    check("api_unhandled 已收口到 dev 维度", "api_unhandled" in _SCOPE["dev"])
+except Exception as _e24:
+    check("日志收口用例无异常", False, str(_e24)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

@@ -484,7 +484,7 @@ export default function ReplenTab(props: Props) {
                               className="col-note" onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                               title={x.note || ''}
                             >
-                              {renderNote(x.note)}
+                              {renderNote(x.note, x.note_segs)}
                             </td>
                           )
                         // 标记操作

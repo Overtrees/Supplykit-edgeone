@@ -345,9 +345,11 @@ def main() -> int:
     print(f"  键集合相等: {'✅' if not only_zh and not only_en else '❌'} "
           f"缺 en={only_zh[:8]} 缺 zh={only_en[:8]}")
 
-    # 动态前缀(t('col.' + id) / t('fld.' + name))由字典文件的键集合兜住, 不按字面量核对
-    _dyn_prefix = ("col.", "fld.")
-    missing = sorted(k for k in used if k not in zh and k not in _dyn_prefix)
+    # 动态前缀(t('col.' + id) / t('fld.' + name) / t('seg.' + k) / t('seg.trend_x_' + x))
+    # 由字典文件的键集合兜住, 不按字面量核对; 'seg.' 这类带尾点的键是拼接左半, 同样跳过
+    _dyn_prefix = ("col.", "fld.", "seg.", "seg.trend_x_", "task.")
+    missing = sorted(k for k in used if k not in zh and k not in _dyn_prefix
+                     and not k.endswith("."))
     dead = sorted(k for k in zh if k not in used)
     print(f"  t() 引用但字典缺失: {len(missing)} {missing[:8]}")
     print(f"  字典有但未被引用(死键): {len(dead)} {dead[:8]}")

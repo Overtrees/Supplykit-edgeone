@@ -5,6 +5,9 @@ import { t } from '../../locale'
 
 interface TaskStep {
   name?: string
+  /** 2026-11-04 步名结构化: name_key+params 走 t() 出双语(后端 cleansing 写入); name 保留原文兜底历史 */
+  name_key?: string
+  p?: Record<string, string | number>
   elapsed?: number
   started?: number
 }
@@ -159,7 +162,7 @@ export default function TaskCard({
               <div key={i} className="task-step-row">
                 <IconCheck size={10} className="task-step-ok" />
                 <span className="task-step-name">
-                  {s.name || t('tc.step', { n: i + 1 })}
+                  {(s.name_key ? t(s.name_key, s.p) : '') || s.name || t('tc.step', { n: i + 1 })}
                 </span>
                 <span className="task-step-time">
                   {s.elapsed != null ? s.elapsed.toFixed(1) + 's' : '—'}
@@ -169,7 +172,9 @@ export default function TaskCard({
             {cur && st === 'running' && (
               <div className="task-step-row task-cur">
                 <IconRefresh size={10} className="task-spin" />
-                <span className="task-step-name">{cur.name || t('tc.processing')}</span>
+                <span className="task-step-name">
+                  {(cur.name_key ? t(cur.name_key, cur.p) : '') || cur.name || t('tc.processing')}
+                </span>
                 <span className="task-step-time task-cur-time">
                   {cur.started ? ((now - Number(cur.started) * 1000) / 1000).toFixed(0) + 's' : '…'}
                 </span>

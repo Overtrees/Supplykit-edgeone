@@ -306,7 +306,7 @@ export default function PurchaseTab(props: Props) {
                             className="col-note" onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                             title={x.note || ''}
                           >
-                            {renderNote(x.note) || t('insights.no_purchase_needed')}
+                            {renderNote(x.note, x.note_segs) || t('insights.no_purchase_needed')}
                           </td>
                         )
                       if (col.id === 'timing')

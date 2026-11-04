@@ -76,7 +76,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 421 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 437 通过/0 失败
   (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 22
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
   - **i18n 专项快照**: `python3 scripts/ui_shot_matrix.py --serve --locale zh|en --viewport 375|390|844|1440`
@@ -275,3 +275,11 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 - **表头不许渲染 col.label / 字段名原文**: 一律走 colLabel(col.id) / fieldLabel(name),
   哪怕 label 当前恰好是英文 —— 那是词条键占位, 不是文案
 - **触屏看不到 title/悬浮**: 需要"看全文"的信息(如备注列)必须给点击展开, 不能只靠 title
+- **后端中文句子要双语, 用「新增结构化字段」而非替换**: 保留原 `note`/`name` 字符串
+  (导出/历史/告警零改动), 另加 `note_segs`/`name_key+p` 供前端 t() 渲染; 中文串由
+  `zh_note(segs)` 单一真源产出, 禁止两份手拼。前端必须有无 segs 时的回落路径
+- **新增 log_type 必须登记 `routes.misc._LOG_SCOPE_TYPES`**: 否则该日志在质量日志页(user)/
+  开发者页(dev)/导出/归档全被 IN 过滤掉 —— "写了等于没写"(本轮抓到 rule_guard、
+  api_unhandled 两个 error 级)。`local_test.py` 已有静态自检, 加类型后跑一次
+- **静态自检必须反证**: 临时移除一项确认会报错, 否则「全绿」可能只是正则没扫到东西
+  (同 `i18n_audit.py` 探测用必然不匹配的 bogus 参数)

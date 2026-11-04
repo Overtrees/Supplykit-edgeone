@@ -550,7 +550,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
         # 分窗清洗+写入(2026-10-15 进度中: 窗口开始即设 cur_step——前端 TaskCard 实时显示进行中)
         _win_no = offset // page_size + 1
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
-                (json.dumps({**params, "cur_step": {"name": "清洗写入窗口 %d/%d" % (_win_no, max((total // page_size) + 1, 1)), "started": int(_t.time())}}, ensure_ascii=False), task_id))
+                (json.dumps({**params, "cur_step": {"name": "清洗写入窗口 %d/%d" % (_win_no, max((total // page_size) + 1, 1)), "name_key": "task.win_clean", "p": {"n": _win_no, "m": max((total // page_size) + 1, 1)}, "started": int(_t.time())}}, ensure_ascii=False), task_id))
         window = rows[offset:offset + page_size]
         cleaned = _clean_rows(window, mp)
         if target == "order":
@@ -664,7 +664,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                         try_err('cleansing', '静默降级', _e)
             elapsed = round(_t.time() - started, 1)
             # 2026-10-16 分离: 导入 done(写 done 计数——联动评估由独立 cleansing_eval 任务续跑分片——根治 done 步 80s 请求被杀)
-            _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": round(_t.time() - started, 1)}]
+            _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - len(window)) // page_size + 1}, "elapsed": round(_t.time() - started, 1)}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                     (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
                                  "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
@@ -705,7 +705,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                          [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
                                                   "mp": mp, "fname": fname, "offset": 0, "success": 0, "failed": 0,
                                                   "sku_list": _ev_skus, "steps": [],
-                                                  "cur_step": {"name": "评估联动准备", "started": int(_t.time())}}, ensure_ascii=False), channel])
+                                                  "cur_step": {"name": "评估联动准备", "name_key": "task.eval_prep", "started": int(_t.time())}}, ensure_ascii=False), channel])
             except Exception as _e4:
                 try_err('cleansing', '创建评估任务降级', _e4)
             from routes.analysis_cache import invalidate
@@ -716,8 +716,8 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                     "failed_details": _fd if _fd else []}
         # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
         _sq = round(_t.time() - started, 1)
-        _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "elapsed": _sq}]
-        _cur = {"name": "窗口 %d" % (offset // page_size + 1), "started": int(_t.time())}
+        _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - len(window)) // page_size + 1}, "elapsed": _sq}]
+        _cur = {"name": "窗口 %d" % (offset // page_size + 1), "name_key": "task.win", "p": {"n": offset // page_size + 1}, "started": int(_t.time())}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
                              "total": total, "steps": _steps, "cur_step": _cur}, ensure_ascii=False), task_id))
@@ -974,13 +974,13 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         _rri = _rj.get("result") or {}
         _cum_rules = int(_rri.get("rules_evaluated") or 0) + evaluated
         _cum_inv = int(_rri.get("inventory_adjusted") or 0) + adjusted
-        _steps = (params.get("steps") or []) + [{"name": "评估分片 %d/%d" % (_seg_no, _seg_cnt), "elapsed": round(_t.time() - started, 1)}]
+        _steps = (params.get("steps") or []) + [{"name": "评估分片 %d/%d" % (_seg_no, _seg_cnt), "name_key": "task.eval_seg", "p": {"n": _seg_no, "m": _seg_cnt}, "elapsed": round(_t.time() - started, 1)}]
         _done = _new_off >= _total
         _status = "done" if _done else "running"
         execute("UPDATE sync_tasks SET status=%s, params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                 (_status,
                  json.dumps({**params, "offset": _new_off, "steps": _steps,
-                             "cur_step": None if _done else {"name": "评估分片 %d/%d" % (_seg_no + 1, _seg_cnt), "started": int(_t.time())}}, ensure_ascii=False),
+                             "cur_step": None if _done else {"name": "评估分片 %d/%d" % (_seg_no + 1, _seg_cnt), "name_key": "task.eval_seg", "p": {"n": _seg_no + 1, "m": _seg_cnt}, "started": int(_t.time())}}, ensure_ascii=False),
                  json.dumps({"result": {"target": target, "success": _total, "failed": 0,
                                         "rules_evaluated": _cum_rules, "inventory_adjusted": _cum_inv,
                                         "message": "评估 %d SKU, 联动 %d" % (_cum_rules, _cum_inv)}}, ensure_ascii=False), task_id))

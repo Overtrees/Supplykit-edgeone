@@ -5587,3 +5587,57 @@ en 写成 `''` 不报错, 安静地掉回中文。**空串是假翻译**。
 
 验证: 弹窗双语 pill/徽章 无裸键; 三 tab 表头 zh/en 各 20 列无裸键; 胶囊显示"京东渠道";
 审计/tsc/eslint/build/22 单测 全过。
+
+## §15.147 后端中文句子结构化(note_segs) + 日志维度排查(2026-11-04)
+
+用户两项: ① `replenishment.py` / `purchase_calc.py` / `cleansing.py` 直接把中文句子拼给前端
+(补货备注「7天走弱 · B建议补120.0件(…)」、采购建议「🔴 库存告急…」、任务步名「窗口 1」),
+数字混在句子里, 还进任务记录与 Excel 导出; ② 排查现有日志(开发者/用户维度)有无待处理项。
+
+### ① 结构化: 新增字段, 不替换字段(零破坏)
+
+用户原文已划边界: 「改成结构化片段数组会影响导出/历史/告警文本, 不在本轮范围」。
+故采用**双字段并存**而非替换:
+
+| 字段 | 内容 | 消费方 |
+|---|---|---|
+| `note` | 中文整句(**逐字不变**) | Excel 导出 / 任务历史 / 告警文本 —— 全部零改动 |
+| `note_segs` | `[{k, ...params}]` 片段数组(**新增**) | 前端 `renderNote()` 走 `t('seg.'+k, p)` 出双语 |
+| `name` | 任务步名中文原文(**不变**) | 历史任务 / 导出 |
+| `name_key` + `p` | 步名词条键 + 参数(**新增**) | `TaskCard` 走 `t(name_key, p)` |
+
+- 新增 `core/note_segs.py`: `zh_note(segs)` 是**单一真源** —— 后端 `note = zh_note(segs)`,
+  不再手拼两份(防漂移); 后续加片段只改模板一处。逐字对照验证 `p_turn` 曾丢「目标」二字并修正。
+- 前端 `shared.tsx` 的 `renderNote(text, segs)`: 有 segs 走词条, 无 segs **回落 text**
+  (线上老数据 / 后端未部署时行为完全不变, 实测回落路径正常)。
+- 词条: `seg.*` ~40 条(含 trend/建议/仓储费/周转/安全线/采购/MOQ) + `task.*` 4 条, zh/en 双份。
+- `i18n_audit.py` 的 `_dyn_prefix` 加 `seg.` / `task.` —— 动态拼键是静态审计盲区, 同 `col.` / `fld.` 处理。
+- 测试: `local_test.py` 加 12 条 note_segs 结构断言(非空数组 / 每段含 k / note 非空 / 具体 seg 形状)。
+
+### ② 日志排查结论
+
+**体系本身健全**: `_LOG_SCOPE_TYPES` 已是 user/dev 单一真源(4 个消费方都引用它);
+`prune_quality_logs()` 按天保留 30 天 + 2 万硬上限; 日志接口均需 token, 只 `/health` 放行且
+不含堆栈; `traced` 只回 request_id、堆栈入库; 前端上报限长。
+
+**抓到 2 个真实 bug —— 与 2026-10-17 修过的历史 bug 同构(「写了等于没写」)**:
+- `rule_guard`(`core/rule_eval.py`, error, 告警批量关闭拦截, 需人工介入)与
+  `api_unhandled`(`index.py`, error, 全局 500 兜底) **不在任何白名单** →
+  质量日志页(scope=user) / 开发者页(scope=dev) / Markdown 导出 / 归档全部按 IN 过滤掉,
+  只躺在 `quality_logs` 表里。恰恰是最该被看到的两类 error。分别补进 user / dev。
+- `frontend_log` 鉴权放行且 `log_type` 由调用方任意给, 白名单外的类型同样不可见 →
+  收口为「不在 dev 白名单归 `frontend_error`」+ level 只认 error/warning/info 三档。
+
+**防复发**: `local_test.py` 新增静态自检 —— 扫全部 `INSERT INTO quality_logs` 的字面量类型
+强制都在白名单内, 并自检「确实扫到 ≥10 个类型」防正则失效假绿。
+反证验证: 临时移除 `rule_guard` 后报 2 条失败, 还原后 437 全过。
+
+**顺手清理**: `DevModePage` 的 `DEV_LABEL` / `LEVEL_LABEL` 两个常量定义后从未引用
+(日志明细改成「按天文件 + Markdown 预览」后遗留), 对应 12 个 `dev.k_*` / `dev.lv_*` 词条
+是死键 —— 一并删除(zh/en 各 12 行)。
+
+**边界说明(本轮未改)**: 日志 `message` / `details` 是后端生成的中文审计文本, 属「数据」不是
+界面文案, 英文界面仍显示中文; 导出 Markdown 的「质量日志 / 异常 / 警告 / 提示」标题同理。
+要双语需给导出 API 传 locale 并按语言出文案, 属数据契约变更, 与 ① 的 note 同类, 未纳入本轮。
+
+门禁: i18n audit PASS · tsc · eslint · build · vitest 22 · local_test **437 通过 0 失败**。
