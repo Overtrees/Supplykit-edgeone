@@ -2315,6 +2315,12 @@ try:
     check("S3-7 业务键空值归一为 ''(与单条 COALESCE 同口径)",
           "def _biz_key" in _src27 and 'r.get("barcode") or ""' in _src27,
           "routes/inventory.py")
+    # 2026-11-04 线上实测踩到: 进销存列表取 /insights/with-sales, 该 SELECT 原本没带 i.id,
+    # 前端每行 x.id 都是 undefined → indexOf(undefined) 对每行都成立 → 点一行等于全选
+    # (视觉 100 行全勾, store 里只有 1 条); "全选"同样只能塞进一个 undefined。
+    _src_ins27 = open('routes/insights.py', encoding='utf-8').read()
+    check("S3-7 with-sales 返回 i.id(前端批量勾选/全选的主键来源, 缺了会全选全表)",
+          "SELECT i.id, i.sku" in _src_ins27, "routes/insights.py")
 
     class _Req27:
         def __init__(self, d):

@@ -96,7 +96,10 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         params += ["%%%s%%" % search] * 2
     total = one("SELECT COUNT(*) AS c FROM inventory i WHERE %s" % where, params) or {}
     total = int(total.get("c") or 0)
-    sel = ("SELECT i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
+    # 2026-11-04 补 i.id: 进销存页的批量勾选依赖行主键, 此前 SELECT 未带 id →
+    #   前端 x.id 恒为 undefined → indexOf(undefined) 对每行都成立, 点一行等于全选
+    #   (视觉全勾、store 里只有 1 条)。id 也是 React key 的唯一来源, 一并能消掉重复 key 警告。
+    sel = ("SELECT i.id, i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
            "i.safety_qty, i.product_name, i.month_inbound, i.month_outbound, i.beginning_stock, "
            "i.turnover_days, i.barcode, i.ext_json, p.brand, p.price, "
            # 2026-11-01 批次数按四维匹配: 原只带 sku/warehouse/channel → 同 SKU 同仓多码时
