@@ -1,3 +1,51 @@
+## 2026-11-04 总览（周转口径 / 北京时间 / 账期月结）
+
+回归 437 → **458 通过 / 0 失败**；i18n audit PASS（中文硬编码 0）；tsc / eslint / vitest 30 / build 全绿；线上构建两次 Success 并已上生产。
+
+| 主题 | 提交 | 一句话 |
+|---|---|---|
+| 库存批量删除/恢复 | `a9aafaa` `631c81a` `923b8d0` | 借订单的交互不借语义；勾选列按 auto layout 下限 32px 收窄 |
+| 点一行=全选全表 | `08dc5f0` `438e35d` `b570a97` | 主键在「重建 dict」里丢了：SELECT 加了 `i.id`，但 dict 重建时没带上 |
+| 迁移框架 + 两条红线 | `d11b551` | S3-5 `schema_migrations`；非内联 SQL / 不硬编码中文进 preflight |
+| i18n 全量对齐 | `f8bf880` `5809e71` `1c339f1` `ccad7a7` | 4 视口×双语实机快照；列 id 集合 ⊆ `col.*` 键集合；后端中文句子结构化 `note_segs` |
+| **周转改平均库存法** | `7144ceb` | `平均×自然月天数÷当月出库`；期末 = 期初+入−出（不 clamp）；合计改「仓周转」先合再除；出库 0 → 未出库不计算；负期末 → 标异常不兜底 |
+| **全链路北京时间** | `7144ceb` | 新增 `core/clock.py` + `utils/date.ts`；后端 14 文件 47 处 + 前端 7 文件统一 `+08:00`；连接后 `SET time_zone`，失败抛出。**根因不是显示差 8 小时，是锁超时提前 8h 失效、效期/库龄在 00:00–08:00 算错一天** |
+| **账期月结（甲+B）** | `7144ceb` | 期初 = 上月期末；可用 = 锚点 + 其后流水；三表 `inventory_month`/`batch_opening`/`ledger_state`（SCHEMA_VERSION 5→6）；批次月初余额**带日期**切片，指定批次跨月仍命中；数据不齐拒绝结账 |
+| **结账两个真 bug** | `171cca0` | ① `<= 月末日` 对 DATETIME 只覆盖到当天 00:00，末日整天丢失（10-31 单日入 19,405/出 23,704）→ 右开区间 ② bootstrap 直接拿基线当月期初，漏掉基线之后的历史流水（10 月少 79,315）→ 加 `_net_before` |
+| 推送通道 | `171cca0` | `github.com:443` 不可达（131s TLS 断）→ 走 `push_api.py`；修 `ls-tree` 缺 `-z` 导致中文名被 quotepath 转义、同一文件误判「新增 1 + 删除 1」的问题 |
+
+### 线上验证（不是本地自证）
+
+`GET /ledger/preview?period=2026-10`（dry-run，只算不写）：
+
+```
+begin 377,865   in 357,637   out 233,985   end 501,517
+rows 1,003      orphan 0     days 31       available_now 376,673   diff 124,844
+```
+
+`diff 124,844` 正好等于 11 月净流水（98,515 − 223,359），即 **`501,517 − 124,844 = 376,673` ≡ 当前可用**。
+结账对页面数字零跳变 —— 这是口径闭环的判据，不是「看起来对」。
+
+`health` 返回 `timestamp +08:00`；`snapshot_qty` 列与 `ledger_state` 表已就位；`/ledger/status` 返回
+`period 2026-11 / days 4 / month_days 30 / target_period 2026-10 / target_ready true`。
+
+### 调度落点（有上限，别乱加）
+
+`edgeone.json` 的 `schedules` **maxItems 10 已占满**，加第 11 条会让整组定时任务丢路由。
+月结因此嵌进最轻的 `cleanup-logs`（每日 03:05 CST），调用点在 `_claim` 之前，4 号之后零 SQL 直接返回。
+回归加断言锁死这条绑定：挪走不报错，只会让账期永远不结。
+
+### 待办
+
+- 11 月这次不会自动结（1–3 号窗口已过），需手动 `POST /ledger/reclose {"period":"2026-10"}`，12-01 起全自动；
+- `snapshot_qty` 只存不比（差异看板未做）；
+- 重结更早历史月份不支持，需整链重建；
+- `cleanse_write.py` 1500+ 行，超 600 红线，账期逻辑已外置但该文件仍需拆。
+
+详见 `docs/DEVELOPMENT.md` §15.146 与 `docs/decisions/0002-账期月结.md`。
+
+---
+
 ## 2026-11-03 下午总览（D4/D5/D8 + 提示收口 + S3-4）
 
 回归 363 → **392 通过 / 0 失败**；preflight 七步全绿（有凭据时含真实 SQL 冒烟）；CI success。

@@ -80,8 +80,15 @@ def main():
               call("GET", "/repos/%s/%s/git/trees/%s?recursive=1" % (OWN, REPO, base_tree))["tree"]
               if e["type"] == "blob"}
     local = {}
-    for line in subprocess.check_output(["git", "ls-tree", "-r", "HEAD"], text=True).splitlines():
-        meta, path = line.split("\t")
+    # -z: NUL 分隔且**不做 quotepath 转义**。不加 -z 时中文文件名会输出成
+    #   "docs/decisions/0002-\350\264\246..." 这种八进制转义串, 与远端 API 返回的
+    #   真实 UTF-8 路径比不出来 —— 同一个文件会被误判成"新增一个 + 删除一个",
+    #   推上去就在仓库里留一个乱码名文件(实测踩过)。
+    raw = subprocess.check_output(["git", "ls-tree", "-r", "-z", "HEAD"], text=True)
+    for line in raw.split("\x00"):
+        if not line:
+            continue
+        meta, path = line.split("\t", 1)
         mode, _t, sha = meta.split()
         local[path] = (mode, sha)
 
