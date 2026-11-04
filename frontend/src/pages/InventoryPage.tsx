@@ -1017,13 +1017,16 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                 }
                 const _hb = (x.batch_count || 0) > 1
                 const _isSel = invBatch && (invSelIds || []).indexOf(x.id) >= 0
-                // 勾选列固定最左(与订单/商品页同款 32px 占位), 点击不触发行的批次展开
+                // 勾选列固定最左 32px。注意: 表格是 auto layout, 单靠 td width:32 不生效 ——
+                // 列宽下限由单元格 min-content 决定, 20px 图标不带盒子就只剩 20px(实测), 点击热区太小。
+                // 所以给 span 撑一个 32x32 的盒, td padding 归零。
                 const _cells = invBatch
                   ? [
                       <td
                         key="__sel"
-                        // minWidth:0 抵 th 的全局下限; padding 左右归零, 否则 20px 图标 + 16px 内边距 = 36px
-                        style={{ width: 32, minWidth: 0, padding: '4px 0', textAlign: 'center' }}
+                        // minWidth:0 抵全局 th{min-width:72px}; padding 归零, 行高交给文字行(≈26px)决定,
+                        // 勾选盒 32x24 不撑高行 —— 100 行列表里每行多 6px 就是 600px 无谓滚动
+                        style={{ width: 32, minWidth: 0, padding: 0, textAlign: 'center' }}
                         onClick={e => e.stopPropagation()}
                       >
                         <span
@@ -1043,6 +1046,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             display: 'inline-flex',
                             alignItems: 'center',
                             justifyContent: 'center',
+                            width: 32,
+                            height: 24,
                           }}
                         >
                           {_isSel ? <IconCircleCheck size={20} /> : <IconCircle size={20} />}
