@@ -2321,6 +2321,10 @@ try:
     _src_ins27 = open('routes/insights.py', encoding='utf-8').read()
     check("S3-7 with-sales 返回 i.id(前端批量勾选/全选的主键来源, 缺了会全选全表)",
           "SELECT i.id, i.sku" in _src_ins27, "routes/insights.py")
+    # 只查 SELECT 不够: 该接口是逐字段重建 dict(items.append({...})), SELECT 出了 id
+    # 但 append 不写就照样丢 —— 2026-11-04 第一次修正是这么翻车的, 线上仍无 id。
+    check("S3-7 with-sales 的 items.append 必须显式带 id(重建 dict 会丢字段)",
+          '"id": r.get("id")' in _src_ins27, "routes/insights.py")
 
     class _Req27:
         def __init__(self, d):

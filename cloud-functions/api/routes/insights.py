@@ -282,6 +282,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
         _dyn_safety = round(ds * _per3, 1) if ds > 0 and _per3 > 0 else 0
         items.append({
+            # id 必须显式带出来: 本函数是**逐字段重建 dict**, SELECT 里加了 i.id 也会在这里被丢掉
+            # (2026-11-04 第一次就是这么修的 —— 改了 sel 却没改 append, 线上仍然没有 id)
+            "id": r.get("id"),
             "sku": sku, "product_name": r.get("product_name") or sku,
             "warehouse": r.get("warehouse", ""), "warehouse_type": r.get("warehouse_type", ""),
             "available_qty": avail, "in_transit_qty": transit, "c_transit": int(r.get("c_transit") or 0),
