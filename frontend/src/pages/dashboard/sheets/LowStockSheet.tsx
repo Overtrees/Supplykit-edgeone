@@ -56,7 +56,7 @@ export default function LowStockSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -97,7 +97,7 @@ export default function LowStockSheet(props: Props) {
                 >
                   <span
                     style={{
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       fontSize: 'var(--font-sm)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -154,7 +154,7 @@ export default function LowStockSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

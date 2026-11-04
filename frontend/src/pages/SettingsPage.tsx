@@ -123,7 +123,7 @@ export default function SettingsPage() {
 
         <Group title={t('set.alert_push')}>
           <div style={{ padding: 14 }}>
-            <div style={{ fontSize: 'var(--font-13)', fontWeight: 600, marginBottom: 4 }}>
+            <div style={{ fontSize: 'var(--font-13)', fontWeight: "var(--fw-semibold)", marginBottom: 4 }}>
               {t('set.webhook')}
             </div>
             <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>

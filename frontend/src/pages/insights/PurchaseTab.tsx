@@ -1,6 +1,7 @@
 import { IconTrendDown, IconTrendFlat, IconTrendUp, IconLightbulb } from '../../components/Icons'
 import EmptyState from '../../components/EmptyState'
 import { t } from '../../locale'
+import { colLabel } from '../../components/colLabels'
 import { INS_PURCHASE_COLS as PURCHASE_COLS } from '../../components/hammer/configs'
 import { renderNote, Skeleton } from './shared'
 
@@ -68,7 +69,7 @@ export default function PurchaseTab(props: Props) {
             {replenMode === 'bbcc' ? t('ins_p.mode_bbcc') : t('ins_p.mode_trad')}
           </span>
         )}
-        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
+        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
           {t('ins.showing_cols', {
             v: purchaseVisCols.length,
             all: PURCHASE_COLS.length,
@@ -111,7 +112,7 @@ export default function PurchaseTab(props: Props) {
                       }}
                       key={col.id}
                     >
-                      {col.label}
+                      {colLabel(col.id)}
                     </th>
                   ) : null
                 })}
@@ -170,7 +171,7 @@ export default function PurchaseTab(props: Props) {
                             key={col.id}
                             style={{
                               fontSize: 'var(--font-sm)',
-                              fontWeight: 600,
+                              fontWeight: "var(--fw-semibold)",
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -178,7 +179,7 @@ export default function PurchaseTab(props: Props) {
                             <span
                               style={{
                                 fontSize: 'var(--font-10)',
-                                fontWeight: 400,
+                                fontWeight: "var(--fw-regular)",
                                 color: 'var(--muted2)',
                               }}
                             >
@@ -196,7 +197,7 @@ export default function PurchaseTab(props: Props) {
                             style={{
                               fontSize: 'var(--font-sm)',
                               color: 'var(--muted)',
-                              fontWeight: 400,
+                              fontWeight: "var(--fw-regular)",
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -215,7 +216,7 @@ export default function PurchaseTab(props: Props) {
                             key={col.id}
                             style={{
                               fontSize: 'var(--font-sm)',
-                              fontWeight: 600,
+                              fontWeight: "var(--fw-semibold)",
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -223,7 +224,7 @@ export default function PurchaseTab(props: Props) {
                             <span
                               style={{
                                 fontSize: 'var(--font-10)',
-                                fontWeight: 400,
+                                fontWeight: "var(--fw-regular)",
                                 color: 'var(--muted2)',
                               }}
                             >
@@ -270,7 +271,7 @@ export default function PurchaseTab(props: Props) {
                           <td
                             key={col.id}
                             style={{
-                              fontWeight: 700,
+                              fontWeight: "var(--fw-bold)",
                               color: x.actual_purchase > 0 ? 'var(--success)' : 'var(--muted2)',
                             }}
                           >
@@ -286,7 +287,7 @@ export default function PurchaseTab(props: Props) {
                           <td
                             key={col.id}
                             style={{
-                              fontWeight: 600,
+                              fontWeight: "var(--fw-semibold)",
                               color:
                                 x.actual_purchase > 0
                                   ? x.target_turnover > 0 && x.after_turnover > x.target_turnover
@@ -302,7 +303,7 @@ export default function PurchaseTab(props: Props) {
                         return (
                           <td
                             key={col.id}
-                            className="col-note"
+                            className="col-note" onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                             title={x.note || ''}
                           >
                             {renderNote(x.note) || t('insights.no_purchase_needed')}
@@ -327,7 +328,7 @@ export default function PurchaseTab(props: Props) {
               })}
             </tbody>
             <tfoot>
-              <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+              <tr style={{ fontWeight: "var(--fw-bold)", borderTop: '2px solid var(--border)' }}>
                 {purchaseVisCols.includes('actual_purchase') && (
                   <>
                     <td

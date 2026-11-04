@@ -47,7 +47,7 @@ export default function ErrorRetry({
       >
         <IconAlert size={48} />
       </div>
-      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6, color: 'var(--danger)' }}>
+      <div style={{ fontWeight: "var(--fw-semibold)", fontSize: 16, marginBottom: 6, color: 'var(--danger)' }}>
         {error}
       </div>
       {finalDesc && <div style={{ fontSize: 13, marginBottom: 16 }}>{finalDesc}</div>}

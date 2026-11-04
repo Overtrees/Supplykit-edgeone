@@ -69,7 +69,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
               <div
                 style={{
                   fontSize: 'var(--font-sm)',
-                  fontWeight: 600,
+                  fontWeight: "var(--fw-semibold)",
                   textAlign: 'center',
                   marginBottom: 8,
                 }}

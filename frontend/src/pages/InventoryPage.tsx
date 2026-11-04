@@ -332,7 +332,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       >
         <span>
           {t('inv.title')}{' '}
-          <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
+          <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
             {t('inv.loaded', {
               a: Math.min(inventory.length, invTotal || inventory.length),
               b: invTotal || inventory.length,
@@ -425,7 +425,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       <th key={col.id}>
                         {colLabel(col.id)}
                         <br />
-                        <span className="small" style={{ fontWeight: 400 }}>
+                        <span className="small" style={{ fontWeight: "var(--fw-regular)" }}>
                           {monthRange}
                         </span>
                       </th>
@@ -435,7 +435,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       <th key={col.id}>
                         {colLabel(col.id)}
                         <br />
-                        <span className="small" style={{ fontWeight: 400 }}>
+                        <span className="small" style={{ fontWeight: "var(--fw-regular)" }}>
                           {monthRange}
                         </span>
                       </th>
@@ -514,7 +514,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     const _beg = x.beginning_stock_raw ?? 0
                     el = React.createElement(
                       'td',
-                      { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
+                      { key: col.id, className: 'col-qty', style: { fontWeight: "var(--fw-semibold)" } },
                       _beg,
                     )
                   } else if (col.id === 'keep_days') {
@@ -546,7 +546,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   else if (col.id === 'month_out')
                     el = React.createElement(
                       'td',
-                      { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
+                      { key: col.id, className: 'col-qty', style: { fontWeight: "var(--fw-semibold)" } },
                       x.month_outbound ?? 0,
                     )
                   else if (col.id === 'prod_date')
@@ -575,7 +575,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       { key: col.id },
                       React.createElement(
                         'span',
-                        { style: { fontSize: 'var(--font-xs)', fontWeight: 600, color: ecolor } },
+                        { style: { fontSize: 'var(--font-xs)', fontWeight: "var(--fw-semibold)", color: ecolor } },
                         expiryStatusLabel(es),
                       ),
                       x.batch_pct
@@ -600,7 +600,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       _ot_st === 'no'
                         ? React.createElement(
                             'span',
-                            { style: { color: 'var(--danger)', fontWeight: 600 } },
+                            { style: { color: 'var(--danger)', fontWeight: "var(--fw-semibold)" } },
                             t('inv.exp.over_third_icon'),
                           )
                         : _ot_st === 'expired'
@@ -612,7 +612,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           : _ot_st === 'warn'
                             ? React.createElement(
                                 'span',
-                                { style: { color: 'var(--warning)', fontWeight: 600 } },
+                                { style: { color: 'var(--warning)', fontWeight: "var(--fw-semibold)" } },
                                 t('inv.exp.warn_icon'),
                               )
                             : _ot_st === 'ok'
@@ -636,7 +636,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         ? [
                             React.createElement(
                               'span',
-                              { key: 's', style: { color: _nclr, fontWeight: 600 } },
+                              { key: 's', style: { color: _nclr, fontWeight: "var(--fw-semibold)" } },
                               _nb + '% ' + _nlbl,
                             ),
                             ' → ',
@@ -651,7 +651,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   } else if (col.id === 'avail')
                     el = React.createElement(
                       'td',
-                      { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
+                      { key: col.id, className: 'col-qty', style: { fontWeight: "var(--fw-semibold)" } },
                       x.available_qty,
                     )
                   else if (col.id === 'turnover') {
@@ -662,7 +662,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         key: col.id,
                         className: 'col-qty',
                         style: {
-                          fontWeight: 600,
+                          fontWeight: "var(--fw-semibold)",
                           color:
                             tc != null && tc > 30
                               ? 'var(--danger)'
@@ -690,7 +690,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       {
                         key: col.id,
                         className: 'col-price',
-                        style: { fontWeight: 600, fontSize: 'var(--font-sm)' },
+                        style: { fontWeight: "var(--fw-semibold)", fontSize: 'var(--font-sm)' },
                       },
                       sa ? '¥' + sa.toLocaleString() : '-',
                     )
@@ -818,7 +818,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             key: col.id,
                             style: {
                               fontSize: 'var(--font-xs)',
-                              fontWeight: 600,
+                              fontWeight: "var(--fw-semibold)",
                               color: expiryStatusColor(es),
                             },
                           },
@@ -827,7 +827,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       } else if (col.id === 'avail')
                         el = React.createElement(
                           'td',
-                          { key: col.id, style: { fontWeight: 600, fontSize: 'var(--font-xs)' } },
+                          { key: col.id, style: { fontWeight: "var(--fw-semibold)", fontSize: 'var(--font-xs)' } },
                           b.qty,
                         )
                       else if (col.id === 'over_third') {
@@ -869,7 +869,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           'td',
                           {
                             key: col.id,
-                            style: { fontSize: 'var(--font-xs)', color: bcolor, fontWeight: 600 },
+                            style: { fontSize: 'var(--font-xs)', color: bcolor, fontWeight: "var(--fw-semibold)" },
                           },
                           pct + '% ' + note,
                         )
@@ -933,7 +933,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             key: col.id,
                             style: {
                               fontSize: 'var(--font-xs)',
-                              fontWeight: 600,
+                              fontWeight: "var(--fw-semibold)",
                               color: _amt > 0 ? 'var(--text)' : 'var(--muted2)',
                             },
                           },
@@ -1033,7 +1033,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             </tbody>
             {inventory.length > 0 && (
               <tfoot>
-                <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                <tr style={{ fontWeight: "var(--fw-bold)", borderTop: '2px solid var(--border)' }}>
                   {invBatch && <td key="__sel" style={{ width: 32 }} />}
                   {visCols.map(function (id) {
                     const col = INV_COLS[whType].find(function (c) {
@@ -1055,13 +1055,13 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     if (col.id === 'month_out')
                       return React.createElement(
                         'td',
-                        { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
+                        { key: col.id, className: 'col-qty', style: { fontWeight: "var(--fw-semibold)" } },
                         _sumVal('mo', x => x.month_outbound),
                       )
                     if (col.id === 'avail')
                       return React.createElement(
                         'td',
-                        { key: col.id, className: 'col-qty', style: { fontWeight: 600 } },
+                        { key: col.id, className: 'col-qty', style: { fontWeight: "var(--fw-semibold)" } },
                         _sumVal('av', x => x.available_qty),
                       )
                     if (col.id === 'keep_days') {
@@ -1069,14 +1069,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       const _d = inventory.reduce((acc, x) => acc + (x.daily_sales || 0), 0)
                       return React.createElement(
                         'td',
-                        { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
+                        { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: "var(--fw-bold)" } },
                         _d > 0 ? t('common.day_unit', { n: (_q / _d).toFixed(1) }) : '—',
                       )
                     }
                     if (col.id === 'turnover')
                       return React.createElement(
                         'td',
-                        { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
+                        { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: "var(--fw-bold)" } },
                         totalTurnover != null ? t('common.day_unit', { n: totalTurnover }) : '—',
                       )
                     if (col.id === 'price')
@@ -1095,7 +1095,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         {
                           key: col.id,
                           className: 'col-price',
-                          style: { fontWeight: 600, fontSize: 'var(--font-sm)' },
+                          style: { fontWeight: "var(--fw-semibold)", fontSize: 'var(--font-sm)' },
                         },
                         '¥' +
                           inventory

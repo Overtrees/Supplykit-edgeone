@@ -138,7 +138,7 @@ export default function RulesSeasonPanel(props: Props) {
               background: 'var(--danger)',
               color: '#fff',
               cursor: 'pointer',
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               flexShrink: 0,
             }}
           >

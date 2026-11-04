@@ -649,7 +649,7 @@ export default function RulesPage() {
             fontFamily: 'monospace',
           }}
         >
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+          <div style={{ fontWeight: "var(--fw-bold)", marginBottom: 4 }}>
             {t('rp.debug_title')}
           </div>
           <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>

@@ -101,7 +101,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               border: '1px solid ' + (TONE[t.type] || TONE.success).bd,
               color: (TONE[t.type] || TONE.success).fg,
               fontSize: 14,
-              fontWeight: 500,
+              fontWeight: "var(--fw-medium)",
               maxWidth: 360,
               backdropFilter: 'var(--glass-filter-soft)',
               WebkitBackdropFilter: 'var(--glass-filter-soft)',
@@ -114,7 +114,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 className="clickable"
                 style={{
                   fontSize: 13,
-                  fontWeight: 700,
+                  fontWeight: "var(--fw-bold)",
                   color: 'var(--primary)',
                   cursor: 'pointer',
                   flexShrink: 0,

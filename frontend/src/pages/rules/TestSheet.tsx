@@ -175,7 +175,7 @@ export default function RuleTestSheet({
               marginBottom: 12,
               textAlign: 'center',
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               color: 'var(--text)',
               maxWidth: '100%',
               whiteSpace: 'nowrap',
@@ -224,7 +224,7 @@ export default function RuleTestSheet({
                   background: 'var(--card)',
                   color: 'var(--primary)',
                   cursor: 'pointer',
-                  fontWeight: 600,
+                  fontWeight: "var(--fw-semibold)",
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
@@ -334,7 +334,7 @@ export default function RuleTestSheet({
                     border: '1px solid var(--border)',
                   }}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 'var(--font-sm)', marginBottom: 8 }}>
+                  <div style={{ fontWeight: "var(--fw-semibold)", fontSize: 'var(--font-sm)', marginBottom: 8 }}>
                     <IconGear size={14} style={{ verticalAlign: -2 }} />{' '}
                     {t('rt.calc_vars')}
                   </div>
@@ -505,7 +505,7 @@ export default function RuleTestSheet({
               >
                 <div
                   style={{
-                    fontWeight: 700,
+                    fontWeight: "var(--fw-bold)",
                     fontSize: 'var(--font-15)',
                     color: testResult.triggered ? 'var(--success)' : 'var(--danger)',
                     marginBottom: 6,
@@ -567,7 +567,7 @@ export default function RuleTestSheet({
                         <span
                           style={{
                             color: testResult.detail.and.hit ? 'var(--success)' : 'var(--danger)',
-                            fontWeight: 600,
+                            fontWeight: "var(--fw-semibold)",
                           }}
                         >
                           {testResult.detail.and.hit ? t('rt.hit') : t('rt.miss')}
@@ -589,7 +589,7 @@ export default function RuleTestSheet({
                             <span
                               style={{
                                 color: o.hit ? 'var(--success)' : 'var(--danger)',
-                                fontWeight: 600,
+                                fontWeight: "var(--fw-semibold)",
                               }}
                             >
                               {o.hit ? t('rt.hit') : t('rt.miss')}

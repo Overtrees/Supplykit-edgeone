@@ -73,7 +73,7 @@ export default function RiskSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               marginBottom: 6,
               textAlign: 'center',
               color: 'var(--text)',
@@ -126,7 +126,9 @@ export default function RiskSheet(props: Props) {
                   borderColor: lc,
                 }}
               >
-                {lb}
+                {/* 2026-11-04: lb 是**词条键**(如 'dash.urgent'), 必须 t() 解析 ——
+                    原来直接渲染 {lb}, 中文界面弹出的是英文键名"dash.urgent" */}
+                {t(lb)}
               </span>
             ))}
           </div>
@@ -177,7 +179,7 @@ export default function RiskSheet(props: Props) {
                         display: 'flex',
                         alignItems: 'center',
                         gap: 4,
-                        fontWeight: 600,
+                        fontWeight: "var(--fw-semibold)",
                         fontSize: 'var(--font-sm)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -202,7 +204,9 @@ export default function RiskSheet(props: Props) {
                             lineHeight: '16px',
                           }}
                         >
-                          {lv.t}
+                          {/* lv.t 是词条键(dash.risk_red 等), 必须 t() 解析 —— 直接渲染会
+                              在中文界面显示英文键名(2026-11-04 用户实测) */}
+                          {lv ? t(lv.t) : ''}
                         </span>
                       ) : null}
                       {x.product_name || x.sku}
@@ -227,7 +231,7 @@ export default function RiskSheet(props: Props) {
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: lv ? lv.c : 'var(--danger)',
                       flexShrink: 0,
                       minWidth: 38,
@@ -246,7 +250,7 @@ export default function RiskSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-<span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+<span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
                   {t('dash.close')}
                 </span>
           </div>

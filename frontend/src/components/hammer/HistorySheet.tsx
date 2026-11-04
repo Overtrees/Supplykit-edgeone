@@ -50,7 +50,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -121,7 +121,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
                         {modeInfo ? ` (${modeInfo})` : ''}
                         <span
                           style={{
-                            fontWeight: 400,
+                            fontWeight: "var(--fw-regular)",
                             fontSize: 'var(--font-10)',
                             color: 'var(--muted2)',
                             marginLeft: 4,
@@ -169,7 +169,7 @@ const HistorySheet = React.memo(({ show, loading, data, onClose }: HistorySheetP
                 }}
                 className="clickable sheet-close"
               >
-                <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+                <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
                   {t('hs.close')}
                 </span>
               </div>

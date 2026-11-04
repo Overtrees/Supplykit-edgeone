@@ -215,7 +215,7 @@ header {
 }
 .header-title {
   font-size: 18px;
-  font-weight: 800;
+  font-weight: var(--fw-bold);
   line-height: 1.3;
 }
 .header-status {
@@ -297,7 +297,7 @@ header {
   padding: 3px 10px;
   border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   min-height: 26px;
   line-height: 20px;
   white-space: nowrap;
@@ -324,7 +324,7 @@ header {
   color: var(--muted);
 }
 .section-title {
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   margin-bottom: 12px;
   font-size: 15px;
 }
@@ -341,7 +341,7 @@ th {
   padding: 8px 8px;
   white-space: nowrap;
   min-width: 72px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 td {
   padding: 4px 8px;
@@ -430,6 +430,42 @@ tbody tr:nth-child(even):hover td {
     max-width: 720px;
   }
 }
+
+/* ===== 字重自适应(2026-11-04, 用户反馈: iOS/安卓/鸿蒙/PC 粗细观感不一致) =====
+   各平台系统字体的字重档位不同: iOS/macOS 的 SF Pro 是可变字重; 安卓/鸿蒙国产 ROM
+   的中文字体常只有 Regular/Medium/Bold 三档, 600 会被 snap 到 700, "半粗"层级消失;
+   Windows 雅黑 + DirectWrite 的 600 是伪粗体。同一个 fontWeight:600 在三端分别渲染成
+   细/中/粗, 用户感知为"字重没适配"。
+
+   方案: 项目统一走四个语义变量, 再按平台微调 ——
+     --fw-regular 400 正文 / --fw-medium 500 次强调 / --fw-semibold 600 标题 / --fw-bold 700 数值
+   @supports (-webkit-touch-callout) 命中 iOS/iPadOS(SF Pro 可变字重): 500 偏细, 半粗用 590。
+   font-synthesis 允许三档字体合成过渡字重(有真字重时优先真字重)。 */
+:root {
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  font-synthesis: weight;
+}
+@supports (-webkit-touch-callout: none) {
+  :root {
+    --fw-medium: 510;   /* SF Pro: 510 比 500 稍实, 600 原生已准 */
+    --fw-semibold: 590; /* iOS 上 600 观感偏重, 590 是"视觉半粗" */
+  }
+}
+/* 触屏设备图标加粗一档: 手指遮盖 + 高 DPI 下 2.0 描边偏细, 触屏统一 2.25
+   (CSS stroke-width 覆盖 SVG 的 presentation attribute, 不改 Icons.tsx) */
+@media (pointer: coarse) {
+  svg [stroke]:not([stroke='none']),
+  svg[stroke]:not([stroke='none']) {
+    stroke-width: 2.25px;
+  }
+}
+body {
+  -webkit-text-size-adjust: 100%; /* 防安卓/微信 webview 横竖屏切换放大字号 */
+  text-size-adjust: 100%;
+}
 .form-grid {
   padding: 12px var(--space-md);
   display: grid;
@@ -465,7 +501,7 @@ tbody tr:nth-child(even):hover td {
   border-radius: var(--radius-full);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   min-height: var(--h-btn-lg);
   display: inline-flex;
   align-items: center;
@@ -731,10 +767,10 @@ input[type='file'] {
   white-space: nowrap;
 }
 .font-600 {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .font-700 {
-  font-weight: 700;
+  font-weight: var(--fw-bold);
 }
 .text-12 {
   font-size: 12px;
@@ -834,7 +870,7 @@ input[type='file'] {
   box-sizing: border-box;
   cursor: pointer;
   font-family: inherit;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   transition: all 0.15s;
   white-space: nowrap;
 }
@@ -852,19 +888,19 @@ input[type='file'] {
   justify-content: center;
   box-sizing: border-box;
   font-family: inherit;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   white-space: nowrap;
   transition: all 0.15s;
 }
 .hammer-tab.active {
   background: var(--primary);
   color: #fff;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .hammer-tab:not(.active) {
   background: var(--gray);
   color: var(--text);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .hammer-panel {
   /* 2026-10-13 回退 fixed: 嵌套面板(组件内)在 App 外层 fixed+transform 容器内再 fixed → 相对 transform 定位重叠截断
@@ -958,7 +994,7 @@ input[type='file'] {
   gap: 6px;
   min-width: 0;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text);
 }
 .task-status {
@@ -969,7 +1005,7 @@ input[type='file'] {
   flex-shrink: 0;
   line-height: 1.4;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   padding: 2px 8px;
   border-radius: 99px;
   white-space: nowrap;
@@ -1027,7 +1063,7 @@ input[type='file'] {
   cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   margin-right: 6px;
   transition:
     opacity 0.15s,
@@ -1086,7 +1122,7 @@ input[type='file'] {
 }
 .cols-group-title {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--muted2);
   padding: 4px 2px 2px;
   margin-top: 4px;
@@ -1105,7 +1141,7 @@ input[type='file'] {
 }
 .cols-top-bar .hammer-clear {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .overflow-x-auto {
   overflow-x: auto;
@@ -1121,10 +1157,10 @@ input[type='file'] {
   font-size: 16px;
 }
 .font-400 {
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .font-500 {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .muted {
   color: var(--muted);
@@ -1235,13 +1271,13 @@ input[type='file'] {
   transition: all 0.2s;
   background: transparent;
   color: var(--segment-inactive-text, var(--muted2));
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   white-space: nowrap;
 }
 .hammer-segment.active {
   background: var(--segment-active-bg, var(--card));
   color: var(--segment-active-text, var(--text));
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   box-shadow: var(--segment-active-shadow, var(--shadow-control));
 }
 
@@ -1301,7 +1337,7 @@ input[type='file'] {
   background: none;
   border: none;
   font-family: inherit;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .hammer-clear:active {
   opacity: 0.7;
@@ -1372,7 +1408,7 @@ input[type='file'] {
 }
 .card-value {
   font-size: clamp(16px, 8cqi, 28px);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   overflow-wrap: break-word;
   line-height: 1.2;
 }
@@ -1409,6 +1445,14 @@ input[type='file'] {
   line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+/* 备注点击展开/再点收起(2026-11-04): 限 3 行 + title 悬浮在触屏上等于"看不全"——
+   手机没有 hover。点击单元格切换 .col-note-open 显示全文。 */
+.col-note-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  max-width: none;
 }
 .col-sku {
   /* 列宽交给 codeColWidth(): 按该表当场最长的那一串字符算, 不再写死 max-width。
@@ -1571,14 +1615,14 @@ td.col-code {
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--card);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   transition: all 0.15s;
 }
 .ds-tag.active {
   background: var(--primary);
   color: #fff;
   border-color: var(--primary);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 /* ── 统一动效(P2): 可点元素过渡 + 按压反馈 + 弹窗入场 ── */
@@ -1620,7 +1664,7 @@ td.col-code {
   border-radius: var(--radius-card);
   padding: 12px;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   text-align: center;
   cursor: pointer;
   border: none;
@@ -1662,13 +1706,13 @@ td.col-code {
   gap: 6px;
   flex-wrap: wrap;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .rule-mode {
   font-size: var(--font-10);
   color: var(--muted2);
   margin-left: auto;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .rule-cond {
   display: flex;
@@ -1739,7 +1783,7 @@ td.col-code {
 .step.active {
   background: var(--card);
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   box-shadow: var(--inset-glass);
 }
 
@@ -1762,7 +1806,7 @@ td.col-code {
 }
 .map-name {
   font-size: var(--font-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1840,7 +1884,7 @@ td.col-code {
   min-height: 34px;
   border-radius: 99px;
   font-size: 17px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--text);
   background: var(--bg-regular);
   backdrop-filter: var(--blur-regular);
@@ -1856,7 +1900,7 @@ td.col-code {
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text);
   margin-bottom: 8px;
   /* 2026-10-27 去分割线(视觉冗余): 标题胶囊+留白已足够分区 */
@@ -1875,7 +1919,7 @@ td.col-code {
   background: var(--card);
   padding: 8px 6px;
   text-align: center;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1902,12 +1946,12 @@ td.col-code {
   align-items: center;
   justify-content: space-between;
   font-size: var(--font-18);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   margin-bottom: 6px;
 }
 .fresh-close {
   font-size: var(--font-13);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   color: var(--muted2);
   padding: 4px 6px;
 }
@@ -1919,7 +1963,7 @@ td.col-code {
 }
 .fresh-section {
   font-size: var(--font-xs);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--muted);
   margin-bottom: 4px;
 }
@@ -1971,7 +2015,7 @@ td.col-code {
 }
 .flow-head-title {
   font-size: var(--font-18);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -2059,7 +2103,7 @@ td.col-code {
 }
 .tpl-btn {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   border: none;
   border-radius: 99px;
   cursor: pointer;
@@ -2189,7 +2233,7 @@ td.col-code {
   color: var(--primary);
 }
 .task-cur-time {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .task-card-meta {
   margin-top: 8px;
@@ -2212,7 +2256,7 @@ td.col-code {
   flex-shrink: 0;
   white-space: nowrap;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   padding: 1px 6px;
   border-radius: 99px;
   margin-left: 6px;
@@ -2462,7 +2506,7 @@ td.col-code {
 }
 .hist-title {
   font-size: var(--font-18);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   line-height: 1.3;
 }
 /* 2026-11-02 S2-9: .hist-sub("含 1 年以前")已随文案删除, 样式一并移除 */
@@ -2490,7 +2534,7 @@ td.col-code {
 }
 .hist-kpi-v {
   font-size: var(--font-18);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
@@ -2499,7 +2543,7 @@ td.col-code {
 }
 .hist-kpi-unit {
   font-size: var(--font-xs);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   color: var(--muted2);
   margin-left: 3px;
 }
@@ -2525,12 +2569,12 @@ td.col-code {
   border-radius: var(--radius-full);
   cursor: pointer;
   color: var(--muted2);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .hist-seg-item.on {
   background: var(--card);
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 /* 榜单/同比: 同一套行高(上下 8px)与分隔线, 两张卡片视觉节奏一致 */
 .hist-row-item {
@@ -2561,7 +2605,7 @@ td.col-code {
 .hist-amt {
   flex: none;
   font-size: var(--font-13);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
 }
 .hist-share {
@@ -2577,7 +2621,7 @@ td.col-code {
   flex: none;
   text-align: right;
   font-size: var(--font-13);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
 }
 /* 涨红跌绿(中国市场惯例) */
@@ -2698,7 +2742,7 @@ td.col-code {
 }
 .hist-arc-v {
   font-size: var(--font-xs);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .hist-arc-v.hist-arc-on {
   color: var(--success);
@@ -2709,7 +2753,7 @@ td.col-code {
 }
 .hist-arc-v.hist-arc-muted {
   color: var(--muted2);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .hist-arc-sub {
   margin-top: 3px;

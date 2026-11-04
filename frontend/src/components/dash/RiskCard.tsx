@@ -57,7 +57,7 @@ export default function RiskCard({
         <div
           style={{
             fontSize: 'var(--font-sm)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             color: 'var(--muted)',
             letterSpacing: 0.2,
             lineHeight: 1.2,
@@ -103,7 +103,7 @@ export default function RiskCard({
               <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
           </div>
-          <div style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--muted2)' }}>
+          <div style={{ fontSize: 'var(--font-sm)', fontWeight: "var(--fw-medium)", color: 'var(--muted2)' }}>
             {t('dash.stock_ok')}
           </div>
         </div>
@@ -121,7 +121,7 @@ export default function RiskCard({
               className="card-value"
               style={{
                 fontSize: 'clamp(17px,8cqi,28px)',
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 lineHeight: 1.15,
                 color: 'var(--danger)',
                 fontVariantNumeric: 'tabular-nums',
@@ -163,7 +163,7 @@ export default function RiskCard({
                     className="clickable"
                     style={{
                       color: 'var(--danger)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       cursor: 'pointer',
                       fontSize: riskFont,
                     }}
@@ -182,7 +182,7 @@ export default function RiskCard({
                     className="clickable"
                     style={{
                       color: 'var(--warning)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       cursor: 'pointer',
                       fontSize: riskFont,
                     }}
@@ -201,7 +201,7 @@ export default function RiskCard({
                     className="clickable"
                     style={{
                       color: 'var(--muted2)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       cursor: 'pointer',
                       fontSize: riskFont,
                     }}
@@ -264,7 +264,7 @@ export default function RiskCard({
                     style={{
                       flexShrink: 0,
                       fontSize: 8,
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: 'var(--muted)',
                       background: 'var(--bg)',
                       padding: '0 4px',

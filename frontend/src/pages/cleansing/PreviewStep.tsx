@@ -1,5 +1,6 @@
 import { IconWarning } from '../../components/Icons'
 import { TARGET_FIELDS, SYS_FIELDS } from './fields'
+import { fieldLabel } from './fieldNames'
 import { t } from '../../locale'
 
 interface Props {
@@ -36,7 +37,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>{t('cw.preview_title')}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: "var(--fw-bold)" }}>{t('cw.preview_title')}</span>
         {(() => {
           const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
           const parts: string[] = [t('cw.pv_total', { n: pv.total })]
@@ -148,11 +149,11 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
                         key={col.src}
                         style={{ minWidth: 80, whiteSpace: 'nowrap', verticalAlign: 'top' }}
                       >
-                        {col.label}
+                        {fieldLabel(col.label)}
                         <div
                           style={{
                             fontSize: 10,
-                            fontWeight: 400,
+                            fontWeight: "var(--fw-regular)",
                             color: 'var(--muted2)',
                             marginTop: 1,
                           }}
@@ -231,7 +232,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             background: 'var(--card)',
             color: 'var(--text)',
             fontSize: 'var(--font-md)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             cursor: 'pointer',
           }}
         >
@@ -249,7 +250,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             background: 'var(--primary)',
             color: '#fff',
             fontSize: 'var(--font-md)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             cursor: 'pointer',
             opacity: bs ? 0.6 : 1,
           }}

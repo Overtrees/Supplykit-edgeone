@@ -256,7 +256,7 @@ export default function TaskPage() {
                       textAlign: 'center',
                       padding: '10px 0',
                       fontSize: 'var(--font-13)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: 'var(--primary)',
                       cursor: 'pointer',
                     }}

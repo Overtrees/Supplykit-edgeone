@@ -349,7 +349,7 @@ export const zh: Record<string, string> = {
   'nav.tasks': '任务管理',
   'nav.quality': '质量日志',
   'nav.settings': '设置',
-  'channel.jd': '京东',
+  'channel.jd': '京东渠道',
   'channel.other': '其他渠道',
   'common.search': '搜索',
   'common.export': '导出',

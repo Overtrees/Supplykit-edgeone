@@ -42,7 +42,7 @@ export default function MappingStep({
             marginBottom: 10,
           }}
         >
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>{t('clean.mapping')}</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: "var(--fw-bold)" }}>{t('clean.mapping')}</span>
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
             {t('clean.mapping_desc')}
           </span>
@@ -180,7 +180,7 @@ export default function MappingStep({
             borderRadius: 'var(--radius-full)',
             background: 'var(--card)',
             cursor: 'pointer',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             minHeight: 42,
             whiteSpace: 'nowrap',
           }}
@@ -199,7 +199,7 @@ export default function MappingStep({
             background: 'var(--primary)',
             color: '#fff',
             cursor: 'pointer',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             minHeight: 42,
             display: 'inline-flex',
             alignItems: 'center',
@@ -222,7 +222,7 @@ export default function MappingStep({
             background: 'var(--success)',
             color: '#fff',
             cursor: 'pointer',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             minHeight: 42,
             display: 'inline-flex',
             alignItems: 'center',

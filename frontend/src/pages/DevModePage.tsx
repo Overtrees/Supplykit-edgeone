@@ -318,7 +318,7 @@ export default function DevModePage() {
               <div
                 style={{
                   fontSize: 'var(--font-18)',
-                  fontWeight: 700,
+                  fontWeight: "var(--fw-bold)",
                   marginBottom: 12,
                   textAlign: 'center',
                   color: 'var(--text)',
@@ -376,7 +376,7 @@ function StatsRow({ items }: { items: { n: any; c: string; color: string }[] }) 
           <div
             style={{
               fontSize: 24,
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               lineHeight: 1.1,
               color: it.color,
               fontVariantNumeric: 'tabular-nums',

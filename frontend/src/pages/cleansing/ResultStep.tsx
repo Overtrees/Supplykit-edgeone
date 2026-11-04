@@ -42,7 +42,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
         )
       })()}
       {/* 标题语义化(原 res.message 直出) */}
-      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
+      <div style={{ fontSize: 16, fontWeight: "var(--fw-bold)", marginBottom: 4 }}>
         {res.async ? t('cw.res_async') : res.success > 0 ? t('cw.res_ok') : t('cw.res_partial')}
       </div>
       {fileName ? (
@@ -71,7 +71,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 color: 'var(--primary)',
                 fontVariantNumeric: 'tabular-nums',
                 lineHeight: 1.1,
@@ -85,7 +85,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 lineHeight: 1.1,
                 color: 'var(--muted2)',
               }}
@@ -101,7 +101,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 color: 'var(--success)',
                 fontVariantNumeric: 'tabular-nums',
                 lineHeight: 1.1,
@@ -115,7 +115,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             <div
               style={{
                 fontSize: 28,
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 lineHeight: 1.1,
                 fontVariantNumeric: 'tabular-nums',
                 color: res.failed > 0 ? 'var(--danger)' : 'var(--muted2)',
@@ -150,7 +150,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
         >
           <div
             style={{
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               fontSize: 'var(--font-sm)',
               marginBottom: 6,
               color: 'var(--danger)',
@@ -195,7 +195,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             background: 'var(--card)',
             color: 'var(--text)',
             fontSize: 'var(--font-md)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             cursor: 'pointer',
           }}
         >
@@ -210,7 +210,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             background: 'var(--success)',
             color: '#fff',
             fontSize: 'var(--font-md)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',

@@ -192,9 +192,9 @@ export default function OrdersPage() {
         </div>
       )}
       <div className="card">
-        <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 8 }}>
+        <div style={{ fontSize: 'var(--font-18)', fontWeight: "var(--fw-bold)", marginBottom: 8 }}>
           {t('nav.orders')} {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
-          <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
+          <span className="small muted" style={{ fontWeight: "var(--fw-regular)", fontSize: 'var(--font-xs)' }}>
             {t('oms.loaded', {
               a: Math.min(orders.length, orderTotal || orders.length),
               b: orderTotal || orders.length,
@@ -214,7 +214,7 @@ export default function OrdersPage() {
             style={{
               float: 'right',
               fontSize: 'var(--font-xs)',
-              fontWeight: 400,
+              fontWeight: "var(--fw-regular)",
               color: 'var(--primary)',
               cursor: 'pointer',
             }}

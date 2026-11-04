@@ -203,7 +203,7 @@ const pillStyle = (cond, yes = 'danger', no = 'info') => ({
   padding: '2px 8px',
   borderRadius: 99,
   fontSize: 12,
-  fontWeight: 600,
+  fontWeight: "var(--fw-semibold)",
   background: cond ? 'rgba(225,29,72,0.08)' : 'rgba(29,78,216,0.08)',
   color: cond ? 'var(--danger)' : 'var(--primary)',
 })

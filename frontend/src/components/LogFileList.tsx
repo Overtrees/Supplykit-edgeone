@@ -129,7 +129,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             <span
               style={{
                 fontSize: 'var(--font-13)',
-                fontWeight: 600,
+                fontWeight: "var(--fw-semibold)",
                 fontVariantNumeric: 'tabular-nums',
                 flexShrink: 0,
               }}
@@ -196,7 +196,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                 <div
                   style={{
                     fontSize: 'var(--font-18)',
-                    fontWeight: 700,
+                    fontWeight: "var(--fw-bold)",
                     marginBottom: 4,
                     textAlign: 'center',
                     color: 'var(--text)',
@@ -204,7 +204,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                 >
                   {t('log.title', { date: preview.date })}{' '}
                   <span
-                    style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', fontWeight: 400 }}
+                    style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', fontWeight: "var(--fw-regular)" }}
                   >
                     {t('log.n_items', { n: preview.count })}
                   </span>

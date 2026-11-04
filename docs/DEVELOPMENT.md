@@ -5564,3 +5564,26 @@ en 写成 `''` 不报错, 安静地掉回中文。**空串是假翻译**。
 `tsc` 0、`eslint` 0、`build` ok、前端 22 单测、后端 417 用例 0 失败。
 
 死键 483 待甄别(`app.desc`、`cl.title`、`clean.title` 等多为历史命名空间残留)。
+
+## §15.146 弹窗键名泄漏 ×2 + 表头裸 label ×6 + 字重自适应 + 渠道名"京东渠道"(2026-11-04)
+
+用户 5 条反馈, 逐条对应:
+
+1. **濒临断货弹窗英文键名两处** —— `riskTabs` 存词条键('dash.urgent'), 注释写"渲染时 t() 解析",
+   但 `RiskSheet` 两处消费方都没 t(): 级别 pill 直接 `{lb}`、列表级别徽章直接 `{lv.t}`。
+   中文界面弹出一排 "dash.urgent" / "dash.risk_red"。修复: `t(lb)` / `t(lv ? lv.t : '')`。
+   **教训: "存键、渲染时 t()"的约定必须查全消费方** —— 写入方对了, 每个渲染点仍可能漏。
+2. **表头裸 label ×6** —— 建议页三 tab(Purchase/Replen/Slow)、商品页、供应商页渲染 `{col.label}`
+   (= 列 id 如 `sys_available`), 清洗预览渲染 `{col.label}`(= 字段名如 `warehouse`)。
+   统一改 `colLabel(col.id)` / `fieldLabel(col.label)`。审计脚本只查 `t('col.x')` 引用,
+   查不出"有词条但没人调 colLabel"的盲区。
+3. **字重跨端自适应** —— 同一 fontWeight:600 在 iOS(SF Pro 可变)/安卓(三档 snap)/Windows(伪粗)
+   观感各异。方案: 全仓 44 个 tsx + styles.css 的字重统一替换为语义变量
+   `--fw-regular/medium/semibold/bold`(400/500/600/700), iOS 经 @supports 调 510/590,
+   `font-synthesis: weight` 允许三档字体合成; 触屏(pointer:coarse)SVG 描边 2→2.25。
+4. **渠道胶囊** —— 用户定案中文显示"京东渠道", `channel.jd` zh 改 '京东渠道'(en 保持 JD.com)。
+5. **备注列显示不全** —— 限 3 行 + title 悬浮在触屏等于看不全(手机无 hover)。
+   备注单元格加点击切换 `.col-note-open`(解除 clamp, 再点收起)。
+
+验证: 弹窗双语 pill/徽章 无裸键; 三 tab 表头 zh/en 各 20 列无裸键; 胶囊显示"京东渠道";
+审计/tsc/eslint/build/22 单测 全过。

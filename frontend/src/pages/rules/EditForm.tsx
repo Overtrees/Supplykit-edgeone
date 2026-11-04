@@ -184,7 +184,7 @@ export default function RuleEditForm({
         marginBottom: 16,
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 12 }}>
+      <div style={{ fontWeight: "var(--fw-semibold)", marginBottom: 12 }}>
         {editing.id ? t('rules.edit') : t('rules.new_btn') + t('rfm.suffix_rule')}
       </div>
 
@@ -320,7 +320,7 @@ export default function RuleEditForm({
       >
         <div
           style={{
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             fontSize: 'var(--font-13)',
             marginBottom: 10,
             display: 'flex',
@@ -399,7 +399,7 @@ export default function RuleEditForm({
               style={{
                 fontSize: 'var(--font-13)',
                 color: 'var(--muted2)',
-                fontWeight: 500,
+                fontWeight: "var(--fw-medium)",
                 whiteSpace: 'nowrap',
               }}
             >
@@ -600,7 +600,7 @@ export default function RuleEditForm({
       >
         <div
           style={{
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             fontSize: 'var(--font-13)',
             marginBottom: 10,
             display: 'flex',
@@ -785,7 +785,7 @@ export default function RuleEditForm({
         >
           <div
             style={{
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               fontSize: 'var(--font-13)',
               marginBottom: 4,
               display: 'flex',
@@ -860,7 +860,7 @@ export default function RuleEditForm({
         >
           <div
             style={{
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               fontSize: 'var(--font-13)',
               marginBottom: 4,
               display: 'flex',

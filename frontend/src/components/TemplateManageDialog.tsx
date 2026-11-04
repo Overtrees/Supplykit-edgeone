@@ -297,7 +297,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               {t('tpl.cf')}
               <span
                 className="small muted"
-                style={{ fontSize: 11, fontWeight: 400, marginLeft: 6 }}
+                style={{ fontSize: 11, fontWeight: "var(--fw-regular)", marginLeft: 6 }}
               >
                 {cf.length ? t('tpl.cf_n', { n: cf.length }) : t('tpl.cf_none')}
               </span>

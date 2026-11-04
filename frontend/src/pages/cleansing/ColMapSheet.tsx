@@ -55,7 +55,7 @@ export default function ColMapSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               marginBottom: 12,
               textAlign: 'center',
             }}
@@ -75,7 +75,7 @@ export default function ColMapSheet(props: Props) {
             })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: 'var(--font-13)', fontWeight: 600, flexShrink: 0 }}>
+            <span style={{ fontSize: 'var(--font-13)', fontWeight: "var(--fw-semibold)", flexShrink: 0 }}>
               {t('cm.map_col')}
             </span>
             <select
@@ -294,7 +294,7 @@ export default function ColMapSheet(props: Props) {
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <div onClick={() => onClose()} className="clickable sheet-cancel" style={{ flex: 1 }}>
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: 600 }}>
+              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)" }}>
                 {t('common.cancel')}
               </span>
             </div>
@@ -305,7 +305,7 @@ export default function ColMapSheet(props: Props) {
               className="clickable sheet-close"
               style={{ flex: 1, opacity: colMapSaving ? 0.6 : 1 }}
             >
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: 600 }}>
+              <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)" }}>
                 {colMapSaving ? t('cm.saving') : t('common.save')}
               </span>
             </div>

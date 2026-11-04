@@ -797,7 +797,7 @@ export default function CleansingPage() {
 
       {s === 0 && (
         <div style={{ textAlign: 'center', padding: '28px 16px' }}>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: "var(--fw-bold)", marginBottom: 6 }}>
             {t('cl.pick_type')}
           </div>
           <div
@@ -856,7 +856,7 @@ export default function CleansingPage() {
               gap: 6,
               borderRadius: 'var(--radius-full)',
               fontSize: 'var(--font-15)',
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               opacity: bs ? 0.65 : 1,
               pointerEvents: bs ? 'none' : 'auto',
             }}

@@ -87,7 +87,7 @@ export function GmvCard({
           className="card-value"
           style={{
             fontSize: 'clamp(17px,8cqi,28px)',
-            fontWeight: 700,
+            fontWeight: "var(--fw-bold)",
             lineHeight: 1.15,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
@@ -108,7 +108,7 @@ export function GmvCard({
                   : periodMeta.gmv
             if (gmvView === 'payout' && _g == null)
               return (
-                <span style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: 500 }}>
+                <span style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: "var(--fw-medium)" }}>
                     {t('dash.payout_pending_short')}
                   </span>
               )
@@ -159,13 +159,13 @@ export function GmvCard({
               <span
                 style={{
                   fontSize: 'var(--font-xs)',
-                  fontWeight: 600,
+                  fontWeight: "var(--fw-semibold)",
                   color: pct >= 0 ? 'var(--success)' : 'var(--danger)',
                 }}
               >
                 {pct >= 0 ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}%{' '}
                 <span
-                  style={{ fontSize: 'var(--font-9)', fontWeight: 400, color: 'var(--muted2)' }}
+                  style={{ fontSize: 'var(--font-9)', fontWeight: "var(--fw-regular)", color: 'var(--muted2)' }}
                 >
                   {_cmpLabel}
                 </span>
@@ -188,7 +188,7 @@ export function GmvCard({
                     : periodMeta.gmv
               if (_g == null)
                 return (
-                  <span style={{ color: 'var(--muted2)', fontWeight: 500 }}>
+                  <span style={{ color: 'var(--muted2)', fontWeight: "var(--fw-medium)" }}>
                     {t('dash.payout_pending_short')}
                   </span>
                 )
@@ -259,7 +259,7 @@ export function AlertSummaryCard({
         <div
           style={{
             fontSize: 'var(--font-sm)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             color: 'var(--muted)',
             letterSpacing: 0.2,
             lineHeight: 1.2,
@@ -306,7 +306,7 @@ export function AlertSummaryCard({
               <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
           </div>
-          <div style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--muted2)' }}>
+          <div style={{ fontSize: 'var(--font-sm)', fontWeight: "var(--fw-medium)", color: 'var(--muted2)' }}>
             {t('dash.no_alerts')}
           </div>
         </div>
@@ -324,7 +324,7 @@ export function AlertSummaryCard({
               className="card-value"
               style={{
                 fontSize: 'clamp(17px,8cqi,28px)',
-                fontWeight: 700,
+                fontWeight: "var(--fw-bold)",
                 lineHeight: 1.15,
                 color:
                   pendingTotal > 10
@@ -362,10 +362,10 @@ export function AlertSummaryCard({
                   2026-11-04 允许换行: 中文「● 采购 7 ● 补货 137」一行放得下, 英文
                   「● Purchase 7 ● Replenish 137」比中文长约 60%, 强制 nowrap 会被卡片裁掉
                   (4 视口验证发现 "Replenish 1…"), 故这里 wrap、收紧 gap。 */}
-              <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
+              <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
                 {t('dash.line_purchase', { n: fmtInt(procBuyN) })}
               </span>
-              <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
+              <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
                 {t('dash.line_replenish', { n: fmtInt(procRepN) })}
               </span>
             </div>
@@ -384,7 +384,7 @@ export function AlertSummaryCard({
             }}
           >
             {/* 总览第三行: 低库存 + 其他(聚合超卖等规则评估, 点击弹窗明细) */}
-            <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
+            <span style={{ fontWeight: "var(--fw-semibold)", color: 'var(--warning)' }}>
               {t('dash.line_low_stock', { n: fmtInt(lowStockTotal) })}
             </span>
             {otherTotal > 0 ? (
@@ -395,7 +395,7 @@ export function AlertSummaryCard({
                   setShowAllOther(true)
                 }}
                 className="clickable"
-                style={{ color: '#007AFF', fontWeight: 600, cursor: 'pointer' }}
+                style={{ color: '#007AFF', fontWeight: "var(--fw-semibold)", cursor: 'pointer' }}
               >
                 {t('dash.line_other', { n: fmtInt(otherTotal) })}
               </span>
@@ -622,7 +622,7 @@ export function HealthCard({
                 className="card-value"
                 style={{
                   fontSize: 'clamp(17px,8cqi,28px)',
-                  fontWeight: 700,
+                  fontWeight: "var(--fw-bold)",
                   lineHeight: 1.15,
                   fontVariantNumeric: 'tabular-nums',
                   color:
@@ -654,7 +654,7 @@ export function HealthCard({
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: 'var(--success)',
                     }}
                   >
@@ -663,7 +663,7 @@ export function HealthCard({
                   <span
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: 'var(--warning)',
                     }}
                   >
@@ -678,7 +678,7 @@ export function HealthCard({
                     className="clickable"
                     style={{
                       fontSize: 'var(--font-xs)',
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       color: 'var(--danger)',
                       cursor: _oosSrc.length > 0 ? 'pointer' : 'default',
                     }}

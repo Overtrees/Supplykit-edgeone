@@ -49,7 +49,7 @@ def _cfg():
 TOK, OWN, REPO, BR = _cfg()
 
 
-def call(method, path, payload=None, tries=3):
+def call(method, path, payload=None, tries=6):
     for i in range(tries):
         try:
             body = json.dumps(payload).encode() if payload is not None else None
@@ -58,11 +58,13 @@ def call(method, path, payload=None, tries=3):
                                                   "Accept": "application/vnd.github+json",
                                                   "Content-Type": "application/json",
                                                   "User-Agent": "supplykit-push"})
-            return json.loads(urllib.request.urlopen(req, timeout=30).read() or b"{}")
+            # 2026-11-04: 大 tree(~800KB) 在 30s 超时/代理链路上常 IncompleteRead,
+            # 超时放宽到 120s, 重试间隔指数退避(2/4/8/16/32)
+            return json.loads(urllib.request.urlopen(req, timeout=120).read() or b"{}")
         except Exception:
             if i == tries - 1:
                 raise
-            time.sleep(2)
+            time.sleep(2 * (2 ** i))
 
 
 def main():

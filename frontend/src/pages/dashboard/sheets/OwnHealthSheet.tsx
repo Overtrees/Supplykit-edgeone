@@ -53,7 +53,7 @@ export default function OwnHealthSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               // 说明行已删除, 由标题自身 marginBottom 提供与首行的间距(原 4 + 说明行 12)
               marginBottom: 12,
               textAlign: 'center',
@@ -128,7 +128,7 @@ export default function OwnHealthSheet(props: Props) {
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 6,
-                        fontWeight: 600,
+                        fontWeight: "var(--fw-semibold)",
                         fontSize: 'var(--font-sm)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -154,7 +154,7 @@ export default function OwnHealthSheet(props: Props) {
                     <span
                       style={{
                         flexShrink: 0,
-                        fontWeight: 700,
+                        fontWeight: "var(--fw-bold)",
                         fontSize: 'var(--font-sm)',
                         color: m.c,
                         fontVariantNumeric: 'tabular-nums',
@@ -179,7 +179,7 @@ export default function OwnHealthSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

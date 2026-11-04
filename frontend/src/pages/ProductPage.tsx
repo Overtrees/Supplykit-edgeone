@@ -9,6 +9,7 @@ import { useAppStore } from '../store/useAppStore'
 import { clearCache } from '../api/client'
 import { t } from '../locale'
 import { PRODUCT_COLS as COLS } from '../components/hammer/configs'
+import { colLabel } from '../components/colLabels'
 const COL_KEY = () => 'c_cols_products_' + (useAppStore.getState().channel || 'jd')
 const getVis = () => {
   try {
@@ -165,7 +166,7 @@ export default function ProductPage() {
       >
         <span>
           {t('prd.title')}{' '}
-          <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
+          <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
             {t('prd.loaded', {
               a: Math.min(list.length, pgTotal || list.length),
               b: pgTotal || list.length,
@@ -210,7 +211,7 @@ export default function ProductPage() {
                 {prodBatch && <th style={{ width: 30 }}></th>}
                 {visCols.map(id => {
                   const col = COLS.find(c => c.id === id)
-                  return col ? <th key={col.id}>{col.label}</th> : null
+                  return col ? <th key={col.id}>{colLabel(col.id)}</th> : null
                 })}
               </tr>
             </thead>

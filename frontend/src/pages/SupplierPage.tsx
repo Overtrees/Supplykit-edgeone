@@ -4,6 +4,7 @@ import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
 
 import { SUPPLIER_COLS as COLS } from '../components/hammer/configs'
+import { colLabel } from '../components/colLabels'
 const COL_KEY = () => 'c_cols_suppliers_' + (useAppStore.getState().channel || 'jd')
 const getVis = () => {
   try {
@@ -150,7 +151,7 @@ export default function SupplierPage() {
               <tr>
                 {visCols.map(id => {
                   const col = COLS.find(c => c.id === id)
-                  return col ? <th key={col.id}>{col.label}</th> : null
+                  return col ? <th key={col.id}>{colLabel(col.id)}</th> : null
                 })}
               </tr>
             </thead>

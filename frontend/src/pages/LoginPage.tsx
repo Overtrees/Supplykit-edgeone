@@ -66,7 +66,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
         }}
       >
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>
+          <div style={{ fontSize: 28, fontWeight: "var(--fw-bold)", color: 'var(--text)', marginBottom: 8 }}>
             SupplyKit
           </div>
           <div style={{ fontSize: 'var(--font-md)', color: 'var(--muted2)' }}>{t('login.subtitle')}</div>
@@ -79,7 +79,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             boxShadow: 'var(--shadow-card)',
           }}
         >
-          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, marginBottom: 20 }}>{t('login.title')}</div>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: "var(--fw-semibold)", marginBottom: 20 }}>{t('login.title')}</div>
           <input
             value={username}
             onChange={e => setUsername(e.target.value)}
@@ -137,7 +137,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               width: '100%',
               padding: '14px',
               fontSize: 'var(--font-lg)',
-              fontWeight: 600,
+              fontWeight: "var(--fw-semibold)",
               border: 'none',
               borderRadius: 'var(--radius-lg)',
               cursor: 'pointer',

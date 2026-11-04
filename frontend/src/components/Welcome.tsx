@@ -36,7 +36,7 @@ export default function Welcome({ close }: { close: () => void }) {
           <div
             style={{
               fontSize: 32,
-              fontWeight: 800,
+              fontWeight: "var(--fw-bold)",
               color: 'var(--text)',
               marginBottom: 8,
               letterSpacing: '-0.5px',
@@ -114,7 +114,7 @@ export default function Welcome({ close }: { close: () => void }) {
                 <div
                   style={{
                     fontSize: 'var(--font-15)',
-                    fontWeight: 600,
+                    fontWeight: "var(--fw-semibold)",
                     color: 'var(--text)',
                     marginBottom: 3,
                   }}
@@ -157,7 +157,7 @@ export default function Welcome({ close }: { close: () => void }) {
             width: '100%',
             padding: '14px',
             fontSize: 'var(--font-lg)',
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             marginBottom: 10,
           }}
         >

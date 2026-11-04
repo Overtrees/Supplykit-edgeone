@@ -82,7 +82,7 @@ export const renderTmpl = text => {
             color: 'var(--primary)',
             padding: '0 4px',
             borderRadius: 4,
-            fontWeight: 600,
+            fontWeight: "var(--fw-semibold)",
             fontSize: 'var(--font-10)',
           }}
         >

@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { INS_SLOW_COLS as SLOW_COLS } from '../../components/hammer/configs'
 import { Skeleton } from './shared'
 import { t } from '../../locale'
+import { colLabel } from '../../components/colLabels'
 
 interface Props {
   disposals: any[]
@@ -50,7 +51,7 @@ export default function SlowTab(props: Props) {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
         <span>{t('insights.slow')}</span>
-        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
+        <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: "var(--fw-regular)" }}>
           {t('ins.loaded_n_of_m', {
             n: Math.min(filteredDisp.length, slowTotal || filteredDisp.length),
             m: slowTotal || filteredDisp.length,
@@ -138,7 +139,7 @@ export default function SlowTab(props: Props) {
                         }}
                         key={col.id}
                       >
-                        {col.label}
+                        {colLabel(col.id)}
                       </th>
                     ) : null
                   })}
@@ -258,7 +259,7 @@ export default function SlowTab(props: Props) {
                             <td
                               key={id}
                               style={{
-                                fontWeight: 600,
+                                fontWeight: "var(--fw-semibold)",
                                 color:
                                   x.days_zero >= 90
                                     ? 'var(--danger)'
@@ -304,12 +305,13 @@ export default function SlowTab(props: Props) {
                             <td
                               key={id}
                               className="col-note"
+                              onClick={e => e.currentTarget.classList.toggle('col-note-open')}
                               title={[(x.reason || []).join(' · '), x.suggestion]
                                 .filter(Boolean)
                                 .join(' → ')}
                             >
                               {(x.reason || []).join(' · ')}
-                              <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                              <span style={{ color: 'var(--text)', fontWeight: "var(--fw-semibold)" }}>
                                 {' '}
                                 → {x.suggestion}
                               </span>

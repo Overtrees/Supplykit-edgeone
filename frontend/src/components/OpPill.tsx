@@ -128,7 +128,7 @@ export default function OpPill() {
                     marginBottom: 10,
                   }}
                 >
-                  <span style={{ fontWeight: 700 }}>{t('op.panel_title')}</span>
+                  <span style={{ fontWeight: "var(--fw-bold)" }}>{t('op.panel_title')}</span>
                   <span className="small muted" style={{ cursor: 'pointer' }}>
                     {t('common.close')}
                   </span>

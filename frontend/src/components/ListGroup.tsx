@@ -9,7 +9,7 @@ export const Group = ({ title, children }: any) => (
       <div
         style={{
           fontSize: 'var(--font-13)',
-          fontWeight: 400,
+          fontWeight: "var(--fw-regular)",
           color: 'var(--muted2)',
           textTransform: 'uppercase',
           letterSpacing: 0.3,

@@ -53,7 +53,7 @@ export default function ProcSheet(props: Props) {
           <div
             style={{
               fontSize: 'var(--font-18)',
-              fontWeight: 700,
+              fontWeight: "var(--fw-bold)",
               marginBottom: 12,
               textAlign: 'center',
               color: 'var(--text)',
@@ -90,7 +90,7 @@ export default function ProcSheet(props: Props) {
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 6,
-                      fontWeight: 600,
+                      fontWeight: "var(--fw-semibold)",
                       fontSize: 'var(--font-sm)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -117,7 +117,7 @@ export default function ProcSheet(props: Props) {
                     <span
                       style={{
                         flexShrink: 0,
-                        fontWeight: 700,
+                        fontWeight: "var(--fw-bold)",
                         color: x.kind === 'purchase' ? 'var(--warning)' : 'var(--danger)',
                       }}
                     >
@@ -144,7 +144,7 @@ export default function ProcSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: "var(--fw-semibold)", color: '#fff' }}>
               {t('dash.close')}
             </span>
           </div>

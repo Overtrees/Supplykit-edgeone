@@ -27,7 +27,7 @@ export default function EmptyState({ icon, title = t('common.empty'), desc = '',
       </div>
       <div
         style={{
-          fontWeight: 600,
+          fontWeight: "var(--fw-semibold)",
           fontSize: 'var(--font-lg)',
           marginBottom: 6,
           color: 'var(--muted)',

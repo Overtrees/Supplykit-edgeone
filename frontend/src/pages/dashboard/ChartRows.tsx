@@ -153,7 +153,7 @@ export function ChartRow3({
               >
                 <span
                   style={{
-                    fontWeight: 600,
+                    fontWeight: "var(--fw-semibold)",
                     fontSize: 'var(--font-sm)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -252,7 +252,7 @@ export function ChartRow3({
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    fontWeight: 600,
+                    fontWeight: "var(--fw-semibold)",
                     fontSize: 'var(--font-sm)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -279,7 +279,7 @@ export function ChartRow3({
                   <span
                     style={{
                       flexShrink: 0,
-                      fontWeight: 700,
+                      fontWeight: "var(--fw-bold)",
                       fontSize: 'var(--font-sm)',
                       color: x.kind === 'purchase' ? 'var(--warning)' : 'var(--danger)',
                     }}
