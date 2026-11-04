@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh } from '../format'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -58,7 +59,7 @@ export default function OosSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            缺货 · 共 {fmtInt((fullOut && fullOut.length ? fullOut : _oosSrc).length)} 条
+            {t('os.title_n', { n: fmtInt((fullOut && fullOut.length ? fullOut : _oosSrc).length) })}
           </div>
           {(fullOut && fullOut.length ? fullOut : _oosSrc).map(function (x, i) {
             return (
@@ -104,8 +105,8 @@ export default function OosSheet(props: Props) {
                     : healthTab === 'bc' || x.warehouse_type === 'bc'
                       ? 'BC'
                       : healthTab === 'own'
-                        ? '自有'
-                        : '平台'}
+                        ? t('os.own')
+                        : t('os.platform')}
                 </span>
               </div>
             )
@@ -117,7 +118,7 @@ export default function OosSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

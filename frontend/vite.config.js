@@ -26,6 +26,16 @@ function cleanupSourcemaps() {
 
 import pkg from './package.json'
 
+// 本地预览代理: 把 /api 转给线上后端, 规避"线上未开 CORS + 浏览器跨域"的限制。
+// 仅本地验证用, 正式部署走同域, 不经过这里。
+const PROXY = {
+  '/api': {
+    target: process.env.VITE_PROXY_TARGET || 'https://supplykit.top',
+    changeOrigin: true,
+    secure: true,
+  },
+}
+
 export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(pkg.version || 'dev'), __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)) },
   plugins: [
@@ -49,5 +59,8 @@ export default defineConfig({
     minifyIdentifiers: false,
     minifySyntax: true
   },
-  server: { port: 5173 },
+  server: { port: 5173, proxy: PROXY },
+  // 预览服务(preview)同样需要代理: 本地跑 dist 验证时, /api 要转给线上后端
+  // (线上后端未开 CORS, 浏览器不能从 localhost 直连 supplykit.top)
+  preview: { port: 4173, proxy: PROXY },
 })

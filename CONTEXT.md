@@ -48,15 +48,46 @@
 - **两条代码红线(2026-11-04 用户定案, 准入条件)**: 详见 `docs/SKILL.md` §11
   - **A 非内联优先**: 新增/调整功能的逻辑落独立文件, 页面/路由只编排; 禁止继续把新逻辑堆进大文件
     (信号: `.py`>600 行 / `.tsx`>500 行 / 单函数>80 行 / 一个文件出现第二套职责)。按职责拆, 不为行数拆。
-  - **B 不硬编码中文**: 界面文案一律 `t('key')`, 新增 key 必须 zh+en 双份且键集合相等;
-    后端 `error` 属诊断文本可用中文, 但不能是唯一用户提示
+- **B 不硬编码中文**: 界面文案一律 `t('key')`, 新增 key 必须 zh+en 双份且键集合相等;
+  后端 `error` 属诊断文本可用中文, 但不能是唯一用户提示
+  - **判据: "界面的说法" vs "世界的名字"**。是界面说法 → 翻; 是世界的名字(商品名/仓库名/
+    渠道名/订单状态值/规则名/告警模板) → 不翻, 翻了下游匹配就断。见 `docs/DEVELOPMENT.md` §15.145
+  - **词表化后必须补解析函数**: 字典存词条键时(`DOC_TYPE_NAMES`/`STATUS_LABEL`/`INV_COLS`),
+    必须有 `docTypeLabel()`/`statusLabelOf()`/`colLabel()` 这类出口, 否则键没人渲染
+  - **动态拼键是审计盲区**: `t('col.' + id)` 这类拼出来的键, 静态引用检查看不见。
+    加列/加字段时必须同步加词条, 靠 `i18n_audit.py` 的 `scan_col_ids()` 兜住
+- **i18n 的三个"静默坑"**(都不报错, 只能靠实机发现):
+  - 文案漏 `{n}` → 数字被丢弃, 界面只剩单位(「万单」)
+  - en 写成 `''` → `t()` 回落中文, 英文界面冒中文(「单 / 件」)
+  - 英文比中文长 60% + 固定宽容器 + `overflow:hidden` → 硬裁且**不产生横向溢出**
+- **码值不要 `word-break: break-all`**: SKU/条码/单号不是自然语言, 用 `nowrap`(或按 `-` 断)。
+  `break-all` 会把 13 位条码逐字折行, 把行高从 58px 撑到 244px
+- **`nowrap` 必须配 `overflow:hidden`**: 只写 `nowrap` 而 `overflow` 保持默认 `visible`,
+  文字比格子宽时会**画到相邻列上直接叠印**(订单页 69 码事故: 订单号 164px 撞 `max-width:140px`
+  的格子, 右溢 35px 压在条码字符上)。码值列宽度用 `components/hammer/codeCell.ts` 的
+  `codeColWidth()` 按该页最长值算, 不要再写死 `max-width`
+- **store 是店铺, warehouse 是仓库**(2026-11-04 用户定案): 两列语义不许混用。
+  改列头时 `locale` 的 `col.store` 与 `components/colLabels.ts` 的回落表**两处都要改**,
+  只改一处会在词条缺失时把错语义带回来
+- **列表页宽屏自适应**: `Group/Row` 型页面(设置/开发者/回收/渠道)统一用 `.form-page` 容器,
+  ≥1024px 自动两列; 不要再写内联 `maxWidth: 500` —— 那会让桌面端永远是竖屏窄条
 - **换机先自检**: `python3 scripts/env_check.py` —— 缺 .env / EDGEONE token / push 凭据会一次性列出, 别等 push 才发现
 - **先本地, 再线上**: 逻辑验证用 `python3 scripts/local_api.py`(本地直连同库), 推一次 2~3 分钟且云函数 120s 硬限
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 363 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 421 通过/0 失败
+  (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 22
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
+  - **i18n 专项快照**: `python3 scripts/ui_shot_matrix.py --serve --locale zh|en --viewport 375|390|844|1440`
+    (可分批跑, report.json 自动合并)。三个必踩坑已在 `scripts/ui_preview_env.py` 里处理:
+    `service_workers='block'`(dist/sw.js 会给 /api 返回 offline 假响应)、走 `vite preview` proxy
+    (线上未开 CORS)、登录后补 `c_welcome_seen`(否则拍到的全是引导页且全报 ok)
+  - **单元格叠印专项**: `python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale both`
+    逐单元格比「文字实际宽 vs 内容区宽」, 抓的是"文字压到邻列"。
+  - **只查 `scrollWidth` 不够**: ①固定宽 + `overflow:hidden` 的容器会"静默裁切", 溢出为 0 但内容没了;
+    ②文字溢出到相邻单元格**不会让 table 的 scrollWidth 变大**, 只是画在别人头上(叠印事故就是这样漏掉的)。
+    文案最长的语言一定要眼睛看一遍截图
 - **文档同步**: 每项改动在 `docs/DEVELOPMENT.md` 追加 §15.10x, 写根因 + 实测数据
 
 ## 常用命令
@@ -71,15 +102,26 @@ python3 scripts/deploy_status.py
 # 本地直连测试
 python3 scripts/local_api.py GET /health
 # 前端构建
-cd frontend && npx tsc --noEmit && npm run build
+cd frontend && VITE_API_BASE_URL= npx vite build   # 本地验证留空走 proxy; 部署时按 CI 注入
+# i18n 门禁(残留 / 键集合 / 占位符 / 空串 / 列词条 / t 遮蔽)
+python3 scripts/i18n_audit.py --gate
+# 4 视口 × 双语界面快照(需先起 `cd frontend && npx vite preview --port 4173`)
+python3 .artifacts/i18n/shot.py --locale zh --viewport 375
 # 本地回归(注意目录)
 cd cloud-functions/api && python3 local_test.py
 # git 提交(消息含特殊字符时用文件)
 cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 ```
 
-## 已知遗留(截至 2026-11-02)
+## 已知遗留(截至 2026-11-04)
 
+- **后端拼装的分析文案未英文化**(只有中文): 补货备注「7天走弱 · B建议补120.0件(…)」、
+  采购建议「🔴 库存告急：只够卖4天…」、任务步名「窗口 1 / 评估分片 1/1」——
+  由 `routes/replenishment.py` / `purchase_calc.py` / `cleansing.py` 拼成字符串返回,
+  与数字混在一起, 还进任务记录和 Excel 导出。要英文化需把 `note` 改为结构化片段数组
+  (前端渲染), 属数据契约变更, 影响导出/历史/告警文本 —— 单独议题。见 §15.145 五
+- **字典死键 483**(`app.desc`、`cl.title`、`clean.title`、`cleansing.empty` 等):
+  多为历史命名空间残留, 待甄别后删除; 不影响运行, 但会干扰"键集合"判读
 - ~~低库存卡 5 行全落郑州仓~~ **已修**: 卡面改「按仓轮转 + 轮内 SKU 去重」——第一轮每仓 1 条,
   轮内跳过已上卡的 SKU; 不满 5 条继续第二轮(3 个仓 = 3+2, 仍是 5 行)。
   **不要再做"每仓最多 1 条"的硬配额**(仓少时卡面塌成 3 行), **也不要只按仓轮转**

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, freshStamp } from '../api/client'
 import { IconTrash } from './Icons'
+import { t } from '../locale'
 
 /**
  * 出入库明细弹窗(2026-10-29)
@@ -23,21 +24,28 @@ export default function FlowRecordsSheet({
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
-  const [extraLabel, setExtraLabel] = useState('供应商')
+  // extraLabel 是后端给的列名文案, 后端未给时按 tab 取词条兜底
+  const [extraLabel, setExtraLabel] = useState(t('flw.default_supplier'))
   const [delId, setDelId] = useState<number | null>(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [skuQ, setSkuQ] = useState('')
 
   const PS = 50
-  const WT_LABEL: Record<string, string> = { own: '自有仓', platform: '平台仓', platform_b: 'B仓' }
+  // 存词条键, 渲染时解析(与 rules/labels 的 WHS 同一手法)
+  const WT_LABEL: Record<string, string> = {
+    own: 'flw.wh_own',
+    platform: 'flw.wh_platform',
+    platform_b: 'flw.wh_b',
+  }
 
-  const load = async (t: 'inbound' | 'outbound', p: number, append = false) => {
+  // 注意: 形参不能叫 t —— 会遮蔽翻译函数 t()
+  const load = async (target: 'inbound' | 'outbound', p: number, append = false) => {
     setLoading(true)
     setErr('')
     try {
       const r = await api.get(
-        `/api/flow-records/list?target=${t}&page=${p}&page_size=${PS}&channel=${channel}` +
+        `/api/flow-records/list?target=${target}&page=${p}&page_size=${PS}&channel=${channel}` +
           (dateFrom ? `&date_from=${dateFrom}` : '') +
           (dateTo ? `&date_to=${dateTo}` : '') +
           (skuQ ? `&sku=${encodeURIComponent(skuQ)}` : '') +
@@ -47,7 +55,10 @@ export default function FlowRecordsSheet({
       const d = r.data || {}
       setItems(prev => (append ? [...prev, ...(d.items || [])] : d.items || []))
       setTotal(d.total || 0)
-      setExtraLabel(d.extra_label || (t === 'inbound' ? '供应商' : '目标仓'))
+      setExtraLabel(
+        d.extra_label ||
+          (target === 'inbound' ? t('flw.default_supplier') : t('flw.default_target_wh')),
+      )
       setPage(p)
     } catch (e: any) {
       setErr(String(e?.message || e).slice(0, 80))
@@ -73,7 +84,7 @@ export default function FlowRecordsSheet({
         ids: [id],
         reason: '出入库明细弹窗手动删除',
       })
-      if (r?.data?.ok === false) throw new Error(r?.data?.error || '删除失败')
+      if (r?.data?.ok === false) throw new Error(r?.data?.error || t('common.delete_failed'))
       setItems(prev => prev.filter(x => x.id !== id))
       setTotal(t => Math.max(0, t - 1))
     } catch (e: any) {
@@ -119,12 +130,12 @@ export default function FlowRecordsSheet({
         >
           {/* 标题 + 两态 tab */}
           <div className="flow-head">
-            <div className="flow-head-title">出入库明细</div>
+            <div className="flow-head-title">{t('flw.title')}</div>
             <div className="hammer-segmented flow-head-tabs">
               {(
                 [
-                  ['inbound', '入库'],
-                  ['outbound', '出库'],
+                  ['inbound', t('flw.tab_in')],
+                  ['outbound', t('flw.tab_out')],
                 ] as const
               ).map(([k, l]) => (
                 <span
@@ -137,7 +148,7 @@ export default function FlowRecordsSheet({
                 </span>
               ))}
             </div>
-            <span className="flow-head-count">共 {total} 条</span>
+            <span className="flow-head-count">{t('flw.total_n', { n: total })}</span>
           </div>
 
           {/* 筛选栏: 日期范围 + SKU 模糊(后端已支持, 触发重载) */}
@@ -159,7 +170,7 @@ export default function FlowRecordsSheet({
           </div>
           <div className="flow-filter-row">
             <input
-              placeholder="搜索 SKU"
+              placeholder={t('flw.search_sku')}
               value={skuQ}
               onChange={e => setSkuQ(e.target.value)}
               className="tpl-field flow-filter-field-full"
@@ -191,14 +202,14 @@ export default function FlowRecordsSheet({
               <thead>
                 <tr>
                   {[
-                    '日期',
-                    'SKU',
-                    '仓库',
-                    '生产日期',
-                    '截止日期',
-                    '数量',
+                    t('flw.date'),
+                    t('fld.sku'),
+                    t('fld.warehouse'),
+                    t('fld.prod_date'),
+                    t('fld.exp_date'),
+                    t('fld.quantity'),
                     extraLabel,
-                    '备注',
+                    t('fld.remark'),
                     '',
                   ].map((h, i) => (
                     <th key={i}>{h}</th>
@@ -215,7 +226,10 @@ export default function FlowRecordsSheet({
                       </span>
                     </td>
                     <td>{it.sku}</td>
-                    <td>{it.warehouse || WT_LABEL[it.warehouse_type] || '—'}</td>
+                    <td>
+                      {it.warehouse ||
+                        (WT_LABEL[it.warehouse_type] ? t(WT_LABEL[it.warehouse_type]) : '—')}
+                    </td>
                     <td>{it.prod_date || '—'}</td>
                     <td>{it.exp_date || '—'}</td>
                     <td>{it.quantity}</td>
@@ -225,7 +239,7 @@ export default function FlowRecordsSheet({
                       <button
                         className="tpl-btn-ghost clickable flow-del-btn"
                         onClick={() => doDelete(it.id)}
-                        title="删除"
+                        title={t('common.delete')}
                       >
                         <IconTrash size={13} />
                       </button>
@@ -235,9 +249,7 @@ export default function FlowRecordsSheet({
                 {!items.length && !loading && (
                   <tr>
                     <td colSpan={9} className="flow-empty">
-                      {dateFrom || dateTo || skuQ
-                        ? '当前筛选无匹配记录，可调整日期或清空搜索'
-                        : '暂无记录'}
+                      {dateFrom || dateTo || skuQ ? t('flw.empty_filtered') : t('flw.empty')}
                     </td>
                   </tr>
                 )}
@@ -246,9 +258,9 @@ export default function FlowRecordsSheet({
           </div>
 
           {/* 底部状态: 滚动到底自动加载(原"加载更多"按钮占 60px 已省出给表格) */}
-          {loading && <div className="flow-foot">加载中…</div>}
+          {loading && <div className="flow-foot">{t('common.loading')}</div>}
           {!loading && items.length >= total && items.length > 0 && (
-            <div className="flow-foot">已全部加载（{total} 条）</div>
+            <div className="flow-foot">{t('flw.all_loaded', { n: total })}</div>
           )}
         </div>
       </div>

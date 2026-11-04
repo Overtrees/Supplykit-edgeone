@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../locale'
 
 type IconProps = { size?: number; className?: string; style?: React.CSSProperties }
 
@@ -571,10 +572,13 @@ export const trendIcon = (current: number, prev: number): React.ReactNode => {
 
 // status display text
 export const STATUS_LABEL: Record<string, { label: string; Icon: React.FC<IconProps> }> = {
-  connected: { label: '实时', Icon: IconStatusOnline },
-  polling: { label: '轮询', Icon: IconStatusWarning },
-  disconnected: { label: '断开', Icon: IconStatusOffline },
+  connected: { label: 'st.connected', Icon: IconStatusOnline },
+  polling: { label: 'st.polling', Icon: IconStatusWarning },
+  disconnected: { label: 'st.disconnected', Icon: IconStatusOffline },
 }
+
+/** 连接状态的展示文案(字典里存词条键, 这里统一解析) */
+export const statusLabelOf = (k: string) => t((STATUS_LABEL[k] || STATUS_LABEL.disconnected).label)
 
 // ─── 滞销处置动作图标(2026-09-06) ───
 

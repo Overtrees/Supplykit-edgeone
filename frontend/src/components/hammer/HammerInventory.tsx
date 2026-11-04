@@ -4,10 +4,12 @@ import { t } from '../../locale'
 import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
-import { INV_COLS, getInvVis, invColKey, INV_WH_LABEL } from './configs'
+import { INV_COLS, getInvVis, invColKey } from './configs'
+import { whTypeLabel } from '../statusLabels'
 import { IconExport, IconClipboard } from '../Icons'
 import ConfirmDialog from '../ConfirmDialog'
 import FlowRecordsSheet from '../FlowRecordsSheet'
+import { colLabel } from '../colLabels'
 
 interface HammerInventoryProps {
   channel: string
@@ -66,10 +68,10 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
       if (d.ok && d.task_id)
         toast.add({
           type: 'success',
-          title: '导出任务已提交',
+          title: t('hx.export_submitted'),
           duration: 6000,
           action: {
-            label: '查看进度 →',
+            label: t('hx.view_progress'),
             handler: () => {
               window.__setPage && window.__setPage('tasks')
             },
@@ -107,7 +109,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
             onClick={() => setHammerPanel(hammerPanel === 'wh' ? null : 'wh')}
             className="hammer-btn btn-ghost"
           >
-            仓库 {INV_WH_LABEL[hammerWhType]}
+            {whTypeLabel(hammerWhType)}
           </button>
           <button
             onClick={doExport}
@@ -122,7 +124,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
         {/* 2026-10-29 出入库明细(流水台账, 含效期/数量/供应商或目标仓) */}
         <div className="hammer-row">
           <button onClick={() => setFlowOpen(true)} className="hammer-btn btn-ghost">
-            <IconClipboard size={13} /> 出入库明细
+            <IconClipboard size={13} /> {t('hi.flow_detail')}
           </button>
           <button
             onClick={() => setHammerPanel(hammerPanel === 'batch' ? null : 'batch')}
@@ -235,7 +237,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
               {t('common.all')}
             </button>
             <button onClick={() => saveCols([])} className="hammer-clear">
-              取消全选
+              {t('common.deselect')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginBottom: 2, padding: '0 4px' }}>
@@ -243,7 +245,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
           </div>
           {visCols.length > 0 && (
             <div className="cols-group-title">
-              <span>已显示</span>
+              <span>{t('common.visible')}</span>
               <span>{visCols.length}</span>
             </div>
           )}
@@ -305,7 +307,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                   }}
                   className="accent-primary"
                 />
-                <span className="flex-1 text-12">{col.label}</span>
+                <span className="flex-1 text-12">{colLabel(col.id)}</span>
                 <span className="muted2 text-9">#{visCols.indexOf(col.id) + 1}</span>
               </div>
             )
@@ -316,7 +318,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
             return (
               <>
                 <div className="cols-group-title">
-                  <span>已隐藏</span>
+                  <span>{t('common.hidden')}</span>
                   <span>{hidden.length}</span>
                 </div>
                 {hidden.map(col => (
@@ -334,7 +336,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                       }}
                       className="accent-primary"
                     />
-                    <span className="flex-1 text-12">{col.label}</span>
+                    <span className="flex-1 text-12">{colLabel(col.id)}</span>
                   </div>
                 ))}
               </>
@@ -349,7 +351,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
             id="hm-search-inv"
             value={localSearch}
             onChange={e => setLocalSearch(e.target.value)}
-            placeholder="搜索SKU/商品名..."
+            placeholder={t('hi.search_ph')}
             className="hammer-input"
           />
           {hammerSearch && (
@@ -364,7 +366,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
       {/* 仓库类型面板 */}
       {hammerPanel === 'wh' && (
         <div className="hammer-panel">
-          <div className="muted2 text-10 mb-4">仓库类型</div>
+          <div className="muted2 text-10 mb-4">{t('hi.wh_type')}</div>
           <div className="hammer-btn-row">
             {Object.keys(INV_COLS).map(k => {
               if (
@@ -378,7 +380,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                   onClick={() => switchWh(k)}
                   className={'hammer-tab' + (hammerWhType === k ? ' active' : '')}
                 >
-                  {INV_WH_LABEL[k]}
+                  {whTypeLabel(k)}
                 </span>
               )
             })}

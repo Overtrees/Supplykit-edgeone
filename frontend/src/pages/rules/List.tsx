@@ -2,7 +2,7 @@ import { IconCheck, IconScale } from '../../components/Icons'
 import ErrorRetry from '../../components/ErrorRetry'
 import EmptyState from '../../components/EmptyState'
 import { t } from '../../locale'
-import { MODES, WHS, pc, fieldLbl, opLbl, renderTmpl } from './labels'
+import { pc, fieldLbl, modeLbl, opLbl, renderTmpl, whLbl } from './labels'
 
 /**
  * 规则列表(全受控) —— 自 RulesPage.tsx 外提(S3-1 续2)。
@@ -36,14 +36,14 @@ export default function RuleList({
 }) {
   const sevCls = s => (s === 'error' ? 'danger' : s === 'info' ? 'info' : 'warning')
   const sevLbl = s =>
-    s === 'error' ? '严重' : s === 'info' ? t('rules.severity_info') : t('rules.severity_warning')
+    s === 'error' ? t('rules.severity_error') : s === 'info' ? t('rules.severity_info') : t('rules.severity_warning')
 
   return (
     <>
       {filteredRules.map(rule => {
         const condInfo = pc(rule.condition_json || '{}')
-        const whLbl = WHS.find(w => w.v === condInfo.warehouse)?.l || '全部'
-        const modeLbl = MODES.find(m => m.v === (rule.mode || ''))?.l || '全部'
+        const _whLbl = whLbl(condInfo.warehouse)
+        const _modeLbl = modeLbl(rule.mode || '')
         // 2026-11-01 条件文案修正两处:
         //  ① 原固定前缀"当 <仓库> <字段> <op> <值>" —— 自有仓规则的前置是
         //     `inv.warehouse_type == own`(字段级), 拼出来变成"当 全部 仓库类型 等于 own",
@@ -53,20 +53,26 @@ export default function RuleList({
         const _isWhField = condInfo.left === 'inv.warehouse_type'
         const _fmtR = (c: any) =>
           c.rightType === 'pct'
-            ? fieldLbl(c.right) + '的' + c.pctValue + '%'
+            ? t('rules.pct_of', { field: fieldLbl(c.right), pct: c.pctValue })
             : c.rightType === 'field'
               ? fieldLbl(c.right)
               : c.right
         const condText =
-          (condInfo.warehouse && !_isWhField ? `当 ${whLbl} ` : '当 ') +
+          (condInfo.warehouse && !_isWhField ? t('rules.when_wh', { wh: _whLbl }) : t('rules.when')) +
           `${fieldLbl(condInfo.left)} ${opLbl(condInfo.op)} ${_fmtR(condInfo)}` +
           (condInfo.and
-            ? ` 且 ${fieldLbl(condInfo.and.left)} ${opLbl(condInfo.and.op)} ${_fmtR(condInfo.and)}`
+            ? ' ' +
+              t('rules.and', {
+                cond: `${fieldLbl(condInfo.and.left)} ${opLbl(condInfo.and.op)} ${_fmtR(condInfo.and)}`,
+              })
             : '') +
           (Array.isArray(condInfo.or) && condInfo.or.length
-            ? ` 或 (${condInfo.or
-                .map(o => `${fieldLbl(o.left)} ${opLbl(o.op)} ${_fmtR(o)}`)
-                .join(' / ')})`
+            ? ' ' +
+              t('rules.or', {
+                cond: condInfo.or
+                  .map((o: any) => `${fieldLbl(o.left)} ${opLbl(o.op)} ${_fmtR(o)}`)
+                  .join(' / '),
+              })
             : '')
         return (
           <div
@@ -95,7 +101,9 @@ export default function RuleList({
                 <span className={'rule-check' + (selIds.includes(rule.id) ? ' on' : '')}>
                   {selIds.includes(rule.id) ? <IconCheck size={12} /> : ''}
                 </span>
-                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>选择</span>
+<span style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)' }}>
+                  {t('rules.select')}
+                </span>
               </span>
             )}
             <div
@@ -110,17 +118,19 @@ export default function RuleList({
                 <div className="rule-title">
                   {rule.name}
                   <span className={'pill ' + (rule.is_active ? 'success' : 'warning')}>
-                    {rule.is_active ? '启用' : '停用'}
+                    {rule.is_active ? t('rules.active') : t('rules.inactive')}
                   </span>
                   <span className={'pill ' + sevCls(rule.severity)}>{sevLbl(rule.severity)}</span>
-                  {rule.mode && <span className="rule-mode">{modeLbl}</span>}
+                  {rule.mode && <span className="rule-mode">{_modeLbl}</span>}
                 </div>
                 <div className="rule-cond">
                   <IconScale size={12} style={{ marginTop: 2 }} />
                   <span>{condText}</span>
                 </div>
                 <div className="rule-desc">
-                  {renderTmpl(rule.alert_title) || <span className="small muted">无标题</span>}
+                  {renderTmpl(rule.alert_title) || (
+                    <span className="small muted">{t('rules.no_title')}</span>
+                  )}
                   {rule.alert_desc ? (
                     <>
                       <span style={{ color: 'var(--muted2)', margin: '0 3px' }}>·</span>
@@ -144,12 +154,16 @@ export default function RuleList({
         ) : (
           <EmptyState
             icon="tag"
-            title={rules.length === 0 ? t('rules.empty') : '没有匹配"' + hammerSearch + '"的规则'}
-            desc={rules.length === 0 ? '创建规则后可自动监控库存异常' : undefined}
+            title={
+              rules.length === 0
+                ? t('rules.empty')
+                : t('rules.no_match', { q: hammerSearch })
+            }
+            desc={rules.length === 0 ? t('rules.empty_desc') : undefined}
             action={
               rules.length === 0 ? (
                 <button className="btn btn-primary" onClick={onNew}>
-                  + 新建规则
+                  {t('rules.new_plus')}
                 </button>
               ) : undefined
             }

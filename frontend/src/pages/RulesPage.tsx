@@ -28,7 +28,7 @@ export default function RulesPage() {
   const [rulesErr, setRulesErr] = useState('')
   const [debugLog, setDebugLog] = useState([])
   const addDebug = (msg, data?) => {
-    const t = new Date().toLocaleTimeString()
+    const _ts = new Date().toLocaleTimeString()
     setDebugLog(p => [{ t, msg, data }, ...p].slice(0, 50))
   }
   const [editing, setEditing] = useState(null)
@@ -57,8 +57,8 @@ export default function RulesPage() {
   const saveErr = e => {
     const detail = e?.response?.data?.detail
     if (detail) toast.error(String(detail))
-    else if (e?.response?.status === 403) toast.error('访客模式仅可查看，不可修改数据')
-    else toast.error('保存失败: ' + (e.message || ''))
+    else if (e?.response?.status === 403) toast.error(t('rp.guest_readonly'))
+    else toast.error(t('rp.save_failed', { msg: e.message || '' }))
   }
   const [suppliers, setSuppliers] = useState([])
 
@@ -154,11 +154,17 @@ export default function RulesPage() {
         if (r && r.id) _m[r.id] = r.is_active ? 1 : 0
       })
       useAppStore.setState({ batchStateMap: _m })
-      setRulesErr(Array.isArray(rawData) ? '' : r.status !== 200 ? '加载失败' : '返回数据格式异常')
+      setRulesErr(
+        Array.isArray(rawData)
+          ? ''
+          : r.status !== 200
+            ? t('rp.load_failed')
+            : t('rp.bad_payload'),
+      )
       addDebug('setRules 完成', { 条数: newData.length })
     } catch (e) {
       addDebug('load 异常', { error: e.message })
-      setRulesErr('加载失败')
+      setRulesErr(t('rp.load_failed'))
     }
   }
   useEffect(() => {
@@ -425,7 +431,7 @@ export default function RulesPage() {
       //   op 的语义: HTTP 200 只代表"已受理", 真正的告警变更发生在后台评估 ——
       //   所以 op 必须活到 eval_tasks 变成终态(由 App 层 OpsWatcher 移除), 不能在这里 finally 清掉。
       const saved = await mutate({
-        label: isNew ? '新建规则' : '保存规则',
+        label: isNew ? t('rp.new_rule') : t('rp.save_rule'),
         run: async () => {
           // S3-2 收口: 保存是重操作, 超时对齐 postHeavy 90s; raw 保留 res.ok 判断
           const res = await apiJson(isNew ? 'POST' : 'PUT', url, {
@@ -453,7 +459,7 @@ export default function RulesPage() {
           return { tid }
         },
         // 文案类保存不触发评估(tid=0) —— 提示要诚实, 不能一律说"正在重算"
-        success: r => (r.tid ? '已保存，正在重算告警' : '已保存'),
+        success: r => (r.tid ? t('rp.saved_recalc') : t('rp.saved')),
         events: ['rules-changed'],
         invalidate: '*',
         op: r =>
@@ -461,7 +467,7 @@ export default function RulesPage() {
             ? {
                 id: 'rules:' + r.tid,
                 kind: 'rules',
-                label: '规则重算',
+                label: t('rp.recalc_op'),
                 scope: globalChannel,
                 taskId: r.tid,
                 startedAt: Date.now(),
@@ -487,24 +493,24 @@ export default function RulesPage() {
         JSON.stringify((cond.or || []).map(o => ({ left: o.left, op: o.op, right: o.right })))
       const _evt = f.event || ''
       if (_cj2.includes('order.') && _evt !== 'order.created')
-        toast.warning('条件引用 order.* 但事件非「订单创建」，该规则可能永不触发')
+        toast.warning(t('rp.warn_order_event'))
       const _pm = _cj2.match(/params\.([\w]+)/g) || []
       if (_pm.length) {
         const _miss = _pm
           .map(m => m.split('.')[1])
           .filter(k => !(rParams[k] !== undefined && rParams[k] !== ''))
         if (_miss.length)
-          toast.warning('条件引用参数 ' + _miss.join('/') + ' 但未填写，评估时将按 0 处理')
+          toast.warning(t('rp.warn_param_missing', { keys: _miss.join('/') }))
       }
     } catch (e) {
-      toast.error('保存失败: ' + e.message)
+      toast.error(t('rp.save_failed', { msg: e.message }))
     }
     setSaveLoading(false)
   }
   const del = async id => {
     addDebug('del 开始', { id })
     const okDel = await mutate({
-      label: '删除规则',
+      label: t('rp.delete_rule_op'),
       run: async () => {
         // S3-2 收口: raw 保留 res.ok 判断
         const res = await apiJson('DELETE', API + '/api/rules/' + id, { raw: true })
@@ -537,7 +543,7 @@ export default function RulesPage() {
           // 2026-11-03 修: 原来只 load 自身, 既没清缓存也没发事件 —— 撤销后看板要等 30s
           //   或切页重挂才知道告警回来了。恢复同样走 mutate 三件套。
           const okUndo = await mutate({
-            label: '恢复规则',
+            label: t('rp.restore_rule'),
             run: async () => {
               // S3-2 收口: raw 保留 res.ok 判断
               const res = await apiJson('POST', API + '/api/rules/' + id + '/restore', {
@@ -546,7 +552,7 @@ export default function RulesPage() {
               if (!res.ok) throw new Error('HTTP ' + res.status)
               return true
             },
-            success: '规则已恢复，正在重算告警',
+            success: t('rp.restored'),
             events: ['rules-changed'],
             invalidate: '*',
           })
@@ -573,30 +579,30 @@ export default function RulesPage() {
   }, [prodBatchAllReq])
   const cParams = isBBCC
     ? [
-        { k: 'b_to_c_days', l: 'B→C调拨(天)', h: '京东B仓→C仓调拨时效' },
-        { k: 'c_safety_days', l: 'C仓缓冲(天)', h: 'C仓安全储备' },
+        { k: 'b_to_c_days', l: 'rp.param_b_to_c', h: 'rp.param_b_to_c_h' },
+        { k: 'c_safety_days', l: 'rp.param_c_safety', h: 'rp.param_c_safety_h' },
       ]
     : []
   const bParams = isBBCC
     ? [
-        { k: 'ship_to_b_days', l: '自有仓→B仓时效(天)' },
-        { k: 'safety_multiplier', l: '安全库存天数' },
-        { k: 'turnover_warning_15', l: '仓储费阈值(天)' },
-        { k: 'turnover_warning_90', l: '周转考核红线(天)' },
+        { k: 'ship_to_b_days', l: 'rp.param_ship_to_b' },
+        { k: 'safety_multiplier', l: 'rp.param_safety_mult' },
+        { k: 'turnover_warning_15', l: 'rp.param_turnover_15' },
+        { k: 'turnover_warning_90', l: 'rp.param_turnover_90' },
       ]
     : []
   const paramFields = isBBCC
     ? []
     : [
-        { k: 'lead_time_days', l: '前置期(天)' },
-        { k: 'safety_multiplier', l: '安全库存天数' },
-        { k: 'turnover_warning_90', l: '周转考核红线(天)' },
+        { k: 'lead_time_days', l: 'rp.param_lead_time' },
+        { k: 'safety_multiplier', l: 'rp.param_safety_mult' },
+        { k: 'turnover_warning_90', l: 'rp.param_turnover_90' },
       ]
   const purchaseFields = [
-    { k: 'purchase_lead_days', l: '采购前置(天)' },
-    { k: 'purchase_safety_days', l: '采购安全库存(天)' },
-    { k: 'moq', l: 'MOQ最小起订(件)' },
-    { k: 'max_turnover_days', l: '目标周转(天)' },
+    { k: 'purchase_lead_days', l: 'rp.param_purchase_lead' },
+    { k: 'purchase_safety_days', l: 'rp.param_purchase_safety' },
+    { k: 'moq', l: 'rp.param_moq' },
+    { k: 'max_turnover_days', l: 'rp.param_max_turnover' },
   ]
 
   if (loading)
@@ -644,11 +650,12 @@ export default function RulesPage() {
           }}
         >
           <div style={{ fontWeight: 700, marginBottom: 4 }}>
-            🔍 规则页调试追踪（关闭: localStorage 设 c_debug_rules=0）
+            {t('rp.debug_title')}
           </div>
           <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
-            当前 rules state: <b>{rules.length}</b> 条 | filteredRules:{' '}
-            <b>{filteredRules.length}</b> 条 | 渠道: <b>{globalChannel}</b> | tab: <b>{tab}</b>
+            {t('rp.debug_state', { n: rules.length })} |{' '}
+            {t('rp.debug_filtered', { n: filteredRules.length })} |{' '}
+            {t('rp.debug_channel', { v: globalChannel })} | {t('rp.debug_tab', { v: tab })}
           </div>
           <button
             onClick={() => setDebugLog([])}
@@ -662,10 +669,10 @@ export default function RulesPage() {
               fontSize: 'var(--font-xs)',
             }}
           >
-            清空日志
+            {t('rp.debug_clear')}
           </button>
           {debugLog.length === 0 ? (
-            <div style={{ color: 'var(--muted2)' }}>暂无操作日志</div>
+            <div style={{ color: 'var(--muted2)' }}>{t('rp.debug_empty')}</div>
           ) : (
             debugLog.map((l, i) => (
               <div key={i} style={{ borderTop: '1px dashed var(--border)', padding: '2px 0' }}>

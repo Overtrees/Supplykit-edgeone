@@ -1,5 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { StaleDotInline, FreshPopover } from './Freshness'
+import { channelName } from './channels'
+import { t } from '../locale'
 import HammerDashboard from './hammer/HammerDashboard'
 import HammerProducts from './hammer/HammerProducts'
 import HammerSuppliers from './hammer/HammerSuppliers'
@@ -93,12 +95,12 @@ export default function AppHeader({
                     {(channels && channels.length
                       ? channels.filter(c => c.enabled !== 0)
                       : [
-                          { code: 'jd', name: '京东渠道' },
-                          { code: 'other', name: '其他渠道' },
+                          { code: 'jd', name_key: 'channel.jd' },
+                          { code: 'other', name_key: 'channel.other' },
                         ]
                     ).map(c => (
                       <option key={c.code} value={c.code}>
-                        {c.name}
+                        {channelName(c)}
                       </option>
                     ))}
                   </select>
@@ -204,12 +206,12 @@ export default function AppHeader({
                     {(channels && channels.length
                       ? channels.filter(c => c.enabled !== 0)
                       : [
-                          { code: 'jd', name: '京东渠道' },
-                          { code: 'other', name: '其他渠道' },
+                          { code: 'jd', name_key: 'channel.jd' },
+                          { code: 'other', name_key: 'channel.other' },
                         ]
                     ).map(c => (
                       <option key={c.code} value={c.code}>
-                        {c.name}
+                        {channelName(c)}
                       </option>
                     ))}
                   </select>
@@ -301,11 +303,11 @@ export default function AppHeader({
                 </div>
                 <div style={{ fontSize: 'var(--font-13)', color: 'var(--text)', marginBottom: 4 }}>
                   {hammerData[channel]?.[page]
-                    ? `${hammerData[channel]?.[page]?.length ?? 0} 条记录`
-                    : '暂无数据'}
+                    ? t('common.n_records', { n: hammerData[channel]?.[page]?.length ?? 0 })
+                    : t('common.empty')}
                 </div>
                 <div style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginTop: 8 }}>
-                  功能待添加
+                  {t('hammer.pending')}
                 </div>
               </div>
             )}

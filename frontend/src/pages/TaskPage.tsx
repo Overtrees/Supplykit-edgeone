@@ -6,33 +6,40 @@ import { useToast } from '../components/Toast'
 import TaskCard from '../components/tasks/TaskCard'
 import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
+import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
+// 词表化: 存键不存文案(渲染时 t() 解析, 切语言立即生效)
 const EXPORT_TYPE_NAME = {
-  orders: '订单明细',
-  inventory: '库存明细',
-  slow: '滞销明细',
-  purchase: '补货建议',
-  purchase_suggestions: '采购建议',
+  orders: 'task.exp_orders',
+  inventory: 'task.exp_inventory',
+  slow: 'task.exp_slow',
+  purchase: 'task.exp_purchase',
+  purchase_suggestions: 'task.exp_purchase_suggestions',
 }
 const CLEAN_TARGET_NAME = {
-  order: '订单表',
-  inventory: '库存表(自有)',
-  platform_inv: '库存表(平台)',
-  inventory_b: '库存表(B仓)',
-  inbound: '入库记录表',
-  outbound: '出库记录表',
-  product: '商品表',
+  order: 'task.imp_order',
+  inventory: 'task.imp_inventory',
+  platform_inv: 'task.imp_platform_inv',
+  inventory_b: 'task.imp_inventory_b',
+  inbound: 'task.imp_inbound',
+  outbound: 'task.imp_outbound',
+  product: 'task.imp_product',
 }
 const TYPE_LABEL = {
-  cleansing_eval: { label: '评估联动', Icon: IconRefresh },
-  seed: { label: '种子数据填充', Icon: IconRefresh },
-  cleansing: { label: '数据清洗导入', Icon: IconBroom },
-  export: { label: '导出任务', Icon: IconExport },
-  reset: { label: '数据重置', Icon: IconUndo },
+  cleansing_eval: { label: 'task.type_eval', Icon: IconRefresh },
+  seed: { label: 'task.type_seed', Icon: IconRefresh },
+  cleansing: { label: 'task.type_cleansing', Icon: IconBroom },
+  export: { label: 'task.type_export', Icon: IconExport },
+  reset: { label: 'task.type_reset', Icon: IconUndo },
 }
-const STATUS_LABEL = { pending: '等待中', running: '进行中', done: '已完成', error: '失败' }
+const STATUS_LABEL = {
+  pending: 'task.st_pending',
+  running: 'task.st_running',
+  done: 'task.st_done',
+  error: 'task.st_error',
+}
 
 export default function TaskPage() {
   const { channel } = useAppStore()
@@ -60,17 +67,18 @@ export default function TaskPage() {
             if (firstLoad.current) return // 首载: 仅记录, 不弹历史完成提示
             if (t.status === 'done') {
               toast.success(
-                '任务完成: ' +
-                  (t.task_type === 'seed'
-                    ? '种子填充'
-                    : t.task_type === 'clean'
-                      ? '清洗导入'
-                      : t.task_type === 'cleansing_eval'
-                        ? '评估联动'
-                        : t.task_type === 'export'
-                          ? '导出'
-                          : t.task_type) +
-                  ' ✓',
+                t('task.done_toast', {
+                  what:
+                    t.task_type === 'seed'
+                      ? t('task.what_seed')
+                      : t.task_type === 'clean'
+                        ? t('task.what_cleansing')
+                        : t.task_type === 'cleansing_eval'
+                          ? t('task.what_eval')
+                          : t.task_type === 'export'
+                            ? t('task.what_export')
+                            : t.task_type,
+                }),
               )
               // 数据已变更，通知各页面刷新；dashboard 强制同步重建拿最新值（不用旧值）
               useAppStore
@@ -80,16 +88,16 @@ export default function TaskPage() {
               window.dispatchEvent(new Event('rules-changed'))
               window.dispatchEvent(new Event('insights-refresh'))
             } else {
-              toast.error('任务失败: ' + String(t.result || '').slice(0, 60))
+              toast.error(t('task.failed_toast', { msg: String(t.result || '').slice(0, 60) }))
             }
           }
         })
-      } else if (r.status === 401) setLoadErr('登录已失效，请重新登录')
+      } else if (r.status === 401) setLoadErr(t('task.session_expired'))
       else if (d.error === 'database_busy') {
-        if (tasks.length === 0) setLoadErr('数据正在处理中...')
-      } else setLoadErr('加载失败: ' + (d.error || 'HTTP ' + r.status))
+        if (tasks.length === 0) setLoadErr(t('task.db_busy'))
+      } else setLoadErr(t('task.load_failed_msg', { msg: d.error || 'HTTP ' + r.status }))
     } catch (e) {
-      if (tasks.length === 0) setLoadErr('网络异常，自动重试中...')
+      if (tasks.length === 0) setLoadErr(t('task.net_retry'))
     }
     setLoading(false)
   }
@@ -138,7 +146,7 @@ export default function TaskPage() {
             raw: true,
             timeout: 120000,
           })
-          if (!r.ok) throw new Error('分片下载失败')
+          if (!r.ok) throw new Error(t('task.chunk_failed'))
           chunks.push(await r.blob())
         }
         blob = new Blob(chunks, { type: 'text/csv' })
@@ -148,7 +156,7 @@ export default function TaskPage() {
           timeout: 120000,
         })
         // 2026-10-30: 不检查 dl.ok 会静默下载"错误页 HTML"(文件名由前端命名, 内容却是 500 页)
-        if (!dl.ok) throw new Error('导出下载失败(' + dl.status + ')')
+        if (!dl.ok) throw new Error(t('task.dl_failed', { code: dl.status }))
         blob = await dl.blob()
       }
       const a = document.createElement('a')
@@ -161,9 +169,9 @@ export default function TaskPage() {
 
   return (
     <div className="card">
-      <div className="section-title">任务管理</div>
+      <div className="section-title">{t('task.page_title')}</div>
       <div className="small muted" style={{ padding: '0 0 8px 0', fontSize: 12 }}>
-        {channel === 'jd' ? '京东' : '其他渠道'} · 异步任务
+        {t('task.subtitle', { ch: channel === 'jd' ? t('task.ch_jd') : t('task.ch_other') })}
       </div>
       <div key={loading ? 'skeleton' : 'data'} className="fade-in">
         {loading ? (
@@ -171,18 +179,18 @@ export default function TaskPage() {
         ) : tasks.length === 0 ? (
           <div style={{ padding: 24 }}>
             {loadErr ? (
-              <ErrorRetry error={'加载失败'} onRetry={loadTasks} />
+              <ErrorRetry error={t('task.load_failed')} onRetry={loadTasks} />
             ) : (
               <EmptyState
                 icon="package"
-                title="暂无任务"
-                desc="导入数据或导出文件后，处理进度会在这里显示"
+                title={t('task.empty')}
+                desc={t('task.empty_desc')}
                 action={
                   <button
                     className="btn btn-primary"
                     onClick={() => window.__setPage && window.__setPage('cleansing')}
                   >
-                    去导入数据 →
+                    {t('task.go_import')}
                   </button>
                 }
               />
@@ -211,7 +219,7 @@ export default function TaskPage() {
                           : task.task_type === 'cleansing_eval'
                             ? 'cleansing_eval'
                             : 'cleansing'
-                  const meta = TYPE_LABEL[type] || { label: '任务', Icon: IconClipboard }
+                  const meta = TYPE_LABEL[type] || { label: 'task.type_unknown', Icon: IconClipboard }
                   const result = task.result
                     ? typeof task.result === 'string'
                       ? safeParse(task.result)
@@ -219,17 +227,20 @@ export default function TaskPage() {
                     : null
                   const sub =
                     task.task_type === 'export'
-                      ? EXPORT_TYPE_NAME[result?.result?.type || result?.type] || '导出'
+                      ? t(EXPORT_TYPE_NAME[result?.result?.type || result?.type] || 'task.export')
                       : task.task_type === 'cleansing'
-                        ? CLEAN_TARGET_NAME[result?.result?.target || result?.target] || '导入'
+                        ? t(
+                            CLEAN_TARGET_NAME[result?.result?.target || result?.target] ||
+                              'task.import',
+                          )
                         : task.task_type === 'cleansing_eval'
-                          ? '评估联动'
+                          ? t('task.eval')
                           : task.task_id.slice(0, 22)
                   return (
                     <TaskCard
                       key={task.task_id}
                       task={task}
-                      label={meta.label}
+                      label={t(meta.label)}
                       sub={sub}
                       icon={meta.Icon ? <meta.Icon size={18} /> : undefined}
                       downloading={downloading[task.task_id]}
@@ -250,7 +261,7 @@ export default function TaskPage() {
                       cursor: 'pointer',
                     }}
                   >
-                    显示更多（还有 {_finished.length - _shown.length} 条已完成）↓
+                    {t('task.show_more', { n: _finished.length - _shown.length })}
                   </div>
                 )}
               </>

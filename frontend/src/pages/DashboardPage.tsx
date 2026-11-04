@@ -7,6 +7,7 @@ import type { InventoryRow, StockRiskShim } from '../api/types'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
 import { t } from '../locale'
+import { orderStageLabel } from '../components/statusLabels'
 
 import { fmtBig } from './dashboard/format'
 import LowStockSheet from './dashboard/sheets/LowStockSheet'
@@ -83,11 +84,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [showAllOther, setShowAllOther] = useState(false)
   const [showAllRisk, setShowAllRisk] = useState(false)
   const [riskFilter, setRiskFilter] = useState<'all' | 'red' | 'orange' | 'yellow'>('all')
+  // 存词条键, 渲染时 t() 解析(级别值本身是判据, 用 code 不用文案)
   const riskTabs: Array<['all' | 'red' | 'orange' | 'yellow', string, string]> = [
-    ['all', '全部', 'var(--muted)'],
-    ['red', '紧急', 'var(--danger)'],
-    ['orange', '预警', 'var(--warning)'],
-    ['yellow', '观察', 'var(--muted2)'],
+    ['all', 'dash.all', 'var(--muted)'],
+    ['red', 'dash.urgent', 'var(--danger)'],
+    ['orange', 'dash.warning', 'var(--warning)'],
+    ['yellow', 'dash.watch', 'var(--muted2)'],
   ]
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
@@ -220,7 +222,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         .map(x => ({
           sku: x.sku,
           product_name: x.product_name,
-          tag: '补货',
+          kind: 'replen',
           qty: (x.suggested_qty || 0) + (x.b_suggested || 0),
           note: x.note || '',
           days_to_empty: x.days_to_empty || 999,
@@ -234,7 +236,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         .map(x => ({
           sku: x.sku,
           product_name: x.product_name,
-          tag: '采购',
+          kind: 'purchase',
           qty: x.actual_purchase || 0,
           note: x.note || '',
           days_to_empty: x.days_to_empty || 999,
@@ -242,7 +244,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         }))
       // 采购在前(更紧急: 需向供应商采且可撑<14天), 随后补货按缺口
       const sorted = [...purNeed, ...repNeed].sort((a, b) => {
-        if (a.tag !== b.tag) return a.tag === '采购' ? -1 : 1
+        if (a.kind !== b.kind) return a.kind === 'purchase' ? -1 : 1
         return a.days_to_empty - b.days_to_empty
       })
       setProcList(sorted)
@@ -316,7 +318,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
           const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
           const dash = dashOk ? s.value.data : null
-          setDashErr(s.status === 'rejected' || !dashOk ? '加载失败，数据可能正在处理中' : '')
+          setDashErr(
+        s.status === 'rejected' || !dashOk ? t('dash.load_fail_processing') : '',
+      )
           const aux = ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}
           setEvaluating(Boolean(aux.evaluating))
           const alerts = aux.alerts || []
@@ -487,16 +491,17 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       return
     }
     if (_evalPolls.current >= 6) return
-    const t = setTimeout(() => {
+    const _tid = setTimeout(() => {
       _evalPolls.current += 1
       window.dispatchEvent(new Event('rules-changed'))
     }, 4000)
-    return () => clearTimeout(t)
+    return () => clearTimeout(_tid)
   }, [evaluating])
   const periodTrend = dashboard?.periods?.[periodTab + '_trend'] || dashboard?.trend || []
   // GMV 卡维度字段映射(总/净/回款 → 趋势字段名+显示名)
   const gmvKey = gmvView === 'net' ? 'net_gmv' : gmvView === 'payout' ? 'payout' : 'GMV'
-  const gmvName = gmvView === 'net' ? '净GMV' : gmvView === 'payout' ? '回款' : 'GMV'
+  const gmvName =
+    gmvView === 'net' ? t('dash.net_gmv') : gmvView === 'payout' ? t('dash.payout') : 'GMV'
   // 维度色(切换感知: 总=蓝/净=绿/回款=紫, 现有微趋势条/折线改色)
   const gmvColor =
     gmvView === 'net' ? 'var(--success)' : gmvView === 'payout' ? '#8b5cf6' : 'var(--primary)'
@@ -548,11 +553,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           data: periodTrend.map(i => i['订单数']) || [],
           color: '#0f766e',
           yAxisIndex: 1,
-          name: '订单数',
+          name: t('dash.order_count'),
         },
       ],
       legend: {
-        data: [gmvName, '订单数'],
+        data: [gmvName, t('dash.order_count')],
         bottom: 6,
         left: 'center',
         icon: 'circle',
@@ -600,8 +605,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 fontSize: 8,
                 margin: 4,
                 formatter: v => {
-                  const t = String(v || '')
-                  return t.length > 5 ? t.slice(0, 5) + '…' : t
+                  const _lb = String(v || '')
+                  return _lb.length > 5 ? _lb.slice(0, 5) + '…' : _lb
                 },
               }
             : {
@@ -610,9 +615,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
                 rotate: storeData.length > 8 ? 35 : 0,
                 margin: 6,
                 formatter: v => {
-                  const t = String(v || '')
-                  if (t.length > 6) return t.slice(0, 6) + '…'
-                  return t
+                  const _lb = String(v || '')
+                  if (_lb.length > 6) return _lb.slice(0, 6) + '…'
+                  return _lb
                 },
                 width: 64,
                 overflow: 'truncate',
@@ -653,7 +658,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
 
   const barOption = useMemo(() => {
     const f = dashboard?.period_funnel?.[periodTab] || dashboard?.funnel || []
-    const names = f.map(x => x.name)
+    const names = f.map(x => orderStageLabel(x.name))
     const values = f.map(x => x.value)
     const ftotal = (f[0] && f[0].value) || 1
     return {
@@ -665,7 +670,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         formatter: p => {
           const idx = p[0]?.dataIndex ?? 0
           const item = f[idx]
-          return `${item.name}<br/>数量: ${item.value}单<br/>占比: ${item.percentage}%<br/>转化率: ${item.conversion}%`
+          return [
+            orderStageLabel(item.name),
+            t('dash.funnel_tip_fmt', { n: item.value }),
+            t('dash.funnel_rate', { p: item.percentage }),
+            t('dash.funnel_conv', { c: item.conversion }),
+          ].join('<br/>')
         },
       },
       grid: { containLabel: true, top: 4, bottom: 6, right: 58 },
@@ -684,7 +694,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             position: 'right',
             fontSize: 10,
             formatter: p =>
-              p.value >= 10000 ? (p.value / 10000).toFixed(1) + '万单' : `${p.value}单`,
+              p.value >= 10000
+                ? t('dash.unit_wan_orders', { n: (p.value / 10000).toFixed(1) })
+                : t('dash.unit_orders', { n: p.value }),
             textBorderColor: 'transparent',
           },
         },
@@ -788,8 +800,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       : lowStockAlerts.filter(x => x.alert_type === 'slow_moving').length
   // 2026-10-27 总览聚合: 待处理卡大数字 = 全部待处理动作(低库存/采购/补货/其他/滞销)——
   // 分卡=明细; 采购/补货条数来自实时接口 procList(同"采购&补货"卡源, tag 区分)
-  const procBuyN = (Array.isArray(procList) ? procList : []).filter(x => x.tag === '采购').length
-  const procRepN = (Array.isArray(procList) ? procList : []).filter(x => x.tag === '补货').length
+  const procBuyN = (Array.isArray(procList) ? procList : []).filter(x => x.kind === 'purchase').length
+  const procRepN = (Array.isArray(procList) ? procList : []).filter(x => x.kind === 'replen').length
   const pendingTotal = lowStockTotal + procBuyN + procRepN + otherTotal + slowMovingTotal
   // 2026-10-16 自然口径: 后端 periods.days 已是实际窗口天数(上周=7/上月=自然月实际天数 28-31)
   // —— 曾写死 {month:30} 致自然月 31 天时日均算错; 优先取后端, 兜底按窗口类型
@@ -960,7 +972,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               display: 'inline-block',
             }}
           />
-          规则重算中，告警数据稍后自动更新
+          {t('dash.recalc_running')}
         </div>
       )}
       <div className="card-grid" style={{ marginBottom: 16 }}>
@@ -978,7 +990,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           periodDays={periodDays}
         />
 
-        {/* 2. {t("dash.pending")}卡 — iOS 18 天气风: 数字主角/语义状态行/分级明细 */}
+        {/* 2. 待处理卡 — iOS 18 天气风: 数字主角/语义状态行/分级明细 */}
         <AlertSummaryCard
           dashboard={dashboard}
           detailFont={detailFont}
@@ -992,7 +1004,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           slowMovingTotal={slowMovingTotal}
         />
 
-        {/* 3. {t("dash.health")} — 加总 {t("dash.sku")} 数 */}
+        {/* 3. 健康度 — 加总 SKU 数 */}
         <HealthCard
           dashboard={dashboard}
           healthTab={healthTab}
@@ -1045,6 +1057,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         storeDataLen={storeDataLen}
         _storeDim={_storeDim}
         setStoreDim={setStoreDim}
+        funnelLen={(dashboard?.period_funnel?.[periodTab] || dashboard?.funnel || []).length}
       />
 
       <ChartRow3

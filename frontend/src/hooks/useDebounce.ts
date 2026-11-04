@@ -10,10 +10,10 @@ export function useDebouncedSearch(
     setLocal(initialValue)
   }, [initialValue])
   useEffect(() => {
-    const t = setTimeout(() => {
+    const _tid = setTimeout(() => {
       if (local !== initialValue) onChange(local)
     }, delay)
-    return () => clearTimeout(t)
+    return () => clearTimeout(_tid)
   }, [local])
   return [local, setLocal] as const
 }

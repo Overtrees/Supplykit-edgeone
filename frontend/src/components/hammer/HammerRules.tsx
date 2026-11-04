@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { useToast } from '../../components/Toast'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { api } from '../../api/client'
+import { t } from '../../locale'
 interface HammerRulesProps {
   channel: string
   onShowHistory?: (ch: string) => void
@@ -42,11 +43,11 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
         mode: useAppStore.getState().hammerReplenMode || '',
       })
       const ev = (r.data && r.data.evaluated) || {}
-      toast.success('评估完成 · jd ' + (ev.jd ?? '-') + ' · other ' + (ev.other ?? '-'))
+      toast.success(t('hr.eval_done', { jd: ev.jd ?? '-', ot: ev.other ?? '-' }))
       window.dispatchEvent(new Event('rules-changed'))
       window.dispatchEvent(new Event('insights-refresh'))
     } catch (e) {
-      toast.error('评估失败: ' + (e.message || ''))
+      toast.error(t('hr.eval_failed', { msg: e.message || '' }))
     }
     setEvaluating(false)
   }
@@ -54,10 +55,10 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
     const s = useAppStore.getState()
     const ids = s.prodSelIds || []
     if (ids.length === 0) {
-      toast.error('请先勾选规则')
+      toast.error(t('hr.pick_rules'))
       return
     }
-    if (action === 'delete' && !window.confirm('删除 ' + ids.length + ' 条规则？可在回收站恢复'))
+    if (action === 'delete' && !window.confirm(t('hr.confirm_delete', { n: ids.length })))
       return
     setBatchBusy(true)
     try {
@@ -68,52 +69,54 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
       if (action === 'delete') {
         toast.add({
           type: 'success',
-          title: label + '完成: ' + ids.length + ' 项',
+          title: t('hr.batch_done', { label, n: ids.length }),
           duration: 5000,
           action: {
-            label: '撤销',
+            label: t('hr.undo'),
             handler: async () => {
               try {
                 await api.postHeavy('/api/rules/batch', { action: 'restore', ids })
-                toast.success('已撤销删除')
+                toast.success(t('hr.undone'))
                 s.setProdBatchSel([])
                 s.setProdBatch(false)
                 s.bumpProdBatchVersion()
               } catch (e) {
-                toast.error('撤销失败: ' + (e.message || ''))
+                toast.error(t('hr.undo_failed', { msg: e.message || '' }))
               }
             },
           },
         })
       } else {
-        toast.success(label + '完成: ' + ids.length + ' 项')
+        toast.success(t('hr.batch_done', { label, n: ids.length }))
       }
       s.setProdBatchSel([])
       s.setProdBatch(false)
       s.bumpProdBatchVersion()
     } catch (e) {
-      toast.error(label + '失败: ' + (e.message || ''))
+      toast.error(t('hr.batch_failed', { label, msg: e.message || '' }))
     }
     setBatchBusy(false)
   }
 
   return (
     <div>
-      <div className="hammer-header">{channel === 'jd' ? '京东' : '其他'} · 规则参数</div>
+      <div className="hammer-header">
+        {t('hr.header', { ch: channel === 'jd' ? t('hr.ch_jd') : t('hr.ch_other') })}
+      </div>
       {/* tab 竖排 */}
       <div className="hammer-segmented" style={{ marginBottom: 8 }}>
         {[
-          ['rules', '规则'],
-          ['params', '补货'],
-          ['purchase', '采购'],
-          ['slow', '滞销'],
+          ['rules', 'hr.tab_rules'],
+          ['params', 'hr.tab_params'],
+          ['purchase', 'hr.tab_purchase'],
+          ['slow', 'hr.tab_slow'],
         ].map(([id, label]) => (
           <span
             key={id}
             onClick={() => setHammerRulesTab(id)}
             className={'hammer-segment' + (hammerRulesTab === id ? ' active' : '')}
           >
-            {label}
+            {t(label)}
           </span>
         ))}
       </div>
@@ -129,14 +132,15 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               className="hammer-btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
             >
-              + 新建
+              {t('hr.new')}
             </button>
             <button
               onClick={() => setSearchOpen(!searchOpen)}
               className="hammer-btn btn-ghost"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
             >
-              搜索{hammerSearch ? <IconCheck size={12} style={{ verticalAlign: -2 }} /> : ''}
+              {t('hr.search')}
+              {hammerSearch ? <IconCheck size={12} style={{ verticalAlign: -2 }} /> : ''}
             </button>
           </div>
           <div className="hammer-row-2">
@@ -147,7 +151,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               className="hammer-btn btn-ghost"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
             >
-              变更历史
+              {t('hr.history')}
             </button>
             <button
               onClick={() => setBatchOpen(!batchOpen)}
@@ -161,7 +165,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                 borderColor: prodBatch ? 'var(--danger)' : undefined,
               }}
             >
-              批量操作
+              {t('hr.batch')}
             </button>
           </div>
           <button
@@ -184,7 +188,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
             ) : (
               <IconLightning size={14} style={{ verticalAlign: -2 }} />
             )}{' '}
-            {evaluating ? '评估中(全量 SKU×仓)...' : '立即运行全部规则'}
+            {evaluating ? t('hr.evaluating') : t('hr.run_all')}
           </button>
           {batchOpen && (
             <div className="hammer-panel">
@@ -197,11 +201,9 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                 }}
               >
                 <span className="text-12 muted2">
-                  已选{' '}
-                  <b style={{ color: 'var(--text)' }}>
-                    {(useAppStore.getState().prodSelIds || []).length}
-                  </b>{' '}
-                  项
+                  {t('hr.selected_n', {
+                    n: (useAppStore.getState().prodSelIds || []).length,
+                  })}
                 </span>
                 {useAppStore.getState().prodBatch ? (
                   <button
@@ -211,14 +213,14 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                       useAppStore.getState().setProdBatchSel([])
                     }}
                   >
-                    退出批量模式
+                    {t('hr.exit_batch')}
                   </button>
                 ) : (
                   <button
                     className="hammer-clear"
                     onClick={() => useAppStore.getState().setProdBatch(true)}
                   >
-                    进入批量模式
+                    {t('hr.enter_batch')}
                   </button>
                 )}
               </div>
@@ -231,7 +233,7 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                     s.requestProdBatchAll()
                   }}
                 >
-                  全选/取消
+                  {t('hr.select_all_toggle')}
                 </button>
               </div>
               <div className="hammer-btn-row" style={{ marginTop: 8 }}>
@@ -242,9 +244,9 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                     opacity: batchBusy || selSt.length === 0 || allActive ? 0.4 : 1,
                   }}
                   disabled={batchBusy || selSt.length === 0 || allActive}
-                  onClick={() => runBatch('active', '启用')}
+                  onClick={() => runBatch('active', t('hr.act_active'))}
                 >
-                  批量启用
+                  {t('hr.batch_enable')}
                 </button>
                 <button
                   className="hammer-btn btn-ghost"
@@ -253,9 +255,9 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                     opacity: batchBusy || selSt.length === 0 || allInactive ? 0.4 : 1,
                   }}
                   disabled={batchBusy || selSt.length === 0 || allInactive}
-                  onClick={() => runBatch('inactive', '停用')}
+                  onClick={() => runBatch('inactive', t('hr.act_inactive'))}
                 >
-                  批量停用
+                  {t('hr.batch_disable')}
                 </button>
                 <button
                   className="hammer-btn btn-ghost"
@@ -264,14 +266,18 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
                     opacity: batchBusy || selSt.length === 0 ? 0.4 : 1,
                   }}
                   disabled={batchBusy || selSt.length === 0}
-                  onClick={() => runBatch('delete', '删除')}
+                  onClick={() => runBatch('delete', t('hr.act_delete'))}
                 >
-                  批量删除
+                  {t('hr.batch_delete')}
                 </button>
               </div>
               <div className="muted2 text-10" style={{ marginTop: 8 }}>
-                勾选规则后在此批量操作（删除可回收站恢复）
-                {allActive ? ' · 所选规则已全部启用' : allInactive ? ' · 所选规则已全部停用' : ''}
+                {t('hr.batch_hint')}
+                {allActive
+                  ? t('hr.all_active')
+                  : allInactive
+                    ? t('hr.all_inactive')
+                    : ''}
               </div>
             </div>
           )}
@@ -280,13 +286,13 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               <input
                 value={localSearch}
                 onChange={e => setLocalSearch(e.target.value)}
-                placeholder="搜索规则名称..."
+                placeholder={t('hr.search_ph')}
                 className="hammer-input"
               />
               {hammerSearch && (
                 <div style={{ marginTop: 4, textAlign: 'right' }}>
                   <button className="hammer-clear" onClick={() => setHammerSearch('')}>
-                    清除
+                    {t('hr.clear')}
                   </button>
                 </div>
               )}
@@ -302,14 +308,14 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
               onClick={() => setHammerRulesMode('bbcc')}
               className={'hammer-tab' + (hammerRulesMode === 'bbcc' ? ' active' : '')}
             >
-              BBCC 送仓
+            {t('hr.mode_bbcc')}
             </span>
           )}
           <span
             onClick={() => setHammerRulesMode('traditional')}
             className={'hammer-tab' + (hammerRulesMode === 'traditional' ? ' active' : '')}
           >
-            传统多仓
+            {t('hr.mode_trad')}
           </span>
         </div>
       )}

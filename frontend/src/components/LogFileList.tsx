@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
+import { t } from '../locale'
 
 /** 日志文件列表(iPhone 日志分析式): 按天平铺 log_archives 归档, 点击行 → 底部弹窗预览当日 md, 系统分享 API 导出
  * 用于: 质量日志页直接平铺(scope=user) + 开发者模式日志弹窗(scope=dev) */
@@ -41,7 +42,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
       )
       setPreview({
         date,
-        markdown: r.data?.markdown || '# 无日志\n',
+        markdown: r.data?.markdown || t('log.no_log') + '\n',
         count: r.data?.count || 0,
         loading: false,
       })
@@ -52,7 +53,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
       }
       setPreview({
         date,
-        markdown: '加载失败，点此重试',
+        markdown: t('log.load_fail_retry'),
         count: 0,
         loading: false,
         error: true,
@@ -98,7 +99,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             fontSize: 'var(--font-sm)',
           }}
         >
-          加载文件列表...
+          {t('log.loading_list')}
         </div>
       ) : files.length === 0 ? (
         <div
@@ -109,7 +110,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
             fontSize: 'var(--font-sm)',
           }}
         >
-          暂无历史日志文件（每日维护自动归档，保留 90 天）
+          {t('log.empty')}
         </div>
       ) : (
         files.map((f: any, i: number) => (
@@ -145,7 +146,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                 flexShrink: 0,
               }}
             >
-              {f.count || 0} 条
+              {t('log.n_items', { n: f.count || 0 })}
             </span>
             <span
               style={{ marginLeft: 'auto', color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}
@@ -201,16 +202,16 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                     color: 'var(--text)',
                   }}
                 >
-                  质量日志 · {preview.date}{' '}
+                  {t('log.title', { date: preview.date })}{' '}
                   <span
                     style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', fontWeight: 400 }}
                   >
-                    {preview.count} 条
+                    {t('log.n_items', { n: preview.count })}
                   </span>
                 </div>
                 {preview.loading ? (
                   <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted2)' }}>
-                    加载中...
+                    {t('common.loading')}
                   </div>
                 ) : (
                   <>
@@ -237,7 +238,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                         className="btn btn-primary"
                         style={{ width: '100%', minHeight: 40, marginBottom: 8 }}
                       >
-                        重试加载
+                        {t('log.retry')}
                       </button>
                     )}
                     <button
@@ -251,7 +252,7 @@ export default function LogFileList({ scope = 'user' }: { scope?: string }) {
                         flexShrink: 0,
                       }}
                     >
-                      {sharing ? '分享中...' : '分享文件'}
+                      {sharing ? t('log.sharing') : t('log.share')}
                     </button>
                   </>
                 )}

@@ -23,7 +23,9 @@ export function GmvCard({
     <div className="card stat-card">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="small muted" style={{ fontSize: 'var(--font-sm)', lineHeight: 1.2 }}>
-          {periodTab === 'custom' ? '自定义' : periodLabel[periodTab]} GMV
+          {t('dash.gmv_card_title', {
+            p: periodTab === 'custom' ? t('dash.custom') : periodLabel[periodTab],
+          })}
         </div>
         {/* GMV 视角切换(总/净/回款), 样式对齐健康小卡 tab: 紧凑segmented pill + 短标签 */}
         <div
@@ -36,9 +38,9 @@ export function GmvCard({
           }}
         >
           {[
-            ['total', '总'],
-            ['net', '净'],
-            ['payout', '回款'],
+            ['total', t('dash.view_total')],
+            ['net', t('dash.view_net')],
+            ['payout', t('dash.view_payout')],
           ].map(([v, l]) => (
             <span
               key={v}
@@ -48,9 +50,7 @@ export function GmvCard({
               }}
               onMouseEnter={function () {}}
               className="clickable"
-              title={
-                v === 'payout' && !gmvPayoutOk ? '回款按到账时间归属——仅月度/完整月可用' : undefined
-              }
+              title={v === 'payout' && !gmvPayoutOk ? t('dash.view_payout_tip') : undefined}
               style={{
                 fontSize: 'var(--font-9)',
                 padding: '2px 6px',
@@ -109,8 +109,8 @@ export function GmvCard({
             if (gmvView === 'payout' && _g == null)
               return (
                 <span style={{ fontSize: 13, color: 'var(--muted2)', fontWeight: 500 }}>
-                  回款待接入资金流水
-                </span>
+                    {t('dash.payout_pending_short')}
+                  </span>
               )
             return '¥' + fmtBig(_g || 0)
           })()}
@@ -119,7 +119,7 @@ export function GmvCard({
           className="card-sub"
           style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}
         >
-          <span>{periodMeta.orders} 单</span>
+          <span>{t('dash.orders_n_plain', { n: periodMeta.orders })}</span>
           {(() => {
             // 2026-10-16 环比跟随维度(总/净/回款分别取各自 last/prev);
             // 后端 prev_net_gmv/prev_payout 缺失时(净/回款无环比数据源)不显示——有就有没有就没有
@@ -144,13 +144,17 @@ export function GmvCard({
             if (!_prev)
               return (
                 <span style={{ fontSize: 'var(--font-9)', color: 'var(--muted2)' }}>
-                  无可比数据
+                  {t('dash.no_basis')}
                 </span>
               )
             const pct = ((Number(_last) - Number(_prev)) / Number(_prev)) * 100
             // 2026-10-16 无歧义: 窗口=上周/上月(完整自然周/月), 环比基准=上上周/上上月
             const _cmpLabel =
-              periodTab === 'today' ? '较昨日' : periodTab === 'week' ? '较上上周' : '较上上月'
+              periodTab === 'today'
+                ? t('dash.vs_prev_day')
+                : periodTab === 'week'
+                  ? t('dash.vs_prev_week')
+                  : t('dash.vs_prev_month')
             return (
               <span
                 style={{
@@ -169,7 +173,7 @@ export function GmvCard({
             )
           })()}
           <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-10)' }}>
-            · 日均 ¥
+            {t('dash.daily_avg_prefix')}
             {(() => {
               // 2026-10-16 去推算兜底: 回款维度无真实流水时显示待接入(不拿 gmv-refund-subsidy 凑)
               const _g =
@@ -185,7 +189,7 @@ export function GmvCard({
               if (_g == null)
                 return (
                   <span style={{ color: 'var(--muted2)', fontWeight: 500 }}>
-                    回款待接入资金流水
+                    {t('dash.payout_pending_short')}
                   </span>
                 )
               return fmtBig((_g || 0) / periodDays)
@@ -340,7 +344,9 @@ export function AlertSummaryCard({
                 // 总览第二行(采购/补货): 数字下间距 6
                 marginTop: 6,
                 display: 'flex',
-                gap: 8,
+                gap: 6,
+                // 卡片是固定正方形(aspect-ratio:1 + overflow:hidden), 换行会被裁 ——
+                // 所以不换行, 改由英文词条取短写(Buy/Replen/Low)来适配宽度
                 flexWrap: 'nowrap',
                 whiteSpace: 'nowrap',
                 fontSize: detailFont,
@@ -352,12 +358,15 @@ export function AlertSummaryCard({
                 // flex margin 不可靠, 静态偏移为浏览器亚像素极限)
               }}
             >
-              {/* 2026-10-27 总览第二行: 采购/补货条数(实时接口同源) */}
+              {/* 2026-10-27 总览第二行: 采购/补货条数(实时接口同源)
+                  2026-11-04 允许换行: 中文「● 采购 7 ● 补货 137」一行放得下, 英文
+                  「● Purchase 7 ● Replenish 137」比中文长约 60%, 强制 nowrap 会被卡片裁掉
+                  (4 视口验证发现 "Replenish 1…"), 故这里 wrap、收紧 gap。 */}
               <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
-                ● 采购 {fmtInt(procBuyN)}
+                {t('dash.line_purchase', { n: fmtInt(procBuyN) })}
               </span>
               <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
-                ● 补货 {fmtInt(procRepN)}
+                {t('dash.line_replenish', { n: fmtInt(procRepN) })}
               </span>
             </div>
           </div>
@@ -376,7 +385,7 @@ export function AlertSummaryCard({
           >
             {/* 总览第三行: 低库存 + 其他(聚合超卖等规则评估, 点击弹窗明细) */}
             <span style={{ fontWeight: 600, color: 'var(--warning)' }}>
-              ● 低库存 {fmtInt(lowStockTotal)}
+              {t('dash.line_low_stock', { n: fmtInt(lowStockTotal) })}
             </span>
             {otherTotal > 0 ? (
               <span
@@ -388,13 +397,15 @@ export function AlertSummaryCard({
                 className="clickable"
                 style={{ color: '#007AFF', fontWeight: 600, cursor: 'pointer' }}
               >
-                ● 其他 {fmtInt(otherTotal)}
+                {t('dash.line_other', { n: fmtInt(otherTotal) })}
               </span>
             ) : (
-              <span style={{ color: 'var(--muted)' }}>其他 0</span>
+              <span style={{ color: 'var(--muted)' }}>{t('dash.other_zero_plain')}</span>
             )}
             {slowMovingTotal > 0 && (
-              <span style={{ color: 'var(--muted2)' }}>● 滞销 {fmtInt(slowMovingTotal)}</span>
+              <span style={{ color: 'var(--muted2)' }}>
+                {t('dash.line_slow', { n: fmtInt(slowMovingTotal) })}
+              </span>
             )}
           </div>
         </div>
@@ -428,7 +439,7 @@ export function HealthCard({
           (Array.isArray(healthTrend) ? healthTrend : []).filter(x => x[_hk] != null && x[_hk] > 0)
             .length >= 2
         const bcActive = healthTab === 'bc' || healthTab === 'platform'
-        const bcLabel = healthTab === 'platform' ? 'C仓' : 'BC'
+        const bcLabel = healthTab === 'platform' ? t('dash.tab_c') : 'BC'
         return (
           <>
             <div
@@ -440,7 +451,7 @@ export function HealthCard({
               }}
             >
               <div className="small muted" style={{ fontSize: 'var(--font-sm)', lineHeight: 1.2 }}>
-                库存{t('dash.healthy')}度
+                {t('dash.health_card_title')}
               </div>
               <div
                 style={{
@@ -468,7 +479,7 @@ export function HealthCard({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  自有
+                  {t('dash.tab_own')}
                 </span>
                 {isJd && _replMode === 'bbcc' && (
                   <span
@@ -533,7 +544,7 @@ export function HealthCard({
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    平台
+                    {t('dash.tab_platform')}
                   </span>
                 )}
                 {bcMenuOpen && (
@@ -573,7 +584,7 @@ export function HealthCard({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        C仓
+                        {t('dash.tab_c')}
                       </div>
                     ) : (
                       <div
@@ -622,7 +633,7 @@ export function HealthCard({
                         : 'var(--success)',
                 }}
               >
-                {healthData.score != null ? healthData.score + '分' : '—'}
+                {healthData.score != null ? t('dash.score_value', { n: healthData.score }) : '—'}
               </div>
               <div
                 className="card-sub"
@@ -647,7 +658,7 @@ export function HealthCard({
                       color: 'var(--success)',
                     }}
                   >
-                    ● {healthData.healthy || 0}健康
+                    {t('dash.healthy_row', { n: healthData.healthy || 0 })}
                   </span>
                   <span
                     style={{
@@ -656,8 +667,7 @@ export function HealthCard({
                       color: 'var(--warning)',
                     }}
                   >
-                    ● {healthData.warning || 0}
-                    {t('dash.low')}
+                    {t('dash.warning_row', { n: healthData.warning || 0 })}
                   </span>
                   <span
                     onClick={function () {
@@ -711,7 +721,7 @@ export function HealthCard({
                         return (
                           <div
                             key={idx}
-                            title={`${String(x.date).slice(5)} ${v}分`}
+                            title={t('dash.score_tip', { d: String(x.date).slice(5), v })}
                             style={{
                               flex: 1,
                               height: h,

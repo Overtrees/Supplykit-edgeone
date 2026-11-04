@@ -68,10 +68,13 @@ export default function ReplenTab(props: Props) {
         className="section-title"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
-        <span>补货建议</span>
+        <span>{t('ins_r.title')}</span>
         <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-          已加载 {Math.min(replen.length, replenTotal || replen.length)}/
-          {replenTotal || replen.length} 条 · 显示 {visCols.length}/{currentCols.length} 列
+          {t('ins.loaded_n_of_m', {
+            n: Math.min(replen.length, replenTotal || replen.length),
+            m: replenTotal || replen.length,
+          })}{' '}
+          · {t('ins.showing_cols', { v: visCols.length, all: currentCols.length })}
           {insightSearch ? ` · "${insightSearch}"` : ''}
           <StaleDot
             level={fresh?.staleLevel || 0}
@@ -80,7 +83,7 @@ export default function ReplenTab(props: Props) {
         </span>
         {replenMode === 'bbcc' && orderedKeys.length > 0 && (
           <span className="pill success" style={{ fontSize: 'var(--font-10)' }}>
-            已下单 {orderedKeys.length} 项
+            {t('ins_r.ordered_n', { n: orderedKeys.length })}
           </span>
         )}
       </div>
@@ -94,7 +97,10 @@ export default function ReplenTab(props: Props) {
       ) : !Array.isArray(replen) || replen.length === 0 ? (
         <div style={{ padding: 12, textAlign: 'center' }}>
           {replenError ? (
-            <ErrorRetry error={'加载失败'} onRetry={() => loadReplen(replenMode, globalChannel)} />
+            <ErrorRetry
+              error={t('ins.load_failed')}
+              onRetry={() => loadReplen(replenMode, globalChannel)}
+            />
           ) : (
             <EmptyState icon="package" title={t('insights.no_replenish')} />
           )}
@@ -191,11 +197,14 @@ export default function ReplenTab(props: Props) {
                               {x.product_name}
                             </td>
                           )
-                        // 仓库(BBCC) / 店铺(TRAD)
+                        // 店铺 / 仓库 —— 一律显示后端返回的**真实值**。
+                        // 2026-11-04 修正: BBCC 模式原先写死成 'B仓' 文案, 把真实的 store 值
+                        // (直营店/食品旗舰店…)整列盖掉 —— 那是拿文案冒充数据。BBCC 是跨仓按
+                        // SKU 聚合, 没有单一 warehouse, 所以此列显示 store; 兜底只在真为空时给 '-'。
                         if (col.id === 'warehouse' || col.id === 'store')
                           return (
                             <td key={col.id} className="col-store">
-                              {replenMode === 'bbcc' ? 'B仓' : x.warehouse || x.store || '-'}
+                              {x.warehouse || x.store || '-'}
                             </td>
                           )
                         // 现有(TRAD)
@@ -243,7 +252,9 @@ export default function ReplenTab(props: Props) {
                             >
                               {x.b_stock > 0
                                 ? x.daily_sales > 0
-                                  ? (x.b_stock / x.daily_sales).toFixed(1) + '天'
+                                  ? t('ins.days_n', {
+                                      n: (x.b_stock / x.daily_sales).toFixed(1),
+                                    })
                                   : '∞'
                                 : '-'}
                             </td>
@@ -378,14 +389,16 @@ export default function ReplenTab(props: Props) {
                         if (col.id === 'c_turn')
                           return (
                             <td key={col.id} className="text-11 font-600">
-                              {x.c_turnover != null ? x.c_turnover + '天' : '∞'}
+                              {x.c_turnover != null ? t('ins.days_n', { n: x.c_turnover }) : '∞'}
                             </td>
                           )
                         // 在途周转
                         if (col.id === 'transit_turn')
                           return (
                             <td key={col.id} style={{ fontSize: 'var(--font-xs)' }}>
-                              {x.transit_turnover != null ? x.transit_turnover + '天' : '∞'}
+                              {x.transit_turnover != null
+                                ? t('ins.days_n', { n: x.transit_turnover })
+                                : '∞'}
                             </td>
                           )
                         // 安全线(TRAD)
@@ -426,7 +439,7 @@ export default function ReplenTab(props: Props) {
                           return (
                             <td key={col.id} style={{ fontSize: 'var(--font-xs)' }}>
                               {x.combined_turnover_current != null
-                                ? x.combined_turnover_current + '天'
+                                ? t('ins.days_n', { n: x.combined_turnover_current })
                                 : '∞'}
                             </td>
                           )
@@ -455,10 +468,10 @@ export default function ReplenTab(props: Props) {
                               {replenMode === 'bbcc'
                                 ? (x.suggested_qty > 0 || x.b_suggested > 0) &&
                                   x.combined_turnover != null
-                                  ? x.combined_turnover + '天'
+                                  ? t('ins.days_n', { n: x.combined_turnover })
                                   : '-'
                                 : x.suggested_qty > 0 && x.after_turnover != null
-                                  ? x.after_turnover + '天'
+                                  ? t('ins.days_n', { n: x.after_turnover })
                                   : '-'}
                             </td>
                           )
@@ -467,8 +480,8 @@ export default function ReplenTab(props: Props) {
                           return (
                             <td
                               key={col.id}
-                              className="col-name"
-                              style={{ color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}
+                              className="col-note"
+                              title={x.note || ''}
                             >
                               {renderNote(x.note)}
                             </td>
@@ -518,7 +531,7 @@ export default function ReplenTab(props: Props) {
                                       (x.suggested_qty > 0 || x.b_suggested > 0) &&
                                       x.combined_turnover > 90 &&
                                       !window.confirm(
-                                        `补后综合周转${x.combined_turnover}天，已超90天考核红线，仍标记操作？`,
+                                        t('ins_r.over_90_confirm', { n: x.combined_turnover }),
                                       )
                                     )
                                       return
@@ -587,7 +600,7 @@ export default function ReplenTab(props: Props) {
                   className="btn btn-ghost"
                   style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
                 >
-                  加载更多
+                  {t('ins.load_more')}
                 </span>
               )}
             </div>
@@ -603,8 +616,9 @@ export default function ReplenTab(props: Props) {
             className="small muted"
             style={{ cursor: 'pointer', fontSize: 'var(--font-sm)', fontWeight: 600 }}
           >
-            <IconPackage size={14} style={{ verticalAlign: -3 }} /> 已下单 {orderedItems.length} 项
-            · 点击查看入库日期与仓储天数
+            <IconPackage size={14} style={{ verticalAlign: -3 }} />{' '}
+            {t('ins_r.ordered_detail', { n: orderedItems.length })} ·{' '}
+            {t('ins_r.ordered_detail_hint')}
           </summary>
           <div style={{ fontSize: 'var(--font-sm)', marginTop: 8 }}>
             {orderedItems.map((po, i) => {
@@ -645,7 +659,9 @@ export default function ReplenTab(props: Props) {
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span className="small" style={{ color: stayColor, fontWeight: 600 }}>
-                      {daysSinceArrival != null ? daysSinceArrival + '天' : '待入仓'}
+                      {daysSinceArrival != null
+                        ? t('ins.days_n', { n: daysSinceArrival })
+                        : t('ins_r.pending_arrival')}
                     </span>
                     <input
                       type="date"

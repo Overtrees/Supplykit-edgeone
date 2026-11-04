@@ -2,6 +2,7 @@ import { IconTag, IconWarning } from '../../components/Icons'
 import React, { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import TemplateManageDialog from '../../components/TemplateManageDialog'
+import { t } from '../../locale'
 interface HammerCleansingProps {
   channel: string
 }
@@ -18,18 +19,19 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
   const [tmplDlgOpen, setTmplDlgOpen] = useState(false)
   const inMapStep = hammerCleansingStep === 1 // 仅映射页(步骤2)显示 模版管理/状态映射
   const isOrder = hammerCleansingTarget === 'order'
-  const target = hammerCleansingChannel === 'jd' ? '京东' : '其他渠道'
+  const target = hammerCleansingChannel === 'jd' ? t('channel.jd') : t('channel.other')
   const sameAsGlobal = hammerCleansingChannel === channel
   const isInOut = hammerCleansingTarget === 'inbound' || hammerCleansingTarget === 'outbound'
   return (
     <div>
       <div className="hammer-header">
-        清洗导入 · 数据归入：<b>{target}</b>
+        {t('cw.header')}
+        <b>{target}</b>
       </div>
       <div className="hammer-segmented">
         {[
-          ['jd', '京东'],
-          ['other', '其他渠道'],
+          ['jd', t('channel.jd')],
+          ['other', t('channel.other')],
         ].map(([id, label]) => (
           <span
             key={id}
@@ -56,8 +58,10 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                 lineHeight: 1.3 /* 行高收紧——内容完整不裁 */,
               }}
             >
-              <IconWarning size={13} style={{ verticalAlign: -2 }} /> 当前全局主体是「
-              {channel === 'jd' ? '京东' : '其他渠道'}」，导入后请切换主体查看该数据
+              <IconWarning size={13} style={{ verticalAlign: -2 }} />{' '}
+              {t('cw.subject_warn_pre')}
+              {channel === 'jd' ? t('channel.jd') : t('channel.other')}
+              {t('cw.subject_warn_suf')}
             </div>
           )}
           {isInOut && (
@@ -70,7 +74,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                   marginBottom: 8,
                 }}
               >
-                重复数据冲突处理
+                {t('cw.conflict_title')}
               </div>
               <div className="hammer-segmented" style={{ flexWrap: 'wrap' }}>
                 <span
@@ -79,7 +83,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                     'hammer-segment' + (hammerCleansingConflict === 'sum' ? ' active' : '')
                   }
                 >
-                  累加求和
+                  {t('cw.conflict_sum')}
                 </span>
                 <span
                   onClick={() => setHammerCleansingConflict('overwrite')}
@@ -87,7 +91,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                     'hammer-segment' + (hammerCleansingConflict === 'overwrite' ? ' active' : '')
                   }
                 >
-                  覆盖
+                  {t('cw.conflict_overwrite')}
                 </span>
               </div>
             </div>
@@ -107,7 +111,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                   minHeight: 36,
                 }}
               >
-                模版管理
+                {t('cw.template_manage')}
               </button>
               {isOrder && (
                 <button
@@ -123,7 +127,7 @@ export default function HammerCleansing({ channel }: HammerCleansingProps) {
                     minHeight: 36,
                   }}
                 >
-                  <IconTag size={13} /> 表格列状态映射
+                  <IconTag size={13} /> {t('cw.colmap')}
                 </button>
               )}
             </div>

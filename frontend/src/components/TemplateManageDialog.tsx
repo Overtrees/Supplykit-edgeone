@@ -8,8 +8,9 @@ import {
   presetMapping,
   presetExample,
   presetRequired,
-  DOC_TYPE_NAMES,
+  docTypeLabel,
 } from '../pages/cleansing/fields'
+import { t } from '../locale'
 
 interface Props {
   tt: string
@@ -75,22 +76,25 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
         window.dispatchEvent(new Event('custom-fields-changed'))
       }
       setSelId(tid)
-      toast.success('模板已应用')
+      toast.success(t('tpl.applied'))
     } catch {}
   }
   const delTemplate = async (tid: any, name: string) => {
-    if (!window.confirm(`删除模板「${name}」？`)) return
+    if (!window.confirm(t('tpl.del_confirm', { name }))) return
     try {
       await api.delete('/api/cleansing/templates/' + tid)
       setSelId('')
       loadTemplates()
-      toast.success('已删除')
+      toast.success(t('common.deleted'))
     } catch {
-      toast.error('删除失败')
+      toast.error(t('common.delete_failed'))
     }
   }
   const addField = () =>
-    changeCf([...cf, { t: 'field_' + Date.now(), l: '自定义字段', tp: 'string' }])
+    changeCf([
+      ...cf,
+      { t: 'field_' + Date.now(), l: t('tpl.cf'), tp: 'string' },
+    ])
   const delField = i => changeCf(cf.filter((_, k) => k !== i))
 
   const fieldStyle: any = {
@@ -137,12 +141,12 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
           }}
         >
           <div className="tpl-title">
-            <span>模板管理</span>
+            <span>{t('tpl.title')}</span>
           </div>
 
           {/* 预设模块(2026-10-27): 单字段源派生——内置预设+下载模板同源, 新列自动同步 */}
           <div className="tpl-section-title">
-            <span>预设模板-{DOC_TYPE_NAMES[tt] || tt}</span>
+            <span>{t('tpl.preset_title', { type: docTypeLabel(tt) })}</span>
             <button
               onClick={() => {
                 // 表头=预设列(label 全字段, 与内置映射同源)
@@ -150,10 +154,12 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 const _req = presetRequired(tt)
                 const _ex = presetExample(tt)
                 const _cols = Object.entries(_src) // [label, target]
-                if (!_cols.length) return toast.error('该类型暂无预设字段')
+                if (!_cols.length) return toast.error(t('tpl.no_preset'))
                 // 表头: 列名(必)/(选)——必选按业务导入链去重键/汇总必需字段
                 const head = _cols.map(
-                  ([label, target]) => label + (_req.includes(String(target)) ? '(必)' : '(选)'),
+                  ([label, target]) =>
+                    label +
+                    (_req.includes(String(target)) ? t('tpl.req') : t('tpl.opt')),
                 )
                 // 第二行示例: 仅必选列给样例, 可选列留空
                 const sample = _cols.map(([, target]) => _ex[String(target)] || '')
@@ -162,19 +168,19 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
                 a.href = url
-                a.download = (DOC_TYPE_NAMES[tt] || tt) + '导入模板.csv'
+                a.download = t('tpl.csv_name', { type: docTypeLabel(tt) })
                 a.click()
                 setTimeout(() => URL.revokeObjectURL(url), 1000)
-                toast.success('模板已下载，按表头填充后导入')
+                toast.success(t('tpl.downloaded'))
               }}
               className="clickable tpl-btn tpl-btn-primary"
               style={{ padding: '7px 14px' }}
             >
-              ↓ 下载 CSV
+              {t('tpl.dl_csv')}
             </button>
           </div>
           {/* 模板区 */}
-          <div className="tpl-section-title">我的模板</div>
+          <div className="tpl-section-title">{t('tpl.mine')}</div>
           <div style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <select
@@ -188,7 +194,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 }}
                 className="tpl-field"
               >
-                <option value="">选择映射模板...</option>
+                <option value="">{t('tpl.pick_ph')}</option>
                 {templates
                   .filter(t => t.doc_type === tt)
                   .map(t => (
@@ -198,15 +204,17 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   ))}
                 {templates.filter(t => t.doc_type !== tt).length > 0 && (
                   <option disabled style={{ color: 'var(--muted2)', fontSize: 11 }}>
-                    ── {tt === 'order' ? '库存' : '订单'}模板（
-                    {templates.filter(t => t.doc_type !== tt).length}个） ──
+                    {t('tpl.other_group', {
+                      type: docTypeLabel(tt === 'order' ? 'inventory' : 'order'),
+                      n: templates.filter(x => x.doc_type !== tt).length,
+                    })}
                   </option>
                 )}
               </select>
             </div>
             {/* 2026-10-27: 已存模板列表移除(下拉即选即应用, 列表冗余); 仅保留空态引导 */}
             {templates.filter((t: any) => t.doc_type === tt).length === 0 && (
-              <div className="tpl-empty">还没有模板：先完成字段映射 → 输入名称保存</div>
+              <div className="tpl-empty">{t('tpl.empty')}</div>
             )}
           </div>
           <div
@@ -216,17 +224,17 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             <input
               value={tmplName}
               onChange={e => setTmplName(e.target.value)}
-              placeholder="新模板名称"
+              placeholder={t('tpl.name_ph')}
               className="tpl-field"
               style={{ flex: '1 1 150px', minWidth: 120 }}
             />
             <button
               onClick={async () => {
                 const n = tmplName.trim()
-                if (!n) return toast.error('请输入模板名称')
+                if (!n) return toast.error(t('tpl.need_name'))
                 const _mp = (window as any).__curMp || {}
                 if (!_mp || Object.keys(_mp).length === 0) {
-                  return toast.error('请先完成字段映射再保存模板')
+                  return toast.error(t('tpl.need_mapping'))
                 }
                 // 2026-10-27 根治: 模板内嵌被引用的自定义字段定义——跨设备/清缓存后仍能还原字段名
                 // (曾只存 mapping, cf 存本机 localStorage, 换设备后 target 无中文名)
@@ -238,7 +246,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                 const _dup = templates.find((t: any) => t.name === n && t.doc_type === tt)
                 if (_dup) {
                   const okOverwrite = window.confirm(
-                    `已存在同名模板「${n}」（${DOC_TYPE_NAMES[tt] || tt}），是否覆盖更新？`,
+                    t('tpl.dup_confirm', { name: n, type: docTypeLabel(tt) }),
                   )
                   if (!okOverwrite) return
                 }
@@ -249,7 +257,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                     mapping: _mp,
                     cf_meta: cfMeta,
                   })
-                  const msg = r?.data?.message || '模板已保存'
+                  const msg = r?.data?.message || t('tpl.saved')
                   setTmplName('')
                   // 一次拉取: 刷新列表 + 自动选中刚保存的模板(name+doc_type 定位)
                   try {
@@ -263,19 +271,19 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   }
                   toast.success(msg)
                 } catch (e) {
-                  toast.error('模板保存失败: ' + (e.response?.data?.detail || e.message))
+                  toast.error(
+                    t('tpl.save_failed', { msg: e.response?.data?.detail || e.message }),
+                  )
                 }
               }}
               className="clickable tpl-btn tpl-btn-primary"
               style={{ padding: '10px 18px', flexShrink: 0 }}
             >
-              保存模板
+              {t('tpl.save_btn')}
             </button>
           </div>
           <div className="tpl-hint">
-            <span title="保存前先在映射页完成字段映射，模板会记录当前映射关系">
-              ⓘ 保存当前映射为模板
-            </span>
+            <span title={t('tpl.save_hint_title')}>{t('tpl.save_hint')}</span>
           </div>
 
           {/* 自定义字段区 */}
@@ -286,16 +294,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
             style={{ marginBottom: cfOpen ? 8 : 0, marginTop: 4 }}
           >
             <span>
-              自定义字段
+              {t('tpl.cf')}
               <span
                 className="small muted"
                 style={{ fontSize: 11, fontWeight: 400, marginLeft: 6 }}
               >
-                {cf.length ? `${cf.length} 个` : '可自定义映射目标字段名'}
+                {cf.length ? t('tpl.cf_n', { n: cf.length }) : t('tpl.cf_none')}
               </span>
             </span>
             <span style={{ fontSize: 12, color: 'var(--muted2)' }}>
-              {cfOpen ? '收起 ▲' : '展开 ▼'}
+              {cfOpen ? t('tpl.collapse') : t('tpl.expand')}
             </span>
           </div>
           <div className="tpl-cf-box" style={{ display: cfOpen ? 'block' : 'none' }}>
@@ -315,7 +323,7 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   onChange={e =>
                     changeCf(cf.map((x, k) => (k === i ? { ...x, l: e.target.value } : x)))
                   }
-                  placeholder="字段名"
+                  placeholder={t('tpl.field_name_ph')}
                   className="tpl-field"
                   style={{ flex: '1 1 150px', minWidth: 120 }}
                 />
@@ -327,16 +335,16 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
                   className="tpl-field"
                   style={{ flexShrink: 0, padding: '9px 10px' }}
                 >
-                  <option value="string">文本</option>
-                  <option value="number">数字</option>
-                  <option value="date">日期</option>
+                  <option value="string">{t('tpl.tp_string')}</option>
+                  <option value="number">{t('tpl.tp_number')}</option>
+                  <option value="date">{t('tpl.tp_date')}</option>
                 </select>
                 <button
                   onClick={() => delField(i)}
                   className="clickable tpl-btn tpl-btn-danger"
                   style={{ padding: '9px 14px', flexShrink: 0 }}
                 >
-                  删除
+                  {t('common.delete')}
                 </button>
               </div>
             ))}
@@ -345,13 +353,13 @@ export default function TemplateManageDialog({ tt, onClose }: Props) {
               className="clickable tpl-btn tpl-btn-ghost"
               style={{ borderStyle: 'dashed', color: 'var(--muted)', width: '100%' }}
             >
-              + 添加自定义字段
+              {t('tpl.add_cf')}
             </button>
           </div>
 
           {/* 2026-10-27 UX: 关闭降为次要按钮(曾主色蓝底与'保存模板'同级 → 视觉上关闭是主操作) */}
           <div onClick={onClose} className="clickable sheet-cancel" style={{ marginTop: 10 }}>
-            关闭
+            {t('tpl.close')}
           </div>
         </div>
       </div>

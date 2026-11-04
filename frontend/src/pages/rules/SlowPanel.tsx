@@ -3,6 +3,7 @@ import { IconSave, IconLoading } from '../../components/Icons'
 import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { IS } from './shared'
+import { t } from '../../locale'
 
 interface Props {
   channel: string
@@ -34,7 +35,7 @@ export default function RulesSlowPanel(props: Props) {
   return (
     <div>
       <div className="small muted" style={{ marginBottom: 10, fontSize: 'var(--font-sm)' }}>
-        按品类分组自定义滞销判定：每个品类设「滞销线(天)」和「临期线(月)」，品类名单匹配商品的分类字段
+        {t('slow.hint')}
       </div>
       {slowCats.map((s, i) => (
         <div
@@ -52,7 +53,7 @@ export default function RulesSlowPanel(props: Props) {
               onChange={e =>
                 setSlowCats(p => p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
               }
-              placeholder="品类名(如 食品)"
+              placeholder={t('slow.name_ph')}
               style={{
                 flex: 1,
                 minWidth: 80,
@@ -118,7 +119,7 @@ export default function RulesSlowPanel(props: Props) {
           </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-              滞销线(天)
+              {t('slow.slow_days')}
               <input
                 type="number"
                 value={s.slow_days}
@@ -133,7 +134,8 @@ export default function RulesSlowPanel(props: Props) {
               />
             </label>
             <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-              观察线(天) <span style={{ color: 'var(--muted2)' }}>留空自动</span>
+              {t('slow.observe_days')}{' '}
+              <span style={{ color: 'var(--muted2)' }}>{t('slow.auto')}</span>
               <input
                 type="number"
                 value={s.observe_days ?? ''}
@@ -155,7 +157,7 @@ export default function RulesSlowPanel(props: Props) {
               />
             </label>
             <label style={{ fontSize: 'var(--font-sm)', flex: 1, minWidth: 80 }}>
-              临期线(月)
+              {t('slow.shelf_months')}
               <input
                 type="number"
                 value={s.shelf_months}
@@ -171,13 +173,13 @@ export default function RulesSlowPanel(props: Props) {
             </label>
           </div>
           <label style={{ fontSize: 'var(--font-sm)', display: 'block' }}>
-            品类名单（逗号分隔，匹配商品"分类"字段）
+            {t('slow.cats_label')}
             <input
               value={s.cats || ''}
               onChange={e =>
                 setSlowCats(p => p.map((x, j) => (j === i ? { ...x, cats: e.target.value } : x)))
               }
-              placeholder="酱油,薯片,糖果..."
+              placeholder={t('slow.cats_ph')}
               style={{ ...IS, marginTop: 2 }}
             />
           </label>
@@ -192,14 +194,14 @@ export default function RulesSlowPanel(props: Props) {
             gap: 10,
           }}
         >
-          物流在途(天)
+          {t('slow.transit')}
           <input
             value={transitDays}
             onChange={e => setTransitDays(e.target.value)}
             style={{ ...IS, width: 80, fontSize: 'var(--font-md)', textAlign: 'center' }}
           />
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            库存出库到客户/入仓的运输天数，默认 3（用于效期预警：已消耗 + 在途 &gt; 1/3 标临近）
+            {t('slow.transit_hint')}
           </span>
         </label>
         <label
@@ -211,14 +213,14 @@ export default function RulesSlowPanel(props: Props) {
             marginTop: 8,
           }}
         >
-          资金占用线(¥)
+          {t('slow.fund')}
           <input
             value={fundThreshold}
             onChange={e => setFundThreshold(e.target.value)}
             style={{ ...IS, width: 80, fontSize: 'var(--font-md)', textAlign: 'center' }}
           />
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            滞销品资金占用(库存×单价)超此线 → 升级「处置」等级(默认 10000)
+            {t('slow.fund_hint')}
           </span>
         </label>
       </div>
@@ -229,7 +231,7 @@ export default function RulesSlowPanel(props: Props) {
               ...p,
               {
                 key: 'new' + Date.now(),
-                name: '新品类',
+                name: t('slow.new_cat'),
                 slow_days: 30,
                 observe_days: '',
                 shelf_months: 3,
@@ -246,7 +248,7 @@ export default function RulesSlowPanel(props: Props) {
             minHeight: 40,
           }}
         >
-          + 添加品类
+          {t('slow.add_cat')}
         </button>
       </div>
       <div style={{ marginTop: 12 }}>
@@ -263,7 +265,7 @@ export default function RulesSlowPanel(props: Props) {
                 transit_days: transitDays || '',
                 slow_fund_threshold: fundThreshold || '',
               })
-              toast.success('已保存')
+              toast.success(t('rp.saved'))
               window.dispatchEvent(new Event('rules-changed'))
             } catch (e) {
               saveErr(e)
@@ -282,11 +284,11 @@ export default function RulesSlowPanel(props: Props) {
         >
           {saving ? (
             <>
-              <IconLoading size={14} /> 保存中...
+              <IconLoading size={14} /> {t('rfm.saving')}
             </>
           ) : (
             <>
-              <IconSave size={14} /> 保存
+              <IconSave size={14} /> {t('common.save')}
             </>
           )}
         </button>

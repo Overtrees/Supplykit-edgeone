@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, freshStamp } from '../api/client'
+import { t } from '../locale'
 
 /**
  * 数据新鲜度(2026-10-29)
@@ -23,9 +24,9 @@ const DOT_COLOR = ['transparent', 'var(--warning)', 'var(--danger)']
 const LEVEL_COLOR = ['var(--muted2)', 'var(--warning)', 'var(--danger)']
 
 const fmtDays = (d: number | null): string => {
-  if (d === null || d === undefined) return '未知'
-  if (d <= 0) return '今天'
-  return d + ' 天前'
+  if (d === null || d === undefined) return t('fr.unknown')
+  if (d <= 0) return t('fr.today')
+  return t('fr.days_ago', { n: d })
 }
 
 export function useFreshness(channel?: string) {
@@ -58,7 +59,7 @@ export function StaleDot({
   if (!level) return null
   return (
     <span
-      title={label ? `${label}数据 ${days ?? '?'} 天未更新` : undefined}
+      title={label ? t('fr.data_stale', { label, d: days ?? '?' }) : undefined}
       style={{
         width: 7,
         height: 7,
@@ -87,7 +88,7 @@ export function StaleDotInline({
   return (
     <span
       onClick={onClick}
-      title={`数据 ${days ?? '?'} 天未更新, 点击查看`}
+      title={t('fr.data_stale_click', { d: days ?? '?' })}
       style={{
         width: 7,
         height: 7,
@@ -149,14 +150,14 @@ export function FreshPopover({
           }}
         >
           <div className="fresh-title">
-            <span>数据新鲜度</span>
+            <span>{t('fr.title')}</span>
             <span className="fresh-close clickable" onClick={onClose}>
-              关闭
+              {t('common.close')}
             </span>
           </div>
-          <div className="fresh-hint">数据来自 ERP / 平台导出快照，超期建议重新导入对应类型</div>
+          <div className="fresh-hint">{t('fr.hint')}</div>
 
-          <div className="fresh-section">看板指标</div>
+          <div className="fresh-section">{t('fr.section_dash')}</div>
           <div className="fresh-list">
             {(data.metrics || []).map(m => (
               <div key={m.key} className="fresh-row">
@@ -169,7 +170,7 @@ export function FreshPopover({
             ))}
           </div>
 
-          <div className="fresh-section">原始数据源</div>
+          <div className="fresh-section">{t('fr.section_src')}</div>
           <div className="fresh-list">
             {(data.sources || []).map(s2 => (
               <div key={s2.doc_type} className="fresh-row">
@@ -179,7 +180,7 @@ export function FreshPopover({
                 </span>
               </div>
             ))}
-            {!(data.sources || []).length && <div className="fresh-empty">暂无导入记录</div>}
+            {!(data.sources || []).length && <div className="fresh-empty">{t('fr.empty')}</div>}
           </div>
         </div>
       </div>

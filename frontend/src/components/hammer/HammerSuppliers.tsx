@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { SUPPLIER_COLS, suppColKey, getSuppVis } from './configs'
 import { t } from '../../locale'
+import { colLabel } from '../colLabels'
 
 interface HammerSuppliersProps {
   channel: string
@@ -34,7 +35,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
           onClick={() => setHammerPanel(hammerPanel === 'columns' ? null : 'columns')}
           className="btn-ghost hammer-btn"
         >
-          列选择 ({visCols.length}/{SUPPLIER_COLS.length})
+          {t('common.columns')} ({visCols.length}/{SUPPLIER_COLS.length})
         </button>
         <button
           onClick={() => {
@@ -54,7 +55,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
               {t('common.all')}
             </button>
             <button onClick={() => saveCols([])} className="hammer-clear">
-              取消全选
+              {t('common.deselect')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginBottom: 2, padding: '0 4px' }}>
@@ -62,7 +63,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
           </div>
           {visCols.length > 0 && (
             <div className="cols-group-title">
-              <span>已显示</span>
+              <span>{t('common.visible')}</span>
               <span>{visCols.length}</span>
             </div>
           )}
@@ -124,7 +125,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
                   }}
                   className="accent-primary"
                 />
-                <span className="flex-1 text-12">{col.label}</span>
+                <span className="flex-1 text-12">{colLabel(col.id)}</span>
                 <span className="muted2 text-9">#{visCols.indexOf(col.id) + 1}</span>
               </div>
             )
@@ -135,7 +136,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
             return (
               <>
                 <div className="cols-group-title">
-                  <span>已隐藏</span>
+                  <span>{t('common.hidden')}</span>
                   <span>{hidden.length}</span>
                 </div>
                 {hidden.map(col => (
@@ -153,7 +154,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
                       }}
                       className="accent-primary"
                     />
-                    <span className="flex-1 text-12">{col.label}</span>
+                    <span className="flex-1 text-12">{colLabel(col.id)}</span>
                   </div>
                 ))}
               </>
@@ -167,7 +168,7 @@ export default function HammerSuppliers({ channel }: HammerSuppliersProps) {
             id="hm-search-supp"
             value={localSearch}
             onChange={e => setLocalSearch(e.target.value)}
-            placeholder="搜索供应商名称/编号..."
+            placeholder={t('hs2.search_ph')}
             className="hammer-input"
           />
           {hammerSearch && (

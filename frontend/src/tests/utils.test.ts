@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  insDefVis,
-  insDefVisTrad,
-  INV_WH_LABEL,
-  ORDER_STATUSES,
-} from '../components/hammer/configs'
+import { insDefVis, insDefVisTrad, ORDER_STATUSES } from '../components/hammer/configs'
+import { whTypeLabel } from '../components/statusLabels'
 import { INS_BBCC_COLS, INS_TRAD_COLS } from '../components/hammer/configs'
 
 describe('工具函数', () => {
@@ -27,10 +23,12 @@ describe('工具函数', () => {
     expect(result).toContain('after_turn')
   })
 
-  it('仓库类型标签定义完整', () => {
-    expect(INV_WH_LABEL.own).toBe('自有仓')
-    expect(INV_WH_LABEL.platform).toBe('平台仓')
-    expect(INV_WH_LABEL.platform_b).toBe('B仓')
+  it('仓库类型标签可解析(走词条, 不硬编码中文)', () => {
+    // 断言点从「表里存中文」改为「解析后非空且三者互不相同」——
+    // 文案归 locale 管, 测试只锁"三种仓库都能拿到各自的显示名"
+    const labels = (['own', 'platform', 'platform_b'] as const).map(whTypeLabel)
+    labels.forEach(l => expect(l.length).toBeGreaterThan(0))
+    expect(new Set(labels).size).toBe(3)
   })
 
   it('订单状态列表完整', () => {

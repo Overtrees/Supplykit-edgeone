@@ -271,7 +271,7 @@ export async function apiJson(
   })()
   const target = /^https?:\/\//i.test(url) ? url : BASE + url
   const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), opts.timeout ?? 30000)
+  const _tid = setTimeout(() => ctrl.abort(), opts.timeout ?? 30000)
   const onAbort = () => ctrl.abort()
   if (opts.signal) {
     if (opts.signal.aborted) ctrl.abort()
@@ -300,7 +300,7 @@ export async function apiJson(
     } catch {}
     throw e
   } finally {
-    clearTimeout(t)
+    clearTimeout(_tid)
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   }
 }
@@ -316,7 +316,7 @@ export async function uploadForm(url: string, fd: FormData, timeout = 90000): Pr
     }
   })()
   const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), timeout)
+  const _tid = setTimeout(() => controller.abort(), timeout)
   try {
     const resp = await fetch(url, {
       method: 'POST',
@@ -348,7 +348,7 @@ export async function uploadForm(url: string, fd: FormData, timeout = 90000): Pr
     }
     return { data: 'data' in data ? data.data : data, status: resp.status }
   } finally {
-    clearTimeout(t)
+    clearTimeout(_tid)
   }
 }
 
@@ -366,7 +366,7 @@ export async function uploadRawBytes(
     }
   })()
   const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), timeout)
+  const _tid = setTimeout(() => controller.abort(), timeout)
   // 2026-11-03 修: 原样 fetch(url) 只对"前端与 API 同源"成立。只要设了
   // VITE_API_BASE_URL(本地 dev 连测试环境/前后端分离部署), 上传就会打到前端自己的
   // origin → 404, 且被上层 catch 吞掉只留"识别失败"。与 axios 实例同口径拼 BASE。
@@ -400,7 +400,7 @@ export async function uploadRawBytes(
     }
     return { data: 'data' in d ? d.data : d, status: resp.status }
   } finally {
-    clearTimeout(t)
+    clearTimeout(_tid)
   }
 }
 

@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one, execute
-from routes.common import ok, PAID_STATUSES, SALES_STATUSES, traced, try_err, INVENTORY_COLS as _INV_COLS
+from routes.common import ok, PAID_STATUSES, SALES_STATUSES, FUNNEL_STAGES, traced, try_err, INVENTORY_COLS as _INV_COLS
 from routes.common import track_run  # 2026-11-02 S1-2: 链路运行流水
 
 router = APIRouter(tags=["dashboard"])
@@ -22,6 +22,34 @@ _PAID = tuple(PAID_STATUSES)
 def _status_cond(col="order_status"):
     """GMV 已支付口径条件"""
     return "%s IN (%s)" % (col, ",".join(["'%s'" % s for s in _PAID]))
+
+
+def _build_funnel_stages(cnt_by_status: dict, total: int) -> list:
+    """把 order_status 原始值计数摊成订单阶段分布。
+
+    - 第 1 档「总订单」= SUM(所有状态) —— 唯一的聚合值, 不来自某一状态;
+    - 其余各档 = `FUNNEL_STAGES` 里列出的**原始状态值**, 与订单表格状态列逐字一致;
+    - `FUNNEL_STAGES` 之外还存在的状态(历史脏值/未来新增值)不丢弃, 按原值追加到末尾,
+      保证「各档合计 == 总订单」。这条是 2026-11-04 修的: 原来写死 4 档且漏「申请退款」,
+      4 档合计 105951 vs 总订单 118091, 差额白白消失。
+
+    percentage: 占总数比例; conversion: 与上一档的比值(卡片里显示为转化率)。
+    """
+    stages = [("总订单", total, 100.0)]
+    for n in FUNNEL_STAGES:
+        v = int(cnt_by_status.get(n, 0) or 0)
+        stages.append((n, v, round(v / total * 100, 1) if total else 0))
+    known = set(FUNNEL_STAGES) | {"总订单"}
+    for n, v in sorted(cnt_by_status.items(), key=lambda kv: -int(kv[1] or 0)):
+        if n in known or not v:
+            continue
+        stages.append((n, int(v), round(int(v) / total * 100, 1) if total else 0))
+    out = []
+    for i, (n, v, pct) in enumerate(stages):
+        prev = stages[i - 1][1] if i > 0 else total
+        out.append({"name": n, "value": v, "percentage": pct,
+                    "conversion": round(min(v / prev * 100, 100), 1) if prev else 0})
+    return out
 
 
 _summary_cache = {}
@@ -590,15 +618,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
               for k, v in sorted(store_gmv.items(), key=lambda x: -x[1])]
 
     ftotal = total_orders
-    stages = [("总订单", ftotal, 100.0)]
-    for n in ["待确认", "待发货", "已发货", "已完成"]:
-        v = funnel.get(n, 0)
-        stages.append((n, v, round(v / ftotal * 100, 1) if ftotal else 0))
-    funnel_res = []
-    for i, (n, v, pct) in enumerate(stages):
-        prev = stages[i - 1][1] if i > 0 else ftotal
-        funnel_res.append({"name": n, "value": v, "percentage": pct,
-                           "conversion": round(min(v / prev * 100, 100), 1) if prev else 0})
+    funnel_res = _build_funnel_stages(funnel, ftotal)
 
     now = datetime.now(timezone.utc)
     today_s = now.strftime("%Y-%m-%d")
@@ -879,17 +899,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
         for (d, st, s2), (gv, sb, cn) in day_rows.items():
             if d0 <= (d or "") <= d1:
                 _ft[st] = _ft.get(st, 0) + cn
-        _total = sum(_ft.values())
-        _stages = [("总订单", _total, 100.0)]
-        for n in ["待确认", "待发货", "已发货", "已完成"]:
-            v = _ft.get(n, 0)
-            _stages.append((n, v, round(v / _total * 100, 1) if _total else 0))
-        _out = []
-        for i, (n, v, pct) in enumerate(_stages):
-            prev = _stages[i - 1][1] if i > 0 else _total
-            _out.append({"name": n, "value": v, "percentage": pct,
-                         "conversion": round(min(v / prev * 100, 100), 1) if prev else 0})
-        return _out
+        # 与全局 funnel 同一套摊法(区间内自身求和为总数)
+        return _build_funnel_stages(_ft, sum(_ft.values()))
     period_funnel = {"today": _funnel_range(today_s, today_s),
                      "week": _funnel_range(d7, d8),
                      "month": _funnel_range(d30, d31)}

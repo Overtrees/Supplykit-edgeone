@@ -57,7 +57,7 @@ export default function SupplierPage() {
       .catch(() => {
         setLd(false)
         setList([])
-        setLoadErr('加载失败')
+        setLoadErr(t('common.load_failed'))
       })
   }
   useEffect(() => {
@@ -106,9 +106,14 @@ export default function SupplierPage() {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
         <span>
-          供应商管理{' '}
+          {t('sup.title')}{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            已加载 {list.length}/{list.length} 条 · 显示 {visCols.length}/{COLS.length} 列
+            {t('sup.loaded', {
+              a: list.length,
+              b: list.length,
+              c: visCols.length,
+              d: COLS.length,
+            })}
           </span>
         </span>
       </div>
@@ -119,14 +124,14 @@ export default function SupplierPage() {
           <EmptyState
             icon="factory"
             title={s ? t('supplier.empty_matched') : t('supplier.empty')}
-            desc={s ? '换个关键词试试' : '通过清洗页导入供应商数据'}
+            desc={s ? t('sup.try_other_kw') : t('sup.import_hint')}
             action={
               !s && (
                 <button
                   className="btn btn-primary"
                   onClick={() => window.__setPage && window.__setPage('cleansing')}
                 >
-                  去导入数据 →
+                  {t('common.go_import')}
                 </button>
               )
             }

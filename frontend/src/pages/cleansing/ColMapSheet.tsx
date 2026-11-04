@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { IconCheck, IconClipboard, IconClose } from '../../components/Icons'
+import { t } from '../../locale'
 
 interface Props {
   colMap: Record<string, any[]>
@@ -59,7 +60,7 @@ export default function ColMapSheet(props: Props) {
               textAlign: 'center',
             }}
           >
-            表格列状态映射
+            {t('cm.title')}
           </div>
           <div
             style={{
@@ -69,13 +70,13 @@ export default function ColMapSheet(props: Props) {
               marginBottom: 12,
             }}
           >
-            按列配置 值→档位，导入时自动归一化 · 渠道：{channel === 'jd' ? '京东' : '其他渠道'}
-            （全局主体隔离） 计入销量池=日销/GMV 都算；仅订单记录=写订单可见，GMV
-            按状态（已发货类算），不计日销补货
+            {t('cm.desc', {
+              ch: channel === 'jd' ? t('cm.ch_jd') : t('cm.ch_other'),
+            })}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <span style={{ fontSize: 'var(--font-13)', fontWeight: 600, flexShrink: 0 }}>
-              映射列
+              {t('cm.map_col')}
             </span>
             <select
               value={colMapCol}
@@ -90,12 +91,12 @@ export default function ColMapSheet(props: Props) {
                 outline: 'none',
               }}
             >
-              <option value="order_status">订单状态（销量池判定）</option>
+              <option value="order_status">{t('cm.opt_order_status')}</option>
             </select>
           </div>
           {!(colMap[colMapCol] || []).length && (
             <div className="tpl-empty" style={{ padding: '12px 2px' }}>
-              还没有配置：点击「补全内置默认」快速生成，或「+ 添加值」手动添加
+              {t('cm.empty')}
             </div>
           )}
           {(colMap[colMapCol] || []).map((s, i) => (
@@ -121,11 +122,11 @@ export default function ColMapSheet(props: Props) {
                     ),
                   }))
                 }
-                placeholder="值(如 交易成功)"
+                placeholder={t('cm.val_ph')}
                 className="tpl-field"
                 title={
                   (colMap[colMapCol] || []).filter(x => x.name && x.name === s.name).length > 1
-                    ? '值重复：导入归一化时后者覆盖前者'
+                    ? t('cm.val_dup')
                     : ''
                 }
                 style={{
@@ -154,14 +155,14 @@ export default function ColMapSheet(props: Props) {
                     {
                       v: 'sale',
                       Icon: IconCheck,
-                      label: '销量池',
-                      tip: '计入销量池（日销+GMV）',
+                      label: 'cm.grp_sale',
+                      tip: 'cm.grp_sale_tip',
                     },
                     {
                       v: 'blocked',
                       Icon: IconClipboard,
-                      label: '仅记录',
-                      tip: '仅订单记录（GMV 按状态，不计日销）',
+                      label: 'cm.grp_blocked',
+                      tip: 'cm.grp_blocked_tip',
                     },
                   ] as const
                 ).map(({ v, Icon, label, tip }) => {
@@ -169,7 +170,7 @@ export default function ColMapSheet(props: Props) {
                   return (
                     <span
                       key={v}
-                      title={tip}
+                      title={t(tip)}
                       className="clickable"
                       onClick={() =>
                         setColMap(p => ({
@@ -199,7 +200,7 @@ export default function ColMapSheet(props: Props) {
                       }}
                     >
                       <Icon size={12} />
-                      {label}
+                  {t(label)}
                     </span>
                   )
                 })}
@@ -229,7 +230,7 @@ export default function ColMapSheet(props: Props) {
               className="btn btn-ghost clickable"
               style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
             >
-              + 添加值
+              {t('cm.add_val')}
             </button>
             <button
               onClick={() =>
@@ -264,7 +265,7 @@ export default function ColMapSheet(props: Props) {
               className="btn btn-ghost clickable"
               style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
             >
-              补全内置默认
+              {t('cm.fill_defaults')}
             </button>
             <button
               onClick={() =>
@@ -276,7 +277,7 @@ export default function ColMapSheet(props: Props) {
               className="btn btn-ghost clickable"
               style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
             >
-              全部销量池
+              {t('cm.all_sale')}
             </button>
             <button
               onClick={() =>
@@ -288,12 +289,14 @@ export default function ColMapSheet(props: Props) {
               className="btn btn-ghost clickable"
               style={{ fontSize: 'var(--font-sm)', padding: '7px 14px', minHeight: 36 }}
             >
-              全部仅记录
+              {t('cm.all_blocked')}
             </button>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <div onClick={() => onClose()} className="clickable sheet-cancel" style={{ flex: 1 }}>
-              <span style={{ fontSize: 'var(--font-15)', fontWeight: 600 }}>取消</span>
+              <span style={{ fontSize: 'var(--font-15)', fontWeight: 600 }}>
+                {t('common.cancel')}
+              </span>
             </div>
             <div
               onClick={() => {
@@ -303,7 +306,7 @@ export default function ColMapSheet(props: Props) {
               style={{ flex: 1, opacity: colMapSaving ? 0.6 : 1 }}
             >
               <span style={{ fontSize: 'var(--font-15)', fontWeight: 600 }}>
-                {colMapSaving ? '保存中...' : '保存'}
+                {colMapSaving ? t('cm.saving') : t('common.save')}
               </span>
             </div>
           </div>

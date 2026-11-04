@@ -1,5 +1,6 @@
 import { IconWarning } from '../../components/Icons'
 import { TARGET_FIELDS, SYS_FIELDS } from './fields'
+import { t } from '../../locale'
 
 interface Props {
   pv: any
@@ -35,12 +36,12 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>清洗预览</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>{t('cw.preview_title')}</span>
         {(() => {
           const n = Object.keys(pv.preview[0] || {}).filter(k => k !== '_source').length
-          const parts: string[] = [`共 ${pv.total} 行`]
-          if (pv.total > 50) parts.push('已展示前 50 行')
-          if (n > 0) parts.push(`${n} 列`)
+          const parts: string[] = [t('cw.pv_total', { n: pv.total })]
+          if (pv.total > 50) parts.push(t('cw.pv_shown_50'))
+          if (n > 0) parts.push(t('cw.pv_cols', { n }))
           return (
             <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
               {parts.join(' · ')}
@@ -80,8 +81,8 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
           >
             <IconWarning size={13} style={{ flexShrink: 0, marginTop: 1 }} />
             <span>
-              预览发现 <b>{missing}</b> 行缺SKU、<b>{dupSkus.size}</b> 个重复SKU（已标红）——
-              建议返回修正后导入
+              {t('cw.pv_issue_pre')}<b>{missing}</b>{t('cw.pv_issue_sku')}<b>{dupSkus.size}</b>{t('cw.pv_issue_dup')}
+              {t('cw.pv_issue_suf')}
             </span>
           </div>
         )
@@ -111,7 +112,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
         if (cols.length === 0)
           return (
             <div className="small muted" style={{ padding: 20, textAlign: 'center' }}>
-              没有已映射的字段，请返回并设置字段映射
+              {t('cw.pv_no_mapping')}
             </div>
           )
         return (
@@ -120,7 +121,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
               className="clean-preview-hint"
               style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)', marginBottom: 4 }}
             >
-              ← 左右滑动查看 · 仅显示已映射的 {cols.length} 列 →
+              {t('cw.pv_swipe_hint', { n: cols.length })}
             </div>
             {/* 2026-10-28 安全区根治: 50 行表格曾把页面撑高 → iOS 地址栏联动 → 顶部露出 chrome 纯色条;
                     改表格内部限高滚动(避免整页高度突变), 纵向滚 table / 横向滚外层 */}
@@ -167,7 +168,12 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
                     // 脏数据预检: 关键字段(sku)缺失/重复 → 行标红(导入前发现, 非执行后才知道)
                     const skuCol = cols.find(c => c.target === 'sku')
                     const skuVal = skuCol ? String(r[skuCol.target] || '') : ''
-                    const issue = skuVal === '' ? '缺SKU' : dupSkus.has(skuVal) ? '重复SKU' : ''
+                    const issue =
+                skuVal === ''
+                  ? t('cw.issue_no_sku')
+                  : dupSkus.has(skuVal)
+                    ? t('cw.issue_dup_sku')
+                    : ''
                     return (
                       <tr
                         key={i}
@@ -229,7 +235,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             cursor: 'pointer',
           }}
         >
-          ← 返回
+          {t('cw.back')}
         </button>
         <button
           className="clickable"
@@ -248,7 +254,7 @@ export default function PreviewStep({ pv, mp, cols, tr, tt, bs, cf, onBack, onEx
             opacity: bs ? 0.6 : 1,
           }}
         >
-          确认写入 {pv.total} 条
+          {t('cw.confirm_write', { n: pv.total })}
         </button>
       </div>
     </div>

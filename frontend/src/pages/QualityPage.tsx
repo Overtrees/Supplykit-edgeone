@@ -13,7 +13,7 @@ export default function QualityPage() {
       >
         {t('nav.quality')}
         <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-          日志文件 · 点击日期查看当日明细
+          {t('qy.log_hint')}
         </span>
       </div>
       <div style={{ maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' }}>

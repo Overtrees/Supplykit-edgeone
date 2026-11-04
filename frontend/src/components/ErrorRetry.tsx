@@ -9,8 +9,8 @@ import { t } from '../locale'
 export function errText(e?: unknown): string {
   // 兼容 string(reason)/对象({response})
   return e && typeof e === 'object' && (e as { response?: unknown }).response
-    ? '加载失败'
-    : '网络波动'
+    ? t('common.load_failed')
+    : t('er.net_fluctuation')
 }
 
 interface ErrorRetryProps {
@@ -27,13 +27,13 @@ interface ErrorRetryProps {
  * err 传入时 desc 自动按错误类型选择(网络波动/加载失败)——一个组件承担两种职责
  */
 export default function ErrorRetry({
-  error = '加载失败',
+  error = '',
   desc = null,
   err = null,
   onRetry,
   onReload = null,
 }: ErrorRetryProps) {
-  const finalDesc = desc ?? (err ? errText(err) : '网络异常或服务不可用')
+  const finalDesc = desc ?? (err ? errText(err) : t('er.net_unavailable'))
   return (
     <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted2)' }}>
       <div
@@ -66,7 +66,7 @@ export default function ErrorRetry({
               fontFamily: 'inherit',
             }}
           >
-            {t('common.retry') || '重试'}
+            {t('common.retry')}
           </button>
         )}
         {onReload && (
@@ -83,13 +83,13 @@ export default function ErrorRetry({
               fontFamily: 'inherit',
             }}
           >
-            刷新页面
+            {t('er.refresh_page')}
           </button>
         )}
       </div>
       {onReload && (
         <div style={{ fontSize: 11, marginTop: 10, color: 'var(--muted2)' }}>
-          连续重试未恢复，建议刷新页面（重新连接服务）
+          {t('er.retry_hint_long')}
         </div>
       )}
     </div>

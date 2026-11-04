@@ -229,6 +229,9 @@ r = client.get("/dashboard/summary")
 check("无 token 401", r.status_code == 401, str(r.status_code))
 
 # dashboard summary
+from routes.common import FUNNEL_STAGES as _FS  # noqa: E402
+from routes.dashboard import _build_funnel_stages as _bfs  # noqa: E402
+
 r = client.get("/dashboard/summary?channel=jd", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 dd = d.get("data") if isinstance(d, dict) else d
@@ -241,7 +244,21 @@ else:
     check("health score 存在", dd["health_index"]["score"] is not None)
     check("periods 环比非0", dd["periods"]["month"]["gmv"] > 0, str(dd["periods"]["month"]))
     check("stores 含店", len(dd.get("stores", [])) >= 1)
-    check("funnel 5 段", len(dd.get("funnel", [])) == 5)
+    # 总订单 + FUNNEL_STAGES 5 档 = 6 段(2026-11-04 补「申请退款」后由 5 变 6)
+    check("funnel 段数=1+状态档", len(dd.get("funnel", [])) == 1 + len(_FS),
+          str([x["name"] for x in dd.get("funnel", [])]))
+
+# 2026-11-04 订单阶段分布: 除「总订单」外每一档都必须是 order_status 的原始值,
+# 且各档合计必须等于总订单(历史上写死 4 档漏了「申请退款」, 差额静默消失)
+_probe = {"待确认": 10, "待发货": 20, "已发货": 30, "已完成": 40, "申请退款": 5, "未知脏值": 3}
+_out = _bfs(_probe, sum(_probe.values()))
+_names = [x["name"] for x in _out]
+check("funnel: 首档为总订单", _names[0] == "总订单", str(_names))
+check("funnel: 覆盖全部原始状态值", all(s in _names for s in _FS), str(_names))
+check("funnel: 未列入的状态按原值追加不丢弃", "未知脏值" in _names, str(_names))
+check("funnel: 各档合计==总订单",
+      sum(x["value"] for x in _out[1:]) == _out[0]["value"], str(_out))
+
 
 # 自定义日期
 r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=2026-08-31",
@@ -916,7 +933,8 @@ try:
     _rp = _rules_src()
     check("规则页: 字段路径与 ctx 一致(无 inv.days_since_last/inv.stock)",
           "inv.days_since_last" not in _rp and "inv.stock" not in _rp, "RulesPage.tsx")
-    check("规则页: 仓储选项含 BC 合计", "BC合计(BBCC)" in _rp, "RulesPage.tsx")
+    # i18n 对齐后文案进词条, 断言改判「仓储字典里有 bc 选项」(结构意图, 与文案解耦)
+    check("规则页: 仓储选项含 BC 合计", "v: 'bc'" in _rp and "rf.wh.bc" in _rp, "rules/labels.tsx")
     check("规则 ctx: locked_qty / daily_sales 已注入",
           "locked_qty\": int(r.get(\"locked_qty\")" in _re.replace("'", '"')
           or '"locked_qty": int(r.get("locked_qty") or 0)' in _re, "rule_eval.py")
@@ -1455,8 +1473,9 @@ try:
           '"order": ("orders", "order_no", "sku", "")' not in _cl3, "cleansing.py")
 
     _cp3 = open('../../frontend/src/pages/CleansingPage.tsx', encoding='utf-8').read()
+    # i18n 对齐后文案进词条: 判「存在覆盖提示词条 + 已无『已跳过』旧文案」
     check("S2-5 前端同键改为提示而不是跳过",
-          "将按本次文件覆盖更新" in _cp3 and "文件已导入过（同键全部已存在），已跳过" not in _cp3,
+          "cl.dup_all" in _cp3 and "已跳过" not in _cp3,
           "CleansingPage.tsx")
 except Exception as _e12:
     check("S2-5 用例无异常", False, str(_e12)[:200])
@@ -2369,8 +2388,10 @@ try:
           _rp25.count("mutate(") >= 3, "RulesPage.tsx=%d" % _rp25.count("mutate("))
     check("采购写路径接入 mutate(下单/取消/到仓日期)",
           _ins25.count("mutate(") >= 3, "InsightsPage.tsx=%d" % _ins25.count("mutate("))
+    # label 已改词条键(rules.restore_rule), 断言判「用了该词条 + 发联动事件」
+    # label 已改词条键(rp.restore_rule), 断言判「用了该词条 + 发联动事件」
     check("撤销删除补发联动事件(原实现只 load 自身)",
-          "label: '恢复规则'" in _rp25 and "events: ['rules-changed']" in _rp25, "RulesPage.tsx")
+          "rp.restore_rule" in _rp25 and "events: ['rules-changed']" in _rp25, "RulesPage.tsx")
     check("顶层提示改走 notify(Provider 外的 useToast 是 no-op)",
           "toast." not in _app25 and "bindNotify" in _tst25, "App.tsx / Toast.tsx")
     check("裸写豁免必须显式标注(// no-link: 理由)",
@@ -2580,9 +2601,12 @@ finally:
 # 这条用例守住"键集合相等"这一半; 另一半(不写中文字面量)靠 review + 改动文件的 grep 判据。
 try:
     import re as _re_i18n
+    # 2026-11-04 字典已拆成 zh/en 两文件(原 locale.ts 单文件, 两段靠 "const en" 分隔)
+    _zh_src = _io.open(_os.path.join(_HERE, "../../frontend/src/locale.zh.ts"), encoding="utf-8").read()
+    _en_src = _io.open(_os.path.join(_HERE, "../../frontend/src/locale.en.ts"), encoding="utf-8").read()
     _loc_src = _io.open(_os.path.join(_HERE, "../../frontend/src/locale.ts"), encoding="utf-8").read()
-    _zh_part = _loc_src.split("const en")[0]
-    _en_part = _loc_src.split("const en")[1] if "const en" in _loc_src else ""
+    _zh_part = _zh_src
+    _en_part = _en_src
     _zh_keys = set(_re_i18n.findall(r"^\s*'([^']+)':", _zh_part, _re_i18n.M))
     _en_keys = set(_re_i18n.findall(r"^\s*'([^']+)':", _en_part, _re_i18n.M))
     check("i18n: zh/en 键集合相等(新增文案必须双份)",

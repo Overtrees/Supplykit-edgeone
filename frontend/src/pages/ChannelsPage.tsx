@@ -3,6 +3,8 @@ import { api } from '../api/client'
 import { useToast } from '../components/Toast'
 import { Group, Row, LastRow } from '../components/ListGroup'
 import { useAppStore, type Channel } from '../store/useAppStore'
+import { channelName } from '../components/channels'
+import { t } from '../locale'
 
 /**
  * 渠道管理(2026-10-30 P2 界面)
@@ -43,7 +45,7 @@ export default function ChannelsPage() {
       })
       // 2026-11-01 修复: useToast() 返回对象({success/error/warning/info}), 不是函数——
       //   原 `toast && toast(msg)` 运行时 TypeError(对象不可调用), 且抛错被 .catch 二次吞掉
-      .catch((e: Error) => toast.error(e && e.message ? e.message : '渠道列表加载失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : t('ch.list_failed')))
       .finally(() => setLoading(false))
   }
 
@@ -55,7 +57,7 @@ export default function ChannelsPage() {
   const create = () => {
     const code = form.code.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_]{0,19}$/.test(code)) {
-      toast.warning('code 需小写字母开头，1-20 位字母/数字/下划线')
+      toast.warning(t('ch.err_code'))
       return
     }
     setSaving(true)
@@ -75,8 +77,12 @@ export default function ChannelsPage() {
         const cp = (r.data && r.data.copied) || {}
         toast.success(
           cp.rules != null
-            ? `已创建「${form.name || code}」，复制规则 ${cp.rules} 条、参数 ${cp.config} 项`
-            : `已创建「${form.name || code}」`,
+            ? t('ch.created_copied', {
+                name: form.name || code,
+                rules: cp.rules,
+                cfg: cp.config,
+              })
+            : t('ch.created', { name: form.name || code }),
         )
         setForm({
           code: '',
@@ -88,7 +94,7 @@ export default function ChannelsPage() {
         setShowForm(false)
         load()
       })
-      .catch((e: Error) => toast.error(e && e.message ? e.message : '创建失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : t('ch.create_failed')))
       .finally(() => setSaving(false))
   }
 
@@ -96,29 +102,26 @@ export default function ChannelsPage() {
     api
       .put('/api/channels/' + encodeURIComponent(code), body, { timeout: 20000 })
       .then(() => {
-        toast.success('已保存')
+        toast.success(t('ch.saved'))
         load()
       })
-      .catch((e: Error) => toast.error(e && e.message ? e.message : '保存失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : t('ch.save_failed')))
   }
 
   const disable = (code: string) => {
-    if (
-      !window.confirm(`禁用渠道「${code}」？\n\n禁用后下拉不再出现，但已有数据保留（可再次启用）。`)
-    )
-      return
+    if (!window.confirm(t('ch.disable_confirm', { code }))) return
     api
       .delete('/api/channels/' + encodeURIComponent(code), { timeout: 20000 })
       .then(() => {
-        toast.success('已禁用')
+        toast.success(t('ch.disabled'))
         load()
       })
-      .catch((e: Error) => toast.error(e && e.message ? e.message : '禁用失败'))
+      .catch((e: Error) => toast.error(e && e.message ? e.message : t('ch.disable_failed')))
   }
 
   return (
     <div className="form-page">
-      <Group title="渠道管理">
+      <Group title={t('set.channels')}>
         {loading ? (
           // 2026-11-02 S2-9: 首载走骨架(两行占位), 不再是单行"加载中..." —— 骨架不让卡片塌陷跳版
           <div style={{ padding: '14px 16px' }}>
@@ -126,55 +129,55 @@ export default function ChannelsPage() {
             <div className="skeleton" style={{ width: '62%', height: 12, marginBottom: 0 }} />
           </div>
         ) : list.length === 0 ? (
-          <Row label="暂无渠道" sub="点下方「新增渠道」创建" />
+          <Row label={t('ch.empty')} sub={t('ch.empty_sub')} />
         ) : (
           list.map(c => (
             <Row
               key={c.code}
-              label={`${c.name}${c.enabled === 0 ? '（已禁用）' : ''}`}
-              sub={`${c.code} · ${c.default_mode === 'bbcc' ? 'BBCC' : '传统多仓'}${
-                c.supports_b ? ' · 含B仓' : ''
-              }`}
+              label={`${channelName(c)}${c.enabled === 0 ? t('ch.suffix_disabled') : ''}`}
+              sub={`${c.code} · ${
+                c.default_mode === 'bbcc' ? 'BBCC' : t('ch.mode_traditional')
+              }${c.supports_b ? t('ch.with_b') : ''}`}
             />
           ))
         )}
         <LastRow
-          label={showForm ? '收起' : '新增渠道'}
-          sub="登记后无需发版：下拉自动出现，可复制既有渠道的规则与参数"
+          label={showForm ? t('ch.collapse') : t('ch.add')}
+          sub={t('ch.add_sub')}
           onClick={() => setShowForm(v => !v)}
         />
       </Group>
 
       {showForm && (
-        <Group title="新增渠道">
+        <Group title={t('ch.add')}>
           <div className="form-grid">
             <label className="form-field">
-              渠道标识 code（小写，创建后不可改）
+              {t('ch.code_label')}
               <input
                 value={form.code}
                 onChange={e => setForm({ ...form, code: e.target.value })}
-                placeholder="如 tmall / pdd / douyin"
+                placeholder={t('ch.code_ph')}
                 className="form-input"
               />
             </label>
             <label className="form-field">
-              显示名
+              {t('ch.name_label')}
               <input
                 value={form.name}
                 onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="如 天猫"
+                placeholder={t('ch.name_ph')}
                 className="form-input"
               />
             </label>
             <label className="form-field">
-              默认补货模式
+              {t('ch.mode_label')}
               <select
                 value={form.default_mode}
                 onChange={e => setForm({ ...form, default_mode: e.target.value })}
                 className="form-input"
               >
-                <option value="traditional">传统多仓（逐仓补货）</option>
-                <option value="bbcc">BBCC（一盘货：B仓→C仓）</option>
+                <option value="traditional">{t('ch.mode_traditional_full')}</option>
+                <option value="bbcc">{t('ch.mode_bbcc')}</option>
               </select>
             </label>
             <label className="form-check">
@@ -183,16 +186,16 @@ export default function ChannelsPage() {
                 checked={form.supports_b}
                 onChange={e => setForm({ ...form, supports_b: e.target.checked })}
               />
-              走 BBCC 体系（启用 B 仓调拨链）
+              {t('ch.supports_b')}
             </label>
             <label className="form-field">
-              复制规则与参数自（可选）
+              {t('ch.copy_from')}
               <select
                 value={form.copy_from}
                 onChange={e => setForm({ ...form, copy_from: e.target.value })}
                 className="form-input"
               >
-                <option value="">不复制（空白渠道）</option>
+                <option value="">{t('ch.copy_none')}</option>
                 {list.map(c => (
                   <option key={c.code} value={c.code}>
                     {c.name}（{c.code}）
@@ -201,7 +204,7 @@ export default function ChannelsPage() {
               </select>
             </label>
             <button className="btn btn-primary" disabled={saving} onClick={create}>
-              {saving ? '创建中...' : '创建渠道'}
+              {saving ? t('ch.creating') : t('ch.create')}
             </button>
           </div>
         </Group>
@@ -214,11 +217,11 @@ export default function ChannelsPage() {
           const actives = list.filter(c => c.enabled !== 0)
           const disabled = list.filter(c => c.enabled === 0)
           return (
-            <Group title="停用渠道">
+            <Group title={t('ch.group_disable')}>
               {actives.map((c, i) => (
                 <Row
                   key={'d' + c.code}
-                  label={`禁用 ${c.name}`}
+                  label={t('ch.disable_row', { name: channelName(c) })}
                   danger
                   loading={saving}
                   last={disabled.length === 0 && i === actives.length - 1}
@@ -228,7 +231,7 @@ export default function ChannelsPage() {
               {disabled.map((c, i) => (
                 <Row
                   key={'e' + c.code}
-                  label={`重新启用 ${c.name}`}
+                  label={t('ch.enable_row', { name: channelName(c) })}
                   sub={c.code}
                   loading={saving}
                   last={i === disabled.length - 1}

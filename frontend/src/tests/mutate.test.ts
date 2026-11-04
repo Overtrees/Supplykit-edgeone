@@ -11,12 +11,15 @@ import { clearCache } from '../api/client'
 import { notify } from '../api/notify'
 import { mutate } from '../api/mutate'
 import { useAppStore } from '../store/useAppStore'
+import { setLocale } from '../locale'
 
 describe('mutate 写操作统一出口', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useAppStore.setState({ ops: [] })
     localStorage.clear()
+    // 断言锁中文文案: jsdom 的 navigator.language 是 en-US, 不显式设置会落到英文词条
+    setLocale('zh')
   })
 
   it('成功: 清缓存 + 发事件 + 提示 + 登记操作态', async () => {

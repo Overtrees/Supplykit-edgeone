@@ -112,7 +112,7 @@ export default function ConfirmDialog({
               style={{ flex: 1, opacity: confirming ? 0.55 : 1 }}
             >
               <span style={{ fontSize: 'var(--font-15)', fontWeight: 700, color: '#fff' }}>
-                {confirming ? '处理中...' : confirmLabel}
+                {confirming ? t('common.processing') : confirmLabel}
               </span>
             </div>
           </div>

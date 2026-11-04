@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { IconLoading, IconSave, IconTag } from '../../components/Icons'
 import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
+import { t } from '../../locale'
 
 interface Props {
   channel: string
@@ -38,7 +39,7 @@ export default function RulesSeasonPanel(props: Props) {
           gap: 4,
         }}
       >
-        <IconTag size={14} /> 活动系数
+        <IconTag size={14} /> {t('sp.title')}
       </div>
       {seasons.map((s, i) => (
         <div
@@ -58,7 +59,7 @@ export default function RulesSeasonPanel(props: Props) {
             onChange={e =>
               setSeasons(p => p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
             }
-            placeholder="618大促"
+            placeholder={t('sp.name_ph')}
             style={{
               flex: 1,
               minWidth: 80,
@@ -90,7 +91,7 @@ export default function RulesSeasonPanel(props: Props) {
               outline: 'none',
             }}
           />
-          <span className="small muted">倍</span>
+          <span className="small muted">{t('sp.unit_times')}</span>
           <label
             style={{
               fontSize: 'var(--font-sm)',
@@ -123,7 +124,7 @@ export default function RulesSeasonPanel(props: Props) {
                 <circle cx="9" cy="9" r="8" fill="none" stroke="var(--border)" strokeWidth="1.5" />
               )}
             </svg>
-            启用
+            {t('sp.enable')}
           </label>
           <button
             onClick={() => setSeasons(p => p.filter((_, j) => j !== i))}
@@ -141,13 +142,13 @@ export default function RulesSeasonPanel(props: Props) {
               flexShrink: 0,
             }}
           >
-            删除
+            {t('common.delete')}
           </button>
         </div>
       ))}
       <button
         onClick={() =>
-          setSeasons(p => [...p, { key: 'new', name: '新活动', factor: 1.2, enabled: true }])
+          setSeasons(p => [...p, { key: 'new', name: t('sp.new_name'), factor: 1.2, enabled: true }])
         }
         className="btn btn-ghost clickable"
         style={{
@@ -157,7 +158,7 @@ export default function RulesSeasonPanel(props: Props) {
           minHeight: 40,
         }}
       >
-        + 添加活动
+        {t('sp.add')}
       </button>
       <div style={{ marginTop: 12 }}>
         <button
@@ -171,7 +172,7 @@ export default function RulesSeasonPanel(props: Props) {
                 items: seasons,
               })
               await loadCfg(m, ch)
-              toast.success('已保存')
+              toast.success(t('sp.saved'))
               window.dispatchEvent(new Event('rules-changed'))
             } catch (e) {
               saveErr(e)
@@ -191,11 +192,11 @@ export default function RulesSeasonPanel(props: Props) {
         >
           {seasonsSaving ? (
             <>
-              <IconLoading size={14} /> 保存中...
+              <IconLoading size={14} /> {t('sp.saving')}
             </>
           ) : (
             <>
-              <IconSave size={14} /> 保存
+              <IconSave size={14} /> {t('sp.save')}
             </>
           )}
         </button>

@@ -3,6 +3,7 @@ import EmptyState from '../../components/EmptyState'
 import { useAppStore } from '../../store/useAppStore'
 import { INS_SLOW_COLS as SLOW_COLS } from '../../components/hammer/configs'
 import { Skeleton } from './shared'
+import { t } from '../../locale'
 
 interface Props {
   disposals: any[]
@@ -48,10 +49,14 @@ export default function SlowTab(props: Props) {
         className="section-title"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
-        <span>滞销预警</span>
+        <span>{t('insights.slow')}</span>
         <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-          已加载 {Math.min(filteredDisp.length, slowTotal || filteredDisp.length)}/
-          {slowTotal || filteredDisp.length} 条 · 显示 {slowVisCols.length}/{SLOW_COLS.length} 列
+          {t('ins.loaded_n_of_m', {
+            n: Math.min(filteredDisp.length, slowTotal || filteredDisp.length),
+            m: slowTotal || filteredDisp.length,
+          })}{' '}
+          ·{' '}
+          {t('ins.showing_cols', { v: slowVisCols.length, all: SLOW_COLS.length })}
           {insightSearch ? ` · "${insightSearch}"` : ''}
         </span>
       </div>
@@ -66,7 +71,7 @@ export default function SlowTab(props: Props) {
         }}
       >
         <span className="muted2" style={{ fontSize: 'var(--font-xs)' }}>
-          按 SKU×仓库 · 品类滞销线 + 临期 + B仓仓储费
+          {t('ins_s.subtitle')}
         </span>
         <span
           onClick={() => setShowDisposed(!showDisposed)}
@@ -81,7 +86,7 @@ export default function SlowTab(props: Props) {
             cursor: 'pointer',
           }}
         >
-          {showDisposed ? '隐藏已处理' : '查看已处理'}
+          {showDisposed ? t('ins_s.hide_disposed') : t('ins_s.show_disposed')}
         </span>
       </div>
       {disposalsLoading && disposals.length === 0 ? (
@@ -91,7 +96,10 @@ export default function SlowTab(props: Props) {
           ))}
         </div>
       ) : filteredDisp.length === 0 ? (
-        <EmptyState icon="tag" title={showDisposed ? '暂无处置记录' : '暂无滞销'} />
+        <EmptyState
+          icon="tag"
+          title={showDisposed ? t('ins_s.empty_disposed') : t('ins_s.empty_slow')}
+        />
       ) : (
         <>
           <div
@@ -210,7 +218,7 @@ export default function SlowTab(props: Props) {
                                 <span
                                   style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
                                 >
-                                  <IconCheck size={12} style={{ verticalAlign: -2 }} /> 已处理
+                                  <IconCheck size={12} style={{ verticalAlign: -2 }} /> {t('ins_s.disposed')}
                                 </span>
                               ) : (
                                 <span
@@ -260,7 +268,7 @@ export default function SlowTab(props: Props) {
                                 fontSize: 'var(--font-sm)',
                               }}
                             >
-                              {x.days_zero == 999 ? '∞' : x.days_zero}天
+                              {x.days_zero == 999 ? '∞' : t('ins.days_n', { n: x.days_zero })}
                             </td>
                           )
                         if (col.id === 'stock')
@@ -282,12 +290,12 @@ export default function SlowTab(props: Props) {
                                 }}
                               >
                                 {x.level === 'black'
-                                  ? '紧急'
+                                  ? t('ins_s.lv_urgent')
                                   : x.level === 'red'
-                                    ? '处置'
+                                    ? t('ins_s.lv_dispose')
                                     : x.level === 'yellow'
-                                      ? '滞销'
-                                      : '观察'}
+                                      ? t('ins_s.lv_slow')
+                                      : t('ins_s.lv_watch')}
                               </span>
                             </td>
                           )
@@ -295,7 +303,10 @@ export default function SlowTab(props: Props) {
                           return (
                             <td
                               key={id}
-                              style={{ fontSize: 'var(--font-xs)', color: 'var(--muted2)' }}
+                              className="col-note"
+                              title={[(x.reason || []).join(' · '), x.suggestion]
+                                .filter(Boolean)
+                                .join(' → ')}
                             >
                               {(x.reason || []).join(' · ')}
                               <span style={{ color: 'var(--text)', fontWeight: 600 }}>
@@ -347,7 +358,7 @@ export default function SlowTab(props: Props) {
                 color: 'var(--muted2)',
               }}
             >
-              加载中...
+              {t('ins.loading')}
             </div>
           )}
         </>

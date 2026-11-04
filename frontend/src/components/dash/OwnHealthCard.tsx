@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../../locale'
 
 /** 自有仓健康单项(后端 routes/dashboard_own_health.py 产出) */
 export interface OwnHealthItem {
@@ -41,7 +42,7 @@ const isNarrow = () => typeof window !== 'undefined' && window.innerWidth <= 932
 const fmtInt = (n?: number): string => {
   if (n == null) return '-'
   const v = Math.round(Number(n) || 0)
-  if (Math.abs(v) >= (isNarrow() ? 1e4 : 1e5)) return Math.round(v / 1e4) + '万'
+  if (Math.abs(v) >= (isNarrow() ? 1e4 : 1e5)) return Math.round(v / 1e4) + t('dash.unit_wan')
   return String(v)
 }
 
@@ -52,41 +53,45 @@ const TYPE_META: Record<
   { tag: string; cls: string; c: string; order: number; desc: string }
 > = {
   own_transfer_gap: {
-    tag: '调拨缺口',
+    tag: t('own.gap'),
     cls: 'danger',
     c: 'var(--danger)',
     order: 0,
-    desc: '下游要货超出自有仓可发量',
+    desc: t('own.gap_desc'),
   },
   own_expiry_risk: {
-    tag: '效期',
+    tag: t('own.expiry'),
     cls: 'danger',
     c: 'var(--danger)',
     order: 1,
-    desc: '批次将过期/已过期，未及调拨消化',
+    desc: t('own.expiry_desc'),
   },
   own_overstock: {
-    tag: '积压',
+    tag: t('own.overstock'),
     cls: 'warning',
     c: 'var(--warning)',
     order: 2,
-    desc: '可撑天数超阈值，占用资金库位',
+    desc: t('own.overstock_desc'),
   },
 }
 
 // 每类的右侧度量(与 pill 同色的加粗数字)
 const metricOf = (x: OwnHealthItem): { v: string; hint: string } => {
-  if (x.alert_type === 'own_transfer_gap') return { v: '缺 ' + fmtInt(x.gap_qty), hint: fn(x) }
+  if (x.alert_type === 'own_transfer_gap')
+    return { v: t('own.lack', { n: fmtInt(x.gap_qty) }), hint: fn(x) }
   if (x.alert_type === 'own_expiry_risk') {
     const d = x.days_to_expiry
     if (d == null) return { v: '—', hint: '' }
-    return { v: d < 0 ? '过期 ' + Math.abs(d) + '天' : '剩 ' + fmtInt(d) + '天', hint: '' }
+    return {
+      v: d < 0 ? t('own.expired_d', { n: Math.abs(d) }) : t('own.left_d', { n: fmtInt(d) }),
+      hint: '',
+    }
   }
-  return { v: '撑 ' + Math.round(Number(x.cover_days || 0)) + '天', hint: '' }
+  return { v: t('own.cover_d', { n: Math.round(Number(x.cover_days || 0)) }), hint: '' }
 }
 const fn = (x: OwnHealthItem) =>
   x.need_qty != null && x.available_qty != null
-    ? '需 ' + fmtInt(x.need_qty) + ' / 可发 ' + fmtInt(x.available_qty)
+    ? t('own.need_can', { a: fmtInt(x.need_qty), b: fmtInt(x.available_qty) })
     : ''
 
 /**
@@ -146,13 +151,13 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
   return (
     <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
       <div className="section-title">
-        自有仓健康
+        {t('own.title')}
         {d.total > 0 ? ` (${fmtInt(d.total)})` : ''}
       </div>
 
       {d.total === 0 ? (
         <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
-          自有仓均正常
+          {t('own.all_ok')}
         </div>
       ) : (
         <>
@@ -163,7 +168,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
 
           {shown.map((x, i) => {
             const m = TYPE_META[x.alert_type] || {
-              tag: '预警',
+              tag: t('own.warn'),
               cls: 'warning',
               c: 'var(--warning)',
               order: 9,
@@ -252,7 +257,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
           {d.total > shown.length && (
             <div
               onClick={onShowAll}
-              aria-label={`还有 ${d.total - shown.length} 条`}
+              aria-label={t('dash.more_aria', { n: d.total - shown.length })}
               className="clickable pill info"
               style={{
                 cursor: 'pointer',
@@ -264,7 +269,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                 width: 'fit-content',
               }}
             >
-              更多 {fmtInt(d.total - shown.length)}
+              {t('dash.more_n', { n: fmtInt(d.total - shown.length) })}
             </div>
           )}
         </>

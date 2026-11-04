@@ -9,7 +9,17 @@ import {
   IconScale,
 } from '../../components/Icons'
 import { t } from '../../locale'
-import { EVENTS, LF, MODES, OPS, WHS, fieldLbl, opLbl, renderTmpl } from './labels'
+import {
+  EVENTS,
+  LF,
+  MODES,
+  OPS,
+  WHS,
+  fieldLbl,
+  opLbl,
+  renderTmpl,
+  whLbl,
+} from './labels'
 import { IS } from './shared'
 
 /**
@@ -175,10 +185,10 @@ export default function RuleEditForm({
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 12 }}>
-        {editing.id ? t('rules.edit') : t('rules.new_btn') + '规则'}
+        {editing.id ? t('rules.edit') : t('rules.new_btn') + t('rfm.suffix_rule')}
       </div>
 
-      {/* 名称 + {t("rules.severity")} + 补货模式 */}
+      {/* 名称 + 级别 + 补货模式 */}
       <div
         style={{
           display: 'flex',
@@ -194,17 +204,17 @@ export default function RuleEditForm({
             value={f.name}
             onChange={e => setF({ ...f, name: e.target.value })}
             style={IS}
-            placeholder="例：低库存预警"
+            placeholder={t('rfm.name_ph')}
           />
         </label>
         <label style={{ fontSize: 'var(--font-sm)' }}>
-          级别
+          {t('rfm.severity')}
           <div className="hammer-segmented" style={{ marginTop: 4, flexShrink: 0 }}>
             {[
-              { v: 'warning', t: '警告', c: 'var(--warning)' },
-              { v: 'error', t: t('rules.severity_error'), c: 'var(--danger)' },
-              { v: 'info', t: '提示', c: 'var(--primary)' },
-            ].map(({ v, t, c }) => (
+              { v: 'warning', lb: t('rfm.sev_warning'), c: 'var(--warning)' },
+              { v: 'error', lb: t('rules.severity_error'), c: 'var(--danger)' },
+              { v: 'info', lb: t('rfm.sev_info'), c: 'var(--primary)' },
+            ].map(({ v, lb, c }) => (
               <span
                 key={v}
                 onClick={() => setF({ ...f, severity: v })}
@@ -215,13 +225,13 @@ export default function RuleEditForm({
                   fontWeight: f.severity === v ? 700 : undefined,
                 }}
               >
-                {t}
+                {lb}
               </span>
             ))}
           </div>
         </label>
         <label style={{ fontSize: 'var(--font-sm)' }}>
-          补货模式
+          {t('rfm.mode')}
           <select
             value={f.mode || ''}
             onChange={e => setF({ ...f, mode: e.target.value })}
@@ -235,13 +245,13 @@ export default function RuleEditForm({
           >
             {MODES.filter(m => m.v !== 'bbcc' || globalChannel === 'jd').map(m => (
               <option key={m.v} value={m.v}>
-                {m.l}
+                {t(m.l)}
               </option>
             ))}
           </select>
         </label>
         <label style={{ fontSize: 'var(--font-sm)' }}>
-          规则类型
+          {t('rfm.type')}
           <select
             value={f.alert_type || 'low_stock'}
             onChange={e => {
@@ -263,21 +273,21 @@ export default function RuleEditForm({
               minWidth: 110,
             }}
           >
-            <option value="low_stock">低库存(动态安全线)</option>
-            <option value="stockout">濒临断货(看板同源)</option>
-            <option value="health">健康监控(看板同源)</option>
-            <option value="oversell">超卖保护</option>
-            <option value="slow_moving">滞销识别</option>
+            <option value="low_stock">{t('rfm.type_low_stock')}</option>
+            <option value="stockout">{t('rfm.type_stockout')}</option>
+            <option value="health">{t('rfm.type_health')}</option>
+            <option value="oversell">{t('rfm.type_oversell')}</option>
+            <option value="slow_moving">{t('rfm.type_slow_moving')}</option>
             {/* 2026-11-01 自有仓供给侧(看板「自有仓健康」卡同源) ——
                           自有仓不产生销售, 低库存口径不适用, 故单列这组 */}
-            <option value="own_transfer_gap">自有仓·调拨覆盖不足</option>
-            <option value="own_overstock">自有仓·积压</option>
-            <option value="own_expiry_risk">自有仓·效期风险</option>
-            <option value="custom">自定义</option>
+            <option value="own_transfer_gap">{t('rfm.type_own_gap')}</option>
+            <option value="own_overstock">{t('rfm.type_own_overstock')}</option>
+            <option value="own_expiry_risk">{t('rfm.type_own_expiry')}</option>
+            <option value="custom">{t('rfm.type_custom')}</option>
           </select>
         </label>
         <label style={{ fontSize: 'var(--font-sm)' }}>
-          触发事件
+          {t('rfm.event')}
           <select
             value={f.event || 'inventory.changed'}
             onChange={e => setF({ ...f, event: e.target.value })}
@@ -291,7 +301,7 @@ export default function RuleEditForm({
           >
             {EVENTS.map(ev => (
               <option key={ev.value} value={ev.value}>
-                {ev.label}
+                {t(ev.label)}
               </option>
             ))}
           </select>
@@ -318,10 +328,10 @@ export default function RuleEditForm({
             gap: 4,
           }}
         >
-          <IconScale size={14} /> 触发条件
+          <IconScale size={14} /> {t('rfm.cond_title')}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="text-14 font-500">当</span>
+          <span className="text-14 font-500">{t('rfm.when')}</span>
           <select
             value={cond.warehouse}
             onChange={e => setCond(p => ({ ...p, warehouse: e.target.value }))}
@@ -329,7 +339,7 @@ export default function RuleEditForm({
           >
             {WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w => (
               <option key={w.v} value={w.v}>
-                {w.l}
+                {t(w.l)}
               </option>
             ))}
           </select>
@@ -340,7 +350,7 @@ export default function RuleEditForm({
           >
             {LF.map(f => (
               <option key={f.v} value={f.v}>
-                {f.l}
+                {t(f.l)}
               </option>
             ))}
           </select>
@@ -351,7 +361,7 @@ export default function RuleEditForm({
           >
             {OPS.map(o => (
               <option key={o.v} value={o.v}>
-                {o.l}
+                {t(o.l)}
               </option>
             ))}
           </select>
@@ -394,14 +404,14 @@ export default function RuleEditForm({
               }}
             >
               {cond.left === 'days_since_last'
-                ? '天'
+                ? t('rfm.unit_day')
                 : cond.left === 'inv.available_qty'
-                  ? '%（安全库存百分比）'
+                  ? t('rfm.unit_pct_safety')
                   : cond.left === 'order.quantity'
-                    ? '件'
+                    ? t('rfm.unit_piece')
                     : cond.left === 'order.total_amount'
-                      ? '元'
-                      : '%'}
+                      ? t('rfm.unit_yuan')
+                      : t('rfm.unit_pct')}
             </span>
           </span>
         </div>
@@ -420,29 +430,29 @@ export default function RuleEditForm({
             size={12}
             style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }}
           />
-          当 <b>{WHS.find(w => w.v === cond.warehouse)?.l || '全部'}</b>{' '}
-          <b>{fieldLbl(cond.left)}</b> {opLbl(cond.op)}{' '}
+          {t('rfm.when')} <b>{whLbl(cond.warehouse)}</b> <b>{fieldLbl(cond.left)}</b>{' '}
+          {opLbl(cond.op)}{' '}
           <b>
             {cond.pctValue || 0}
             {cond.left === 'days_since_last'
-              ? '天'
+              ? t('rfm.unit_day')
               : cond.left === 'inv.available_qty'
-                ? '%'
-                : '件'}
+                ? t('rfm.unit_pct')
+                : t('rfm.unit_piece')}
           </b>
           {cond.left === 'inv.available_qty' ? (
             <span style={{ color: 'var(--muted2)', fontSize: 'var(--font-xs)' }}>
-              （安全库存的 {cond.pctValue || 0}%）
+              {t('rfm.pct_of_safety', { pct: cond.pctValue || 0 })}
             </span>
           ) : (
             ''
           )}
-          时
+          {t('rfm.then')}
           {(cond.or || []).map((o, i) => (
             <span key={i} style={{ color: 'var(--primary)' }}>
               {' '}
-              <b>或</b> {WHS.find(w => w.v === o.warehouse)?.l || '全部'} <b>{fieldLbl(o.left)}</b>{' '}
-              {opLbl(o.op)} <b>{o.right}</b>
+              <b>{t('rfm.or')}</b> {whLbl(o.warehouse)} <b>{fieldLbl(o.left)}</b> {opLbl(o.op)}{' '}
+              <b>{o.right}</b>
             </span>
           ))}
         </div>
@@ -463,7 +473,7 @@ export default function RuleEditForm({
             }}
           >
             <span className="text-13 font-600" style={{ color: 'var(--primary)' }}>
-              或
+              {t('rfm.or')}
             </span>
             <select
               value={o.warehouse}
@@ -476,7 +486,7 @@ export default function RuleEditForm({
             >
               {WHS.filter(w => w.v !== 'platform_b' || globalChannel === 'jd').map(w => (
                 <option key={w.v} value={w.v}>
-                  {w.l}
+                  {t(w.l)}
                 </option>
               ))}
             </select>
@@ -491,7 +501,7 @@ export default function RuleEditForm({
             >
               {LF.map(f => (
                 <option key={f.v} value={f.v}>
-                  {f.l}
+                  {t(f.l)}
                 </option>
               ))}
             </select>
@@ -511,7 +521,7 @@ export default function RuleEditForm({
             >
               {OPS.map(x => (
                 <option key={x.v} value={x.v}>
-                  {x.l}
+                  {t(x.l)}
                 </option>
               ))}
             </select>
@@ -519,7 +529,7 @@ export default function RuleEditForm({
               type="number"
               step="any"
               value={o.right === 'inv.safety_qty' ? '' : o.right}
-              placeholder={o.right === 'inv.safety_qty' ? '动态安全线' : ''}
+              placeholder={o.right === 'inv.safety_qty' ? t('rf.vars.safety') : ''}
               onChange={e => {
                 const or = [...(cond.or || [])]
                 or[i] = {
@@ -575,7 +585,7 @@ export default function RuleEditForm({
             cursor: 'pointer',
           }}
         >
-          ＋ 或条件（任一满足触发）
+          {t('rfm.add_or')}
         </button>
       </div>
 
@@ -598,10 +608,10 @@ export default function RuleEditForm({
             gap: 4,
           }}
         >
-          <IconAlert size={14} /> 告警内容
+          <IconAlert size={14} /> {t('rfm.alert_title_section')}
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
             <span className="muted2" style={{ fontSize: 'var(--font-10)' }}>
-              生成告警
+              {t('rfm.gen_alert')}
             </span>
             <span className="hammer-segmented" style={{ flexShrink: 0 }}>
               <span
@@ -609,21 +619,21 @@ export default function RuleEditForm({
                 onClick={() => setRParams({ ...rParams, alert_enabled: '1' })}
                 style={{ minWidth: 34, padding: '2px 6px' }}
               >
-                开
+                {t('rfm.on')}
               </span>
               <span
                 className={'hammer-segment' + (rParams.alert_enabled === '0' ? ' active' : '')}
                 onClick={() => setRParams({ ...rParams, alert_enabled: '0' })}
                 style={{ minWidth: 34, padding: '2px 6px' }}
               >
-                关
+                {t('rfm.off')}
               </span>
             </span>
           </span>
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
           <label style={{ flex: 1, minWidth: 180, fontSize: 'var(--font-sm)' }}>
-            告警标题
+            {t('rfm.alert_title')}
             <div
               style={{
                 marginTop: 4,
@@ -641,7 +651,7 @@ export default function RuleEditForm({
             >
               {renderTmpl(f.alert_title) || (
                 <span className="muted" style={{ fontSize: 'var(--font-sm)' }}>
-                  输入文字或点击下方按钮插入变量
+                  {t('rfm.var_hint')}
                 </span>
               )}
             </div>
@@ -649,16 +659,16 @@ export default function RuleEditForm({
               value={f.alert_title}
               onChange={e => setF({ ...f, alert_title: e.target.value })}
               style={{ ...IS, fontSize: 'var(--font-13)', marginTop: 4 }}
-              placeholder="输入文字，点击下方按钮插入变量"
+              placeholder={t('rfm.var_hint_ph')}
             />
             <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
               {[
-                { v: '{product_name}', l: '商品名' },
-                { v: '{sku}', l: 'SKU' },
-              ].map(t => (
+                { v: '{product_name}', l: 'rf.vars.product_name' },
+                { v: '{sku}', l: 'rf.vars.sku' },
+              ].map(vr => (
                 <span
-                  key={t.v}
-                  onClick={() => setF({ ...f, alert_title: f.alert_title + t.v })}
+                  key={vr.v}
+                  onClick={() => setF({ ...f, alert_title: f.alert_title + vr.v })}
                   className="clickable"
                   style={{
                     padding: '4px 12px',
@@ -685,13 +695,13 @@ export default function RuleEditForm({
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />
                   </svg>
-                  {t.l}
+                  {t(vr.l)}
                 </span>
               ))}
             </div>
           </label>
           <label style={{ flex: 1, minWidth: 180, fontSize: 'var(--font-sm)' }}>
-            告警描述
+            {t('rfm.alert_desc')}
             <div
               style={{
                 marginTop: 4,
@@ -709,7 +719,7 @@ export default function RuleEditForm({
             >
               {renderTmpl(f.alert_desc) || (
                 <span className="muted" style={{ fontSize: 'var(--font-sm)' }}>
-                  输入文字或点击下方按钮插入变量
+                  {t('rfm.var_hint')}
                 </span>
               )}
             </div>
@@ -717,17 +727,17 @@ export default function RuleEditForm({
               value={f.alert_desc}
               onChange={e => setF({ ...f, alert_desc: e.target.value })}
               style={{ ...IS, fontSize: 'var(--font-13)', marginTop: 4 }}
-              placeholder="输入文字，点击下方按钮插入变量"
+              placeholder={t('rfm.var_hint_ph')}
             />
             <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
               {[
-                { v: '{avail}', l: '可用量' },
-                { v: '{safety}', l: '动态安全线' },
-                { v: '{sku}', l: 'SKU' },
-              ].map(t => (
+                { v: '{avail}', l: 'rf.vars.avail' },
+                { v: '{safety}', l: 'rf.vars.safety' },
+                { v: '{sku}', l: 'rf.vars.sku' },
+              ].map(vr => (
                 <span
-                  key={t.v}
-                  onClick={() => setF({ ...f, alert_desc: f.alert_desc + t.v })}
+                  key={vr.v}
+                  onClick={() => setF({ ...f, alert_desc: f.alert_desc + vr.v })}
                   className="clickable"
                   style={{
                     padding: '4px 12px',
@@ -754,7 +764,7 @@ export default function RuleEditForm({
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />
                   </svg>
-                  {t.l}
+                  {t(vr.l)}
                 </span>
               ))}
             </div>
@@ -784,38 +794,36 @@ export default function RuleEditForm({
             }}
           >
             <IconGear size={13} style={{ verticalAlign: -2 }} />{' '}
-            {f.alert_type === 'stockout'
-              ? '断货计算参数(看板断货卡同源)'
-              : '健康分档参数(看板健康卡同源)'}
+            {f.alert_type === 'stockout' ? t('rfm.param_stockout') : t('rfm.param_health')}
           </div>
           <div className="muted2" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>
             {f.alert_type === 'stockout'
-              ? '配置后看板断货判定(Adj-DOS/OTIF/动态SS/分级阈值)即时按此计算，停用/删除本规则则回默认值'
-              : '配置后看板库存健康度分档(good/warning)即时按此计算，停用/删除本规则则回默认值'}
+              ? t('rfm.param_stockout_hint')
+              : t('rfm.param_health_hint')}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {(f.alert_type === 'stockout'
               ? [
-                  ['lit', '补货周期 L/T(天, 留空=按模式自动)'],
-                  ['otif_min', 'OTIF 置信下限(0.6~1)'],
-                  ['ss_z', '动态SS Z值(1.28/1.65/2.33)'],
-                  ['sigma_days', '波动率σ样本天数(默认60, 与断货卡同源)'],
-                  ['accel_ratio', '加速倍率阈值(默认1.3)'],
-                  ['accel_min_qty', '加速样本量(默认10)'],
-                  ['buffer_orange', '橙灯缓冲上限(默认1.2)'],
-                  ['buffer_yellow', '黄灯缓冲上限(默认1.0)'],
-                  ['orange_slack_days', '橙灯天数余量(默认1)'],
-                  ['include_avail_zero', '已断纳入红灯 1/0'],
-                  ['log', '审计日志 1/0(触发写 quality_logs)'],
+                  ['lit', 'p.lit'],
+                  ['otif_min', 'p.otif_min'],
+                  ['ss_z', 'p.ss_z'],
+                  ['sigma_days', 'p.sigma_days'],
+                  ['accel_ratio', 'p.accel_ratio'],
+                  ['accel_min_qty', 'p.accel_min_qty'],
+                  ['buffer_orange', 'p.buffer_orange'],
+                  ['buffer_yellow', 'p.buffer_yellow'],
+                  ['orange_slack_days', 'p.orange_slack_days'],
+                  ['include_avail_zero', 'p.include_avail_zero'],
+                  ['log', 'p.log'],
                 ]
               : [
-                  ['health_good', '健康档位线(默认85)'],
-                  ['health_warning', '预警档位线(默认60)'],
-                  ['log', '审计日志 1/0(触发写 quality_logs)'],
+                  ['health_good', 'p.health_good'],
+                  ['health_warning', 'p.health_warning'],
+                  ['log', 'p.log'],
                 ]
             ).map(([k, l]) => (
               <label key={k} style={{ fontSize: 'var(--font-sm)' }}>
-                {l}
+                {t(l)}
                 <input
                   type="number"
                   step="any"
@@ -827,7 +835,7 @@ export default function RuleEditForm({
                     marginTop: 2,
                     padding: '6px 10px',
                   }}
-                  placeholder="默认值"
+                  placeholder={t('rfm.param_default_ph')}
                 />
               </label>
             ))}
@@ -860,27 +868,27 @@ export default function RuleEditForm({
               gap: 4,
             }}
           >
-            <IconGear size={13} style={{ verticalAlign: -2 }} /> 自有仓口径参数(看板同源)
+            <IconGear size={13} style={{ verticalAlign: -2 }} /> {t('rfm.param_own')}
           </div>
           <div className="muted2" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>
             {f.alert_type === 'own_transfer_gap'
-              ? '缺口 = 下游日销 × 调拨周期 − 自有可发(在仓+在途+采购在途)；小于阈值不报，避免零头噪音'
+              ? t('rfm.param_own_gap_hint')
               : f.alert_type === 'own_overstock'
-                ? '可撑天数 = 自有可用 ÷ 下游日销；超过阈值判积压(占用资金与库位)'
-                : '距过期天数低于缓冲即报；另含"按当前消化速度赶不上效期"的加速预警'}
+                ? t('rfm.param_own_overstock_hint')
+                : t('rfm.param_own_expiry_hint')}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {(f.alert_type === 'own_transfer_gap'
               ? [
-                  ['transfer_gap_min', '缺口下限(件, 低于不报, 默认1)'],
-                  ['b2c_days', '调拨周期(天, 留空=按补货模式取 B→C+缓冲)'],
+                  ['transfer_gap_min', 'p.transfer_gap_min'],
+                  ['b2c_days', 'p.b2c_days'],
                 ]
               : f.alert_type === 'own_overstock'
-                ? [['own_overstock_days', '积压天数阈值(默认90)']]
-                : [['own_expiry_buffer_days', '效期缓冲(天, 默认15)']]
+                ? [['own_overstock_days', 'p.own_overstock_days']]
+                : [['own_expiry_buffer_days', 'p.own_expiry_buffer_days']]
             ).map(([k, l]) => (
               <label key={k} style={{ fontSize: 'var(--font-sm)' }}>
-                {l}
+                {t(l)}
                 <input
                   type="number"
                   step="any"
@@ -892,7 +900,7 @@ export default function RuleEditForm({
                     marginTop: 2,
                     padding: '6px 10px',
                   }}
-                  placeholder="默认值"
+                  placeholder={t('rfm.param_default_ph')}
                 />
               </label>
             ))}
@@ -913,7 +921,7 @@ export default function RuleEditForm({
             justifyContent: 'center',
           }}
         >
-          <IconLightning size={14} /> 测试
+          <IconLightning size={14} /> {t('rfm.test')}
         </button>
         <button
           onClick={save}
@@ -930,7 +938,7 @@ export default function RuleEditForm({
         >
           {saveLoading ? (
             <>
-              <IconLoading size={14} /> 保存中...
+              <IconLoading size={14} /> {t('rfm.saving')}
             </>
           ) : (
             <>

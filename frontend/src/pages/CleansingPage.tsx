@@ -10,6 +10,7 @@ import ResultStep from './cleansing/ResultStep'
 import PreviewStep from './cleansing/PreviewStep'
 import MappingStep from './cleansing/MappingStep'
 import { t } from '../locale'
+import { channelName } from '../components/channels'
 
 import {
   SYS_FIELDS,
@@ -121,7 +122,7 @@ export default function CleansingPage() {
   }, [])
 
   const addField = () =>
-    saveCf([...cf, { t: 'field_' + Date.now(), l: '自定义字段', tp: 'string' }])
+    saveCf([...cf, { t: 'field_' + Date.now(), l: t('cl.custom_field'), tp: 'string' }])
   const delField = i => saveCf(cf.filter((_, k) => k !== i))
 
   // 用户自定义别名记忆(核心): 手工映射过的 (列名→目标) 存 localStorage, 下次同列名自动识别
@@ -163,7 +164,7 @@ export default function CleansingPage() {
       console.warn('[detect] file 为空——未获取到文件对象')
     }
     setF(file)
-    setBs('识别中')
+    setBs(t('cl.detect_ing'))
 
     try {
       const r = await uploadRawBytes(
@@ -173,7 +174,7 @@ export default function CleansingPage() {
       )
       const d = r.data
       if (!d.ok) {
-        toast.error(d.error || '识别失败')
+        toast.error(d.error || t('cl.detect_failed'))
         setBs('')
         return
       }
@@ -222,20 +223,17 @@ export default function CleansingPage() {
       goStep(1) // 停步映射字段界面, 用户确认/补映射后手动预览(智能识别仅辅助)
       setBs('')
       if (Object.keys(a).length > 0)
-        toast.success(
-          '已自动识别 ' + Object.keys(a).length + ' 列（未识别的列请在下方手工选择目标字段）',
-        )
-      else
-        toast.warning(
-          '未自动识别到映射列，请手工选择每列目标字段（选择后系统会记住，下次同列名自动识别）',
-        )
+        toast.success(t('cl.detected_n', { n: Object.keys(a).length }))
+      else toast.warning(t('cl.detect_none'))
     } catch (e) {
       toast.error(
-        '请求异常: ' +
-          e.message +
-          (e.response?.data?.detail
-            ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
-            : ''),
+        t('cl.req_error', {
+          msg:
+            e.message +
+            (e.response?.data?.detail
+              ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+              : ''),
+        }),
       )
     }
     setBs('')
@@ -243,11 +241,11 @@ export default function CleansingPage() {
 
   const preview = async () => {
     if (!f) {
-      toast.error('请先选择文件后再预览')
+      toast.error(t('cl.need_file'))
       setBs('')
       return
     }
-    setBs('预览中')
+    setBs(t('cl.previewing'))
     try {
       const r = await uploadRawBytes(
         '/api/cleansing/preview?q_target=' +
@@ -262,7 +260,7 @@ export default function CleansingPage() {
       )
       const d = r.data
       if (!d.ok) {
-        toast.error(d.error || '预览失败')
+        toast.error(d.error || t('cl.preview_failed'))
         setBs('')
         return
       }
@@ -272,10 +270,7 @@ export default function CleansingPage() {
       if (_miss.length) {
         toast.add({
           type: 'warning',
-          title:
-            '未映射必填列: ' +
-            _miss.join('、') +
-            ' —— 请先在下方下拉补映射（带「(必)」后缀的字段），再点预览',
+          title: t('cl.miss_required', { cols: _miss.join('、') }),
           duration: 0,
         })
         setBs('')
@@ -287,8 +282,8 @@ export default function CleansingPage() {
       // 停在旧滚动位置 → 上方是新内容、人在空白区, 要"手动滚动"才见到表格。进预览必回顶。
       window.scrollTo(0, 0)
     } catch (e) {
-      const msg = e.response?.data?.error || e.message || '请求失败'
-      toast.error('预览失败: ' + msg)
+      const msg = e.response?.data?.error || e.message || t('cl.req_failed')
+      toast.error(t('cl.preview_failed_msg', { msg }))
     }
     setBs('')
   }
@@ -318,10 +313,10 @@ export default function CleansingPage() {
     setColMapSaving(true)
     try {
       await api.put('/api/replenishment-config/column-value-map?channel=' + ch, { items: colMap })
-      toast.success('列映射已保存，导入时即时生效')
+      toast.success(t('cl.colmap_saved'))
       setColMapOpen(false)
     } catch (e) {
-      toast.error('保存失败: ' + (e.message || ''))
+      toast.error(t('cl.save_failed', { msg: e.message || '' }))
     }
     setColMapSaving(false)
   }
@@ -343,16 +338,12 @@ export default function CleansingPage() {
     if (execLock.current) return
     execLock.current = true
     try {
-      setBs('清洗中...')
+      setBs(t('cl.cleansing'))
       // 2026-11-01 通用硬拦: PRESET_REQUIRED 全量必填(此前仅 4 个专项检查, 商品的 sku/名称
       // 等漏拦——预览入口的预警同源, 两处只维护一份 PRESET_REQUIRED)
       const _miss = missingRequired(tt, mp)
       if (_miss.length) {
-        toast.error(
-          '写入前必须映射必填列: ' +
-            _miss.join('、') +
-            '（缺失将导致整批跳过或核算错误），请返回上一步补映射',
-        )
+        toast.error(t('cl.miss_before_write', { cols: _miss.join('、') }))
         setBs('')
         execLock.current = false
         return
@@ -364,7 +355,7 @@ export default function CleansingPage() {
           m => m && (m.target === 'warehouse' || m.t === 'warehouse'),
         )
         if (!hasWarehouse) {
-          toast.error('导入库存必须映射「仓库」列，否则传统多仓无法按仓库维度核算')
+          toast.error(t('cl.need_wh_inv'))
           setBs('')
           execLock.current = false
           return
@@ -376,9 +367,7 @@ export default function CleansingPage() {
           m => m && (m.target === 'warehouse' || m.t === 'warehouse'),
         )
         if (!hasWh) {
-          toast.error(
-            '导入订单必须映射「仓库」列，否则传统补货模式按仓库维度核算日销时会丢失该订单销量',
-          )
+          toast.error(t('cl.need_wh_order'))
           setBs('')
           execLock.current = false
           return
@@ -386,7 +375,7 @@ export default function CleansingPage() {
         // 2026-10-15 SKU 必映射(写入 key order_no+sku——sku 缺失整批跳过——5000 单无明细根因)
         const hasSku = Object.values(mp || {}).some(m => m && (m.target === 'sku' || m.t === 'sku'))
         if (!hasSku) {
-          toast.error('导入订单必须映射「SKU/商品编号」列（写入唯一键），否则整批订单将被跳过')
+          toast.error(t('cl.need_sku_order'))
           setBs('')
           execLock.current = false
           return
@@ -399,9 +388,7 @@ export default function CleansingPage() {
           m => m && (m.target === 'expiry_managed' || m.t === 'expiry_managed'),
         )
         if (!hasExp) {
-          toast.error(
-            '导入商品必须映射「是否做效期管理」列（填 是/否），否则后续出入库无法判断按效期扣减还是按到货顺序扣减',
-          )
+          toast.error(t('cl.need_expiry'))
           setBs('')
           execLock.current = false
           return
@@ -414,7 +401,7 @@ export default function CleansingPage() {
           m => m && (m.target === 'platform' || m.t === 'platform'),
         )
         if (!hasPlat) {
-          toast.error('导入 GMV 回款必须映射「平台」列（与流水号组成去重键）')
+          toast.error(t('cl.need_platform'))
           setBs('')
           execLock.current = false
           return
@@ -423,7 +410,7 @@ export default function CleansingPage() {
           m => m && (m.target === 'flow_no' || m.t === 'flow_no'),
         )
         if (!hasFlow) {
-          toast.error('导入 GMV 回款必须映射「流水号」列（与平台组成去重键），否则整批将被跳过')
+          toast.error(t('cl.need_flow'))
           setBs('')
           execLock.current = false
           return
@@ -446,19 +433,10 @@ export default function CleansingPage() {
           //   覆盖逻辑变成死代码(与 2026-11-01 库存那次是同一类错误)。
           if (dd && dd.ok !== false) {
             if (dd.duplicate) {
-              toast.warning(
-                '同键 ' +
-                  (dd.new + dd.overlap || 0) +
-                  ' 条均已存在，将按本次文件覆盖更新（不会重复计数）',
-              )
+              toast.warning(t('cl.dup_all', { n: dd.new + dd.overlap || 0 }))
             } else if (dd.overlap) {
               setOverlapAsk({
-                message:
-                  '其中 ' +
-                  dd.overlap +
-                  ' 条已存在（将覆盖更新），新增 ' +
-                  dd.new +
-                  ' 条——确认导入？',
+                message: t('cl.overlap_ask', { o: dd.overlap, n: dd.new }),
               })
               setBs('')
               execLock.current = false
@@ -483,7 +461,7 @@ export default function CleansingPage() {
         ) // raw 直传 90s
         const d = r.data
         if (!d.ok) {
-          toast.error(d.error || '提交失败')
+          toast.error(d.error || t('cl.submit_failed'))
           setBs('')
           execLock.current = false
           return
@@ -492,16 +470,20 @@ export default function CleansingPage() {
         if (d.success !== undefined) {
           // 2026-10-15 重复提前检测: 后端返回 duplicate(全部同键已存在——二次导入同表)→ 跳过提示(非'清洗完成'——秒级拦截)
           if (d.duplicate) {
-            setRes({ success: d.success, failed: d.failed, message: d.message || '文件已导入过' })
+            setRes({
+              success: d.success,
+              failed: d.failed,
+              message: d.message || t('cl.imported_before'),
+            })
             goStep(3)
             setBs('')
             execLock.current = false
-            toast.warning(d.message || '文件已导入过，跳过 ' + d.failed + ' 条')
+            toast.warning(d.message || t('cl.imported_skip', { n: d.failed }))
             return
           }
           // 2026-10-16 部分重叠(底部弹窗决策): X 条已存在(新增 Y 条)——确认只写新增?
           if (d.overlap_partial) {
-            setOverlapAsk({ message: d.message || '存在重复数据' })
+            setOverlapAsk({ message: d.message || t('cl.has_duplicates') })
             setBs('')
             execLock.current = false
             return
@@ -510,7 +492,7 @@ export default function CleansingPage() {
           goStep(3)
           setBs('')
           execLock.current = false
-          toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
+          toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
           return
         }
         const totalRows = d.total_rows || d.total || '?'
@@ -520,17 +502,17 @@ export default function CleansingPage() {
           async: true,
           taskId: d.task_id,
           submitted: totalRows,
-          message: '已提交 ' + totalRows + ' 条',
+          message: t('cl.submitted_n', { n: totalRows }),
         })
         goStep(3)
         setBs('')
         execLock.current = false
         toast.add({
           type: 'success',
-          title: '已提交 ' + totalRows + ' 条',
+          title: t('cl.submitted_n', { n: totalRows }),
           duration: 6000,
           action: {
-            label: '查看进度 →',
+            label: t('cl.view_progress'),
             handler: () => {
               window.__setPage && window.__setPage('tasks')
             },
@@ -550,10 +532,10 @@ export default function CleansingPage() {
           if (!finished) {
             toast.add({
               type: 'success',
-              title: '导入任务已提交，后台续跑中',
+              title: t('cl.bg_running'),
               duration: 6000,
               action: {
-                label: '查看进度 →',
+                label: t('cl.view_progress'),
                 handler: () => {
                   window.__setPage && window.__setPage('tasks')
                 },
@@ -591,20 +573,22 @@ export default function CleansingPage() {
               })
               goStep(3)
               setBs('')
-              toast.success(
-                '清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道',
-              )
+              toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
             } else if (sd.status === 'error') {
               finished = true
               clearTimeout(threshold)
               clearInterval(poll)
-              toast.error('失败: ' + sd.error)
+              toast.error(t('cl.failed_msg', { msg: sd.error }))
               setBs('')
             } else if (sd.status === 'running' && sd.total) {
               const _pg = Math.min(((sd.page || 0) * 5000 + 5000) / Math.max(sd.total, 1), 1)
               const _pct = Math.round(_pg * 100)
               setBs(
-                `清洗中... ${_pct}% (${Math.min((sd.page || 0) * 5000 + 5000, sd.total)}/${sd.total}条)`,
+                t('cl.progress', {
+                  pct: _pct,
+                  done: Math.min((sd.page || 0) * 5000 + 5000, sd.total),
+                  total: sd.total,
+                }),
               )
             }
           } catch {
@@ -626,11 +610,13 @@ export default function CleansingPage() {
         } catch {}
       } catch (e) {
         toast.error(
-          '请求异常: ' +
-            e.message +
-            (e.response?.data?.detail
-              ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
-              : ''),
+          t('cl.req_error', {
+            msg:
+              e.message +
+              (e.response?.data?.detail
+                ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+                : ''),
+          }),
         )
         setBs('')
       }
@@ -643,7 +629,7 @@ export default function CleansingPage() {
   const confirmOverlap = async () => {
     if (!overlapAsk) return
     setOverlapAsk(null)
-    setBs('执行中')
+    setBs(t('cl.executing'))
     execLock.current = false
     try {
       const r = await api.post(
@@ -659,7 +645,7 @@ export default function CleansingPage() {
       )
       const d = r.data
       if (!d.ok) {
-        toast.error(d.error || '提交失败')
+        toast.error(d.error || t('cl.submit_failed'))
         setBs('')
         return
       }
@@ -668,26 +654,26 @@ export default function CleansingPage() {
         goStep(3)
         setBs('')
         execLock.current = false
-        toast.success('清洗完成，数据已归入「' + (ch === 'jd' ? '京东' : '其他渠道') + '」渠道')
+        toast.success(t('cl.done_into', { ch: channelName({ code: ch } as any) }))
         return
       }
       setRes({
         async: true,
         taskId: d.task_id,
         submitted: d.total_rows || d.total || '?',
-        message: '已提交 ' + (d.total_rows || d.total || '?') + ' 条',
+        message: t('cl.submitted_n', { n: d.total_rows || d.total || '?' }),
       })
       goStep(3)
       setBs('')
       execLock.current = false
-      toast.success('已提交，后台续跑中')
+      toast.success(t('cl.submitted_bg'))
     } catch (e) {
-      toast.error('请求异常: ' + (e.message || ''))
+      toast.error(t('cl.req_error', { msg: e.message || '' }))
       setBs('')
     }
   }
   const quickExecute = async () => {
-    setBs('执行中')
+    setBs(t('cl.executing'))
     try {
       const r = await uploadRawBytes(
         '/api/cleansing/preview?q_target=' +
@@ -702,7 +688,7 @@ export default function CleansingPage() {
       )
       const d = r.data
       if (!d.ok) {
-        toast.error(d.error || '提交失败')
+        toast.error(d.error || t('cl.submit_failed'))
         setBs('')
         return
       }
@@ -710,11 +696,13 @@ export default function CleansingPage() {
       doExecute()
     } catch (e) {
       toast.error(
-        '请求异常: ' +
-          e.message +
-          (e.response?.data?.detail
-            ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
-            : ''),
+        t('cl.req_error', {
+          msg:
+            e.message +
+            (e.response?.data?.detail
+              ? '：' + JSON.stringify(e.response.data.detail).slice(0, 200)
+              : ''),
+        }),
       )
       setBs('')
     }
@@ -742,7 +730,7 @@ export default function CleansingPage() {
     <div className="card">
       {s > 0 && (
         <div className="step-indicator">
-          {['上传文件', '映射字段', '预览确认', '完成'].map((l, i) => (
+          {[t('cl.step_upload'), t('cl.step_map'), t('cl.step_preview'), t('cl.step_done')].map((l, i) => (
             <span key={i} className={'step' + (s === i ? ' active' : '') + (s > i ? ' done' : '')}>
               {s > i ? (
                 <IconCheck
@@ -809,7 +797,9 @@ export default function CleansingPage() {
 
       {s === 0 && (
         <div style={{ textAlign: 'center', padding: '28px 16px' }}>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>选择导入类型</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+            {t('cl.pick_type')}
+          </div>
           <div
             style={{
               fontSize: 'var(--font-xs)',
@@ -818,7 +808,7 @@ export default function CleansingPage() {
               letterSpacing: 0.2,
             }}
           >
-            订单 / 库存 / 出入库 / 商品 / 供应商 / GMV 回款
+            {t('cl.pick_type_sub')}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 24 }}>
             <select
@@ -839,19 +829,19 @@ export default function CleansingPage() {
                 minHeight: 48,
               }}
             >
-              <option value="order">导入订单</option>
-              <optgroup label="库存">
-                <option value="inventory">自有仓库存</option>
-                <option value="platform_inv">平台仓库存</option>
-                <option value="inventory_b">B仓库存</option>
+              <option value="order">{t('cl.opt_order')}</option>
+              <optgroup label={t('cl.opt_inv_group')}>
+                <option value="inventory">{t('cl.opt_inv_own')}</option>
+                <option value="platform_inv">{t('cl.opt_inv_platform')}</option>
+                <option value="inventory_b">{t('cl.opt_inv_b')}</option>
               </optgroup>
-              <optgroup label="入库出库记录">
-                <option value="inbound">入库记录</option>
-                <option value="outbound">出库记录</option>
+              <optgroup label={t('cl.opt_flow_group')}>
+                <option value="inbound">{t('cl.opt_inbound')}</option>
+                <option value="outbound">{t('cl.opt_outbound')}</option>
               </optgroup>
-              <option value="product">导入商品</option>
-              <option value="supplier">导入供应商</option>
-              <option value="gmv_flow">GMV 回款（资金流水）</option>
+              <option value="product">{t('cl.opt_product')}</option>
+              <option value="supplier">{t('cl.opt_supplier')}</option>
+              <option value="gmv_flow">{t('cl.opt_gmv')}</option>
             </select>
           </div>
           <label
@@ -871,7 +861,7 @@ export default function CleansingPage() {
               pointerEvents: bs ? 'none' : 'auto',
             }}
           >
-            {bs ? '识别中...' : t('cleansing.select_file')}
+            {bs ? t('cl.detecting') : t('cleansing.select_file')}
             <input
               type="file"
               accept=".csv,.xlsx"
@@ -902,7 +892,7 @@ export default function CleansingPage() {
                 fontSize: 'var(--font-13)',
               }}
             >
-              <IconLoading size={14} /> 正在识别文件...
+              <IconLoading size={14} /> {t('cl.detecting_file')}
             </div>
           )}
           <div
@@ -913,7 +903,7 @@ export default function CleansingPage() {
               letterSpacing: 0.2,
             }}
           >
-            支持 CSV / Excel · 智能识别列名 · 手工映射为主
+            {t('cl.upload_hint')}
           </div>
         </div>
       )}
@@ -991,9 +981,9 @@ export default function CleansingPage() {
       {overlapAsk && (
         <ConfirmDialog
           open={!!overlapAsk}
-          title="检测到重复数据"
+          title={t('cl.detect_dup')}
           desc={overlapAsk.message}
-          confirmLabel="确认导入新增"
+          confirmLabel={t('cl.confirm_new')}
           onCancel={() => setOverlapAsk(null)}
           onConfirm={() => {
             confirmOverlap()

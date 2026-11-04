@@ -45,9 +45,9 @@ export default function Welcome({ close }: { close: () => void }) {
             {t('welcome.title')}
           </div>
           <div style={{ fontSize: 'var(--font-15)', color: 'var(--muted2)', lineHeight: 1.5 }}>
-            电商供应链数据清洗
+            {t('welcome.tagline1')}
             <br />
-            与补货决策看板
+            {t('welcome.tagline2')}
           </div>
         </div>
         <div
@@ -61,26 +61,26 @@ export default function Welcome({ close }: { close: () => void }) {
           {[
             {
               svg: 'M3 12h4l2-9 4 18 2-9h4',
-              title: '看数据',
-              desc: '多维看板总览',
+              title: t('welcome.dash'),
+              desc: t('welcome.dash_desc'),
               page: 'dash',
             },
             {
               svg: 'M9 18h6M10 22h4M15.09 14c.6-.77 1.05-1.6 1.32-2.5A5.4 5.4 0 0 0 12 6a5.4 5.4 0 0 0-4.41 5.5c.27.9.72 1.73 1.32 2.5M9 18c0-1.5.5-2.9 1.5-4h3c1 1.1 1.5 2.5 1.5 4',
-              title: '看补货',
-              desc: '补货/采购建议',
+              title: t('welcome.insights'),
+              desc: t('welcome.insights_desc'),
               page: 'insights',
             },
             {
               svg: 'M20 4 8 16M16 20 4 8M14 6a3 3 0 0 0-6 0v5h6V6ZM6 14c0 2 1.5 4 3 5M14 14c0 2-1.5 4-3 5M4 8h16',
-              title: '导数据',
-              desc: '数据清洗导入',
+              title: t('welcome.cleansing'),
+              desc: t('welcome.cleansing_desc'),
               page: 'cleansing',
             },
             {
               svg: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',
-              title: '设规则',
-              desc: '规则引擎配置',
+              title: t('welcome.rules'),
+              desc: t('welcome.rules_desc'),
               page: 'rules',
             },
           ].map(function (card) {
@@ -139,7 +139,7 @@ export default function Welcome({ close }: { close: () => void }) {
               const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
               if (d.ok) {
                 if (d.data?.requires_reset) {
-                  notify.error('已有数据，请在设置页先「一键重置」')
+                  notify.error(t('welcome.seed_exists'))
                   return
                 }
                 const taskId = d.data?.task_id
@@ -147,9 +147,9 @@ export default function Welcome({ close }: { close: () => void }) {
                   try {
                     localStorage.setItem('c_seed_task', taskId)
                   } catch {}
-                  notify.success('种子数据填充中，可前往任务管理查看进度')
+                  notify.success(t('welcome.seed_running'))
                 }
-              } else notify.error('填充失败: ' + (d.error || ''))
+              } else notify.error(t('welcome.seed_failed', { msg: d.error || '' }))
             } catch (e) {}
           }}
           className="btn btn-primary"

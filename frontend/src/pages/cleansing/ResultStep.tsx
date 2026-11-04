@@ -1,4 +1,5 @@
 import { IconAlert, IconCheck, IconFolder } from '../../components/Icons'
+import { t } from '../../locale'
 
 interface Props {
   res: any
@@ -42,7 +43,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
       })()}
       {/* 标题语义化(原 res.message 直出) */}
       <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
-        {res.async ? '已提交后台处理' : res.success > 0 ? '导入完成' : '导入未完成'}
+        {res.async ? t('cw.res_async') : res.success > 0 ? t('cw.res_ok') : t('cw.res_partial')}
       </div>
       {fileName ? (
         <div className="small muted" style={{ fontSize: 'var(--font-sm)', marginBottom: 8 }}>
@@ -56,8 +57,9 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
         {res.error || res.message || ''}
         {res.error ? (
           <span style={{ marginLeft: 6, fontSize: 'var(--font-sm)', color: 'var(--warning)' }}>
-            （侧边栏 <IconAlert size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />{' '}
-            查看详情）
+            {t('cw.res_detail_pre')}
+            <IconAlert size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />{' '}
+            {t('cw.res_detail_suf')}
           </span>
         ) : (
           ''
@@ -77,7 +79,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             >
               {res.submitted}
             </div>
-            <div className="small muted">已提交</div>
+            <div className="small muted">{t('cw.res_st_submitted')}</div>
           </div>
           <div>
             <div
@@ -90,7 +92,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             >
               —
             </div>
-            <div className="small muted">处理中</div>
+            <div className="small muted">{t('cw.res_st_processing')}</div>
           </div>
         </div>
       ) : (
@@ -107,7 +109,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             >
               {res.success}
             </div>
-            <div className="small muted">成功</div>
+            <div className="small muted">{t('cw.res_st_success')}</div>
           </div>
           <div>
             <div
@@ -121,7 +123,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             >
               {res.failed}
             </div>
-            <div className="small muted">跳过</div>
+            <div className="small muted">{t('cw.res_st_skipped')}</div>
           </div>
         </div>
       )}
@@ -131,7 +133,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
           style={{ marginTop: 14, marginBottom: 14 }}
           onClick={() => window.__setPage && window.__setPage('tasks')}
         >
-          前往任务管理页查看进度 →
+          {t('cw.go_tasks')}
         </button>
       )}
       {res.failed > 0 && Array.isArray(res.failed_details) && res.failed_details.length > 0 && (
@@ -154,7 +156,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
               color: 'var(--danger)',
             }}
           >
-            失败明细（可对照修正后重新导入）
+            {t('cw.fail_detail')}
           </div>
           {res.failed_details.map((d, i) => (
             <div
@@ -197,7 +199,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
             cursor: 'pointer',
           }}
         >
-          重新开始
+          {t('cw.restart')}
         </button>
         <label
           style={{
@@ -217,7 +219,7 @@ export default function ResultStep({ res, fileName, onRestart, onFile }: Props) 
           }}
           className="clickable"
         >
-          <IconFolder size={14} /> 导入相同格式
+          <IconFolder size={14} /> {t('cw.same_format')}
           <input
             type="file"
             accept=".csv,.xlsx"

@@ -7,6 +7,8 @@ import { ORDER_COLS, ORDER_STATUSES, orderColKey, getOrderVis } from './configs'
 import { IconExport, IconCheck } from '../Icons'
 import ConfirmDialog from '../ConfirmDialog'
 import { t } from '../../locale'
+import { orderStatusLabel } from '../statusLabels'
+import { colLabel } from '../colLabels'
 
 interface HammerOrdersProps {
   channel: string
@@ -56,14 +58,16 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
         s.setOrderBatch(false)
         setHammerPanel(null)
         toast.success(
-          action === 'permanent-delete' ? `已永久删除 ${ids.length} 条` : `已删除 ${ids.length} 条`,
+          action === 'permanent-delete'
+            ? t('hx.purged_n', { n: ids.length })
+            : t('hx.deleted_n', { n: ids.length }),
         )
         window.dispatchEvent(new Event('orders-changed'))
       } else {
-        toast.error('操作失败: ' + (d.error || ''))
+        toast.error(t('hx.op_failed', { msg: d.error || '' }))
       }
     } catch (e) {
-      toast.error('操作失败: ' + e.message)
+      toast.error(t('hx.op_failed', { msg: e.message }))
     }
   }
   const doExport = async () => {
@@ -77,16 +81,16 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
       if (d.ok && d.task_id)
         toast.add({
           type: 'success',
-          title: '导出任务已提交',
+          title: t('hx.export_submitted'),
           duration: 6000,
           action: {
-            label: '查看进度 →',
+            label: t('hx.view_progress'),
             handler: () => {
               window.__setPage && window.__setPage('tasks')
             },
           },
         })
-      else throw new Error(d.error || '提交失败')
+      else throw new Error(d.error || t('hx.submit_failed'))
     } catch (e) {
       toast.error(t('export.failed'))
     }
@@ -142,7 +146,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                   : undefined
               }
             >
-              批量操作
+              {t('hx.batch')}
             </button>
           </div>
         </div>
@@ -157,11 +161,11 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
               }}
             >
               <span className="text-12 muted2">
-                已选{' '}
+                {t('hx.selected_pre')}{' '}
                 <b style={{ color: 'var(--text)' }}>
                   {(useAppStore.getState().orderSelIds || []).length}
                 </b>{' '}
-                项
+                {t('hx.selected_suf')}
               </span>
               {useAppStore.getState().orderBatch ? (
                 <button
@@ -171,14 +175,14 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                     useAppStore.getState().setOrderSelIds([])
                   }}
                 >
-                  退出批量模式
+                  {t('hx.exit_batch')}
                 </button>
               ) : (
                 <button
                   className="hammer-clear"
                   onClick={() => useAppStore.getState().setOrderBatch(true)}
                 >
-                  进入批量模式
+                  {t('hx.enter_batch')}
                 </button>
               )}
             </div>
@@ -191,7 +195,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                   window.dispatchEvent(new Event('orders-toggle-all'))
                 }}
               >
-                全选/取消
+                {t('hx.select_all_toggle')}
               </button>
             </div>
             <div className="hammer-btn-row" style={{ marginTop: 8 }}>
@@ -201,7 +205,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                 disabled={orderSelIds.length === 0}
                 onClick={() => runOrderBatch('delete')}
               >
-                批量删除
+                {t('hx.batch_delete')}
               </button>
               <button
                 className="hammer-btn btn-ghost"
@@ -209,11 +213,11 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                 disabled={orderSelIds.length === 0}
                 onClick={() => setConfirmPurge(true)}
               >
-                永久删除
+                {t('hx.purge')}
               </button>
             </div>
             <div className="muted2 text-10" style={{ marginTop: 8 }}>
-              勾选订单后在此批量操作 · 删除为软删（回收站可恢复）
+              {t('hx.order_batch_hint')}
             </div>
           </div>
         )}
@@ -221,13 +225,9 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
       {confirmPurge && (
         <ConfirmDialog
           open
-          title="永久删除订单"
-          desc={
-            '永久删除 ' +
-            (useAppStore.getState().orderSelIds || []).length +
-            ' 条订单？此操作不可撤销'
-          }
-          confirmLabel="永久删除"
+          title={t('hx.purge_title')}
+          desc={t('hx.purge_desc', { n: (useAppStore.getState().orderSelIds || []).length })}
+          confirmLabel={t('hx.purge')}
           danger
           onConfirm={() => {
             setConfirmPurge(false)
@@ -243,7 +243,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
               {t('common.all')}
             </button>
             <button onClick={() => saveCols([])} className="hammer-clear">
-              取消全选
+              {t('common.deselect')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginBottom: 2, padding: '0 4px' }}>
@@ -251,7 +251,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
           </div>
           {visCols.length > 0 && (
             <div className="cols-group-title">
-              <span>已显示</span>
+              <span>{t('common.visible')}</span>
               <span>{visCols.length}</span>
             </div>
           )}
@@ -313,7 +313,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                   }}
                   className="accent-primary"
                 />
-                <span className="flex-1 text-12">{col.label}</span>
+                <span className="flex-1 text-12">{colLabel(col.id)}</span>
                 <span className="muted2 text-9">#{visCols.indexOf(col.id) + 1}</span>
               </div>
             )
@@ -324,7 +324,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
             return (
               <>
                 <div className="cols-group-title">
-                  <span>已隐藏</span>
+                  <span>{t('common.hidden')}</span>
                   <span>{hidden.length}</span>
                 </div>
                 {hidden.map(col => (
@@ -342,7 +342,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                       }}
                       className="accent-primary"
                     />
-                    <span className="flex-1 text-12">{col.label}</span>
+                    <span className="flex-1 text-12">{colLabel(col.id)}</span>
                   </div>
                 ))}
               </>
@@ -356,7 +356,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
             id="hm-search-orders"
             value={localSearch}
             onChange={e => setLocalSearch(e.target.value)}
-            placeholder="搜索单号/商品/SKU..."
+            placeholder={t('hx.search_order_ph')}
             className="hammer-input"
           />
           {hammerSearch && (
@@ -387,7 +387,7 @@ export default function HammerOrders({ channel }: HammerOrdersProps) {
                   fontWeight: orderStatus === s ? 600 : 400,
                 }}
               >
-                {s || t('common.all')}
+                {orderStatusLabel(s)}
               </span>
             ))}
           </div>

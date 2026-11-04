@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { clearCache, abortScope } from '../api/client'
@@ -8,21 +8,25 @@ import ErrorRetry from '../components/ErrorRetry'
 import { useToast } from '../components/Toast'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { IconCircle, IconCircleCheck } from '../components/Icons'
+import { colLabel } from '../components/colLabels'
+import { orderStatusLabel, orderStatusTone } from '../components/statusLabels'
+import { codeColWidth } from '../components/hammer/codeCell'
 import { t } from '../locale'
 
+// 列只存 id: 表头渲染走 colLabel(col.id), 列选择面板同源(configs.ts 的 ORDER_COLS)
 const COLS = [
-  { id: 'date', label: '下单日期' },
-  { id: 'brand', label: '品牌' },
-  { id: 'order_no', label: '订单号' },
-  { id: 'barcode', label: '69码' },
-  { id: 'store', label: '店铺' },
-  { id: 'warehouse', label: '仓库' },
-  { id: 'product', label: '商品' },
-  { id: 'quantity', label: '数量' },
-  { id: 'unit_price', label: '单价' },
-  { id: 'amount', label: '金额' },
-  { id: 'status', label: '状态' },
-  { id: 'paid_at', label: '入库日期' },
+  { id: 'date' },
+  { id: 'brand' },
+  { id: 'order_no' },
+  { id: 'barcode' },
+  { id: 'store' },
+  { id: 'warehouse' },
+  { id: 'product' },
+  { id: 'quantity' },
+  { id: 'unit_price' },
+  { id: 'amount' },
+  { id: 'status' },
+  { id: 'paid_at' },
 ]
 const COL_KEY = () => 'c_cols_orders_' + (useAppStore.getState().channel || 'jd')
 const getVis = () => {
@@ -126,6 +130,18 @@ export default function OrdersPage() {
   const s = hammerSearch || ''
   const st = orderStatus || ''
 
+  // 码值列(订单号/条码)宽度按**当前这一页数据里最长的那串**算:
+  // 2026-11-04 订单页订单号 164px 撞 .col-sku 的 max-width 140px, 且 td.mono 是
+  // nowrap + overflow:visible, 文字直接叠印到右边条码上。现在按内容给宽, 不再钉死。
+  const codeW = useMemo(() => {
+    const out: Record<string, ReturnType<typeof codeColWidth>> = {}
+    for (const id of visCols) {
+      if (id !== 'order_no' && id !== 'barcode') continue
+      out[id] = codeColWidth(orders.map((x: any) => (id === 'order_no' ? x.order_no : x.barcode)))
+    }
+    return out
+  }, [orders, visCols])
+
   // 加载平台仓库存（按 SKU+仓库 维度）
   const doBatchOrder = async (action: string, ids: number[]) => {
     try {
@@ -140,13 +156,15 @@ export default function OrdersPage() {
         setOrderBatch(false)
         useAppStore.getState().loadAll()
         toast.success(
-          action === 'permanent-delete' ? `已永久删除 ${ids.length} 条` : `已删除 ${ids.length} 条`,
+          action === 'permanent-delete'
+            ? t('oms.batch_purged', { n: ids.length })
+            : t('oms.batch_deleted', { n: ids.length }),
         )
       } else {
-        toast.error('操作失败: ' + (d.error || ''))
+        toast.error(t('oms.action_failed', { msg: d.error || '' }))
       }
     } catch (e) {
-      toast.error('操作失败: ' + e.message)
+      toast.error(t('oms.action_failed', { msg: e.message }))
     }
   }
   const delOrder = async () => {
@@ -169,16 +187,20 @@ export default function OrdersPage() {
             flexWrap: 'wrap',
           }}
         >
-          <span className="small muted">搜索 "{s}"</span>
+          <span className="small muted">{t('oms.search_tag', { q: s })}</span>
           {st && <span className="pill info">{st}</span>}
         </div>
       )}
       <div className="card">
         <div style={{ fontSize: 'var(--font-18)', fontWeight: 700, marginBottom: 8 }}>
-          订单 {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
+          {t('nav.orders')} {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
           <span className="small muted" style={{ fontWeight: 400, fontSize: 'var(--font-xs)' }}>
-            已加载 {Math.min(orders.length, orderTotal || orders.length)}/
-            {orderTotal || orders.length} 条 · 显示 {visCols.length}/{COLS.length} 列
+            {t('oms.loaded', {
+              a: Math.min(orders.length, orderTotal || orders.length),
+              b: orderTotal || orders.length,
+              c: visCols.length,
+              d: COLS.length,
+            })}
             <StaleDot
               level={fresh?.staleLevel || 0}
               days={Math.max(...(fresh?.sources || []).map(s => s.days ?? 0), 0)}
@@ -197,7 +219,7 @@ export default function OrdersPage() {
               cursor: 'pointer',
             }}
           >
-            查 1 年前 →
+            {t('oms.to_history')}
           </span>
         </div>
         {/* 2026-10-27 无感切回: 有旧数据(store 持久)时先显旧, 后台刷新不闪骨架; 仅无数据可显示才骨架 */}
@@ -212,14 +234,14 @@ export default function OrdersPage() {
             <EmptyState
               icon="clipboard"
               title={s ? t('order.empty_matched') : t('order.empty')}
-              desc={s ? '换个关键词试试' : '通过清洗导入订单数据'}
+              desc={s ? t('oms.try_other_kw') : t('oms.import_hint')}
               action={
                 !s && (
                   <button
                     className="btn btn-primary"
                     onClick={() => window.__setPage && window.__setPage('cleansing')}
                   >
-                    去导入数据 →
+                    {t('oms.go_import')}
                   </button>
                 )
               }
@@ -235,7 +257,7 @@ export default function OrdersPage() {
               <colgroup>
                 {visCols.map(id => {
                   const col = COLS.find(c => c.id === id)
-                  return col ? <col key={col.id} /> : null
+                  return col ? <col key={col.id} style={codeW[col.id]?.style} /> : null
                 })}
               </colgroup>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
@@ -243,7 +265,11 @@ export default function OrdersPage() {
                   {orderBatch && <th style={{ width: 32 }} />}
                   {visCols.map(id => {
                     const col = COLS.find(c => c.id === id)
-                    return col ? <th key={col.id}>{col.label}</th> : null
+                    return col ? (
+                      <th key={col.id} style={codeW[col.id]?.style}>
+                        {colLabel(col.id)}
+                      </th>
+                    ) : null
                   })}
                 </tr>
               </thead>
@@ -290,7 +316,11 @@ export default function OrdersPage() {
                         if (!col) return null
                         if (col.id === 'order_no')
                           return (
-                            <td key={col.id} className="mono col-sku">
+                            <td
+                              key={col.id}
+                              className="mono col-sku col-code"
+                              title={x.order_no || undefined}
+                            >
                               {x.order_no}
                             </td>
                           )
@@ -298,7 +328,8 @@ export default function OrdersPage() {
                           return (
                             <td
                               key={col.id}
-                              className="mono"
+                              className="mono col-code"
+                              title={x.barcode || undefined}
                               style={{ fontSize: 'var(--font-xs)' }}
                             >
                               {x.barcode || '-'}
@@ -352,30 +383,8 @@ export default function OrdersPage() {
                         if (col.id === 'status')
                           return (
                             <td key={col.id} style={{ textAlign: 'center' }}>
-                              <span
-                                className={
-                                  'pill ' +
-                                  (function () {
-                                    const s = x.order_status || ''
-                                    if (
-                                      s.includes('完成') ||
-                                      s.includes('签收') ||
-                                      s.includes('收货')
-                                    )
-                                      return 'success'
-                                    if (
-                                      s.includes('退款') ||
-                                      s.includes('取消') ||
-                                      s.includes('退货') ||
-                                      s.includes('售后')
-                                    )
-                                      return 'danger'
-                                    if (s.includes('发货') || s.includes('出库')) return 'info'
-                                    return 'warning'
-                                  })()
-                                }
-                              >
-                                {x.order_status}
+                              <span className={'pill ' + orderStatusTone(x.order_status)}>
+                                {orderStatusLabel(x.order_status)}
                               </span>
                             </td>
                           )
@@ -417,9 +426,9 @@ export default function OrdersPage() {
       {/* end card */}
       <ConfirmDialog
         open={!!confirmDel}
-        title="删除订单"
-        desc="删除后不可恢复"
-        confirmLabel="删除"
+        title={t('oms.confirm_del_title')}
+        desc={t('oms.confirm_del_desc')}
+        confirmLabel={t('common.delete_btn')}
         onConfirm={delOrder}
         onCancel={() => setConfirmDel(null)}
       />
@@ -451,7 +460,7 @@ export default function OrdersPage() {
             ‹
           </button>
           <span className="small muted" style={{ fontSize: 'var(--font-sm)' }}>
-            第 {orderPage}/{totalPages} 页
+            {t('oms.page_of', { a: orderPage, b: totalPages })}
           </span>
           <button
             onClick={() => setOrderPage(orderPage + 1)}
@@ -470,7 +479,7 @@ export default function OrdersPage() {
             ››
           </button>
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span className="small muted">跳至</span>
+            <span className="small muted">{t('oms.jump_to')}</span>
             <input
               type="number"
               min={1}
@@ -496,7 +505,7 @@ export default function OrdersPage() {
                 outline: 'none',
               }}
             />
-            <span className="small muted">页</span>
+            <span className="small muted">{t('oms.page_suffix')}</span>
           </span>
         </div>
       )}

@@ -119,7 +119,7 @@ export default function HammerDashboard({ channel }) {
           }}
           className="hammer-btn btn-primary"
         >
-          <IconClipboard size={14} /> 任务管理
+          <IconClipboard size={14} /> {t('nav.tasks')}
         </button>
       </div>
     </div>

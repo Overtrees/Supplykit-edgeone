@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, alertAge, whTag } from '../format'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -61,7 +62,7 @@ export default function LowStockSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            低库存告警 · 共 {fmtInt(total)} 条
+            {t('ls.title_n', { n: fmtInt(total) })}
           </div>
           {/* 2026-11-01 曾把 warehouse_type 过滤整个拿掉 —— 当时的实测结论是
                 "库内 low_stock 200 条全是 platform, 没有 bc 类型", 于是 bbcc 下过滤恒空。
@@ -133,7 +134,7 @@ export default function LowStockSheet(props: Props) {
                       className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')}
                       style={{ fontSize: 'var(--font-10)' }}
                     >
-                      {x.severity === 'warning' ? '警告' : '超储'}
+                      {x.severity === 'warning' ? t('ls.warning') : t('ls.overstock')}
                     </span>
                   </span>
                 </div>
@@ -153,7 +154,7 @@ export default function LowStockSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

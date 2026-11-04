@@ -4,7 +4,8 @@ import { api, apiJson } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { IconCheck, IconClose, IconGear, IconLightning, IconLoading } from '../../components/Icons'
 import { IS } from './shared'
-import { fieldLbl, opLbl } from './labels'
+import { fieldLbl, opLbl, whLbl } from './labels'
+import { t } from '../../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -122,9 +123,9 @@ export default function RuleTestSheet({
         },
       })
       if (d.ok) setTestResult(d.data)
-      else toast.error('测试失败: ' + (d.error || ''))
+      else toast.error(t('rt.failed', { msg: d.error || '' }))
     } catch (e) {
-      toast.error('测试失败: ' + e.message)
+      toast.error(t('rt.failed', { msg: e.message }))
     }
     setTestLoading(false)
   }
@@ -182,7 +183,7 @@ export default function RuleTestSheet({
               textOverflow: 'ellipsis',
             }}
           >
-            规则测试
+            {t('rt.title')}
           </div>
           <div style={{ overflowY: 'auto', minHeight: 0, flex: 1 }}>
             <div
@@ -229,17 +230,17 @@ export default function RuleTestSheet({
                   gap: 4,
                 }}
               >
-                <IconLightning size={12} /> 用真实库存填充
+                <IconLightning size={12} /> {t('rt.fill_real')}
               </button>
               {testSampleSku && (
                 <span style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>
-                  样本: {testSampleSku}
+                  {t('rt.sample', { sku: testSampleSku })}
                 </span>
               )}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                可用量
+                {t('rt.avail')}
                 <input
                   type="number"
                   value={testInv.available_qty}
@@ -248,9 +249,9 @@ export default function RuleTestSheet({
                 />
               </label>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                安全线
+                {t('rt.safety')}
                 <span className="small muted" style={{ marginLeft: 6, fontSize: 'var(--font-xs)' }}>
-                  运行时动态注入=日销×补货周期（模拟测试用下方数值）
+                  {t('rt.safety_hint')}
                 </span>
                 <input
                   type="number"
@@ -260,7 +261,7 @@ export default function RuleTestSheet({
                 />
               </label>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                在途
+                {t('rt.transit')}
                 <input
                   type="number"
                   value={testInv.in_transit_qty}
@@ -269,7 +270,7 @@ export default function RuleTestSheet({
                 />
               </label>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                滞销天数
+                {t('rt.idle_days')}
                 <input
                   type="number"
                   value={testInv.days_since_last}
@@ -278,7 +279,7 @@ export default function RuleTestSheet({
                 />
               </label>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                订单数量
+                {t('rt.order_qty')}
                 <input
                   type="number"
                   value={testInv.order_quantity}
@@ -287,16 +288,18 @@ export default function RuleTestSheet({
                 />
               </label>
               <label style={{ fontSize: 'var(--font-sm)' }}>
-                仓库主体
+                {t('rt.warehouse')}
                 <select
                   value={testInv.warehouse_type}
                   onChange={e => setTestInv(p => ({ ...p, warehouse_type: e.target.value }))}
                   style={IS}
                 >
-                  <option value="">全部</option>
-                  <option value="platform">C仓</option>
-                  {globalChannel === 'jd' && <option value="platform_b">B仓</option>}
-                  <option value="own">自有仓</option>
+                  <option value="">{t('rf.wh.all')}</option>
+                  <option value="platform">{t('rf.wh.platform')}</option>
+                  {globalChannel === 'jd' && (
+                    <option value="platform_b">{t('rf.wh.platform_b')}</option>
+                  )}
+                  <option value="own">{t('rf.wh.own')}</option>
                 </select>
               </label>
             </div>
@@ -333,52 +336,52 @@ export default function RuleTestSheet({
                 >
                   <div style={{ fontWeight: 600, fontSize: 'var(--font-sm)', marginBottom: 8 }}>
                     <IconGear size={14} style={{ verticalAlign: -2 }} />{' '}
-                    计算变量/规则参数（与看板判定同源，可调预览）
+                    {t('rt.calc_vars')}
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {_needAdj && (
                       <label style={{ fontSize: 'var(--font-sm)' }}>
-                        可售天数 Adj-DOS
+                        {t('rt.adj_dos')}
                         <input
                           type="number"
                           step="any"
                           value={testInv.adj_dos}
                           onChange={e => setTestInv(p => ({ ...p, adj_dos: e.target.value }))}
                           style={IS}
-                          placeholder="例 2.5"
+                          placeholder={t('rt.eg', { v: '2.5' })}
                         />
                       </label>
                     )}
                     {_needBuf && (
                       <label style={{ fontSize: 'var(--font-sm)' }}>
-                        缓冲比 Buffer
+                        {t('rt.buffer')}
                         <input
                           type="number"
                           step="any"
                           value={testInv.buffer}
                           onChange={e => setTestInv(p => ({ ...p, buffer: e.target.value }))}
                           style={IS}
-                          placeholder="例 0.8"
+                          placeholder={t('rt.eg', { v: '0.8' })}
                         />
                       </label>
                     )}
                     {_needHealth && (
                       <label style={{ fontSize: 'var(--font-sm)' }}>
-                        库存健康分
+                        {t('rt.health')}
                         <input
                           type="number"
                           step="any"
                           value={testInv.health_score}
                           onChange={e => setTestInv(p => ({ ...p, health_score: e.target.value }))}
                           style={IS}
-                          placeholder="例 60"
+                          placeholder={t('rt.eg', { v: '60' })}
                         />
                       </label>
                     )}
                     {_needOwn && (
                       <>
                         <label style={{ fontSize: 'var(--font-sm)' }}>
-                          下游日销(件/天)
+                          {t('rt.downstream_ds')}
                           <input
                             type="number"
                             step="any"
@@ -387,47 +390,47 @@ export default function RuleTestSheet({
                               setTestOwn(p => ({ ...p, downstream_ds: e.target.value }))
                             }
                             style={IS}
-                            placeholder="例 10"
+                            placeholder={t('rt.eg', { v: '10' })}
                           />
                         </label>
                         <label style={{ fontSize: 'var(--font-sm)' }}>
-                          自有可发(在仓+在途+采购在途)
+                          {t('rt.can_ship')}
                           <input
                             type="number"
                             step="any"
                             value={testOwn.can_ship}
                             onChange={e => setTestOwn(p => ({ ...p, can_ship: e.target.value }))}
                             style={IS}
-                            placeholder="例 40"
+                            placeholder={t('rt.eg', { v: '40' })}
                           />
                         </label>
                         <label style={{ fontSize: 'var(--font-sm)' }}>
-                          调拨周期(天)
+                          {t('rt.b2c_days')}
                           <input
                             type="number"
                             step="any"
                             value={testOwn.b2c_days}
                             onChange={e => setTestOwn(p => ({ ...p, b2c_days: e.target.value }))}
                             style={IS}
-                            placeholder="例 6"
+                            placeholder={t('rt.eg', { v: '6' })}
                           />
                         </label>
                         <label style={{ fontSize: 'var(--font-sm)' }}>
-                          自有可撑天数(留空=按可用/日销推)
+                          {t('rt.cover_days')}
                           <input
                             type="number"
                             step="any"
                             value={testOwn.cover_days}
                             onChange={e => setTestOwn(p => ({ ...p, cover_days: e.target.value }))}
                             style={IS}
-                            placeholder="例 120"
+                            placeholder={t('rt.eg', { v: '120' })}
                           />
                         </label>
                       </>
                     )}
                     {_needBatch && (
                       <label style={{ fontSize: 'var(--font-sm)' }}>
-                        距过期天数(负=已过期)
+                        {t('rt.days_to_expire')}
                         <input
                           type="number"
                           step="any"
@@ -436,14 +439,14 @@ export default function RuleTestSheet({
                             setTestBatch(p => ({ ...p, days_to_expire: e.target.value }))
                           }
                           style={IS}
-                          placeholder="例 10"
+                          placeholder={t('rt.eg', { v: '10' })}
                         />
                       </label>
                     )}
                     {_needParams &&
                       Object.keys(testParams).map(k => (
                         <label key={k} style={{ fontSize: 'var(--font-sm)' }}>
-                          参数 {k}
+                          {t('rt.param', { k })}
                           <input
                             type="number"
                             step="any"
@@ -473,10 +476,10 @@ export default function RuleTestSheet({
               >
                 {testLoading ? (
                   <>
-                    <IconLoading size={14} /> 测试中...
+                    <IconLoading size={14} /> {t('rt.running')}
                   </>
                 ) : (
-                  '运行测试'
+                  t('rt.run')
                 )}
               </button>
               <button
@@ -484,7 +487,7 @@ export default function RuleTestSheet({
                 className="btn btn-ghost"
                 style={{ flex: 1, minHeight: 42 }}
               >
-                关闭
+                {t('rt.close')}
               </button>
             </div>
             {testResult && (
@@ -510,11 +513,11 @@ export default function RuleTestSheet({
                 >
                   {testResult.triggered ? (
                     <>
-                      <IconCheck size={15} style={{ verticalAlign: -3 }} /> 触发告警
+                      <IconCheck size={15} style={{ verticalAlign: -3 }} /> {t('rt.triggered')}
                     </>
                   ) : (
                     <>
-                      <IconClose size={15} style={{ verticalAlign: -3 }} /> 未触发
+                      <IconClose size={15} style={{ verticalAlign: -3 }} /> {t('rt.not_triggered')}
                     </>
                   )}
                 </div>
@@ -536,35 +539,27 @@ export default function RuleTestSheet({
                       paddingTop: 8,
                     }}
                   >
-                    条件: 当{' '}
-                    <b>
-                      {testResult.detail.left === 'inv.warehouse_type'
-                        ? // 字段级仓储条件(自有仓规则的固定前置)不再叠仓前缀
-                          ''
-                        : testResult.detail.warehouse
-                          ? testResult.detail.warehouse === 'platform_b'
-                            ? 'B仓'
-                            : testResult.detail.warehouse === 'platform'
-                              ? 'C仓'
-                              : '自有仓'
-                          : '全部'}
-                    </b>{' '}
+                    {t('rt.cond', {
+                      wh:
+                        testResult.detail.left === 'inv.warehouse_type'
+                          ? // 字段级仓储条件(自有仓规则的固定前置)不再叠仓前缀
+                            ''
+                          : whLbl(testResult.detail.warehouse || ''),
+                    })}{' '}
                     {fieldLbl(testResult.detail.left)} {opLbl(testResult.detail.op)}{' '}
                     {String(testResult.detail.right).includes('.')
                       ? fieldLbl(testResult.detail.right)
                       : testResult.detail.right}
                     <br />
-                    计算: 左侧值 = {String(testResult.detail.left_value)}
-                    {String(testResult.detail.right_value).startsWith('max(') ? (
-                      <>，右侧 = {testResult.detail.right_value}</>
-                    ) : (
-                      <>，右侧值 = {String(testResult.detail.right_value)}</>
-                    )}
+                    {t('rt.calc_left', { v: String(testResult.detail.left_value) })}
+                    {String(testResult.detail.right_value).startsWith('max(')
+                      ? t('rt.calc_right_pct', { v: testResult.detail.right_value })
+                      : t('rt.calc_right', { v: String(testResult.detail.right_value) })}
                     {/* 2026-11-01 嵌套子条件逐条回显(仅 and/or 规则有) —— 顶层那对比值命中
                                 不代表整条命中, 用户需看到被哪个子条件拦住 */}
                     {testResult.detail.and && (
                       <div style={{ marginTop: 6 }}>
-                        <b style={{ color: 'var(--muted)' }}>且</b>{' '}
+                        <b style={{ color: 'var(--muted)' }}>{t('rules.and_short')}</b>{' '}
                         {fieldLbl(testResult.detail.and.left)} {opLbl(testResult.detail.and.op)}{' '}
                         {String(testResult.detail.and.right).includes('.')
                           ? fieldLbl(testResult.detail.and.right)
@@ -575,7 +570,7 @@ export default function RuleTestSheet({
                             fontWeight: 600,
                           }}
                         >
-                          {testResult.detail.and.hit ? '命中' : '未命中'}
+                          {testResult.detail.and.hit ? t('rt.hit') : t('rt.miss')}
                         </span>
                         <span className="muted">
                           {' '}
@@ -586,7 +581,7 @@ export default function RuleTestSheet({
                     )}
                     {Array.isArray(testResult.detail.or) && testResult.detail.or.length > 0 && (
                       <div style={{ marginTop: 6 }}>
-                        <b style={{ color: 'var(--muted)' }}>或(任一)</b>
+                        <b style={{ color: 'var(--muted)' }}>{t('rt.or_any')}</b>
                         {testResult.detail.or.map((o, oi) => (
                           <div key={oi} style={{ paddingLeft: 8 }}>
                             · {fieldLbl(o.left)} {opLbl(o.op)}{' '}
@@ -597,7 +592,7 @@ export default function RuleTestSheet({
                                 fontWeight: 600,
                               }}
                             >
-                              {o.hit ? '命中' : '未命中'}
+                              {o.hit ? t('rt.hit') : t('rt.miss')}
                             </span>
                           </div>
                         ))}

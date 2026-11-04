@@ -1,5 +1,7 @@
 import { IconCheck, IconLightning } from '../../components/Icons'
 import { ALIAS, PRESET_REQUIRED, SYS_FIELDS, TARGET_FIELDS } from './fields'
+import { fieldLabel } from './fieldNames'
+import { t } from '../../locale'
 
 interface Props {
   cols: any[]
@@ -40,9 +42,9 @@ export default function MappingStep({
             marginBottom: 10,
           }}
         >
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>列映射</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 700 }}>{t('clean.mapping')}</span>
           <span className="small muted" style={{ fontSize: 'var(--font-xs)' }}>
-            选择文件列对应的目标字段 · 未映射列导入时丢弃
+            {t('clean.mapping_desc')}
           </span>
         </div>
         {cols.map(c => {
@@ -78,7 +80,7 @@ export default function MappingStep({
                         gap: 3,
                       }}
                     >
-                      <IconCheck size={11} style={{ verticalAlign: -1 }} /> 已映射
+                      <IconCheck size={11} style={{ verticalAlign: -1 }} /> {t('cw.mapped')}
                     </span>
                   ) : (
                     <span
@@ -92,8 +94,8 @@ export default function MappingStep({
                     >
                       {/* 2026-11-01 建议目标是必选字段 → pill 文案升级为"必选"(复用同一 pill warning) */}
                       {matched && (PRESET_REQUIRED[tt] || []).includes(matched)
-                        ? '未映射 · 必选'
-                        : '未映射 · 导入时丢弃'}
+                        ? t('cw.unmapped_req')
+                        : t('cw.unmapped_drop')}
                     </span>
                   )}
                 </span>
@@ -107,13 +109,13 @@ export default function MappingStep({
                       cf.find(x => x.t === mp[c.name].target)
                     return sf2 ? (
                       <span className="map-sub">
-                        → {sf2.l} ({sf2.t})
+                        → {fieldLabel(sf2.t)} ({sf2.t})
                       </span>
                     ) : null
                   })()
                 ) : matched && sf ? (
                   <span className="map-sub">
-                    智能建议 → {sf.l} ({sf.t})
+                    {t('clean.suggest')} → {fieldLabel(sf.t)} ({sf.t})
                   </span>
                 ) : null}
               </div>
@@ -129,19 +131,19 @@ export default function MappingStep({
                   className="tpl-field"
                   style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-13)' }}
                 >
-                  <option value="">-- 不映射 --</option>
+                  <option value="">{t('clean.no_map')}</option>
                   {(TARGET_FIELDS[tt] || SYS_FIELDS).map(f => (
                     /* 2026-11-01 必选字段加"(必)"后缀——与下载模板表头同源口径(必/选) */
                     <option key={f.t} value={f.t}>
-                      {f.l}
-                      {(PRESET_REQUIRED[tt] || []).includes(f.t) ? '(必)' : ''}
+                      {fieldLabel(f.t)}
+                      {(PRESET_REQUIRED[tt] || []).includes(f.t) ? t('clean.required_suffix') : ''}
                     </option>
                   ))}
                   {cf
                     .filter(f => f.t && f.l)
                     .map(f => (
                       <option key={f.t} value={f.t}>
-                        {f.l}
+                        {f.l || fieldLabel(f.t)}
                       </option>
                     ))}
                 </select>
@@ -183,7 +185,7 @@ export default function MappingStep({
             whiteSpace: 'nowrap',
           }}
         >
-          ← 返回
+          {t('cw.back')}
         </button>
         <button
           onClick={() => onPreview()}
@@ -206,7 +208,7 @@ export default function MappingStep({
             whiteSpace: 'nowrap',
           }}
         >
-          下一步 · 预览
+          {t('cw.next_preview')}
         </button>
         <button
           onClick={() => onQuick()}
@@ -229,7 +231,7 @@ export default function MappingStep({
             whiteSpace: 'nowrap',
           }}
         >
-          <IconLightning size={14} /> 一键执行
+          <IconLightning size={14} /> {t('cw.one_click')}
         </button>
       </div>
     </>

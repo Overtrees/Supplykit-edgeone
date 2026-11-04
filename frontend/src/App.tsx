@@ -32,16 +32,17 @@ import useKeyboard from './hooks/useKeyboard'
 import useLightTracker from './hooks/useLightTracker'
 import useGlassRefraction from './hooks/useGlassRefraction'
 import { t } from './locale'
+import { channelName } from './components/channels'
 
 export const NAV = [
   { id: 'dash', label: t('nav.dash') },
   { id: 'products', label: t('nav.products') },
   { id: 'suppliers', label: t('nav.suppliers') },
-  { id: 'orders', label: '订单明细' },
-  { id: 'history', label: '历史归档' },
+  { id: 'orders', label: t('nav.orders') },
+  { id: 'history', label: t('nav.history') },
   { id: 'inv', label: t('nav.inv') },
   { id: 'insights', label: t('nav.insights') },
-  { id: 'cleansing', label: '数据清洗及导入' },
+  { id: 'cleansing', label: t('nav.cleansing') },
   { id: 'rules', label: t('nav.rules') },
   { id: 'quality', label: t('nav.quality') },
   { id: 'settings', label: t('nav.settings') },
@@ -139,17 +140,15 @@ export default function App() {
   // 当前渠道展示名(数据驱动; 未拉到配置时按 code 兜底)
   // 2026-10-30 兜底文案必须与 channels 注册表一致: 原兜底写 '京东' → 首屏/接口未返回时
   //   胶囊显示"京东", 数据到了才变"京东渠道"(用户感知为"有概率变成京东")
-  const _chLabel =
-    (channels.find(c => c.code === channel) || {}).name ||
-    (channel === 'jd' ? '京东渠道' : channel === 'other' ? '其他渠道' : channel)
+  const _chLabel = channelName(channels.find(c => c.code === channel)) || channel
   const fresh = useFreshness(channel) // 2026-10-29 数据新鲜度(看板胶囊左侧圆点)
   const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
   // 2026-10-27 徽标兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防徽标永久显示需手动刷新
   useEffect(() => {
     if (syncing <= 0) return
-    const t = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
-    return () => clearTimeout(t)
+    const _tid = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
+    return () => clearTimeout(_tid)
   }, [syncing])
   // 2026-11-03 操作态看守(OpsWatcher): 后端任务不靠前端计时猜, 轮询真实状态。
   //   为什么必须在 App 层而不是规则页: 用户保存后切页, 规则页卸载 → 页面内轮询就没了,
@@ -171,7 +170,7 @@ export default function App() {
             window.dispatchEvent(new Event('rules-changed'))
           } else if (st === 'error') {
             useAppStore.getState().opDone(o.id)
-            notify.error('规则重算失败，告警可能未更新（详情见质量页日志）')
+            notify.error(t('op.rules_fail'))
           }
         } catch {
           /* 网络抖动: 保留 op 等下一轮, 不误清 */
@@ -179,23 +178,23 @@ export default function App() {
       }
     }
     check()
-    const t = setInterval(check, 2500)
+    const _tid = setInterval(check, 2500)
     return () => {
       alive = false
-      clearInterval(t)
+      clearInterval(_tid)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opsKey, API])
   // 陈旧兜底: 刷新恢复的 op 若后端任务早已消失, 15 分钟后自动清 —— 防"永远处理中"
   useEffect(() => {
     if (!ops.length) return
-    const t = setInterval(() => {
+    const _tid = setInterval(() => {
       const now = Date.now()
       useAppStore.getState().ops.forEach(o => {
         if (now - o.startedAt > 15 * 60 * 1000) useAppStore.getState().opDone(o.id)
       })
     }, 30000)
-    return () => clearInterval(t)
+    return () => clearInterval(_tid)
   }, [ops.length])
   // 全局同步徽标(看板页/其他页 header-status 共用——任一拉新/30s 静默进行时显示, 完成自动消失)
   // 文案按场景: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; syncOld=false(首载无旧值, 骨架)=「加载中」
@@ -225,7 +224,7 @@ export default function App() {
         >
           <path d="M21 12a9 9 0 1 1-6.219-8.56" />
         </svg>
-        {syncOld ? '同步中' : '加载中'}
+        {syncOld ? t('op.sync_old') : t('common.loading')}
       </span>
     ) : null
   // 2026-11-03 操作态优先于取数态: 后端正在算时不显示"同步中"(那是前端在取数),
@@ -308,7 +307,7 @@ export default function App() {
       useAppStore.getState().opAdd({
         id: _opId,
         kind: 'ingest',
-        label: '种子数据填充',
+        label: 'op.seed',
         taskId: seedTask,
         startedAt: Date.now(),
       })
@@ -322,7 +321,7 @@ export default function App() {
               localStorage.removeItem('c_seed_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
-            notify.success('种子数据填充完成')
+            notify.success(t('op.seed_done'))
             window.dispatchEvent(new Event('seed-done'))
             refreshAll()
           } else if (d.data?.status === 'error' || d.data?.status === 'not_found') {
@@ -338,7 +337,7 @@ export default function App() {
             } catch {}
             window.__seedMissCount = 0
             useAppStore.getState().opDone(_opId)
-            if (d.data?.status === 'error') notify.error('种子数据填充失败')
+            if (d.data?.status === 'error') notify.error(t('op.seed_fail'))
           }
         } catch {}
       }, 5000)
@@ -357,7 +356,7 @@ export default function App() {
       useAppStore.getState().opAdd({
         id: _opId,
         kind: 'ingest',
-        label: '数据清洗',
+        label: 'op.clean',
         scope: cleansingTask.channel || '',
         taskId: cleansingTask.task_id,
         startedAt: Date.now(),
@@ -387,7 +386,7 @@ export default function App() {
               localStorage.removeItem('c_cleansing_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
-            notify.success('数据清洗完成')
+            notify.success(t('op.clean_done'))
             refreshAll()
           } else if (d.status === 'error') {
             clearInterval(poll)
@@ -395,7 +394,7 @@ export default function App() {
               localStorage.removeItem('c_cleansing_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
-            notify.error('数据清洗失败')
+            notify.error(t('op.clean_fail'))
           } else if (d.status === 'not_found') {
             // 容错：刚提交的任务可能还没入库，重试 3 次
             const missCount = (window.__cleanMissCount || 0) + 1
@@ -424,7 +423,7 @@ export default function App() {
       useAppStore.getState().opAdd({
         id: _opId,
         kind: 'ingest',
-        label: '数据重置',
+        label: 'op.reset',
         taskId: resetTask,
         startedAt: Date.now(),
       })
@@ -439,7 +438,7 @@ export default function App() {
             } catch {}
             useAppStore.getState().opDone(_opId)
             if (d.data?.status === 'done') {
-              notify.success('数据重置完成')
+              notify.success(t('op.reset_done'))
               refreshAll()
             }
           }
@@ -460,7 +459,7 @@ export default function App() {
       useAppStore.getState().opAdd({
         id: _opId,
         kind: 'ingest',
-        label: '数据导出',
+        label: 'op.export',
         taskId: exportTask.task_id,
         startedAt: Date.now(),
       })
@@ -477,14 +476,14 @@ export default function App() {
               localStorage.removeItem('c_export_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
-            notify.success('导出完成，可在质量日志查看下载')
+            notify.success(t('op.export_done'))
           } else if (d.data?.status === 'error') {
             clearInterval(poll)
             try {
               localStorage.removeItem('c_export_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
-            notify.error('导出失败')
+            notify.error(t('op.export_fail'))
           }
         } catch {}
       }, 5000)
@@ -630,8 +629,8 @@ export default function App() {
   }, [])
   useEffect(() => {
     checkApi()
-    const t = setInterval(checkApi, 30000)
-    return () => clearInterval(t)
+    const _tid = setInterval(checkApi, 30000)
+    return () => clearInterval(_tid)
   }, [checkApi])
 
   // 数据版本轮询：后端_ cache_version 变化时自动刷新

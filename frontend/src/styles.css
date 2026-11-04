@@ -355,7 +355,26 @@ td {
   text-align: center; /* 2026-10-10: 所有表格列数据统一居中(长文本 word-break 换行保障完整) */
 }
 td.mono {
-  word-break: break-all;
+  /* 2026-11-04 移动端 4 视口验证: break-all 会把 SKU-0462-J / 13 位条码逐字折成多行,
+     72px 列宽下每行撑到 244px(一屏只放 1~2 行)。这类"码值"不是自然语言,
+     断在任意字符处既难读也没必要 —— 保持整体不换行, 超宽交给表格横向滚动。
+
+     2026-11-04 二次修正(订单页 69 码叠印): 光 `nowrap` 不够 —— 文字比格子宽时会
+     **溢出到相邻列**。实测订单号 "JD-jd059-045376724" 文字宽 164px, 所在 .col-sku
+     单元格只有 145px(max-width: 140px 卡住列宽), overflow 默认 visible,
+     于是右溢 19px 直接压在条码 "6900000000435" 上, 两串字符叠印成一团。
+     `overflow: hidden` 是这里唯一能同时满足三件事的写法:
+       ① 不折行(列高不会从 58px 被撑到 244px);
+       ② 不叠印(超出的部分被裁掉, 不会骑到隔壁列);
+       ③ 不丢数据(完整值走 title + 长按/悬浮, 见 CodeCell)。
+     注意: 单元格若只写 overflow: hidden, 里面是 inline 文本, 会按"整块含 padding"
+     的水平方向裁, 所以下面用 text-overflow: ellipsis 明确给出"被裁了"的信号。
+     这条只做兜底, 真正决定列宽的是 codeCellStyle() 算出的 colWidth —— 让列宽先够用。 */
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .col-sku {
   min-width: 80px;
@@ -401,6 +420,15 @@ tbody tr:nth-child(even):hover td {
   padding: var(--space-md) 0;
   max-width: 560px;
   margin: 0 auto;
+}
+/* 2026-11-04 多设备自适应(用户反馈: 开发者/渠道/回收/设置四页在宽屏仍是"竖屏窄条"):
+   表单型页面(标签+副标题+箭头的 Row)横向拉宽不增加信息, 两列还会把互不相关的分组
+   并排打断阅读顺序 —— 故采用 A 方案: ≥1024px 放宽到 720px 单列居中, 留白从两侧
+   挪到行内, 分组语义顺序(操作→界面→系统信息→推送)保持纵向不变。窄屏不受影响。 */
+@media (min-width: 1024px) {
+  .form-page {
+    max-width: 720px;
+  }
 }
 .form-grid {
   padding: 12px var(--space-md);
@@ -1364,9 +1392,44 @@ input[type='file'] {
   white-space: normal;
   font-size: clamp(11px, 2.5cqi, 14px);
 }
+/* 备注列: 后端给的是一整句分析(上百字), 默认 100px 宽会逐字折成十几行,
+   把整行撑到 240px+, 一屏只放得下 1~2 行(4 视口验证发现)。这里给足宽并限制 3 行,
+   完整文本走 title 悬浮。 */
+.col-note {
+  min-width: 220px;
+  max-width: 320px;
+  white-space: normal;
+  word-break: break-word;
+  font-size: var(--font-sm);
+  color: var(--muted2);
+  text-align: left;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .col-sku {
-  max-width: 140px;
-  font-size: clamp(10px, 2cqi, 13px);
+  /* 列宽交给 codeColWidth(): 按该表当场最长的那一串字符算, 不再写死 max-width。
+     2026-11-04 订单页叠印的根因之一就是这里的 `max-width: 140px` 把订单号列钉死,
+     而文字要 164px —— 钉窄 + nowrap + overflow:visible 三者相加就是叠印。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+/* 码值单元格(条码 / SKU / 单号): 与 td.mono 同一套策略, 单独给类名是为了让
+   `codeColWidth()` 算出的宽度能被选择器命中(也便于日后只调码值列)。 */
+td.col-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 
 @media (prefers-color-scheme: dark) {

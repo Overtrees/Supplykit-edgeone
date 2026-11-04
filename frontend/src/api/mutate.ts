@@ -2,6 +2,7 @@ import { clearCache } from './client'
 import { notify } from './notify'
 import { useAppStore } from '../store/useAppStore'
 import type { AppOp } from '../store/useAppStore'
+import { t } from '../locale'
 
 /**
  * 写操作统一出口(2026-11-03)
@@ -77,7 +78,9 @@ export async function mutate<T>(o: MutateOptions<T>): Promise<T | null> {
     return r
   } catch (e) {
     const msg = _errMsg(e)
-    notify.error((o.errorPrefix || o.label + '失败') + (msg ? ': ' + msg : ''))
+    // 失败前缀: 有 errorPrefix 用它, 否则用整句模板 kz.fail(避免 label + '失败' 的中英拼接)
+    const _prefix = o.errorPrefix ? t(o.errorPrefix) : t('kz.fail', { label: t(o.label) })
+    notify.error(_prefix + (msg ? t('kz.fail_detail', { msg }) : ''))
     return null
   } finally {
     if (opId && !o.opPersist) useAppStore.getState().opDone(opId)

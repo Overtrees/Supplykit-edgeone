@@ -3,6 +3,7 @@ import { apiJson } from '../api/client'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import { Group, LastRow } from '../components/ListGroup'
+import { t } from '../locale'
 
 const VERSION =
   typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '2.0.0' // 构建注入(package.json version), 发版改 package.json
@@ -43,21 +44,23 @@ export default function SettingsPage() {
         data: { webhook_url: webhookUrl.trim() },
       })
       if (d.ok)
-        toast.success(webhookUrl.trim() ? '已保存，新告警将推送到该地址' : '已保存，告警推送已关闭')
-      else toast.error('保存失败: ' + (d.error || ''))
+        toast.success(
+          webhookUrl.trim() ? t('set.webhook_saved_on') : t('set.webhook_saved_off'),
+        )
+      else toast.error(t('set.save_failed', { msg: d.error || '' }))
     } catch (e) {
-      toast.error('保存失败: ' + e.message)
+      toast.error(t('set.save_failed', { msg: e.message }))
     }
     setWebhookSaving(false)
   }
 
   return (
     <>
-      <div style={{ padding: '16px 0', maxWidth: 500, margin: '0 auto' }}>
-        <Group title="操作">
+      <div className="form-page">
+        <Group title={t('settings.actions')}>
           <LastRow
-            label="回收站"
-            sub="查看已删除的规则和订单，可恢复或永久删除"
+            label={t('settings.recycle_bin')}
+            sub={t('set.recycle_sub')}
             onClick={() => {
               try {
                 ;(window as any).__setPage && (window as any).__setPage('recycle')
@@ -65,8 +68,8 @@ export default function SettingsPage() {
             }}
           />
           <LastRow
-            label="渠道管理"
-            sub="新增/禁用渠道（无需发版），可复制既有渠道的规则与参数"
+            label={t('set.channels')}
+            sub={t('set.channels_sub')}
             onClick={() => {
               try {
                 ;(window as any).__setPage && (window as any).__setPage('channels')
@@ -75,8 +78,8 @@ export default function SettingsPage() {
           />
           {devMode && (
             <LastRow
-              label="开发者模式"
-              sub="版本/构建信息 · 异常日志分析"
+              label={t('set.devmode')}
+              sub={t('set.devmode_sub')}
               onClick={() => {
                 try {
                   ;(window as any).__setPage && (window as any).__setPage('devmode')
@@ -86,9 +89,9 @@ export default function SettingsPage() {
           )}
         </Group>
 
-        <Group title="系统信息">
+        <Group title={t('settings.system')}>
           <LastRow
-            label="版本号"
+            label={t('set.version')}
             value={`v${VERSION}`}
             onClick={() => {
               devTap.current += 1
@@ -97,34 +100,34 @@ export default function SettingsPage() {
                   localStorage.setItem('c_dev_mode', '1')
                 } catch {}
                 setDevMode(true)
-                toast.success('开发者模式已开启')
+                toast.success(t('set.devmode_on'))
               } else if (devTap.current >= 4) {
-                toast.info(`再点 ${6 - devTap.current} 次开启开发者模式`)
+                toast.info(t('set.devmode_left', { n: 6 - devTap.current }))
               }
             }}
           />
         </Group>
 
-        <Group title="界面">
+        <Group title={t('set.interface')}>
           <LastRow
-            label="重置欢迎页"
-            sub="重新显示首次使用引导"
+            label={t('settings.reset_welcome')}
+            sub={t('set.reset_welcome_sub')}
             onClick={() => {
               try {
                 localStorage.removeItem('c_welcome_seen')
               } catch {}
-              toast.success('欢迎页已重置')
+              toast.success(t('set.welcome_reset'))
             }}
           />
         </Group>
 
-        <Group title="告警推送">
+        <Group title={t('set.alert_push')}>
           <div style={{ padding: 14 }}>
             <div style={{ fontSize: 'var(--font-13)', fontWeight: 600, marginBottom: 4 }}>
-              Webhook 地址
+              {t('set.webhook')}
             </div>
             <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginBottom: 8 }}>
-              钉钉/企业微信机器人地址，新告警每 30 分钟推送到该地址（留空不推送）
+              {t('set.webhook_hint')}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
@@ -153,7 +156,7 @@ export default function SettingsPage() {
                   fontSize: 'var(--font-md)',
                 }}
               >
-                {webhookSaving ? '保存中...' : '保存'}
+                {webhookSaving ? t('set.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -167,7 +170,7 @@ export default function SettingsPage() {
             color: 'var(--muted2)',
           }}
         >
-          SupplyKit · 供应链数据工作台
+          {t('set.footer')}
         </div>
       </div>
     </>

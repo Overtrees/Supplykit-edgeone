@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { IconCheck, IconClose, IconRefresh, IconClipboard } from '../Icons'
+import { t } from '../../locale'
 
 interface TaskStep {
   name?: string
@@ -41,17 +42,18 @@ function safeParse<T>(v: string | T | null | undefined, fallback: T): T {
 // 2026-10-27 相对时间(卡片右上角): 刚刚 / N分钟前 / N小时前 / MM-DD
 const relTime = (iso?: string) => {
   if (!iso) return ''
-  const t = new Date(
+  // 注意: 变量名不能叫 t —— 会遮蔽 locale 的 t(), 相对时间文案就永远出中文
+  const _ts = new Date(
     String(iso).replace(' ', 'T') + (String(iso).includes('Z') ? '' : 'Z'),
   ).getTime()
-  if (!t) return ''
-  const diff = Math.max(0, Date.now() - t)
+  if (!_ts) return ''
+  const diff = Math.max(0, Date.now() - _ts)
   const m = Math.floor(diff / 60000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return m + ' 分钟前'
+  if (m < 1) return t('tc.just_now')
+  if (m < 60) return t('tc.mins_ago', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return h + ' 小时前'
-  const d = new Date(t)
+  if (h < 24) return t('tc.hours_ago', { n: h })
+  const d = new Date(_ts)
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
@@ -89,8 +91,8 @@ export default function TaskCard({
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!cur || st !== 'running') return
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
+    const _tid = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(_tid)
   }, [cur, st])
 
   const filename = String(resultInner?.filename || result?.filename || '')
@@ -119,7 +121,7 @@ export default function TaskCard({
                 (params.driver === 'backend' ? 'task-driver-back' : 'task-driver-front')
               }
             >
-              {params.driver === 'backend' ? '后端推进' : '前端轮询'}
+              {params.driver === 'backend' ? t('tc.backend_run') : t('tc.frontend_poll')}
             </span>
           ) : null}
           {task.created_at ? (
@@ -130,12 +132,12 @@ export default function TaskCard({
             {st === 'done' && <IconCheck size={11} />}
             {st === 'error' && <IconClose size={11} />}
             {st === 'done'
-              ? '完成'
+              ? t('tc.done')
               : st === 'error'
-                ? '失败'
+                ? t('tc.failed')
                 : st === 'running'
-                  ? '进行中'
-                  : '等待'}
+                  ? t('tc.running')
+                  : t('tc.waiting')}
           </span>
         </div>
         <div className="task-card-sub">{sub}</div>
@@ -156,7 +158,9 @@ export default function TaskCard({
             {steps.map((s, i) => (
               <div key={i} className="task-step-row">
                 <IconCheck size={10} className="task-step-ok" />
-                <span className="task-step-name">{s.name || '步骤 ' + (i + 1)}</span>
+                <span className="task-step-name">
+                  {s.name || t('tc.step', { n: i + 1 })}
+                </span>
                 <span className="task-step-time">
                   {s.elapsed != null ? s.elapsed.toFixed(1) + 's' : '—'}
                 </span>
@@ -165,7 +169,7 @@ export default function TaskCard({
             {cur && st === 'running' && (
               <div className="task-step-row task-cur">
                 <IconRefresh size={10} className="task-spin" />
-                <span className="task-step-name">{cur.name || '处理中'}</span>
+                <span className="task-step-name">{cur.name || t('tc.processing')}</span>
                 <span className="task-step-time task-cur-time">
                   {cur.started ? ((now - Number(cur.started) * 1000) / 1000).toFixed(0) + 's' : '…'}
                 </span>
@@ -177,39 +181,40 @@ export default function TaskCard({
         {/* 结果信息(done/error) */}
         {st === 'done' && (
           <div className="task-card-meta task-num">
-            {total > 0 && <span>共 {total} 行</span>}
+            {total > 0 && <span>{t('tc.rows', { n: total })}</span>}
             {(success > 0 || failed > 0) && (
               <span>
-                成功 {success}
-                {failed > 0 ? <span className="task-fail"> / 失败 {failed}</span> : null}
+                {t('tc.success', { n: success })}
+                {failed > 0 ? (
+                  <span className="task-fail">{t('tc.failed_n', { n: failed })}</span>
+                ) : null}
               </span>
             )}
-            {elapsed > 0 && <span>耗时 {elapsed}s</span>}
+            {elapsed > 0 && <span>{t('tc.elapsed', { n: elapsed })}</span>}
           </div>
         )}
         {isEval && (
           <div className="task-card-meta task-num">
             {st === 'running' && evalTotal > 0 && (
               <span>
-                窗口 {evalSeg} · 已评估 {Math.min(evalOff, evalTotal)}/{evalTotal} SKU
+                {t('tc.window', {
+                  seg: evalSeg,
+                  cur: Math.min(evalOff, evalTotal),
+                  total: evalTotal,
+                })}
               </span>
             )}
             {st === 'done' && (
               <span>
-                评估 <b>{evalRules}</b> SKU
-                {evalInv > 0 ? (
-                  <span>
-                    {' '}
-                    · 联动 <b>{evalInv}</b> 库存
-                  </span>
-                ) : null}
+                <b>{evalRules}</b> {t('tc.eval_rules_suffix')}
+                {evalInv > 0 ? <span> {t('tc.eval_inv', { n: evalInv })}</span> : null}
               </span>
             )}
           </div>
         )}
         {st === 'error' && (
           <div className="task-card-meta task-err">
-            {String(resultInner?.error || result?.error || '任务失败').slice(0, 120)}
+            {String(resultInner?.error || result?.error || t('tc.task_failed')).slice(0, 120)}
           </div>
         )}
         {st === 'done' && task.task_type === 'export' && filename && (
@@ -219,7 +224,7 @@ export default function TaskCard({
               disabled={downloading}
               onClick={() => onDownload && onDownload(task.task_id, filename)}
             >
-              {downloading ? '下载中…' : '下载'}
+              {downloading ? t('tc.downloading') : t('tc.download')}
             </button>
           </div>
         )}

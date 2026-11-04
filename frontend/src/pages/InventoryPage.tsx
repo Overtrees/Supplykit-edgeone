@@ -7,6 +7,13 @@ import { IconLoading, IconCircle, IconCircleCheck } from '../components/Icons'
 import { useToast } from '../components/Toast'
 import { useAppStore } from '../store/useAppStore'
 import { INV_COLS } from '../components/hammer/configs'
+import { colLabel } from '../components/colLabels'
+import {
+  batchUseLabel,
+  expiryActionLabel,
+  expiryStatusColor,
+  expiryStatusLabel,
+} from '../components/statusLabels'
 import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
@@ -154,16 +161,16 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       if (p === 1 && items.length > 0) {
         const s = items[0].month_start?.slice(5) || ''
         const e = items[0].month_end?.slice(5) || ''
-        setMonthRange(`${s}至${e}`)
+        setMonthRange(`${s}${t('col.range_to')}${e}`)
       }
     } catch (e) {
       if (seq !== reqSeq.current) return
       if (invLenRef.current > 0) {
         // 有旧数据: 保留列表(不清空) + loadErr 作非阻塞提示; syncing 胶囊由 finally 归零
-        setLoadErr('刷新失败，当前显示上次数据')
+        setLoadErr(t('inv.load_fail_keep'))
       } else {
         setInventory([])
-        setLoadErr('加载失败')
+        setLoadErr(t('common.load_failed'))
       }
     } finally {
       // 根治: settle 唯一在 finally(return 竞态/abort/catch/正常尾必执行——曾散点被 return 跳过致永久'加载中')
@@ -196,11 +203,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     const _has = !s || inventory.some(x => String(x.sku || '').includes(s))
     if (!_has) {
       locateCheckedRef.current = true
-      toast.error('未找到 ' + highlightSku + '，可能不在当前仓库维度或已无库存')
+      toast.error(t('inv.not_found', { sku: highlightSku }))
       return
     }
     locateCheckedRef.current = true
-    const t = setTimeout(() => {
+    const _tm = setTimeout(() => {
       try {
         let el = null
         if (highlightWarehouse) {
@@ -210,7 +217,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
       } catch (e) {}
     }, 300)
-    return () => clearTimeout(t)
+    return () => clearTimeout(_tm)
   }, [highlightSku, highlightWarehouse, inventory, whType, loading, s])
   const handleScroll = e => {
     const el = e.target
@@ -274,12 +281,12 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         loadInv(1)
         toast.success(
           miss.length
-            ? `已归档 ${n} 条, ${miss.length} 条已不存在`
-            : `已归档 ${n} 条 · 可在回收站恢复`,
+            ? t('inv.archived_miss', { n, m: miss.length })
+            : t('inv.archived_ok', { n }),
         )
-      } else toast.error('删除失败: ' + (d.error || ''))
+      } else toast.error(t('inv.delete_failed', { msg: d.error || '' }))
     } catch (e) {
-      toast.error('删除失败: ' + e.message)
+      toast.error(t('inv.delete_failed', { msg: e.message }))
     }
   }
 
@@ -324,10 +331,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         }}
       >
         <span>
-          进销存{' '}
+          {t('inv.title')}{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-            已加载 {Math.min(inventory.length, invTotal || inventory.length)}/
-            {invTotal || inventory.length} 条 · 显示 {visCols.length}/{INV_COLS[whType].length} 列
+            {t('inv.loaded', {
+              a: Math.min(inventory.length, invTotal || inventory.length),
+              b: invTotal || inventory.length,
+              c: visCols.length,
+              d: INV_COLS[whType].length,
+            })}
             {s ? ` · "${s}"` : ''}
             <StaleDot
               level={fresh?.staleLevel || 0}
@@ -356,7 +367,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             style={{ color: 'var(--muted)', flexShrink: 0 }}
             onClick={() => loadInv(1)}
           >
-            立即刷新
+            {t('inv.refresh_now')}
           </span>
         </div>
       )}
@@ -373,14 +384,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           <EmptyState
             icon="package"
             title={s ? t('inv.empty_matched') : t('common.empty')}
-            desc={s ? '换个关键词试试' : '通过清洗导入库存数据'}
+            desc={s ? t('inv.try_other_kw') : t('inv.import_hint')}
             action={
               !s && (
                 <button
                   className="btn btn-primary"
                   onClick={() => window.__setPage && window.__setPage('cleansing')}
                 >
-                  去导入数据 →
+                  {t('inv.go_import')}
                 </button>
               )
             }
@@ -412,7 +423,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   if (col.id === 'month_in')
                     el = (
                       <th key={col.id}>
-                        {col.label}
+                        {colLabel(col.id)}
                         <br />
                         <span className="small" style={{ fontWeight: 400 }}>
                           {monthRange}
@@ -422,14 +433,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   else if (col.id === 'month_out')
                     el = (
                       <th key={col.id}>
-                        {col.label}
+                        {colLabel(col.id)}
                         <br />
                         <span className="small" style={{ fontWeight: 400 }}>
                           {monthRange}
                         </span>
                       </th>
                     )
-                  else el = <th key={col.id}>{col.label}</th>
+                  else el = <th key={col.id}>{colLabel(col.id)}</th>
                   return el
                 })}
               </tr>
@@ -463,7 +474,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                                 color: 'var(--primary)',
                               },
                             },
-                            isOpen ? '▴' : '⤵ 批次',
+                            isOpen ? '▴' : t('inv.batch_badge'),
                           )
                         : null,
                     )
@@ -471,7 +482,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     el = React.createElement(
                       'td',
                       { key: col.id, style: { fontSize: 'var(--font-xs)' } },
-                      x.channel === 'other' ? '其他' : '京东',
+                      x.channel === 'other' ? t('inv.channel_other') : t('inv.channel_jd'),
                     )
                   else if (col.id === 'brand')
                     el = React.createElement(
@@ -558,33 +569,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     )
                   else if (col.id === 'eff_status') {
                     const es = x.batch_status
-                    const ecolor =
-                      es === 'ok'
-                        ? 'var(--success)'
-                        : es === 'warn'
-                          ? 'var(--warning)'
-                          : es === 'no'
-                            ? 'var(--danger)'
-                            : es === 'expired'
-                              ? 'var(--accent-purple)'
-                              : 'var(--muted2)'
-                    const elbl =
-                      es === 'ok'
-                        ? '✓ 正常'
-                        : es === 'warn'
-                          ? '⚠️ 临近'
-                          : es === 'no'
-                            ? '✗ 否'
-                            : es === 'expired'
-                              ? '⚫ 过期'
-                              : '-'
+                    const ecolor = expiryStatusColor(es)
                     el = React.createElement(
                       'td',
                       { key: col.id },
                       React.createElement(
                         'span',
                         { style: { fontSize: 'var(--font-xs)', fontWeight: 600, color: ecolor } },
-                        elbl,
+                        expiryStatusLabel(es),
                       ),
                       x.batch_pct
                         ? React.createElement(
@@ -609,63 +601,34 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         ? React.createElement(
                             'span',
                             { style: { color: 'var(--danger)', fontWeight: 600 } },
-                            '✗ 已超1/3',
+                            t('inv.exp.over_third_icon'),
                           )
                         : _ot_st === 'expired'
                           ? React.createElement(
                               'span',
                               { style: { color: 'var(--accent-purple)' } },
-                              '已过期',
+                              t('inv.exp.expired_short'),
                             )
                           : _ot_st === 'warn'
                             ? React.createElement(
                                 'span',
                                 { style: { color: 'var(--warning)', fontWeight: 600 } },
-                                '⚠️ 临近',
+                                t('inv.exp.warn_icon'),
                               )
                             : _ot_st === 'ok'
                               ? React.createElement(
                                   'span',
                                   { style: { color: 'var(--muted2)' } },
-                                  '否',
+                                  t('inv.exp.no'),
                                 )
                               : '-',
                     )
                   } else if (col.id === 'note') {
                     const _ns = x.batch_status
                     const _nb = x.batch_pct || 0
-                    const _nclr =
-                      _ns === 'ok'
-                        ? 'var(--success)'
-                        : _ns === 'warn'
-                          ? 'var(--warning)'
-                          : _ns === 'no'
-                            ? 'var(--danger)'
-                            : _ns === 'expired'
-                              ? 'var(--accent-purple)'
-                              : 'var(--muted2)'
-                    const _nlbl =
-                      _ns === 'ok'
-                        ? '正常'
-                        : _ns === 'warn'
-                          ? '临近1/3'
-                          : _ns === 'no'
-                            ? '已超1/3'
-                            : _ns === 'expired'
-                              ? '已过期'
-                              : ''
-                    const _nact =
-                      _ns === 'ok'
-                        ? _nb > 30
-                          ? '动销放缓，促动销'
-                          : '正常销售'
-                        : _ns === 'warn'
-                          ? '促销去库/调拨'
-                          : _ns === 'no'
-                            ? '尽快清仓/退供'
-                            : _ns === 'expired'
-                              ? '报废/退供应商'
-                              : ''
+                    const _nclr = expiryStatusColor(_ns)
+                    const _nlbl = expiryStatusLabel(_ns, false)
+                    const _nact = expiryActionLabel(_ns, _nb)
                     el = React.createElement(
                       'td',
                       { key: col.id, style: { fontSize: 'var(--font-xs)' } },
@@ -708,7 +671,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                                 : 'var(--text)',
                         },
                       },
-                      tc != null ? tc + '天' : '∞',
+                      tc != null ? t('common.day_unit', { n: tc }) : '∞',
                     )
                   } else if (col.id === 'price')
                     el = React.createElement(
@@ -757,7 +720,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         'td',
                         { colSpan: _span, className: 'td-loading' },
                         React.createElement(IconLoading, { size: 12 }),
-                        '批次加载中…',
+                        t('inv.batch_loading'),
                       ),
                     ),
                   )
@@ -774,7 +737,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           className: 'td-loading',
                           style: { color: 'var(--danger)' },
                         },
-                        '批次加载失败，请收起后重新展开',
+                        t('inv.batch_failed'),
                       ),
                     ),
                   )
@@ -804,14 +767,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     }
                     const bcolor =
                       pct >= 67 ? 'var(--danger)' : pct >= 40 ? 'var(--warning)' : 'var(--success)'
-                    const note =
-                      pct >= 67
-                        ? '⚠️ 已消耗过半'
-                        : pct >= 40
-                          ? '🟡 消耗中'
-                          : pct > 0
-                            ? '🟢 正常消耗'
-                            : '⚪ 刚入库'
+                    const note = batchUseLabel(pct)
                     const bcells = visCols.map(function (id) {
                       const col = INV_COLS[whType].find(function (c) {
                         return c.id === id
@@ -852,8 +808,9 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                                 86400000)) *
                               100,
                           )
+                          // 用**码值**而不是显示文案做比较(文案会被 i18n 改, 拿它当键必炸)
                           es =
-                            cv >= 100 ? '⚫过期' : cv >= 67 ? '✗否' : cv > 40 ? '⚠️临近' : '✓正常'
+                            cv >= 100 ? 'expired' : cv >= 67 ? 'no' : cv > 40 ? 'warn' : 'ok'
                         }
                         el = React.createElement(
                           'td',
@@ -862,19 +819,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             style: {
                               fontSize: 'var(--font-xs)',
                               fontWeight: 600,
-                              color:
-                                es === '✓正常'
-                                  ? 'var(--success)'
-                                  : es === '⚠️临近'
-                                    ? 'var(--warning)'
-                                    : es === '✗否'
-                                      ? 'var(--danger)'
-                                      : es === '⚫过期'
-                                        ? 'var(--accent-purple)'
-                                        : 'var(--muted2)',
+                              color: expiryStatusColor(es),
                             },
                           },
-                          es,
+                          expiryStatusLabel(es),
                         )
                       } else if (col.id === 'avail')
                         el = React.createElement(
@@ -883,7 +831,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           b.qty,
                         )
                       else if (col.id === 'over_third') {
-                        let ot_st = '-'
+                        let ot_st = ''
                         if (b.exp_date && b.prod_date) {
                           const td = Math.round(
                             (new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
@@ -896,7 +844,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                                 td) *
                                 100,
                             )
-                            ot_st = cv >= 100 ? '⚫已过期' : cv > 33 ? '✗ 已超1/3' : '正常'
+                            ot_st = cv >= 100 ? 'expired' : cv > 33 ? 'no' : 'ok'
                           }
                         }
                         el = React.createElement(
@@ -905,14 +853,16 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             key: col.id,
                             style: {
                               fontSize: 'var(--font-xs)',
-                              color: ot_st.includes('已超')
-                                ? 'var(--danger)'
-                                : ot_st.includes('过期')
-                                  ? 'var(--accent-purple)'
-                                  : 'var(--muted2)',
+                              color: ot_st === 'expired' ? 'var(--accent-purple)' : expiryStatusColor(ot_st),
                             },
                           },
-                          ot_st,
+                          ot_st === 'expired'
+                            ? t('inv.exp.expired_short')
+                            : ot_st === 'no'
+                              ? t('inv.exp.over_third_icon')
+                              : ot_st
+                                ? t('inv.exp.ok')
+                                : '-',
                         )
                       } else if (col.id === 'note')
                         el = React.createElement(
@@ -1120,14 +1070,14 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       return React.createElement(
                         'td',
                         { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
-                        _d > 0 ? (_q / _d).toFixed(1) + ' 天' : '—',
+                        _d > 0 ? t('common.day_unit', { n: (_q / _d).toFixed(1) }) : '—',
                       )
                     }
                     if (col.id === 'turnover')
                       return React.createElement(
                         'td',
                         { key: col.id, style: { fontSize: 'var(--font-13)', fontWeight: 700 } },
-                        totalTurnover != null ? totalTurnover + ' 天' : '—',
+                        totalTurnover != null ? t('common.day_unit', { n: totalTurnover }) : '—',
                       )
                     if (col.id === 'price')
                       return React.createElement(
@@ -1166,7 +1116,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             color: 'var(--text)',
                           },
                         },
-                        '合计',
+                        t('inv.total'),
                       )
                     return React.createElement('td', { key: col.id })
                   })}
@@ -1197,7 +1147,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                 className="btn btn-ghost"
                 style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
               >
-                {loadingMore ? '加载中... ' : ''}({Math.min(inventory.length, invTotal)}/{invTotal})
+                {loadingMore ? t('common.loading') : ''}({Math.min(inventory.length, invTotal)}/
+                {invTotal})
               </span>
             </div>
           )}
@@ -1210,7 +1161,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                 color: 'var(--muted2)',
               }}
             >
-              已加载全部 {invTotal} 条
+              {t('inv.all_loaded', { n: invTotal })}
             </div>
           )}
         </div>

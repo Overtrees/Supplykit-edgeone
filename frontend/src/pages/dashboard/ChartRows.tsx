@@ -19,19 +19,23 @@ export function MidCharts({
   storeDataLen,
   _storeDim,
   setStoreDim,
+  funnelLen = 6,
 }: any) {
+  // 订单阶段分布: 档数随库里的 order_status 取值变化(现为 6: 总订单+5 状态)。
+  // 固定 200px 在 6 档时每档只剩 30px, 轴标签会挤在一起 —— 按档数给高, 每档保底 30px。
+  const funnelH = Math.max(200, funnelLen * 30 + 24)
   return (
     <div className="mid-chart-grid">
       <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
         <div className="section-title">{t('dash.funnel')}</div>
-        <Chart option={barOption} height={200} />
+        <Chart option={barOption} height={funnelH} />
       </div>
       <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
         <div
           className="section-title"
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
         >
-          {_storeDim === 'brand' ? '品牌GMV' : t('dash.store_gmv')}
+          {_storeDim === 'brand' ? t('dash.brand_gmv_title') : t('dash.store_gmv')}
           <span
             style={{
               display: 'inline-flex',
@@ -57,7 +61,7 @@ export function MidCharts({
                 whiteSpace: 'nowrap',
               }}
             >
-              店铺
+              {t('dash.dim_store')}
             </span>
             <span
               onClick={function () {
@@ -75,7 +79,7 @@ export function MidCharts({
                 whiteSpace: 'nowrap',
               }}
             >
-              品牌
+              {t('dash.dim_brand')}
             </span>
           </span>
         </div>
@@ -164,7 +168,7 @@ export function ChartRow3({
                   className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')}
                   style={{ flexShrink: 0 }}
                 >
-                  {x.severity === 'warning' ? '警告' : t('dash.alert_overstock')}
+                  {x.severity === 'warning' ? t('dash.sev_warning') : t('dash.alert_overstock')}
                 </span>
               </div>
               <div
@@ -192,7 +196,7 @@ export function ChartRow3({
               loadFullAlerts()
               setShowAllLowStock(true)
             }}
-            aria-label={`还有 ${lowStockTotal - lowStockShown.length} 条`}
+            aria-label={t('dash.more_aria_n', { n: lowStockTotal - lowStockShown.length })}
             className="clickable pill info"
             style={{
               cursor: 'pointer',
@@ -204,26 +208,29 @@ export function ChartRow3({
               width: 'fit-content',
             }}
           >
-            更多 {fmtInt(lowStockTotal - lowStockShown.length)}
+            {t('dash.more_btn', { n: fmtInt(lowStockTotal - lowStockShown.length) })}
           </div>
         )}
       </div>
       <div className="card" style={{ height: 'auto', overflow: 'visible' }}>
-        <div className="section-title">采购&补货告警{procTotal > 0 ? ` (${procTotal})` : ''}</div>
+        <div className="section-title">
+          {t('dash.proc_card_title')}
+          {procTotal > 0 ? ` (${procTotal})` : ''}
+        </div>
         {procLoading ? (
           <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
-            加载中...
+            {t('dash.loading_ellipsis')}
           </div>
         ) : procTotal === 0 ? (
           <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
-            暂无采购/补货需求
+            {t('dash.no_proc_demand')}
           </div>
         ) : (
           procList.slice(0, 5).map((x, i) => (
             <div
-              key={x.tag + x.sku + i}
+              key={x.kind + x.sku + i}
               onClick={() =>
-                onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen', x.sku)
+                onGoInsights && onGoInsights(x.kind === 'purchase' ? 'purchase' : 'replen', x.sku)
               }
               className="clickable"
               style={{
@@ -255,7 +262,7 @@ export function ChartRow3({
                   }}
                 >
                   <span
-                    className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')}
+                    className={'pill ' + (x.kind === 'purchase' ? 'warning' : 'danger')}
                     style={{
                       flexShrink: 0,
                       fontSize: 'var(--font-9)',
@@ -264,7 +271,7 @@ export function ChartRow3({
                       lineHeight: '16px',
                     }}
                   >
-                    {x.tag}
+                    {x.kind === 'purchase' ? t('dash.tag_purchase') : t('dash.tag_replenish')}
                   </span>
                   {x.product_name || x.sku}
                 </span>
@@ -274,7 +281,7 @@ export function ChartRow3({
                       flexShrink: 0,
                       fontWeight: 700,
                       fontSize: 'var(--font-sm)',
-                      color: x.tag === '采购' ? 'var(--warning)' : 'var(--danger)',
+                      color: x.kind === 'purchase' ? 'var(--warning)' : 'var(--danger)',
                     }}
                   >
                     +{x.qty}
@@ -296,8 +303,8 @@ export function ChartRow3({
                 {x.note
                   ? String(x.note).slice(0, 36)
                   : x.days_to_empty > 999
-                    ? '库存充足'
-                    : '可撑' + x.days_to_empty + '天'}
+                    ? t('dash.stock_sufficient')
+                    : t('dash.cover_for_days', { n: x.days_to_empty })}
               </div>
             </div>
           ))
@@ -307,7 +314,7 @@ export function ChartRow3({
             onClick={() => {
               setShowAllProc(true)
             }}
-            aria-label={`还有 ${procTotal - 5} 条`}
+            aria-label={t('dash.more_aria_n', { n: procTotal - 5 })}
             className="clickable pill info"
             style={{
               cursor: 'pointer',
@@ -319,7 +326,7 @@ export function ChartRow3({
               width: 'fit-content',
             }}
           >
-            更多 {procTotal - 5}
+            {t('dash.more_btn', { n: procTotal - 5 })}
           </div>
         )}
       </div>

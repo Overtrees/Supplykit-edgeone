@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { IconLoading, IconSave } from '../../components/Icons'
 import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
+import { t } from '../../locale'
 
 interface Props {
   channel: string
@@ -33,7 +34,7 @@ export default function RulesPurchasePanel(props: Props) {
   return (
     <div>
       <div style={{ fontSize: 'var(--font-sm)', color: 'var(--muted2)', marginBottom: 8 }}>
-        供应商起订（可选）
+        {t('rpn.supplier_section')}
       </div>
       <div className="hammer-btn-row" style={{ marginBottom: 12 }}>
         <select
@@ -46,7 +47,7 @@ export default function RulesPurchasePanel(props: Props) {
           }}
           className="hammer-select"
         >
-          <option value="">通用（所有供应商）</option>
+          <option value="">{t('rpn.supplier_all')}</option>
           {suppliers.map(s => (
             <option key={s} value={s}>
               {s}
@@ -60,7 +61,7 @@ export default function RulesPurchasePanel(props: Props) {
           const actualKey = selectedSupplier && isSupKey ? `${k}_${selectedSupplier}` : k
           return (
             <label key={actualKey} style={{ fontSize: 'var(--font-13)' }}>
-              {l}
+              {t(l)}
               {selectedSupplier && isSupKey && (
                 <span className="small muted">（{selectedSupplier}）</span>
               )}
@@ -88,7 +89,7 @@ export default function RulesPurchasePanel(props: Props) {
             })
             await api.put('/api/replenishment-config?channel=' + ch, toSave)
             setCfg(p => ({ ...p, ...toSave }))
-            toast.success('已保存')
+            toast.success(t('rp.saved'))
             window.dispatchEvent(new Event('rules-changed'))
           } catch (e) {
             saveErr(e)
@@ -107,11 +108,11 @@ export default function RulesPurchasePanel(props: Props) {
       >
         {saving ? (
           <>
-            <IconLoading size={14} /> 保存中...
+            <IconLoading size={14} /> {t('rfm.saving')}
           </>
         ) : (
           <>
-            <IconSave size={14} /> 保存
+            <IconSave size={14} /> {t('common.save')}
           </>
         )}
       </button>

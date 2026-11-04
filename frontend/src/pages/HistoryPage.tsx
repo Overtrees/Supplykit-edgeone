@@ -29,8 +29,8 @@ import { t } from '../locale'
 const fmtMoney = (n: number): string => {
   const v = Number(n || 0)
   const abs = Math.abs(v)
-  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万'
+  if (abs >= 1e8) return (v / 1e8).toFixed(2) + t('dash.unit_yi')
+  if (abs >= 1e4) return (v / 1e4).toFixed(2) + t('dash.unit_wan')
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 // 轴刻度专用: 刻度的作用是看量级, 不是看精度 —— "300.00万" 会白占宽度,
@@ -38,13 +38,13 @@ const fmtMoney = (n: number): string => {
 const fmtAxis = (n: number): string => {
   const v = Number(n || 0)
   const abs = Math.abs(v)
-  if (abs >= 1e8) return (v / 1e8).toFixed(1) + '亿'
-  if (abs >= 1e4) return Math.round(v / 1e4) + '万'
+  if (abs >= 1e8) return (v / 1e8).toFixed(1) + t('dash.unit_yi')
+  if (abs >= 1e4) return Math.round(v / 1e4) + t('dash.unit_wan')
   return String(Math.round(v))
 }
 const fmtInt = (n: number): string => {
   const v = Math.round(Number(n || 0))
-  if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(2) + '万'
+  if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(2) + t('dash.unit_wan')
   return v.toLocaleString('zh-CN')
 }
 
@@ -121,9 +121,12 @@ export default function HistoryPage() {
         formatter: (p: any) => {
           const i = p[0]?.dataIndex ?? 0
           const r = series[i] || {}
-          return `${r.date}<br/>金额: ${fmtMoney(r.gmv)}<br/>单数: ${fmtInt(
-            r.orders,
-          )}<br/>件数: ${fmtInt(r.qty)}`
+          return t('hist.tip_axis', {
+            d: r.date,
+            g: fmtMoney(r.gmv),
+            o: fmtInt(r.orders),
+            q: fmtInt(r.qty),
+          })
         },
       },
       grid: { containLabel: true, top: 12, bottom: 4, left: 4, right: 8 },
@@ -156,7 +159,7 @@ export default function HistoryPage() {
           视觉上像多了一层冗余容器; 且首卡片 4 个 card 里只有它没有可操作内容。 */}
       <div className="hist-headcard">
         <div className="hist-head">
-          <span className="hist-title">历史归档</span>
+          <span className="hist-title">{t('hist.title')}</span>
         </div>
         {/* 2026-11-02 S2-9(用户定案最终形态): 标题下方不再有任何副文本 ——
             · 归档状态/覆盖区间/"哪天起自动归档" → 锤子菜单底部(.hist-arc)
@@ -177,7 +180,7 @@ export default function HistoryPage() {
             GMV 对不上时, 这是唯一能解释差异的依据。放标题右侧后与"区间汇总"同层,
             不打断"数字→图"的阅读动线 */}
         <div className="hist-title-row">
-          <span className="section-title hist-title-flat">区间汇总</span>
+          <span className="section-title hist-title-flat">{t('hist.summary')}</span>
           <span className="hist-caveat-inline" title={t('hist.caveat_full')}>
             {t('hist.caveat_short')}
           </span>
@@ -186,10 +189,14 @@ export default function HistoryPage() {
             原来一律显示四个 "—", 用户分不清"在加载"和"真的没数" */}
         <div className={'hist-kpis' + (loading && !sum ? ' is-fresh' : '')}>
           {[
-            { k: '金额', v: fmtMoney(totals.gmv), s: '元' },
-            { k: '单数', v: fmtInt(totals.orders), s: '单' },
-            { k: '件数', v: fmtInt(totals.qty), s: '件' },
-            { k: '日均', v: fmtMoney(totals.avg_gmv_per_day), s: '元/天' },
+            { k: t('hist.kpi_amount'), v: fmtMoney(totals.gmv), s: t('hist.unit_yuan') },
+            { k: t('hist.kpi_orders'), v: fmtInt(totals.orders), s: t('hist.unit_order') },
+            { k: t('hist.kpi_qty'), v: fmtInt(totals.qty), s: t('hist.unit_piece') },
+            {
+              k: t('hist.kpi_avg'),
+              v: fmtMoney(totals.avg_gmv_per_day),
+              s: t('hist.unit_yuan_day'),
+            },
           ].map(x => (
             <div key={x.k}>
               <div className="hist-kpi-k">{x.k}</div>
@@ -213,7 +220,7 @@ export default function HistoryPage() {
         ) : empty ? (
           // 2026-11-02 S2-9(用户定案): 页面不留任何归档说明 —— 空态只说"这段没数据",
           // "为什么空/哪天起会有"统一由锤子菜单的归档状态承接, 不再做第二份兜底
-          <div className="hist-empty">该区间没有数据</div>
+          <div className="hist-empty">{t('hist.empty_range')}</div>
         ) : (
           <Chart option={chartOption} height={window.innerWidth <= 600 ? 220 : 260} />
         )}
@@ -221,7 +228,7 @@ export default function HistoryPage() {
 
       <div className="card">
         <div className="hist-title-row">
-          <span className="section-title hist-title-flat">Top 20</span>
+          <span className="section-title hist-title-flat">{t('hist.top20')}</span>
           <span className="hist-seg">
             {(['sku', 'store'] as const).map(k => (
               <span
@@ -229,19 +236,19 @@ export default function HistoryPage() {
                 onClick={() => setTopBy(k)}
                 className={'hist-seg-item' + (topBy === k ? ' on' : '')}
               >
-                {k === 'sku' ? 'SKU' : '店铺'}
+                {k === 'sku' ? t('hist.dim_sku') : t('hist.dim_store')}
               </span>
             ))}
           </span>
         </div>
         {(top?.items || []).length === 0 ? (
-          <div className="hist-empty">无数据</div>
+          <div className="hist-empty">{t('hist.empty_short')}</div>
         ) : (
           (top.items as any[]).map((it, i) => (
             <div key={it.key + i} className="hist-row-item">
               <span className="hist-rank">{i + 1}</span>
               <span className="hist-name" title={it.key}>
-                {it.key || '(空)'}
+                {it.key || t('hist.blank_key')}
               </span>
               <span className="hist-amt">{fmtMoney(it.gmv)}</span>
               <span className="hist-share">{it.share}%</span>
@@ -254,7 +261,7 @@ export default function HistoryPage() {
         {/* 2026-11-02 S2-9: 标题去"近 30 天" —— 口径改成跟随菜单区间(与汇总同源),
             写死天数会与上方汇总各算一套时间窗, 页面里出现两个口径却无一处说明 */}
         <div className="hist-title-row">
-          <span className="section-title hist-title-flat">同比</span>
+          <span className="section-title hist-title-flat">{t('hist.yoy')}</span>
           {yoy?.cur?.start && yoy?.cur?.end ? (
             <span className="hist-yoy-span">
               {yoy.cur.start} ~ {yoy.cur.end}
@@ -262,18 +269,17 @@ export default function HistoryPage() {
           ) : null}
         </div>
         {!yoy ? (
-          <div className="hist-empty">加载中…</div>
+          <div className="hist-empty">{t('hist.loading')}</div>
         ) : !yoy.has_prev ? (
           <div className="hist-note">
             {yoy.prev?.start
-              ? `去年同期 ${yoy.prev.start} ~ ${yoy.prev.end} 无数据`
-              : '去年同期无数据'}
-            ，暂不做同比
+              ? t('hist.yoy_none_dated', { a: yoy.prev.start, b: yoy.prev.end })
+              : t('hist.yoy_none')}
           </div>
         ) : (
           <>
             <div className="hist-yoy-meta">
-              去年同期 {yoy.prev.start} ~ {yoy.prev.end}
+              {t('hist.yoy_meta', { a: yoy.prev.start, b: yoy.prev.end })}
             </div>
             {(['gmv', 'orders', 'qty'] as const).map(k => {
               const d = yoy.delta?.[k]
@@ -281,13 +287,19 @@ export default function HistoryPage() {
               return (
                 <div key={k} className="hist-row-item">
                   <span className="hist-name">
-                    {k === 'gmv' ? '金额' : k === 'orders' ? '单数' : '件数'}
+                    {k === 'gmv'
+                      ? t('hist.kpi_amount')
+                      : k === 'orders'
+                        ? t('hist.kpi_orders')
+                        : t('hist.kpi_qty')}
                   </span>
                   <span className="hist-amt">
                     {k === 'gmv' ? fmtMoney(yoy.cur[k]) : fmtInt(yoy.cur[k])}
                   </span>
                   <span className="hist-share hist-share-wide">
-                    去年 {k === 'gmv' ? fmtMoney(yoy.prev[k]) : fmtInt(yoy.prev[k])}
+                    {t('hist.yoy_last', {
+                      v: k === 'gmv' ? fmtMoney(yoy.prev[k]) : fmtInt(yoy.prev[k]),
+                    })}
                   </span>
                   <span className={'hist-delta ' + cls}>
                     {cls === 'na' ? '—' : (d >= 0 ? '+' : '') + d + '%'}

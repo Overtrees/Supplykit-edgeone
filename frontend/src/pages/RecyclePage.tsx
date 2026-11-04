@@ -248,7 +248,7 @@ export default function RecyclePage() {
   }
 
   return (
-    <div style={{ padding: '16px 0', maxWidth: 500, margin: '0 auto' }}>
+    <div className="form-page">
       {loading ? (
         <div>
           {[1, 2, 3].map(i => (

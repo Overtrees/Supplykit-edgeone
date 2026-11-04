@@ -168,8 +168,8 @@ export default function InsightsPage() {
   useEffect(() => {
     const h = () => {
       const ch = useAppStore.getState().channel || 'jd'
-      const t = useAppStore.getState().hammerInsightsTab || 'replen'
-      if (t === 'purchase') {
+      const _tab = useAppStore.getState().hammerInsightsTab || 'replen'
+      if (_tab === 'purchase') {
         useAppStore.getState().setSyncing(1)
         useAppStore.getState().setSyncOld(purchase.length > 0)
         api
@@ -182,7 +182,7 @@ export default function InsightsPage() {
           .then(r => setPurchase(r.data?.suggestions || r.data || []))
           .catch(() => {})
           .finally(() => useAppStore.getState().setSyncing(-1))
-      } else if (t === 'slow') {
+      } else if (_tab === 'slow') {
         useAppStore.getState().setSyncing(1)
         useAppStore.getState().setSyncOld(disposals.length > 0)
         api
@@ -343,10 +343,10 @@ export default function InsightsPage() {
   // 已下单列表(0.5 RU/次实测, 5人×8h×30天 ≈7.2万RU/月 = 额度0.14%/常态耗0.5%, RU 预算内)——多设备变更 ≤30s 收敛
   useEffect(() => {
     if (tab !== 'replen' || globalChannel !== 'jd') return
-    const t = setInterval(() => {
+    const _tid = setInterval(() => {
       if (document.visibilityState === 'visible') loadOrdered(true)
     }, 30000)
-    return () => clearInterval(t)
+    return () => clearInterval(_tid)
   }, [tab, globalChannel])
 
   const [orderedKeys, setOrderedKeys] = useState([])
@@ -368,7 +368,7 @@ export default function InsightsPage() {
       // 2026-11-03 走 mutate: 原来只弹 toast, 既不清缓存也不通知其它页 ——
       //   而采购建议接口会关闭 purchase_need 告警, 看板计数因此滞后到下一次 30s 静默刷新。
       mutate({
-        label: '取消下单',
+        label: 'ip.cancel_order',
         run: () =>
           api.delete(
             '/api/purchase-orders?sku=' +
@@ -378,8 +378,8 @@ export default function InsightsPage() {
               '&channel=' +
               globalChannel,
           ),
-        success: '已取消下单',
-        errorPrefix: '取消失败',
+        success: 'ip.cancel_ordered',
+        errorPrefix: 'ip.cancel_failed',
         events: ['insights-refresh', 'rules-changed'],
       }).then(ok => {
         if (ok) return
@@ -402,7 +402,7 @@ export default function InsightsPage() {
       setOrderedKeys(prev => [...prev, key])
       setOrderedItems(prev => [...prev, newItem])
       mutate({
-        label: '下单',
+        label: 'ip.place_order',
         run: () =>
           api.post(
             '/api/purchase-orders?sku=' +
@@ -416,8 +416,8 @@ export default function InsightsPage() {
               '&channel=' +
               globalChannel,
           ),
-        success: '已下单',
-        errorPrefix: '下单失败',
+        success: 'ip.placed',
+        errorPrefix: 'ip.place_failed',
         events: ['insights-refresh', 'rules-changed'],
       }).then(r => {
         if (!r) {
@@ -453,10 +453,10 @@ export default function InsightsPage() {
     // 乐观更新
     setOrderedItems(prev => prev.map(x => (x.id === item.id ? { ...x, arrival_date: date } : x)))
     mutate({
-      label: '更新到仓日期',
+      label: 'ip.update_arrival',
       run: () => api.put('/api/purchase-orders/' + item.id, { arrival_date: date }),
       events: ['insights-refresh', 'rules-changed'],
-      errorPrefix: '更新失败',
+      errorPrefix: 'ip.update_failed',
     }).then(ok => {
       if (!ok) loadOrdered()
     })
@@ -554,7 +554,7 @@ export default function InsightsPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* {t("nav.insights")} */}
+      {/* 补货建议 */}
       {tab === 'replen' && (
         <ReplenTab
           replen={replen}

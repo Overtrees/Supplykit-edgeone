@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, alertAge, whTag } from '../format'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -61,7 +62,7 @@ export default function OtherAlertsSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            其他告警 · 共 {fmtInt(otherTotal)} 条
+            {t('oa.title_n', { n: fmtInt(otherTotal) })}
           </div>
           {(fullAlerts
             ? fullAlerts.filter(
@@ -131,7 +132,7 @@ export default function OtherAlertsSheet(props: Props) {
                       className={'pill ' + (x.severity === 'error' ? 'danger' : 'warning')}
                       style={{ fontSize: 'var(--font-10)' }}
                     >
-                      {x.severity === 'error' ? '紧急' : '警告'}
+                      {x.severity === 'error' ? t('ls.urgent') : t('ls.warning')}
                     </span>
                   </span>
                 </div>
@@ -151,7 +152,7 @@ export default function OtherAlertsSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

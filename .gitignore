@@ -25,3 +25,9 @@ export_files/
 
 # 本地 eslint 缓存(CI 每次新建, 不入库)
 .eslintcache
+
+# 4 视口验证的截图产物(体积大, 只留脚本与 report.json)
+.artifacts/i18n/shots/*.png
+
+# UI 快照产物(截图 + report.json)只做本地验证, 不入库
+.artifacts/ui_shots/

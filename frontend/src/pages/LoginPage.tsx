@@ -1,6 +1,7 @@
 import { IconScale } from '../components/Icons'
 import { apiJson } from '../api/client'
 import React, { useState } from 'react'
+import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -13,7 +14,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
   const doLogin = async () => {
     if (loading) return // 防重复点击/Enter 并发(慢网络时曾连发两次)
     if (!username || !password) {
-      setError('请输入用户名和密码')
+      setError(t('login.need_both'))
       return
     }
     setLoading(true)
@@ -33,10 +34,10 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
         } catch {}
         onLogin()
       } else {
-        setError(d.detail || '用户名或密码错误')
+        setError(d.detail || t('login.bad_cred'))
       }
     } catch {
-      setError('无法连接到服务器，请重试')
+      setError(t('login.net_fail'))
     }
     setLoading(false)
   }
@@ -68,7 +69,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
           <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>
             SupplyKit
           </div>
-          <div style={{ fontSize: 'var(--font-md)', color: 'var(--muted2)' }}>供应链数据工作台</div>
+          <div style={{ fontSize: 'var(--font-md)', color: 'var(--muted2)' }}>{t('login.subtitle')}</div>
         </div>
         <div
           style={{
@@ -78,11 +79,11 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             boxShadow: 'var(--shadow-card)',
           }}
         >
-          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, marginBottom: 20 }}>登录</div>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, marginBottom: 20 }}>{t('login.title')}</div>
           <input
             value={username}
             onChange={e => setUsername(e.target.value)}
-            placeholder="用户名"
+            placeholder={t('login.user_ph')}
             autoFocus
             onKeyDown={e => e.key === 'Enter' && password && doLogin()}
             style={{
@@ -102,7 +103,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
-            placeholder="密码"
+            placeholder={t('login.pwd_ph')}
             onKeyDown={e => e.key === 'Enter' && doLogin()}
             style={{
               width: '100%',
@@ -145,7 +146,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               opacity: loading ? 0.6 : 1,
             }}
           >
-            {loading ? '登录中...' : '登录'}
+            {loading ? t('login.loading') : t('login.title')}
           </button>
           <div
             style={{
@@ -158,7 +159,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
               textAlign: 'center',
             }}
           >
-            访客模式：<b>demo</b> / <b>demo123</b>（仅可查看，无需注册）
+            {t('login.guest')}<b>demo</b> / <b>demo123</b>{t('login.guest_hint')}
           </div>
           <div
             style={{
@@ -172,7 +173,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
             }}
           >
             <IconScale size={12} style={{ verticalAlign: -2 }} />{' '}
-            声明：系统所使用的演示数据涉及品牌、商品、供应商为虚构，与任何真实企业或个人无关
+            {t('login.disclaimer')}
           </div>
         </div>
       </div>

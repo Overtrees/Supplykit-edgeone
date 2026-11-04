@@ -107,7 +107,7 @@ export default function ProductPage() {
           setLd(false)
           setLoadingMore(false)
           setList([])
-          setLoadErr('加载失败')
+          setLoadErr(t('common.load_failed'))
         }
       })
   }
@@ -164,10 +164,15 @@ export default function ProductPage() {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
         <span>
-          商品管理{' '}
+          {t('prd.title')}{' '}
           <span className="small muted" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-            已加载 {Math.min(list.length, pgTotal || list.length)}/{pgTotal || list.length} 条 ·
-            显示 {visCols.length}/{COLS.length} 列{s ? ` · "${s}"` : ''}
+            {t('prd.loaded', {
+              a: Math.min(list.length, pgTotal || list.length),
+              b: pgTotal || list.length,
+              c: visCols.length,
+              d: COLS.length,
+            })}
+            {s ? ` · "${s}"` : ''}
           </span>
         </span>
       </div>
@@ -178,14 +183,14 @@ export default function ProductPage() {
           <EmptyState
             icon="tag"
             title={s ? t('product.empty_matched') : t('product.empty')}
-            desc={s ? '换个关键词试试' : '通过清洗页导入商品数据'}
+            desc={s ? t('prd.try_other_kw') : t('prd.import_hint')}
             action={
               !s && (
                 <button
                   className="btn btn-primary"
                   onClick={() => window.__setPage && window.__setPage('cleansing')}
                 >
-                  去导入数据 →
+                  {t('common.go_import')}
                 </button>
               )
             }
@@ -268,7 +273,9 @@ export default function ProductPage() {
                     if (col.id === 'channel')
                       return (
                         <td key={col.id} style={{ fontSize: 'var(--font-xs)' }}>
-                          {useAppStore.getState().channel === 'other' ? '其他' : '京东'}
+                          {useAppStore.getState().channel === 'other'
+                            ? t('inv.channel_other_short')
+                            : t('inv.channel_jd_short')}
                         </td>
                       )
                     if (col.id === 'brand')
@@ -316,7 +323,7 @@ export default function ProductPage() {
                     if (col.id === 'unit')
                       return (
                         <td key={col.id} className="col-qty" style={{ fontSize: 'var(--font-sm)' }}>
-                          {x.unit || '瓶'}
+                          {x.unit || t('prd.unit_default')}
                         </td>
                       )
                     if (col.id === 'weight')
@@ -343,7 +350,7 @@ export default function ProductPage() {
                           <span
                             className={'pill ' + (x.status === 'active' ? 'success' : 'warning')}
                           >
-                            {x.status === 'active' ? '在售' : '停用'}
+                            {x.status === 'active' ? t('prd.status_active') : t('prd.status_inactive')}
                           </span>
                         </td>
                       )
@@ -353,21 +360,15 @@ export default function ProductPage() {
                       const _em = String(x.expiry_managed ?? '').trim()
                       const _map =
                         _em === 'yes'
-                          ? { txt: '是', cls: 'success' }
+                          ? { txt: t('prd.em_yes'), cls: 'success', tip: t('prd.em_yes_tip') }
                           : _em === 'no'
-                            ? { txt: '否', cls: 'neutral' }
-                            : { txt: '未标注', cls: 'warning' }
+                            ? { txt: t('prd.em_no'), cls: 'neutral', tip: t('prd.em_no_tip') }
+                            : { txt: t('prd.em_unset'), cls: 'warning', tip: t('prd.em_unset_tip') }
                       return (
                         <td key={col.id} style={{ textAlign: 'center' }}>
                           <span
                             className={'pill ' + _map.cls}
-                            title={
-                              _em === 'yes'
-                                ? '出库按批次精确匹配, 缺失走 FEFO 降级'
-                                : _em === 'no'
-                                  ? '出库按到货顺序 FIFO, 批次不记日期'
-                                  : '未标注 → 出入库按"做效期"处理并告警; 请在清洗页导入商品表补标'
-                            }
+                            title={_map.tip}
                           >
                             {_map.txt}
                           </span>
@@ -411,7 +412,8 @@ export default function ProductPage() {
                 className="btn btn-ghost"
                 style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
               >
-                {loadingMore ? '加载中... ' : ''}({Math.min(list.length, pgTotal)}/{pgTotal})
+                {loadingMore ? t('common.loading') : ''}({Math.min(list.length, pgTotal)}/
+                {pgTotal})
               </span>
             </div>
           )}
@@ -424,7 +426,7 @@ export default function ProductPage() {
                 color: 'var(--muted2)',
               }}
             >
-              已加载全部 {pgTotal} 条
+              {t('common.all_loaded', { n: pgTotal })}
             </div>
           )}
         </div>

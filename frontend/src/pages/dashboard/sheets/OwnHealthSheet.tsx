@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom'
 import { fmtInt } from '../format'
 import type { OwnHealthData, OwnHealthItem } from '../../../components/dash/OwnHealthCard'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -59,7 +60,7 @@ export default function OwnHealthSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            自有仓健康 · 共 {fmtInt((ownHealth as OwnHealthData | null)?.total || 0)} 项
+            {t('oh.title_n', { n: fmtInt((ownHealth as OwnHealthData | null)?.total || 0) })}
           </div>
           {/* 2026-11-01 去掉「供给侧口径: 调拨缺口 / 积压 / 效期（自有仓不产生销售…）」说明行
                 (用户明确要求去除): 口径解释属实现注释, 不该占弹窗首屏; 行首 pill 已标类型。 */}{' '}
@@ -68,9 +69,9 @@ export default function OwnHealthSheet(props: Props) {
                 占用垂直空间。现在统一按 缺口→效期→积压 排序铺平, 每行行首 pill 标类型。 */}
           {(() => {
             const _OWN_META: Record<string, { tag: string; cls: string; c: string }> = {
-              own_transfer_gap: { tag: '调拨缺口', cls: 'danger', c: 'var(--danger)' },
-              own_expiry_risk: { tag: '效期', cls: 'danger', c: 'var(--danger)' },
-              own_overstock: { tag: '积压', cls: 'warning', c: 'var(--warning)' },
+              own_transfer_gap: { tag: 'oh.tag_transfer_gap', cls: 'danger', c: 'var(--danger)' },
+              own_expiry_risk: { tag: 'oh.tag_expiry', cls: 'danger', c: 'var(--danger)' },
+              own_overstock: { tag: 'oh.tag_overstock', cls: 'warning', c: 'var(--warning)' },
             }
             const _all = ((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[]
             // 2026-11-01 分类型配额(每类上限 20, 总数上限 60)——
@@ -92,18 +93,18 @@ export default function OwnHealthSheet(props: Props) {
               }, [])
             return all.map(function (x, i) {
               const m = _OWN_META[x.alert_type] || {
-                tag: '预警',
+                tag: 'oh.tag_warning',
                 cls: 'warning',
                 c: 'var(--warning)',
               }
               const metric =
                 x.alert_type === 'own_transfer_gap'
-                  ? '缺 ' + fmtInt(x.gap_qty)
+                  ? t('oh.gap_n', { n: fmtInt(x.gap_qty) })
                   : x.alert_type === 'own_expiry_risk'
                     ? x.days_to_expiry != null && x.days_to_expiry < 0
-                      ? '过期 ' + Math.abs(x.days_to_expiry) + '天'
-                      : '剩 ' + fmtInt(x.days_to_expiry ?? undefined) + '天'
-                    : '撑 ' + Math.round(Number(x.cover_days || 0)) + '天'
+                      ? t('oh.expired_n', { n: Math.abs(x.days_to_expiry) })
+                      : t('oh.left_n', { n: fmtInt(x.days_to_expiry ?? undefined) })
+                    : t('oh.cover_n', { n: Math.round(Number(x.cover_days || 0)) })
               return (
                 <div
                   key={x.alert_type + x.sku + i}
@@ -146,7 +147,7 @@ export default function OwnHealthSheet(props: Props) {
                           lineHeight: '16px',
                         }}
                       >
-                        {m.tag}
+                        {t(m.tag)}
                       </span>
                       {x.product_name || x.sku}
                     </span>
@@ -178,7 +179,7 @@ export default function OwnHealthSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>{t('common.close')}</span>
           </div>
         </div>
       </div>

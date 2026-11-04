@@ -52,10 +52,10 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
             <IconAlert size={20} />
           </div>
           <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--danger)', marginBottom: 4 }}>
-            组件渲染异常
+            {t('eb.title')}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted2)', marginBottom: 10 }}>
-            详细信息已记录日志
+            {t('eb.detail')}
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
@@ -90,7 +90,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
                   cursor: 'pointer',
                 }}
               >
-                回到看板
+                {t('eb.back')}
               </button>
             )}
           </div>

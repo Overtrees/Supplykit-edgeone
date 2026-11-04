@@ -153,7 +153,7 @@ export default function Sidebar({
                       {item.id === 'dash' && t('nav.dash')}
                       {item.id === 'insights' && t('nav.insights')}
                       {item.id === 'orders' && t('nav.orders')}
-                      {item.id === 'history' && '一年以前 · 同比'}
+                      {item.id === 'history' && t('nav.history_note')}
                       {item.id === 'inv' && t('nav.inv')}
                       {item.id === 'products' && t('nav.products')}
                       {item.id === 'suppliers' && t('nav.suppliers')}

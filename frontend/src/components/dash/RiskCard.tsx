@@ -1,5 +1,6 @@
 import React from 'react'
 import type { InventoryRow } from '../../api/types'
+import { t } from '../../locale'
 
 export interface RiskCardProps {
   replMode: string
@@ -20,13 +21,14 @@ const fmtWh = (w: string | undefined) => {
   if (!w) return ''
   const p = String(w).split(',').filter(Boolean)
   if (p.length <= 2) return p.join(',')
-  return p.slice(0, 2).join(',') + '等' + p.length + '仓'
+  return t('dash.wh_more', { a: p.slice(0, 2).join(','), n: p.length })
 }
 
-const RISK_LV: Record<string, { c: string; t: string }> = {
-  red: { c: 'var(--danger)', t: '紧急' },
-  orange: { c: 'var(--warning)', t: '预警' },
-  yellow: { c: 'var(--accent-yellow)', t: '关注' },
+// 标签存词条键(取值是后端契约), 渲染时 t()
+const RISK_LV: Record<string, { c: string; k: string }> = {
+  red: { c: 'var(--danger)', k: 'dash.risk_red' },
+  orange: { c: 'var(--warning)', k: 'dash.risk_orange' },
+  yellow: { c: 'var(--accent-yellow)', k: 'dash.risk_yellow' },
 }
 
 export default function RiskCard({
@@ -61,7 +63,7 @@ export default function RiskCard({
             lineHeight: 1.2,
           }}
         >
-          濒临断货预警{replMode === 'bbcc' ? '（BC）' : ''}
+          {replMode === 'bbcc' ? t('dash.risk_title_bc') : t('dash.risk_title')}
         </div>
       </div>
       {!items || items.length === 0 ? (
@@ -204,7 +206,7 @@ export default function RiskCard({
                       fontSize: riskFont,
                     }}
                   >
-                    ● {total - riskCritical - riskWarning} 观察
+            ● {total - riskCritical - riskWarning} {t('dash.risk_yellow')}
                   </span>
                 )}
               </div>
@@ -215,14 +217,14 @@ export default function RiskCard({
               const whLabel =
                 fmtWh(x.warehouse) ||
                 (x.type === 'C'
-                  ? 'C仓'
+                  ? t('dash.wh_c')
                   : x.type === 'OWN'
-                    ? '自有'
+                    ? t('inv.own')
                     : x.type === 'B'
-                      ? 'B仓'
+                      ? t('dash.wh_b')
                       : replMode === 'bbcc'
                         ? 'BC'
-                        : 'C仓')
+                        : t('dash.wh_c'))
               const lv = RISK_LV[x.level]
               return (
                 <div

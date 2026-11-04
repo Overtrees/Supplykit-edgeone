@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store/useAppStore'
+import { t } from '../locale'
 
 /**
  * 操作态胶囊(2026-11-03)
@@ -43,8 +44,8 @@ export default function OpPill() {
   const [, force] = useState(0)
   useEffect(() => {
     if (!ops.length) return
-    const t = setInterval(() => force(v => v + 1), 1000)
-    return () => clearInterval(t)
+    const _tid = setInterval(() => force(v => v + 1), 1000)
+    return () => clearInterval(_tid)
   }, [ops.length])
   // 任务清空时收起面板(渲染期不 setState)
   useEffect(() => {
@@ -56,9 +57,9 @@ export default function OpPill() {
   // 文案: 规则重算优先(最常见的等待场景), 其次"几项处理中"
   const rules = ops.filter(o => o.kind === 'rules')
   const label = rules.length
-    ? '规则重算中'
+    ? t('op.rules_running')
     : ops.length > 1
-      ? ops.length + ' 项处理中'
+    ? t('op.n_processing', { n: ops.length })
       : ops[0].label
 
   return (
@@ -66,7 +67,7 @@ export default function OpPill() {
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        title="点击查看后台任务"
+        title={t('op.title')}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -127,13 +128,13 @@ export default function OpPill() {
                     marginBottom: 10,
                   }}
                 >
-                  <span style={{ fontWeight: 700 }}>后台处理中</span>
+                  <span style={{ fontWeight: 700 }}>{t('op.panel_title')}</span>
                   <span className="small muted" style={{ cursor: 'pointer' }}>
-                    关闭
+                    {t('common.close')}
                   </span>
                 </div>
                 <div className="small muted" style={{ marginBottom: 10, lineHeight: 1.5 }}>
-                  这些操作在后端继续执行，可以离开当前页面；完成后看板与列表会自动更新。
+                  {t('op.panel_hint')}
                 </div>
                 {ops.map(o => (
                   <div
@@ -149,7 +150,7 @@ export default function OpPill() {
                     <Spinner size={11} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span className="ellipsis" style={{ display: 'block' }}>
-                        {o.label}
+                        {t(o.label)}
                         {o.scope ? <span className="small muted"> · {o.scope}</span> : null}
                       </span>
                     </span>
@@ -160,9 +161,9 @@ export default function OpPill() {
                       className="small muted clickable"
                       style={{ flexShrink: 0, color: 'var(--primary)' }}
                       onClick={() => opDone(o.id)}
-                      title="仅从列表移除(不影响后端任务)"
+                      title={t('op.hide_tip')}
                     >
-                      隐藏
+                      {t('op.hide')}
                     </span>
                   </div>
                 ))}

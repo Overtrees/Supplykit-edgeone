@@ -27,7 +27,11 @@ def list_channels(enabled_only: int = 0):
     """渠道列表(默认含已禁用, 便于管理页展示)"""
     rows = query("SELECT code, name, enabled, supports_b, default_mode, sort, created_at "
                  "FROM channels ORDER BY sort, code") or []
+    # 2026-11-04 红线 B: 内置渠道名不再以中文单向下发 —— 补 `name_key`, 前端按其本地化;
+    #   `name` 仍原样返回(自定义渠道只在库里有中文名, 前端对 name_key 缺失时回落到 name)。
+    from core.channel_names import channel_name_key
     items = [{"code": r.get("code"), "name": r.get("name") or r.get("code"),
+              "name_key": channel_name_key(r.get("code")),
               "enabled": int(r.get("enabled") or 0),
               "supports_b": bool(r.get("supports_b")),
               "default_mode": r.get("default_mode") or "traditional",

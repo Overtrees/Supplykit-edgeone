@@ -5,6 +5,7 @@ import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { PRODUCT_COLS, prodColKey, getProdVis } from './configs'
 import { t } from '../../locale'
 import { api } from '../../api/client'
+import { colLabel } from '../colLabels'
 
 interface HammerProductsProps {
   channel: string
@@ -38,10 +39,10 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
     const s = useAppStore.getState()
     const ids = s.prodSelIds || []
     if (ids.length === 0) {
-      toast.error('请先勾选商品')
+      toast.error(t('hx.pick_prod'))
       return
     }
-    if (action === 'delete' && !window.confirm('删除 ' + ids.length + ' 个商品？可在回收站恢复'))
+    if (action === 'delete' && !window.confirm(t('hx.prod_del_confirm', { n: ids.length })))
       return
     setBatchBusy(true)
     try {
@@ -51,31 +52,31 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
         // 批量删除可撤销（5s 窗口）
         toast.add({
           type: 'success',
-          title: label + '完成: ' + ids.length + ' 项',
+          title: t('hx.done_n', { label, n: ids.length }),
           duration: 5000,
           action: {
-            label: '撤销',
+            label: t('hx.undo'),
             handler: async () => {
               try {
                 await api.postHeavy('/api/products/batch', { action: 'restore', ids })
-                toast.success('已撤销删除')
+                toast.success(t('hx.undone'))
                 s.setProdBatchSel([])
                 s.setProdBatch(false)
                 s.bumpProdBatchVersion()
               } catch (e) {
-                toast.error('撤销失败: ' + (e.message || ''))
+                toast.error(t('hx.undo_failed', { msg: e.message || '' }))
               }
             },
           },
         })
       } else {
-        toast.success(label + '完成: ' + ids.length + ' 项')
+        toast.success(t('hx.done_n', { label, n: ids.length }))
       }
       s.setProdBatchSel([])
       s.setProdBatch(false)
       s.bumpProdBatchVersion()
     } catch (e) {
-      toast.error(label + '失败: ' + (e.message || ''))
+      toast.error(t('hx.fail', { label, msg: e.message || '' }))
     }
     setBatchBusy(false)
   }
@@ -116,7 +117,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
               : undefined
           }
         >
-          批量操作
+          {t('hx.batch')}
         </button>
       </div>
       {hammerPanel === 'batch' && (
@@ -130,11 +131,11 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
             }}
           >
             <span className="text-12 muted2">
-              已选{' '}
+              {t('hx.selected_pre')}{' '}
               <b style={{ color: 'var(--text)' }}>
                 {(useAppStore.getState().prodSelIds || []).length}
               </b>{' '}
-              项
+              {t('hx.selected_suf')}
             </span>
             {useAppStore.getState().prodBatch ? (
               <button
@@ -144,14 +145,14 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                   useAppStore.getState().setProdBatchSel([])
                 }}
               >
-                退出批量模式
+                {t('hx.exit_batch')}
               </button>
             ) : (
               <button
                 className="hammer-clear"
                 onClick={() => useAppStore.getState().setProdBatch(true)}
               >
-                进入批量模式
+                {t('hx.enter_batch')}
               </button>
             )}
           </div>
@@ -164,7 +165,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                 s.requestProdBatchAll()
               }}
             >
-              全选/取消
+              {t('hx.select_all_toggle')}
             </button>
           </div>
           <div className="hammer-btn-row" style={{ marginTop: 8 }}>
@@ -175,9 +176,9 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                 opacity: batchBusy || selSt.length === 0 || allActive ? 0.4 : 1,
               }}
               disabled={batchBusy || selSt.length === 0 || allActive}
-              onClick={() => runBatch('active', '启用')}
+              onClick={() => runBatch('active', t('hx.act_enable'))}
             >
-              批量启用
+              {t('hx.batch_enable')}
             </button>
             <button
               className="hammer-btn btn-ghost"
@@ -186,22 +187,26 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                 opacity: batchBusy || selSt.length === 0 || allInactive ? 0.4 : 1,
               }}
               disabled={batchBusy || selSt.length === 0 || allInactive}
-              onClick={() => runBatch('inactive', '停用')}
+              onClick={() => runBatch('inactive', t('hx.act_disable'))}
             >
-              批量停用
+              {t('hx.batch_disable')}
             </button>
             <button
               className="hammer-btn btn-ghost"
               style={{ color: 'var(--danger)', opacity: batchBusy || selSt.length === 0 ? 0.4 : 1 }}
               disabled={batchBusy || selSt.length === 0}
-              onClick={() => runBatch('delete', '删除')}
+              onClick={() => runBatch('delete', t('hx.act_delete'))}
             >
-              批量删除
+              {t('hx.batch_delete')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginTop: 8 }}>
-            勾选商品后在此批量操作
-            {allActive ? ' · 所选商品已全部启用' : allInactive ? ' · 所选商品已全部停用' : ''}
+            {t('hx.prod_batch_hint')}
+            {allActive
+              ? ' · ' + t('hx.prod_all_active')
+              : allInactive
+                ? ' · ' + t('hx.prod_all_inactive')
+                : ''}
           </div>
         </div>
       )}
@@ -282,7 +287,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                   }}
                   className="accent-primary"
                 />
-                <span className="flex-1 text-12">{col.label}</span>
+                <span className="flex-1 text-12">{colLabel(col.id)}</span>
                 <span className="muted2 text-9">#{visCols.indexOf(col.id) + 1}</span>
               </div>
             )
@@ -311,7 +316,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
                       }}
                       className="accent-primary"
                     />
-                    <span className="flex-1 text-12">{col.label}</span>
+                    <span className="flex-1 text-12">{colLabel(col.id)}</span>
                   </div>
                 ))}
               </>
@@ -325,7 +330,7 @@ export default function HammerProducts({ channel }: HammerProductsProps) {
             id="hm-search-prod"
             value={localSearch}
             onChange={e => setLocalSearch(e.target.value)}
-            placeholder="搜索SKU/商品名..."
+            placeholder={t('hx.search_prod_ph')}
             className="hammer-input"
           />
           {hammerSearch && (

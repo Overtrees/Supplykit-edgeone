@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import { fmtInt } from '../format'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -58,14 +59,14 @@ export default function ProcSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            采购&补货告警 · 共 {fmtInt(procTotal)} 条
+            {t('dash.proc_alert_count', { n: fmtInt(procTotal) })}
           </div>
           {(procList || []).map(function (x, i) {
             return (
               <div
                 key={i}
                 onClick={function () {
-                  onGoInsights && onGoInsights(x.tag === '采购' ? 'purchase' : 'replen', x.sku)
+                  onGoInsights && onGoInsights(x.kind === 'purchase' ? 'purchase' : 'replen', x.sku)
                 }}
                 className="clickable"
                 style={{
@@ -99,7 +100,7 @@ export default function ProcSheet(props: Props) {
                     }}
                   >
                     <span
-                      className={'pill ' + (x.tag === '采购' ? 'warning' : 'danger')}
+                      className={'pill ' + (x.kind === 'purchase' ? 'warning' : 'danger')}
                       style={{
                         flexShrink: 0,
                         fontSize: 'var(--font-9)',
@@ -108,7 +109,7 @@ export default function ProcSheet(props: Props) {
                         lineHeight: '16px',
                       }}
                     >
-                      {x.tag}
+                      {x.kind === 'purchase' ? t('dash.tag_purchase') : t('dash.tag_replenish')}
                     </span>
                     {x.product_name || x.sku}
                   </span>
@@ -117,7 +118,7 @@ export default function ProcSheet(props: Props) {
                       style={{
                         flexShrink: 0,
                         fontWeight: 700,
-                        color: x.tag === '采购' ? 'var(--warning)' : 'var(--danger)',
+                        color: x.kind === 'purchase' ? 'var(--warning)' : 'var(--danger)',
                       }}
                     >
                       +{x.qty}
@@ -130,8 +131,8 @@ export default function ProcSheet(props: Props) {
                   {x.note
                     ? String(x.note).slice(0, 50)
                     : x.days_to_empty > 999
-                      ? '库存充足'
-                      : '可撑' + x.days_to_empty + '天'}
+                      ? t('dash.stock_sufficient')
+                      : t('dash.cover_for_days', { n: x.days_to_empty })}
                 </div>
               </div>
             )
@@ -143,7 +144,9 @@ export default function ProcSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+              {t('dash.close')}
+            </span>
           </div>
         </div>
       </div>

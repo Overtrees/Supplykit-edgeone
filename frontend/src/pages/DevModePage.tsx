@@ -6,30 +6,36 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import { clearCache, clearInflight } from '../api/client'
 import { Group, Row, LastRow } from '../components/ListGroup'
 import LogFileList from '../components/LogFileList'
+import { t } from '../locale'
 
 const VERSION =
   typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '2.0.0'
 const BUILD = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__ ? __BUILD_DATE__ : ''
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
+// 词表化: 存键不存文案, 渲染时 t() 解析(切语言立即生效)
 const DEV_LABEL: Record<string, string> = {
-  api_error: '接口异常',
-  slow_request: '慢请求',
-  cache_error: '缓存降级',
-  quiet_error: '静默降级',
-  frontend_error: '前端上报',
-  window_error: 'JS 错误',
-  unhandled_rejection: 'Promise 拒绝',
-  component_error: '组件渲染',
-  api_http_error: '接口 HTTP',
+  api_error: 'dev.k_api_error',
+  slow_request: 'dev.k_slow',
+  cache_error: 'dev.k_cache',
+  quiet_error: 'dev.k_quiet',
+  frontend_error: 'dev.k_frontend',
+  window_error: 'dev.k_js',
+  unhandled_rejection: 'dev.k_rejection',
+  component_error: 'dev.k_render',
+  api_http_error: 'dev.k_http',
 }
-const LEVEL_LABEL: Record<string, string> = { warning: '警告', error: '异常', info: '提示' }
+const LEVEL_LABEL: Record<string, string> = {
+  warning: 'dev.lv_warning',
+  error: 'dev.lv_error',
+  info: 'dev.lv_info',
+}
 
 /** 开发者模式页(设置页·点版本号 6 次开启): 连接状态/环境信息/运行概况/日志分析/种子数据(开发工具) */
 export default function DevModePage() {
   const toast = useToast() // DevModePage 在 App ToastProvider 内, 可用
   const { wsStatus } = useAppStore()
-  const [status, setStatus] = useState('检查中...')
+  const [status, setStatus] = useState(() => t('dev.checking'))
   const [ping, setPing] = useState(0)
   const [lastCheck, setLastCheck] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -65,11 +71,11 @@ export default function DevModePage() {
       // S3-2 收口: 探测 5s 超时(原裸 fetch 无超时)
       const d = await apiJson('GET', API + '/api/insights/ping', { timeout: 5000 })
       const ms = Math.round(performance.now() - start)
-      setStatus(d.ok ? '正常' : '异常')
+      setStatus(d.ok ? t('dev.ok') : t('dev.abnormal'))
       setPing(ms)
       setLastCheck(new Date().toLocaleTimeString())
     } catch {
-      setStatus('无法连接')
+      setStatus(t('dev.unreachable'))
       setPing(0)
       setLastCheck(new Date().toLocaleTimeString())
     }
@@ -104,7 +110,7 @@ export default function DevModePage() {
       const d = await apiJson('POST', API + '/api/seed/fill', { timeout: 90000 })
       if (d.ok) {
         if (d.data?.requires_reset) {
-          toast.error('已有数据，请先重置')
+          toast.error(t('dev.has_data'))
           setSeeding(false)
           setConfirm('reset')
           return
@@ -117,21 +123,21 @@ export default function DevModePage() {
         }
         toast.add({
           type: 'success',
-          title: '填充任务已提交',
+          title: t('dev.seed_submitted'),
           duration: 6000,
           action: {
-            label: '查看进度 →',
+            label: t('dev.view_progress'),
             handler: () => {
               window.__setPage && window.__setPage('tasks')
             },
           },
         })
       } else {
-        toast.error('填充失败: ' + (d.error || ''))
+        toast.error(t('dev.seed_failed', { msg: d.error || '' }))
         setSeeding(false)
       }
     } catch {
-      toast.error('填充失败')
+      toast.error(t('dev.seed_failed_plain'))
       setSeeding(false)
     }
   }
@@ -146,7 +152,7 @@ export default function DevModePage() {
         try {
           localStorage.setItem('c_reset_task', d.data.task_id)
         } catch {}
-        toast.success('重置任务已提交，后台清理中...')
+        toast.success(t('dev.reset_submitted'))
         // 轮询等待重置完成
         const poll = setInterval(async () => {
           try {
@@ -175,7 +181,7 @@ export default function DevModePage() {
                 window.dispatchEvent(new CustomEvent('insights-refresh'))
                 window.dispatchEvent(new CustomEvent('orders-changed'))
               } catch {}
-              toast.success('数据已重置')
+              toast.success(t('dev.reset_done'))
               setTimeout(() => window.location.reload(), 400)
             }
           } catch {
@@ -184,47 +190,57 @@ export default function DevModePage() {
           }
         }, 2000)
       } else {
-        toast.error('重置失败: ' + (d.error || ''))
+        toast.error(t('dev.reset_failed', { msg: d.error || '' }))
         setResetting(false)
       }
     } catch {
-      toast.error('重置失败')
+      toast.error(t('dev.reset_failed_plain'))
       setResetting(false)
     }
   }
 
   return (
-    <div style={{ padding: '16px 0', maxWidth: 500, margin: '0 auto' }}>
+    <div className="form-page">
       {/* 连接状态(从设置页移入) */}
-      <Group title="连接状态">
+      <Group title={t('dev.conn')}>
         <Row
-          label="后端服务"
+          label={t('dev.backend')}
           value={status}
           sub={`${ping}ms · ${lastCheck}`}
           onClick={checkConnection}
           loading={refreshing}
         />
         <LastRow
-          label="实时连接"
-          value={wsStatus === 'connected' ? '已连接' : wsStatus === 'polling' ? '轮询中' : '已断开'}
+          label={t('dev.realtime')}
+          value={
+            wsStatus === 'connected'
+              ? t('dev.connected')
+              : wsStatus === 'polling'
+                ? t('dev.polling')
+                : t('dev.disconnected')
+          }
         />
       </Group>
 
       {/* 环境信息(版本已在设置页, 此处只留构建/API/DB) */}
-      <Group title="环境信息">
-        <Row label="构建日期" value={BUILD || '-'} />
-        <Row label="API" value={API || '同源'} />
+      <Group title={t('dev.env')}>
+        <Row label={t('dev.build_date')} value={BUILD || '-'} />
+        <Row label="API" value={API || t('dev.same_origin')} />
         <LastRow label="DB" value="TiDB · EdgeOne Makers" />
       </Group>
 
       {/* 运行概况(monitor 汇总) —— 2026-10-27 抽 StatsRow 组件(曾 4×40 行重复内联) */}
-      <Group title="运行概况">
+      <Group title={t('dev.overview')}>
         <StatsRow
           items={[
-            { n: mon ? mon.totals?.error || 0 : '-', c: '异常总数', color: 'var(--danger)' },
-            { n: mon ? mon.totals?.slow || 0 : '-', c: '慢请求', color: 'var(--warning)' },
-            { n: mon ? mon.today?.error || 0 : '-', c: '今日异常', color: 'var(--text)' },
-            { n: mon ? mon.today?.slow || 0 : '-', c: '今日慢请求', color: 'var(--text)' },
+            {
+              n: mon ? mon.totals?.error || 0 : '-',
+              c: t('dev.total_errors'),
+              color: 'var(--danger)',
+            },
+            { n: mon ? mon.totals?.slow || 0 : '-', c: t('dev.slow_req'), color: 'var(--warning)' },
+            { n: mon ? mon.today?.error || 0 : '-', c: t('dev.today_errors'), color: 'var(--text)' },
+            { n: mon ? mon.today?.slow || 0 : '-', c: t('dev.today_slow'), color: 'var(--text)' },
           ]}
         />
         <div
@@ -235,30 +251,30 @@ export default function DevModePage() {
             lineHeight: 1.5,
           }}
         >
-          异常/慢请求留痕于 quality_logs(开发者维度), 控制台「日志分析」为平台请求级(24h 保留)
+          {t('dev.overview_note')}
         </div>
       </Group>
 
       {/* 日志分析入口 */}
-      <Group title="日志分析">
+      <Group title={t('dev.log_analysis')}>
         <LastRow
-          label="日志分析"
-          sub="按日日志文件 · 点击预览当日明细"
+          label={t('dev.log_analysis')}
+          sub={t('dev.log_analysis_sub')}
           onClick={() => setShowLogs(true)}
         />
       </Group>
 
       {/* 种子数据(从设置页移入): 开发/运维数据工具 */}
-      <Group title="种子数据">
+      <Group title={t('dev.seed')}>
         <Row
-          label="一键填充"
-          sub="生成 2,000 SKU × 60 天 × 10 万条模拟数据"
+          label={t('dev.seed_fill')}
+          sub={t('dev.seed_fill_sub')}
           onClick={() => setConfirm('fill')}
           loading={seeding}
         />
         <LastRow
-          label="一键重置"
-          sub="清空所有数据恢复初始状态"
+          label={t('dev.seed_reset')}
+          sub={t('dev.seed_reset_sub')}
           onClick={() => setConfirm('reset')}
           danger
           loading={resetting}
@@ -308,7 +324,7 @@ export default function DevModePage() {
                   color: 'var(--text)',
                 }}
               >
-                日志分析
+                {t('dev.log_analysis')}
               </div>
               <LogFileList scope="dev" />
             </div>
@@ -320,9 +336,9 @@ export default function DevModePage() {
       {confirm === 'fill' && (
         <ConfirmDialog
           open
-          title="生成种子数据？"
-          desc="将生成 160 个商品、60 天订单、9 个仓库库存等模拟数据，覆盖现有数据。"
-          confirmLabel="生成"
+          title={t('dev.confirm_fill_title')}
+          desc={t('dev.confirm_fill_desc')}
+          confirmLabel={t('dev.confirm_fill_ok')}
           onConfirm={doSeed}
           onCancel={() => setConfirm(null)}
         />
@@ -330,9 +346,9 @@ export default function DevModePage() {
       {confirm === 'reset' && (
         <ConfirmDialog
           open
-          title="重置所有数据？"
-          desc="此操作不可恢复。将清空订单、库存、商品、规则等全部数据。"
-          confirmLabel="重置"
+          title={t('dev.confirm_reset_title')}
+          desc={t('dev.confirm_reset_desc')}
+          confirmLabel={t('dev.confirm_reset_ok')}
           onConfirm={doReset}
           onCancel={() => setConfirm(null)}
         />

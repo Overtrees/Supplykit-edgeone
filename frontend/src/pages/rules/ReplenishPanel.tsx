@@ -3,6 +3,7 @@ import { IconFactory, IconLoading, IconPackage, IconSave } from '../../component
 import { api } from '../../api/client'
 import { useToast } from '../../components/Toast'
 import { IS } from './shared'
+import { t } from '../../locale'
 
 interface Props {
   channel: string
@@ -45,7 +46,7 @@ export default function RulesReplenishPanel(props: Props) {
               gap: 4,
             }}
           >
-            <IconPackage size={14} /> C 仓
+            <IconPackage size={14} /> {t('rpn.c_wh')}
           </div>
           <div
             style={{
@@ -57,7 +58,7 @@ export default function RulesReplenishPanel(props: Props) {
           >
             {cParams.map(({ k, l, h }) => (
               <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-                {l}
+                {t(l)}
                 <input
                   value={String(cfg[k] || '')}
                   onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
@@ -65,7 +66,7 @@ export default function RulesReplenishPanel(props: Props) {
                 />
                 {h && (
                   <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginTop: 2 }}>
-                    {h}
+                    {t(h)}
                   </div>
                 )}
               </label>
@@ -81,7 +82,7 @@ export default function RulesReplenishPanel(props: Props) {
               gap: 4,
             }}
           >
-            <IconFactory size={14} /> B 仓
+            <IconFactory size={14} /> {t('rpn.b_wh')}
           </div>
           <div
             style={{
@@ -93,7 +94,7 @@ export default function RulesReplenishPanel(props: Props) {
           >
             {bParams.map(({ k, l }) => (
               <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-                {l}
+                {t(l)}
                 <input
                   value={String(cfg[k] || '')}
                   onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
@@ -114,7 +115,7 @@ export default function RulesReplenishPanel(props: Props) {
         >
           {paramFields.map(({ k, l }) => (
             <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-              {l}
+              {t(l)}
               <input
                 value={String(cfg[k] || '')}
                 onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
@@ -137,7 +138,7 @@ export default function RulesReplenishPanel(props: Props) {
             })
             await api.put('/api/replenishment-config?mode=' + m + '&channel=' + ch, toSave)
             setCfg(p => ({ ...p, ...toSave }))
-            toast.success('已保存')
+            toast.success(t('rp.saved'))
             window.dispatchEvent(new Event('rules-changed'))
           } catch (e) {
             saveErr(e)
@@ -156,11 +157,11 @@ export default function RulesReplenishPanel(props: Props) {
       >
         {saving ? (
           <>
-            <IconLoading size={14} /> 保存中...
+            <IconLoading size={14} /> {t('rfm.saving')}
           </>
         ) : (
           <>
-            <IconSave size={14} /> 保存
+            <IconSave size={14} /> {t('common.save')}
           </>
         )}
       </button>

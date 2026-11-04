@@ -14,6 +14,7 @@ import {
 } from './configs'
 import { IconExport, IconCheck, IconReturn, IconMoney, IconTag } from '../Icons'
 import { api, apiJson } from '../../api/client'
+import { colLabel } from '../colLabels'
 interface HammerInsightsProps {
   channel: string
 }
@@ -111,20 +112,20 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
       if (d.ok && d.task_id) {
         toast.add({
           type: 'success',
-          title: '导出任务已提交',
+          title: t('hm.export_submitted'),
           duration: 6000,
           action: {
-            label: '查看进度 →',
+            label: t('hm.view_progress'),
             handler: () => {
               window.__setPage && window.__setPage('tasks')
             },
           },
         })
       } else {
-        throw new Error(d.error || '提交失败')
+        throw new Error(d.error || t('hm.submit_failed'))
       }
     } catch (e) {
-      toast.error('导出失败: ' + e.message)
+      toast.error(t('hm.export_failed', { msg: e.message }))
     }
     setExporting(false)
   }
@@ -134,26 +135,26 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
   const DISPOSE_ACTIONS = {
     mark: {
       icon: <IconCheck size={13} />,
-      label: '标记已处理',
-      desc: '确认库存已清理或不再处理',
+      label: 'hm.dp_mark',
+      desc: 'hm.dp_mark_desc',
       color: 'var(--success)',
     },
     return: {
       icon: <IconReturn size={13} />,
-      label: '退货供应商',
-      desc: '向供应商退货, 回收占用资金',
+      label: 'hm.dp_return',
+      desc: 'hm.dp_return_desc',
       color: 'var(--warning)',
     },
     clearance: {
       icon: <IconMoney size={13} />,
-      label: '清仓甩卖',
-      desc: '大力度清库, 尽快释放资金',
+      label: 'hm.dp_clearance',
+      desc: 'hm.dp_clearance_desc',
       color: 'var(--accent-purple)',
     },
     promo: {
       icon: <IconTag size={13} />,
-      label: '降价促销',
-      desc: '降价促销拉动动销',
+      label: 'hm.dp_promo',
+      desc: 'hm.dp_promo_desc',
       color: '#06b6d4',
     },
   }
@@ -161,14 +162,14 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
     const s = useAppStore.getState()
     const ids = s.prodSelIds || []
     if (ids.length === 0) {
-      toast.error('请先勾选要处置的项')
+      toast.error(t('hm.pick_first'))
       return
     }
     const _a = DISPOSE_ACTIONS[bpAction] || DISPOSE_ACTIONS.mark
     if (
       bpAction !== 'mark' &&
       !window.confirm(
-        '确定对 ' + ids.length + ' 项执行「' + _a.label + '」？该操作将记录处置状态。',
+        t('hm.dispose_confirm', { n: ids.length, action: t(_a.label) }),
       )
     )
       return
@@ -180,32 +181,34 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
         return { sku: parts[0], warehouse: parts[1] }
       })
       await api.post('/api/disposals/batch', { channel, action: bpAction, note: bpNote, items })
-      toast.success('已处置 ' + items.length + ' 项(' + _a.label + ')')
+      toast.success(t('hm.disposed', { n: items.length, action: t(_a.label) }))
       s.setProdBatch(false)
       s.setProdBatchSel([])
       setBpOpen(false)
       window.dispatchEvent(new Event('insights-refresh'))
     } catch (e) {
-      toast.error('处置失败: ' + (e.message || ''))
+      toast.error(t('hm.dispose_failed', { msg: e.message || '' }))
     }
     setBpBusy(false)
   }
   return (
     <div>
-      <div className="hammer-header">{channel === 'jd' ? '京东' : '其他'} · 建议</div>
+      <div className="hammer-header">
+        {channel === 'jd' ? t('hm.jd') : t('hm.other')} · {t('common.suggestions')}
+      </div>
       {/* tab 入口 */}
       <div className="hammer-segmented" style={{ marginBottom: 4 }}>
         {[
-          ['replen', '补货建议'],
-          ['purchase', '采购建议'],
-          ['slow', '滞销预警'],
+          ['replen', 'hm.tab_replen'],
+          ['purchase', 'hm.tab_purchase'],
+          ['slow', 'hm.tab_slow'],
         ].map(([id, label]) => (
           <span
             key={id}
             onClick={() => setHammerInsightsTab(id)}
             className={'hammer-segment' + (hammerInsightsTab === id ? ' active' : '')}
           >
-            {label}
+            {t(label)}
           </span>
         ))}
       </div>
@@ -224,7 +227,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             onClick={() => setHammerReplenMode('traditional')}
             className={'hammer-segment' + (mode === 'traditional' ? ' active' : '')}
           >
-            传统多仓
+            {t('hm.mode_traditional')}
           </span>
         </div>
       )}
@@ -235,13 +238,13 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             onClick={() => setHammerPanel(hammerPanel === 'search' ? null : 'search')}
             className="hammer-btn btn-ghost"
           >
-            搜索
+            {t('hm.search')}
           </button>
           <button
             onClick={() => setHammerPanel(hammerPanel === 'columns' ? null : 'columns')}
             className="hammer-btn btn-ghost"
           >
-            列选择 ({visCols.length}/{cols.length})
+            {t('hm.columns', { a: visCols.length, b: cols.length })}
           </button>
         </div>
         <button
@@ -251,7 +254,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
           style={{ opacity: exporting ? 0.5 : 1 }}
         >
           {exporting ? <span className="hammer-spinner" /> : <IconExport size={13} />}{' '}
-          {exporting ? '导出中...' : '导出'}
+          {exporting ? t('hm.exporting') : t('hm.export')}
         </button>
         {isSlow && (
           <button
@@ -262,7 +265,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
               color: useAppStore.getState().prodBatch ? 'var(--danger)' : undefined,
             }}
           >
-            批量处置
+            {t('hm.batch_dispose')}
           </button>
         )}
       </div>
@@ -278,11 +281,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             }}
           >
             <span className="text-12 muted2">
-              已选{' '}
-              <b style={{ color: 'var(--text)' }}>
-                {useAppStore.getState().prodSelIds?.length || 0}
-              </b>{' '}
-              项
+              {t('hm.selected_n', { n: useAppStore.getState().prodSelIds?.length || 0 })}
             </span>
             {useAppStore.getState().prodBatch ? (
               <button
@@ -292,14 +291,14 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                   useAppStore.getState().setProdBatchSel([])
                 }}
               >
-                退出批量模式
+                {t('hm.exit_batch')}
               </button>
             ) : (
               <button
                 className="hammer-clear"
                 onClick={() => useAppStore.getState().setProdBatch(true)}
               >
-                进入批量模式
+                {t('hm.enter_batch')}
               </button>
             )}
           </div>
@@ -312,21 +311,21 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                 s.requestProdBatchAll()
               }}
             >
-              全选/取消
+              {t('hm.select_all_toggle')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginTop: 6 }}>
-            滞销预警按 SKU×仓库 · 处置后该行标记「已处理」
+            {t('hm.slow_hint')}
           </div>
           <div className="hm-group" style={{ marginTop: 6 }}>
-            <span className="text-11 muted2">处置动作(按滞销业务特性)</span>
+            <span className="text-11 muted2">{t('hm.actions_title')}</span>
           </div>
           <div className="hammer-btn-row" style={{ marginTop: 6 }}>
             {Object.entries(DISPOSE_ACTIONS).map(([v, a]) => (
               <button
                 key={v}
                 className="hammer-btn btn-ghost"
-                title={a.desc}
+                title={t(a.desc)}
                 style={{
                   color: a.color,
                   opacity:
@@ -344,24 +343,24 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                 onClick={() => setBpAction(v)}
               >
                 {a.icon}
-                {a.label}
+                {t(a.label)}
               </button>
             ))}
           </div>
           <div className="muted2 text-10" style={{ marginTop: 4 }}>
-            {DISPOSE_ACTIONS[bpAction]?.desc || ''}
+            {DISPOSE_ACTIONS[bpAction]?.desc ? t(DISPOSE_ACTIONS[bpAction].desc) : ''}
           </div>
           <div style={{ marginTop: 8 }}>
             <input
               value={bpNote}
               onChange={e => setBpNote(e.target.value)}
-              placeholder="备注(可选)"
+              placeholder={t('hm.note_ph')}
               className="hammer-input"
             />
           </div>
           <div className="hammer-btn-row" style={{ marginTop: 8 }}>
             <button disabled={bpBusy} className="hammer-btn btn-primary" onClick={runDispose}>
-              {bpBusy ? '处理中...' : '执行处置'}
+              {bpBusy ? t('hm.busy') : t('hm.run_dispose')}
             </button>
           </div>
         </div>
@@ -371,11 +370,12 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
         <div className="hammer-panel">
           <div className="hammer-header">
             {hammerInsightsTab === 'replen'
-              ? '补货建议'
+              ? t('hm.tab_replen')
               : hammerInsightsTab === 'purchase'
-                ? '采购建议'
-                : '滞销预警'}
-            {isPurchase ? '' : mode === 'bbcc' ? ' (BBCC)' : ' (传统)'} · 搜索
+                ? t('hm.tab_purchase')
+                : t('hm.tab_slow')}
+            {isPurchase ? '' : mode === 'bbcc' ? t('hm.suffix_bbcc') : t('hm.suffix_trad')}
+            {t('hm.suffix_search')}
           </div>
           <input
             id="hm-search-insights"
@@ -390,7 +390,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                 e.target.value,
               )
             }
-            placeholder="搜索SKU/商品名..."
+            placeholder={t('hm.search_ph')}
             className="hammer-input"
           />
           {hammerData?.[channel]?.[
@@ -420,7 +420,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
               {t('common.all')}
             </button>
             <button onClick={() => saveCols([])} className="hammer-clear">
-              取消全选
+              {t('common.deselect')}
             </button>
             <button
               onClick={() =>
@@ -444,7 +444,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
           </div>
           {visCols.length > 0 && (
             <div className="cols-group-title">
-              <span>已显示</span>
+              <span>{t('hm.shown')}</span>
               <span>{visCols.length}</span>
             </div>
           )}
@@ -506,7 +506,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                   }}
                   className="accent-primary"
                 />
-                <span className="flex-1 text-12">{col.label || '(序号)'}</span>
+                <span className="flex-1 text-12">{colLabel(col.id)}</span>
                 <span className="muted2 text-9">#{visCols.indexOf(col.id) + 1}</span>
               </div>
             )
@@ -517,7 +517,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
             return (
               <>
                 <div className="cols-group-title">
-                  <span>已隐藏</span>
+                  <span>{t('hm.hidden')}</span>
                   <span>{hidden.length}</span>
                 </div>
                 {hidden.map(col => (
@@ -535,7 +535,7 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
                       }}
                       className="accent-primary"
                     />
-                    <span className="flex-1 text-12">{col.label || '(序号)'}</span>
+                    <span className="flex-1 text-12">{colLabel(col.id)}</span>
                   </div>
                 ))}
               </>

@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, RISK_LV } from '../format'
+import { t } from '../../../locale'
 
 interface Props {
   open: boolean
@@ -78,24 +79,25 @@ export default function RiskSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            濒临断货预警{_replMode === 'bbcc' ? '（BC）' : ''} ·{' '}
+            {_replMode === 'bbcc' ? t('dash.risk_title_bc') : t('dash.risk_title')} ·{' '}
             {riskFilter === 'red'
-              ? '紧急'
+              ? t('dash.risk_red')
               : riskFilter === 'orange'
-                ? '预警'
+                ? t('dash.risk_orange')
                 : riskFilter === 'yellow'
-                  ? '观察'
-                  : '全部'}{' '}
-            {fmtInt(
-              (riskFilter === 'red'
-                ? riskCritical
-                : riskFilter === 'orange'
-                  ? riskWarning
-                  : riskFilter === 'yellow'
-                    ? _r.total - riskCritical - riskWarning
-                    : _r.total) || 0,
-            )}{' '}
-            条
+                  ? t('dash.risk_yellow')
+                  : t('dash.all')}{' '}
+            {t('dash.risk_n', {
+              n: fmtInt(
+                (riskFilter === 'red'
+                  ? riskCritical
+                  : riskFilter === 'orange'
+                    ? riskWarning
+                    : riskFilter === 'yellow'
+                      ? _r.total - riskCritical - riskWarning
+                      : _r.total) || 0,
+              ),
+            })}
           </div>
           {/* 级别切换 tab(三级 pill 入口联动, 弹窗内可切换) */}
           <div
@@ -134,14 +136,14 @@ export default function RiskSheet(props: Props) {
               const whLabel =
                 fmtWh(x.warehouse) ||
                 (x.type === 'C'
-                  ? 'C仓'
+                  ? t('dash.wh_c')
                   : x.type === 'OWN'
-                    ? '自有'
+                    ? t('inv.own')
                     : x.type === 'B'
-                      ? 'B仓'
+                      ? t('dash.wh_b')
                       : _replMode === 'bbcc'
                         ? 'BC'
-                        : 'C仓')
+                        : t('dash.wh_c'))
               const lv = RISK_LV[x.level]
               return (
                 <div
@@ -206,7 +208,7 @@ export default function RiskSheet(props: Props) {
                       {x.product_name || x.sku}
                     </div>
                     <div className="small muted" style={{ fontSize: 'var(--font-10)' }}>
-                      日销 {x.daily_sales} · 可用 {x.available_qty}
+                      {t('dash.daily_sales_avail', { a: x.daily_sales, b: x.available_qty })}
                     </div>
                   </div>
                   <span
@@ -232,7 +234,7 @@ export default function RiskSheet(props: Props) {
                       textAlign: 'right',
                     }}
                   >
-                    {x.days_to_empty} 天
+                    {t('dash.days_n', { n: x.days_to_empty })}
                   </span>
                 </div>
               )
@@ -244,7 +246,9 @@ export default function RiskSheet(props: Props) {
             className="clickable sheet-close"
             style={{ marginTop: 8 }}
           >
-            <span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>关闭</span>
+<span style={{ fontSize: 'var(--font-15)', fontWeight: 600, color: '#fff' }}>
+                  {t('dash.close')}
+                </span>
           </div>
         </div>
       </div>

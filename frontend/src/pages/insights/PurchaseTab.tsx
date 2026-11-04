@@ -45,14 +45,16 @@ export default function PurchaseTab(props: Props) {
           lineHeight: 1.7,
         }}
       >
-        <IconLightbulb size={13} style={{ verticalAlign: -2 }} /> <b>采购闭环</b>：导出采购建议 →
-        内部评估执行下单 → <b>清洗导入库存（含在途列）</b>更新在途 → 建议自动抵扣，完成闭环
+        <IconLightbulb size={13} style={{ verticalAlign: -2 }} />{' '}
+        <b>{t('ins_p.banner_1')}</b>：{t('ins_p.banner_pre')}
+        <b>{t('ins_p.banner_2')}</b>
+        {t('ins_p.banner_mid')}
       </div>
       <div
         className="section-title"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
       >
-        <span>采购建议</span>
+        <span>{t('insights.purchase')}</span>
         {globalChannel === 'jd' && (
           <span
             className="pill"
@@ -63,12 +65,19 @@ export default function PurchaseTab(props: Props) {
               lineHeight: '18px',
             }}
           >
-            {replenMode === 'bbcc' ? 'BBCC 口径(含B仓)' : '传统口径(不含B仓)'}
+            {replenMode === 'bbcc' ? t('ins_p.mode_bbcc') : t('ins_p.mode_trad')}
           </span>
         )}
         <span className="muted2" style={{ fontSize: 'var(--font-xs)', fontWeight: 400 }}>
-          显示 {purchaseVisCols.length}/{PURCHASE_COLS.length} 列 · 已加载{' '}
-          {Math.min(purchaseLimit, filteredPurchase.length)}/{filteredPurchase.length} 条
+          {t('ins.showing_cols', {
+            v: purchaseVisCols.length,
+            all: PURCHASE_COLS.length,
+          })}{' '}
+          ·{' '}
+          {t('ins.loaded_n_of_m', {
+            n: Math.min(purchaseLimit, filteredPurchase.length),
+            m: filteredPurchase.length,
+          })}
           {insightSearch ? ` · "${insightSearch}"` : ''}
         </span>
       </div>
@@ -110,14 +119,15 @@ export default function PurchaseTab(props: Props) {
             </thead>
             <tbody>
               {filteredPurchase.slice(0, purchaseLimit).map((x, i) => {
+                // 判据用 code, 显示层再映射(中文值不能兼作判据, 否则翻译即失效)
                 const timing =
                   !x.purchase_qty || x.purchase_qty <= 0
-                    ? '充足'
+                    ? 'enough'
                     : x.after_turnover &&
                         (x.target_turnover || 15) > 0 &&
                         x.after_turnover <= (x.target_turnover || 15)
-                      ? '建议'
-                      : '充足'
+                      ? 'suggest'
+                      : 'enough'
                 return (
                   <tr key={i}>
                     {purchaseVisCols.map(id => {
@@ -173,7 +183,7 @@ export default function PurchaseTab(props: Props) {
                               }}
                             >
                               {' '}
-                              (自有{x.own_available || 0}
+                              {t('ins_p.own_avail', { a: x.own_available || 0 })}
                               {replenMode === 'bbcc' ? `+B${x.b_available || 0}` : ''}+C
                               {x.plat_available || 0})
                             </span>
@@ -193,9 +203,9 @@ export default function PurchaseTab(props: Props) {
                             {x.sys_transit ?? '-'}
                             <span style={{ fontSize: 'var(--font-10)', color: 'var(--muted2)' }}>
                               {' '}
-                              (自有在途{x.own_transit || 0}
-                              {replenMode === 'bbcc' ? `+B在途${x.b_transit || 0}` : ''}+C在途
-                              {x.plat_transit || 0})
+                              {t('ins_p.own_transit', { a: x.own_transit || 0 })}
+                              {replenMode === 'bbcc' ? t('ins_p.b_in_transit', { b: x.b_transit || 0 }) : ''}
+                              {t('ins_p.c_in_transit', { c: x.plat_transit || 0 })})
                             </span>
                           </td>
                         )
@@ -285,15 +295,15 @@ export default function PurchaseTab(props: Props) {
                                   : 'var(--muted2)',
                             }}
                           >
-                            {x.actual_purchase > 0 ? x.after_turnover + '天' : '-'}
+                            {x.actual_purchase > 0 ? t('ins.days_n', { n: x.after_turnover }) : '-'}
                           </td>
                         )
                       if (col.id === 'note')
                         return (
                           <td
                             key={col.id}
-                            className="col-name"
-                            style={{ color: 'var(--muted2)', fontSize: 'var(--font-sm)' }}
+                            className="col-note"
+                            title={x.note || ''}
                           >
                             {renderNote(x.note) || t('insights.no_purchase_needed')}
                           </td>
@@ -301,8 +311,12 @@ export default function PurchaseTab(props: Props) {
                       if (col.id === 'timing')
                         return (
                           <td key={col.id} style={{ textAlign: 'center' }}>
-                            <span className={`pill ${timing === '建议' ? 'warning' : 'info'}`}>
-                              {timing}
+                            <span
+                              className={`pill ${timing === 'suggest' ? 'warning' : 'info'}`}
+                            >
+                              {timing === 'suggest'
+                                ? t('ins_p.timing_suggest')
+                                : t('ins_p.timing_enough')}
                             </span>
                           </td>
                         )
@@ -320,7 +334,7 @@ export default function PurchaseTab(props: Props) {
                       colSpan={purchaseVisCols.indexOf('actual_purchase')}
                       style={{ textAlign: 'right', fontSize: 'var(--font-sm)' }}
                     >
-                      合计
+                      {t('ins.total_row')}
                     </td>
                     <td style={{ color: 'var(--success)', fontSize: 'var(--font-13)' }}>
                       +{filteredPurchase.reduce((s, x) => s + (x.actual_purchase || 0), 0)}
@@ -343,7 +357,7 @@ export default function PurchaseTab(props: Props) {
                                     withPurchase.length
                                   ).toFixed(1)
                                 : ''
-                            return '平均周转 ' + (avgTurnover || '—') + ' 天'
+                            return t('ins.avg_turnover', { v: avgTurnover || '—' })
                           })()}
                         </td>
                       )}
@@ -374,7 +388,7 @@ export default function PurchaseTab(props: Props) {
                 className="btn btn-ghost"
                 style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
               >
-                加载中...
+                {t('ins.loading')}
               </span>
             </div>
           )}
