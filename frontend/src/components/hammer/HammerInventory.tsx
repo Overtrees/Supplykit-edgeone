@@ -6,6 +6,7 @@ import { useDebouncedSearch } from '../../hooks/useDebounce'
 import { useToast } from '../../components/Toast'
 import { INV_COLS, getInvVis, invColKey, INV_WH_LABEL } from './configs'
 import { IconExport, IconClipboard } from '../Icons'
+import ConfirmDialog from '../ConfirmDialog'
 import FlowRecordsSheet from '../FlowRecordsSheet'
 
 interface HammerInventoryProps {
@@ -22,8 +23,11 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
     setHammerCols,
     hammerWhType,
     setHammerWhType,
+    invBatch,
+    invSelIds,
   } = useAppStore()
   const [localSearch, setLocalSearch] = useDebouncedSearch(hammerSearch, setHammerSearch)
+  const [confirmBatchDel, setConfirmBatchDel] = useState(false)
   const [visCols, setVisCols] = useState(
     () => getInvVis(hammerWhType, channel) || INV_COLS[hammerWhType].map(c => c.id),
   )
@@ -120,8 +124,108 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
           <button onClick={() => setFlowOpen(true)} className="hammer-btn btn-ghost">
             <IconClipboard size={13} /> 出入库明细
           </button>
+          <button
+            onClick={() => setHammerPanel(hammerPanel === 'batch' ? null : 'batch')}
+            className="hammer-btn btn-ghost"
+            style={
+              useAppStore.getState().invBatch
+                ? { borderColor: 'var(--danger)', color: 'var(--danger)' }
+                : undefined
+            }
+          >
+            批量操作
+          </button>
         </div>
       </div>
+      {/* 批量操作面板(2026-11-04 订单同款交互, 按库存语义适配) */}
+      {hammerPanel === 'batch' && (
+        <div className="hammer-panel">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+            }}
+          >
+            <span className="text-12 muted2">
+              已选 <b style={{ color: 'var(--text)' }}>{invSelIds.length}</b> 项
+            </span>
+            {invBatch ? (
+              <button
+                className="hammer-clear"
+                onClick={() => {
+                  useAppStore.getState().setInvBatch(false)
+                  useAppStore.getState().setInvSelIds([])
+                }}
+              >
+                退出批量模式
+              </button>
+            ) : (
+              <button
+                className="hammer-clear"
+                onClick={() => useAppStore.getState().setInvBatch(true)}
+              >
+                进入批量模式
+              </button>
+            )}
+          </div>
+          <div className="hm-group">
+            <button
+              className="hammer-btn btn-ghost"
+              onClick={() => {
+                const s = useAppStore.getState()
+                if (!s.invBatch) s.setInvBatch(true)
+                window.dispatchEvent(new Event('inventory-toggle-all'))
+              }}
+            >
+              全选/取消
+            </button>
+          </div>
+          <div className="hammer-btn-row" style={{ marginTop: 8 }}>
+            <button
+              className="hammer-btn btn-ghost"
+              style={{ color: 'var(--danger)', opacity: invSelIds.length === 0 ? 0.4 : 1 }}
+              disabled={invSelIds.length === 0}
+              onClick={() => setConfirmBatchDel(true)}
+            >
+              批量删除
+            </button>
+            <button
+              className="hammer-btn btn-ghost"
+              onClick={() => {
+                setHammerPanel(null)
+                window.dispatchEvent(new Event('inventory-goto-recycle'))
+              }}
+              title="已删除的库存快照在回收站, 可批量恢复"
+            >
+              去恢复 →
+            </button>
+          </div>
+          <div className="muted2 text-10" style={{ marginTop: 8, lineHeight: 1.6 }}>
+            删除 = 整行进归档快照(保留删除时的数量), 可在回收站恢复。
+            <br />
+            恢复时若同业务键(sku×69码×仓)已重新导入, 该条会被拦截。
+          </div>
+        </div>
+      )}
+      {confirmBatchDel && (
+        <ConfirmDialog
+          open
+          title="批量删除库存"
+          desc={
+            '删除 ' +
+            useAppStore.getState().invSelIds.length +
+            ' 条库存?整行会进归档快照, 可在回收站恢复(重新导入同业务键后会被拦截)'
+          }
+          confirmLabel="删除"
+          onConfirm={() => {
+            setConfirmBatchDel(false)
+            window.dispatchEvent(new Event('inventory-batch-delete'))
+          }}
+          onCancel={() => setConfirmBatchDel(false)}
+        />
+      )}
       {/* 列选择面板 */}
       {hammerPanel === 'columns' && (
         <div className="hammer-panel hammer-panel-scroll">

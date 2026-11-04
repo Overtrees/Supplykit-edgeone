@@ -4,12 +4,17 @@
 (保留原 id), 恢复 = 原样插回。归档表方案(而非 deleted_at 软删)的理由:
 60 处读库存的 SQL 零改动、唯一键 uq_inventory_biz 不被"已删行"占位。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
-from db import query, one, execute
+from db import query, one, execute, executemany
 from routes.common import ok, fail, traced, try_err
 
 router = APIRouter(tags=["inventory"])
+
+# 批量上限: 云函数 wall clock 120s 硬限, 恢复逐条插入 + 冲突预取, 500 条实测 < 6s;
+# 超过则让用户分批(不静默截断——截断会让"选了 800 只恢复 500"变成静默丢数据)
+_BATCH_MAX = 500
+
 
 # inventory 全列(与 schema_create 的 inventory DDL 一一对应; 归档表同列序 + archived_at)
 _INV_ALL = ("id, sku, product_name, store, warehouse, warehouse_type, available_qty, in_transit_qty, "
@@ -109,3 +114,149 @@ def restore_inventory(iid: int):
     from routes.analysis_cache import invalidate
     invalidate("inventory")
     return ok({"restored_id": iid})
+
+
+def _biz_key(r):
+    """库存业务键 uq_inventory_biz: (sku, 69码, 仓, 渠道, 仓型)
+
+    空值归一成 '' —— 与单条 restore 的 COALESCE(barcode,'') 判定保持同一口径,
+    否则 'NULL' 与 '' 会被当成两个键, 放过本该拦截的冲突。
+    """
+    return (r.get("sku") or "", r.get("barcode") or "", r.get("warehouse") or "",
+            r.get("channel") or "", r.get("warehouse_type") or "own")
+
+
+def _chunks(seq, n):
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
+@router.post("/inventory/batch")
+@traced
+async def inventory_batch(request: Request):
+    """批量删除 / 批量恢复(归档快照).
+
+    {action: "delete"|"restore", ids: [int]}
+
+    与订单批量的**本质差异**(订单是 UPDATE deleted_at 一把梭, 这里不能照搬):
+    ① 删除无冲突判定 → 可以整批 INSERT...SELECT + DELETE, 2 条 SQL 搞定;
+    ② 恢复有业务键冲突(删除后同键又被导入) → **必须逐条判定**, 且要返回明细,
+       让前端能说清"恢复了 3 条, 2 条被拦(原因)", 而不是整批炸掉或静默丢。
+    ③ 冲突判定用**预取**而非逐条查: 先一次性取回候选 SKU 的现存行做内存比对,
+       把 N 次往返压成常数次(否则 100 条要 200 次往返 ≈ 11s, 逼近 120s 硬限)。
+    """
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+        try_err('inventory', 'batch 请求体解析失败', _e)
+    action = (d.get("action") or "").strip()
+    ids = []
+    for _x in (d.get("ids") or []):
+        try:
+            ids.append(int(_x))
+        except (TypeError, ValueError):
+            pass
+    ids = list(dict.fromkeys(ids))  # 去重, 保序
+    if action not in ("delete", "restore") or not ids:
+        return fail("参数无效: 需 action(delete|restore) 与 ids")
+    if len(ids) > _BATCH_MAX:
+        return fail("单次最多 %d 条(本次 %d), 请分批" % (_BATCH_MAX, len(ids)))
+
+    if action == "delete":
+        _archived, _missing = 0, []
+        for _b in _chunks(ids, 200):
+            _ph = ",".join(["%s"] * len(_b))
+            # 先查存在行(区分"本来就不存在" vs "删成功"), 再归档再删 ——
+            # 不能靠归档表回查: 历史归档行会让已删过的 id 被误判成本次删成功
+            _live = [r["id"] for r in query("SELECT id FROM inventory WHERE id IN (%s)" % _ph, _b)]
+            _missing += [i for i in _b if i not in set(_live)]
+            if not _live:
+                continue
+            _ph2 = ",".join(["%s"] * len(_live))
+            execute("INSERT INTO inventory_archive (" + _INV_ALL + ", archived_at) "
+                    "SELECT " + _INV_ALL + ", NOW() FROM inventory WHERE id IN (%s)" % _ph2, _live)
+            execute("DELETE FROM inventory WHERE id IN (%s)" % _ph2, _live)
+            _archived += len(_live)
+        if _archived:
+            from routes.analysis_cache import invalidate
+            invalidate("inventory")
+        return ok({"deleted": _archived, "missing": _missing})
+
+    # ── restore ──
+    _rows = []
+    for _b in _chunks(ids, 200):
+        _ph = ",".join(["%s"] * len(_b))
+        _rows += query("SELECT * FROM inventory_archive WHERE id IN (%s)" % _ph, _b)
+    if not _rows:
+        return fail("归档行不存在(可能已被恢复或清理)")
+
+    _got = {r["id"] for r in _rows}
+    _failed = [{"id": _i, "reason": "归档行不存在"} for _i in ids if _i not in _got]
+
+    # 预取①: 原 id 是否已被占用
+    _taken = set()
+    for _b in _chunks([r["id"] for r in _rows], 500):
+        _ph = ",".join(["%s"] * len(_b))
+        _taken |= {r["id"] for r in query(
+            "SELECT id FROM inventory WHERE id IN (%s)" % _ph, _b)}
+
+    # 预取②: 业务键是否已重新导入 —— 只查候选 SKU, 不做全表扫
+    _exist = set()
+    _skus = list({(r.get("sku") or "") for r in _rows if r.get("sku")})
+    for _b in _chunks(_skus, 500):
+        _ph = ",".join(["%s"] * len(_b))
+        for _r in query(
+                "SELECT COALESCE(sku,'') AS sku, COALESCE(barcode,'') AS barcode, "
+                "COALESCE(warehouse,'') AS warehouse, COALESCE(channel,'') AS channel, "
+                "COALESCE(warehouse_type,'own') AS warehouse_type "
+                "FROM inventory WHERE sku IN (%s)" % _ph, _b):
+            _exist.add(_biz_key(_r))
+
+    _ok_rows, _seen = [], set()
+    for _r in _rows:
+        _iid = _r.get("id")
+        if _iid in _taken:
+            _failed.append({"id": _iid, "reason": "库存表已存在同 id(数据异常)"})
+            continue
+        _k = _biz_key(_r)
+        if _k in _exist:
+            _failed.append({"id": _iid, "reason": "同业务键(sku×69码×仓)已重新导入, 恢复会重复"})
+            continue
+        if _k in _seen:  # 同批两条归档行互相撞键
+            _failed.append({"id": _iid, "reason": "同批存在相同业务键, 仅恢复第一条"})
+            continue
+        _seen.add(_k)
+        _ok_rows.append(_r)
+
+    _restored = 0
+    if _ok_rows:
+        try:
+            executemany(
+                "INSERT INTO inventory (" + _INV_ALL + ") VALUES ("
+                + ",".join(["%s"] * len(_INV_FIELDS)) + ")",
+                [[_r.get(_c) for _c in _INV_FIELDS] for _r in _ok_rows])
+            _restored = len(_ok_rows)
+            for _b in _chunks([r["id"] for r in _ok_rows], 500):
+                _ph = ",".join(["%s"] * len(_b))
+                execute("DELETE FROM inventory_archive WHERE id IN (%s)" % _ph, _b)
+        except Exception as _e:
+            # 整批写入失败(唯一键/长度等) → 回退逐条, 让能恢复的恢复, 不整批回滚
+            try_err('inventory', 'batch restore executemany 回退逐条', _e)
+            _restored, _ok2 = 0, []
+            for _r in _ok_rows:
+                try:
+                    execute("INSERT INTO inventory (" + _INV_ALL + ") VALUES ("
+                            + ",".join(["%s"] * len(_INV_FIELDS)) + ")",
+                            [_r.get(_c) for _c in _INV_FIELDS])
+                    execute("DELETE FROM inventory_archive WHERE id=%s", [_r["id"]])
+                    _restored += 1
+                    _ok2.append(_r["id"])
+                except Exception as _e2:
+                    try_err('inventory', 'batch restore 单条 id=%s' % _r.get("id"), _e2)
+                    _failed.append({"id": _r["id"], "reason": "写入失败(唯一键或数据异常)"})
+
+    if _restored:
+        from routes.analysis_cache import invalidate
+        invalidate("inventory")
+    return ok({"restored": _restored, "failed": _failed})

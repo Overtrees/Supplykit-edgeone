@@ -231,7 +231,7 @@ const initAppStore = (set, get) => ({
   setSidebarOpen: v => set({ sidebarOpen: v }),
   hammerPanel: null,
   // 回收页共享状态(2026-09-15: 页面与锤子菜单联动)——selected 计数 + 忙碌标志
-  recycleSel: { rules: 0, orders: 0 },
+  recycleSel: { rules: 0, orders: 0, inventory: 0 },
   recycleBusy: false,
   setRecycleSel: sel => set({ recycleSel: sel }),
   setRecycleBusy: b => set({ recycleBusy: b }),
@@ -338,6 +338,13 @@ const initAppStore = (set, get) => ({
   setOrderSelIds: ids => set({ orderSelIds: ids }),
   orderBatchVersion: 0,
   bumpOrderBatchVersion: () => set(s => ({ orderBatchVersion: s.orderBatchVersion + 1 })),
+
+  // 库存批量模式(2026-11-04): 与订单同款交互, 但语义不同 —— 删除是"整行归档快照",
+  // 恢复在回收站页; 所以这里只负责"勾选 + 批量删除", 不承载恢复。
+  invBatch: false,
+  setInvBatch: v => set({ invBatch: v }),
+  invSelIds: [] as number[],
+  setInvSelIds: ids => set({ invSelIds: ids }),
 
   prodSelIds: [],
   prodFilterLen: 0,

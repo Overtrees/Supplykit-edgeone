@@ -3,9 +3,8 @@ import { api, clearCache, abortScope, apiJson } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
-import { IconLoading } from '../components/Icons'
+import { IconLoading, IconCircle, IconCircleCheck } from '../components/Icons'
 import { useToast } from '../components/Toast'
-import ConfirmDialog from '../components/ConfirmDialog'
 import { useAppStore } from '../store/useAppStore'
 import { INV_COLS } from '../components/hammer/configs'
 import { t } from '../locale'
@@ -77,10 +76,16 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   }, [inventory])
   // 切走取消在途(根治快速切换卡骨架)
   useEffect(() => () => abortScope('inventory'), [])
-  const [confirmDel, setConfirmDel] = useState(null)
   const [monthRange, setMonthRange] = useState('')
   const reqSeq = useRef(0)
-  const { channel: globalChannel, hammerWhType, hammerCols, hammerSearch } = useAppStore()
+  const {
+    channel: globalChannel,
+    hammerWhType,
+    hammerCols,
+    hammerSearch,
+    invBatch,
+    invSelIds,
+  } = useAppStore()
   const whType = hammerWhType
   useEffect(() => {
     if (visCols.length === 0) {
@@ -249,21 +254,62 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     },
     [invSummary, inventory],
   )
-  const delInv = async () => {
-    if (!confirmDel) return
+  // 批量删除(2026-11-04): 交互与订单同款, 语义按库存适配 —— 后端是"整行归档快照",
+  // 删掉的不是消失而是进回收站可恢复, 所以提示写"已归档"而不是"已删除"。
+  // 单条删除也走这条链路(原 setConfirmDel 全模块无任何入口, 是一段死代码, 已移除)。
+  const doBatchDelete = async () => {
+    const ids = useAppStore.getState().invSelIds
+    if (!ids.length) return
     try {
-      // S3-2 收口: raw 保留 r.ok 判断
-      const r = await apiJson('DELETE', `${API}/api/inventory/${confirmDel}`, { raw: true })
-      if (r.ok) {
-        toast.success('已删除')
-        setConfirmDel(null)
-        loadInv()
-      } else toast.error('删除失败')
+      const d = await apiJson('POST', API + '/api/inventory/batch', {
+        timeout: 90000,
+        data: { action: 'delete', ids },
+      })
+      if (d.ok) {
+        const n = (d.data && d.data.deleted) || 0
+        const miss = (d.data && d.data.missing) || []
+        useAppStore.getState().setInvSelIds([])
+        useAppStore.getState().setInvBatch(false)
+        clearCache('inventory')
+        loadInv(1)
+        toast.success(
+          miss.length
+            ? `已归档 ${n} 条, ${miss.length} 条已不存在`
+            : `已归档 ${n} 条 · 可在回收站恢复`,
+        )
+      } else toast.error('删除失败: ' + (d.error || ''))
     } catch (e) {
       toast.error('删除失败: ' + e.message)
     }
-    setConfirmDel(null)
   }
+
+  // 锤子菜单事件联动(与订单页同构): ref 转发最新闭包, 单次绑定, 避免 useEffect 重绑
+  const flRef = useRef(fl)
+  flRef.current = fl
+  const batchDelRef = useRef(doBatchDelete)
+  batchDelRef.current = doBatchDelete
+  useEffect(() => {
+    const hToggleAll = () => {
+      const s = useAppStore.getState()
+      const all = flRef.current.map(x => x.id)
+      const cur = s.invSelIds || []
+      s.setInvSelIds(cur.length === all.length && all.length > 0 ? [] : all)
+    }
+    const hDel = () => batchDelRef.current()
+    const hGoRecycle = () => window.__setPage && window.__setPage('recycle')
+    window.addEventListener('inventory-toggle-all', hToggleAll)
+    window.addEventListener('inventory-batch-delete', hDel)
+    window.addEventListener('inventory-goto-recycle', hGoRecycle)
+    return () => {
+      window.removeEventListener('inventory-toggle-all', hToggleAll)
+      window.removeEventListener('inventory-batch-delete', hDel)
+      window.removeEventListener('inventory-goto-recycle', hGoRecycle)
+    }
+  }, [])
+  // 退出批量模式时清空选择, 防止"下次进来还勾着上次的行"
+  useEffect(() => {
+    if (!invBatch && invSelIds.length) useAppStore.getState().setInvSelIds([])
+  }, [invBatch, invSelIds.length])
 
   return (
     <div className="card">
@@ -355,6 +401,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             </colgroup>
             <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
               <tr>
+                {invBatch && <th style={{ width: 32 }} />}
                 {visCols.map(id => {
                   const col = INV_COLS[whType].find(c => c.id === id)
                   if (!col) return null
@@ -696,7 +743,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                 const bk = x.sku + '|' + x.warehouse
                 const isOpen = batchOpen.includes(bk)
                 const batchTrs = []
-                const _span = visCols.length
+                const _span = visCols.length + (invBatch ? 1 : 0)
                 if (isOpen && batchLoading[bk]) {
                   // 展开加载中: 给出视觉反馈(此前无任何提示, 慢网络下像"点了没反应")
                   batchTrs.push(
@@ -966,6 +1013,39 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   })
                 }
                 const _hb = (x.batch_count || 0) > 1
+                const _isSel = invBatch && (invSelIds || []).indexOf(x.id) >= 0
+                // 勾选列固定最左(与订单/商品页同款 32px 占位), 点击不触发行的批次展开
+                const _cells = invBatch
+                  ? [
+                      <td
+                        key="__sel"
+                        style={{ width: 32, textAlign: 'center' }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <span
+                          onClick={() => {
+                            const _s = useAppStore.getState()
+                            const _cur = _s.invSelIds || []
+                            _s.setInvSelIds(
+                              _cur.indexOf(x.id) >= 0
+                                ? _cur.filter(function (i) {
+                                    return i !== x.id
+                                  })
+                                : _cur.concat([x.id]),
+                            )
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {_isSel ? <IconCircleCheck size={20} /> : <IconCircle size={20} />}
+                        </span>
+                      </td>,
+                    ].concat(visCells)
+                  : visCells
                 return [
                   React.createElement(
                     'tr',
@@ -983,9 +1063,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                             background: 'rgba(245,158,11,0.15)',
                             outline: '2px solid var(--warning)',
                           }
-                        : {},
+                        : _isSel
+                          ? { background: 'rgba(29,78,216,0.06)' }
+                          : {},
                     },
-                    visCells,
+                    _cells,
                   ),
                 ].concat(batchTrs)
               })}
@@ -993,6 +1075,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             {inventory.length > 0 && (
               <tfoot>
                 <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                  {invBatch && <td key="__sel" style={{ width: 32 }} />}
                   {visCols.map(function (id) {
                     const col = INV_COLS[whType].find(function (c) {
                       return c.id === id
@@ -1123,14 +1206,6 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           )}
         </div>
       )}
-      <ConfirmDialog
-        open={!!confirmDel}
-        title="删除库存记录"
-        desc="删除后整行进归档(保留删除时的数量), 可在恢复接口/归档列表中找回; 重新导入同业务键后再恢复会被拦截"
-        confirmLabel="删除"
-        onConfirm={delInv}
-        onCancel={() => setConfirmDel(null)}
-      />
     </div>
   )
 }

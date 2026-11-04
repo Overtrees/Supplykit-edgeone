@@ -7,37 +7,55 @@ import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
-/** 回收站页(独立页, App header 显示; 批量操作由锤子菜单 HammerRecycle 触发, 事件联动) */
+/** 回收站页(独立页, App header 显示; 批量操作由锤子菜单 HammerRecycle 触发, 事件联动)
+ *
+ * 2026-11-04 增补「已删除库存」: 库存删除与订单不同 —— 订单是软删(deleted_at),
+ * 库存是整行归档快照(inventory_archive, 保留删除时的数量)。所以这里不是"取消删除标记",
+ * 而是"把快照原样插回"; 且恢复会被业务键(sku×69码×仓)冲突拦截, 故必须逐条回报结果,
+ * 不能像订单那样 Promise.all 一把梭(任一失败会整批抛出, 已成功的也看不到)。
+ */
 export default function RecyclePage() {
   const { setRecycleSel, setRecycleBusy } = useAppStore()
   const [rules, setRules] = useState<any[]>([])
   const [orders, setOrders] = useState<any[]>([])
+  const [inventories, setInventories] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [batchBusy, setBatchBusy] = useState(false)
-  const [selected, setSelected] = useState<{ rules: Set<number>; orders: Set<number> }>({
+  const [selected, setSelected] = useState<{
+    rules: Set<number>
+    orders: Set<number>
+    inventory: Set<number>
+  }>({
     rules: new Set(),
     orders: new Set(),
+    inventory: new Set(),
   })
 
   const syncSel = (s: typeof selected) => {
     setSelected(s)
-    setRecycleSel({ rules: s.rules.size, orders: s.orders.size })
+    setRecycleSel({ rules: s.rules.size, orders: s.orders.size, inventory: s.inventory.size })
   }
 
   const loadData = () => {
     setLoading(true)
     // S3-2 收口: apiJson 直接返回 json(不再 .then(r => r.json()))
+    // 库存归档按 channel 存储, 回收站要"看全部"就两个渠道各取一次再合并
     Promise.all([
       apiJson('GET', API + '/api/rules?channel=all&include_deleted=1'),
       apiJson('GET', API + '/api/orders?page=1&page_size=200&include_deleted=1'),
+      apiJson('GET', API + '/api/inventory/archive?channel=jd&limit=200'),
+      apiJson('GET', API + '/api/inventory/archive?channel=other&limit=200'),
     ])
-      .then(([rData, oData]: any[]) => {
+      .then(([rData, oData, iJd, iOt]: any[]) => {
         const items = rData.data || rData || []
         setRules(items.filter((x: any) => x.deleted_at))
         const o = oData.data || oData || []
         // 响应结构 {items,total}——取 items(原生 fetch 未解包 axios 层)
         const orderItems = Array.isArray(o) ? o : Array.isArray(o.items) ? o.items : []
         setOrders(orderItems.filter((x: any) => x.deleted_at))
+        const _inv = [...((iJd && iJd.data) || []), ...((iOt && iOt.data) || [])]
+        _inv.sort((a: any, b: any) => String(b.archived_at).localeCompare(String(a.archived_at)))
+        setInventories(_inv)
         setLoading(false)
       })
       .catch(() => {
@@ -52,7 +70,7 @@ export default function RecyclePage() {
     setRecycleBusy(batchBusy)
   }, [batchBusy, setRecycleBusy])
 
-  const toggleSel = (type: 'rules' | 'orders', id: number) => {
+  const toggleSel = (type: 'rules' | 'orders' | 'inventory', id: number) => {
     const next = { ...selected, [type]: new Set(selected[type]) }
     if (next[type].has(id)) next[type].delete(id)
     else next[type].add(id)
@@ -62,17 +80,20 @@ export default function RecyclePage() {
     // 空类型视为已全选(不参与 all 判断——否则某类型无数据时 all 恒 false, 无法取消全选)
     const allR = rules.length === 0 || rules.every(x => selected.rules.has(x.id))
     const allO = orders.length === 0 || orders.every(x => selected.orders.has(x.id))
-    const all = allR && allO
+    const allI = inventories.length === 0 || inventories.every(x => selected.inventory.has(x.id))
+    const all = allR && allO && allI
     syncSel({
       rules: new Set(all ? [] : rules.map(x => x.id)),
       orders: new Set(all ? [] : orders.map(x => x.id)),
+      inventory: new Set(all ? [] : inventories.map(x => x.id)),
     })
   }
 
   const batchAction = async (action: string, label: string) => {
     const ruleIds = Array.from(selected.rules),
-      orderIds = Array.from(selected.orders)
-    const n = ruleIds.length + orderIds.length
+      orderIds = Array.from(selected.orders),
+      invIds = Array.from(selected.inventory)
+    const n = ruleIds.length + orderIds.length + invIds.length
     if (n === 0) {
       alert('请先勾选要' + label + '的项')
       return
@@ -98,8 +119,35 @@ export default function RecyclePage() {
           orderIds.map(id => apiJson('POST', API + '/api/orders/' + id + '/' + action)),
         )
       }
+      // 库存: 只有"恢复"一种动作(归档行没有永久删除入口), 走批量接口拿逐条结果
+      if (invIds.length) {
+        if (action !== 'restore') throw new Error('库存归档不支持该操作')
+        const d = await apiJson('POST', API + '/api/inventory/batch', {
+          timeout: 90000,
+          data: { action: 'restore', ids: invIds },
+        })
+        if (!d.ok) throw new Error(d.error || '恢复失败')
+        const _ok = (d.data && d.data.restored) || 0
+        const _failed = (d.data && d.data.failed) || []
+        if (_failed.length) {
+          // 部分成功要如实回报 —— 这是与订单批量最大的差异(订单任一失败整批抛出)
+          const _head = _failed
+            .slice(0, 8)
+            .map((f: any) => '· id ' + f.id + ': ' + f.reason)
+            .join('\n')
+          alert(
+            '库存恢复 ' +
+              _ok +
+              ' 条成功, ' +
+              _failed.length +
+              ' 条被拦截:\n' +
+              _head +
+              (_failed.length > 8 ? '\n…还有 ' + (_failed.length - 8) + ' 条' : ''),
+          )
+        }
+      }
       loadData()
-      syncSel({ rules: new Set(), orders: new Set() })
+      syncSel({ rules: new Set(), orders: new Set(), inventory: new Set() })
     } catch (e: any) {
       alert(label + '失败: ' + e.message)
     }
@@ -107,6 +155,10 @@ export default function RecyclePage() {
   }
   const confirmPurge = () => {
     const n = selected.rules.size + selected.orders.size
+    if (n === 0 && selected.inventory.size > 0) {
+      alert('库存归档只能恢复, 不支持永久删除; 请取消勾选库存项')
+      return
+    }
     if (n === 0) {
       alert('请先勾选要永久删除的项')
       return
@@ -143,12 +195,18 @@ export default function RecyclePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const renderList = (type: 'rules' | 'orders', items: any[]) => {
+  const renderList = (type: 'rules' | 'orders' | 'inventory', items: any[]) => {
     if (items.length === 0)
       return (
         <EmptyState
           icon="clipboard"
-          title={type === 'rules' ? t('recycle.empty_rules') : t('recycle.empty_orders')}
+          title={
+            type === 'rules'
+              ? t('recycle.empty_rules')
+              : type === 'orders'
+                ? t('recycle.empty_orders')
+                : '没有已删除的库存'
+          }
         />
       )
     return (
@@ -156,10 +214,30 @@ export default function RecyclePage() {
         {items.map((x: any, i: number) => (
           <ListItem
             key={x.id}
-            label={type === 'rules' ? x.name : x.order_no + ' - ' + (x.product_name || '')}
+            // 库存是四维键(仓型×SKU×69码×仓): 只写 SKU 会分不清"同 SKU 多仓"
+            label={
+              type === 'rules'
+                ? x.name
+                : type === 'orders'
+                  ? x.order_no + ' - ' + (x.product_name || '')
+                  : (x.warehouse || '—') +
+                    ' · ' +
+                    x.sku +
+                    (x.barcode ? ' · ' + x.barcode : '') +
+                    ' - ' +
+                    (x.product_name || '')
+            }
             isSel={selected[type].has(x.id)}
             onClick={() => toggleSel(type, x.id)}
-            right={x.deleted_at ? String(x.deleted_at).slice(0, 10) : ''}
+            right={
+              type === 'inventory'
+                ? x.archived_at
+                  ? String(x.archived_at).slice(0, 10)
+                  : ''
+                : x.deleted_at
+                  ? String(x.deleted_at).slice(0, 10)
+                  : ''
+            }
             last={i === items.length - 1}
           />
         ))}
@@ -194,6 +272,14 @@ export default function RecyclePage() {
               sub="点击行勾选，批量操作见右上角锤子"
             />
             {renderList('orders', orders)}
+          </Group>
+          {/* 2026-11-04 已删除库存(归档快照): 与订单同款勾选 + 批量, 但只能恢复不能永久删 */}
+          <Group title="已删除库存（归档快照）">
+            <Row
+              label={`已删除库存 ${selected.inventory.size > 0 ? '· 已选 ' + selected.inventory.size : ''}`}
+              sub="恢复 = 原样插回删除时的数量；同业务键已重新导入的会被拦截"
+            />
+            {renderList('inventory', inventories)}
           </Group>
           {batchBusy && (
             <div

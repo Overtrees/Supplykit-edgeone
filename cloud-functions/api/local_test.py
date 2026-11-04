@@ -2294,6 +2294,141 @@ finally:
     except Exception:
         pass
 
+# ── S3-7: 库存批量删除/恢复(订单同款批量操作, 按库存特性适配) ──────────────
+try:
+    import asyncio as _ai27
+    import routes.inventory as _inv27
+    import routes.analysis_cache as _ac27
+
+    _src27 = open('routes/inventory.py', encoding='utf-8').read()
+
+    check("S3-7 批量接口存在, 且只接受 delete/restore",
+          '@router.post("/inventory/batch")' in _src27
+          and 'action not in ("delete", "restore")' in _src27, "routes/inventory.py")
+    check("S3-7 恢复逐条判定 + 返回 failed 明细(不照搬订单的 UPDATE 一把梭)",
+          '"failed"' in _src27 and "_ok_rows" in _src27
+          and "UPDATE inventory SET" not in _src27, "routes/inventory.py")
+    check("S3-7 冲突走预取(SKU IN), 把 N 次往返压成常数次",
+          "FROM inventory WHERE sku IN (%s)" in _src27, "routes/inventory.py")
+    check("S3-7 有批量上限, 超限报错而非静默截断",
+          "_BATCH_MAX" in _src27 and "请分批" in _src27, "routes/inventory.py")
+    check("S3-7 业务键空值归一为 ''(与单条 COALESCE 同口径)",
+          "def _biz_key" in _src27 and 'r.get("barcode") or ""' in _src27,
+          "routes/inventory.py")
+
+    class _Req27:
+        def __init__(self, d):
+            self._d = d
+
+        async def json(self):
+            return self._d
+
+    _o27 = (_inv27.query, _inv27.execute, _inv27.executemany, _ac27.invalidate)
+    _st27 = {"inv": 0, "exec": [], "many": []}
+
+    def _run27(payload):
+        return _ai27.run(_inv27.inventory_batch(_Req27(payload)))
+
+    def _exec27(sql, p=None):
+        _st27["exec"].append((str(sql), p))
+        return len(p or [])
+
+    def _many27(sql, seq):
+        _st27["many"].append((str(sql), list(seq)))
+        return len(list(seq))
+
+    def _row27(i, sku, bc, wh):
+        return {"id": i, "sku": sku, "barcode": bc, "warehouse": wh,
+                "warehouse_type": "own", "channel": "jd", "available_qty": 42}
+
+    _inv27.execute, _inv27.executemany = _exec27, _many27
+    _ac27.invalidate = lambda dom: _st27.__setitem__("inv", _st27["inv"] + 1)
+
+    # ① 批量删除: 3 个 id 中 2 个真实存在 → 归档+删各一条 SQL, missing 报未命中
+    _inv27.query = lambda sql, p=None: (
+        [{"id": 1}, {"id": 2}] if "FROM inventory WHERE id IN" in str(sql) else [])
+    _st27["exec"], _st27["inv"] = [], 0
+    _r27 = _run27({"action": "delete", "ids": [1, 2, 3]})
+    _d27 = _r27.get("data") or {}
+    check("S3-7 批量删除 = 归档+删原行各一条 SQL, missing 报未命中",
+          _r27.get("ok") and _d27.get("deleted") == 2 and _d27.get("missing") == [3]
+          and len(_st27["exec"]) == 2
+          and "INSERT INTO inventory_archive" in _st27["exec"][0][0]
+          and _st27["exec"][1][0].startswith("DELETE FROM inventory")
+          and _st27["inv"] == 1, str(_r27)[:200])
+
+    # ② 批量恢复全成功: 2 条无冲突 → executemany 一次写入 + 归档批量移除
+    _arc27 = [_row27(11, "SKU-A", "BC-A", "集货仓"), _row27(12, "SKU-B", "BC-B", "集货仓")]
+
+    def _q27_ok(sql, p=None):
+        s = str(sql)
+        if "FROM inventory_archive WHERE id IN" in s:
+            return _arc27
+        return []  # id 占用 / 现存业务键都为空
+
+    _inv27.query = _q27_ok
+    _st27["exec"], _st27["many"], _st27["inv"] = [], [], 0
+    _r27 = _run27({"action": "restore", "ids": [11, 12]})
+    _d27 = _r27.get("data") or {}
+    check("S3-7 批量恢复 = executemany 一次写入 + 归档批量移除(不是 2N 次往返)",
+          _r27.get("ok") and _d27.get("restored") == 2 and not _d27.get("failed")
+          and len(_st27["many"]) == 1 and len(_st27["many"][0][1]) == 2
+          and len(_st27["exec"]) == 1
+          and _st27["exec"][0][0].startswith("DELETE FROM inventory_archive")
+          and _st27["inv"] == 1, str(_r27)[:200])
+
+    # ③ 部分冲突: 同业务键已被重新导入 → 该条拦截, 其余照常恢复(部分成功)
+    _arc27 = [_row27(13, "SKU-C", "BC-C", "集货仓"), _row27(14, "SKU-D", "BC-D", "集货仓")]
+
+    def _q27_dup(sql, p=None):
+        s = str(sql)
+        if "FROM inventory_archive WHERE id IN" in s:
+            return _arc27
+        if "FROM inventory WHERE sku IN" in s:
+            return [{"sku": "SKU-C", "barcode": "BC-C", "warehouse": "集货仓",
+                     "channel": "jd", "warehouse_type": "own"}]
+        return []
+
+    _inv27.query = _q27_dup
+    _st27["exec"], _st27["many"], _st27["inv"] = [], [], 0
+    _r27 = _run27({"action": "restore", "ids": [13, 14]})
+    _d27 = _r27.get("data") or {}
+    _f27 = _d27.get("failed") or []
+    check("S3-7 部分冲突: 冲突条被拦(带原因), 其余照常恢复 —— 不整批回滚",
+          _r27.get("ok") and _d27.get("restored") == 1
+          and len(_f27) == 1 and _f27[0]["id"] == 13
+          and "已重新导入" in _f27[0]["reason"]
+          and len(_st27["many"]) == 1 and len(_st27["many"][0][1]) == 1,
+          str(_r27)[:260])
+
+    # ④ 同批两条归档行撞同一个业务键 → 只恢复第一条, 第二条报原因
+    _arc27 = [_row27(15, "SKU-E", "BC-E", "集货仓"), _row27(16, "SKU-E", "BC-E", "集货仓")]
+    _inv27.query = lambda sql, p=None: (
+        _arc27 if "FROM inventory_archive WHERE id IN" in str(sql) else [])
+    _st27["exec"], _st27["many"] = [], []
+    _r27 = _run27({"action": "restore", "ids": [15, 16]})
+    _d27 = _r27.get("data") or {}
+    check("S3-7 同批内重复业务键只恢复第一条(避免自己撞唯一键)",
+          _r27.get("ok") and _d27.get("restored") == 1
+          and len(_d27.get("failed") or []) == 1
+          and "相同业务键" in _d27["failed"][0]["reason"], str(_r27)[:240])
+
+    # ⑤ 参数与上限
+    check("S3-7 缺 action/ids → fail",
+          _run27({"action": "", "ids": []}).get("ok") is False
+          and _run27({"action": "restore", "ids": []}).get("ok") is False, "参数校验")
+    check("S3-7 超过 %d 条 → 明确报错(不静默截断)" % 500,
+          _run27({"action": "delete", "ids": list(range(1, 502))}).get("ok") is False
+          and "分批" in (_run27({"action": "delete", "ids": list(range(1, 502))}).get("error") or ""),
+          "上限保护")
+except Exception as _e27:
+    check("S3-7 用例无异常", False, str(_e27)[:200])
+finally:
+    try:
+        _inv27.query, _inv27.execute, _inv27.executemany, _ac27.invalidate = _o27
+    except Exception:
+        pass
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()
