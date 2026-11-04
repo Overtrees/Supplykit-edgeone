@@ -922,7 +922,15 @@ try:
           or '"locked_qty": int(r.get("locked_qty") or 0)' in _re, "rule_eval.py")
     check("规则 ctx: order.total_amount/unit_price 已注入",
           '"total_amount": round(_g[\"amt\"]' in _cl or '"total_amount": round(_g["amt"], 2)' in _cl, "cleansing.py")
-    check("规则字段存量迁移已登记", "rules_field_path_v1" in _sc, "schema_create.py")
+    # 2026-11-04 S3-5: 存量数据类步骤已迁出 create_all_tables → 断言覆盖两个存放点
+    _mt_src = open('migrations/steps/legacy_log_sync.py', encoding='utf-8').read()
+    _mig_src = open('migrations/__init__.py', encoding='utf-8').read()
+    _st_rfp = open('migrations/steps/rules_field_path.py', encoding='utf-8').read()
+    # 2026-11-04 S3-5: 该步已迁入 migrations/steps/, 断言改扫框架与步骤(与存放位置解耦)
+    check("规则字段存量迁移已登记(迁移框架 steps + 注册表)",
+          "_LEGACY_ALIASES" in _mt_src and "rules_field_path_v1" in _mt_src
+          and "rules_field_path" in _mig_src and "inv.days_since_last" in _st_rfp,
+          "migrations/")
     check("导入: 仓型映射单一真源(平台库存/B仓导入不再 NameError)",
           "TARGET_WH =" in _rf("routes/common.py")
           and "TARGET_WH as _TARGET_WH" in _rf("routes/cleanse_write.py"), "cleanse_write.py")
@@ -2065,6 +2073,11 @@ try:
     _sc8.query, _sc8.execute = (lambda sql, p=None: []), _ex8
     _oq8b = _db8.query
     _db8.query = lambda sql, p=None: []
+    # 2026-11-04 S3-5: ensure_schema 现在会调 migrations.run_pending —— 必须一起打桩,
+    #   否则它会真的去连库跑迁移(本用例只验版本门禁语义, 不该碰真实库)
+    import migrations.runner as _mr8
+    _or8 = _mr8.run_pending
+    _mr8.run_pending = lambda reg=None: ([], [])
     try:
         _state8["ver"] = None
         _sc8.ensure_schema()
@@ -2081,11 +2094,134 @@ try:
         _fail_no_write = _state8["ver"] is None
     finally:
         _db8.query, _db8.execute, _db8.one = _oq8b, _oe8db, _oo8db
+        _mr8.run_pending = _or8
         _sc8.query, _sc8.execute = _osc_q, _osc_e
     check("S2-8 首启: 建 schema_state + 全量执行 + 写入版本", _first_ok, "ver=%r" % _state8.get("ver"))
     check("S2-8 任一建表失败: 不写版本(下次冷启动重试)", _fail_no_write, "ver=%r" % _state8.get("ver"))
 except Exception as _e21:
     check("S2-8 版本门禁用例无异常", False, str(_e21)[:200])
+
+# ── S3-5: 迁移框架 —— 有序 / 单步事务 / 只跑未登记的 / 失败不阻断 ─────────────
+# 背景(2026-11-04): 存量数据类步骤原内联在 create_all_tables 里, 每次 schema 版本升级会把
+# **全部历史步骤重跑**, 靠每步自己 INSERT IGNORE migration_log 自守。漏一处守卫就是
+# 改数据类步骤重复执行(金额翻倍级别的事故)。迁入 migrations/ 后由 schema_migrations 统一记账。
+try:
+    import migrations as _mg
+    import migrations.runner as _mr
+    _v5 = _mg.validate()
+
+    check("S3-5 注册表 step id 合法且不重复(重复 id 会让后一个被当成已应用)",
+          not _v5["bad"] and not _v5["dup"], str(_v5)[:160])
+    check("S3-5 步骤模块文件都真实存在(注册表只存模块名, 不在注册时导入)",
+          all(_os.path.exists(_os.path.join('migrations/steps', _s['module'] + '.py'))
+              for _s in _mg.registry()), "migrations/steps/")
+    # 该缺陷是本次迁移的直接动机: 老写法把数据迁移塞进了建表函数
+    _sc5 = open('schema_create.py', encoding='utf-8').read()
+    _cat5 = _sc5.split("def create_all_tables")[1].split("def ensure_schema")[0]
+    check("S3-5 建表函数里不再内联存量数据 UPDATE(只看 DDL + 约束)",
+          "UPDATE rules SET" not in _cat5 and "UPDATE alerts SET" not in _cat5
+          and "UPDATE products SET" not in _cat5 and "UPDATE channels SET" not in _cat5,
+          "schema_create.py")
+    check("S3-5 ensure_schema 接入迁移框架(失败计入 _errors → 不写版本)",
+          "from migrations.runner import run_pending" in _sc5
+          and "迁移失败" in _sc5 and "schema_migrations" in _sc5, "schema_create.py")
+    check("S3-5 执行器单步事务(数据改动与登记同一事务提交)",
+          "with transaction() as c:" in open('migrations/runner.py', encoding='utf-8').read()
+          and "INSERT INTO schema_migrations(id, note, status, attempts)" in
+          open('migrations/runner.py', encoding='utf-8').read(),
+          "migrations/runner.py")
+
+    # 动态: 已应用集合恒等 → 零执行; 未应用 → 按注册顺序逐条执行并登记; 失败不阻断后续
+    _ed = {"done": set(), "failed": {}, "ins": [], "ran": []}
+
+    _or_q, _or_e, _or_t = _mr.query, _mr.execute, _mr.transaction
+
+    def _mq5(sql, p=None):
+        s5 = str(sql)
+        if "status='applied'" in s5:
+            return [{"id": i} for i in _ed["done"]]
+        if "status='failed'" in s5:
+            return [{"id": k, "attempts": v} for k, v in _ed["failed"].items()]
+        return []
+
+    def _me5(sql, p=None):
+        # 失败见证(settle)走 execute, 且**不在** run 的事务里 —— 记到这里
+        if "ON DUPLICATE KEY UPDATE note=VALUES(note), status=VALUES(status)" in str(sql) \
+                and p and len(p) >= 3:
+            _ed["failed"][p[0]] = int(p[3] or 0)
+        return 1
+
+    _mr.query = _mq5
+    _mr.execute = _me5
+    import contextlib as _ctx5
+
+    class _Cur5:
+        def execute(self, sql, params=None):
+            _ed["ins"].append(params[0] if params else None)
+            _ed["done"].add(params[0] if params else None)
+
+        def close(self):
+            pass
+
+    class _Conn5:
+        def cursor(self):
+            return _Cur5()
+
+    def _txn5():
+        @_ctx5.contextmanager
+        def _cm():
+            yield _Conn5()
+
+        return _cm()
+
+    _mr.transaction = _txn5
+    _fake_reg = [
+        {"id": "t_a", "module": "ok_a", "describe": ""},
+        {"id": "t_b", "module": "boom_b", "describe": ""},
+        {"id": "t_c", "module": "ok_c", "describe": ""},
+    ]
+    import sys as _sys5
+    import types as _ty5
+
+    def _mk5(name, boom):
+        m = _ty5.ModuleType("migrations.steps." + name)
+        if boom:
+            def _run():
+                raise RuntimeError("boom")
+        else:
+            def _run():
+                return "ok " + name
+        m.run = _run
+        _sys5.modules["migrations.steps." + name] = m
+
+    _mk5("ok_a", False)
+    _mk5("ok_c", False)
+    _mk5("boom_b", True)
+    try:
+        _ap5, _fa5 = _mr.run_pending(_fake_reg)
+        _ok_order = _ap5 == ["t_a", "t_c"] and _fa5 == ["t_b"]
+        _failed_witness = _ed["failed"].get("t_b") == 1   # 失败要有见证, 否则下次当没跑过
+        # 第二轮: 已应用的零执行; 失败的**再重试一次**(未达上限) → 仍失败, 计数 +1
+        _ins_before = len(_ed["ins"])
+        _ap5b, _fa5b = _mr.run_pending(_fake_reg)
+        _second_none = (_ap5b == [] and _fa5b == ["t_b"]
+                        and len(_ed["ins"]) == _ins_before
+                        and _ed["failed"].get("t_b") == 2)
+        # 第三轮: 失败次数已达上限 → 跳过, 不再重跑(不刷日志/不撞同错)
+        _ed["failed"]["t_b"] = _mr.MAX_ATTEMPTS
+        _ap5c, _fa5c = _mr.run_pending(_fake_reg)
+        _cap_skip = _ap5c == [] and _fa5c == []
+    finally:
+        for _n5 in ("ok_a", "ok_c", "boom_b"):
+            _sys5.modules.pop("migrations.steps." + _n5, None)
+        _mr.query, _mr.execute, _mr.transaction = _or_q, _or_e, _or_t
+    check("S3-5 动态: 失败步不登记为已应用、不阻断后续", _ok_order, "已应用=%r" % sorted(_ed["done"]))
+    check("S3-5 动态: 失败留见证(status=failed + attempts), 否则下次会被当成没跑过",
+          _failed_witness, "attempts=%r" % _ed["failed"])
+    check("S3-5 动态: 第二轮只重试失败步, 已应用的零执行零登记", _second_none, "")
+    check("S3-5 动态: 达失败上限后跳过(不无限重跑)", _cap_skip, "")
+except Exception as _e22:
+    check("S3-5 迁移框架用例无异常", False, str(_e22)[:200])
 
 # ── S2-9: 补列统一 + 死代码清理 ─────────────────────────────────────────────
 try:
@@ -2098,7 +2234,7 @@ try:
           and "SHOW COLUMNS" not in _src9b, "schema_create.py / index.py")
     check("S2-9 补列走版本门禁(在 ensure_schema 全量路径内, 缺才 ALTER)",
           "for _t, _cols in _COLUMN_ADDS.items()" in _src9
-          and "if _c in _have:" in _src9 and "SCHEMA_VERSION = 4" in _src9, "schema_create.py")
+          and "if _c in _have:" in _src9 and "SCHEMA_VERSION = " in _src9, "schema_create.py")
     check("S2-9 同表多列合并不覆盖(dict 无重复键)",
           _src9.count('"inventory": [') == 1 and _src9.count('"products": [') == 1,
           "schema_create.py")
@@ -2438,6 +2574,29 @@ finally:
         _inv27.query, _inv27.execute, _inv27.executemany, _ac27.invalidate = _o27
     except Exception:
         pass
+
+# ── i18n 键对齐(2026-11-04 红线 B): zh/en 键集合必须相等 ───────────────────
+# 背景: 页面里散着大量中文字面量, 切到 EN 就是半中半英。新增文案必须走 t('key') 且双份,
+# 这条用例守住"键集合相等"这一半; 另一半(不写中文字面量)靠 review + 改动文件的 grep 判据。
+try:
+    import re as _re_i18n
+    _loc_src = _io.open(_os.path.join(_HERE, "../../frontend/src/locale.ts"), encoding="utf-8").read()
+    _zh_part = _loc_src.split("const en")[0]
+    _en_part = _loc_src.split("const en")[1] if "const en" in _loc_src else ""
+    _zh_keys = set(_re_i18n.findall(r"^\s*'([^']+)':", _zh_part, _re_i18n.M))
+    _en_keys = set(_re_i18n.findall(r"^\s*'([^']+)':", _en_part, _re_i18n.M))
+    check("i18n: zh/en 键集合相等(新增文案必须双份)",
+          _zh_keys == _en_keys,
+          "缺 en=%r 缺 zh=%r" % (sorted(_zh_keys - _en_keys)[:6], sorted(_en_keys - _zh_keys)[:6]))
+    check("i18n: 字典已覆盖回收站与库存批量面板(2026-11-04 新增)",
+          all(k in _zh_keys for k in ("recycle.deleted_inventory", "recycle.bulk_restore",
+                                      "inv.batch.open", "inv.batch.delete",
+                                      "inv.batch.confirm_desc")), "locale.ts")
+    # t() 的兜底顺序: 当前语言 → zh → key 本身。缺 en 会**静默回落到中文**, 用户看到半中半英
+    check("i18n: 缺键回落顺序为 当前语言→zh→key(缺 en 会静默显示中文)",
+          "locales[currentLocale]?.[key] || locales['zh'][key] || key" in _loc_src, "locale.ts")
+except Exception as _e23:
+    check("i18n 用例无异常", False, str(_e23)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

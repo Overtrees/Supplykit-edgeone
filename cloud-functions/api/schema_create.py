@@ -332,6 +332,16 @@ _TABLES = {
         "CREATE TABLE IF NOT EXISTS migration_log "
         "(name VARCHAR(64) PRIMARY KEY, done_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     ),
+    # 2026-11-04 S3-5 有序迁移登记(替代 migration_log 的自守模式; 语义: 某 step 已应用)
+    #   note 记步骤自报的影响行数或 adopted:旧标记名, 便于事后核对"到底跑没跑、跑了多少"
+    "schema_migrations": (
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "id VARCHAR(64) PRIMARY KEY, "
+        "applied_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
+        "note VARCHAR(255) DEFAULT '', "
+        "status VARCHAR(16) NOT NULL DEFAULT 'applied', "
+        "attempts INT NOT NULL DEFAULT 0)"
+    ),
     "agg_dirty": (
         "CREATE TABLE IF NOT EXISTS agg_dirty "
         "(id TINYINT PRIMARY KEY, ts DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))"
@@ -461,7 +471,9 @@ _COLUMN_ADDS = {
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
 # v4(2026-11-03 D8): alerts 增 closed_reason/closed_at/reopen_count + 维度索引
-SCHEMA_VERSION = 4
+# v5(2026-11-04 S3-5): 建 schema_migrations; 存量数据类步骤迁入 migrations/(本版本号变化即触发一次
+#   全量路径 → run_pending 只执行未登记的步骤, 已应用的靠 legacy_log_sync 归并, 不会被重跑)
+SCHEMA_VERSION = 5
 
 
 def table_ddl(name):
@@ -540,53 +552,9 @@ def create_all_tables():
                 try_err('schema', '模板双键唯一索引补建(重名数据需先清理)', _e4)
     except Exception as e:
         try_err('schema', '模板索引迁移降级', e)
-    # 2026-10-29 规则字段路径迁移(幂等): 前端旧选项选出的表达式在后端 ctx 里永远取不到
-    #   inv.days_since_last → days_since_last(顶层) / inv.stock → stock(顶层)
-    #   不迁则存量规则静默永不触发(解析缺 key 返回 None → 条件跳过)
-    try:
-        from db import execute as _erf
-        if _erf("INSERT IGNORE INTO migration_log(name) VALUES('rules_field_path_v1')"):
-            _n1 = _erf("UPDATE rules SET condition_json=REPLACE(condition_json,"
-                       "'inv.days_since_last','days_since_last') "
-                       "WHERE condition_json LIKE '%%inv.days_since_last%%'")
-            _n2 = _erf("UPDATE rules SET condition_json=REPLACE(condition_json,"
-                       "'inv.stock','stock') WHERE condition_json LIKE '%%inv[.]stock%%'")
-            try_err('schema', '规则字段路径迁移完成: days_since_last=%s stock=%s' % (_n1, _n2), None)
-    except Exception as _erfx:
-        try_err('schema', '规则字段路径迁移降级', _erfx)
-    # 2026-10-30 低库存口径统一(可用+在途): 内建 low_stock 规则条件补 in_transit, 文案 {avail}→{sellable}
-    #   背景: BC 维度原先把"在途"并入 available_qty, 与逐仓行(纯可用)同模板不同义 → 语义对齐后
-    #   规则条件显式相加; 只影响 alert_type='low_stock' 且尚未含 in_transit 的规则(自定义规则不动)
-    try:
-        from db import execute as _els
-        if _els("INSERT IGNORE INTO migration_log(name) VALUES('lowstock_sellable_v1')"):
-            _n = _els("UPDATE rules SET "
-                      "condition_json=REPLACE(condition_json, '\"inv.available_qty\"', "
-                      "  '\"inv.available_qty + inv.in_transit_qty\"'), "
-                      "alert_desc=REPLACE(alert_desc, '{avail}', '{sellable}') "
-                      "WHERE alert_type='low_stock' AND condition_json LIKE '%%inv.available_qty%%' "
-                      "AND condition_json NOT LIKE '%%in_transit_qty%%'")
-            try_err('schema', '低库存口径迁移完成(可用+在途): %s 条' % _n, None)
-    except Exception as _elsx:
-        try_err('schema', '低库存口径迁移降级', _elsx)
-    # 2026-10-30 渠道显示名对齐原 UI: '京东' → '京东渠道'(切主体胶囊/下拉文案与旧版一致)
-    try:
-        from db import execute as _eln
-        if _eln("INSERT IGNORE INTO migration_log(name) VALUES('channel_name_v1')"):
-            _eln("UPDATE channels SET name='京东渠道' WHERE code='jd' AND name='京东'")
-            try_err('schema', '渠道显示名对齐完成', None)
-    except Exception as _elne:
-        try_err('schema', '渠道显示名对齐降级', _elne)
-    # 2026-10-30 低库存文案修正: 上一条迁移只换占位符({avail}→{sellable}), 前缀"可用"未改
-    #   → 现为"可用 {sellable}"(语义矛盾: sellable 是可用+在途)。这里补正为"可售 {sellable}"
-    try:
-        from db import execute as _elw
-        if _elw("INSERT IGNORE INTO migration_log(name) VALUES('lowstock_wording_v2')"):
-            _n2 = _elw("UPDATE rules SET alert_desc=REPLACE(alert_desc, '可用 {sellable}', '可售 {sellable}') "
-                       "WHERE alert_type='low_stock' AND alert_desc LIKE '%%可用 {sellable}%%'")
-            try_err('schema', '低库存文案修正完成: %s 条' % _n2, None)
-    except Exception as _elwx:
-        try_err('schema', '低库存文案修正降级', _elwx)
+    # 2026-10-29 规则字段路径 / 2026-10-30 低库存口径与文案 / 渠道名 / 超卖文案 /
+    # 2026-11-01 效期管理推导 —— 五类**改存量数据**的步骤 2026-11-04 S3-5 迁入
+    # `migrations/steps/`(有序、单步事务、只跑一次)。此处只保留声明式 DDL。
     # 2026-10-29 日销主键契约检测(根治, 不做 DDL):
     #   目标结构 = 代理主键 `id` + 业务唯一键(含 barcode)。
     #   TiDB 聚簇表**不支持 DROP PRIMARY KEY**(主键值编码进 Row Key = 行物理地址),
@@ -621,26 +589,9 @@ def create_all_tables():
                 try_err('schema', '主键契约登记降级', _el)
     except Exception as _epk:
         try_err('schema', '日销主键契约检测降级', _epk)
-    # 2026-10-29 存量文案迁移(幂等): 超卖判定口径由"单笔订单量"改为"累计订单量",
-    # 告警 description 是**生成时快照**, 已存在的告警仍是旧文案 → 一次性同步
-    try:
-        execute("UPDATE alerts SET description='累计订单量超过可用库存' "
-                "WHERE alert_type='oversell' AND description='订单数量超过可用库存'")
-    except Exception as e:
-        try_err('schema', '超卖告警文案迁移降级', e)
+    # 2026-10-29 超卖文案 / 2026-11-01 效期管理推导 → 2026-11-04 S3-5 迁入 migrations/steps/。
     # 2026-11-02 S2-9: 幂等补列已统一为模块级 _COLUMN_ADDS, 由 ensure_schema 全量路径执行
     #   (原此处内嵌补列 —— 与 index.py 启动段补列并存两套, 现合并为单一声明)。
-    # 2026-11-01 效期管理标记存量推导(一次性, migration_log 幂等):
-    #   有批次行或 best_before 已填 → 视为"做效期管理"; 其余保持 ''(待标注, 导入时强制补)。
-    #   **不默认全 yes** —— 会把不做效期的老货误判; **不默认 no** —— 会废掉现有批次。
-    try:
-        if execute("INSERT IGNORE INTO migration_log(name) VALUES('products_expiry_managed_v1')"):
-            _n_em = execute("UPDATE products SET expiry_managed='yes' "
-                            "WHERE COALESCE(expiry_managed,'')='' AND ("
-                            "  COALESCE(best_before,'')<>'' OR sku IN (SELECT sku FROM batches))")
-            try_err('schema', '效期管理标记推导完成: %d 个 SKU 标 yes' % int(_n_em or 0), '')
-    except Exception as _eem:
-        try_err('schema', '效期管理标记推导降级', _eem)
     # 2026-11-01 库存业务唯一键(幂等; 有重复则登记待办, 不阻断启动):
     #   写入路径一直是"先查后写", 少一层库约束 —— 并发/大小写/空格差异会插出重复行,
     #   而 inventory 是四维对账的基准: 重复行会让 "Σ批次=可用" 与 "月汇总=流水" 同时失真,
@@ -677,7 +628,7 @@ def ensure_schema():
     改表/索引/迁移 → 只需 bump SCHEMA_VERSION + 改声明, 不再写"SHOW INDEX 检查 + ALTER"式迁移代码。
     并发安全: DDL 幂等, 版本写入 GREATEST 防回退; 两实例同时首跑 = 重复执行无害。
     """
-    from db import query as _q, one as _one, execute as _e
+    from db import one as _one, execute as _e
     from routes.common import try_err
     # ① 热路径: 一次 SELECT(表不存在 → 异常 → 视为版本 0)
     try:
@@ -741,7 +692,17 @@ def ensure_schema():
                         _errors.append("补列 %s.%s: %s" % (_t, _c, _e9))
     except Exception as _e9b:
         try_err('schema', '补列统一执行降级', _e9b)
-    # ④ 全部成功才写版本(任一失败 → 不写 → 下次冷启动重试)
+    # ④ 存量数据类步骤(有序, 只跑未登记的): 2026-11-04 S3-5 从本函数的内联段迁出。
+    #    失败不阻断后续, 也不写版本 → 下次冷启动重试。见 migrations/runner.py
+    try:
+        from migrations.runner import run_pending
+        _m_ok, _m_fail = run_pending()
+        if _m_fail:
+            _errors.append("迁移失败: %s" % ",".join(_m_fail))
+    except Exception as _em:
+        _errors.append("迁移框架异常: %s" % _em)
+        try_err('schema', '迁移框架降级', _em)
+    # ⑤ 全部成功才写版本(任一失败 → 不写 → 下次冷启动重试)
     if _errors:
         try_err('schema', 'schema 初始化未完成(%d 处失败), 不写版本, 下次冷启动重试' % len(_errors),
                 "; ".join(_errors)[:400])

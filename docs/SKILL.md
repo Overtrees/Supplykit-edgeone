@@ -19,8 +19,8 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 平台 | EdgeOne Makers, ProjectId `makers-8gstkvheqm2c`(名 supplykit, Area=overseas 免备案) |
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
-| 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 |
-| 回归 | `local_test.py` **405 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(389 条 EXPLAIN + schema 对账) |
+| 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
+| 回归 | `local_test.py` **417 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(389 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
@@ -67,6 +67,7 @@ cloud-functions/api/
   index.py          唯一入口: 行首 app = FastAPI(); 鉴权中间件; /health
   db.py             原生数据层: pymysql DictCursor + 连接池(BoundedSemaphore 名额)
   schema_create.py  表/索引声明 + SCHEMA_VERSION 门禁(热路径零 DDL)
+  migrations/       有序迁移框架: steps/*.py 单步事务 + schema_migrations 记账(只跑未应用的)
   biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判)
   routes/common.py  @traced(异常统一 200 + ok:false) / try_err / 日志落库
   routes/*.py       22 个 APIRouter: auth dashboard orders products inventory replenishment
@@ -127,7 +128,7 @@ push-alerts 08:30 / ping 13:55)。
 ```bash
 bash scripts/preflight.sh
 # [1/7] 后端 Python 3.10 语法   [2/7] pyflakes(undefined name / 重定义)
-# [3/7] local_test 回归 405 (+SQL 冒烟)  [4/7] ESLint  [5/7] Prettier  [6/7] tsc
+# [3/7] local_test 回归 417 (+SQL 冒烟)  [4/7] ESLint  [5/7] Prettier  [6/7] tsc
 # [7/7] vitest 单测(2026-11-03 纳入: 此前从未执行, 攒了 12 个长期失败)
 ```
 
@@ -220,6 +221,8 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 | 只信 `git push \| tail -2` 的退出码 | 那是 `tail` 的 0; 失败会被当成功 |
 | 两个重灌进程并发 | 批次删除是整段 DELETE, 会互相清表 |
 | 照 `DEVELOPMENT.md` 一~九章施工 | 那是 PA + SQLite 时代的旧架构(写 `backend/`、19 路由、90 天归档), 与现状冲突; 现行判据只看 §15.10x 之后 + `ARCHITECTURE.md` |
+| 往页面/路由文件里继续堆新逻辑 | 上帝文件是这么长出来的; 新逻辑落独立文件, 页面只编排 —— 见 §11 红线 A |
+| JSX / toast / placeholder 写中文字面量 | 语言切换立刻露馅; 文案一律 `t('key')` 且 zh/en 双份 —— 见 §11 红线 B |
 
 **重灌顺序(错必出偏差)**: `seed step6 → _recalc_own_inventory → _rebuild_own_batches → best_before 回写`。
 
@@ -272,4 +275,40 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - **敢说"我判断错了"并回滚** —— 比硬撑一个错结论有价值
 - UI 改动**先读 `docs/UI_DESIGN.md`**, 改完给截图; 信息结构有疑问时先画结构图再动手
 - 文档数字与描述必须与代码一致; 发现过时描述要主动报告, 而不是照着过时描述干活
+
+---
+
+## 11. 两条代码红线(2026-11-04 用户定案, 与业务口径同级)
+
+> 这两条不是"建议", 是**准入条件**。违反的改动不予提交, 已有代码顺手改到合规。
+
+### 红线 A: 非内联优先, 不造上帝文件
+
+**新增或调整功能时, 新逻辑默认落独立文件**; 页面/路由只做编排与装配。
+
+| 层 | 放在哪 |
+|---|---|
+| 后端 | `routes/<域>.py`(HTTP) / `core/<域>.py`(纯逻辑) / `biz/<域>.py`(业务计算) / `migrations/steps/<域>.py`(迁移步骤) |
+| 前端 | `pages/<页>/<块>.tsx`(页面私有块) / `components/<域>/<块>.tsx`(跨页复用) |
+
+**触发即拆的信号**(任一命中就动手, 别等"下次"):
+
+- 单文件 `.py` > 600 行 / `.tsx` > 500 行;
+- 单函数或单组件 > 80 行, 或需要滚动两屏才能读完;
+- **一个文件里出现第二套职责** —— 声明 + 执行 + 数据修补混在一起(典型: 建表声明里塞 10 段互不相关的数据迁移);
+- 新增代码让某文件的职责需要"和"字才能描述。
+
+**不许为拆而拆**: 5 行的文件、只被引用一次且无独立语义的包装层, 同样算噪音。按**职责**拆, 不按行数拆。
+
+### 红线 B: 界面文案不硬编码中文
+
+**前端所有用户可见文案走 `t('key')`, 新增 key 必须 zh + en 同时补**, 两份字典键集合必须严格相等。
+
+- 覆盖: JSX 文本节点、`title`/`placeholder`/`aria-label`、`alert`/`confirm`、toast、空态、确认框、表格列名;
+- **注释不算文案**, 不受限(本仓库注释一律中文, 这是刻意的);
+- 后端 `error` 字段是**诊断文本**, 允许中文; 但它不能是唯一用户提示 —— 前端展示时用 `t()` 的可读前缀, 或按接口返回的 `code` 本地化;
+- 判据: 改动文件里 `grep -nE "[\u4e00-\u9fa5]"` 的命中, 只应出现在注释与 `locale.ts` 内;
+- 回归: `local_test.py` 的 "i18n 键中英对齐" 用例会拦 zh/en 键集合不一致。
+
+**为什么较真**: 项目已有中英双份字典(173 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
 

@@ -39,7 +39,7 @@ export default function HammerRecycle() {
             className="btn-ghost hammer-btn"
             style={btnWidth}
           >
-            全选/取消
+            {t('inv.batch.toggle_all')}
           </button>
           <button
             onClick={() => dispatch('recycle-restore')}
@@ -47,7 +47,8 @@ export default function HammerRecycle() {
             className="btn-ghost hammer-btn"
             style={btnWidth}
           >
-            批量恢复{totalRestore > 0 ? ` (${totalRestore})` : ''}
+            {t('recycle.bulk_restore')}
+            {totalRestore > 0 ? ` (${totalRestore})` : ''}
           </button>
         </div>
         {/* 第二排: 永久删除 单独一行(不含库存归档) */}
@@ -58,7 +59,8 @@ export default function HammerRecycle() {
             className="btn-ghost hammer-btn"
             style={{ ...btnWidth, color: 'var(--danger)' }}
           >
-            永久删除{totalPurge > 0 ? ` (${totalPurge})` : ''}
+            {t('recycle.purge')}
+            {totalPurge > 0 ? ` (${totalPurge})` : ''}
           </button>
         </div>
       </div>
@@ -70,9 +72,9 @@ export default function HammerRecycle() {
           lineHeight: 1.5,
         }}
       >
-        点击列表行勾选 → 锤子菜单批量操作。永久删除不可撤销。
+        {t('recycle.hammer_hint')}
         {nInv > 0 && <br />}
-        {nInv > 0 && '库存归档只支持恢复，不参与永久删除。'}
+        {nInv > 0 && t('recycle.hammer_hint_inv')}
       </div>
     </div>
   )

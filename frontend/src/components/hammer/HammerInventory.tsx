@@ -133,7 +133,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                 : undefined
             }
           >
-            批量操作
+            {t('inv.batch.open')}
           </button>
         </div>
       </div>
@@ -149,7 +149,9 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
             }}
           >
             <span className="text-12 muted2">
-              已选 <b style={{ color: 'var(--text)' }}>{invSelIds.length}</b> 项
+              {t('inv.batch.selected_pre')}{' '}
+              <b style={{ color: 'var(--text)' }}>{invSelIds.length}</b>{' '}
+              {t('inv.batch.selected_post')}
             </span>
             {invBatch ? (
               <button
@@ -159,14 +161,14 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                   useAppStore.getState().setInvSelIds([])
                 }}
               >
-                退出批量模式
+                {t('inv.batch.exit')}
               </button>
             ) : (
               <button
                 className="hammer-clear"
                 onClick={() => useAppStore.getState().setInvBatch(true)}
               >
-                进入批量模式
+                {t('inv.batch.enter')}
               </button>
             )}
           </div>
@@ -179,7 +181,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                 window.dispatchEvent(new Event('inventory-toggle-all'))
               }}
             >
-              全选/取消
+              {t('inv.batch.toggle_all')}
             </button>
           </div>
           <div className="hammer-btn-row" style={{ marginTop: 8 }}>
@@ -189,7 +191,7 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
               disabled={invSelIds.length === 0}
               onClick={() => setConfirmBatchDel(true)}
             >
-              批量删除
+              {t('inv.batch.delete')}
             </button>
             <button
               className="hammer-btn btn-ghost"
@@ -197,28 +199,24 @@ export default function HammerInventory({ channel }: HammerInventoryProps) {
                 setHammerPanel(null)
                 window.dispatchEvent(new Event('inventory-goto-recycle'))
               }}
-              title="已删除的库存快照在回收站, 可批量恢复"
+              title={t('inv.batch.goto_restore_title')}
             >
-              去恢复 →
+              {t('inv.batch.goto_restore')}
             </button>
           </div>
           <div className="muted2 text-10" style={{ marginTop: 8, lineHeight: 1.6 }}>
-            删除 = 整行进归档快照(保留删除时的数量), 可在回收站恢复。
+            {t('inv.batch.hint_1')}
             <br />
-            恢复时若同业务键(sku×69码×仓)已重新导入, 该条会被拦截。
+            {t('inv.batch.hint_2')}
           </div>
         </div>
       )}
       {confirmBatchDel && (
         <ConfirmDialog
           open
-          title="批量删除库存"
-          desc={
-            '删除 ' +
-            useAppStore.getState().invSelIds.length +
-            ' 条库存?整行会进归档快照, 可在回收站恢复(重新导入同业务键后会被拦截)'
-          }
-          confirmLabel="删除"
+          title={t('inv.batch.confirm_title')}
+          desc={t('inv.batch.confirm_desc', { n: useAppStore.getState().invSelIds.length })}
+          confirmLabel={t('common.delete')}
           onConfirm={() => {
             setConfirmBatchDel(false)
             window.dispatchEvent(new Event('inventory-batch-delete'))

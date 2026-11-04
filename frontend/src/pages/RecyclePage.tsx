@@ -7,6 +7,9 @@ import { t } from '../locale'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
+/** 已选条数后缀(0 条不显示, 避免"已选 0"噪音); 文案走 i18n, 不拼中文字面量 */
+const selSuffix = (n: number) => (n > 0 ? ' ' + t('recycle.selected_suffix', { n }) : '')
+
 /** 回收站页(独立页, App header 显示; 批量操作由锤子菜单 HammerRecycle 触发, 事件联动)
  *
  * 2026-11-04 增补「已删除库存」: 库存删除与订单不同 —— 订单是软删(deleted_at),
@@ -95,7 +98,7 @@ export default function RecyclePage() {
       invIds = Array.from(selected.inventory)
     const n = ruleIds.length + orderIds.length + invIds.length
     if (n === 0) {
-      alert('请先勾选要' + label + '的项')
+      alert(t('recycle.err_nothing_selected', { label }))
       return
     }
     setBatchBusy(true)
@@ -121,12 +124,12 @@ export default function RecyclePage() {
       }
       // 库存: 只有"恢复"一种动作(归档行没有永久删除入口), 走批量接口拿逐条结果
       if (invIds.length) {
-        if (action !== 'restore') throw new Error('库存归档不支持该操作')
+        if (action !== 'restore') throw new Error(t('recycle.err_inv_action'))
         const d = await apiJson('POST', API + '/api/inventory/batch', {
           timeout: 90000,
           data: { action: 'restore', ids: invIds },
         })
-        if (!d.ok) throw new Error(d.error || '恢复失败')
+        if (!d.ok) throw new Error(d.error || t('recycle.err_restore_failed'))
         const _ok = (d.data && d.data.restored) || 0
         const _failed = (d.data && d.data.failed) || []
         if (_failed.length) {
@@ -136,35 +139,34 @@ export default function RecyclePage() {
             .map((f: any) => '· id ' + f.id + ': ' + f.reason)
             .join('\n')
           alert(
-            '库存恢复 ' +
-              _ok +
-              ' 条成功, ' +
-              _failed.length +
-              ' 条被拦截:\n' +
+            t('recycle.inv_restore_partial', { ok: _ok, fail: _failed.length }) +
+              '\n' +
               _head +
-              (_failed.length > 8 ? '\n…还有 ' + (_failed.length - 8) + ' 条' : ''),
+              (_failed.length > 8
+                ? '\n' + t('recycle.inv_restore_more', { n: _failed.length - 8 })
+                : ''),
           )
         }
       }
       loadData()
       syncSel({ rules: new Set(), orders: new Set(), inventory: new Set() })
     } catch (e: any) {
-      alert(label + '失败: ' + e.message)
+      alert(t('recycle.action_failed', { label, msg: e.message }))
     }
     setBatchBusy(false)
   }
   const confirmPurge = () => {
     const n = selected.rules.size + selected.orders.size
     if (n === 0 && selected.inventory.size > 0) {
-      alert('库存归档只能恢复, 不支持永久删除; 请取消勾选库存项')
+      alert(t('recycle.err_inv_restore_only'))
       return
     }
     if (n === 0) {
-      alert('请先勾选要永久删除的项')
+      alert(t('recycle.err_no_selection'))
       return
     }
-    if (window.confirm('永久删除 ' + n + ' 项？此操作不可撤销'))
-      batchAction('permanent-delete', '永久删除')
+    if (window.confirm(t('recycle.confirm_purge', { n })))
+      batchAction('permanent-delete', t('recycle.purge'))
   }
 
   // 锤子菜单事件联动(HammerRecycle dispatch) —— ref 转发+单次绑定(根治 useEffect 重绑双 handler 抵消竞态)
@@ -179,7 +181,7 @@ export default function RecyclePage() {
       toggleAllRef.current()
     }
     const hRestore = () => {
-      batchActionRef.current('restore', '恢复')
+      batchActionRef.current('restore', t('common.restore'))
     }
     const hPurge = () => {
       confirmPurgeRef.current()
@@ -261,23 +263,23 @@ export default function RecyclePage() {
         <>
           <Group title={t('recycle.deleted_rules')}>
             <Row
-              label={`已删除规则 ${selected.rules.size > 0 ? '· 已选 ' + selected.rules.size : ''}`}
-              sub="点击行勾选，批量操作见右上角锤子"
+              label={t('recycle.row_rules') + selSuffix(selected.rules.size)}
+              sub={t('recycle.row_hint')}
             />
             {renderList('rules', rules)}
           </Group>
           <Group title={t('recycle.deleted_orders')}>
             <Row
-              label={`已删除订单 ${selected.orders.size > 0 ? '· 已选 ' + selected.orders.size : ''}`}
-              sub="点击行勾选，批量操作见右上角锤子"
+              label={t('recycle.row_orders') + selSuffix(selected.orders.size)}
+              sub={t('recycle.row_hint')}
             />
             {renderList('orders', orders)}
           </Group>
           {/* 2026-11-04 已删除库存(归档快照): 与订单同款勾选 + 批量, 但只能恢复不能永久删 */}
           <Group title={t('recycle.deleted_inventory')}>
             <Row
-              label={`已删除库存 ${selected.inventory.size > 0 ? '· 已选 ' + selected.inventory.size : ''}`}
-              sub="恢复 = 原样插回删除时的数量；同业务键已重新导入的会被拦截"
+              label={t('recycle.row_inventory') + selSuffix(selected.inventory.size)}
+              sub={t('recycle.row_hint_inv')}
             />
             {renderList('inventory', inventories)}
           </Group>
@@ -290,7 +292,7 @@ export default function RecyclePage() {
                 color: 'var(--muted2)',
               }}
             >
-              处理中...
+              {t('recycle.processing')}
             </div>
           )}
         </>
