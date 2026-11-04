@@ -5441,3 +5441,22 @@ schema 对账 42 表 396 列 13 索引全存在。preflight 7/7。
 - 页面里仍有大量中文字面量(清洗页/建议页/规则页等), 本轮只清了「本轮改动 + 回收站/库存批量面板」;
   红线 B 从今天起对**新代码**生效, 存量靠顺手改;
 - `HammerRecycle` 与 `HammerInventory` 共用 `inv.batch.toggle_all` 一个键, 语义分叉时必须拆。
+
+#### 五、线上验证(部署 d11b551 之后)
+
+`smoke_check.py` 全绿(health JSON + 首页 #root); 线上库 `schema_state.version=5`,
+`schema_migrations` 7 行全 `applied` / `attempts=0` —— 实例冷启动走热路径(版本已一致),
+**零 DDL、零步骤重跑**, 迁移登记时间戳仍是本地试跑那一次。
+
+界面中英双语实测(390×844):
+
+| 位置 | zh | en |
+|---|---|---|
+| 库存批量面板 | 已选 0 项 / 全选/取消 / 批量删除 / 去恢复 → | Selected 0 item(s) / Select / clear / Delete selected / Restore → |
+| 批量删除确认 | 批量删除库存 + "删除 N 条库存?" | Delete inventory rows + "Delete N inventory row(s)?" |
+| 回收站行标签 | 已删除规则 / 订单 / 库存 | Deleted rules / orders / inventory |
+| 回收站行提示 | 点击行勾选，批量操作见右上角锤子 | Tap a row to select; bulk actions are in the hammer menu |
+
+**仍未英文化的**: 顶部渠道胶囊「京东渠道 / 其他渠道」—— 来自数据库 `channels.name`
+(数据, 不是界面文案), 换语言不会变。这是**数据本地化的独立问题**, 不在红线 B 范围内:
+红线 B 管的是"代码里写死的中文", 不管"库里存的中文"。
