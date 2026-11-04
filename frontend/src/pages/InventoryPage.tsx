@@ -394,6 +394,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         >
           <table>
             <colgroup>
+              {/* 勾选列必须占一个 col: 加了 th 却不加 col, colgroup 列数与实际列数不匹配, 整段会被浏览器忽略 */}
+              {invBatch && <col style={{ width: 32 }} />}
               {visCols.map(id => {
                 const col = INV_COLS[whType].find(c => c.id === id)
                 return col ? <col key={col.id} /> : null
@@ -401,7 +403,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
             </colgroup>
             <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 1 }}>
               <tr>
-                {invBatch && <th style={{ width: 32 }} />}
+                {/* 全局 th{min-width:72px} 会把 32px 撑回 72px, 必须显式 minWidth:0 才真正收窄 */}
+                {invBatch && <th style={{ width: 32, minWidth: 0 }} />}
                 {visCols.map(id => {
                   const col = INV_COLS[whType].find(c => c.id === id)
                   if (!col) return null
@@ -1019,7 +1022,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                   ? [
                       <td
                         key="__sel"
-                        style={{ width: 32, textAlign: 'center' }}
+                        // minWidth:0 抵 th 的全局下限; padding 左右归零, 否则 20px 图标 + 16px 内边距 = 36px
+                        style={{ width: 32, minWidth: 0, padding: '4px 0', textAlign: 'center' }}
                         onClick={e => e.stopPropagation()}
                       >
                         <span

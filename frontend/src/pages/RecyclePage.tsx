@@ -205,7 +205,7 @@ export default function RecyclePage() {
               ? t('recycle.empty_rules')
               : type === 'orders'
                 ? t('recycle.empty_orders')
-                : '没有已删除的库存'
+                : t('recycle.empty_inventory')
           }
         />
       )
@@ -274,7 +274,7 @@ export default function RecyclePage() {
             {renderList('orders', orders)}
           </Group>
           {/* 2026-11-04 已删除库存(归档快照): 与订单同款勾选 + 批量, 但只能恢复不能永久删 */}
-          <Group title="已删除库存（归档快照）">
+          <Group title={t('recycle.deleted_inventory')}>
             <Row
               label={`已删除库存 ${selected.inventory.size > 0 ? '· 已选 ' + selected.inventory.size : ''}`}
               sub="恢复 = 原样插回删除时的数量；同业务键已重新导入的会被拦截"
