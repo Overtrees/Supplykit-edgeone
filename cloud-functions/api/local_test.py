@@ -459,7 +459,10 @@ from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa:
 
 _SH = _tz(_td(hours=8))
 _arch = _WINDOWS.get("archive")
-check("cron 窗口: 覆盖 8 个重任务", len(_WINDOWS) == 8, str(sorted(_WINDOWS)))
+check("cron 窗口: 覆盖 9 个重任务(含 2026-11-04 账期结账)", len(_WINDOWS) == 9,
+      str(sorted(_WINDOWS)))
+check("cron 窗口: ledger_close = 00:30-03:00 CST(每月 1 号结上月)",
+      _WINDOWS.get("ledger_close") == (0, 30, 3, 0), str(_WINDOWS.get("ledger_close")))
 check("cron 窗口: archive = 00:30-04:00 CST", _arch == (0, 30, 4, 0), str(_arch))
 check("cron 窗口: ping/continue_tasks 不设窗(续跑靠请求驱动直接调用)",
       _off_window("ping") is None and _off_window("continue_tasks") is None, "不应被挡")
@@ -2686,6 +2689,61 @@ try:
     check("api_unhandled 已收口到 dev 维度", "api_unhandled" in _SCOPE["dev"])
 except Exception as _e24:
     check("日志收口用例无异常", False, str(_e24)[:200])
+
+# ── 账期(月结)纯函数: 期初结转/未满月天数/批次期初带日期(2026-11-04) ──
+try:
+    from core.ledger import (period_of, shift_period, period_bounds, period_days,
+                             elapsed_days, is_current, _days_between)
+    check("账期: shift_period 跨年正确", shift_period("2026-01", -1) == "2025-12"
+          and shift_period("2026-12", 1) == "2027-01", shift_period("2026-01", -1))
+    check("账期: 非法账期返回空(不猜)", shift_period("2026-13-", 0) == ""
+          or shift_period("bad", 0) == "", "应返回空串")
+    check("账期: period_bounds 取真实月末(2 月 28/29)",
+          period_bounds("2026-02")[1] == "2026-02-28"
+          and period_bounds("2024-02")[1] == "2024-02-29"
+          and period_bounds("2026-11")[1] == "2026-11-30", str(period_bounds("2024-02")))
+    check("账期: period_days = 28/29/30/31", period_days("2026-11") == 30
+          and period_days("2026-12") == 31 and period_days("2026-02") == 28,
+          str(period_days("2026-11")))
+    _cur = period_of()
+    from core.clock import now_cn as _nowcn
+    check("账期: 当月 elapsed = 今天几号(未满月折算的分母)",
+          elapsed_days(_cur) == _nowcn().day, "%s vs %s" % (elapsed_days(_cur), _nowcn().day))
+    check("账期: 已过去的月份 elapsed = 整月天数",
+          elapsed_days(shift_period(_cur, -1)) == period_days(shift_period(_cur, -1)),
+          str(elapsed_days(shift_period(_cur, -1))))
+    check("账期: 未来月份 elapsed = 0", elapsed_days(shift_period(_cur, 1)) == 0)
+    check("账期: 未满月判定 is_current 只对当月为真",
+          is_current(_cur) and not is_current(shift_period(_cur, -1)))
+    check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
+          _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
+    # 批次月初余额必须带日期: 少了它, 上月批次到本月退化成无日期期初批次, 指定批次出库失效
+    _cw = open("routes/cleanse_write.py").read()
+    check("账期: 批次池期初读 batch_opening(带日期), 不是只读 beginning_stock",
+          "batch_opening" in _cw and "_open_map" in _cw, "routes/cleanse_write.py")
+    check("账期: 库存重算的 Σ 流水有账期下界(不再是全期累加成双算)",
+          "inbound_date >= '" in _cw and "outbound_date >= '" in _cw, "routes/cleanse_write.py")
+    check("账期: 重算不再把负可用归零(负库存要暴露)",
+          "upd.append((max(0," not in _cw, "routes/cleanse_write.py")
+    # 调度落点: schedules 上限 10 条已占满(edgeone.json 现为 10 条), 加第 11 条会丢路由,
+    #   所以月结**搭在 cleanup-logs 那条凌晨调度上**。这条断言防的是重构时把这句静默挪走 ——
+    #   挪走不会报错, 只会让账期永远不结, 属于最难发现的一类回归。
+    _cr = open("routes/cron.py").read()
+    check("账期: 月结挂在 cleanup-logs 调度内(不新增第 11 条 schedule)",
+          "run_ledger_close()" in _cr.split("async def cron_cleanup_logs")[1].split("async def")[0],
+          "routes/cron.py / cron_cleanup_logs")
+    check("账期: 月结调用在 _claim 之前(日志已清理也要照常结账)",
+          ("_led = run_ledger_close()" in _cr.split("async def cron_cleanup_logs")[1]
+           .split("_claim(")[0]), "routes/cron.py")
+    check("账期: 只对有自有仓库存的渠道结账(避免平台仓白写 blocked)",
+          "def _own_channels" in _cr and "_own_channels(channels)" in _cr, "routes/cron.py")
+    check("账期: 结账后不重建批次(省 10~20s, 批次池已由 batch_opening 固化)",
+          "结账后只刷库存" in _cr, "routes/cron.py")
+    check("账期: edgeone.json 的 schedules 未超 10 条上限",
+          len(json.load(open("../../edgeone.json")).get("schedules") or []) <= 10,
+          str(len(json.load(open("../../edgeone.json")).get("schedules") or [])))
+except Exception as _e25:
+    check("账期用例无异常", False, str(_e25)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

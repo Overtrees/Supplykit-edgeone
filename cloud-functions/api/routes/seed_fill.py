@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from db import query, one, execute, executemany
+from core.clock import now_cn
 
 BRANDS_FOOD = ['禾味', '山泉', '椒香', '酱乡', '醋乡', '味源', '禾田', '青禾', '禾风',
                '谷香', '醇味', '鲜禾', '禾记']
@@ -300,10 +301,15 @@ def _seed_inventory(skus_data):
                     q = random.randint(0, 8)
                 else:
                     q = random.randint(50, 800)
-                # 2026-11-01: 自有仓给真实期初(此前恒 0, 导致"期初扣减"路径永远测不到)
-                #   期初 = 当前量的 20%~40%, 剩余部分由 入库−出库 解释; 批次重建时
-                #   期初批次排 FEFO 队首并参与扣减, Σ批次 仍恒等于可用。
-                beg = int(q * random.uniform(0.20, 0.40)) if wt == 'own' else 0
+                # 2026-11-04 真实场景(用户定案): 期初 = **月初结存**, 量级应与当前可用接近 ——
+                #   当月才过几天, 库存不会凭空变成 3 倍。原 20%~40% 让"期初 2 件、当月出 68 件"
+                #   这种自相矛盾的行占到 15%(负库存), 不符合任何真实公司。
+                #   低库存行按 q 折得更低(缺货本色), 但至少 1 件 —— 0 期初 + 0 入库 = 永远发不出货
+                if wt == 'own':
+                    _beg_r = random.uniform(0.60, 1.00) if low else random.uniform(0.75, 1.05)
+                    beg = max(1, int(q * _beg_r))
+                else:
+                    beg = 0
                 # 2026-11-01 多码: own 仓按 65/35 拆成两行(同 SKU 同仓两个 69码)
                 #   inventory 本就按 (sku,barcode,warehouse,warehouse_type) 拆行 —— 拆行不是新概念,
                 #   是让"同 SKU 多码"这一真实形态在 seed 里存在, 否则按码聚合的修复无从验证。
@@ -351,7 +357,7 @@ def _seed_batches():
         execute("DELETE FROM batches WHERE channel IN ('jd','other')")
     except Exception as _e0:
         try_err('seed_fill', '批次清空失败(继续插入可能翻倍)', _e0)
-    today = _dt.now(timezone.utc)
+    today = now_cn()
     rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 平台仓批次按 sku×仓
                  "WHERE available_qty > 0 AND warehouse_type NOT IN ('own')")
     _pcat = {}
@@ -440,7 +446,7 @@ def _seed_batches():
 
 def _seed_records():
     """当月出入库记录(进销存页展示): 按批次池随机, INSERT IGNORE 防唯一冲突"""
-    today = datetime.now(timezone.utc)
+    today = now_cn()
     # 2026-10-29 幂等: 先清空该渠道旧出入库记录(原纯 INSERT → 重复执行翻倍,
     #   实测 8061 条入库中 4029 组同 SKU+日期+仓 重复)
     try:
@@ -459,10 +465,14 @@ def _seed_records():
     #   批次重建的精确扣减全部落空, 只能靠"缩进 bug 少算"让总量看似接近。
     #   现: 每个 (SKU, 渠道, 仓) 先定 1~3 个批次(prod/exp), 入库按批次落笔,
     #   出库只从"该批次剩余量"里取 → Σ批次 = 期初 + Σ入 − Σ出 恒成立, 且不会卖超。
-    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, channel FROM inventory "
+    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, channel, "
+                   "COALESCE(beginning_stock,0) AS beg FROM inventory "
                    "WHERE warehouse_type='own' AND warehouse!=''"):
         _batch_pool.setdefault((str(r.get('sku') or ''), str(r.get('channel') or 'jd')), []).append(
-            {'wh': str(r.get('warehouse') or ''), 'bc': str(r.get('bc') or '')})
+            {'wh': str(r.get('warehouse') or ''), 'bc': str(r.get('bc') or ''),
+             # 2026-11-04 期初参与出库约束: 真实场景「当月出库 ≤ 月初结存 + 当月入库」,
+             #   原实现只按批次剩余量限制(全期口径) → 当月出库能超过期初, 出现期初 2 件出 68 件
+             'beg': int(r.get('beg') or 0)})
     _pcat = {}
     for r in query("SELECT sku, category, channel FROM products"):
         _pcat[(str(r.get('sku') or ''), str(r.get('channel') or 'jd'))] = str(r.get('category') or '')
@@ -471,6 +481,18 @@ def _seed_records():
             "SELECT DISTINCT sku FROM inventory WHERE warehouse_type='own'")}):
         if _s and random.random() < 0.04:   # 4% 问题批次(过期/临期), 供效期预警演示
             _prob.add(_s)
+    # 2026-11-04 滞销判定改按**真实订单量**, 不再依赖内存里的 _DEMO_SLOW:
+    #   那两个集合由 _seed_orders_range 填充(step2/3), 而 /seed/step 单跑 step6 时是空集
+    #   → 滞销 SKU 会被当成正常动销(流水入库 500 出库 450), 与"90 天没几单"的订单自相矛盾。
+    #   订单量 ≤ 15 件/90天 = 滞销或低动销, 出库流水也该几乎不动。
+    _slow_db = set(_DEMO_SLOW)
+    try:
+        _slow_db |= {str(r.get('sku') or '') for r in query(
+            "SELECT sku FROM orders WHERE data_source='seed' "
+            "AND (deleted_at IS NULL OR deleted_at='') "
+            "GROUP BY sku HAVING SUM(quantity) <= 15")}
+    except Exception as _esl:
+        try_err('seed_fill', '滞销判定降级(用内存标记)', _esl)
     _food_kw = ['酱油', '酱', '醋', '油', '酒', '糖', '蜂', '咖', '粉',
                 '薯', '坚果', '饼干', '巧克力', '糖果', '麻辣', '椒']
     in_rows, out_rows = [], []
@@ -487,7 +509,12 @@ def _seed_records():
             continue  # 无自有仓库存行 → 不造 warehouse='' 的脏流水
         # 90 天窗口: 原 max(today.day-1, 6) 让流水全挤在当月 → 周转/库龄/环比全部失真
         max_days = 90
+        _mtd_days = max(1, today.day)   # 当月已过天数: 日期偏移 < 该值即落在本月
         for _whm in _pool:
+            # 2026-11-04 当月额度(逐库存行): 期初 + 当月已入 − 当月已出
+            #   出库生成时用它做上限, 保证「当月出库 ≤ 可售」, 负库存只留 1% 超卖样本
+            _beg = _whm['beg']
+            _mtd_in, _mtd_out = 0, 0
             _cat = _pcat.get(_ck, '')
             _shelf = (random.randint(150, 270) if any(k in _cat for k in _food_kw)
                       else random.randint(200, 365))
@@ -517,6 +544,8 @@ def _seed_records():
                 _db = random.randint(0, min(max_days, _b['ago']))
                 _b['left'] = _qty
                 _b['day'] = _db
+                if _db < _mtd_days:             # 当月入库 → 计入当月可售额度
+                    _mtd_in += _qty
                 in_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
                                 'supplier': '供应商-%s' % str(sku or '')[-3:],
                                 'inbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
@@ -527,12 +556,30 @@ def _seed_records():
                                 # 不做效期管理 → 不落批次日期(重建走 FIFO, 不产生批次告警)
                                 'prod_date': '' if _em == 'no' else _b['pd'],
                                 'exp_date': '' if _em == 'no' else _b['ed']})
-            # 出库: 先定目标出库率(55%~70%), 再按 2~4 笔分摊到批次;
+            # 出库: 先按场景定出库率, 再按 4~8 笔分摊到批次;
             # 单笔上限 80%(原 60%×最多2笔 → 出库率仅 12%, 库存虚高、补货建议失真)
             _total_in = sum(b['left'] for b in plan)
-            _target = int(round(_total_in * random.uniform(0.55, 0.70)))
-            _n_out = random.randint(2, 4)
-            for _k in range(_n_out + 6):        # 允许补笔: 单批 80% 上限会挡住均分, 剩余量继续摊
+            # 2026-11-04 出库率按场景(用户定案: 低库存/滞销/日常表现都要保留):
+            #   · 滞销(3% SKU): 几乎不动销, 出库率 2%~10% → 页面"未出库/高库龄"
+            #   · 低库存: 到货即卖光, 96%~100% → 可用贴着 0, 补货频繁
+            #   · 日常销售: 80%~95%, 进销接近平衡 → 期末≈期初≈可用(库存平稳, 真实公司形态)
+            #   原一律 55%~70% 会让 90 天净流入 300+, 期初与可用差出数倍, 月底一对账就穿帮
+            if str(sku) in _slow_db:
+                _out_rate = random.uniform(0.02, 0.10)
+            elif _beg <= 10:
+                _out_rate = random.uniform(0.96, 1.00)
+            else:
+                _out_rate = random.uniform(0.80, 0.95)
+            _target = int(round(_total_in * _out_rate))
+            # 2026-11-04 真实场景调整(用户定案):
+            #   · 日常销售节奏: 出库笔数 3~6, 前 2 笔强制落在近 3 天 → 当月有出库,
+            #     不再出现"60% 的 SKU 当月一笔没出"(那不是缺货, 是流水撒得太稀)
+            #   · 不卖超: 当月出库 ≤ (期初 + 当月入库) × 95%, 超出部分顺延到上月
+            #     → 期末为负从 15% 降到 ~1%(保留极少数超卖样本, 让"负库存异常"标记仍可验证)
+            _n_out = random.randint(4, 8)
+            _cap_mtd = _beg + _mtd_in        # 当月可售上限
+            _oversell = random.random() < 0.01
+            for _k in range(_n_out + 12):        # 允许补笔: 单批 80% 上限会挡住均分, 剩余量继续摊
                 if _target <= 0:
                     break
                 _avail = [b for b in plan if b['left'] > 0]
@@ -541,12 +588,25 @@ def _seed_records():
                 _b = random.choice(_avail)
                 # 出库不早于该批入库(入库又 ≥ 生产日), 整条因果链闭合
                 _db = random.randint(0, min(_b['day'], max_days))
+                if _k < 2 and _b['day'] >= 2:   # 前两笔: 近 3 天(日常销售)
+                    _db = random.randint(0, min(2, _b['day']))
                 _quota = max(1, _target // max(1, _n_out - min(_k, _n_out - 1)))
                 _qty = min(_quota, max(1, int(_b['left'] * 0.8)), _target)
+                if _db < _mtd_days and not _oversell:
+                    _room = int((_cap_mtd - _mtd_out) * 0.95)
+                    if _room <= 0:
+                        if _b['day'] > _mtd_days:
+                            _db = random.randint(_mtd_days, _b['day'])   # 顺延到上月
+                        else:
+                            break          # 当月无额度, 且这批也是当月货 → 本月不再出
+                    else:
+                        _qty = min(_qty, _room)
                 if _qty <= 0:
                     break
                 _b['left'] -= _qty
                 _target -= _qty
+                if _db < _mtd_days:
+                    _mtd_out += _qty
                 out_rows.append({'sku': sku, 'product_name': sk_name, 'quantity': _qty,
                                  'target_warehouse': 'B仓',
                                  'outbound_date': (today - timedelta(days=_db)).strftime('%Y-%m-%d ') + _rand_hm(),
@@ -580,7 +640,7 @@ def _sync_inv_month():
     说明: 流水仓型为空串时匹配不到 inventory(不会写错值, 也不会兜底猜), 表现为月汇总
       不更新 —— 由 /api/seed/step 的前后对账把偏差显性暴露出来。
     """
-    month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
+    month_start = now_cn().strftime('%Y-%m-01')
     _stat = {}
     # 2026-11-01 清零(跨月必需): 原实现只 UPDATE「有流水聚合组的行」, 当月无流水的行会
     #   停留在上个月的月汇总值。实测 11-01: inventory.month_inbound 合计 98,725 vs 流水
@@ -776,7 +836,7 @@ def _seed_alerts():
 
 def _build_snapshot():
     """日销快照: 从订单聚合最近 90 天(幂等 upsert)"""
-    start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime('%Y-%m-%d')
+    start = (now_cn() - timedelta(days=90)).strftime('%Y-%m-%d')
     # 2026-10-29 按 69码: 快照主键含 barcode, 写入必须带码(否则按码日销全空)
     execute(
         "INSERT INTO daily_sales_snapshot(date, channel, sku, barcode, warehouse, order_count) "
@@ -887,7 +947,7 @@ def run_seed_fill():
     """完整填充(PA 原版逻辑移植); 返回 summary dict"""
     started = time.time()
     random.seed(42)
-    today = datetime.now(timezone.utc)
+    today = now_cn()
     jd_s = _make_skus('-J', 1000)
     ot_s = _make_skus('-O', 1000)
     skus_data = {'jd': jd_s, 'other': ot_s}

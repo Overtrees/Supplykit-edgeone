@@ -7,6 +7,7 @@ import { clearCache, clearInflight } from '../api/client'
 import { Group, Row, LastRow } from '../components/ListGroup'
 import LogFileList from '../components/LogFileList'
 import { t } from '../locale'
+import { todayCn } from '../utils/date'
 
 const VERSION =
   typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '2.0.0'
@@ -102,7 +103,7 @@ export default function DevModePage() {
     api
       .get<QualityLogRow[]>('/api/quality-logs?scope=dev&limit=200')
       .then(r => {
-        const _today = new Date().toISOString().slice(0, 10)
+        const _today = todayCn()
         const _n = (r.data || []).filter(
           x => String(x.created_at || '').slice(0, 10) === _today,
         ).length

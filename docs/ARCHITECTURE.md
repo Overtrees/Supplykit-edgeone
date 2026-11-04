@@ -140,7 +140,8 @@ git push edgeone feat/edgeone
 # 构建状态查询 + 部署后冒烟 /api/health（部署确认/细粒度指纹方法见 docs/DEVELOPMENT）
 ```
 
-> **定时任务**：cron 11 个端点中 10 个由 edgeone.json schedules 调度（最小间隔一天）；每日规则评估/快照/归档/清理。
+> **定时任务**：cron 11 个端点中 10 个由 edgeone.json schedules 调度（**maxItems 上限 10，已占满**，最小间隔一天）；
+> 第 11 个（账期月结 `/cron/ledger-close`）嵌入 `cleanup-logs` 调用，不新增调度条数。详见 `docs/decisions/0002-账期月结.md`。
 > **自愈**：index.py 启动幂等（补索引/补列/内置规则补种与退役）；cron freshness 守护快照。
 
 ---

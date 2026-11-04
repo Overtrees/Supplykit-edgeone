@@ -11,6 +11,7 @@ from routes.common import ok, fail, traced, try_err
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8
 from core.note_segs import zh_note  # 2026-11-04 结构化备注: segs 单一真源, note=zh_note(segs)
+from core.clock import now_cn
 
 
 # 内置默认滞销品类线(2026-10-25 抽取公共共享——get_slow_cats 接口与 disposal 计算同源, 防两处漂移)
@@ -317,7 +318,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     from routes.common import ch_supports_b as _csb2
     _ch_b = _csb2(channel)   # 该渠道是否走 BBCC(B 仓调拨链)
     from biz.sales import calc_sales_multi, load_daily_sales_grouped
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = now_cn().replace(tzinfo=None)
 
     def _cfg_number(key, default):
         row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
@@ -447,7 +448,12 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         if _ldbc is None:
             _ldbc = last_order.get(sku, "") if (_bc and sku not in _sku_has_bc) else ""
         ld = _ldbc or ""
-        days_zero = 999 if not ld else max((now - datetime.strptime(ld, "%Y-%m-%d")).days, 0)
+        # 2026-11-04 去兜底: 从未销售 → days_zero = None(前端显示「从未销售」), 不再用 999 冒充;
+        #   末销日期在未来(数据错) → 如实给负数, 不夹 0。
+        days_zero = None if not ld else (now - datetime.strptime(ld, "%Y-%m-%d")).days
+        # 阈值/排序比较键: 从未销售 = 最滞销(仅内部用, 不写进返回值/不展示)
+        _dz = float("inf") if days_zero is None else days_zero
+        _dzs = "从未销售" if days_zero is None else "%d天未销售" % days_zero
         _kbc = "%s|%s" % (sku, _bc)
         if _kbc in daily_bc:
             daily = float(daily_bc[_kbc] or 0)
@@ -455,7 +461,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             daily = float(daily_map.get(sku, 0) or 0)   # 整体未归码 → 降级
         else:
             daily = 0.0
-        turnover = round(avail / daily, 1) if daily > 0 else 999.0
+        # 2026-11-04 去兜底: 无销量 → 周转 None(前端显示「—」), 不再返回 999.0 假天数
+        turnover = round(avail / daily, 1) if daily > 0 else None
         fund = round(avail * float(p.get("price") or 0), 0)
         reason, level, b_storage = [], None, None
         # ① 临期风险(black 紧急)
@@ -489,14 +496,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                 observe_days = max(slow_days // 2, 15)
         except Exception:
             observe_days = max(slow_days // 2, 15)
-        if days_zero >= slow_days:
+        if _dz >= slow_days:
             if level is None:
                 level = "yellow"
-            reason.append("%s: %d天未销售(超%d天线)" % (cat_name, days_zero, slow_days))
-        elif days_zero >= observe_days:
+            reason.append("%s: %s(超%d天线)" % (cat_name, _dzs, slow_days))
+        elif _dz >= observe_days:
             if level is None:
                 level = "observe"
-            reason.append("%s: %d天未销售(接近%d天线, 建议观察)" % (cat_name, days_zero, slow_days))
+            reason.append("%s: %s(接近%d天线, 建议观察)" % (cat_name, _dzs, slow_days))
         else:
             if level is None and b_storage:
                 level = "yellow"
@@ -522,7 +529,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             "disposed_action": disposed.get((sku, _bc, wh)) or disposed.get((sku, wh), ""),
         })
     items.sort(key=lambda x: ({"black": 0, "red": 1, "yellow": 2, "observe": 3}.get(x["level"], 9),
-                               -x["days_zero"]))
+                               -(x["days_zero"] if x["days_zero"] is not None else 1e9)))
     if search:
         sq = search.lower()
         items = [x for x in items if sq in str(x.get("sku", "")).lower()

@@ -31,6 +31,7 @@ import { create } from 'zustand'
 import { api, clearCache, clearInflight, freshStamp } from '../api/client'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
+import { daysAgoCn, todayCn } from '../utils/date'
 
 /**
  * 全局操作态(2026-11-03)
@@ -176,13 +177,11 @@ const initAppStore = (set, get) => ({
     const _c = safeGet('c_channel') || 'jd'
     const _s = safeGet('c_hist_start_' + _c) || ''
     if (_s) return _s
-    const d = new Date()
-    d.setUTCDate(d.getUTCDate() - 29)
-    return d.toISOString().slice(0, 10)
+    return daysAgoCn(29)   // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
   })(),
   histEnd: (() => {
     const _c = safeGet('c_channel') || 'jd'
-    return safeGet('c_hist_end_' + _c) || new Date().toISOString().slice(0, 10)
+    return safeGet('c_hist_end_' + _c) || todayCn()
   })(),
   histBy: (safeGet('c_hist_by_' + (safeGet('c_channel') || 'jd')) as 'day' | 'month') || 'day',
   histShowCustom: false,
@@ -194,10 +193,8 @@ const initAppStore = (set, get) => ({
     let start = get().histStart
     let end = get().histEnd
     if (days > 0) {
-      const d = new Date()
-      d.setUTCDate(d.getUTCDate() - (days - 1))
-      start = d.toISOString().slice(0, 10)
-      end = new Date().toISOString().slice(0, 10)
+      start = daysAgoCn(days - 1)
+      end = todayCn()
     }
     try {
       localStorage.setItem('c_hist_preset_' + ch, p)
@@ -387,11 +384,9 @@ const initAppStore = (set, get) => ({
       histStart: (() => {
         const _s = safeGet('c_hist_start_' + ch) || ''
         if (_s) return _s
-        const d = new Date()
-        d.setUTCDate(d.getUTCDate() - 29)
-        return d.toISOString().slice(0, 10)
+        return daysAgoCn(29)   // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
       })(),
-      histEnd: safeGet('c_hist_end_' + ch) || new Date().toISOString().slice(0, 10),
+      histEnd: safeGet('c_hist_end_' + ch) || todayCn(),
       histBy: (safeGet('c_hist_by_' + ch) as 'day' | 'month') || 'day',
       histShowCustom: false,
       prodBatch: false,

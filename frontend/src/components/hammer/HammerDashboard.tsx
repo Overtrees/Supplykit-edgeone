@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { IconClipboard } from '../Icons'
 import { t } from '../../locale'
+import { daysAgoCn, todayCn } from '../../utils/date'
 export default function HammerDashboard({ channel }) {
   const {
     hammerDashPeriod,
@@ -23,12 +24,10 @@ export default function HammerDashboard({ channel }) {
   const [endVal, setEndVal] = useState(customDateEnd || '')
 
   if (!startVal) {
-    const d = new Date()
-    d.setDate(d.getDate() - 29)
-    setStartVal(d.toISOString().slice(0, 10))
+    setStartVal(daysAgoCn(29))   // 北京时间近 30 天
   }
   if (!endVal) {
-    setEndVal(new Date().toISOString().slice(0, 10))
+    setEndVal(todayCn())
   }
 
   return (

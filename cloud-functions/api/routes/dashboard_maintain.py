@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from db import query, one, execute
 from routes.common import try_err, status_cond as _status_cond, SALES_SQL as _SALES_SQL
+from core.clock import now_cn
 
 # 窗口完整性检测限频(每渠道 60s——多 miss 合并, 不拖每请求)
 _WINDOW_LAST = {}
@@ -18,7 +19,7 @@ def _rebuild_day_agg(days=90, channel=None):
     不在全窗口 DELETE(大事务持锁 → 并发 FOR UPDATE 9004 锁超时, 实测 summary 86s)
     返回 bool(成功/失败)——调用方据此置/清 agg_dirty 脏标记(封死重建失败边界)"""
     try:
-        _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        _start = (now_cn() - timedelta(days=days)).strftime("%Y-%m-%d")
         _chw = " AND channel=%s" if channel else ""
         _chp = [channel] if channel else []
         _sql = ("INSERT INTO orders_day_agg(`date`, channel, order_status, store, gmv, subsidy, cnt) "
@@ -97,7 +98,7 @@ def _snapshot_step(channel, _db2):
     """
     try:
         from datetime import timedelta as _td
-        _now = datetime.now(timezone.utc)
+        _now = now_cn()
         _cur = one("SELECT MAX(`date`) AS m FROM daily_sales_snapshot WHERE channel=%s", [channel]) or {}
         _cur_d = str(_cur.get("m") or "")[:10]
         _frm = datetime.strptime(_cur_d, "%Y-%m-%d") + _td(days=1) if _cur_d else (datetime.strptime(_db2, "%Y-%m-%d") - _td(days=90))
@@ -161,7 +162,7 @@ def _snapshot_reconcile(channel, days=90, limit_days=10):
     """
     try:
         from routes.common import SALES_SQL as _SQL
-        _start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        _start = (now_cn() - timedelta(days=days)).strftime("%Y-%m-%d")
         _snap = {str(r.get("d"))[:10]: (int(r.get("c") or 0), int(r.get("q") or 0))
                  for r in query("SELECT `date` AS d, COUNT(*) AS c, SUM(order_count) AS q "
                                 "FROM daily_sales_snapshot WHERE channel=%s AND `date`>=%s "
@@ -212,7 +213,7 @@ def _track_data(channel, _db2):
         # 限频 60s(模块级时间戳, 每 miss 的 2 COUNT 查询不拖请求——检测轻量低频即可)
         try:
             global _WINDOW_LAST
-            _now = datetime.now(timezone.utc)
+            _now = now_cn()
             if _WINDOW_LAST.get(channel) and (_now - _WINDOW_LAST[channel]).total_seconds() < 60:
                 pass  # 窗口内已检测(上次 miss 做过), 跳过
             else:
@@ -256,7 +257,7 @@ def _track_data(channel, _db2):
         # maintenance_log 抢占(与 cron freshness 同法) → 一天只跑一次; 后台线程执行, 不拖慢 summary
         try:
             _rc = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,'reconcile')",
-                          [datetime.now(timezone.utc).strftime("%Y-%m-%d")])
+                          [now_cn().strftime("%Y-%m-%d")])
             if _rc:
                 import threading as _th
                 def _rc_run():

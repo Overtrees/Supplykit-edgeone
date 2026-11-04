@@ -172,6 +172,7 @@ export const zh: Record<string, string> = {
 
   // ---- 洞察三面板 ----
   'ins.days_n': '{n}天',
+  'ins.never_sold': '从未销售',
   'ins.loading': '加载中...',
   'ins.load_more': '加载更多',
   'ins.load_failed': '加载失败',
@@ -407,6 +408,15 @@ export const zh: Record<string, string> = {
   'common.end_date': '结束',
   'inv.own': '自有仓',
   'inv.platform': '平台仓',
+  // 周转 = 当月自然月天数 × (期初 + 当月入库) ÷ 当月出库; 期初取导入值、不反推
+  // 当月出库为 0 时公式无解 → 显示「未出库」(绝不渲染 ∞)
+  'inv.turnover_na': '未出库',
+  'inv.month_open': '月内累计',
+  'inv.negative_stock': '负库存异常',
+  'inv.end_stock_hint': '期末库存 = 期初 + 当月入库 − 当月出库；为负说明出库超过可售量',
+  'inv.avg_stock_hint': '平均库存 =(期初 + 期末)÷2，周转天数的分子',
+  'inv.turnover_hint': '在库周转 = 平均库存 × 天数 ÷ 当月出库；平均库存 =(期初 + 期末)÷2，期末 = 期初 + 当月入库 - 当月出库。当月未满时"天数"取已过天数（与出库同一时间窗），月末取整月天数',
+  'inv.total_turnover_hint': '仓周转 = 总平均库存 × 当月天数 ÷ 总出库；总平均库存 =(总期初 + 总期末)÷2',
   'recycle.title': '回收站',
   'recycle.deleted_rules': '已删除的规则',
   'recycle.deleted_orders': '已删除的订单',
@@ -514,6 +524,7 @@ export const zh: Record<string, string> = {
   'error.component_render': '组件渲染错误',
   'dash.no_alerts': '暂无告警',
   'dash.min_days': '最短',
+  'dash.no_sales': '无销量',
   'dash.days_out': '天断货',
   'dash.critical': '紧急',
   'dash.warning': '预警',
@@ -606,6 +617,8 @@ export const zh: Record<string, string> = {
   'col.begin': '期初库存',
   'col.month_in': '当月采购入库',
   'col.month_out': '当月出库',
+  'col.end_stock': '期末库存',
+  'col.avg_stock': '平均库存',
   'col.batch_days': '总效期/天',
   'col.eff_status': '效期状态',
   'col.over_third': '超1/3',
@@ -656,7 +669,9 @@ export const zh: Record<string, string> = {
   'col.quantity': '数量',
   'col.unit_price': '单价',
   'col.amount': '金额',
-  'col.paid_at': '支付时间',
+  // paid_at 语义 = 入库日期(导入别名 入库日期/入库时间/实际入库日期 均映射到此字段,
+  // 见 pages/cleansing/fields.ts), 与"付款时间"是两个不同口径 —— 不要写成支付时间。
+  'col.paid_at': '入库日期',
   'col.transit': '在途',
   'col.c_transit': 'C仓在途',
   'col.prod_date': '生产日期',

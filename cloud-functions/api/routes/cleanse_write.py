@@ -4,6 +4,7 @@
 """
 from datetime import datetime, timezone
 import json
+import re
 
 from db import query, one, execute, executemany
 from routes.common import try_err, TARGET_WH as _TARGET_WH
@@ -281,7 +282,18 @@ def _rebuild_own_batches(channel, skus):
     只处理 own 维度; 平台/B 仓批次由库存导入提供。
     """
     from db import query as _q, execute as _e, executemany as _em
+    from core.ledger import (begin_date as _ledger_begin, current_period as _cur_period)
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
+    # 2026-11-04 账期改造: 批次池 = **月初余额(带日期)** + 本账期入库, 出库也只扣本账期
+    #   不这么切, 上月批次到本月就退化成"无日期期初批次" → 指定批次出库全部命中不了、
+    #   只能降级 FIFO, 用户"以导入指定批次为准"的口径当场失效。
+    _bd = _ledger_begin(channel)
+    if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
+        _bd = ""
+    _is_ledger = bool(_bd)                       # True = 已结过账, 期初来自 batch_opening
+    _cur_p = _cur_period(channel) if _is_ledger else ""
+    _d_in = " AND inbound_date >= '%s' " % _bd if _bd else " "
+    _d_out = " AND outbound_date >= '%s' " % _bd if _bd else " "
     done = 0
     _miss = []          # 未填批次的出库量 [(sku, 仓, qty)] —— 已按 FEFO 扣, 仅告警
     _miss_exact = []    # 填了批次但该批次无对应入库 [(sku, 仓, [(pd,ed)], qty)] —— 已按 FEFO 扣, 仅告警
@@ -298,7 +310,7 @@ def _rebuild_own_batches(channel, skus):
                     "WHERE channel=%%s AND warehouse_type IN (%s))"
                     % (_ph_wt, "%s"))
         _sql_ins = ("SELECT id, sku, barcode, warehouse, prod_date, exp_date, quantity "
-                    "FROM inbound_records WHERE channel=%s AND sku IN (%s)" + _wh_cond +
+                    "FROM inbound_records WHERE channel=%s AND sku IN (%s)" + _wh_cond + _d_in +
                     " ORDER BY CASE WHEN prod_date='' THEN 1 ELSE 0 END, prod_date, id")
         # _sql_ins 共 4 个 %s: channel + sku IN(...) + _wh_cond 的 warehouse_type IN(...) + 子查询 channel
         # 曾只给 2 个 → "not enough arguments for format string"(给 _wh_cond 加过滤后引入)
@@ -308,11 +320,12 @@ def _rebuild_own_batches(channel, skus):
         #   旧键 (sku, 69码, 生产日, 截止日) 跨仓累加 → 多仓同批号时第一个仓吃满出库量, 仓错账平
         outs_exact = {}   # (sku, bc, wh) -> {(pd, ed): qty}
         outs_noexp = {}   # (sku, bc, wh) -> qty
-        for r in _q("SELECT sku, barcode, warehouse, prod_date, exp_date, SUM(quantity) AS q "
+        _sql_out = ("SELECT sku, barcode, warehouse, prod_date, exp_date, SUM(quantity) AS q "
                     "FROM outbound_records WHERE channel=%s AND sku IN (%s) "
                     # 2026-10-29 仓型维度: 只取自有类流水的出库
                     "AND (COALESCE(warehouse_type,'')='' OR warehouse_type IN (%s)) "
-                    "GROUP BY sku, barcode, warehouse, prod_date, exp_date" % ("%s", ph, _ph_wt),
+                    + _d_out + "GROUP BY sku, barcode, warehouse, prod_date, exp_date")
+        for r in _q(_sql_out % ("%s", ph, _ph_wt),
                     [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _sk = str(r.get("sku") or "")
             _bc = str(r.get("barcode") or "").strip()
@@ -335,6 +348,20 @@ def _rebuild_own_batches(channel, skus):
                     [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _beg_map[(str(r.get("sku") or ""), str(r.get("bc") or ""),
                       str(r.get("warehouse") or ""))] = int(r.get("b") or 0)
+        # 2026-11-04 账期版期初: 已结过账 → 月初余额来自 batch_opening(**带生产/到期日**),
+        #   这才是"上月入库没卖完、本月继续按指定批次出"能成立的唯一前提。
+        #   未结过账(首次建账) → 仍用库存导入的 beginning_stock(无日期, FEFO 排最前)。
+        _open_map = {}
+        if _is_ledger:
+            for r in _q("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, "
+                        "COALESCE(prod_date,'') AS pd, COALESCE(exp_date,'') AS ed, qty "
+                        "FROM batch_opening WHERE period=%s AND channel=%s AND sku IN (%s) "
+                        "AND warehouse_type IN (%s)" % ("%s", "%s", ph, _ph_wt),
+                        [_cur_p, channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
+                _open_map.setdefault((str(r.get("sku") or ""), str(r.get("bc") or ""),
+                                      str(r.get("warehouse") or "")), []).append(
+                    {"quantity": int(r.get("qty") or 0), "prod_date": str(r.get("pd") or ""),
+                     "exp_date": str(r.get("ed") or ""), "_opening": True})
         # 库存行的仓型映射(插入批次时用真实仓型, 而非写死 'own')
         _wt_map = {}
         for _r1 in _q("SELECT sku, warehouse, warehouse_type FROM inventory "
@@ -362,11 +389,15 @@ def _rebuild_own_batches(channel, skus):
         for k, _b0 in _beg_map.items():
             if _b0 > 0:
                 by_key.setdefault(k, [])
+        for k in _open_map:
+            by_key.setdefault(k, [])   # 只有月初余额、本账期无入库的 SKU 也要建池
         _del_keys, _insert_rows = [], []
         for (sk, bc, wh), rows in by_key.items():
             _b0 = _beg_map.get((sk, bc, wh), 0)
             _pool = []
-            if _b0 > 0:
+            if _is_ledger:
+                _pool.extend(_open_map.get((sk, bc, wh), []))
+            elif _b0 > 0:
                 # 期初批次: 无日期 = 效期未知, FEFO 排最前(视为最早库存), 参与扣减
                 _pool.append({"quantity": _b0, "prod_date": "", "exp_date": "", "_opening": True})
             _pool.extend(rows)
@@ -528,15 +559,26 @@ def _ensure_inventory_rows(channel, rows):
 
 
 def _recalc_own_inventory(channel, skus):
-    """自有仓库存重算(2026-10-29 四维): available = 期初 + Σ入库 − Σ出库
+    """自有仓库存重算(账期版 2026-11-04): available = 期初 + Σ入库 − Σ出库(**限本账期**)
 
     绑定键 = 仓库类型 + SKU + **69码** + 仓库名
       · 有 69码 → 四维匹配
       · 69码为空 → 降级三维(sku + warehouse), 与项目 "69码三键优先, 空落二键" 约定一致
     幂等: 流水与期初确定 → 结果唯一; 严格匹配(不做单仓降级等隐式修正)
+
+    2026-11-04 账期改造(用户定案甲方案): Σ 的起点不再是"开天辟地", 而是 `ledger_state.begin_date`
+      —— 结过账就是本月 1 号(期初 = 上月期末), 没结过是空(首次建账走全期)。
+      原实现无日期下界 + 期初被每次导入的快照覆盖 → 每月累加一次双算, 这是根因。
     """
     from db import query as _q, execute as _e, executemany as _em
+    from core.ledger import begin_date as _ledger_begin
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
+    # 账期下界: 严格校验成 YYYY-MM-DD 后内联(值来自 ledger_state, 非用户输入)
+    _bd = _ledger_begin(channel)
+    if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
+        _bd = ""
+    _d_in = " AND r.inbound_date >= '%s' " % _bd if _bd else " "
+    _d_out = " AND r.outbound_date >= '%s' " % _bd if _bd else " "
     out = 0
     for i in range(0, len(skus), 200):
         batch = skus[i:i + 200]
@@ -551,11 +593,11 @@ def _recalc_own_inventory(channel, skus):
             # 69码匹配: **严格相等**(2026-11-01 收口, 与 cron 批次对账同规则)
             #   原"任一方为空即匹配"在多码 SKU 下会把别的码的流水算进来 —— 偏差被抵消, 查不出来。
             #   库存行无码而流水有码 = 数据不一致, 应当暴露(available 只剩余期初), 不该悄悄借别的码。
-            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')), 0) AS in_q, "
+            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')" + _d_in + "), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
-            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')), 0) AS out_q "
+            "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')" + _d_out + "), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
             # 2026-11-02 删除快照口径: 软删行(若有)冻结删除时的数量, 重算不碰 —— 恢复删除 =
             #   复原删除时的快照。当前 inventory 删除走归档表(硬删), 此过滤纯防御,
@@ -569,7 +611,9 @@ def _recalc_own_inventory(channel, skus):
                 val = int(r.get("beg") or 0) + int(r.get("in_q") or 0) - int(r.get("out_q") or 0)
             except Exception:
                 continue
-            upd.append((max(0, val), r.get("id")))
+            # 2026-11-04 去掉 `max(0, val)` 兜底: 负可用是"出库 > 期初+入库"的真实异常,
+            #   归 0 会把它伪装成"恰好卖完", 看板与对账永远发现不了。负值一路带到前端标「负库存异常」。
+            upd.append((val, r.get("id")))
         if upd:
             _em("UPDATE inventory SET available_qty=%s WHERE id=%s", upd)
             out += len(upd)
@@ -647,10 +691,12 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
                                   "safety_qty": cur.get("safety_qty") or 0,
                                   "in_transit_qty": cur.get("in_transit_qty") or 0}})
         else:
-            # beginning_stock 与 available 同置: _recalc_own_inventory 的口径是
-            #   available = beginning + Σ入 − Σ出, 新行无流水; 若 beginning 留 0,
-            #   下一次重算会把刚加的增量抹成 0(增量"导入后自行消失")
+            # 新行基线: 未建账时 beginning 与 available 同置(否则重算会把增量抹成 0)。
+            # 2026-11-04 已建账后改为 0 —— 这时那条入库流水本来就在本月窗口里会被 Σ 统计,
+            #   再把增量写成期初就是双算(同一个 +N 进两次)。
             _q = max(0, delta)
+            if wht == SELF_WAREHOUSE_TYPES[0] and _ledger_started(channel):
+                _q = 0
             _ins.append((sku, bc, wh, wht, _q, _q, channel))
             _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
                           "inv": {"sku": sku, "warehouse": wh, "warehouse_type": wht,
@@ -1090,21 +1136,24 @@ def _write_rows(target, channel, conflict_mode, cleaned):
         cleaned = _keep
         for it in cleaned:
             it["warehouse_type"] = wt
-            # 2026-10-29 架构定案: 自有仓库存=重算制 —— 导入的 available_qty 作为【期初基线】
-            #   available = beginning_stock + Σ入库 − Σ出库(由 _recalc_own_inventory 计算)
-            #   平台仓/B仓: 导入即权威快照(available 直接生效, 不重算)
+            # 2026-11-04 账期改造(用户定案): 已建账(结过账)后, 导入的"当时可用"**不再写成期初** ——
+            #   写成期初就等于每次导入都把基线抬高一次, 而流水又是全期/滚动窗口, 必然双算,
+            #   这是"每月累加一次、偏差单调增长"的根因。改为存 snapshot_qty 只做对账。
+            #   首次建账(未结过账)仍以导入值作为基线 —— 那时它本来就是基线。
             if wt == "own":
-                # own: 导入值作为【期初】(available = 期初 + Σ入 − Σ出, 由重算得出)
-                # 兼容两种列: available_qty(当前可用) 或 beginning_stock(期初库存)
                 _bs = it.get("beginning_stock")
                 if _bs in (None, "", 0):
                     _bs = it.get("available_qty") or 0
-                it["beginning_stock"] = _bs
+                if _ledger_started(channel):
+                    it["snapshot_qty"] = _bs
+                    it.pop("beginning_stock", None)
+                else:
+                    it["beginning_stock"] = _bs
         _s, _f, _ed = _write_batch("inventory",
                                    ["sku", "product_name", "store", "warehouse", "warehouse_type",
                                     "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
                                     "beginning_stock", "month_inbound", "month_outbound", "locked_qty",
-                                    "c_transit", "weight", "volume"],
+                                    "c_transit", "weight", "volume", "snapshot_qty"],
                                    cleaned, conflict_mode, "sku", "warehouse", channel=channel,
                                    agg_key3="barcode",  # 69码三键(sku|warehouse|barcode, 空落二键)
                                    agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
@@ -1199,6 +1248,19 @@ def _write_rows(target, channel, conflict_mode, cleaned):
 # 2026-10-29 自有类仓型白名单(可扩展): 出入库只允许这些仓型
 # 未来新增自有仓类型(如区域仓/前置仓)只需在此追加, 其余逻辑自动跟随
 SELF_WAREHOUSE_TYPES = ("own",)
+
+
+def _ledger_started(channel):
+    """该渠道是否已建账(结过账)。
+
+    是 → 库存导入不再把"当时可用"写成期初(只存 snapshot_qty 做对账);
+    否 → 首次建账, 导入值就是基线。表没建/查询失败一律按"未建账"处理(等价旧行为, 不会写错)。
+    """
+    try:
+        from core.ledger import begin_date as _bd
+        return bool(_bd(channel))
+    except Exception:
+        return False
 
 
 def _is_self_wt(wt):

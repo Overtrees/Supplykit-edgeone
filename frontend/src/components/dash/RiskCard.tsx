@@ -145,7 +145,9 @@ export default function RiskCard({
                 lineHeight: 1.4,
               }}
             >
-              {t('dash.min_days')} {items[0].days_to_empty} {t('dash.days_out')}
+              {items[0].days_to_empty != null
+                ? `${t('dash.min_days')} ${items[0].days_to_empty} ${t('dash.days_out')}`
+                : t('dash.no_sales')}
             </div>
             {(riskCritical > 0 || riskWarning > 0 || total > riskCritical + riskWarning) && (
               <div

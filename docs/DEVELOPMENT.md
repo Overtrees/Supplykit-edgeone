@@ -4081,7 +4081,7 @@ def _off_window(task):
     return None if w[0]*60+w[1] <= cur <= w[2]*60+w[3] else {"skipped": True, "reason": "窗口外"}
 ```
 
-8 个重任务接入(snapshot/freshness/archive/cleanup_logs/daily_rules/recycle/push_alerts/reconcile);
+9 个重任务接入(snapshot/freshness/archive/cleanup_logs/daily_rules/recycle/push_alerts/reconcile/ledger_close);
 窗口外**一行 SQL 都不发**(直接 return, 零 RU)。
 
 **窗口边界不是拍脑袋, 是查出来的**。查 `pipeline_runs` 最近 40 条:

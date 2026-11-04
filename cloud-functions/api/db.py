@@ -77,7 +77,7 @@ def _new_conn():
 
 
 def _connect_db(database):
-    return pymysql.connect(
+    c = pymysql.connect(
         host=os.environ.get("TIDB_HOST"),
         port=int(os.environ.get("TIDB_PORT", "4000")),
         user=os.environ.get("TIDB_USER"),
@@ -91,6 +91,17 @@ def _connect_db(database):
         read_timeout=90,
         write_timeout=90,
     )
+    # 2026-11-04 会话时区固定为北京时间(+08:00):
+    #   TiDB Cloud Serverless 默认 SYSTEM=UTC, 而业务日期(下单/流水/月份边界)全是北京时间。
+    #   不设的话 NOW()/CURRENT_TIMESTAMP 比北京时间早 8 小时 —— 北京时间 00:00–08:00 写入的
+    #   订单/流水会被打成"昨天", 月初更会把整月流水甩到上月, 与页面"本月"口径对不上。
+    #   这里失败就抛: 时区错了数据就错了, 静默降级反而更难查。
+    _cur = c.cursor()
+    try:
+        _cur.execute("SET time_zone = '+08:00'")
+    finally:
+        _cur.close()
+    return c
 
 
 def _pool():

@@ -52,6 +52,9 @@ _TABLES = {
         "available_qty INT DEFAULT 0, in_transit_qty INT DEFAULT 0, c_transit INT DEFAULT 0, "
         "safety_qty INT DEFAULT 0, safety_days DECIMAL(10,2) DEFAULT 0, locked_qty INT DEFAULT 0, "
         "beginning_stock INT DEFAULT 0, month_inbound INT DEFAULT 0, month_outbound INT DEFAULT 0, "
+        # snapshot_qty: 库存导入送来的"当时可用"(对账基准)。已建账后它**不再写成期初**,
+        #   只留在这里做差异核对 —— 覆盖期初就是"每月累加一次双算"的根因
+        "snapshot_qty INT DEFAULT 0, "
         "turnover_days DECIMAL(10,2) DEFAULT 0, weight DECIMAL(10,2) DEFAULT 0, volume DECIMAL(10,4) DEFAULT 0, "
         "barcode VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
@@ -377,6 +380,45 @@ _TABLES = {
         "reason VARCHAR(32) DEFAULT 'write', "
         "ts DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY(channel, `date`))"
     ),
+    # ── 账期(月结)三表 2026-11-04 用户定案 ────────────────────────────────
+    # inventory_month: 每账期一行(期初/入库/出库/期末)。期初 = 上月期末(月末结存),
+    #   不反推; 只存切段结果, 不承担计算(通式见 core/ledger.py)
+    "inventory_month": (
+        "CREATE TABLE IF NOT EXISTS inventory_month ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
+        "period CHAR(7) NOT NULL, channel VARCHAR(20) NOT NULL DEFAULT 'jd', "
+        "warehouse_type VARCHAR(20) NOT NULL DEFAULT 'own', "
+        "sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(64) NOT NULL DEFAULT '', "
+        "begin_qty INT DEFAULT 0, in_qty INT DEFAULT 0, out_qty INT DEFAULT 0, end_qty INT DEFAULT 0, "
+        # src: report(月报导入) / derived(流水推算) / gap(账期断档)
+        "src VARCHAR(16) NOT NULL DEFAULT 'derived', closed TINYINT DEFAULT 1, "
+        "as_of CHAR(10) DEFAULT '', updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "UNIQUE KEY uq_inv_month (period, channel, warehouse_type, sku, barcode, warehouse))"
+    ),
+    # batch_opening: 批次月初余额(**带日期**)。结账时从 batches 整表切片 —— 少了它, 上月批次
+    #   到本月就退化成"无日期期初批次", 指定批次出库全部命中不了, 只能降级 FIFO
+    "batch_opening": (
+        "CREATE TABLE IF NOT EXISTS batch_opening ("
+        "period CHAR(7) NOT NULL, channel VARCHAR(20) NOT NULL DEFAULT 'jd', "
+        "warehouse_type VARCHAR(20) NOT NULL DEFAULT 'own', "
+        "sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(64) NOT NULL DEFAULT '', "
+        "prod_date VARCHAR(32) NOT NULL DEFAULT '', exp_date VARCHAR(32) NOT NULL DEFAULT '', "
+        "qty INT DEFAULT 0, "
+        "PRIMARY KEY (period, channel, warehouse_type, sku, barcode, warehouse, prod_date, exp_date))"
+    ),
+    # ledger_state: 每 (渠道×仓型) 一行, 记录当前生效账期与起算日 ——
+    #   可用 = beginning_stock + Σ流水(>= begin_date); begin_date 为空 = 尚未建账(全期)
+    "ledger_state": (
+        "CREATE TABLE IF NOT EXISTS ledger_state ("
+        "channel VARCHAR(20) NOT NULL DEFAULT 'jd', "
+        "warehouse_type VARCHAR(20) NOT NULL DEFAULT 'own', "
+        "period CHAR(7) NOT NULL DEFAULT '', status VARCHAR(16) NOT NULL DEFAULT 'bootstrap', "
+        "begin_date CHAR(10) NOT NULL DEFAULT '', reason VARCHAR(500) NOT NULL DEFAULT '', "
+        "rows_count INT DEFAULT 0, closed_at DATETIME NULL, "
+        "PRIMARY KEY (channel, warehouse_type))"
+    ),
 }
 
 # ── 索引声明(2026-11-02 S2-8: 原 index.py 启动段三组, 收敛到同一处) ─────────
@@ -440,7 +482,9 @@ _COLUMN_ADDS = {
                          ("volume", "DECIMAL(10,4) DEFAULT 0"),
                          ("status", "VARCHAR(16) DEFAULT ''")],
     "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0"),    # 曾漏(采购建议 SELECT 用, 1054 实证)
-                  ("ext_json", "TEXT")],
+                  ("ext_json", "TEXT"),
+                  # 2026-11-04 账期: 导入的"当时可用"存这里做对账, 不再覆盖期初
+                  ("snapshot_qty", "INT DEFAULT 0")],
     # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
     # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
     "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''"), ("ext_json", "TEXT")],
@@ -473,7 +517,8 @@ _COLUMN_ADDS = {
 # v4(2026-11-03 D8): alerts 增 closed_reason/closed_at/reopen_count + 维度索引
 # v5(2026-11-04 S3-5): 建 schema_migrations; 存量数据类步骤迁入 migrations/(本版本号变化即触发一次
 #   全量路径 → run_pending 只执行未登记的步骤, 已应用的靠 legacy_log_sync 归并, 不会被重跑)
-SCHEMA_VERSION = 5
+# v6(2026-11-04 账期): 新增 inventory_month / batch_opening / ledger_state(月结三表)
+SCHEMA_VERSION = 6
 
 
 def table_ddl(name):

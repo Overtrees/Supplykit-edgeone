@@ -14,6 +14,7 @@ from routes.dashboard_maintain import _track_data, _snapshot_step, _rebuild_day_
 from routes.dashboard_stock_risk import _stock_risk, _grade_risk, _rule_params
 from routes.dashboard_health import _health_index, _sync_health_snapshot
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
+from core.clock import now_cn
 _register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear(), _accel_cache.clear()))
 
 _PAID = tuple(PAID_STATUSES)
@@ -64,7 +65,7 @@ def _daily_maintenance(channel="jd"):
     抢占 maintenance_log(date+task 主键, INSERT IGNORE 多实例安全), 已维护则跳过(1 次轻插入)
     内容: 快照/agg 数据追平(每 miss) + 每日例行(日志治理等)"""
     try:
-        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _today = now_cn().strftime("%Y-%m-%d")
         _got = execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s, 'daily')", [_today])
         if not _got:
             return  # 今天已维护(本实例或其他实例)
@@ -99,7 +100,7 @@ def _daily_maintenance(channel="jd"):
             # ⑤ 日志归档: 昨天 user/dev/all 生成 md 存 log_archives(历史文件回溯) + 清理 90 天前归档(保留周期)
             try:
                 from datetime import timedelta as _td2
-                _yest = (datetime.now(timezone.utc) - _td2(days=1)).strftime("%Y-%m-%d")
+                _yest = (now_cn() - _td2(days=1)).strftime("%Y-%m-%d")
                 from routes.misc import _export_md as _em
                 for _sc in ("user", "dev", "all"):
                     _d3, _cnt3, _md3 = _em(_yest, _sc, "")
@@ -107,7 +108,7 @@ def _daily_maintenance(channel="jd"):
                             "VALUES(%s,%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE "
                             "markdown=VALUES(markdown), `count`=VALUES(`count`), updated_at=NOW(6)",
                             [_d3, _sc, _md3, _cnt3])
-                _cut = (datetime.now(timezone.utc) - _td2(days=90)).strftime("%Y-%m-%d")
+                _cut = (now_cn() - _td2(days=90)).strftime("%Y-%m-%d")
                 execute("DELETE FROM log_archives WHERE `date` < %s", [_cut])
             except Exception as _e:
                     try_err('dashboard', '静默降级', _e)
@@ -116,7 +117,7 @@ def _daily_maintenance(channel="jd"):
         # 而失败只写一条 quality_logs 就再无痕迹(用户表现为"数据不更新"却查不出原因)。
         # 同文件 _daily_rules_guard 一直是有回滚的, 两种写法并存本身就是隐患。
         try:
-            _td = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _td = now_cn().strftime("%Y-%m-%d")
             execute("DELETE FROM maintenance_log WHERE `date`=%s AND task='daily'", [_td])
         except Exception as _e2:
             try_err('dashboard', '回滚维护标记失败', _e2)
@@ -140,7 +141,7 @@ def _daily_rules_guard():
     现改为: 占位记录同时存库存指纹(行数+最大变更时间), 指纹变化则允许当天重评估(仍串行,
     靠 UPDATE ... WHERE fingerprint=<旧指纹> 原子抢占, 多实例不重复)。"""
     try:
-        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _today = now_cn().strftime("%Y-%m-%d")
         # 数据就绪检测: 快照有行才评估(seed/reset 后场景——避免空库空评估占位毒化)
         try:
             _snap = one("SELECT COUNT(*) c FROM daily_sales_snapshot") or {}
@@ -241,7 +242,7 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
         # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
         try:
             from db import query as _qm
-            _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _today = now_cn().strftime("%Y-%m-%d")
             _done = {str(r.get("task") or "") for r in
                      _qm("SELECT task FROM maintenance_log WHERE `date`=%s AND task IN ('daily','daily_rules')",
                          [_today])}
@@ -480,7 +481,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
 
 def _build_summary(channel, start_date, end_date, mode="bbcc"):
     """summary 计算体(共享缓存 builder; 原函数体迁移)"""
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     today = now.strftime("%Y-%m-%d")
 
     if start_date and end_date:
@@ -620,7 +621,7 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     ftotal = total_orders
     funnel_res = _build_funnel_stages(funnel, ftotal)
 
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     today_s = now.strftime("%Y-%m-%d")
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     # 2026-10-16 自然口径(v1.0 GMV 矩阵): 上周=上周一~上周日完整自然周 / 上月=上月1号~月末完整自然月(环比=上上周/上上月)

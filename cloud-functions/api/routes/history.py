@@ -24,6 +24,7 @@ from fastapi import APIRouter
 from db import query, one
 from routes.common import ok, traced, try_err
 from routes.analysis_cache import cache_get as _cache_get
+from core.clock import now_cn
 
 router = APIRouter(tags=["history"])
 
@@ -34,11 +35,11 @@ _MAX_SPAN = 400
 
 
 def _today():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return now_cn().strftime("%Y-%m-%d")
 
 
 def _cutoff():
-    return (datetime.now(timezone.utc) - timedelta(days=_CUT_DAYS)).strftime("%Y-%m-%d")
+    return (now_cn() - timedelta(days=_CUT_DAYS)).strftime("%Y-%m-%d")
 
 
 def _archive_day():
@@ -48,7 +49,7 @@ def _archive_day():
     订单在 (t+366) 日第一次满足 —— 报"满 365 天后"是常见误读(实际第 366 天才搬)。
     前端提示按这个日期算, 与 cron 的判定式逐字对齐, 不另立口径。
     """
-    return (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    return (now_cn() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _shift(day, days):

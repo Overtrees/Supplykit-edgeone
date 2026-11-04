@@ -1,8 +1,7 @@
 """原生 insights 路由(方案 B): 滞销识别 + 进销存 with-sales(契约与旧 backend 一致)"""
-from datetime import datetime, timezone
-
 from fastapi import APIRouter
 
+from core.clock import days_since_cn, month_bounds_cn, month_days_cn, now_cn, elapsed_days_cn
 from db import query, one
 from routes.common import ok, traced, try_err
 
@@ -27,7 +26,7 @@ def ping():
 def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
                 search: str = "", days_threshold: int = 30):
     """滞销识别: 最后销售日距今 > threshold 且库存>0"""
-    now = datetime.now(timezone.utc)
+    now = now_cn()   # 北京时间, 不能用 UTC(00:00–08:00 会算成昨天)
     # 2026-10-29 按 69码: 分组含 barcode; 最后销售日按码取
     # 2026-10-29 性能: 原为**相关子查询**(每个 (sku,69码) 组各扫一遍快照 —— 实测 10.5s)
     #   → 改为两个预聚合 JOIN(各扫一次快照)
@@ -58,17 +57,20 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
         if avail <= 0:
             continue
         last = str(r.get("last_sale") or "")[:10]
-        days = 999 if not last else max((now - datetime.strptime(last, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days, 0)
-        if days <= days_threshold:
+        _d = days_since_cn(last)     # 北京时间自然日差, 不看时分秒; None = 从未销售
+        # 2026-11-04 去兜底: 不再用 999 冒充"999 天未销"。从未销售(None)一定算滞销,
+        #   不能因为"算不出天数"反而被阈值过滤掉(漏报)。未来日期(数据错)如实为负。
+        if _d is not None and _d <= days_threshold:
             continue
         items.append({
             "sku": r.get("sku"), "barcode": r.get("barcode") or "",
             "product_name": r.get("product_name") or r.get("sku"),
             "warehouse_type": r.get("warehouse_type") or "",
             "available_qty": avail, "safety_qty": int(r.get("safety_qty") or 0),
-            "days_since_last": days, "last_sale": last,
+            "days_since_last": _d, "last_sale": last,   # None = 从未销售
         })
-    items.sort(key=lambda x: -x["days_since_last"])
+    # 从未销售(None)排最前: 内部排序哨兵, 不对外输出
+    items.sort(key=lambda x: -(x["days_since_last"] if x["days_since_last"] is not None else 1e9))
     if search:
         sq = search.lower()
         items = [i for i in items if sq in str(i.get("sku", "")).lower()
@@ -85,10 +87,13 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
 def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 0,
                          page_size: int = 0, search: str = "", mode: str = ""):
     """进销存台账: 库存 + 日销 + 周转 + 当月进出(wh_type=own/platform/platform_b)"""
-    from datetime import datetime, timezone as _tz
-    now = datetime.now(_tz.utc)
-    month_start = now.strftime("%Y-%m-01")
-    month_end = now.strftime("%Y-%m-%d")
+    month_start, month_end = month_bounds_cn()   # 北京时间自然月
+    # 2026-11-04 表头区间(用户定案): **自然月闭合** 11-01 → 11-30, 入库/出库同一区间。
+    #   不用"该月最后有流水的一天": 各 SKU 覆盖天数不同(有的只到 11-01、有的到 11-05),
+    #   按流水末日显示会让同一页面在不同 SKU/筛选下区间不一致, 也与周转折算的整月天数脱节。
+    #   跨月后自动从新月份 1 号/月末重新起算(month_bounds_cn)。
+    month_in_end = month_end
+    month_out_end = month_end
     where = "i.channel=%s AND i.warehouse_type=%s"
     params = [channel, wh_type]
     if search:
@@ -159,7 +164,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                 "ROW_NUMBER() OVER (PARTITION BY sku, COALESCE(barcode,'') ORDER BY exp_date ASC) AS rn "
                 # 2026-11-01 空日期批次(batches.exp_date DEFAULT '')必须排除:
                 #   IS NOT NULL 放不过空串 → 不做效期管理的 SKU 会取到 '' 当成"最近效期"
-                "FROM batches WHERE channel=%s AND warehouse_type=%s AND COALESCE(exp_date,'')<>'' "
+                # 2026-11-04 同步补 prod_date: 生产日期为空时总效期算成 0 → 与商品页同一处修复
+                "FROM batches WHERE channel=%s AND warehouse_type=%s "
+                "AND COALESCE(exp_date,'')<>'' AND COALESCE(prod_date,'')<>'' "
                 "AND sku IN (" + _ph + ")) b "
                 "JOIN (SELECT sku, COALESCE(barcode,'') AS barcode, COUNT(*) AS cnt FROM batches "
                 "WHERE channel=%s AND warehouse_type=%s AND sku IN (" + _ph + ") "
@@ -173,7 +180,8 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             except Exception as _e:
                     try_err('insights', '静默降级', _e)
             from datetime import datetime as _bdt
-            _now = datetime.now(timezone.utc).replace(tzinfo=None)
+            from core.clock import now_cn as _now_cn
+            _now = _now_cn().replace(tzinfo=None)   # 北京时间(库龄"已生产天数"按北京日期算)
             for _b in _brows:
                 _sku = str(_b.get("sku") or "")
                 _pd = str(_b.get("pd") or "")[:10]
@@ -253,10 +261,18 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         from routes.common import ch_default_mode as _cdm
         mode = _cdm(channel)   # 2026-10-30: 渠道默认模式由 channels 表驱动(原硬编码 jd→bbcc)
     _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
-    # 2026-10-30 周转天数口径(会计/进销存标准): 期间天数 × (期初 + 当期入库) / 当期出库
-    #   分子=当期可供总量, 分母=当期实际流出速度(出库流水), 反映真实周转效率;
-    #   与 days_to_empty(前瞻: 可用/日销, 还能撑多久) 是两回事, 两者并存
-    _period_days = max(1, (now.date() - datetime.strptime(month_start, "%Y-%m-%d").date()).days + 1)
+    # 2026-11-04 周转天数口径(用户定案):
+    #   当月自然天数 × (期初 + 当月入库) / 当月出库
+    #   期初取 inventory.beginning_stock 导入原值, 不做"可用-月入+月出"反推
+    #   期间天数 = **当月自然月天数**(11 月 30 天 / 12 月 31 天 / 2 月 28-29 天):
+    #   不能用"今天"或"出库流水最后一天" —— 流水可能还停在上月(跨月), 或只覆盖月初几天
+    #   (把日均摊薄/放大), 都不是这个公式的本意
+    # 2026-11-04 账期口径(用户定案): 周转的"天数"必须与分母(当月出库)**同一时间窗** ——
+    #   当月未满时用**已过自然日**(11-04 = 4 天), 已结账月用整月天数(28~31)。
+    #   原来一律乘整月天数: 4 天的出库量配 30 天, 周转虚高约 7 倍, 且月初尤其离谱。
+    _period_days = elapsed_days_cn()      # 已过天数(完整月 = 整月天数)
+    _month_days = month_days_cn()          # 整月天数(表头区间/展示用)
+    _is_open = _period_days < _month_days
     for r in rows:
         sku = r.get("sku")
         _bc1 = str(r.get("barcode") or "")
@@ -281,6 +297,16 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         _wt3 = str(r.get("warehouse_type") or "")
         _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
         _dyn_safety = round(ds * _per3, 1) if ds > 0 and _per3 > 0 else 0
+        # 2026-11-04 平均库存法(用户定案):
+        #   期末 = 期初 + 当月入库 - 当月出库 (期初取导入原值, 不反推)
+        #   平均库存 = (期初 + 期末) / 2
+        #   周转天 = 平均库存 × 当月自然天数 / 当月出库
+        # 期末为负 = 出库 > 期初+入库, 属于数据异常: **不兜底、不改数**, 如实算负周转,
+        #   另给 stock_abnormal 让前端标「负库存异常」——负值不能当正常周转看
+        # 出库为 0 的行仍把库存计入仓级平均(占用库存), 但不参与 SKU 周转(见 _end 照算)
+        _beg = int(r.get("beginning_stock") or 0)
+        _end = _beg + month_inbound - month_outbound
+        _avg = (_beg + _end) / 2.0
         items.append({
             # id 必须显式带出来: 本函数是**逐字段重建 dict**, SELECT 里加了 i.id 也会在这里被丢掉
             # (2026-11-04 第一次就是这么修的 —— 改了 sel 却没改 append, 线上仍然没有 id)
@@ -290,14 +316,25 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "available_qty": avail, "in_transit_qty": transit, "c_transit": int(r.get("c_transit") or 0),
             "safety_qty": _dyn_safety,
             "daily_sales": round(ds, 1),
-            # 周转天数 = 期间天数 × (真实期初 + 当月入库) / 当月出库; 出库为 0 → 无定义(None → 前端显示 —)
-            "turnover_days": (round(_period_days * (int(r.get("beginning_stock") or 0) + month_inbound)
-                                    / month_outbound, 1) if month_outbound > 0 else None),
-            "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
+            # 2026-11-04 周转口径(用户定案): 平均库存 × 当月自然天数 / 当月出库, 保留 2 位
+            #   平均库存 = (期初 + 期末)/2; 期初取导入原值, 期末按 期初+入-出 推算
+            #   当月出库为 0 → 公式无解, 返回 None, 前端显示「未出库」(不再渲染 ∞)
+            "turnover_days": (round(_avg * _period_days / month_outbound, 2)
+                              if month_outbound > 0 else None),
+            "avg_stock": round(_avg, 1),
+            "end_stock": _end,
+            # 期末为负 → 前端标「负库存异常」, 负周转不能当正常值用
+            "stock_abnormal": _end < 0,
+            "period_days": _period_days,
+            "month_days": _month_days,      # 整月天数(28~31): 表头区间用
+            "is_open": _is_open,            # 当月未满 → 周转按"已过天数"折算, 前端需标注
+            # 2026-11-04 去兜底: 无销量(日销=0)时**如实返回 None**, 不再给 999 假天数。
+            #   999 会被前端当真实值展示/排序, 用户看到"999 天"以为是能撑三年。
+            "days_to_empty": round(avail / ds, 1) if ds > 0 else None,
             "month_start": month_start, "month_end": month_end,
+            "month_in_end": month_in_end, "month_out_end": month_out_end,
             "month_inbound": month_inbound,
             "month_outbound": month_outbound,
-            "beginning_stock": max(avail - month_inbound + month_outbound, 0),
             "beginning_stock_raw": int(r.get("beginning_stock") or 0),  # 真实导入期初(导出对账用)
             "barcode": r.get("barcode") or "", "brand": r.get("brand") or "",
             "price": r.get("price") or 0, "batch_count": int(r.get("batch_count") or 0),
@@ -319,13 +356,19 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                               "SUM(available_qty) AS av, SUM(in_transit_qty) AS tr "
                               "FROM inventory WHERE channel=%s AND warehouse_type=%s",
                               [channel, wh_type]) or {}
+                    # 2026-11-04 合计与行值同口径: 先把该维度所有 SKU 的期初/月入/月出分别求和,
+                    #   再除一次(期间天数 × Σ(期初+月入) / Σ月出); 不是各行天数的算术平均
                     return {"cnt": int(_r0.get("c") or 0), "beg": int(_r0.get("beg") or 0),
                             "mi": int(_r0.get("mi") or 0), "mo": int(_r0.get("mo") or 0),
-                            "av": int(_r0.get("av") or 0), "tr": int(_r0.get("tr") or 0)}
-                _sum = _cg("inv_sum|%s|%s" % (channel, wh_type), 60, _build_sum)
+                            "av": int(_r0.get("av") or 0), "tr": int(_r0.get("tr") or 0),
+                            "pd": _period_days}
+                # 缓存键带 pd: 期间天数逐日变(当月未满用已过天数), 不带就会拿昨天的天数算今天
+                _sum = _cg("inv_sum|%s|%s|%s" % (channel, wh_type, _period_days), 60, _build_sum)
             except Exception as _es:
                 try_err('insights', '进销存全量汇总降级', _es)
         return ok({"items": items, "total": total, "page": page, "page_size": page_size,
-                   "summary": _sum,
-                   "month_start": month_start, "month_end": month_end})
+                   "summary": _sum, "period_days": _period_days, "month_days": _month_days,
+                   "is_open": _is_open,
+                   "month_start": month_start, "month_end": month_end,
+                   "month_in_end": month_in_end, "month_out_end": month_out_end})
     return ok(items)

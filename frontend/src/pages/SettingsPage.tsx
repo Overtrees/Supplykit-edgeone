@@ -4,10 +4,11 @@ import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import { Group, LastRow } from '../components/ListGroup'
 import { t } from '../locale'
+import { todayCn } from '../utils/date'
 
 const VERSION =
   typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '2.0.0' // 构建注入(package.json version), 发版改 package.json
-const BUILD = new Date().toISOString().slice(0, 10)
+const BUILD = todayCn()   // 北京时间构建日期(UTC 会在 00:00-08:00 显示昨天)
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
 export default function SettingsPage() {

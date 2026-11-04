@@ -13,6 +13,7 @@ import type { ListResponse } from '../api/types'
 import type { ReplenRow } from './insights/ReplenTab'
 import type { PurchaseRow } from './insights/PurchaseTab'
 import type { DisposalRow } from './insights/SlowTab'
+import { todayCn } from '../utils/date'
 
 // ── 列配置 ──────────────────────────────────────────────────────────────
 import {
@@ -475,7 +476,7 @@ export default function InsightsPage() {
     })
   }
 
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = todayCn()
 
   useEffect(() => {
     useAppStore.getState().setProdBatchSel([])

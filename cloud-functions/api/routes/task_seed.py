@@ -9,6 +9,7 @@ from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
 
 from fastapi import APIRouter, Request, Form, UploadFile, File
+from core.clock import now_cn
 router = APIRouter(tags=["task-seed"])
 
 
@@ -49,7 +50,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         from routes.seed_fill import prepare_skus, seed_step
         _t0 = _tt.time()
         skus_data = prepare_skus()
-        today = datetime.now(_tz.utc)
+        today = now_cn()
         nxt, part = seed_step(step, today, skus_data)
         _sq = round(_tt.time() - _t0, 1)
         # 2026-10-15 每步耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
@@ -110,7 +111,7 @@ async def seed_fill(request: Request):
                 "VALUES(%s,'seed','running',%s,'{}',%s)",
                 (task_id, _json.dumps({"step": 0}), channel))
         skus_data = prepare_skus()
-        today = datetime.now(_tz.utc)
+        today = now_cn()
         nxt, part = seed_step(0, today, skus_data)
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (_json.dumps({"step": nxt}), task_id))
@@ -242,7 +243,7 @@ async def seed_step_run(request: Request):
                         "(orders 中 data_source='seed' 为空 → 判定为真实库)", 400)
     from routes.seed_fill import _sync_inv_month
     import time as _t
-    month_start = datetime.now(timezone.utc).strftime('%Y-%m-01')
+    month_start = now_cn().strftime('%Y-%m-01')
     _fixed = {}
     # 可选: 就地回填流水仓型(seed 库专用, 幂等)
     #   历史 seed 数据 inbound/outbound_records.warehouse_type 为空串(建表默认值, 生成时未写),

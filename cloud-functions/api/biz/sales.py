@@ -2,7 +2,9 @@
 
 三窗口滚动预测 + 3σ 异常剔除 + 近 3 天 1.5 倍加权(与旧版口径完全一致)
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+
+from core.clock import CN_TZ, now_cn
 
 from db import query
 from schema_create import table_ddl as _table_ddl
@@ -36,7 +38,7 @@ def load_daily_sales(cutoff_days, channel, skus=None):
     5 万 SKU/百万订单时快照几十万行不再进 Python(进销存 7s→毫秒级); 语义等同(同集过滤)
     大集合(>2000)回退 Python 过滤(210 次往返反慢——部署实证 25.6s)
     """
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     daily = {}
@@ -94,7 +96,7 @@ def load_daily_sales_grouped(cutoff_days, channel, skus=None, with_bc_wh=False):
     with_bc_wh=True → 额外返回 by_sku_wh_bc(按码×仓, 供物化生成 __C__/__BC__ 的按码行)
     2026-10-17 等价重构: skus 过滤下推 SQL(同 load_daily_sales)——同集过滤, 不拉全量;
     大集合(>2000)回退 Python 过滤(210 次往返反慢——部署实证 stock_risk 25.6s)"""
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     cutoff = (now - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     by_sku = {}
@@ -172,7 +174,7 @@ def smooth_promo_spikes(daily, now=None, max_win=28, hist_days=60, peak_ratio=5.
     返回处理后的 daily(供 calc_sales_multi 前调用)
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_cn()
     hist_days_list = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max_win, hist_days)]
     hist_nz = [daily.get(d, 0) for d in hist_days_list if daily.get(d, 0) > 0]
     if not hist_nz:
@@ -198,7 +200,7 @@ def calc_sales_multi(daily_by_sku, windows=None, sparse="plain"):
     """
     if windows is None:
         windows = [7, 14, 28]
-    now = datetime.now(timezone.utc)
+    now = now_cn()
     max_win = max(windows)
     all_days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max_win)]
     results = {w: {} for w in windows}
@@ -439,7 +441,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
             days, channel, skus=skus, with_bc_wh=True)
         if not by_sku and not by_sku_wh:
             return 0
-        now_d = datetime.now(timezone.utc)
+        now_d = now_cn()
         # 仓型集合(与补货/断货同口径: inventory warehouse_type)
         try:
             _wh_type = {}
@@ -481,7 +483,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
             n = 0
             for k, v in daily.items():
                 try:
-                    if v > 0 and (now_d - datetime.strptime(str(k)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)).days < win:
+                    if v > 0 and (now_d - datetime.strptime(str(k)[:10], "%Y-%m-%d").replace(tzinfo=CN_TZ)).days < win:
                         n += 1
                 except Exception:
                     continue
@@ -503,7 +505,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                 for _dk, _dv in daily.items():
                     try:
                         if (now_d - datetime.strptime(str(_dk)[:10], "%Y-%m-%d")
-                                .replace(tzinfo=timezone.utc)).days < _sig_days:
+                                .replace(tzinfo=CN_TZ)).days < _sig_days:
                             vals.append(_dv)
                     except Exception:
                         continue
@@ -621,10 +623,11 @@ def purge_orphan_sku_stats(channel, days=90):
     取并集而不是只看快照: 快照可能晚一天(分段续跑), 只卖"今天"的 SKU 必须被保住。
     """
     from db import query as _q, execute as _ex
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from datetime import timedelta as _td
+    from core.clock import now_cn as _now_cn
     from routes.common import SALES_SQL as _SQL, try_err
     try:
-        _cut = (_dt.now(_tz.utc) - _td(days=int(days))).strftime("%Y-%m-%d")
+        _cut = (_now_cn() - _td(days=int(days))).strftime("%Y-%m-%d")
         _live = set()
         for r in (_q("SELECT DISTINCT sku FROM daily_sales_snapshot "
                      "WHERE channel=%s AND `date`>=%s", [channel, _cut]) or []):

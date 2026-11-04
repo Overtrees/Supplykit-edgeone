@@ -11,13 +11,14 @@ from fastapi import APIRouter, Request, Response
 
 from db import query, one, execute
 from routes.common import ok, fail, traced, try_err
+from core.clock import now_cn
 
 router = APIRouter(tags=["task-export"])
 
 
 
 def now_stamp():
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return now_cn().strftime("%Y%m%d_%H%M%S")
 
 # 导出文件名中文映射(2026-10-25: 曾 exports_<英文type>_<channel>_<ts>——改中文+日期+时分秒)
 _EXPORT_NAMES = {
@@ -125,7 +126,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "数量": o.get("quantity", ""), "单价": o.get("unit_price", ""),
                 "金额": o.get("total_amount", ""), "状态": o.get("order_status", ""),
                 "下单时间": str(o.get("ordered_at") or "")[:10],
-                "支付时间": str(o.get("paid_at") or "")[:10],
+                "入库日期": str(o.get("paid_at") or "")[:10],
                 "平台": o.get("platform", ""), "渠道": o.get("channel", ""),
             })
         return out
@@ -186,6 +187,10 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                         "当月出库": it.get("month_outbound", ""),
                         # 期初取真实导入值(方案A), 不是反推的本月期初
                         "期初": it.get("beginning_stock_raw", ""),
+                        # 2026-11-04 平均库存法: 期末/平均随导出一起去, 否则表里只有周转天数,
+                        #   线下对账时无法复算(期末 = 期初+入-出, 平均 = (期初+期末)/2)
+                        "期末库存": it.get("end_stock", ""),
+                        "平均库存": it.get("avg_stock", ""),
                     })
                 out.append(_row)
         return out
@@ -268,7 +273,7 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
                         "数量": o.get("quantity", ""), "单价": o.get("unit_price", ""),
                         "金额": o.get("total_amount", ""), "状态": o.get("order_status", ""),
                         "下单时间": str(o.get("ordered_at") or "")[:10],
-                        "支付时间": str(o.get("paid_at") or "")[:10],
+                        "入库日期": str(o.get("paid_at") or "")[:10],
                         "平台": o.get("platform", ""), "渠道": o.get("channel", ""),
                     })
                 import csv as _csv

@@ -38,25 +38,40 @@ def _list_products_inner(channel, page, page_size, search, include_deleted):
     else:
         rows = query("SELECT %s FROM products WHERE %s ORDER BY id ASC" % (_FIELDS, where), params)
 
-    # 注入批次总效期 batch_days(SKU 最早批次 exp-prod 天数, 对齐 PA; 只查当前页 SKU)
+    # 注入批次总效期 batch_days(只查当前页 SKU)
+    # 2026-11-04 修正两处错(用户定案"按导入值, 不反推"):
+    #   1) 原 MIN(prod_date)/MIN(exp_date) 未排除空日期批次 —— 空串在 MIN 里排最前,
+    #      只要有一条无日期批次, 整条算不出 → 前端显示空白(线上 819/874 个做效期管理的 SKU 中招)
+    #   2) 原两个 MIN 各自跨批次取最小 —— 生产日期来自 A 批、到期日来自 B 批, 凑出不存在的保质期
+    #   现在: 只在**日期完整**的批次里选到期最早的那一批, 用它自己的两个导入日期相减(同一批, 不拼凑)
     _skus = [str(r.get("sku") or "") for r in rows if r.get("sku")]
     if _skus:
         from datetime import datetime as _dt
         _ph = ",".join(["%s"] * len(_skus))
-        _bmap = {}
-        for b in query("SELECT sku, MIN(prod_date) AS pd, MIN(exp_date) AS ed FROM batches "
-                       "WHERE channel=%s AND sku IN (" + _ph + ") GROUP BY sku",
+        _earliest = {}
+        for b in query("SELECT sku, prod_date, exp_date FROM batches "
+                       "WHERE channel=%s AND sku IN (" + _ph + ") "
+                       "AND COALESCE(prod_date,'')<>'' AND COALESCE(exp_date,'')<>''",
                        [channel] + _skus):
-            _pd = str(b.get("pd") or "")[:10]
-            _ed = str(b.get("ed") or "")[:10]
-            if _pd and _ed:
-                try:
-                    _bmap[str(b.get("sku"))] = max((_dt.strptime(_ed, "%Y-%m-%d")
-                                                    - _dt.strptime(_pd, "%Y-%m-%d")).days, 0)
-                except Exception as _e:
-                        try_err('products', '静默降级', _e)
+            _sku = str(b.get("sku") or "")
+            _pd = str(b.get("prod_date") or "")[:10]
+            _ed = str(b.get("exp_date") or "")[:10]
+            if not _sku or not _pd or not _ed:
+                continue
+            if _sku not in _earliest or _ed < _earliest[_sku][1]:
+                _earliest[_sku] = (_pd, _ed)
+        _bmap = {}
+        for _sku, (_pd, _ed) in _earliest.items():
+            try:
+                # 2026-11-04 去兜底: 到期日早于生产日 = 数据错误, **如实给负值**(页面一眼可见),
+                #   原 max(..., 0) 把错误抹成"保质期 0 天", 看起来像正常数据。
+                _bmap[_sku] = (_dt.strptime(_ed, "%Y-%m-%d")
+                               - _dt.strptime(_pd, "%Y-%m-%d")).days
+            except Exception as _e:
+                    try_err('products', '静默降级', _e)
         for r in rows:
-            r["batch_days"] = _bmap.get(str(r.get("sku") or ""), 0)
+            # 无完整日期批次 → None(前端显示 '-' 占位), 不再用 0 混同"保质期 0 天"
+            r["batch_days"] = _bmap.get(str(r.get("sku") or ""))
 
     # is_active 注入(前端批量面板按钮状态: status==='active' → 1; 原缺失致批量停用按钮恒禁用)
     for r in rows:

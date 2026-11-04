@@ -136,7 +136,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     若存在引用计算变量的规则(inv.adj_dos/buffer/otif/ss_dyn/accel_rate/health.score/params.*),
     注入断货判定同源的计算值(SKU 聚合粒度)——规则与看板断货/健康计算联动, 否则走快速路径(不加载日销)
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+    from core.clock import CN_TZ, now_cn
     # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
     from routes.common import INVENTORY_COLS as _IC
     _SEL = ("SELECT " + _IC + " FROM inventory "
@@ -185,7 +186,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
                    [channel]):
         last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
-    now = datetime.now(timezone.utc)
+    now = now_cn()   # 北京时间: 末销天数按自然日算
     _tick("lastmap")
 
     # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
@@ -303,15 +304,16 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         # 缺失一律不给键(→ 条件求值返回 None → 规则跳过), 绝不用 0 冒充(避免"剩余0天"误报)
         _exp_map = {}
         try:
-            from datetime import datetime as _dtx, timezone as _tzx
-            _nowx = _dtx.now(_tzx.utc)
+            from datetime import datetime as _dtx
+            from core.clock import now_cn as _now_cn
+            _todayx = _now_cn().date()   # 北京时间自然日: 剩余保质期差一天就会误报临期
             for _rx in query("SELECT sku, MIN(exp_date) AS e FROM batches WHERE channel=%s "
                              "AND exp_date IS NOT NULL AND exp_date!='' GROUP BY sku", [channel]):
                 _e = str(_rx.get("e") or "")[:10]
                 if _e:
                     try:
                         _exp_map[str(_rx.get("sku"))] = (
-                            _dtx.strptime(_e, "%Y-%m-%d").replace(tzinfo=_tzx.utc) - _nowx).days
+                            _dtx.strptime(_e, "%Y-%m-%d").date() - _todayx).days
                     except Exception:
                         pass
         except Exception as _ex:
@@ -422,7 +424,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         days = 999
         if last:
             try:
-                days = max((now - datetime.strptime(last, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days, 0)
+                days = max((now - datetime.strptime(last, "%Y-%m-%d").replace(tzinfo=CN_TZ)).days, 0)
             except Exception:
                 days = 999
         base = {

@@ -79,13 +79,15 @@ cloud-functions/api/
 **鉴权**: 只认 `X-Auth-Token`(网关把 `Authorization` 改写成 `q-sign`, 用 Bearer 会登录成功但全接口 401)。
 `auth` / `health` / `debug` / `insights/ping` / `cron` / `logs/frontend` 免鉴权; demo 用户写操作返回 403。
 
-**cron**: `routes/cron.py` 10 端点, 由 `edgeone.json` 的 `schedules` 驱动(archive 01:05 / cleanup 03:05 /
-freshness 03:10 / snapshot 03:35 / daily-rules 04:05 / reconcile 04:10 / recycle 04:35 / continue-tasks 05:05 /
-push-alerts 08:30 / ping 13:55)。
+**cron**: `routes/cron.py` 11 端点, 由 `edgeone.json` 的 `schedules` 驱动(**仅 10 条, maxItems 上限**:
+archive 01:05 / cleanup 03:05 / freshness 03:10 / snapshot 03:35 / daily-rules 04:05 / reconcile 04:10 /
+recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— 第 11 个端点
+`/cron/ledger-close`(账期月结)**不单独挂调度**, 嵌入 `cleanup-logs` 内调用(见 `docs/decisions/0002`)。
+**新增定时任务前必须先腾条数**: 加到 11 条会导致整组 schedules 路由丢失。
 平台 schedules **无法注入 header**(schema 只有 name/cron/timezone/method/path/payload, 且 `edgeone.json`
 进公开仓库, 用 payload 传密钥等于公开) → **"鉴权"根治不了**, 所以守的是"危害":
 ① `_throttle` 进程内限频 ② `_claim` DB 当日抢占(多实例安全) ③ **时间窗守卫** ——
-8 个重任务只在各自调度窗口内有效, 窗口外**零 SQL** 直接 skipped ④ 失败 `_unclaim` 回滚。
+9 个重任务只在各自调度窗口内有效, 窗口外**零 SQL** 直接 skipped ④ 失败 `_unclaim` 回滚。
 时间窗按 `Asia/Shanghai` 显式计算(容器在新加坡), 边界来自实测: 平台触发稳定**早 57~60 秒**,
 所以窗口两端各留 ≥1.5 小时。`ping`/`continue_tasks` 不设窗(后者被请求驱动直接调用, 设窗会打死续跑)。
 外部调用者的能力上限 = 在窗口内把任务提前几分钟触发一次, `_claim` 保证当日仍只跑一次。

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 
 from db import query, one
 from routes.common import try_err
+from core.clock import now_cn
 
 
 def _cfg(channel):
@@ -189,7 +190,7 @@ def own_health(channel, full: int = 0, limit: int = 10):
                 return _r
         return _rows[0] if _rows else None
 
-    _today = datetime.now(timezone.utc).date()
+    _today = now_cn().date()
     items = []
 
     for (sku, bc, wh_raw), st in own_rows.items():

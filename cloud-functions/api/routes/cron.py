@@ -27,6 +27,7 @@ from routes.common import ch_codes as _CHANNELS  # 2026-11-02 S1-5: 渠道数据
 from routes.common import ch_conf as _CH_CONF
 from routes.common import SALES_SQL as _PAID_SQL  # 2026-10-29 销量池单一真源(原硬编码 已完成)
 from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8: 关闭统一入口
+from core.clock import now_cn
 
 router = APIRouter(tags=["cron"])
 @router.get("/cron/continue-tasks")
@@ -44,7 +45,7 @@ def continue_tasks():
     done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
     try:
         rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
-        _cutoff = (datetime.now(_tz2.utc) - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+        _cutoff = (now_cn() - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
         try_err('cron', 'continue-tasks 诊断: rows=%d cutoff=%s' % (len(rows or []), _cutoff))
         for r in (rows or []):
             tt = r.get("task_type") or ""
@@ -125,7 +126,7 @@ def _throttle(key, seconds):
 def _claim(task):
     """当日一次性抢占(多实例安全)。返回 True=抢到, 应执行。
     表异常时放行执行 —— 宁可多跑一次, 也不要因为护栏自己出错而整天空转。"""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = now_cn().strftime("%Y-%m-%d")
     try:
         return bool(execute("INSERT IGNORE INTO maintenance_log(`date`, task) VALUES(%s,%s)",
                             [today, task]))
@@ -136,7 +137,7 @@ def _claim(task):
 
 def _unclaim(task):
     """执行失败回滚抢占标记 —— 不回滚=当天永久跳过(dashboard._daily_maintenance 就是栽在这)"""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = now_cn().strftime("%Y-%m-%d")
     try:
         execute("DELETE FROM maintenance_log WHERE `date`=%s AND task=%s", [today, task])
     except Exception as _e:
@@ -167,6 +168,8 @@ _WINDOWS = {
     "reconcile":    (3, 30, 6, 0),
     "recycle":      (4, 0, 6, 30),
     "push_alerts":  (8, 0, 10, 0),
+    # 账期结账: 平台每月 1 号 00:40 CST 调度, 窗口给到 03:00(排队/取整余量)
+    "ledger_close": (0, 30, 3, 0),
 }
 # 不设窗的两个:
 #   ping            —— 保活用, 全天触发无害, 且 UptimeRobot 也在打
@@ -259,7 +262,7 @@ def _log(level, message, source="cron"):
 
 def _build_snapshot(rebuild_days=90):
     """增量构建日销快照: 聚合最近 rebuild_days 天已支付订单(幂等 upsert)"""
-    start = (datetime.now(timezone.utc) - timedelta(days=rebuild_days)).strftime("%Y-%m-%d")
+    start = (now_cn() - timedelta(days=rebuild_days)).strftime("%Y-%m-%d")
     execute(
         "INSERT INTO daily_sales_snapshot(date, channel, sku, barcode, warehouse, order_count) "
         "SELECT DATE(ordered_at), channel, sku, COALESCE(barcode,''), warehouse, SUM(quantity) FROM orders "
@@ -311,7 +314,7 @@ async def cron_freshness(request: Request):
         return ok(_off)
     r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot") or {}
     m = str(r.get("m") or "")
-    stale_limit = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    stale_limit = (now_cn() - timedelta(days=2)).strftime("%Y-%m-%d")
     if m and m >= stale_limit:
         return ok({"rebuilt": False, "max_date": m})
     if not _claim("snapshot"):
@@ -341,7 +344,7 @@ async def cron_archive(request: Request):
         return ok({"skipped": True, "reason": "10 分钟内已执行"})
     if not _claim("cron:archive"):
         return ok({"skipped": True, "reason": "今天已归档"})
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+    cutoff = (now_cn() - timedelta(days=365)).strftime("%Y-%m-%d")
     old = query(
         "SELECT id, ordered_at, channel, store, sku, order_status, total_amount, quantity "
         "FROM orders WHERE DATE(ordered_at) < %s AND (deleted_at IS NULL OR deleted_at='')",
@@ -388,12 +391,30 @@ async def cron_cleanup_logs(request: Request):
     _off = _off_window("cleanup_logs")
     if _off:
         return ok(_off)
+    # 月结随本条调度执行(2026-11-04): edgeone.json 的 schedules 上限 10 条已占满,
+    #   加第 11 条整组定时任务会丢路由, 所以复用最轻的这条凌晨任务, 不新增调度。
+    #   run_ledger_close() 在每月 4 号之后第一行就返回, 一条 SQL 都不发 —— 日均成本为零。
+    #   必须放在 _claim 之前: 日志当天已清理过(手动跑过一次)也要照常结账,
+    #   不能让"今天已清理"这个抢占把月结吞掉。
+    _led = None
+    try:
+        _led = run_ledger_close()
+    except Exception as _e:
+        try_err("ledger", "月结(随日志清理调度)异常", _e)
+        _led = {"ok": False, "reason": str(_e)[:200]}
+    # 只留摘要: 逐渠道明细会跟着接口返回, 平台日志里没必要铺开几十行
+    if isinstance(_led, dict):
+        _led = {"period": _led.get("period", ""), "ok": _led.get("ok_count", 0),
+                "skipped": _led.get("skipped"), "reason": _led.get("reason", ""),
+                "blocked": [{"channel": x.get("channel"), "reason": x.get("reason")}
+                            for x in (_led.get("blocked") or [])]}
     if not _claim("cron:cleanup_logs"):
-        return ok({"skipped": True, "reason": "今天已清理"})
+        return ok({"skipped": True, "reason": "今天已清理", "ledger": _led})
     from routes.common import prune_quality_logs
     r = prune_quality_logs()
     _log("info", "日志清理: 过期删除 %d 条 / 上限删除 %d 条 / 现存 %d 条"
          % (r.get("old", 0), r.get("cap", 0), r.get("total", 0)))
+    r["ledger"] = _led
     return ok(r)
 
 
@@ -524,7 +545,7 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
                 _sc2 = _hs2.get("score")
                 from db import execute as _exH
                 from datetime import datetime as _dth, timezone as _tzh
-                _d0 = _dth.now(_tzh.utc).strftime("%Y-%m-%d")
+                _d0 = now_cn().strftime("%Y-%m-%d")
                 _exH("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
                      "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
                      "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
@@ -591,7 +612,7 @@ async def cron_ping(request: Request):
     if not await _authed(request):
         return fail("未授权", 401)
     _log("info", "schedules ping 触发(平台调度验证)")
-    return ok({"pong": True, "ts": datetime.now(timezone.utc).isoformat()})
+    return ok({"pong": True, "ts": now_cn().isoformat()})
 
 
 @router.api_route("/cron/recycle", methods=["GET","POST"])
@@ -745,7 +766,7 @@ def run_reconcile(days=90):
         _d = max(1, min(int(days or 90), 365))
     except Exception:
         _d = 90
-    _now = datetime.now(timezone.utc)
+    _now = now_cn()
     _start = (_now - timedelta(days=_d)).strftime("%Y-%m-%d")
     _end = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
     # GMV 段晚一天收口: 软删残留靠 _rebuild_agg_day 单日精准自愈, 最近两天可能尚未重建,
@@ -810,7 +831,7 @@ def run_reconcile(days=90):
     # ④ 快照 ↔ 订单 抽样到 SKU×69码(而不是总量): 总量相等但个别 SKU 错位, ①段发现不了。
     #    取近 7 天量最大的 50 个维度比对 —— 高频 SKU 错一位就影响补货, 低频的错位影响小。
     try:
-        _d1 = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        _d1 = (now_cn() - timedelta(days=7)).strftime("%Y-%m-%d")
         _sample = query(
             "SELECT s.channel, s.sku, s.bc, s.q1, COALESCE(o.q2, 0) AS q2 FROM ("
             "  SELECT channel, sku, COALESCE(barcode,'') AS bc, SUM(order_count) AS q1 "
@@ -913,3 +934,101 @@ async def cron_reconcile(request: Request, days: int = 90):
     if not _throttle("reconcile", 300):
         return ok({"skipped": True, "reason": "5 分钟内已对账"})
     return ok(run_reconcile(days))
+
+
+# ── 账期自动结账(2026-11-04 用户定案: 自动, 但数据不齐拒绝结) ──────────────
+def _own_channels(channels=None):
+    """只保留**真有自有仓库存**的渠道
+
+    账期只管自有仓(平台仓/B 仓以后台导出为准)。对没有 own 数据的渠道结账,
+    体检必然报"一整月都没有数据" → 白写一条 blocked, 还会让人误判结账坏了。
+    查不到渠道清单(表异常)时退回全量, 不静默把结账停掉。
+    """
+    try:
+        rows = query("SELECT DISTINCT channel FROM inventory WHERE warehouse_type='own' "
+                     "AND (deleted_at IS NULL OR deleted_at='')") or []
+        have = {str(r.get("channel") or "") for r in rows if r.get("channel")}
+    except Exception:
+        have = set()
+    pool = [c for c in (channels or _CHANNELS()) if c]
+    return [c for c in pool if c in have] if have else pool
+
+
+def run_ledger_close(channels=None):
+    """把上一个账期结掉(仅自有仓); 1 号主结, 2、3 号自动重试。
+
+    触发方式: 由 `cleanup-logs`(每日 03:05 CST)带入 —— schedules 上限 10 条已占满,
+      不单独挂调度。手动/CI 可直接打 `/cron/ledger-close`(窗口 00:30-03:00)。
+    非 1~3 号 → 直接 skipped(纯 Python 判断, 一条 SQL 都不发, 零 RU)。
+    体检不过(上期流水没导全) → 该渠道拒绝结账并留痕, **不改任何数** ——
+    结一个缺流水的假账会把错误结转进下月期初, 比不结账危险得多。
+    补导之后走 POST /ledger/reclose 补结, 不必等下次 1 号。
+    """
+    # 1~3 号都允许重试: 平台调度偶发失败/数据 1 号没导全时, 2、3 号还能自动补上,
+    #   不用等人来点; 4 号起停止(再往后就该走 reclose 明确补结, 不能靠自动兜)
+    _d = now_cn().day
+    if _d > 3:
+        return {"skipped": True, "reason": "非结账窗口(每月 1~3 号结上月)", "day": _d}
+    from core.ledger import close_period, shift_period, period_of, state_get
+    target = shift_period(period_of(), -1)
+    if not target:
+        return {"skipped": True, "reason": "账期计算异常"}
+    out = []
+    for ch in _own_channels(channels):
+        _skus = []
+        # 已结过就不再重复结(幂等, 省一轮重算)
+        if state_get(ch, "own").get("period") == target and \
+                state_get(ch, "own").get("status") == "closed":
+            out.append({"ok": True, "channel": ch, "period": target, "skipped": "该账期已结"})
+            continue
+        # 结账前后各重算一次, 顺序不能反:
+        #   ① 结账**前**: 让 batches 反映"此刻真实余额"(全期窗口), 否则切片出来的
+        #      batch_opening 是旧值 —— 一旦切错, 下月指定批次出库全部落空;
+        #   ② 结账: 写账期 + 冻结批次月初余额 + 把期末写回成下月期初;
+        #   ③ 结账**后**: 用新窗口(本月 1 号起)重建, 池 = 月初余额 + 本月流水, 可用同步刷新。
+        # 缺了 ③, 页面上的可用还停在"结账前"的口径, 要等下一次导入才对。
+        try:
+            from routes.cleanse_write import (_recalc_own_inventory as _rc,
+                                              _rebuild_own_batches as _rb)
+            _skus = [str(r.get("sku") or "") for r in
+                     (query("SELECT DISTINCT sku FROM inventory WHERE channel=%s "
+                            "AND warehouse_type='own' AND (deleted_at IS NULL OR deleted_at='')",
+                            [ch]) or [])]
+            _skus = [s for s in _skus if s]
+            if _skus:
+                _rc(ch, _skus)
+                _rb(ch, _skus)
+        except Exception as _e:
+            try_err('ledger', '结账前重算降级', _e)
+        try:
+            r = close_period(target, ch, "own")
+        except Exception as _e:
+            try_err('ledger', '自动结账异常', _e)
+            r = {"ok": False, "period": target, "reason": str(_e)}
+        if r.get("ok") and _skus:
+            # 结账后只刷库存, **不重建批次**: 下期批次池已由 batch_opening 切片固化,
+            #   此刻重建一次要多花 10~20s(2000 SKU 全删重建), 而下一次流水导入必然会重建。
+            #   库存必须刷 —— 期初已被改写成期末, 不刷会留下"期初/可用"两套数。
+            try:
+                _rc(ch, _skus)
+            except Exception as _e:
+                try_err('ledger', '结账后重算降级', _e)
+        r["channel"] = ch
+        out.append(r)
+    return {"period": target,
+            "ok_count": len([x for x in out if x.get("ok")]),
+            "blocked": [x for x in out if not x.get("ok")],
+            "items": out}
+
+
+@router.api_route("/cron/ledger-close", methods=["GET", "POST"])
+@traced
+@_pipe("ledger_close")
+async def cron_ledger_close(request: Request):
+    """账期自动结账入口(平台每月 1 号 00:40 CST 调度)"""
+    if not await _authed(request):
+        return fail("未授权", 401)
+    _off = _off_window("ledger_close")
+    if _off:
+        return ok(_off)
+    return ok(run_ledger_close())

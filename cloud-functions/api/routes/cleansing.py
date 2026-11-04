@@ -11,7 +11,8 @@ import io
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone  # datetime 用于 status 超时标记(缺 datetime 曾 NameError——同步分支/轮询全崩)
+from datetime import datetime, timedelta  # datetime 用于 status 超时标记(缺 datetime 曾 NameError——同步分支/轮询全崩)
+from core.clock import now_cn   # 北京时间: updated_at 由 NOW()(+08:00 会话)写入, 比超时阈值必须同区
 
 from fastapi import APIRouter, Query
 from fastapi import Request
@@ -489,7 +490,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
     if status == "running":
         # 2026-10-14 超时自愈: running 超过 30 分钟无更新(前端轮询停/实例冻结)——标记 error 防永久卡(释放防重拦截)
         ua = str(row.get("updated_at") or "")[:19]
-        if ua and ua < (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"):
+        if ua and ua < (now_cn() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"):
             execute("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
                     [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——已自动标记结束，请重新导入"}}), task_id])
             row["status"] = "error"
@@ -520,7 +521,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
             if params.get("finalizing"):
                 _fs = one("SELECT updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
                 _fu = str((_fs or {}).get("updated_at") or "")[:19].replace("T", " ")
-                if _fu and _fu < (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"):
+                if _fu and _fu < (now_cn() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"):
                     execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                             [json.dumps({**params, "finalizing": 0}, ensure_ascii=False), task_id])
                     try_err('cleansing', 'finalizing 超时恢复(>5min——done 步死连接已回滚——重跑)', '')

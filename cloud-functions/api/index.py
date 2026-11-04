@@ -35,7 +35,9 @@ from routes.purchase import router as purchase_router
 from routes.cron import router as cron_router
 from routes.channels import router as channels_router
 from routes.history import router as history_router  # 2026-11-02 S2-4/A: daily_stats 读出口
+from routes.ledger import router as ledger_router   # 2026-11-04 账期(月结): 状态/结账/补结/预演
 from routes.common import verify_token, try_err
+from core.clock import now_cn
 
 app = FastAPI()
 
@@ -192,7 +194,7 @@ async def auth_middleware(request: Request, next):
 def health(detail: int = 0):
     """健康探针。detail=1 追加链路运行流水(前端 15s 轮询不带此参数, 零额外查询/RU)"""
     from datetime import datetime, timezone
-    out = {"status": "ok", "db_backend": "tidb", "timestamp": datetime.now(timezone.utc).isoformat()}
+    out = {"status": "ok", "db_backend": "tidb", "timestamp": now_cn().isoformat()}
     # 2026-10-15 保活顺带续跑(UptimeRobot 5min ping——有 running 任务才调 continue——无任务零开销——RU 不浪费)
     try:
         _run = one("SELECT COUNT(*) AS c FROM sync_tasks WHERE status='running' AND updated_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE)")
@@ -273,6 +275,7 @@ app.include_router(purchase_router)
 app.include_router(cron_router)
 app.include_router(channels_router)
 app.include_router(history_router)
+app.include_router(ledger_router)
 
 # ── 启动 schema 初始化(2026-11-02 S2-8): 表/索引声明全部收敛到 schema_create.py, 版本门禁热路径零 DDL ──
 if os.environ.get("DB_BACKEND", "tidb") == "tidb":

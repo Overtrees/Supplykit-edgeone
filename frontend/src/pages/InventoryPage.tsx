@@ -1,4 +1,5 @@
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react'
+import { daysSinceCn } from '../utils/date'
 import { api, clearCache, abortScope, apiJson } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
@@ -35,6 +36,12 @@ interface InventoryPageProps {
 interface InvRowData {
   month_start?: string
   month_end?: string
+  month_in_end?: string
+  month_out_end?: string
+  // 2026-11-04 账期: 当月未满时 period_days = 已过天数(< month_days), 表头要标"月内累计"
+  period_days?: number
+  month_days?: number
+  is_open?: boolean
   [k: string]: unknown
 }
 interface WithSalesResp {
@@ -101,7 +108,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   }, [inventory])
   // 切走取消在途(根治快速切换卡骨架)
   useEffect(() => () => abortScope('inventory'), [])
-  const [monthRange, setMonthRange] = useState('')
+  // 表头区间(自然月闭合 11-01 至 11-30; 各 SKU 流水末日不同, 不按各自末日显示)
+  const [inRange, setInRange] = useState('')
+  const [outRange, setOutRange] = useState('')
+  // 账期是否"月内未满"(true → 周转按已过天数折算, 表头标注)
+  const [ledgerOpen, setLedgerOpen] = useState<{ d: number; m: number } | null>(null)
   const reqSeq = useRef(0)
   const {
     channel: globalChannel,
@@ -117,15 +128,30 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       // 2026-10-30 新增列自动可见: localStorage 里存的是旧列集, 直接用它会让新列(keep_days)永不出现
       const _saved = getVis(whType, globalChannel)
       const _all = INV_COLS[whType].map(c => c.id)
-      // keep_days 仅自有仓维度存在(用户定), 其他维度不追加
-      const _newCol = whType === 'own' ? 'keep_days' : null
-      setVisCols(
-        _saved && _saved.length
-          ? !_newCol || _saved.includes(_newCol)
-            ? _saved.filter(id => _all.includes(id))
-            : [..._saved.filter(id => _all.includes(id)), _newCol]
-          : _all,
-      )
+      // 仅自有仓维度存在的列(用户定); 其他维度不追加。
+      // 2026-11-04 改成清单: 原实现只处理 keep_days 一列, 新增期末/平均库存后
+      //   老用户 localStorage 里的旧列集会让新列永不出现
+      const _ownOnly = whType === 'own' ? ['keep_days', 'end_stock', 'avg_stock'] : []
+      const _missing = _ownOnly.filter(id => _all.includes(id) && !(_saved || []).includes(id))
+      if (!_saved || !_saved.length) {
+        setVisCols(_all)
+      } else {
+        // 新列必须插到**定义位置**, 不能一律追加到末尾 —— 否则「期末/平均」跑到在库金额后面,
+        //   期初→入→出→期末→平均→周转 的对账链被拆开, 用户还得自己去挪列
+        const _cols = _saved.filter(id => _all.includes(id))
+        for (const id of _missing) {
+          const pos = _all.indexOf(id)
+          let at = _cols.length
+          for (let i = 0; i < _cols.length; i++) {
+            if (_all.indexOf(_cols[i]) > pos) {
+              at = i
+              break
+            }
+          }
+          _cols.splice(at, 0, id)
+        }
+        setVisCols(_cols)
+      }
       return
     }
   }, [globalChannel])
@@ -177,9 +203,17 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
       invPageRef.current = p
       setInventory(prev => (p === 1 ? items : [...prev, ...items]))
       if (p === 1 && items.length > 0) {
+        // 表头区间按**自然月闭合**(11-01 至 11-30), 入库/出库同一区间:
+        //   各 SKU 流水覆盖天数不同, 按"各自最后一天"显示会让同页两列区间不一致
         const s = items[0].month_start?.slice(5) || ''
-        const e = items[0].month_end?.slice(5) || ''
-        setMonthRange(`${s}${t('col.range_to')}${e}`)
+        const e = items[0].month_end?.slice(5) || s
+        setInRange(`${s}${t('col.range_to')}${e}`)
+        setOutRange(`${s}${t('col.range_to')}${e}`)
+        // 账期口径(2026-11-04): 当月未满时周转按"已过天数"折算, 表头必须把这件事说出来,
+        //   否则用户会拿 4 天的周转跟整月的比, 以为数据错了
+        setLedgerOpen(items[0].is_open
+          ? { d: Number(items[0].period_days) || 0, m: Number(items[0].month_days) || 0 }
+          : null)
       }
     } catch (e) {
       if (seq !== reqSeq.current) return
@@ -251,23 +285,30 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
 
   const fl = useMemo(() => inventory, [inventory])
 
-  // 2026-10-30 平均周转与行值同口径(会计): 期间天数 × Σ(期初+当月入库) / Σ当月出库
-  //   (原 Σturnover_days/行数 是算术平均, 会被单个大库存行拉爆)
+  // 2026-11-04 仓周转(用户定案, 平均库存法):
+  //   总期末 = Σ期初 + Σ当月入库 - Σ当月出库
+  //   总平均库存 = (Σ期初 + 总期末) / 2
+  //   仓周转 = 总平均库存 × 当月自然天数 / Σ当月出库
+  //   期初取导入原值(beginning_stock_raw / summary.beg), 不做反推
   const totalTurnover = useMemo(() => {
     // 优先后端全量汇总(该维度所有 SKU); 无 summary(搜索/翻页)时回退已加载行
     const beg = invSummary
-      ? (invSummary.beg || 0) + (invSummary.mi || 0)
-      : inventory.reduce((s, x) => s + (x.beginning_stock_raw || 0) + (x.month_inbound || 0), 0)
-    const out = invSummary
+      ? invSummary.beg || 0
+      : inventory.reduce((s, x) => s + (x.beginning_stock_raw || 0), 0)
+    const mi = invSummary
+      ? invSummary.mi || 0
+      : inventory.reduce((s, x) => s + (x.month_inbound || 0), 0)
+    const mo = invSummary
       ? invSummary.mo || 0
       : inventory.reduce((s, x) => s + (x.month_outbound || 0), 0)
-    if (out <= 0 || inventory.length === 0) return null
-    const ms = inventory[0].month_start
-    const days = ms
-      ? Math.max(1, Math.floor((Date.now() - new Date(ms + 'T00:00:00').getTime()) / 86400000) + 1)
-      : 30
-    return ((days * beg) / out).toFixed(1)
-  }, [inventory])
+    if (mo <= 0 || inventory.length === 0) return null
+    // 期末不兜底: 仓总平均库存为负时, 仓周转如实为负并标异常(见渲染处)
+    const end = beg + mi - mo
+    const avg = (beg + end) / 2
+    // 期间天数由后端给「当月自然月天数」(11 月=30), 与行值同一口径
+    const days = invSummary?.pd || inventory[0].period_days || 30
+    return ((avg * days) / mo).toFixed(2)
+  }, [inventory, invSummary])
 
   // 底部总计取值: 优先后端全量 summary(该维度所有 SKU), 缺失回退已加载行
   // 2026-11-01 修正签名: 原声明 3 个形参却从不使用 fallback, 而 4 处调用只传 2 个
@@ -445,7 +486,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         {colLabel(col.id)}
                         <br />
                         <span className="small" style={{ fontWeight: 'var(--fw-regular)' }}>
-                          {monthRange}
+                          {inRange}
+                          {ledgerOpen ? ` · ${t('inv.month_open')} ${ledgerOpen.d}/${ledgerOpen.m}` : ''}
                         </span>
                       </th>
                     )
@@ -455,7 +497,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         {colLabel(col.id)}
                         <br />
                         <span className="small" style={{ fontWeight: 'var(--fw-regular)' }}>
-                          {monthRange}
+                          {outRange}
                         </span>
                       </th>
                     )
@@ -576,6 +618,36 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       },
                       x.month_outbound ?? 0,
                     )
+                  else if (col.id === 'end_stock') {
+                    // 2026-11-04 期末 = 期初 + 当月入库 − 当月出库(后端算, 前端只渲染)
+                    //   负数 = 出库超过可售量, 属于数据异常 → 红色标出, 与周转列的口径一致
+                    const _end = x.end_stock ?? 0
+                    el = React.createElement(
+                      'td',
+                      {
+                        key: col.id,
+                        className: 'col-qty',
+                        title: t('inv.end_stock_hint'),
+                        style: {
+                          color: _end < 0 ? 'var(--danger)' : undefined,
+                          fontWeight: 'var(--fw-semibold)',
+                        },
+                      },
+                      _end,
+                    )
+                  } else if (col.id === 'avg_stock') {
+                    const _avg = x.avg_stock ?? 0
+                    el = React.createElement(
+                      'td',
+                      {
+                        key: col.id,
+                        className: 'col-qty',
+                        title: t('inv.avg_stock_hint'),
+                        style: { color: _avg < 0 ? 'var(--danger)' : undefined },
+                      },
+                      typeof _avg === 'number' ? _avg.toFixed(1) : _avg,
+                    )
+                  }
                   else if (col.id === 'prod_date')
                     el = React.createElement(
                       'td',
@@ -701,22 +773,47 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                     )
                   else if (col.id === 'turnover') {
                     const tc = x.turnover_days
+                    // 期末为负 → 负周转, 标「负库存异常」; 负值不能当正常周转读
+                    const abn = tc != null && tc < 0
                     el = React.createElement(
                       'td',
                       {
                         key: col.id,
                         className: 'col-qty',
+                        title: abn ? t('inv.negative_stock') : t('inv.turnover_hint'),
                         style: {
                           fontWeight: 'var(--fw-semibold)',
                           color:
-                            tc != null && tc > 30
+                            tc != null && (tc > 30 || abn)
                               ? 'var(--danger)'
                               : tc != null && tc > 15
                                 ? 'var(--warning)'
                                 : 'var(--text)',
                         },
                       },
-                      tc != null ? t('common.day_unit', { n: tc }) : '∞',
+                      // 2026-11-04 不再渲染 ∞: 当月出库为 0 时公式无解,
+                      //   给明确文案「未出库」(走词条, 不硬编码中文)
+                      tc != null
+                        ? [
+                            // 用户定案: 周转天必须两位小数 —— 后端 round(2) 后 17.0 会被
+                            //   JSON 序列化成 17, 直接插值就成"17 天", 与 "16.07 天" 不齐
+                            t('common.day_unit', { n: Number(tc).toFixed(2) }),
+                            abn
+                              ? React.createElement(
+                                  'span',
+                                  {
+                                    key: 'abn',
+                                    style: {
+                                      display: 'block',
+                                      fontSize: 'var(--font-10)',
+                                      fontWeight: 'var(--fw-regular)',
+                                    },
+                                  },
+                                  t('inv.negative_stock'),
+                                )
+                              : null,
+                          ]
+                        : t('inv.turnover_na'),
                     )
                   } else if (col.id === 'price')
                     el = React.createElement(
@@ -801,8 +898,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                               Math.min(
                                 100,
                                 Math.round(
-                                  ((new Date().getTime() - new Date(b.prod_date).getTime()) /
-                                    86400000 /
+                                  (daysSinceCn(b.prod_date) /
                                     dp) *
                                     100,
                                 ),
@@ -847,8 +943,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         let es = ''
                         if (b.exp_date && b.prod_date) {
                           const cv = Math.round(
-                            ((new Date().getTime() - new Date(b.prod_date).getTime()) /
-                              86400000 /
+                            (daysSinceCn(b.prod_date) /
                               ((new Date(b.exp_date).getTime() - new Date(b.prod_date).getTime()) /
                                 86400000)) *
                               100,
@@ -886,8 +981,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                           )
                           if (td > 0) {
                             const cv = Math.round(
-                              ((new Date().getTime() - new Date(b.prod_date).getTime()) /
-                                86400000 /
+                              (daysSinceCn(b.prod_date) /
                                 td) *
                                 100,
                             )
@@ -1116,6 +1210,32 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         },
                         _sumVal('mo', x => x.month_outbound),
                       )
+                    if (col.id === 'end_stock' || col.id === 'avg_stock') {
+                      // 合计与行值同口径: 先合计再推算, 不是把各行期末/平均做算术平均
+                      //   总期末 = Σ期初 + Σ月入 − Σ月出; 总平均 = (Σ期初 + 总期末)/2
+                      const _b = _sumVal('beg', x => x.beginning_stock_raw)
+                      const _i = _sumVal('mi', x => x.month_inbound)
+                      const _o = _sumVal('mo', x => x.month_outbound)
+                      const _e = _b + _i - _o
+                      const _a = (_b + _e) / 2
+                      const _v = col.id === 'end_stock' ? _e : _a
+                      return React.createElement(
+                        'td',
+                        {
+                          key: col.id,
+                          className: 'col-qty',
+                          title:
+                            col.id === 'end_stock'
+                              ? t('inv.end_stock_hint')
+                              : t('inv.avg_stock_hint'),
+                          style: {
+                            fontWeight: 'var(--fw-bold)',
+                            color: _v < 0 ? 'var(--danger)' : undefined,
+                          },
+                        },
+                        col.id === 'end_stock' ? _e : _a.toFixed(1),
+                      )
+                    }
                     if (col.id === 'avail')
                       return React.createElement(
                         'td',
@@ -1138,15 +1258,41 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         _d > 0 ? t('common.day_unit', { n: (_q / _d).toFixed(1) }) : '—',
                       )
                     }
-                    if (col.id === 'turnover')
+                    if (col.id === 'turnover') {
+                      // 仓总平均库存为负 → 仓周转为负, 同样标异常, 不当正常值
+                      const _tabn = totalTurnover != null && Number(totalTurnover) < 0
                       return React.createElement(
                         'td',
                         {
                           key: col.id,
-                          style: { fontSize: 'var(--font-13)', fontWeight: 'var(--fw-bold)' },
+                          title: _tabn ? t('inv.negative_stock') : t('inv.total_turnover_hint'),
+                          style: {
+                            fontSize: 'var(--font-13)',
+                            fontWeight: 'var(--fw-bold)',
+                            color: _tabn ? 'var(--danger)' : undefined,
+                          },
                         },
-                        totalTurnover != null ? t('common.day_unit', { n: totalTurnover }) : '—',
+                        totalTurnover != null
+                          ? [
+                              t('common.day_unit', { n: totalTurnover }),
+                              _tabn
+                                ? React.createElement(
+                                    'span',
+                                    {
+                                      key: 'tabn',
+                                      style: {
+                                        display: 'block',
+                                        fontSize: 'var(--font-10)',
+                                        fontWeight: 'var(--fw-regular)',
+                                      },
+                                    },
+                                    t('inv.negative_stock'),
+                                  )
+                                : null,
+                            ]
+                          : t('inv.turnover_na'),
                       )
+                    }
                     if (col.id === 'price')
                       return React.createElement(
                         'td',

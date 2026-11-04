@@ -16,7 +16,7 @@ export interface DisposalRow {
   reason?: string[]
   suggestion?: string
   disposed?: boolean
-  days_zero?: number
+  days_zero?: number | null   // null = 从未销售(不是 999)
   stock?: number
   [k: string]: unknown
 }
@@ -280,7 +280,7 @@ export default function SlowTab(props: Props) {
                               style={{
                                 fontWeight: 'var(--fw-semibold)',
                                 color:
-                                  x.days_zero >= 90
+                                  x.days_zero == null || x.days_zero >= 90
                                     ? 'var(--danger)'
                                     : x.days_zero >= 30
                                       ? 'var(--warning)'
@@ -288,7 +288,9 @@ export default function SlowTab(props: Props) {
                                 fontSize: 'var(--font-sm)',
                               }}
                             >
-                              {x.days_zero == 999 ? '∞' : t('ins.days_n', { n: x.days_zero })}
+                              {x.days_zero == null
+                                ? t('ins.never_sold')
+                                : t('ins.days_n', { n: x.days_zero })}
                             </td>
                           )
                         if (col.id === 'stock')

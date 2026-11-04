@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from db import query, one, execute
 from routes.common import try_err, INVENTORY_COLS as _INV_COLS
 from routes.dashboard_stock_risk import _rule_params  # health 判定用规则参数(2026-10-11 移动时补依赖)
+from core.clock import now_cn
 
 
 def _sync_health_snapshot(channel, health):
@@ -26,7 +27,7 @@ def _sync_health_snapshot(channel, health):
                 "VALUES(%s,%s,%s,%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
                 "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
-                [datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel,
+                [now_cn().strftime("%Y-%m-%d"), channel,
                  int(_sc) if _sc is not None else -1,
                  int((health.get("own") or {}).get("score") or -1),
                  int((health.get("platform") or {}).get("score") or -1),

@@ -8,6 +8,7 @@ import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from core.clock import now_cn
 
 # GMV 总收入口径(含申请退款流水, net 再扣)——看板 GMV/趋势/漏斗
 PAID_STATUSES = ("待发货", "已发货", "已完成", "申请退款")
@@ -444,7 +445,7 @@ def mark_agg_days(channel, days, reason="write"):
     更早的日期 agg 本来就不服务(那部分由 summary 自定义区间 / 历史归档页直查),
     登记了也永远不会被重建 → 队列残留 → agg_dirty 永远置位 → 看板永久降级直查。
     """
-    _min = (datetime.now(timezone.utc) - timedelta(days=AGG_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    _min = (now_cn() - timedelta(days=AGG_WINDOW_DAYS)).strftime("%Y-%m-%d")
     _ds = sorted({_norm_day(d) for d in (days or [])} - {""})
     _ds = [d for d in _ds if d >= _min]
     if not _ds:

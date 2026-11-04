@@ -15,6 +15,7 @@ import type { MutableRefObject } from 'react'
 import type { NoteSeg } from '../../api/types'
 import type { ColumnDef } from '../../components/hammer/configs'
 import type { FreshData } from '../../components/Freshness'
+import { daysSinceCn } from '../../utils/date'
 
 /** 补货建议行: 已知字段精确类型, 动态扩展字段收敛为 unknown */
 export interface ReplenRow {
@@ -689,12 +690,8 @@ export default function ReplenTab(props: Props) {
           </summary>
           <div style={{ fontSize: 'var(--font-sm)', marginTop: 8 }}>
             {orderedItems.map((po, i) => {
-              const daysSinceArrival = po.arrival_date
-                ? Math.floor(
-                    (new Date().getTime() - new Date(po.arrival_date).getTime()) /
-                      (1000 * 60 * 60 * 24),
-                  )
-                : null
+              // 北京时间自然日差(UTC 解析会在 00:00-08:00 少算一天)
+              const daysSinceArrival = po.arrival_date ? daysSinceCn(po.arrival_date) : null
               const stayColor =
                 daysSinceArrival != null
                   ? daysSinceArrival > 90

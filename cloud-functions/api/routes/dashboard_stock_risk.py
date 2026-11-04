@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from db import query, one, execute
 from routes.common import try_err, INVENTORY_COLS as _INV_COLS
 from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛; 顶层 import 无环)
+from core.clock import now_cn
 
 
 
@@ -104,7 +105,7 @@ def _stock_risk(channel, full: int = 0):
         factor_trad = factor_bbcc = 1.0
     try:
         from datetime import datetime as _dt, timezone as _tz
-        accel = _hourly_accel(channel, _dt.now(_tz.utc), ratio=accel_ratio, min_qty=accel_min_qty)
+        accel = _hourly_accel(channel, now_cn(), ratio=accel_ratio, min_qty=accel_min_qty)
     except Exception as _e:
         try_err("dash", "hourly_accel 计算降级", _e)
         accel = {}

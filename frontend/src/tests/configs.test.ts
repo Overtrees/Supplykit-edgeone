@@ -40,7 +40,11 @@ describe('列配置', () => {
   })
 
   it('进销存页三视图列定义完整', () => {
-    expect(INV_COLS.own.length).toBe(20)
+    expect(INV_COLS.own.length).toBe(22)
+    // 平均库存法对账链必须同屏: 期初 → 入 → 出 → 期末 → 平均 → 周转, 缺一列就无从核对
+    expect(INV_COLS.own.map(c => c.id)).toEqual(
+      expect.arrayContaining(['begin', 'month_in', 'month_out', 'end_stock', 'avg_stock', 'turnover']),
+    )
     expect(INV_COLS.platform.length).toBe(15)
     expect(INV_COLS.platform_b.length).toBe(16)
   })

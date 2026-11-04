@@ -93,6 +93,10 @@ export const INV_COLS = {
     { id: 'transit', label: 'transit' },
     { id: 'month_in', label: 'month_in' },
     { id: 'month_out', label: 'month_out' },
+    // 2026-11-04 平均库存法(用户定案): 期末 = 期初+入-出, 平均 = (期初+期末)/2,
+    //   周转 = 平均 × 当月天数 / 当月出库 —— 三个数在同屏可对账, 缺列就只能"信结果"
+    { id: 'end_stock', label: 'end_stock' },
+    { id: 'avg_stock', label: 'avg_stock' },
     { id: 'prod_date', label: 'prod_date' },
     { id: 'exp_date', label: 'exp_date' },
     { id: 'batch_days', label: 'batch_days' },

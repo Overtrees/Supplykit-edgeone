@@ -8,6 +8,7 @@ from routes.common import ok, fail, traced, try_err, SALES_SQL as _SALES_SQL
 
 router = APIRouter(tags=["misc"])
 from routes.debug import router as debug_router
+from core.clock import CN_TZ, now_cn
 router.include_router(debug_router)  # 2026-10-13 调试端点统一收口(debug.py)
 
 # ── 日志收口分级白名单(2026-10-17 统一收敛: 曾 3 处重复定义漂移——export 多 detect_debug/business_error,
@@ -51,7 +52,7 @@ def _export_md(date="", scope="", level=""):
     """md 生成体(export/file 共用): 返回 (日期, 条数, markdown 文本)"""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     _SCOPE_TYPES = _LOG_SCOPE_TYPES  # 2026-10-17 统一收敛(模块级常量)
-    _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    _d = date or now_cn().strftime("%Y-%m-%d")
     _next = (_dt.strptime(_d, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
     where = " WHERE created_at >= %s AND created_at < %s"
     params = [_d + " 00:00:00", _next + " 00:00:00"]
@@ -97,7 +98,7 @@ def get_log_file(date: str = "", scope: str = ""):
     """日志文件(iPhone 式): 读 log_archives 归档(历史保留) → 无归档则实时生成并归档(懒生成, 任何日期点开即有)
     返回 {date, scope, count, markdown, archived}"""
     from datetime import datetime as _dt, timezone as _tz
-    _d = date or _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    _d = date or now_cn().strftime("%Y-%m-%d")
     _arch = one("SELECT markdown, `count` FROM log_archives WHERE `date`=%s AND `scope`=%s", [_d, scope or "all"])
     if _arch and _arch.get("markdown"):
         # 2026-10-28 一致性修复: 归档是快照(旧), 明细可能已新增 —— 曾直接返回归档
@@ -142,7 +143,7 @@ def list_log_files(days: int = 30, scope: str = ""):
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     _SCOPE_TYPES = _LOG_SCOPE_TYPES  # 2026-10-17 统一收敛(模块级常量, 防 3 处漂移)
     _sc = scope or "all"
-    _cut = (_dt.now(_tz.utc) - _td(days=days)).strftime("%Y-%m-%d")
+    _cut = (now_cn() - _td(days=days)).strftime("%Y-%m-%d")
     # 1) 归档表(历史文件, 明细清理后仍在)
     arch = query("SELECT `date`, `count`, updated_at FROM log_archives WHERE scope=%s AND `date` >= %s "
                  "ORDER BY `date` DESC", [_sc, _cut])
@@ -245,7 +246,7 @@ def monitor():
     from datetime import datetime, timezone as _tz
     err = one("SELECT COUNT(*) AS c FROM quality_logs WHERE level='error'") or {}
     slow = one("SELECT COUNT(*) AS c FROM quality_logs WHERE log_type='slow_request'") or {}
-    today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+    today = now_cn().strftime("%Y-%m-%d")
     err_today = one("SELECT COUNT(*) AS c FROM quality_logs "
                     "WHERE level='error' AND DATE(created_at)=%s", [today]) or {}
     slow_today = one("SELECT COUNT(*) AS c FROM quality_logs "
@@ -579,7 +580,7 @@ async def heal_own_inventory(request: Request):
             from db import execute as _e6
             # 2026-10-30 窗口统一 90: 物化重建 / 对账 / 回填三处一致;
             #   原 90 天会多写 30 天"物化根本不读"的历史行(白耗 RU)
-            _start = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+            _start = (now_cn() - timedelta(days=90)).strftime("%Y-%m-%d")
             for _ch3 in chs:
                 # 2026-10-30 条件化(原无条件全量 90 天回填): 该语句本意是"主键重建后表被清空"的补偿,
                 #   改 ON DUPLICATE 后条件丢失 → 每次 heal-own 都写 13 万行(实测 12 次调用 = 12 次全量,
@@ -716,7 +717,7 @@ def data_freshness(channel: str = "jd"):
     _LBL = {"order": "订单", "inventory": "库存", "platform_inv": "平台库存",
             "inventory_b": "B仓库存", "inbound": "入库", "outbound": "出库",
             "product": "商品档案", "supplier": "供应商", "gmv_flow": "GMV回款"}
-    _now = _dt.now(_tz.utc)
+    _now = now_cn()
     rows = []
     try:
         # db.query 返回 tuple → 转 list(下方兜底需要 append; 曾 AttributeError: 'tuple' has no append)
@@ -732,7 +733,7 @@ def data_freshness(channel: str = "jd"):
         _t = str(s)[:19].replace("T", " ")
         for _fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
             try:
-                _d = _dt.strptime(_t, _fmt).replace(tzinfo=_tz.utc)
+                _d = _dt.strptime(_t, _fmt).replace(tzinfo=CN_TZ)
                 return max(int((_now - _d).total_seconds() // 86400), 0)
             except Exception:
                 continue
