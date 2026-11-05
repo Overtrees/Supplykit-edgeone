@@ -46,17 +46,21 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         import time as _tt
         params = _json.loads(row.get("params") or "{}")
         step = int(params.get("step") or 0)
-        from routes.seed_fill import prepare_skus, seed_step
+        from routes.seed_fill import prepare_skus, seed_step, SEED_DONE
         _t0 = _tt.time()
         skus_data = prepare_skus()
         today = now_cn()
-        nxt, part = seed_step(step, today, skus_data)
+        # 2026-11-05 带 run_id: 每步写入前登记 id 水位 → 可精确回滚本轮新增行 + 行数对账
+        nxt, part = seed_step(step, today, skus_data, run_id=task_id)
         _sq = round(_tt.time() - _t0, 1)
         # 2026-10-15 每步耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
         _steps = (params.get("steps") or []) + [{"name": str(part) or ("步骤%d" % step), "elapsed": _sq}]
-        _cur = {"name": ("步骤%d" % nxt) if nxt < 10 else "完成", "started": int(_tt.time())}
-        new_params = _json.dumps({"step": nxt, "steps": _steps, "cur_step": None if nxt >= 10 else _cur})
-        if nxt >= 10:
+        # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 原写死 10, 而段号重排后完成值是 12
+        #   → 任务越过 10 后永不落 done, status 轮询会一直续跑(空转烧 RU)
+        _cur = {"name": ("步骤%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
+        new_params = _json.dumps({"step": nxt, "steps": _steps,
+                                  "cur_step": None if nxt >= SEED_DONE else _cur})
+        if nxt >= SEED_DONE:
             # 全部步骤完成 → done(汇总 part 简单展示)
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
                     (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
@@ -110,7 +114,7 @@ async def seed_fill(request: Request):
                 (task_id, _json.dumps({"step": 0}), channel))
         skus_data = prepare_skus()
         today = now_cn()
-        nxt, part = seed_step(0, today, skus_data)
+        nxt, part = seed_step(0, today, skus_data, run_id=task_id)
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (_json.dumps({"step": nxt}), task_id))
         return ok({"task_id": task_id, "started": True})
@@ -122,6 +126,78 @@ async def seed_fill(request: Request):
         except Exception as _e:
                 try_err('tasks', '静默降级', _e)
         return fail("种子填充启动失败: %s" % str(e)[:200])
+
+@router.post("/seed/watermark")
+@traced
+async def seed_watermark_report(request: Request):
+    """seed 水位与行数对账(只读): 看某轮 seed 每步"预期多少行 / 实际落了多少行"
+
+    为什么要有这个口: seed 一次全量 90 万行级, "生成侧说写了 N 行" 和 "库里真有 N 行" 是两件事 ——
+    唯一键冲突被 INSERT IGNORE 吃掉、校验拒写, 都会让实际少于预期, 而旧实现全程静默。
+    差一行就是一行, 这里直接给出来, 不再靠"跑完了"推断。
+
+    调用: POST /api/seed/watermark  {"run_id": "<seed 任务 id>"}
+    """
+    from routes.common import verify_token
+    if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
+        return fail("仅 admin 可用", 403)
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+        try_err('tasks', '静默降级', _e)
+    run_id = str(d.get("run_id") or "").strip()
+    if not run_id:
+        return fail("需要 run_id(seed 任务的 task_id)", 400)
+    from routes.seed_fill import wm_report
+    return ok(wm_report(run_id))
+
+
+@router.post("/seed/rollback")
+@traced
+async def seed_rollback(request: Request):
+    """按水位回滚某轮 seed 的**新增行**(只删 id > hwm_before, 历史行不动)
+
+    使用场景: seed 跑到第 8 步撞 90s 上限/网关 504 失败 —— 旧做法只能整库 reset 重来,
+    把前 7 步已经正确的数据一起丢掉, 还要再付一次几十万行 DELETE 的 RU。
+    这里只删"这一轮新增的", 已经存在的历史数据(哪怕也是 seed 生成的)一行不碰。
+
+    安全约束:
+      · target 只可能是 orders / inventory / inbound_records / outbound_records ——
+        水位的语义是"插入型目标按 id 递增", upsert 型目标(products/suppliers)不登记水位, 无从回滚
+      · 不带 steps → 回滚该轮已登记的全部步骤; 带 steps → 只回滚指定步骤
+      · 回滚前要求该轮任务不是 running(避免和正在续跑的那一步打架)
+
+    调用: POST /api/seed/rollback  {"run_id": "...", "steps": [7,8]}   (steps 可省)
+    """
+    from routes.common import verify_token
+    if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
+        return fail("仅 admin 可用", 403)
+    d = {}
+    try:
+        d = await request.json()
+    except Exception as _e:
+        try_err('tasks', '静默降级', _e)
+    run_id = str(d.get("run_id") or "").strip()
+    if not run_id:
+        return fail("需要 run_id(seed 任务的 task_id)", 400)
+    _steps = d.get("steps")
+    if _steps is not None:
+        try:
+            _steps = [int(x) for x in _steps]
+        except Exception:
+            return fail("steps 必须是整数数组", 400)
+    # 与正在续跑的任务互斥: running 状态下回滚会删掉本步刚写入的行, 白跑
+    _t = one("SELECT status FROM sync_tasks WHERE task_id=%s", [run_id]) or {}
+    if str(_t.get("status") or "") == "running":
+        return fail("该任务仍在 running(正在续跑), 先等它结束或标为 error 再回滚", 409)
+    from routes.seed_fill import wm_rollback
+    _res = wm_rollback(run_id, _steps)
+    # 回滚改了库存/订单 → 分析缓存必须失效, 否则页面还显示已删掉的数据
+    from routes.analysis_cache import invalidate
+    invalidate("all")
+    return ok(_res)
+
 
 @router.post("/seed/reset")
 @traced
@@ -192,29 +268,29 @@ async def seed_step_run(request: Request):
     背景: /seed/fill 要求空库且从 step 0 全跑(实测 36.7 分钟), 只为验证一处派生逻辑
       也要清空重来, RU 开销过大。此口让运维只重算指定步骤。
 
-    白名单: from_step ∈ {5,6,7,8}, 连续执行到 8
-      · [8]      只重算月汇总(最快, 前提: 流水已带 warehouse_type)
-      · [7,8]    重算自有仓可用 + 重建批次, 再重算月汇总
-      · [6,7,8]  重建流水(带仓型) + 重算可用 + 月汇总 —— 验证 _seed_records 新逻辑走这个
-      · [5,6,7,8] 先补库存行(含多码拆行) 再走上面三步 —— 验证 _seed_inventory 新逻辑走这个
-        (inventory 有业务唯一键, INSERT IGNORE 只补新键行: 已存在的码行不受影响, 期初不被改写)
-      · 0-4 会写 products/orders → 拒绝; 5 只限 seed 库(orders.data_source='seed' 守卫)
-      · 首次 from_step=5 会连跑 5→8(实测 >120s), 可能返回 504 网关超时 —— 服务端仍会跑完,
-        用四维校验(Σ批次=可用 / 月汇总=流水)确认, 不要重复触发
-      · 6 不可单独执行: 流水变了而可用未重算 → 可用与流水脱节, 反而破坏四维
-        (故强制连续到 8, 不接受 [6] 或 [6,7])
-      · 9 重建快照/物化(实测 456s, 超平台单请求时限) → 拒绝
+    白名单: from_step ∈ {局部重跑段}，见下方 `_ALLOWED`，连续执行到末步
+      · [月汇总]        只重算月汇总(最快, 前提: 流水已带 warehouse_type)
+      · [落账,月汇总]   重算自有仓可用 + 重建批次, 再重算月汇总
+      · [流水,落账,月汇总] 重建流水(带仓型) + 重算可用 + 月汇总
+      · [库存,流水,落账,月汇总] 先补库存行(含多码拆行) 再走上面三步
+      · 更早的段会写 products/orders → 拒绝; 库存段只限 seed 库(orders.data_source='seed' 守卫)
+      · 流水段单跑不可: 流水变了而可用未重算 → 可用与流水脱节, 反而破坏四维
+        (故强制连续到月汇总, 不接受只跑流水或 [流水,落账])
+      · 告警/快照/物化段(实测 456s, 超平台单请求时限) → 拒绝
       · _seed_config 会 DELETE 并重写 replenishment_config/rules, 线上单跑会冲掉人工配置
-        → 不复用 seed_step(8), 只取其中的月汇总部分
+        → 不复用 seed_step(月汇总), 只取其中的月汇总部分
+
+    2026-11-05 段号重排: 订单从 4 段扩到 6 段(90 天), 库存/流水/落账/月汇总整体后移。
+      原白名单硬编码 (5,6,7,8) 与段号耦合 → 现在从 seed_fill 的段常量推导, 再扩段也不用改这里。
 
     四维保障(返回里直接给出证据):
       · beginning_unchanged: 期初**任何情况下**都必须不变(铁律: 期初以导入为准)
-      · available_unchanged: 仅 [8] 时要求为 true(只许写 month_* 两列);
-        [7,8]/[6,7,8] 会按新流水重算可用, 允许变化, 由 month_diff 兜底验证自洽
+      · available_unchanged: 只跑月汇总段时要求为 true(只许写 month_* 两列);
+        落账段会按新流水重算可用, 允许变化, 由 month_diff 兜底验证自洽
       · month_diff: 月汇总 vs 流水的偏差行数, 前后对比, 正常应为 0
 
     调用:
-      curl -X POST <host>/api/seed/step -H 'X-Auth-Token: <admin>' -d '{"from_step":6}'
+      curl -X POST <host>/api/seed/step -H 'X-Auth-Token: <admin>' -d '{"from_step":8}'
     """
     from routes.common import verify_token
     if verify_token(request.headers.get("X-Auth-Token", "")) != "admin":
@@ -224,20 +300,25 @@ async def seed_step_run(request: Request):
         d = await request.json()
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
+    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH)  # noqa: E402
+    _LAST = _SEED_MONTH
+    _ALLOWED = (_SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH)
     try:
-        from_step = int(d.get("from_step") or d.get("step") or 8)
+        from_step = int(d.get("from_step") or d.get("step") or _SEED_SETTLE)
     except Exception:
         return fail("from_step 必须是整数", 400)
-    if from_step not in (5, 6, 7, 8):
-        return fail("from_step 只支持 5/6/7/8, 且必须连续执行到 8 —— "
-                    "5 生成库存行(含多码拆行) / 6 重建流水 / 7 重算可用+批次 / 8 月汇总; "
-                    "0-4 会写商品与订单, 6 单跑会让可用与流水脱节", 400)
-    # from_step=5 会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
+    if from_step not in _ALLOWED:
+        return fail("from_step 只支持 %s, 且必须连续执行到 %d —— "
+                    "%d 生成库存行(含多码拆行) / %d 重建流水 / %d 重算可用+批次 / %d 月汇总; "
+                    "更早的段会写商品与订单, 流水段单跑会让可用与流水脱节"
+                    % ("/".join(str(x) for x in _ALLOWED), _LAST,
+                       _SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH), 400)
+    # 库存段会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
     #   否则等于往真实客户库里塞演示库存。orders.data_source='seed' 是"这是 seed 库"的可靠标记。
-    if from_step <= 5:
+    if from_step <= _SEED_INV:
         _sd = one("SELECT COUNT(*) AS c FROM orders WHERE data_source='seed'") or {}
         if int(_sd.get("c") or 0) <= 0:
-            return fail("from_step=5 会写入演示库存行, 仅限 seed 库"
+            return fail("库存段会写入演示库存行, 仅限 seed 库"
                         "(orders 中 data_source='seed' 为空 → 判定为真实库)", 400)
     from routes.seed_fill import _sync_inv_month
     import time as _t
@@ -261,52 +342,40 @@ async def seed_step_run(request: Request):
         before = _inv_fingerprint()
         bad_before = _month_sum_diff(month_start)
         _steps = []
-        # ── step 5: 生成库存行(新 SKU 才真正插入; 已存在行 INSERT IGNORE 跳过) ──
-        #   from_step=5 是"让 seed 生成器的新逻辑(多码拆行)真正落地"的唯一途径 —— 不跑它,
+        # ── 库存段: 生成库存行(新 SKU 才真正插入; 已存在行 INSERT IGNORE 跳过) ──
+        #   这是"让 seed 生成器的新逻辑(多码拆行)真正落地"的唯一途径 —— 不跑它,
         #   inventory 里永远只有旧的单码行, 双码链路无从验证。
-        if from_step <= 5:
+        if from_step <= _SEED_INV:
             import random as _rnd
             from routes.seed_fill import _seed_inventory, prepare_skus
             _rnd.seed(42)
             _t0 = _t.time()
             _nin = _seed_inventory(prepare_skus())
-            _steps.append({"step": 5, "name": "库存行生成",
+            _steps.append({"step": _SEED_INV, "name": "库存行生成",
                            "elapsed_s": round(_t.time() - _t0, 1),
                            "result": {"rows": _nin}})
-        # ── step 6: 重建出入库流水(带 warehouse_type) ──────────────────────
-        if from_step <= 6:
+        # ── 流水段: 重建出入库流水(带 warehouse_type) ──────────────────────
+        if from_step <= _SEED_FLOW:
             import random as _rnd
             from routes.seed_fill import _seed_records
-            _rnd.seed(42)   # 与 seed_step(6) 同语义: 每步独立确定性(否则依赖进程随机态)
+            _rnd.seed(42)   # 与 seed_step(流水段) 同语义: 每步独立确定性(否则依赖进程随机态)
             _t0 = _t.time()
             _ib, _ob = _seed_records()
-            _steps.append({"step": 6, "name": "出入库流水重建",
+            _steps.append({"step": _SEED_FLOW, "name": "出入库流水重建",
                            "elapsed_s": round(_t.time() - _t0, 1),
                            "result": {"inbound": _ib, "outbound": _ob}})
-        # ── step 7: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
-        if from_step <= 7:
-            from routes.cleanse_write import _recalc_own_inventory as _rc
-            from routes.seed_fill import _seed_batches
+        # ── 落账段: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
+        if from_step <= _SEED_SETTLE:
+            from routes.seed_fill import seed_settle
             _t0 = _t.time()
-            _nrc = 0
-            for _ch in ('jd', 'other'):
-                _sk = [r.get('sku') for r in query(
-                    "SELECT DISTINCT sku FROM inventory WHERE channel=%s AND warehouse_type='own'",
-                    [_ch])]
-                if _sk:
-                    _rc(_ch, [x for x in _sk if x])
-                    _nrc += len(_sk)
-            _nb = _seed_batches()
-            # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进 step8)
-            from routes.seed_fill import _assert_barcode_aligned as _abc
-            _bc_chk = _abc()
-            _steps.append({"step": 7, "name": "可用重算+批次重建",
+            _st = seed_settle()
+            _steps.append({"step": _SEED_SETTLE, "name": "可用重算+批次重建",
                            "elapsed_s": round(_t.time() - _t0, 1),
-                           "result": {"skus": _nrc, "batches": _nb, "barcode_aligned": _bc_chk}})
-        # ── step 8: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
+                           "result": _st})
+        # ── 月汇总段: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
         _t0 = _t.time()
         groups = _sync_inv_month()
-        _steps.append({"step": 8, "name": "月汇总重算",
+        _steps.append({"step": _SEED_MONTH, "name": "月汇总重算",
                        "elapsed_s": round(_t.time() - _t0, 1), "result": groups})
         after = _inv_fingerprint()
         bad_after = _month_sum_diff(month_start)
@@ -322,7 +391,7 @@ async def seed_step_run(request: Request):
         elif bad_after:
             _hint = "月汇总仍有 %d 行与流水不一致, 需排查库存行是否缺失或仓型不匹配" % bad_after
         return ok({
-            "from_step": from_step, "to_step": 8,
+            "from_step": from_step, "to_step": _LAST,
             "total_s": round(_t.time() - _ta, 1),
             "steps": _steps,
             "rows_delta": after["rows"] - before["rows"],

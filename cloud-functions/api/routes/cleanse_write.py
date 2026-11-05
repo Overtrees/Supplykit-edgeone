@@ -569,8 +569,27 @@ def _recalc_own_inventory(channel, skus):
     2026-11-04 账期改造(用户定案甲方案): Σ 的起点不再是"开天辟地", 而是 `ledger_state.begin_date`
       —— 结过账就是本月 1 号(期初 = 上月期末), 没结过是空(首次建账走全期)。
       原实现无日期下界 + 期初被每次导入的快照覆盖 → 每月累加一次双算, 这是根因。
+
+    2026-11-05 RU 改造(用户定案, 目标: 一次 2 万 SKU 重灌落在免费额度内):
+      原实现 = 每 200 SKU 一条 SELECT, 里面为**每一行**跑两个相关子查询
+      (inbound/outbound 各一次) → 2 万 SKU 实测 12.7 RU/SKU × 2 万 ≈ 25 万次索引探测 ≈ 25M RU。
+      一次 seed 重灌光是"重算可用"就要吃掉整月额度的一大半, 这不是优化题, 是可行性题。
+
+      线上 EXPLAIN ANALYZE 定价(2026-11-05 实测, 同一份数据):
+        · 旧路径 12 SKU 一批 ........................ 29.6 RU
+        · 新路径 UPDATE ... JOIN 12 SKU 一批 ........ 23.9 RU  ← 只省两成, 不解决问题
+        · **全渠道一次聚合(不管多少 SKU) ........... 66.9 RU**
+        · **一次 SELECT 出全部 id+beg+in+out ........ 119.4 RU / 39.6ms**
+      结论: 成本**按"批次数"计, 不按 SKU 数计**。0.5 万批 × 24 RU = 12 万 RU 起步,
+      2 万 SKU 就是 1000 批; 而"一次拿全量"只要 119 RU —— 差三个数量级。
+
+      所以改成 **一条 SELECT 取全量 → Python 算 → executemany 回写**:
+        · 流水侧 UNION ALL 后按 (sku,69码,仓,仓型) 聚合一次, LEFT JOIN 库存行;
+        · 只拉 own 维度的行(与旧实现 WHERE 一致), 行数 = 库存行数, 不随订单/流水增长;
+        · 回写按 1000 行一批 executemany(与 _write_batch 同参数), 写侧 RU 与旧路径同量级。
+      **不再按 SKU 分批** —— `skus` 参数只用于"只重算这些 SKU"的语义, 不用于切批。
     """
-    from db import query as _q, execute as _e, executemany as _em
+    from db import query as _q, executemany as _em
     from core.ledger import begin_date as _ledger_begin
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
     # 账期下界: 严格校验成 YYYY-MM-DD 后内联(值来自 ledger_state, 非用户输入)
@@ -579,29 +598,94 @@ def _recalc_own_inventory(channel, skus):
         _bd = ""
     _d_in = " AND r.inbound_date >= '%s' " % _bd if _bd else " "
     _d_out = " AND r.outbound_date >= '%s' " % _bd if _bd else " "
+    _want = {str(x) for x in (skus or []) if x}
+    # 流水分组合并: 一条语句同时产出 in_q / out_q(UNION ALL 后再 SUM, 比两段子查询少一次扫描)
+    #   **分组键必须带仓型**: 旧实现的匹配条件是「流水仓型为空 或 等于库存行仓型」——
+    #   也就是同 (sku,码,仓) 下, 空仓型的流水会同时算给该仓的**每一个**仓型行。
+    #   若这里按 (sku,码,仓) 聚合、再 join 三个仓型行, 那份流水会被三次 JOIN 累加三次。
+    #   所以仓型进分组键, join 时用"空或相等"还原旧口径。
+    sql = (
+        "SELECT i.id, COALESCE(i.beginning_stock,0) AS beg, "
+        "       COALESCE(f._in,0) AS in_q, COALESCE(f._out,0) AS out_q, i.sku "
+        "FROM inventory i "
+        "LEFT JOIN ("
+        "  SELECT r.sku AS _sku, COALESCE(r.barcode,'') AS _bc, r.warehouse AS _wh, "
+        "         COALESCE(r.warehouse_type,'') AS _wt, "
+        "         SUM(CASE WHEN r._io=1 THEN r.quantity ELSE 0 END) AS _in, "
+        "         SUM(CASE WHEN r._io=2 THEN r.quantity ELSE 0 END) AS _out "
+        "  FROM ("
+        "    SELECT sku, barcode, warehouse, warehouse_type, quantity, 1 AS _io FROM inbound_records "
+        "      WHERE channel=%%s%s"
+        "    UNION ALL "
+        "    SELECT sku, barcode, warehouse, warehouse_type, quantity, 2 AS _io FROM outbound_records "
+        "      WHERE channel=%%s%s"
+        "  ) r "
+        "  GROUP BY r.sku, COALESCE(r.barcode,''), r.warehouse, COALESCE(r.warehouse_type,'')"
+        ") f ON f._sku = i.sku "
+        "   AND f._wh = i.warehouse "
+        # 69码严格相等(2026-11-01 收口): 库存行无码而流水有码 = 数据不一致, 应暴露而非借码
+        "   AND f._bc = COALESCE(i.barcode,'') "
+        # 仓型兼容匹配(与旧子查询同一条件): 流水仓型为空 = 未标注, 视为适用于该仓所有仓型
+        "   AND (f._wt = '' OR f._wt = i.warehouse_type) "
+        "WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
+        "  AND (i.deleted_at IS NULL OR i.deleted_at='')"
+        # 2026-11-04 去掉 `max(0, val)` 兜底: 负可用是"出库 > 期初+入库"的真实异常,
+        #   归 0 会把它伪装成"恰好卖完", 看板与对账永远发现不了。负值一路带到前端标「负库存异常」。
+    ) % (_d_in, _d_out, _ph_wt)
+    try:
+        rows = _q(sql, [channel, channel, channel] + list(SELF_WAREHOUSE_TYPES))
+    except Exception as _er:
+        # 执行计划异常(如优化器选了不合适的 join 顺序) → 退回旧逐 SKU 路径,
+        #   不让一次计划变化就把重算全丢掉(旧路径慢但语义相同)。正常情况零成本。
+        try_err('cleanse_write', '批量重算降级(退回逐 SKU)', _er)
+        return _recalc_own_inventory_slow(channel, skus, _bd)
+    upd = []
+    for r in rows:
+        if _want and str(r.get("sku") or "") not in _want:
+            continue
+        try:
+            val = int(r.get("beg") or 0) + int(r.get("in_q") or 0) - int(r.get("out_q") or 0)
+        except (TypeError, ValueError):
+            continue
+        upd.append((val, r.get("id")))
+    out = 0
+    for i in range(0, len(upd), 1000):
+        chunk = upd[i:i + 1000]
+        try:
+            _em("UPDATE inventory SET available_qty=%s WHERE id=%s", chunk)
+            out += len(chunk)
+        except Exception as _ew:
+            try_err('cleanse_write', '重算回写批失败(%d 行)' % len(chunk), _ew)
+    return out
+
+
+
+def _recalc_own_inventory_slow(channel, skus, bd=""):
+    """旧版逐行子查询重算 —— **仅作批量版异常时的降级路径**, 勿在新代码里调用
+
+    语义与 _recalc_own_inventory 逐字一致(同一套匹配条件), 见上方改造说明。
+    """
+    from db import query as _q, executemany as _em
+    _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
+    _d_in = " AND r.inbound_date >= '%s' " % bd if bd else " "
+    _d_out = " AND r.outbound_date >= '%s' " % bd if bd else " "
     out = 0
     for i in range(0, len(skus), 200):
-        batch = skus[i:i + 200]
+        batch = [x for x in skus[i:i + 200] if x]
+        if not batch:
+            continue
         ph = ",".join(["%s"] * len(batch))
         rows = _q(
-            "SELECT i.id, i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
-            "COALESCE(i.beginning_stock, 0) AS beg, "
+            "SELECT i.id, COALESCE(i.beginning_stock, 0) AS beg, "
             "COALESCE((SELECT SUM(r.quantity) FROM inbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
-            # 2026-10-29 仓型维度: 流水仓型须与库存行仓型一致(为多仓/多类型准备)
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
-            # 69码匹配: **严格相等**(2026-11-01 收口, 与 cron 批次对账同规则)
-            #   原"任一方为空即匹配"在多码 SKU 下会把别的码的流水算进来 —— 偏差被抵消, 查不出来。
-            #   库存行无码而流水有码 = 数据不一致, 应当暴露(available 只剩余期初), 不该悄悄借别的码。
             "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')" + _d_in + "), 0) AS in_q, "
             "COALESCE((SELECT SUM(r.quantity) FROM outbound_records r "
             "  WHERE r.channel=i.channel AND r.sku=i.sku AND r.warehouse=i.warehouse "
             "  AND (COALESCE(r.warehouse_type,'')='' OR r.warehouse_type=i.warehouse_type) "
             "  AND COALESCE(r.barcode,'')=COALESCE(i.barcode,'')" + _d_out + "), 0) AS out_q "
             "FROM inventory i WHERE i.channel=%s AND i.warehouse_type IN (%s) AND i.sku IN (%s)"
-            # 2026-11-02 删除快照口径: 软删行(若有)冻结删除时的数量, 重算不碰 —— 恢复删除 =
-            #   复原删除时的快照。当前 inventory 删除走归档表(硬删), 此过滤纯防御,
-            #   与 _adjust_inventory 的命中查询同一条件。
             " AND (i.deleted_at IS NULL OR i.deleted_at='')"
             % ("%s", _ph_wt, ph),
             [channel] + list(SELF_WAREHOUSE_TYPES) + batch)
@@ -611,8 +695,6 @@ def _recalc_own_inventory(channel, skus):
                 val = int(r.get("beg") or 0) + int(r.get("in_q") or 0) - int(r.get("out_q") or 0)
             except Exception:
                 continue
-            # 2026-11-04 去掉 `max(0, val)` 兜底: 负可用是"出库 > 期初+入库"的真实异常,
-            #   归 0 会把它伪装成"恰好卖完", 看板与对账永远发现不了。负值一路带到前端标「负库存异常」。
             upd.append((val, r.get("id")))
         if upd:
             _em("UPDATE inventory SET available_qty=%s WHERE id=%s", upd)

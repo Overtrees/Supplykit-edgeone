@@ -113,6 +113,26 @@ print("=== 四维基线 ===", four_dims())
 _fresh = query("SELECT * FROM data_freshness WHERE doc_type='inventory' AND channel='jd'")
 cleanup()
 
+# ── 账期前置(2026-11-05 补): 本用例断言的是"期初以导入为准 → available=期初+Σ入库",
+#    这条只在**未结过账**时成立。已结账后 cleanse_write 会把导入的"当时可用"改写成
+#    snapshot_qty(只做对账), beginning_stock 不再被导入改写 —— 见 §15.152 账期改造。
+#    原用例写于 11-01(账期上线前), 11-05 线上账期已结(2026-10, begin_date=2026-11-01)
+#    → 四条断言全红。**不是代码坏了, 是用例前提没了**。这里显式还原前提并在结尾复原。
+_LEDGER = None
+try:
+    from db import one as _one
+    _LEDGER = _one("SELECT * FROM ledger_state WHERE channel='jd' AND warehouse_type='own'")
+except Exception:
+    _LEDGER = None
+if _LEDGER and str(_LEDGER.get("status") or "") == "closed":
+    print("   账期已结(period=%s, begin=%s) → 临时置为未结, 用例结束后复原"
+          % (_LEDGER.get("period"), _LEDGER.get("begin_date")))
+    # 注意: `_ledger_started()` 判的是 **begin_date 有没有值**, 不是 status。
+    #   只改 status 不改 begin_date → 仍然被当成"已建账" → 导入值照旧写成 snapshot_qty。
+    #   (第一次改漏了这点, 四条断言依然全红 —— 记在这里, 免得下次又踩。)
+    execute("UPDATE ledger_state SET status='open', begin_date='' "
+            "WHERE channel='jd' AND warehouse_type='own'")
+
 # 1. 商品
 s, e = post_import("product", "SKU,名称,69码,是否做效期管理\n%s,重算测试品,%s,否\n" % (SKU, BC), PROD_MP)
 print("\n[1] 商品导入:", s.get("status"), "| eval:", e.get("status"))
@@ -161,6 +181,13 @@ check("提示含入库缺到期日", "无到期日期" in _msg7, _msg7)
 
 print("\n=== 清理 ===")
 cleanup()
+# 复原账期状态(临时改过就必须还回去, 否则线上"结账"状态被测试静默改成未结)
+if _LEDGER and str(_LEDGER.get("status") or "") == "closed":
+    execute("UPDATE ledger_state SET status=%s, period=%s, begin_date=%s, rows_count=%s "
+            "WHERE channel='jd' AND warehouse_type='own'",
+            [_LEDGER.get("status"), _LEDGER.get("period"), _LEDGER.get("begin_date"),
+             _LEDGER.get("rows_count")])
+    print("   账期状态已复原: status=%s period=%s" % (_LEDGER.get("status"), _LEDGER.get("period")))
 if _fresh:
     execute("UPDATE data_freshness SET last_import_at=%s, last_biz_date=%s, rows_imported=%s "
             "WHERE doc_type='inventory' AND channel='jd'",

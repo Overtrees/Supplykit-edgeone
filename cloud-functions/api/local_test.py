@@ -2958,8 +2958,11 @@ try:
           _br3["rows"] and _br3["rows"][0].get("src") == "import", _br3["rows"][:1])
 
     _sc10 = open("schema_create.py", encoding="utf-8").read()
+    import schema_create as _sck
+    # 断言"版本号 ≥ 8"而不是"== 8": 钉死具体数字会让每次合法的 bump 都变成红灯,
+    #   逼着人改测试而不是改代码 —— 真正要守的是"没被退回旧版本"
     check("期初校准: 表声明存在 + SCHEMA_VERSION 已 bump(改 schema 必 bump)",
-          "ledger_begin_adj" in _sc10 and "SCHEMA_VERSION = 8" in _sc10, "schema_create.py")
+          "ledger_begin_adj" in _sc10 and _sck.SCHEMA_VERSION >= 8, "schema_create.py")
     _ms10 = open("routes/misc.py", encoding="utf-8").read()
     check("期初校准: 日志类型 ledger_override 登记到用户可见域",
           "ledger_override" in _ms10.split("_LOG_SCOPE_TYPES")[1].split('"dev"')[0],
@@ -2970,6 +2973,67 @@ try:
           "routes/cleanse_write.py")
 except Exception as _e27:
     check("期初校准用例无异常", False, str(_e27)[:200])
+
+# ── seed 规模与水位(2026-11-05 用户定案: 每渠道约 21 万单 / 10000 SKU / 90 天) ──
+# 这一组守的是"规模口径"与"半途失败可回滚"两件事 —— 两者都不是能靠肉眼验收的:
+#   · 规模错了 → 页面数字看着正常, 但演示场景(滞销占比/多码比例)全都不成立
+#   · 没有水位 → seed 撞 90s 上限就只能整库 reset, 一次失败报废全部前置步骤
+try:
+    import routes.seed_fill as _sf
+    check("seed 规模: 每渠道 SKU 数 = 10000",
+          _sf.SKU_PER_CHANNEL == 10000, _sf.SKU_PER_CHANNEL)
+    check("seed 规模: 订单窗口 90 天", _sf.ORDER_DAYS == 90, _sf.ORDER_DAYS)
+    # 订单基数反推: 促销日(×2~4)与周末(×0.6~1.2)是在基数上再乘的,
+    #   按 90×基数≈21 万直算会跑出 32 万 —— 这里锁住"含波峰后的总量"落在 21 万上下
+    import datetime as _dtsf, random as _rdsf
+    _tot = 0
+    _rdsf.seed(7)
+    _promo = {'618': list(range(5, 20)), 'month_end': list(range(45, 55))}
+    for _d in range(_sf.ORDER_DAYS):
+        _is_promo = any(_d in _v for _v in _promo.values())
+        _dtx = _dtsf.date(2026, 11, 5) - _dtsf.timedelta(days=_d)
+        _tot += (int(_sf.ORDER_BASE_PER_DAY * _rdsf.uniform(2, 4)) if _is_promo
+                 else (int(_sf.ORDER_BASE_PER_DAY * _rdsf.uniform(0.6, 1.2))
+                       if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
+    check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
+          200000 <= _tot <= 230000, _tot)
+    # 段号自成体系: 订单 6 段 + 库存/流水/落账/月汇总/尾段 = 完成值 12
+    check("seed 段号: 订单 6 段(90 天 ÷ 15 天)", _sf._SEED_ORDER_SEGS == 6, _sf._SEED_ORDER_SEGS)
+    check("seed 段号: 各段严格递增且完成值 = 12",
+          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE
+          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 12,
+          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE, _sf._SEED_MONTH,
+           _sf._SEED_TAIL, _sf.SEED_DONE))
+    # SKU 编号位宽: 4 位到 9999 就撞名, 10000 个必须 5 位
+    _sk_t = _sf._make_skus('-T', 10000, 0.01)
+    check("seed SKU: 10000 个编号无撞名", len({x['sku'] for x in _sk_t}) == 10000,
+          len({x['sku'] for x in _sk_t}))
+    check("seed SKU: 多码按 1% 比例(10000 → 100 个)", len([x for x in _sk_t if x['bc2']]) == 100,
+          len([x for x in _sk_t if x['bc2']]))
+    check("seed SKU: 第二码用 691 前缀, 不与主码 690 段重叠",
+          all(x['bc2'].startswith('691') and x['barcode'].startswith('690')
+              for x in _sk_t if x['bc2']), _sk_t[0])
+    # 水位目标白名单: 只允许插入型表(upsert 型目标没有 id 单调性, 回滚语义不成立)
+    check("seed 水位: 只对插入型目标登记(upsert 型不参与回滚)",
+          set(_sf._WM_TARGETS) == {'orders', 'inventory', 'inbound_records',
+                                   'outbound_records', 'batches'}, _sf._WM_TARGETS)
+    check("seed 水位: 回滚条件只用 id > hwm_before(不碰历史行)",
+          "DELETE FROM `%s` WHERE id > %%s" in open("routes/seed_fill.py", encoding="utf-8").read(),
+          "routes/seed_fill.py")
+    # 一键与分步必须同源(历史上 run_seed_fill 写死 1000 SKU, prepare_skus 是另一套)
+    _sf_src = open("routes/seed_fill.py", encoding="utf-8").read()
+    check("seed: 一键填充与分步共用 prepare_skus(不再写死 1000)",
+          "skus_data = prepare_skus()" in _sf_src.split("def run_seed_fill")[1],
+          "routes/seed_fill.py")
+    # 任务完成判据不能写死数字(段号重排后 10→12, 写死会让任务越过 10 后永不落 done = 空转烧 RU)
+    _ts_src = open("routes/task_seed.py", encoding="utf-8").read()
+    check("seed: 任务完成判据取 SEED_DONE, 不写死 10",
+          "nxt >= SEED_DONE" in _ts_src and "nxt >= 10" not in _ts_src, "routes/task_seed.py")
+    _sc11 = open("schema_create.py", encoding="utf-8").read()
+    check("seed 水位: seed_watermark 表已声明",
+          "seed_watermark" in _sc11 and "uq_wm_run_step" in _sc11, "schema_create.py")
+except Exception as _e28:
+    check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

@@ -51,6 +51,20 @@ SUP = [
 _DEMO_SLOW = set()
 _DEMO_LOW = set()
 
+# ── 规模与窗口(2026-11-05 用户定案) ─────────────────────────────────────
+# 每渠道 10000 SKU / 约 21 万单 / 90 天。集中在这里, 免得散落在各函数里对不上
+# (历史上 `_seed_orders(today,...)` 写死 60 天, 而流水生成写死 90 天 —— 两套窗口,
+#  导致"订单只有 60 天、流水 90 天", 周转与环比口径永远差一截)。
+SKU_PER_CHANNEL = 10000
+ORDER_DAYS = 90
+# 单渠道每天基础单量: 90 天 × 1550 ≈ 13.95 万, 叠加促销日(×2~4, 25 天)与周末(×0.6~1.2)
+#   → 实测 5 次抽样落在 20.4 万 ~ 21.6 万, 中位 21.1 万(用户口径 "21 万上下")。
+#   注: 曾估 2333(按"90×2333≈21 万"直算), 但促销/周末系数是**在基数上再乘**的,
+#   实测跑出 32 万 —— 用户给的 21 万是含促销波峰后的总量, 不是基数。基数必须反推。
+ORDER_BASE_PER_DAY = 1550
+BC2_RATIO = 0.01          # 多码 SKU 占比(每渠道约 100 个)
+
+
 
 def _cat_group(cat):
     if cat in CATS[50:60]:
@@ -74,9 +88,17 @@ def _pick_brand(cat):
     return random.choice(pool)
 
 
-def _make_skus(sfx, count=1000):
-    """SKU 生成器(与原版 make_skus 一致): SKU-{i:04d}{sfx}"""
+def _make_skus(sfx, count=1000, bc2_ratio=0.01):
+    """SKU 生成器: SKU-{i:05d}{sfx}
+
+    2026-11-05 规模调整(用户定案: 每渠道约 21 万单 / 10000 SKU / 90 天):
+      · 编号位宽 4 → 5: 原 '%04d' 到 9999 就撞名, 10000 个 SKU 必须 5 位;
+      · 多码样本从"前 3 个"改成**同渠道约 1%**(bc2_ratio): 固定 3 个在大规模下等于没有,
+        多码链路(按码拆库存行/按码日销/补码规则)要靠足量样本才验得出来；
+      · 第二码用 691 前缀而非 690, 保证不与主码段重叠。
+    """
     r = []
+    _n_bc2 = max(1, int(count * bc2_ratio))
     for i in range(1, count + 1):
         c = CATS[(i - 1) % len(CATS)]
         s = STORES[(i - 1) % len(STORES)]
@@ -87,14 +109,15 @@ def _make_skus(sfx, count=1000):
             p = round(random.uniform(100, 299), 1)
         else:
             p = round(random.uniform(5.8, 99.9), 1)
-        r.append({'sku': 'SKU-%04d%s' % (i, sfx), 'name': '%s%d' % (c, i), 'store': s, 'cat': c,
+        r.append({'sku': 'SKU-%05d%s' % (i, sfx), 'name': '%s%d' % (c, i), 'store': s, 'cat': c,
                   'price': p, 'box': random.choice([6, 12, 24]),
                   'barcode': '690%010d' % i, 'weight': round(random.uniform(5, 25), 1),
                   'volume': round(random.uniform(0.02, 0.12), 3),
                   'status': 'active', 'brand': _pick_brand(c),
-                  # 2026-11-01 多码样本: 每渠道前 3 个 SKU 挂第二码(换包装/换供应商导致的条码变更)
-                  #   没有这组数据, 所有"按 69码聚合"的修复都只能在单码上验证 = 等于没验证
-                  'bc2': ('691%010d' % i) if i <= 3 else ''})
+                  # 2026-11-01 多码样本: 换包装/换供应商导致的条码变更 —— 没有这组数据,
+                  #   所有"按 69码聚合"的修复都只能在单码上验证 = 等于没验证
+                  # 2026-11-05: 固定前 3 个 → 按比例(同渠道约 1%, 10000 SKU 即约 100 个)
+                  'bc2': ('691%010d' % i) if i <= _n_bc2 else ''})
     return r
 
 
@@ -156,7 +179,7 @@ def _seed_products_suppliers(skus_data):
 
 def _seed_orders(today, skus_data):
     """全量订单(兼容): 等价于 _seed_orders_range(0, 60)"""
-    return _seed_orders_range(today, skus_data, 0, 60)
+    return _seed_orders_range(today, skus_data, 0, ORDER_DAYS)
 
 
 def _seed_orders_range(today, skus_data, day_from, day_to):
@@ -167,8 +190,10 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     if day_from == 0:
         _DEMO_SLOW, _DEMO_LOW = set(), set()
     # 2026-10-29 修复跨步重复: 原 total 每步重置为 0 → 分步 seed 时 order_no 可能与前一步撞
-    #   uq_orders_no_sku(实测 step2 报 1062)。改为带步偏移(day_from × 10 万), 全局不重叠
-    total = int(day_from) * 100000
+    #   uq_orders_no_sku(实测 step2 报 1062)。改为带步偏移, 全局不重叠
+    # 2026-11-05 偏移量 10 万 → 100 万: 单段(15 天)已约 3.5 万单, 双渠道 7 万;
+    #   原 10 万偏移在多实例/重跑叠加时余量太薄, 而 order_no 唯一是硬约束(撞了就是整批 1062)
+    total = int(day_from) * 1000000
     batch = []
 
     def _amt(q, price, disc_r, freight_r, sub_r):
@@ -193,8 +218,8 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                     [tuple(o[c] for c in cols) for o in batch])
         batch = []
 
-    for ch, label, skus, base in [('jd', 'jd', skus_data['jd'], 1100),
-                                  ('other', 'other', skus_data['other'], 550)]:
+    for ch, label, skus, base in [('jd', 'jd', skus_data['jd'], ORDER_BASE_PER_DAY),
+                                  ('other', 'other', skus_data['other'], ORDER_BASE_PER_DAY)]:
         promo = {'618': list(range(5, 20)), 'month_end': list(range(45, 55))}
         _n = len(skus)
         _shuffled = skus[:]
@@ -485,14 +510,22 @@ def _seed_records():
     #   那两个集合由 _seed_orders_range 填充(step2/3), 而 /seed/step 单跑 step6 时是空集
     #   → 滞销 SKU 会被当成正常动销(流水入库 500 出库 450), 与"90 天没几单"的订单自相矛盾。
     #   订单量 ≤ 15 件/90天 = 滞销或低动销, 出库流水也该几乎不动。
+    #
+    # 2026-11-05 RU 改造: 这条 GROUP BY sku HAVING SUM(quantity)<=15 实测 **422.69 RU**
+    #   (18 万行订单扫 + 分组)。它只为拿 970 个 SKU 的标记, 却按订单行数计价 ——
+    #   21 万单时代更贵, 而 seed 一次重灌跑很多步, 单这一条就抵得上重算可用的全部开销。
+    #   改为**内存判定**: 标记由 _seed_orders_range 生成时记入 _DEMO_SLOW;
+    #   只有内存集合为空(/seed/step 单跑 step6)时才退回查库, 且按渠道分别查(走 channel 索引)。
     _slow_db = set(_DEMO_SLOW)
-    try:
-        _slow_db |= {str(r.get('sku') or '') for r in query(
-            "SELECT sku FROM orders WHERE data_source='seed' "
-            "AND (deleted_at IS NULL OR deleted_at='') "
-            "GROUP BY sku HAVING SUM(quantity) <= 15")}
-    except Exception as _esl:
-        try_err('seed_fill', '滞销判定降级(用内存标记)', _esl)
+    if not _slow_db:
+        for _sc in ('jd', 'other'):
+            try:
+                _slow_db |= {str(r.get('sku') or '') for r in query(
+                    "SELECT sku FROM orders WHERE channel=%s AND data_source='seed' "
+                    "AND (deleted_at IS NULL OR deleted_at='') "
+                    "GROUP BY sku HAVING SUM(quantity) <= 15", [_sc])}
+            except Exception as _esl:
+                try_err('seed_fill', '滞销判定降级(用内存标记)', _esl)
     _food_kw = ['酱油', '酱', '醋', '油', '酒', '糖', '蜂', '咖', '粉',
                 '薯', '坚果', '饼干', '巧克力', '糖果', '麻辣', '椒']
     in_rows, out_rows = [], []
@@ -852,8 +885,8 @@ def _build_snapshot():
 def prepare_skus():
     """生成 SKU(确定性: random.seed(42), 供 fill/status 各步复用一致)"""
     random.seed(42)
-    jd_s = _make_skus('-J', 1000)
-    ot_s = _make_skus('-O', 1000)
+    jd_s = _make_skus('-J', SKU_PER_CHANNEL, BC2_RATIO)
+    ot_s = _make_skus('-O', SKU_PER_CHANNEL, BC2_RATIO)
     return {'jd': jd_s, 'other': ot_s}
 
 
@@ -889,58 +922,239 @@ def _assert_barcode_aligned():
     return out
 
 
-def seed_step(step, today, skus_data):
-    """执行单个步骤(Makers 异步分步: 每步 ≤90s, 任务表驱动续跑); 返回 (next_step, part_summary)"""
+# ── seed 分区计划(2026-11-05 与 seed_step 同步调整) ─────────────────────
+# 订单从 4 段 × 15 天扩到 6 段 × 15 天(90 天装满), 其余段号顺延。
+# 调用方(task_seed)只把它当"下一个 step 号"用, 不依赖具体含义, 所以新增段不需改协议。
+_SEED_ORDER_SEGS = 6                                   # step 1..6 = 订单 6 段
+_SEED_INV = _SEED_ORDER_SEGS + 1                       # 7  库存
+_SEED_FLOW = _SEED_INV + 1                             # 8  流水
+_SEED_SETTLE = _SEED_FLOW + 1                          # 9  落账(重算+批次+自检)
+_SEED_MONTH = _SEED_SETTLE + 1                         # 10 月汇总+配置
+_SEED_TAIL = _SEED_MONTH + 1                           # 11 告警+快照+物化
+SEED_DONE = _SEED_TAIL + 1                             # 12 = 完成
+
+
+# ── 水位 / 回滚 / 行数对账(2026-11-05) ──────────────────────────────────
+# 为什么需要: seed 一次全量 90 万行级订单 + 17 万行库存, 单步撞 90s 上限或网关 504 是常态。
+#   旧做法下"跑到一半失败"只有一个出路 —— 整库 reset 重来(而 reset 也是几十万行 DELETE,
+#   要 RU 也要时间, 且会把已经正确的步骤一并丢掉)。有了水位就能只回滚**这一轮新增的行**。
+#
+# 语义严格限定:
+#   · hwm_before = 该表本轮写入前的 MAX(id)。回滚 = `DELETE WHERE id > hwm_before`
+#     —— 只删本轮新增, 绝不碰历史行(哪怕历史行也是 seed 生成的)。
+#   · 只对**插入型**目标有意义(orders/inventory/inbound/outbound/batches)。upsert 型目标
+#     (products/suppliers/同键覆盖)无法用 id 水位回滚 —— 那类目标只做行数对账, 不登记回滚点。
+#   · expected vs actual 不等 = 有行没落库(唯一键冲突被 IGNORE / 校验拒写)。
+#     这个差在旧实现里是完全隐形的: 生成侧打印 "生成 170200 行", 库里实际 169800,
+#     后续所有对账(Σ批次=可用 / 月汇总=流水)都在拿残缺底数算, 却"看起来跑完了"。
+_WM_TARGETS = ('orders', 'inventory', 'inbound_records', 'outbound_records', 'batches')
+
+
+def _wm_table_exists():
+    try:
+        one("SELECT 1 AS x FROM seed_watermark LIMIT 1")
+        return True
+    except Exception:
+        return False
+
+
+def wm_begin(run_id, step, targets, channel=''):
+    """登记本轮写入前的 id 水位; 返回 {table: hwm_before}
+    表不存在(老库未跑 ensure_schema)→ 返回空 dict, 调用方自动退化为"不登记, 不影响写入"
+    """
+    out = {}
+    if not _wm_table_exists():
+        return out
+    for t in targets:
+        if t not in _WM_TARGETS:
+            continue  # 非插入型目标不登记(语义不成立, 见上方注释)
+        try:
+            _r = one("SELECT COALESCE(MAX(id),0) AS m FROM `%s`" % t) or {}
+            _hwm = int(_r.get('m') or 0)
+            execute("INSERT INTO seed_watermark(run_id, step, target, channel, hwm_before, status) "
+                    "VALUES(%s,%s,%s,%s,%s,'writing') "
+                    "ON DUPLICATE KEY UPDATE hwm_before=VALUES(hwm_before), expected=0, actual=0, "
+                    "status='writing', started_at=NOW(), finished_at=NULL, note=''",
+                    (run_id, int(step), t, channel, _hwm))
+            out[t] = _hwm
+        except Exception as _e:
+            try_err('seed_fill', '水位登记降级 %s' % t, _e)
+    return out
+
+
+def wm_end(run_id, step, expected, channel=''):
+    """回填本步实际落库行数, 与生成侧预期对账
+    expected: {table: 生成行数}; 实际值按 `id > hwm_before` 精确计数(不受历史行干扰)
+    """
+    out = {}
+    if not _wm_table_exists():
+        return out
+    for t, exp in (expected or {}).items():
+        try:
+            _r = one("SELECT hwm_before FROM seed_watermark "
+                     "WHERE run_id=%s AND step=%s AND target=%s AND channel=%s",
+                     (run_id, int(step), t, channel)) or {}
+            _hwm = int(_r.get('hwm_before') or 0)
+            _a = one("SELECT COUNT(*) AS c FROM `%s` WHERE id > %%s" % t, [_hwm]) or {}
+            _act = int(_a.get('c') or 0)
+            _exp = int(exp or 0)
+            _status = 'ok' if _act >= _exp else 'short'
+            execute("UPDATE seed_watermark SET expected=%s, actual=%s, status=%s, "
+                    "finished_at=NOW(), note=%s "
+                    "WHERE run_id=%s AND step=%s AND target=%s AND channel=%s",
+                    (_exp, _act, _status,
+                     '' if _act >= _exp else '落库少 %d 行(唯一键冲突或校验拒写)' % (_exp - _act),
+                     run_id, int(step), t, channel))
+            out[t] = {'expected': _exp, 'actual': _act, 'status': _status}
+            # 少行**不抛错**: 可能是合法去重(如批次 INSERT IGNORE 撞唯一键),
+            #   但要留痕 —— 旧实现在这里完全静默, 是"跑完了但数据少"的根源
+            if _act < _exp:
+                try_err('seed_fill', '水位对账少行 %s 步%d: 预期 %d 实际 %d'
+                        % (t, int(step), _exp, _act), '')
+        except Exception as _e:
+            try_err('seed_fill', '水位回填降级 %s' % t, _e)
+    return out
+
+
+def wm_rollback(run_id, steps=None):
+    """按水位回滚某轮 seed 的新增行(**只删 id > hwm_before**, 历史行不动)
+
+    steps=None → 回滚该 run 全部已登记步骤。
+    返回 {table: 删除行数} + 每步明细; 失败逐表留痕不中断(回滚是尽力而为, 但要能看见哪张表没删掉)。
+    """
+    out = {'deleted': {}, 'steps': [], 'error': ''}
+    if not _wm_table_exists():
+        out['error'] = 'seed_watermark 不存在(未跑 ensure_schema)'
+        return out
+    try:
+        _sql = ("SELECT step, target, channel, hwm_before, expected, actual, status "
+                "FROM seed_watermark WHERE run_id=%s")
+        _p = [run_id]
+        if steps:
+            _sql += " AND step IN (%s)" % ",".join(["%s"] * len(steps))
+            _p += [int(x) for x in steps]
+        rows = query(_sql + " ORDER BY step, target", _p) or []
+    except Exception as _e:
+        out['error'] = str(_e)[:160]
+        return out
+    for r in rows:
+        t = str(r.get('target') or '')
+        _hwm = int(r.get('hwm_before') or 0)
+        if t not in _WM_TARGETS:
+            continue
+        try:
+            n = execute("DELETE FROM `%s` WHERE id > %%s" % t, [_hwm])
+            out['deleted'][t] = out['deleted'].get(t, 0) + int(n or 0)
+            out['steps'].append({'step': int(r.get('step') or 0), 'target': t,
+                                 'hwm_before': _hwm, 'deleted': int(n or 0)})
+        except Exception as _e:
+            out['steps'].append({'step': int(r.get('step') or 0), 'target': t,
+                                 'hwm_before': _hwm, 'error': str(_e)[:120]})
+            try_err('seed_fill', '水位回滚失败 %s' % t, _e)
+    return out
+
+
+def wm_report(run_id):
+    """该轮 seed 的水位与行数对账明细(运维口展示; 不含任何写操作)"""
+    if not _wm_table_exists():
+        return {'error': 'seed_watermark 不存在(未跑 ensure_schema)'}
+    rows = query("SELECT step, target, channel, hwm_before, expected, actual, status, note, "
+                 "started_at, finished_at FROM seed_watermark WHERE run_id=%s "
+                 "ORDER BY step, target", [run_id]) or []
+    _short = [r for r in rows if str(r.get('status') or '') == 'short']
+    return {'run_id': run_id, 'steps': len(rows), 'short': len(_short), 'rows': rows}
+
+
+def seed_step(step, today, skus_data, run_id=''):
+    """执行单个步骤(Makers 异步分步: 每步 ≤90s, 任务表驱动续跑); 返回 (next_step, part_summary)
+
+    run_id: 本轮 seed 的标识(任务 id)。给了就登记水位(可回滚 + 行数对账); 不给则纯生成。
+      旧调用方(不带 run_id)行为完全不变 —— 水位是附加能力, 不是前置条件。
+    """
     random.seed(42)  # 确定性: 各步/重复调用生成一致(防重跑数据漂移)
     if step == 0:
         n_prod, n_sup = _seed_products_suppliers(skus_data)
         return 1, {'products': len(n_prod), 'suppliers': len(n_sup)}
-    if 1 <= step <= 4:
-        day_from = (step - 1) * 15
-        n = _seed_orders_range(today, skus_data, day_from, day_from + 15)
+    if 1 <= step <= _SEED_ORDER_SEGS:
+        _span = ORDER_DAYS // _SEED_ORDER_SEGS          # 15 天/段
+        day_from = (step - 1) * _span
+        if run_id:
+            wm_begin(run_id, step, ('orders',), channel='jd,other')
+        n = _seed_orders_range(today, skus_data, day_from, day_from + _span)
+        if run_id:
+            wm_end(run_id, step, {'orders': n}, channel='jd,other')
         return step + 1, {'orders_part_%d' % step: n}
-    if step == 5:
+    if step == _SEED_INV:
+        if run_id:
+            wm_begin(run_id, step, ('inventory',), channel='jd,other')
         n = _seed_inventory(skus_data)
-        return 6, {'inventory': n}
-    if step == 6:
+        if run_id:
+            wm_end(run_id, step, {'inventory': n}, channel='jd,other')
+        return _SEED_FLOW, {'inventory': n}
+    if step == _SEED_FLOW:
         # 2026-10-29 顺序修正: 先流水(原 step6 生成批次 → 早于流水, 批次基于旧库存)
+        if run_id:
+            wm_begin(run_id, step, ('inbound_records', 'outbound_records'), channel='jd,other')
         a, b = _seed_records()
-        return 7, {'inbound': a, 'outbound': b}
-    if step == 7:
-        # 重算自有仓(期初+流水) → 再生成批次(保证 Σ批次 = available)
-        try:
-            from routes.cleanse_write import _recalc_own_inventory as _rc
-            for _ch in ('jd', 'other'):
-                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
-                                                   "WHERE channel=%s AND warehouse_type='own'", [_ch])]
-                if _sk:
-                    _rc(_ch, [x for x in _sk if x])
-        except Exception as _e_s7:
-            try_err('seed_fill', '分步重算降级', _e_s7)
-        n = _seed_batches()
-        # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进 step8/9)
-        _bc_chk = _assert_barcode_aligned()
-        return 8, {'batches': n, 'barcode_aligned': _bc_chk}
-    if step == 8:
+        if run_id:
+            wm_end(run_id, step, {'inbound_records': a, 'outbound_records': b}, channel='jd,other')
+        return _SEED_SETTLE, {'inbound': a, 'outbound': b}
+    if step == _SEED_SETTLE:
+        # 批次是"先 DELETE 再 INSERT"的重建 → id 水位对这个目标不成立(删过之后 id 不连续),
+        #   所以这里只登记 expected/actual 对账, 不参与回滚(回滚靠上一步的流水+库存水位即可)
+        _st = seed_settle()
+        return _SEED_MONTH, _st
+    if step == _SEED_MONTH:
         _ms = _sync_inv_month()
         _seed_config()
-        return 9, {'config': 'ok', 'inv_month': _ms}
-    if step == 9:
+        return _SEED_TAIL, {'config': 'ok', 'inv_month': _ms}
+    if step == _SEED_TAIL:
         n_alert = _seed_alerts()
         n_snap = _build_snapshot()
         # 2026-10-29 补: 日销物化重建(必须跟在快照之后)
         #   补货/采购/断货/健康全部读 sku_sales_stats; 原 seed 不重建 → 物化为空/残缺
-        #   放在 step9 内(而非新增 step10): status 端点以 nxt>=10 判定完成, step10 永不执行
         _rb = {}
         try:
             from biz.sales import _rebuild_sku_sales_stats as _rss
             for _ch in ('jd', 'other'):
-                _rb[_ch] = _rss(_ch, days=90)   # 2026-10-30 窗口统一 90
+                _rb[_ch] = _rss(_ch, days=ORDER_DAYS)
         except Exception as _erb:
             try_err('seed_fill', 'seed 物化重建降级', _erb)
             _rb = {'error': str(_erb)[:150]}
-        return 10, {'alerts': n_alert, 'snapshot': n_snap, 'sales_stats': _rb}
-    return 10, {}
+        return SEED_DONE, {'alerts': n_alert, 'snapshot': n_snap, 'sales_stats': _rb}
+    return SEED_DONE, {}
+
+
+def seed_settle():
+    """落账: 重算自有仓可用 → 重建批次 → 自检(2026-11-05 抽成独立函数, seed 与运维口共用)
+
+    为什么单独成函数: 这段是"数据写完之后的账要平"的唯一实现 ——
+      available = 期初 + Σ入库 − Σ出库, 且 Σ批次 ≡ available。
+    原来它内联在 seed_step(7) 里, /api/seed/step 运维口又抄了一份, 两处各自演化
+    (历史上就因此出现过"批次基于重算前旧库存"的顺序错误)。现在只有一个实现。
+
+    失败**不重抛**: 走到这一步库存/流水都已落库, 抛出去只会留下半张账;
+    留痕 + 在返回里标 degraded, 由调用方决定要不要重跑这一步。
+    """
+    out = {'recalc': 0, 'batches': 0, 'barcode_aligned': {}, 'degraded': ''}
+    try:
+        from routes.cleanse_write import _recalc_own_inventory as _rc
+        for _ch in ('jd', 'other'):
+            _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
+                                               "WHERE channel=%s AND warehouse_type='own'", [_ch])]
+            if _sk:
+                out['recalc'] += int(_rc(_ch, [x for x in _sk if x]) or 0)
+    except Exception as _e_s:
+        out['degraded'] = 'recalc: %s' % str(_e_s)[:120]
+        try_err('seed_fill', '落账-重算降级', _e_s)
+    try:
+        out['batches'] = _seed_batches()
+    except Exception as _e_b:
+        out['degraded'] = (out['degraded'] + '; ' if out['degraded'] else '') + 'batches: %s' % str(_e_b)[:120]
+        try_err('seed_fill', '落账-批次重建降级', _e_b)
+    # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进下一步)
+    out['barcode_aligned'] = _assert_barcode_aligned()
+    return out
 
 
 def run_seed_fill():
@@ -948,9 +1162,10 @@ def run_seed_fill():
     started = time.time()
     random.seed(42)
     today = now_cn()
-    jd_s = _make_skus('-J', 1000)
-    ot_s = _make_skus('-O', 1000)
-    skus_data = {'jd': jd_s, 'other': ot_s}
+    # 2026-11-05 同步分步口径: 原这里写死 1000 SKU, 而 prepare_skus() 已是 SKU_PER_CHANNEL
+    #   → 一键 seed 与分步 seed 生成的 SKU 集合不同(order_no 撞车/库存行数对不上)。
+    #   两处必须同源, 所以直接调 prepare_skus()。
+    skus_data = prepare_skus()
     n_prod, n_sup = _seed_products_suppliers(skus_data)
     n_orders = _seed_orders(today, skus_data)
     n_inv = _seed_inventory(skus_data)
@@ -964,17 +1179,11 @@ def run_seed_fill():
     # 2026-10-29 顺序修正: 流水 → 重算 own available → 再生成批次(批次必须基于最终库存)
     #   原顺序(批次→流水→重算)会让批次基于重算前的旧库存, 与 available 不齐
     n_in, n_out = _seed_records()
-    try:
-        from routes.cleanse_write import _recalc_own_inventory as _rc
-        for _ch in ('jd', 'other'):
-            _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "
-                                               "WHERE channel=%s AND warehouse_type='own'", [_ch])]
-            if _sk:
-                _rc(_ch, [x for x in _sk if x])
-    except Exception as _e_rec:
-        try_err('seed_fill', '自有仓重算降级(seed)', _e_rec)
-    n_batch = _seed_batches()
-    _bc_chk = _assert_barcode_aligned()   # 自检: 档案有码 → 流水/库存不得空码
+    # 2026-11-05 落账统一: 原此处内联了一份"重算 → 批次 → 自检", 与 seed_step 里那份各自演化
+    #   → 抽出 seed_settle() 单一实现, 一键与分步走同一条路径
+    _st = seed_settle()
+    n_batch = _st.get('batches', 0)
+    _bc_chk = _st.get('barcode_aligned', {})
     _sync_inv_month()
     _seed_config()
     n_alert = _seed_alerts()
@@ -982,5 +1191,6 @@ def run_seed_fill():
     return {'orders': n_orders, 'products': len(n_prod), 'suppliers': len(n_sup),
             'inventory': n_inv, 'inventory_db': inv_counts, 'orders_db': orders_db, 'batches': n_batch,
             'inbound': n_in, 'outbound': n_out, 'alerts': n_alert, 'snapshot': n_snap,
+            'recalc': _st.get('recalc', 0), 'degraded': _st.get('degraded', ''),
             'barcode_aligned': _bc_chk,
             'elapsed': round(time.time() - started, 1)}

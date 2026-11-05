@@ -353,6 +353,23 @@ _TABLES = {
         "CREATE TABLE IF NOT EXISTS data_version (id TINYINT PRIMARY KEY, v BIGINT DEFAULT 0, "
         "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
     ),
+    # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
+    #   写完回填实际行数。作用有两个, 都不是"锦上添花":
+    #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的
+    #      半张数据没有任何标记可循 —— 只能整库 reset 重来, 而 reset 本身也要花 RU。
+    #      有水位就能按 id > hwm_before 精确删掉"这一轮新增的", 已存在的旧数据不受影响。
+    #   ② **可对账**: 生成侧以为写了 N 行, 落库实际 M 行 —— 差异(唯一键冲突/被 IGNORE 吃掉)
+    #      在 seed 里一直是隐形的。登记 expected/actual 后, 差一行就是一行, 不再"看起来跑完了"。
+    "seed_watermark": (
+        "CREATE TABLE IF NOT EXISTS seed_watermark ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, run_id VARCHAR(48) NOT NULL, "
+        "step INT NOT NULL DEFAULT 0, target VARCHAR(32) NOT NULL DEFAULT '', "
+        "channel VARCHAR(20) NOT NULL DEFAULT '', "
+        "hwm_before BIGINT DEFAULT 0, expected INT DEFAULT 0, actual INT DEFAULT 0, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'writing', note VARCHAR(255) DEFAULT '', "
+        "started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME NULL, "
+        "UNIQUE KEY uq_wm_run_step(run_id, step, target, channel), KEY idx_wm_run(run_id))"
+    ),
     "log_archives": (
         "CREATE TABLE IF NOT EXISTS log_archives ("
         "`date` CHAR(10) NOT NULL, `scope` VARCHAR(16) NOT NULL DEFAULT 'all', "
@@ -541,7 +558,11 @@ _COLUMN_ADDS = {
 #   全量路径 → run_pending 只执行未登记的步骤, 已应用的靠 legacy_log_sync 归并, 不会被重跑)
 # v6(2026-11-04 账期): 新增 inventory_month / batch_opening / ledger_state(月结三表)
 # v7(2026-11-05 账期): inventory 增 ledger_base(建账基线, 与会被回写的 beginning_stock 解耦)
-SCHEMA_VERSION = 8
+# v8(2026-11-05 seed 规模): 新增 seed_watermark(seed 水位/回滚/行数对账)
+# v9(2026-11-05 seed 水位): 同批次的**版本号修订** —— v8 那次改动追加了 seed_watermark 声明
+#   但忘了 bump 版本号(声明写着 8、版本也已是 8) → ensure_schema 走热路径直接返回,
+#   新表永远不会被创建。这正是"改 schema 必 bump"这条规矩存在的原因。
+SCHEMA_VERSION = 9
 
 
 def table_ddl(name):
