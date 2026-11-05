@@ -30,16 +30,30 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     status = row.get("status") or "not_found"
     if status in ("done", "error"):
         return {"data": {"status": status}}
-    # 防并发续跑(前端 App+Settings 双轮询/多实例): 原子抢占 updated_at 锁
-    # 3 秒内已有请求续跑过 → 本次跳过(步骤执行中轮询不再重复触发, 防步骤并发冲突)
+    # 防并发续跑(前端 App+Settings 双轮询/多实例/运维口同时驱动): 原子抢占并**持有**租约
+    #
+    # 2026-11-05 线上事故(水位对账抓出来的): 每段订单都被执行了**两次**, 单日订单精确为
+    #   3100(= 1550×2), jd016 那一格高达 11,609(≈3 次)。旧锁是:
+    #       UPDATE ... SET updated_at=NOW() WHERE updated_at < NOW() - INTERVAL 3 SECOND
+    #   两个缺陷:
+    #     ① 锁没有"持有期" —— 抢到锁的请求要执行 40~60s, 而这期间 updated_at 停在抢锁那刻,
+    #        3 秒后第二个轮询就能再抢一次, 于是同一步并发跑两遍, 两遍都往库里写。
+    #     ② updated_at 同时被前端当"进度心跳"用, 兼任锁会互相干扰(一个要推未来, 一个要写现在)。
+    #   现在: 独立列 `lease_until` 表达租约, 抢锁 = 把租约推到 NOW()+600s 且要求"已过期或无租约"。
+    #   执行期间任何并发请求看到的都是未过期的租约, 抢不到; 步末释放(置 NULL)。
+    #   进程崩溃会把任务卡 10 分钟 —— 有意的: 宁可等, 也不能让同一步跑两遍把数据写重。
+    _LEASE = 600
     try:
-        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
-                          [task_id])
+        _locked = execute(
+            "UPDATE sync_tasks SET lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND) "
+            "WHERE task_id=%s AND (lease_until IS NULL OR lease_until < NOW())",
+            [_LEASE, task_id])
         if not _locked:
-            return {"data": {"status": "running"}}  # 已有请求在续跑, 跳过本次(防并发)
+            return {"data": {"status": "running"}}  # 已有请求持有租约, 跳过本次(防并发)
     except Exception as _e:
-            try_err('tasks', '静默降级', _e)
+        try_err('tasks', '静默降级', _e)
+        # 抢锁失败(DB 抖动)时**不能**继续执行 —— 否则就是无锁并发, 等于回到事故现场
+        return {"data": {"status": "running"}}
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json
@@ -62,8 +76,9 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         new_params = _json.dumps({"step": nxt, "steps": _steps, "total_step": SEED_DONE,
                                   "cur_step": None if nxt >= SEED_DONE else _cur})
         if nxt >= SEED_DONE:
-            # 全部步骤完成 → done(汇总 part 简单展示)
-            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+            # 全部步骤完成 → done(汇总 part 简单展示); 同时释放租约
+            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, "
+                    "updated_at=NOW(), lease_until=NULL WHERE task_id=%s",
                     (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
             from routes.analysis_cache import invalidate
             invalidate("all")  # seed 完成 → 分析缓存即时失效
@@ -75,7 +90,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
             except Exception as _e:
                     try_err('tasks', '静默降级', _e)
             return {"data": {"status": "done"}}
-        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW(), lease_until=NULL WHERE task_id=%s",
                 (new_params, task_id))
         from routes.analysis_cache import invalidate
         invalidate("all")  # 每步数据变化 → 缓存失效
@@ -83,7 +98,8 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     except Exception as e:
         import traceback as _tb
         try:
-            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+            execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW(), "
+                    "lease_until=NULL WHERE task_id=%s",
                     (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
         except Exception as _e:
                 try_err('tasks', '静默降级', _e)
@@ -301,23 +317,25 @@ async def seed_step_run(request: Request):
         d = await request.json()
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
-    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_SETTLE,
-                                  _SEED_MONTH)  # noqa: E402
+    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_MONTH,
+                                  _SETTLE_SEGS)  # noqa: E402
     _LAST = _SEED_MONTH
-    _ALLOWED = (_SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH)
-    # _SEED_SETTLE 是「落账起点」(= jd 段), 运维口一次把两渠道落账都做完:
-    #   它是进程内顺序调用, 不受单请求 120s 限制的**分段**约束(分段是给 seed 任务续跑用的);
-    #   但两渠道合计 50s+ 依然偏重, 所以下面把 jd/other 分开计时上报, 慢了能立刻看出是哪边。
+    # 白名单 = 库存 / 流水 / 落账四段 / 月汇总。落账四段由 _SETTLE_SEGS 推导, 段数再变不用改这里。
+    _SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)
+    _SETTLE_FIRST = _SETTLE_NOS[0]
+    _ALLOWED = (_SEED_INV, _SEED_FLOW) + _SETTLE_NOS + (_SEED_MONTH,)
     try:
-        from_step = int(d.get("from_step") or d.get("step") or _SEED_SETTLE)
+        # 默认 = 落账起点(第一段落账), 与旧行为一致: 不带参数就重算可用 + 重建全部批次
+        from_step = int(d.get("from_step") or d.get("step") or _SETTLE_FIRST)
     except Exception:
         return fail("from_step 必须是整数", 400)
     if from_step not in _ALLOWED:
         return fail("from_step 只支持 %s, 且必须连续执行到 %d —— "
-                    "%d 生成库存行(含多码拆行) / %d 重建流水 / %d 重算可用+批次 / %d 月汇总; "
+                    "%d 生成库存行(含多码拆行) / %d 重建流水 / %s 落账四段(渠道×仓型) / %d 月汇总; "
                     "更早的段会写商品与订单, 流水段单跑会让可用与流水脱节"
                     % ("/".join(str(x) for x in _ALLOWED), _LAST,
-                       _SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH), 400)
+                       _SEED_INV, _SEED_FLOW,
+                       "/".join(str(x) for x in _SETTLE_NOS), _SEED_MONTH), 400)
     # 库存段会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
     #   否则等于往真实客户库里塞演示库存。orders.data_source='seed' 是"这是 seed 库"的可靠标记。
     if from_step <= _SEED_INV:
@@ -370,19 +388,25 @@ async def seed_step_run(request: Request):
                            "elapsed_s": round(_t.time() - _t0, 1),
                            "result": {"inbound": _ib, "outbound": _ob}})
         # ── 落账段: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
-        if from_step <= _SEED_SETTLE:
+        #   2026-11-05 二次拆段: 线上实测「按渠道拆」仍 504(jd 单渠道 123s)——
+        #   jd 有 68,322 平台仓行 + 9,637 B 仓行, 每行 1~3 批 ≈ 16.8 万批次。
+        #   现按 (渠道 × 仓型) 四段顺序执行, 运维口一次跑完但**逐段计时上报**,
+        #   哪段慢立刻能看出来(seed 任务里这四段是分开的四个单请求)。
+        if any(from_step <= x for x in _SETTLE_NOS):
             from routes.seed_fill import seed_settle
-            # 分渠道执行: 与 seed 任务的两段落账同一实现, 只是这里顺序跑完(运维口本来就要一次看到底)
-            _td = _t.time()
-            _st = seed_settle(channel='jd')
-            _t_jd = round(_t.time() - _td, 1)
-            _td = _t.time()
-            _st2 = seed_settle(channel='other')
-            _t_oth = round(_t.time() - _td, 1)
-            _steps.append({"step": _SEED_SETTLE, "name": "可用重算+批次重建",
-                           "elapsed_s": round(_t_jd + _t_oth, 1),
-                           "result": {"jd": _st, "other": _st2,
-                                      "t_jd_s": _t_jd, "t_other_s": _t_oth}})
+            _segs = []
+            for _no, _ch, _wg in _SETTLE_SEGS:
+                if from_step > _no:
+                    continue          # 起点晚于本段 → 跳过(但起点之前的段一定不做)
+                _td = _t.time()
+                _st = seed_settle(channel=_ch, wh_group=_wg)
+                _segs.append({"step": _no, "channel": _ch, "wh_group": _wg,
+                              "elapsed_s": round(_t.time() - _td, 1),
+                              "result": {k: v for k, v in (_st or {}).items()
+                                         if k != 'barcode_aligned'}})
+            _steps.append({"step": _SETTLE_NOS[0], "name": "可用重算+批次重建",
+                           "elapsed_s": round(sum(x["elapsed_s"] for x in _segs), 1),
+                           "result": _segs})
         # ── 月汇总段: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
         _t0 = _t.time()
         groups = _sync_inv_month()

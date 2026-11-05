@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { apiJson } from '../api/client'
+import { adoptRunning } from '../api/taskWatch'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
@@ -47,6 +48,11 @@ export default function TaskPage() {
   const [tasks, setTasks] = useState([])
   const [downloading, setDownloading] = useState({})
   const [loading, setLoading] = useState(true)
+  // 2026-11-05 修「骨架后才闪一下空态」: 首个响应回来了但**一条任务都没有**时, 不能立刻判定
+  //   "空"。channel 变化的那个 effect 会先 setTasks([]) 再置 loading —— 若此时 state 还是上一轮
+  //   的 tasks(非空), 渲染会先走"有数据"分支; 而这一轮任务列表真的为空时, 骨架消失的同一帧
+  //   就落进 EmptyState。加一个"至少成功拉到过一次"的标记: 没到过就不渲染空态, 继续骨架。
+  const [loadedOnce, setLoadedOnce] = useState(false)
   const [showAllDone, setShowAllDone] = useState(false) // 已完成折叠(默认 10 条)
 
   const [loadErr, setLoadErr] = useState('')
@@ -57,6 +63,14 @@ export default function TaskPage() {
   //   之后再被 3s 后的新调用 setLoading(true) 覆盖, 视觉上就是"一直卡在骨架屏"。
   //   加序号后只有**最新一次**请求允许写入 state(与 loadAll 的 _loadSeq 同一套办法)。
   const loadSeq = useRef(0)
+  // 看守回调里拿不到最新的 toast/翻译上下文, 用一个 ref 把"报告失败"这件事挂出来
+  const reportTaskFail = (id: string, err: string) => {
+    try {
+      toast.error(t('task.failed_toast', { msg: String(err || id).slice(0, 60) }))
+    } catch {
+      /* toast 不可用时不阻塞 */
+    }
+  }
   const loadTasks = async () => {
     const mySeq = ++loadSeq.current
     try {
@@ -69,6 +83,23 @@ export default function TaskPage() {
       if (d.ok && Array.isArray(d.data)) {
         setTasks(d.data)
         setLoadErr('')
+        setLoadedOnce(true)
+        // 把 running 的任务交给 App 层看守推进(幂等: 已在看守里的只更新回调)
+        adoptRunning(d.data, {
+          onDone: () => {
+            void loadTasks()
+            useAppStore
+              .getState()
+              .loadAll(1, { refresh: true })
+              .catch(() => {})
+            window.dispatchEvent(new Event('rules-changed'))
+            window.dispatchEvent(new Event('insights-refresh'))
+          },
+          onFail: (id, err) => {
+            void loadTasks()
+            reportTaskFail(id, err)
+          },
+        })
         // 检测任务从未完成 → 完成：提示 + 全局刷新数据
         //   2026-11-05 修: 回调参数原叫 `t`, 与模块级翻译函数 t() **同名遮蔽** ——
         //   于是 `t('task.done_toast', ...)` 实际是在"调用一个任务对象", 直接 TypeError。
@@ -131,9 +162,14 @@ export default function TaskPage() {
 
   useEffect(() => {
     setTasks([])
+    setLoadedOnce(false)
     setLoading(true)
     loadTasks()
   }, [channel])
+  // 2026-11-05 修「切页面回来任务卡住」: 原来这里有第二个 3s 轮询, 与 App 层的看守
+  //   并行驱动同一个任务 —— 两边各发一次 /seed/fill/status, 服务端租约只让其中一个推进,
+  //   另一个白跑; 而离开任务页后本页卸载, 只剩 App 看守, 用户却以为是"任务停了"。
+  //   现在页面只**展示**(3s 刷列表), 推进一律交给 App 层看守(taskWatch), 全仓一处驱动。
   useEffect(() => {
     const poll = setInterval(loadTasks, 3000)
     return () => clearInterval(poll)
@@ -204,7 +240,7 @@ export default function TaskPage() {
         {t('task.subtitle', { ch: channel === 'jd' ? t('task.ch_jd') : t('task.ch_other') })}
       </div>
       <div key={loading ? 'skeleton' : 'data'} className="fade-in">
-        {loading ? (
+        {loading || (!loadedOnce && tasks.length === 0) ? (
           <div className="skeleton" style={{ height: 40 }} />
         ) : tasks.length === 0 ? (
           <div style={{ padding: 24 }}>

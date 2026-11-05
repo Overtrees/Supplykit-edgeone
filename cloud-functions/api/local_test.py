@@ -2997,15 +2997,27 @@ try:
                        if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
-    # 段号自成体系: 订单 6 段 + 库存/流水/落账 jd/落账 other/月汇总/尾段 = 完成值 13
+    # 段号自成体系: 订单 6 段 + 库存/流水/落账×4/月汇总/尾段 = 完成值 15
     check("seed 段号: 订单 6 段(90 天 ÷ 15 天)", _sf._SEED_ORDER_SEGS == 6, _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 13(落账已拆 jd/other 两段)",
-          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE_JD
-          < _sf._SEED_SETTLE_OTHER < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 13,
-          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE_JD, _sf._SEED_SETTLE_OTHER,
-           _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
-    check("seed 段号: 落账两段各只做一个渠道(单请求 ≤30s, 不撞 120s 网关上限)",
-          _sf._SEED_SETTLE_OTHER == _sf._SEED_SETTLE_JD + 1, _sf._SEED_SETTLE_JD)
+    check("seed 段号: 各段严格递增且完成值 = 15(落账拆渠道×仓型四段)",
+          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE_JD_PF
+          < _sf._SEED_SETTLE_JD_OWN < _sf._SEED_SETTLE_OT_PF < _sf._SEED_SETTLE_OT_OWN
+          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 15,
+          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE_JD_PF, _sf._SEED_SETTLE_JD_OWN,
+           _sf._SEED_SETTLE_OT_PF, _sf._SEED_SETTLE_OT_OWN, _sf._SEED_MONTH,
+           _sf._SEED_TAIL, _sf.SEED_DONE))
+    # 线上实测: 按渠道拆完 jd 单渠道仍 504(123s) —— jd 有 68,322 平台仓行, 每行 1~3 批
+    #   ≈ 16.8 万批次。必须再按仓型切。
+    check("落账四段: 顺序为 jd平台→jd自有→other平台→other自有(自有段必须最后, 要读全部仓型批次)",
+          _sf._SETTLE_SEGS == ((_sf._SEED_SETTLE_JD_PF, 'jd', 'platform'),
+                               (_sf._SEED_SETTLE_JD_OWN, 'jd', 'own'),
+                               (_sf._SEED_SETTLE_OT_PF, 'other', 'platform'),
+                               (_sf._SEED_SETTLE_OT_OWN, 'other', 'own')),
+          _sf._SETTLE_SEGS)
+    check("落账四段: 段号连续(否则 seed_step 会跳段)",
+          [x[0] for x in _sf._SETTLE_SEGS] == list(range(_sf._SEED_SETTLE_JD_PF,
+                                                         _sf._SEED_SETTLE_OT_OWN + 1)),
+          [x[0] for x in _sf._SETTLE_SEGS])
     # SKU 编号位宽: 4 位到 9999 就撞名, 10000 个必须 5 位
     _sk_t = _sf._make_skus('-T', 10000, 0.01)
     check("seed SKU: 10000 个编号无撞名", len({x['sku'] for x in _sk_t}) == 10000,
@@ -3044,11 +3056,11 @@ try:
     # 订单段返回值: 曾是全局累计序号(含 day_from*1000000 偏移), 水位对账当场算出"预期 1500 万"
     _sf11 = open("routes/seed_fill.py", encoding="utf-8").read()
     check("订单段返回值 = 本段新增行数(不再是含偏移的全局序号)",
-          "_seg_rows += len(batch)" in _sf11 and "    return _seg_rows" in _sf11,
-          "routes/seed_fill.py")
+          "_seg_rows += int(_r.get('rows') or 0)" in _sf11, "routes/seed_fill.py")
     check("落账段用内存 SKU 集合(省掉 2 万行的 SELECT DISTINCT, 实测 3.1s)",
-          "def seed_settle(skus_data=None, channel='')" in _sf11
-          and "def _seed_batches(skus_data=None, channel='')" in _sf11, "routes/seed_fill.py")
+          "def seed_settle(skus_data=None, channel='', wh_group='')" in _sf11
+          and "def _seed_batches(skus_data=None, channel='', wh_group='')" in _sf11,
+          "routes/seed_fill.py")
     # 拆段后最怕的事: 只清 jd 却按全表重建 → jd 双份、other 三份。删除范围必须跟重建范围同步
     #   断言看**代码行**(去掉注释), 否则说明性注释里的旧写法定法会被误判成没改
     _sb_src = _sf11.split("def _seed_batches")[1].split("def _seed_records")[0]
@@ -3056,7 +3068,7 @@ try:
                          if x.strip() and not x.strip().startswith("#"))
     check("批次重建: DELETE 范围与重建范围同源(_chs), 不再写死 'jd','other'",
           "DELETE FROM batches WHERE channel IN (%s)" in _sb_code
-          and "for _och in _chs:" in _sb_code
+          and "for _och in (() if _only_pf else _chs):" in _sb_code
           and "IN ('jd','other')" not in _sb_code,
           "routes/seed_fill.py")
     check("批次重建: 平台仓批次行也按 _chs 过滤(否则另一渠道批次被重复插入)",
@@ -3118,6 +3130,136 @@ try:
     _inv11 = open(_os.path.join(_FE, "pages", "InventoryPage.tsx"), encoding="utf-8").read()
     check("进销存: 竞态丢弃分支不再改 loading(否则列表闪空白)",
           "if (seq !== reqSeq.current) {\n        // 2026-11-05" in _inv11, "InventoryPage.tsx")
+
+    # ── 2026-11-05 第三轮线上实测: 落账 jd 单渠道仍 504(123s) / 订单被双写至 32.4 万 ──
+    # ① 按渠道拆分不够: jd 有 68,322 平台仓行(1~3 批/行 ≈ 16.8 万批次), 单段仍超 120s。
+    #    再按仓型切四段, 每段落一批行的量级。
+    _sb_code3 = "\n".join(x for x in _sf11.split("def _seed_batches")[1]
+                          .split("def _seed_records")[0].splitlines()
+                          if x.strip() and not x.strip().startswith("#"))
+    check("落账四段: 批次重建支持仓型过滤(_only_own/_only_pf 分支都在)",
+          "_only_own" in _sb_code3 and "_only_pf" in _sb_code3
+          and "warehouse_type='own'" in _sb_code3, "routes/seed_fill.py")
+    check("落账四段: 平台段跳过自有仓批次(否则平台段白跑一半量, 拆分失效)",
+          "for _och in (() if _only_pf else _chs):" in _sb_code3
+          or "for _och in (() if _only_pf else _chs):" in _sf11, "routes/seed_fill.py")
+    # best_before 要读全部仓型批次取 MIN(exp_date) —— 只在最后一段(全量落完)回写
+    check("落账四段: best_before 回写只在最后一段(平台段提前 return)",
+          "if _only_pf:\n        return len(bdata)" in _sf11, "routes/seed_fill.py")
+    # 可用库存重算只写 own 行, 平台段再跑一遍纯属白烧 RU
+    check("落账四段: 可用重算只跑含自有仓的段",
+          "if wh_group in ('', 'own'):" in _sf11, "routes/seed_fill.py")
+    # seed_step 若仍按单段硬编码, 四段只会跑第一段 → 落账永远不完整
+    _ss_src = _sf11.split("def seed_step")[1].split("\ndef ")[0]
+    check("落账四段: seed_step 用 _SETTLE_SEGS 表驱动(不再单段硬编码)",
+          "for _seg_no, _seg_ch, _seg_wg in _SETTLE_SEGS:" in _ss_src, "routes/seed_fill.py")
+    # task_seed 的 /seed/step 白名单必须从 _SETTLE_SEGS 推导, 否则 10~12 段全被拒
+    check("/seed/step 白名单: 落账段号从 _SETTLE_SEGS 推导(不写死单段)",
+          "_SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)" in _ts_src, "routes/task_seed.py")
+    # ② 订单双写: 水位对账抓出每段执行两遍(单日 3100 = 1550×2, JD-jd016 达 11,609)。
+    #    旧锁 `updated_at < NOW() - INTERVAL 3 SECOND` 没有持有期 —— 执行 40~60s 期间
+    #    第二个轮询照样能抢。改独立 lease_until 列 + 600s 租约。
+    _ts_code3 = "\n".join(x for x in _ts_src.splitlines()
+                          if x.strip() and not x.strip().startswith("#"))
+    check("续跑锁: 用 lease_until 独占租约, 不再用 3 秒窗口的 updated_at 判断",
+          "lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND)" in _ts_code3
+          and "INTERVAL 3 SECOND" not in _ts_code3, "routes/task_seed.py")
+    check("续跑锁: 抢锁失败不许继续执行(否则正是双写本身)",
+          "if not _locked:" in _ts_src and 'return {"data": {"status": "running"}}' in _ts_src,
+          "routes/task_seed.py")
+    _sc10 = open("schema_create.py", encoding="utf-8").read()
+    check("续跑锁: sync_tasks 已声明 lease_until 列",
+          "lease_until DATETIME NULL" in _sc10, "schema_create.py")
+    # 加列必须 bump 版本: ensure_schema 走热路径(一条 SELECT 零 DDL), 版本不变就永远不建列
+    _ver = int(_re.search(r"^SCHEMA_VERSION\s*=\s*(\d+)", _sc10, _re.M).group(1))
+    check("schema 版本: 加 lease_until 后已 bump(≥10)", _ver >= 10, _ver)
+
+    # ── 2026-11-05 seed 走导入链路(用户定案: 演示数据必须由导入代码路径自己产出) ──
+    import routes.seed_import as _si
+    # 规格必须与导入页的 target 一一对上, 否则会出现"导入了但没走链路"的假象
+    check("导入链路: 6 个 target 都有文件规格(product/order/inventory/inventory_b/inbound/outbound)",
+          set(_si._SPEC) == {"product", "order", "inventory", "inventory_b",
+                             "inbound", "outbound"}, sorted(_si._SPEC))
+    check("导入链路: 每个 target 的列数与映射数一致(列没映射=那一列永远不进库)",
+          all(len(sp["cols"]) == len(sp["mp"]) for sp in _si._SPEC.values()),
+          {k: (len(v["cols"]), len(v["mp"])) for k, v in _si._SPEC.items()})
+    check("导入链路: 每个映射都有 target/type(缺 type 会让数值列变成字符串)",
+          all(set(m) >= {"target", "type"} for sp in _si._SPEC.values()
+              for m in sp["mp"].values()), "routes/seed_import.py")
+    # CSV 往返: 逗号/引号/换行都在商品名里真实存在, 只有走 csv 模块才不出错
+    _csv_txt = _si.to_csv("product", [{"sku": "SKU-X", "product_name": '酱油,大瓶"特惠"',
+                                       "barcode": "6901", "price": 9.9}])
+    _hdr_line = _csv_txt.decode("utf-8").splitlines()
+    check("导入链路: CSV 表头用中文导出列名(与 ERP 导出同构, 不是英文内部列名)",
+          _hdr_line[0].startswith("SKU编码,"), _hdr_line[0][:40])
+    import csv as _csvm2
+    _parsed_rows = list(_csvm2.reader(__import__("io").StringIO(_csv_txt.decode("utf-8"))))
+    check("导入链路: CSV 往返后逗号/引号不破坏列边界(仍是 14 列)",
+          len(_parsed_rows[1]) == 14, len(_parsed_rows[1]))
+    # 与真实导入同一批函数(不是"照着写一份"): 解析/清洗/写入三层都必须来自 cleansing/cleanse_write
+    _sip = open("routes/seed_import.py", encoding="utf-8").read()
+    check("导入链路: 复用导入的解析与清洗(cleansing._parse_table / _clean_rows)",
+          "from routes.cleansing import _parse_table, _clean_rows" in _sip, "routes/seed_import.py")
+    check("导入链路: 复用导入的写入分派(cleanse_write._write_rows)",
+          "from routes.cleanse_write import _write_rows" in _sip, "routes/seed_import.py")
+    # seed 侧: 订单/商品/库存/流水都不许再裸 INSERT(否则链路只走一半, 等于没走)
+    #   断言看**代码行**(去注释), 否则说明性注释里的旧写法定法会被误判成没改
+    _sf12_raw = open("routes/seed_fill.py", encoding="utf-8").read()
+    _sf12 = "\n".join(x for x in _sf12_raw.splitlines()
+                      if x.strip() and not x.strip().startswith("#"))
+    check("导入链路: seed 订单不再 executemany 裸写(改走 import_rows)",
+          "INSERT IGNORE INTO orders" not in _sf12, "routes/seed_fill.py")
+    check("导入链路: seed 库存不再裸写(自有仓/平台仓分别发 inventory / inventory_b)",
+          "INSERT IGNORE INTO inventory" not in _sf12
+          and "_imp('inventory'" in _sf12 and "_imp('inventory_b'" in _sf12,
+          "routes/seed_fill.py")
+    check("导入链路: seed 出入库不再裸写(按渠道×类型发四份文件)",
+          "INSERT IGNORE INTO `%s`(%s)" not in _sf12
+          and "_imp(_tgt, ch, _rows" in _sf12, "routes/seed_fill.py")
+    check("导入链路: seed 商品档案走 import_rows(能暴露'映射了但写入白名单漏列')",
+          "_imp('product', ch, _prow" in _sf12, "routes/seed_fill.py")
+    # 可用重算不再由 seed 自己补一遍 —— 那是导入链路的职责, seed 只做只读核对
+    check("导入链路: 落账不再二次调用 _recalc_own_inventory(改只读核对)",
+          "_recalc_own_inventory as _rc" not in _sf12 and "_assert_available_balanced" in _sf12,
+          "routes/seed_fill.py")
+    # 写入层显式冲突语义: 不显式写 ON DUPLICATE 子句时, TiDB 的"键里含 deleted_at"会让
+    #   upsert 静默退化成"什么都不做" —— 所以 _write_batch 必须支持调用方给子句
+    _cw12 = open("routes/cleanse_write.py", encoding="utf-8").read()
+    check("导入链路: _write_batch 支持显式 conflict_sql(优先于按表名推断)",
+          "conflict_sql=\"\"" in _cw12 and 'sql += " ON DUPLICATE KEY UPDATE %s" % conflict_sql' in _cw12,
+          "routes/cleanse_write.py")
+    check("导入链路: _write_rows 把 conflict_sql 透传给库存分支",
+          "conflict_sql=_ksql" in _cw12, "routes/cleanse_write.py")
+    # 库存导出模板补了本周口径(周一至今), 不能由 month_* 推导
+    check("inventory: 已声明 week_inbound/week_outbound(库存导出模板的本周口径)",
+          "week_inbound INT DEFAULT 0" in _sc10 and "week_outbound INT DEFAULT 0" in _sc10,
+          "schema_create.py")
+
+    # ── 2026-11-05 用户实测: 骨架后闪空态 / 卡片一直刚刚 / 切页面任务停 ──
+    import os as _os2
+    _FE2 = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__)))), "frontend", "src")
+    _tp12 = open(_os.path.join(_FE2, "pages", "TaskPage.tsx"), encoding="utf-8").read()
+    check("任务页: 未成功拉到过一次之前不渲染空态(否则骨架后闪一下空列表)",
+          "loadedOnce" in _tp12 and "!loadedOnce && tasks.length === 0" in _tp12, "TaskPage.tsx")
+    _tc12 = open(_os.path.join(_FE2, "components", "tasks", "TaskCard.tsx"),
+                 encoding="utf-8").read()
+    # 相对时间曾把"带 +08:00 的时间串"再补一个 Z → 解析失败 → 恒「刚刚」
+    check("任务卡: 时间解析不再无脑补 Z(带 +08:00 时会解析失败塌成刚刚)",
+          "+08:00" in _tc12 and "String(iso).includes('Z')" not in _tc12, "TaskCard.tsx")
+    check("任务卡: running 显示累计运行时长(不再依赖'这一秒刚好在推进')",
+          "tc.running_for" in _tc12, "TaskCard.tsx")
+    # 看守: 驱动从任务页搬到 App 层 —— 切页面/持锁期间都有推进, 且全局串行
+    _tw = open(_os.path.join(_FE2, "api", "taskWatch.ts"), encoding="utf-8").read()
+    check("任务看守: 全局串行(同一时刻只有一个续跑请求, 不并发抢锁)",
+          "_inflight" in _tw and "if (_inflight) return" in _tw, "api/taskWatch.ts")
+    check("任务看守: 单请求超时 < 网关硬上限 120s",
+          "DRIVE_TIMEOUT = 115000" in _tw, "api/taskWatch.ts")
+    check("任务看守: 无进展时指数退避(租约被持有时不硬撞、不烧 RU)",
+          "Math.pow(1.25" in _tw, "api/taskWatch.ts")
+    _app12 = open(_os.path.join(_FE2, "App.tsx"), encoding="utf-8").read()
+    check("任务看守: 挂在 App 层(不在任务页), 切页面照样推进",
+          "adoptRunning" in _app12 and "onWatchChange" in _app12, "App.tsx")
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 

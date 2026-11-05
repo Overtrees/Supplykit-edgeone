@@ -1105,9 +1105,15 @@ def _promote_empty_barcode(channel, pairs, chunk=500):
     return done
 
 
-def _write_rows(target, channel, conflict_mode, cleaned):
+def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
     """按 target 分派写入; 返回 (success, failed)
-    渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道"""
+    渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道
+
+    conflict_sql: 透传给库存分支的 _write_batch, 覆盖默认的"同键全列覆盖"。
+      seed 重灌演示库时用「不覆盖已有行」——那样才能看出"重复导入被幂等挡下"这件事,
+      而不是把旧行改一遍还报成功。传空 = 现有导入行为完全不变。
+    """
+    _ksql = conflict_sql
     for it in cleaned:
         if "channel" not in it:
             it["channel"] = channel
@@ -1253,7 +1259,8 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                                    cleaned, conflict_mode, "sku", "warehouse", channel=channel,
                                    agg_key3="barcode",  # 69码三键(sku|warehouse|barcode, 空落二键)
                                    agg_sum=["available_qty", "in_transit_qty", "c_transit", "locked_qty",
-                                            "beginning_stock", "month_inbound", "month_outbound"])
+                                            "beginning_stock", "month_inbound", "month_outbound"],
+                                   conflict_sql=_ksql)
         if _held_rows:
             _f += len(_held_rows)
             for _it, _why in _held_rows[:40]:
@@ -1403,7 +1410,7 @@ def _fill_warehouse_type(channel, cleaned, target):
     return cleaned
 
 
-def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd", agg_sum=None, agg_overwrite=False, agg_key3=None):
+def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel="jd", agg_sum=None, agg_overwrite=False, agg_key3=None, conflict_sql=""):
     """批量写入: 仅保留存在的列; 冲突策略——
     inbound/outbound(sum/overwrite 前端适配面): sum=数量累加, overwrite=全列覆盖
     inventory: 同键全列覆盖(快照, 重导=刷新此刻数量)
@@ -1412,7 +1419,14 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
     2026-10-17 文件内同键聚合(新导入数据内部: 同组合键多行 → 合并, 不撞唯一键 1062):
     agg_sum=求和列集(数量/金额类——order/inventory/gmv_flow/inbound/outbound 同键多行求和一条);
     agg_overwrite=True(同键覆盖末行——product/supplier 档案类 upsert 语义); None=不聚合
-    agg_key3=69码三键(订单/库存/商品/出入库: 组合键 + 69码 优先, 69码空落二键——用户定)"""
+    agg_key3=69码三键(订单/库存/商品/出入库: 组合键 + 69码 优先, 69码空落二键——用户定)
+
+    conflict_sql (2026-11-05 seed 走导入链路): 调用方显式给出 ON DUPLICATE KEY UPDATE 子句,
+      覆盖上面按表名推断的默认冲突策略。seed 用它把"流水/订单已存在就不动"这条语义
+      写全 —— 键里带 deleted_at(与业务唯一键逐列一致)时, 缺失的 updated 子句会让
+      ON DUPLICATE 静默退化成"什么都不做"; 写清楚是唯一能让语义与导入对齐的办法。
+      传了它就完全绕过 sum/inv/ord 三套默认推断, 避免两套规则打架。
+    """
     if not cleaned:
         return 0, 0, []
     keys = list(dict.fromkeys(key_cols))  # 保序 list(曾 set 无序——查重 OR keys[0]/keys[1] 下标崩)
@@ -1520,7 +1534,10 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
         cols = list(dict.fromkeys(c for r in rows for c in (r.keys() if isinstance(r, dict) else [])))
         sql = "INSERT INTO `%s` (%s) VALUES (%s)" % (
             table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
-        if sum_mode:
+        if conflict_sql:
+            # 调用方显式声明的冲突策略(见函数 docstring) —— 优先于下面三套按表名推断
+            sql += " ON DUPLICATE KEY UPDATE %s" % conflict_sql
+        elif sum_mode:
             # inbound/outbound + sum: 数量列累加, 其余列覆盖
             upd = []
             for c in cols:

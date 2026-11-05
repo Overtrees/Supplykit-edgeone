@@ -41,6 +41,7 @@ export const zh: Record<string, string> = {
   'op.export': '数据导出',
   'op.rules_fail': '规则重算失败，告警可能未更新（详情见质量页日志）',
   'op.sync_old': '同步中',
+  'op.watching': '{n} 个任务运行中',
   'op.seed_done': '种子数据填充完成',
   'op.seed_fail': '种子数据填充失败',
   'op.clean_done': '数据清洗完成',
@@ -1359,6 +1360,8 @@ export const zh: Record<string, string> = {
   'task.imp_outbound': '出库记录表',
   'task.imp_product': '商品表',
   'tc.just_now': '刚刚',
+  // 2026-11-05 任务卡右上角: 进行中的任务要看得见在跑, 不能永远「刚刚」
+  'tc.running_for': '已运行 {n}s',
   'tc.mins_ago': '{n} 分钟前',
   'tc.hours_ago': '{n} 小时前',
   'tc.backend_run': '后端推进',

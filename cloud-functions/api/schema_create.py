@@ -55,6 +55,9 @@ _TABLES = {
         # snapshot_qty: 库存导入送来的"当时可用"(对账基准)。已建账后它**不再写成期初**,
         #   只留在这里做差异核对 —— 覆盖期初就是"每月累加一次双算"的根因
         "snapshot_qty INT DEFAULT 0, "
+        # week_inbound / week_outbound: 本周(周一至今)出入库量。真实库存导出里"本周入库/出库"
+        #   是独立口径(不是当月的滚动值), 不能由 month_* 推导。
+        "week_inbound INT DEFAULT 0, week_outbound INT DEFAULT 0, "
         "turnover_days DECIMAL(10,2) DEFAULT 0, weight DECIMAL(10,2) DEFAULT 0, volume DECIMAL(10,4) DEFAULT 0, "
         "barcode VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
@@ -218,6 +221,7 @@ _TABLES = {
         "task_type VARCHAR(32) DEFAULT '', status VARCHAR(16) DEFAULT 'pending', "
         "params TEXT, result TEXT, channel VARCHAR(20) DEFAULT 'jd', "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+        "lease_until DATETIME NULL, "
         "UNIQUE KEY uk_tasks_id (task_id), KEY idx_tasks_status (status))"
     ),
     "cleansing_templates": (
@@ -523,7 +527,11 @@ _COLUMN_ADDS = {
                   # 2026-11-05 账期: 建账基线(首次结账时固化, 此后**永不覆盖**)。
                   #   beginning_stock 会被结账回写成"当期期初", 若再拿它当基线,
                   #   重跑结账就会把已结转的量再叠一次(不幂等)。基线必须独立存放。
-                  ("ledger_base", "INT DEFAULT NULL")],
+                  ("ledger_base", "INT DEFAULT NULL"),
+                  # 2026-11-05 库存导出模板补列: 本周入库/出库是独立口径(周一至今),
+                  #   与 month_* 不等价, 不能由 month_* 推导
+                  ("week_inbound", "INT DEFAULT 0"),
+                  ("week_outbound", "INT DEFAULT 0")],
     # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
     # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
     "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''"), ("ext_json", "TEXT")],
@@ -550,6 +558,10 @@ _COLUMN_ADDS = {
     "maintenance_log": [("details", "VARCHAR(255) DEFAULT NULL")],
     # 2026-11-02 S2-1 写入令牌(防"重建期间被失效"的旧值覆盖墓碑)
     "analysis_cache": [("tok", "BIGINT DEFAULT 0")],
+    # 2026-11-05 seed 续跑租约(见 task_seed.py 事故说明)。
+    #   为什么不用 updated_at 兼任: updated_at 是前端卡片上的"进度心跳", 租约要把它推到未来,
+    #   前端就会算出"负几分钟前"。两件事语义不同, 必须两列。
+    "sync_tasks": [("lease_until", "DATETIME NULL")],
 }
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
@@ -562,7 +574,11 @@ _COLUMN_ADDS = {
 # v9(2026-11-05 seed 水位): 同批次的**版本号修订** —— v8 那次改动追加了 seed_watermark 声明
 #   但忘了 bump 版本号(声明写着 8、版本也已是 8) → ensure_schema 走热路径直接返回,
 #   新表永远不会被创建。这正是"改 schema 必 bump"这条规矩存在的原因。
-SCHEMA_VERSION = 9
+# v10(2026-11-05 seed 续跑租约): sync_tasks 增 lease_until —— 旧锁用 updated_at 兼任,
+#   3 秒窗口挡不住并发续跑, 线上每段订单被执行两遍(单日精确 3100 = 1550×2)。
+# v11(2026-11-05 seed 走导入链路): inventory 增 week_inbound/week_outbound(库存导出模板
+#   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
+SCHEMA_VERSION = 11
 
 
 def table_ddl(name):

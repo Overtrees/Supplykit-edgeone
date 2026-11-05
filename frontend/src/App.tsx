@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
 import { clearCache, clearInflight, apiJson, activeRequests, onActiveRequests } from './api/client'
+import { adoptRunning, onWatchChange, watchCount } from './api/taskWatch'
 import { reportError } from './api/logger'
 import { ToastProvider, ToastAutoClear } from './components/Toast'
 import { useFreshness } from './components/Freshness'
@@ -159,6 +160,51 @@ export default function App() {
     return onActiveRequests(sync)
   }, [])
   const badgeBusy = syncing > 0 || reqBusy > 0
+  // 2026-11-05 任务看守(回答"持锁 600s 时别的页面怎么办 / 多次切页面怎么办"):
+  //   后端续跑是**前端轮询驱动**的, 每推进一次服务端就占 600s 租约防并发重写。
+  //   原来驱动只挂在任务页 —— 一切走就没人推进; 而用户根本不知道这个任务还在跑。
+  //   现在改成 App 层看守: 任何页面停留期间都持续推进(与页面无关注视), 且
+  //   ① 全局串行(同一时刻只有一个续跑请求, 不并发抢锁、不把胶囊拖成一直转);
+  //   ② 单请求超时 115s(< 网关 120s 硬上限), 被掐断也不会让服务端留半个事务;
+  //   ③ 无进展时按指数退避(3s→15s), 租约被别人持有时不硬撞、不烧 RU;
+  //   ④ 切页面不影响: 看守在模块层, 组件卸载不摘监听(见 taskWatch 的 _watches)。
+  const [watching, setWatching] = useState(0)
+  useEffect(() => onWatchChange(() => setWatching(watchCount())), [])
+  // 首次挂载 + 每次页面可见: 轻轻拉一次任务列表, 把 running 的接管进来
+  //   (轻量: limit=8, 只为拿"还有哪些任务在跑", 不参与业务数据)
+  useEffect(() => {
+    let alive = true
+    const adopt = async () => {
+      try {
+        const d = await apiJson<{ data?: Array<Record<string, unknown>> }>(
+          'GET',
+          API + '/api/tasks?channel=' + useAppStore.getState().channel + '&limit=8',
+          { timeout: 15000 },
+        )
+        if (!alive) return
+        adoptRunning((d?.data || []) as Array<{ task_id?: string; status?: string }>, {
+          onDone: () => {
+            window.dispatchEvent(new Event('seed-done'))
+            useAppStore
+              .getState()
+              .loadAll(1, { refresh: true })
+              .catch(() => {})
+          },
+        })
+      } catch {
+        /* 网络抖动: 下次可见时再试, 不打断 */
+      }
+    }
+    void adopt()
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void adopt()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      alive = false
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [API])
   // 2026-10-27 徽标兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防徽标永久显示需手动刷新
   //   2026-11-05 保留但收窄作用域: 只兜 syncing(页面声明), reqBusy 由网络层 finally 保证归零,
   //   不需要也不应该被它清掉(否则真慢的请求会被"显示完成")。
@@ -244,6 +290,11 @@ export default function App() {
         <path d="M21 12a9 9 0 1 1-6.219-8.56" />
       </svg>
       {syncOld ? t('op.sync_old') : t('common.loading')}
+      {/* 2026-11-05: 有任务正在被看守时补一个计数 —— 用户切换页面时也能知道"后台还有 N 个任务在跑",
+          而不是回到任务页才突然发现"跑了十分钟"。 */}
+      {watching > 0 ? (
+        <span style={{ opacity: 0.75 }}>· {t('op.watching', { n: watching })}</span>
+      ) : null}
     </span>
   ) : null
   // 2026-11-03 操作态优先于取数态: 后端正在算时不显示"同步中"(那是前端在取数),

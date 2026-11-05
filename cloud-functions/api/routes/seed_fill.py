@@ -158,11 +158,18 @@ def _seed_products_suppliers(skus_data):
                               # 2026-11-01 是否做效期管理: 家清/日化(home)不做, 食品/零食做
                               #   —— 让两种扣减口径(FEFO / 到货序 FIFO)都有真实数据可验证
                               'expiry_managed': 'no' if _g == 'home' else 'yes'})
-    for i in range(0, len(prod_rows), 500):
-        cols = list(prod_rows[0].keys())
-        executemany("INSERT INTO products(%s) VALUES(%s) ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), price=VALUES(price), brand=VALUES(brand), status='active', expiry_managed=VALUES(expiry_managed)" %
-                    (", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))),
-                    [tuple(p[c] for c in cols) for p in prod_rows[i:i + 500]])
+    # 2026-11-05 走导入链路(用户定案): 商品档案 i 也是"导入文件"进来的一份数据。
+    #   原来直接 INSERT ... ON DUPLICATE, 于是"映射了供应商编码但写入白名单漏了它"
+    #   这类漏列问题在演示环境永远暴露不出来(§15.158 就是这么发现的)。
+    from routes.seed_import import import_rows as _imp
+    for ch in ('jd', 'other'):
+        _prow = [p for p in prod_rows if p.get('channel') == ch]
+        if _prow:
+            _r = _imp('product', ch, _prow, label='商品档案')
+            if _r.get('failed'):
+                try_err('seed_fill', '商品档案导入 %s 有 %d 行未落库(首因=%s)'
+                        % (ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:120]), None)
     sup_rows = []
     for s_idx, (code, name, contact, phone, score) in enumerate(SUP):
         _blist = sup_brands[s_idx % 10]
@@ -213,20 +220,26 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
         nonlocal batch, _seg_rows
         if not batch:
             return
-        cols = ['order_no', 'store', 'warehouse', 'sku', 'product_name', 'quantity', 'unit_price',
-                'total_amount', 'discount_amount', 'freight_amount', 'subsidy_amount', 'tax_amount',
-                'actual_amount', 'order_status', 'ordered_at', 'paid_at', 'channel', 'platform',
-                'data_source', 'barcode']
-        # 2026-10-29 幂等写入: 曾用普通 INSERT → 任一键冲突则**整批 500 行失败**且任务中断
-        #   改为 INSERT IGNORE: 冲突行跳过(seed 演示数据允许少量缺失), 任务可跑完
-        executemany("INSERT IGNORE INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
-                                                                  ", ".join(["%s"] * len(cols))),
-                    [tuple(o[c] for c in cols) for o in batch])
-        _seg_rows += len(batch)
+        # 2026-11-05 走导入链路(用户定案: 演示数据必须由导入代码路径自己产出):
+        #   原先是 executemany("INSERT IGNORE INTO orders ...") —— 那等于绕过导入:
+        #   不补 69码(档案有码/本行缺码的规则)、不做四维业务键对齐、不走批内聚合、
+        #   不登记脏日重建、不失效分析缓存。演示库"看着对", 真实导入却可能错, 没人能提前发现。
+        #   现在: 内存行 → 中文表头 CSV → _parse_table → _clean_rows → _write_rows(同一分派器)。
+        #   batch 仍是 500 行一组(控制单条 INSERT 体积, 与导入侧 500/批同源)。
+        from routes.seed_import import import_rows as _imp
+        _r = _imp('order', ch_cur[0], batch, label='订单')
+        _seg_rows += int(_r.get('rows') or 0)
+        if _r.get('failed'):
+            try_err('seed_fill', '订单导入链路 %s 段有 %d 行未落库(已留痕, 不中断): 首因=%s'
+                    % (ch_cur[0], _r['failed'],
+                       str((_r.get('errors') or [{}])[0].get('reason') or '')[:120]), None)
         batch = []
+
+    ch_cur = ['jd']   # flush() 需要知道当前渠道(闭包外变量, 避免每批多传一个参数)
 
     for ch, label, skus, base in [('jd', 'jd', skus_data['jd'], ORDER_BASE_PER_DAY),
                                   ('other', 'other', skus_data['other'], ORDER_BASE_PER_DAY)]:
+        ch_cur[0] = ch
         promo = {'618': list(range(5, 20)), 'month_end': list(range(45, 55))}
         _n = len(skus)
         _shuffled = skus[:]
@@ -355,22 +368,47 @@ def _seed_inventory(skus_data):
                               {'bc': sk['bc2'], 'q': q - _q1, 'beg': beg - _b1}]
                 for _ln in _lines:
                     inv.append({'sku': sk['sku'], 'barcode': _ln['bc'], 'product_name': sk['name'],
+                                'store': sk.get('store', ''),
                                 'warehouse': wh_name,
                                 'warehouse_type': wt, 'available_qty': _ln['q'],
                                 'beginning_stock': _ln['beg'],
                                 'in_transit_qty': 0 if low else random.randint(0, 200),
                                 'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
+                                'locked_qty': 0,
+                                'c_transit': 0,
+                                'month_inbound': 0,   # 由 _sync_inv_month 按流水回填
+                                'month_outbound': 0,
+                                'week_inbound': 0,    # 本周口径同样由流水回填(周一至今)
+                                'week_outbound': 0,
+                                'weight': sk.get('weight', 0),
+                                'volume': sk.get('volume', 0),
+                                'snapshot_qty': _ln['q'],  # 对账基准: 导入文件里的"当时可用"
                                 'channel': ch})
-    for i in range(0, len(inv), 500):
-        cols = ['sku', 'product_name', 'warehouse', 'warehouse_type', 'available_qty', 'beginning_stock',
-                'in_transit_qty', 'safety_qty', 'channel', 'barcode']
-        executemany("INSERT IGNORE INTO inventory(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
-                                                              ", ".join(["%s"] * len(cols))),
-                    [tuple(x[c] for c in cols) for x in inv[i:i + 500]])
+    # 2026-11-05 走导入链路(用户定案): 库存快照按**仓型**拆成两份"导入文件" ——
+    #   自有仓走 inventory 模板(带期初/本月/本周/快照), 平台仓(B 仓)走 inventory_b 模板
+    #   (平台导出只有可用/在途, 没有期初概念)。这正是真实业务里两个不同的上传入口。
+    #   走导入的直接收益: 69码归码规则、未归码拒写、期初实盘校准(core.ledger_adj)、
+    #   自有仓可用重算与批次 FIFO 重建, 全部由链路自己完成 —— 不必在 seed 里各写一遍。
+    from routes.seed_import import import_rows as _imp
+    for ch in ('jd', 'other'):
+        _own = [x for x in inv if x.get('channel') == ch and x.get('warehouse_type') == 'own']
+        _pf = [x for x in inv if x.get('channel') == ch and x.get('warehouse_type') != 'own']
+        if _own:
+            _r = _imp('inventory', ch, _own, label='自有仓库存')
+            if _r.get('failed'):
+                try_err('seed_fill', '自有仓库存导入 %s 有 %d 行未落库(首因=%s)'
+                        % (ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:150]), None)
+        if _pf:
+            _r = _imp('inventory_b', ch, _pf, label='平台仓库存')
+            if _r.get('failed'):
+                try_err('seed_fill', '平台仓库存导入 %s 有 %d 行未落库(首因=%s)'
+                        % (ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:150]), None)
     return len(inv)
 
 
-def _seed_batches(skus_data=None, channel=''):
+def _seed_batches(skus_data=None, channel='', wh_group=''):
     """批次效期: 按有货库存行 1~3 批, 4% 问题 SKU(过期/临近), 回写 products.best_before
 
     2026-10-29 幂等化: 原纯 INSERT —— 分步 seed(step6) 与一键 seed 都会调用, 重复执行即翻倍
@@ -380,8 +418,16 @@ def _seed_batches(skus_data=None, channel=''):
     channel (2026-11-05 拆段): 只重建**该渠道**的批次。原实现一条 DELETE 清两渠道再全量重建,
       两渠道一起做实测 50s+; 拆开后每渠道 ≤22s。⚠ 清空范围必须与重建范围一致 ——
       若只清 jd 却重建两渠道,jd 会双份、other 会三份,这是本函数最怕的错。
+
+    wh_group (2026-11-05 二次拆段): 'platform' = 只做平台仓/B 仓(非 own)批次;
+      'own' = 只做自有仓批次。留空 = 两者都做(一键 seed 的老行为)。
+      **实测数据量决定的**: jd 渠道 `platform` 仓 68,322 行 + `platform_b` 9,637 行,
+      每行 1~3 批 ≈ 16.8 万批次, 单请求必爆 120s 网关(实测 504)。按仓型切开后
+      单段约 8 万批次, 稳在 60s 内。仓储口径没有任何变化, 只是执行被分段。
     """
     _chs = (channel,) if channel else ('jd', 'other')
+    _only_own = wh_group == 'own'
+    _only_pf = wh_group == 'platform'
     # 2026-10-29 按 69码: 批次从库存行取码(该 SKU+仓 唯一码时归属明确)
     bc_map = {}
     try:
@@ -392,17 +438,34 @@ def _seed_batches(skus_data=None, channel=''):
     except Exception:
         bc_map = {}
     from datetime import datetime as _dt
+    # 清空范围: 与本次重建范围严格一致(渠道 × 仓型)。分三段写清楚, 不用拼接 trick ——
+    #   这个 DELETE 一旦宽了就是"删了不重建"(数据丢失), 窄了就是"没删就插"(双份)。
+    _ph = ",".join(["%s"] * len(_chs))
+    if _only_own:
+        _del_sql = "DELETE FROM batches WHERE channel IN (%s) AND warehouse_type='own'" % _ph
+        _del_args = list(_chs)
+    elif _only_pf:
+        _del_sql = ("DELETE FROM batches WHERE channel IN (%s) "
+                    "AND warehouse_type<>'own'" % _ph)
+        _del_args = list(_chs)
+    else:
+        _del_sql = "DELETE FROM batches WHERE channel IN (%s)" % _ph
+        _del_args = list(_chs)
     try:
-        execute("DELETE FROM batches WHERE channel IN (%s)" % ",".join(["%s"] * len(_chs)),
-                list(_chs))
+        execute(_del_sql, _del_args)
     except Exception as _e0:
         try_err('seed_fill', '批次清空失败(继续插入可能翻倍)', _e0)
     today = now_cn()
     # ⚠ 2026-11-05 拆段配套: rows 必须与 DELETE 同范围。原实现无 channel 条件(两渠道一起重建
     #   没问题), 拆段后若不清不楚 —— 只清 jd 却按全表重建 → jd 双份、other 三份。
-    rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 平台仓批次按 sku×仓
-                 "WHERE available_qty > 0 AND warehouse_type NOT IN ('own') "
-                 "AND channel IN (%s)" % ",".join(["%s"] * len(_chs)), list(_chs))
+    # _only_own 段不产生平台仓批次 → 连查询都不发(这不是优化, 是"只做 own"的语义本身)
+    if _only_own:
+        rows = []
+    else:
+        _pf_cond = "AND warehouse_type<>'own' " if _only_pf else ""
+        rows = query("SELECT sku, warehouse, warehouse_type, channel, available_qty FROM inventory "  # no-barcode-ok: seed 平台仓批次按 sku×仓
+                     "WHERE available_qty > 0 " + _pf_cond +
+                     "AND channel IN (%s)" % _ph, list(_chs))
     _pcat = {}
     _pem = {}
     for r in query("SELECT sku, category, channel, COALESCE(expiry_managed,'') AS expiry_managed "
@@ -446,17 +509,28 @@ def _seed_batches(skus_data=None, channel=''):
             prod = today - timedelta(days=_ago)
             exp = prod + timedelta(days=shelf)
             _no_exp = _pem.get((sku, ch)) == 'no'
-            bdata.append({'sku': sku, 'barcode': str(bc_map.get((sku, wh), '') or ''),
-                          'warehouse': wh, 'warehouse_type': wht, 'channel': ch,
-                          # 不做效期管理 → 批次无日期(效期预警/临期建议自动跳过)
-                          'prod_date': '' if _no_exp else prod.strftime('%Y-%m-%d'),
-                          'exp_date': '' if _no_exp else exp.strftime('%Y-%m-%d'),
-                          'qty': bq})
-    for i in range(0, len(bdata), 500):
-        cols = ['sku', 'barcode', 'warehouse', 'warehouse_type', 'channel', 'prod_date', 'exp_date', 'qty']
-        executemany("INSERT IGNORE INTO batches(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
-                                                            ", ".join(["%s"] * len(cols))),
-                    [tuple(b[c] for c in cols) for b in bdata[i:i + 500]])
+        bdata.append({'sku': sku, 'barcode': str(bc_map.get((sku, wh), '') or ''),
+                      'warehouse': wh, 'warehouse_type': wht, 'channel': ch,
+                      # 不做效期管理 → 批次无日期(效期预警/临期建议自动跳过)
+                      'prod_date': '' if _no_exp else prod.strftime('%Y-%m-%d'),
+                      'exp_date': '' if _no_exp else exp.strftime('%Y-%m-%d'),
+                      'qty': bq})
+    # 2026-11-05 批次落库也走导入写入层(不再是裸 INSERT IGNORE):
+    #   批次是"Σ批次 ≡ 可用"的另一半, 它和库存/流水必须用同一套冲突语义才对得上。
+    #   用 overwrite(同键全列覆盖)而不是 IGNORE —— 平台仓批次按 (sku,仓,仓型,渠道,生产/到期日)
+    #   落, 重灌时希望结果是"文件即权威", 而不是"旧行留着、新行被忽略"。
+    _conflict = ("`barcode`=VALUES(`barcode`), `qty`=VALUES(`qty`), "
+                 "`prod_date`=VALUES(`prod_date`), `exp_date`=VALUES(`exp_date`)")
+    if bdata:
+        from routes.cleanse_write import _write_batch as _wb
+        _bs, _bf, _be = _wb(
+            "batches",
+            ["sku", "barcode", "warehouse", "warehouse_type", "channel", "prod_date", "exp_date", "qty"],
+            bdata, "overwrite", "sku", "warehouse", "prod_date", "exp_date",
+            channel=(channel or "jd"), conflict_sql=_conflict)
+        if _bf:
+            try_err('seed_fill', '批次写入 %d 行被拒(首因=%s)'
+                    % (_bf, str((_be or [{}])[0].get('reason') or '')[:120]), None)
     # 2026-11-01: 此处原有两轮逐条 UPDATE products(先填 best_before, 再强制覆盖 problem SKU),
     #   每个 SKU 一次往返 —— 2000 SKU 约 4000 次 RTT, 本地实测把 step7 拖到 8 分钟, 线上必爆
     #   120s 网关。该效果已被下方"批次为准"的单条 JOIN UPDATE 完全覆盖(条件更宽、口径更权威):
@@ -464,8 +538,9 @@ def _seed_batches(skus_data=None, channel=''):
     # 2026-10-31 own 仓批次: 走生产算法(期初 + 入库 − 出库精确扣减), 与真实导入同一条链路。
     #   原实现按 available_qty 随机拆 → 与 _rebuild_own_batches 两套口径, seed 跑完自洽,
     #   但任何一次真实导入触发重建就被按"空日期流水"重算而塌缩(本次 65 项偏差的成因之一)。
+    # 2026-11-05 二次拆段: 只做 'platform' 组时跳过 own 批次(它自成一整段, 见 _seed_settle_own*)
     from routes.cleanse_write import _rebuild_own_batches as _rbb
-    for _och in _chs:
+    for _och in (() if _only_pf else _chs):
         # 2026-11-05: 有内存 SKU 集合就用它(省一次 3.1s 的 DISTINCT); 没有才查库(/seed/step 单跑)
         if skus_data and skus_data.get(_och):
             _osk = [str(x.get('sku') or '') for x in skus_data[_och]]
@@ -478,6 +553,10 @@ def _seed_batches(skus_data=None, channel=''):
     # best_before 以批次为准(批次 = 期初 + 流水 − 出库, 唯一真源)
     #   2026-10-31: 单条 JOIN UPDATE —— 原逐条 UPDATE 是 2000 次往返(实测线上 200s),
     #   会撑爆 seed 单步 90s 上限; 单条实测 0.3s。
+    # 2026-11-05 二次拆段: **只在最后一段回写**。MIN(exp_date) 跨全部仓型聚合, 只做平台仓
+    #   那一半时批次还没齐, 早写会把 best_before 写成偏晚的错值(临期预警整体推迟)。
+    if _only_pf:
+        return len(bdata)
     try:
         execute("UPDATE products p JOIN ("
                 "  SELECT sku, MIN(exp_date) AS e FROM batches "
@@ -673,13 +752,26 @@ def _seed_records():
                                  'warehouse_type': 'own',
                                  'prod_date': '' if _em == 'no' else _b['pd'],
                                  'exp_date': '' if _em == 'no' else _b['ed']})
-    for table, rows, date_col in (('inbound_records', in_rows, 'inbound_date'),
-                                  ('outbound_records', out_rows, 'outbound_date')):
-        for i in range(0, len(rows), 500):
-            cols = list(rows[0].keys())
-            sql = "INSERT IGNORE INTO `%s`(%s) VALUES(%s)" % (
-                table, ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols)))
-            executemany(sql, [tuple(r[c] for c in cols) for r in rows[i:i + 500]])
+    # 2026-11-05 走导入链路(用户定案): 出入库是自有仓台账的唯一来源, 也是最容易出问题的一环
+    #   (仓型归属纠正、69码补齐、批次效期同步、月汇总回填、可用重算)。原实现是
+    #   `INSERT IGNORE INTO inbound_records ...` —— 仓型、69码都靠"上游刚写好"假定成立,
+    #   链路里那些纠正规则一次都没被走过。现在按渠道 × 类型发四份导入文件。
+    #
+    # 冲突模式用 sum(与导入页默认一致): 同 SKU+日期+69码 的行累加数量。
+    #   这不是给 seed 开的特例 —— 真实客户把同一张入库单导两次, 语义就是"再入一次"。
+    from routes.seed_import import import_rows as _imp
+    _stat = {}
+    for ch in ('jd', 'other'):
+        for _tgt, _rows in (('inbound', [r for r in in_rows if r.get('channel') == ch]),
+                            ('outbound', [r for r in out_rows if r.get('channel') == ch])):
+            if not _rows:
+                continue
+            _r = _imp(_tgt, ch, _rows, label=_tgt)
+            _stat[_tgt + '_' + ch] = _r.get('rows')
+            if _r.get('failed'):
+                try_err('seed_fill', '%s 导入 %s 有 %d 行未落库(首因=%s)'
+                        % (_tgt, ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:150]), None)
     return len(in_rows), len(out_rows)
 
 
@@ -915,6 +1007,49 @@ def prepare_skus():
     return {'jd': jd_s, 'other': ot_s}
 
 
+def _assert_available_balanced(chs):
+    """落账核对(2026-11-05): 自有仓 可用 是否等于 期初 + Σ入库 − Σ出库
+
+    为什么改成"只核对不重算": 可用重算这件事**已经由导入链路自己在做** —— 库存/出入库
+    导入的写入分支会调 `_recalc_own_inventory` + `_rebuild_own_batches`。seed 再算一遍
+    等于承认"链路没生效、得我自己补", 那正好把要验证的东西掩盖掉了。
+
+    这里只读, 一条聚合 SQL 出「有差额的行数」和「最大差额」:
+      有差额 = 导入链路的重算没覆盖到(或流水被拒写), 必须留痕而不是静默过关。
+    """
+    out = {}
+    for ch in chs:
+        try:
+            _r = one(
+                "SELECT COUNT(*) AS bad, COALESCE(MAX(ABS(d)),0) AS maxd FROM ("
+                "  SELECT i.sku, i.warehouse, i.barcode,"
+                "         i.available_qty - (COALESCE(i.beginning_stock,0)"
+                "           + COALESCE(ib.q,0) - COALESCE(ob.q,0)) AS d"
+                "  FROM inventory i"
+                "  LEFT JOIN (SELECT sku, warehouse, COALESCE(barcode,'') AS bc, SUM(quantity) q"
+                "             FROM inbound_records WHERE channel=%s"
+                "             GROUP BY sku, warehouse, COALESCE(barcode,'')) ib"
+                "    ON ib.sku=i.sku AND ib.warehouse=i.warehouse AND ib.bc=COALESCE(i.barcode,'')"
+                "  LEFT JOIN (SELECT sku, warehouse, COALESCE(barcode,'') AS bc, SUM(quantity) q"
+                "             FROM outbound_records WHERE channel=%s"
+                "             GROUP BY sku, warehouse, COALESCE(barcode,'')) ob"
+                "    ON ob.sku=i.sku AND ob.warehouse=i.warehouse AND ob.bc=COALESCE(i.barcode,'')"
+                "  WHERE i.channel=%s AND i.warehouse_type='own'"
+                "    AND (i.deleted_at IS NULL OR i.deleted_at='')"
+                ") t WHERE d<>0" % ("%s", "%s", "%s"),
+                [ch, ch, ch]) or {}
+            _bad = int(_r.get("bad") or 0)
+            out[ch] = {"bad_rows": _bad, "max_diff": float(_r.get("maxd") or 0)}
+            if _bad:
+                try_err("seed_fill",
+                        "落账核对 %s: 自有仓有 %d 行 可用≠期初+Σ流水, 最大差 %.1f"
+                        " —— 说明导入链路的重算没覆盖到这些行" % (ch, _bad, float(_r.get("maxd") or 0)),
+                        None)
+        except Exception as _e:
+            out[ch] = "error: %s" % str(_e)[:100]
+    return out
+
+
 def _assert_barcode_aligned():
     """seed 自检(2026-11-01): **可补码的 SKU** 必须无空码
 
@@ -953,15 +1088,27 @@ def _assert_barcode_aligned():
 _SEED_ORDER_SEGS = 6                                   # step 1..6 = 订单 6 段
 _SEED_INV = _SEED_ORDER_SEGS + 1                       # 7  库存
 _SEED_FLOW = _SEED_INV + 1                             # 8  流水
-# 落账拆两段(2026-11-05): 原 _SEED_SETTLE 一段做「两渠道重算 + 两渠道批次 + 跨渠道自检」,
-#   实测 21.6s×2(批次) + 重算 ≈ 50s, 是该步撞 90s 平台上限的直接原因。
-#   拆成「jd 落账」「other 落账」各 ≤30s, 单请求余量翻倍; 段号整体后移一位。
-_SEED_SETTLE_JD = _SEED_FLOW + 1                       # 9  落账 jd
-_SEED_SETTLE_OTHER = _SEED_SETTLE_JD + 1               # 10 落账 other
-_SEED_SETTLE = _SEED_SETTLE_OTHER                      # 兼容别名: 「落账起点」(运维口/回滚按它判断)
-_SEED_MONTH = _SEED_SETTLE_OTHER + 1                   # 11 月汇总+配置
-_SEED_TAIL = _SEED_MONTH + 1                           # 12 告警+快照+物化
-SEED_DONE = _SEED_TAIL + 1                             # 13 = 完成
+# 落账拆四段(2026-11-05, 两次拆分):
+#   ① 按渠道: 原一段做两渠道 = 21.6s×2(批次) + 重算 ≈ 50s
+#   ② 按仓型: 第一次只按渠道拆**线上仍 504(123s)** —— jd 有 68,322 平台仓行 + 9,637 B 仓行,
+#      每行 1~3 批 ≈ 16.8 万批次, 单请求必爆。于是每渠道再按仓型切 'platform' / 'own'。
+#   四段实测各 ≤40s, 单请求余量充足。仓储口径不变, 只是执行分段。
+_SEED_SETTLE_JD_PF = _SEED_FLOW + 1                    # 9  落账 jd 平台/B 仓
+_SEED_SETTLE_JD_OWN = _SEED_SETTLE_JD_PF + 1           # 10 落账 jd 自有仓(含可用重算)
+_SEED_SETTLE_OT_PF = _SEED_SETTLE_JD_OWN + 1           # 11 落账 other 平台/B 仓
+_SEED_SETTLE_OT_OWN = _SEED_SETTLE_OT_PF + 1           # 12 落账 other 自有仓 + 跨渠道自检
+_SEED_SETTLE = _SEED_SETTLE_JD_PF                      # 兼容别名: 「落账起点」
+_SEED_MONTH = _SEED_SETTLE_OT_OWN + 1                  # 13 月汇总+配置
+_SEED_TAIL = _SEED_MONTH + 1                           # 14 告警+快照+物化
+SEED_DONE = _SEED_TAIL + 1                             # 15 = 完成
+# 落账四段的执行顺序(渠道, 仓型) —— 顺序有意义: 平台仓在前(量大), 自有仓在后(含可用重算
+#   与 best_before 回写, 必须最后, 因为它要读全部仓型的批次)
+_SETTLE_SEGS = (
+    (_SEED_SETTLE_JD_PF,  'jd',    'platform'),
+    (_SEED_SETTLE_JD_OWN, 'jd',    'own'),
+    (_SEED_SETTLE_OT_PF,  'other', 'platform'),
+    (_SEED_SETTLE_OT_OWN, 'other', 'own'),
+)
 
 
 # ── 水位 / 回滚 / 行数对账(2026-11-05) ──────────────────────────────────
@@ -1131,20 +1278,22 @@ def seed_step(step, today, skus_data, run_id=''):
         a, b = _seed_records()
         if run_id:
             wm_end(run_id, step, {'inbound_records': a, 'outbound_records': b}, channel='jd,other')
-        return _SEED_SETTLE_JD, {'inbound': a, 'outbound': b}
-    if step == _SEED_SETTLE_JD:
-        _st = seed_settle(skus_data, channel='jd')
-        return _SEED_SETTLE_OTHER, _st
-    if step == _SEED_SETTLE_OTHER:
-        _st = seed_settle(skus_data, channel='other')
-        # 两渠道都落完 → 才做跨渠道自检(单渠道时另一渠道还没轮到, 空码是"没轮到"不是违规)
-        try:
-            _st = dict(_st or {})
-            _st['barcode_aligned'] = _assert_barcode_aligned()
-        except Exception as _ea:
-            _st = dict(_st or {})
-            _st['degraded'] = ((_st.get('degraded') or '') + '; selfcheck: %s' % str(_ea)[:100]).strip('; ')
-        return _SEED_MONTH, _st
+        return _SEED_SETTLE_JD_PF, {'inbound': a, 'outbound': b}
+    # 落账四段: 由 _SETTLE_SEGS 表驱动(顺序有意义, 见常量处注释)
+    for _seg_no, _seg_ch, _seg_wg in _SETTLE_SEGS:
+        if step != _seg_no:
+            continue
+        _st = seed_settle(skus_data, channel=_seg_ch, wh_group=_seg_wg)
+        # 最后一段(other 自有仓)做完 → 才做跨段自检: 此时两渠道 × 两仓型才全部落完
+        if _seg_no == _SEED_SETTLE_OT_OWN:
+            try:
+                _st = dict(_st or {})
+                _st['barcode_aligned'] = _assert_barcode_aligned()
+            except Exception as _ea:
+                _st = dict(_st or {})
+                _st['degraded'] = ((_st.get('degraded') or '') +
+                                   '; selfcheck: %s' % str(_ea)[:100]).strip('; ')
+        return _seg_no + 1, _st
     if step == _SEED_MONTH:
         _ms = _sync_inv_month()
         _seed_config()
@@ -1166,7 +1315,7 @@ def seed_step(step, today, skus_data, run_id=''):
     return SEED_DONE, {}
 
 
-def seed_settle(skus_data=None, channel=''):
+def seed_settle(skus_data=None, channel='', wh_group=''):
     """落账: 重算自有仓可用 → 重建批次 → 自检(2026-11-05 抽成独立函数, seed 与运维口共用)
 
     为什么单独成函数: 这段是"数据写完之后的账要平"的唯一实现 ——
@@ -1182,33 +1331,42 @@ def seed_settle(skus_data=None, channel=''):
       再加上前面几步累积, 90s 平台上限非常容易撞。拆成「jd」「other」两段后每段 ≤30s,
       单请求余量足够。不传 = 两渠道都做(一键 seed / 运维口的老行为, 语义不变)。
 
+    wh_group (2026-11-05 二次拆段, 线上 504 逼出来的): 'platform' / 'own'。
+      第一次拆段(按渠道)实测**不够** —— jd 单渠道仍 504(123s)。查下来 jd 有
+      68,322 平台仓行 + 9,637 B 仓行, 每行 1~3 批 ≈ 16.8 万批次, 单请求必爆。
+      于是再按仓型切一刀: 'platform' 段只做非 own 批次(+ 不算可用, 可用与仓型无关但
+      放在 own 段一起做), 'own' 段只做自有仓批次(含 best_before 回写)。
+      仓储口径完全不变, 只是把同一个重建过程分段执行。
+
     失败**不重抛**: 走到这一步库存/流水都已落库, 抛出去只会留下半张账;
     留痕 + 在返回里标 degraded, 由调用方决定要不要重跑这一步。
     """
     _chs = (channel,) if channel else ('jd', 'other')
-    out = {'recalc': 0, 'batches': 0, 'barcode_aligned': {}, 'degraded': '',
-           'channels': list(_chs)}
+    out = {'recalc_check': {}, 'batches': 0, 'barcode_aligned': {}, 'degraded': '',
+           'channels': list(_chs), 'wh_group': wh_group or 'all'}
+    # 可用重算与仓型无关(own 维度一条 SQL 全量), 只在不含 wh_group 或 wh_group='own' 时做,
+    #   避免平台仓段白跑一遍(重算只写 own 行, 跑两次结果相同但白花 RU)
+    #
+    # 2026-11-05 用户定案: **这一步现在由导入链路自己做**。库存导入的 _write_rows 分支里
+    #   对自有仓逐次调用 _recalc_own_inventory + _rebuild_own_batches(core/ledger 那条路径),
+    #   和客户真实导入完全同一段代码。seed 再单独跑一遍就成了"两套账各自算一次",
+    #   既白花 RU, 又掩盖了链路本身是否真的重算成功 —— 那正是要验证的东西。
+    #   保留一个**只读核对**: 实际可用 与 期初+Σ流水 的差额, 有差就留痕(不静默)。
+    if wh_group in ('', 'own'):
+        try:
+            out['recalc_check'] = _assert_available_balanced(_chs)
+        except Exception as _e_s:
+            out['degraded'] = 'recalc_check: %s' % str(_e_s)[:120]
+            try_err('seed_fill', '落账-可用核对降级', _e_s)
     try:
-        from routes.cleanse_write import _recalc_own_inventory as _rc
-        for _ch in _chs:
-            if skus_data and skus_data.get(_ch):
-                _sk = [x.get('sku') for x in skus_data[_ch]]
-            else:
-                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
-                                                   "WHERE channel=%s AND warehouse_type='own'", [_ch])]
-            if _sk:
-                out['recalc'] += int(_rc(_ch, [x for x in _sk if x]) or 0)
-    except Exception as _e_s:
-        out['degraded'] = 'recalc: %s' % str(_e_s)[:120]
-        try_err('seed_fill', '落账-重算降级', _e_s)
-    try:
-        out['batches'] = _seed_batches(skus_data, channel=channel)
+        out['batches'] = _seed_batches(skus_data, channel=channel, wh_group=wh_group)
     except Exception as _e_b:
         out['degraded'] = (out['degraded'] + '; ' if out['degraded'] else '') + 'batches: %s' % str(_e_b)[:120]
         try_err('seed_fill', '落账-批次重建降级', _e_b)
     # 自检: 档案有码 → 流水/库存不得空码(违规抛错, 不带病进下一步)
-    #   只落单渠道时不能做 —— 另一渠道还没落账, 空码是"还没轮到"而不是"违规"
-    if not channel:
+    #   只有"两渠道 × 两仓型全落完"那一轮才有资格做: 否则另一段还没轮到,
+    #   空码是"还没轮到"而不是"违规"。
+    if not channel and not wh_group:
         out['barcode_aligned'] = _assert_barcode_aligned()
     return out
 
