@@ -64,7 +64,11 @@ def _log_task(task_id, task_type, status, channel, result=""):
 # ── 任务列表 ──────────────────────────────────────────────────────────────
 @router.get("/tasks")
 def list_tasks(channel: str = "jd", limit: int = 50):
-    rows = query("SELECT task_id, task_type, status, params, result, channel, created_at "
+    # 2026-11-05 带 updated_at: 卡片右上角时间要表达"这个任务最近一次动是什么时候"。
+    #   只返回 created_at 的话, seed 这种分步长跑(10~30 分钟)会一直显示"刚刚" ——
+    #   因为 created_at 是**任务创建那一刻**, 后面每步推进都不改它。
+    #   updated_at 在每一步续跑时被 NOW() 刷新(见 task_seed.seed_fill_status), 正好是"进度心跳"。
+    rows = query("SELECT task_id, task_type, status, params, result, channel, created_at, updated_at "
                  "FROM sync_tasks WHERE channel=%s OR channel='' ORDER BY id DESC LIMIT %s",
                  [channel, limit])
     return ok(rows)

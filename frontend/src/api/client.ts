@@ -47,6 +47,50 @@ function cacheKey(method?: string, url?: string, params?: unknown) {
   return (method ?? '') + ':' + (url ?? '') + ':' + JSON.stringify(params || {})
 }
 
+/**
+ * 在途请求登记(2026-11-05 根治「多页面卡加载中/同步中」)
+ *
+ * 为什么必须放在网络层, 而不是继续让每个页面自己 setSyncing(1)/setSyncing(-1):
+ *   全仓有 9 个 setSyncing 调用点(Dashboard 3 处、Insights 3 处、Inventory、History、store),
+ *   每处都得自己在**所有**退出路径上配对 -1 —— 包括 early return、abort、catch、finally。
+ *   实测这些地方确实漏了: InsightsPage 的 `if (seq !== replenSeq.current) return` 在
+ *   try 块里, 而 -1 在 finally 里(这条没漏); 但 HistoryPage 的 _settle 挂在 .finally,
+ *   一旦请求被 abortScope 取消, axios 抛 CanceledError 进 rejected 分支 → 走 finally 是能减。
+ *   真正的漏洞是**没有超时兜底时的等待**: 请求挂 90s, 胶囊就转 90s, 用户看到的就是
+ *   "一直在加载中/同步中"。
+ *
+ * 所以改成: 每个真发出的 HTTP 请求自动登记一次占用, 无论成功/失败/取消都在 finally 注销。
+ *   页面的 setSyncing 调用保留(它们表达"这一整轮取数", 比单请求粒度更粗), 但从此即使
+ *   某个页面忘了配对, 胶囊也不会永久卡住 —— 计数由网络层保证归零。
+ */
+let _activeReq = 0
+const _reqListeners = new Set<() => void>()
+function _notifyReq() {
+  _reqListeners.forEach(fn => {
+    try {
+      fn()
+    } catch {}
+  })
+}
+function _reqStart() {
+  _activeReq += 1
+  _notifyReq()
+}
+function _reqEnd() {
+  _activeReq = Math.max(0, _activeReq - 1)
+  _notifyReq()
+}
+/** 订阅"当前有多少个 HTTP 请求在途"(0 = 没有任何取数) */
+export function onActiveRequests(fn: () => void): () => void {
+  _reqListeners.add(fn)
+  return () => {
+    _reqListeners.delete(fn)
+  }
+}
+export function activeRequests(): number {
+  return _activeReq
+}
+
 // 底层 axios 实例
 const instance = axios.create({
   baseURL: BASE,
@@ -55,6 +99,9 @@ const instance = axios.create({
 
 // 请求拦截器：自动注入全局 channel 参数 + 认证 token
 instance.interceptors.request.use(config => {
+  // 在途登记放在拦截器里 = 所有 axios 请求自动覆盖, 页面无需逐个配对
+  ;(config as unknown as Record<string, unknown>).__tracked = true
+  _reqStart()
   if (!config.params || !config.params.channel) {
     const ch = localStorage.getItem('c_channel') || 'jd'
     if (config.params) {
@@ -91,6 +138,7 @@ const INFLIGHT_TTL = 15000
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
 instance.interceptors.response.use(
   response => {
+    _reqEnd()
     const { method, url, params } = response.config
     const key = cacheKey(method || 'get', url || '', params)
     if ((method || 'get').toLowerCase() === 'get') {
@@ -128,6 +176,7 @@ instance.interceptors.response.use(
     return response
   },
   error => {
+    _reqEnd()
     const err = error as AxiosError
     // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
     if (axios.isCancel(err)) {
@@ -295,6 +344,7 @@ export async function apiJson<T = unknown>(
     else opts.signal.addEventListener('abort', onAbort)
   }
   const hasBody = opts.data !== undefined
+  _reqStart()
   try {
     const resp = await fetch(target, {
       method,
@@ -313,6 +363,7 @@ export async function apiJson<T = unknown>(
     } catch {}
     throw e
   } finally {
+    _reqEnd()
     clearTimeout(_tid)
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   }

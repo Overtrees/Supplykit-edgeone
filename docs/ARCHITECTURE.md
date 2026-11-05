@@ -76,7 +76,7 @@ cloud-functions/api/
 ├── core/alert_lifecycle.py       告警生命周期单一入口(维度键/关闭原因/重开复用, 2026-11-03 D8)
 ├── routes/ (31个 = 22 router + 9 支撑)  路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
-├── local_test.py                 本地回归 517 项（mock db + TestClient）
+├── local_test.py                 本地回归 530 项（mock db + TestClient）
 └── sql_smoke.py                  真实 SQL 冒烟（EXPLAIN 396 条 + schema 对账, 2026-11-03 S3-4）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器

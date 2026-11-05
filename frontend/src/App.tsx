@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
-import { clearCache, clearInflight, apiJson } from './api/client'
+import { clearCache, clearInflight, apiJson, activeRequests, onActiveRequests } from './api/client'
 import { reportError } from './api/logger'
 import { ToastProvider, ToastAutoClear } from './components/Toast'
 import { useFreshness } from './components/Freshness'
@@ -147,7 +147,21 @@ export default function App() {
   const fresh = useFreshness(channel) // 2026-10-29 数据新鲜度(看板胶囊左侧圆点)
   const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
+  // 2026-11-05 根治「多页面卡加载中/同步中」: 胶囊此前只看 store.syncing ——
+  //   那是**页面手动配对**的计数器(全仓 9 处 setSyncing), 任何一处漏配对或多配一次, 胶囊就卡住。
+  //   历史修法是"20s 强制归零"补丁, 但那只是让徽标消失, 页面自己的 loading 还是卡着。
+  //   现在补一条来自网络层的硬信号 reqBusy: 只要**真有 HTTP 请求在途**就转, 全都回来了就停。
+  //   两者取或 —— 页面声明的整轮取数(粒度更粗, 含请求间隙) ∪ 真实在途请求(不可能漏配对)。
+  const [reqBusy, setReqBusy] = useState(0)
+  useEffect(() => {
+    const sync = () => setReqBusy(activeRequests())
+    sync()
+    return onActiveRequests(sync)
+  }, [])
+  const badgeBusy = syncing > 0 || reqBusy > 0
   // 2026-10-27 徽标兜底: syncing 卡住(任何遗漏路径)20s 强制归零——防徽标永久显示需手动刷新
+  //   2026-11-05 保留但收窄作用域: 只兜 syncing(页面声明), reqBusy 由网络层 finally 保证归零,
+  //   不需要也不应该被它清掉(否则真慢的请求会被"显示完成")。
   useEffect(() => {
     if (syncing <= 0) return
     const _tid = setTimeout(() => useAppStore.setState({ syncing: 0 }), 20000)
@@ -205,34 +219,33 @@ export default function App() {
   // 全局同步徽标(看板页/其他页 header-status 共用——任一拉新/30s 静默进行时显示, 完成自动消失)
   // 文案按场景: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; syncOld=false(首载无旧值, 骨架)=「加载中」
   // 仅图标旋转(animation 挂 svg, 文字不转); 字号继承渠道文本(inherit)
-  const syncBadge =
-    syncing > 0 ? (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 5,
-          fontSize: 'inherit',
-          fontWeight: 'inherit',
-          color: 'var(--muted)',
-          whiteSpace: 'nowrap',
-        }}
+  const syncBadge = badgeBusy ? (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 'inherit',
+        fontWeight: 'inherit',
+        color: 'var(--muted)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <svg
+        width={12}
+        height={12}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={3}
+        strokeLinecap="round"
+        style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
       >
-        <svg
-          width={12}
-          height={12}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={3}
-          strokeLinecap="round"
-          style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
-        >
-          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-        </svg>
-        {syncOld ? t('op.sync_old') : t('common.loading')}
-      </span>
-    ) : null
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+      </svg>
+      {syncOld ? t('op.sync_old') : t('common.loading')}
+    </span>
+  ) : null
   // 2026-11-03 操作态优先于取数态: 后端正在算时不显示"同步中"(那是前端在取数),
   //   两者叠加会让用户以为"一直在加载"。ops 空时回落到原来的同步徽标。
   const headerPill = ops.length > 0 ? <OpPill /> : syncBadge

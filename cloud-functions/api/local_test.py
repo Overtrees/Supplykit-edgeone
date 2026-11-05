@@ -2997,13 +2997,15 @@ try:
                        if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
-    # 段号自成体系: 订单 6 段 + 库存/流水/落账/月汇总/尾段 = 完成值 12
+    # 段号自成体系: 订单 6 段 + 库存/流水/落账 jd/落账 other/月汇总/尾段 = 完成值 13
     check("seed 段号: 订单 6 段(90 天 ÷ 15 天)", _sf._SEED_ORDER_SEGS == 6, _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 12",
-          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE
-          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 12,
-          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE, _sf._SEED_MONTH,
-           _sf._SEED_TAIL, _sf.SEED_DONE))
+    check("seed 段号: 各段严格递增且完成值 = 13(落账已拆 jd/other 两段)",
+          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE_JD
+          < _sf._SEED_SETTLE_OTHER < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 13,
+          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE_JD, _sf._SEED_SETTLE_OTHER,
+           _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
+    check("seed 段号: 落账两段各只做一个渠道(单请求 ≤30s, 不撞 120s 网关上限)",
+          _sf._SEED_SETTLE_OTHER == _sf._SEED_SETTLE_JD + 1, _sf._SEED_SETTLE_JD)
     # SKU 编号位宽: 4 位到 9999 就撞名, 10000 个必须 5 位
     _sk_t = _sf._make_skus('-T', 10000, 0.01)
     check("seed SKU: 10000 个编号无撞名", len({x['sku'] for x in _sk_t}) == 10000,
@@ -3036,8 +3038,8 @@ try:
     # 批大小: 单批 100 SKU 实测 1.26s、1000 SKU 也只有 1.78s —— 耗时只跟**查询次数**有关。
     #   2 万 SKU: 100/批 = 200 批 ≈ 280s(必超 90s), 1000/批 = 20 批 ≈ 36s。这是硬约束。
     _cw11 = open("routes/cleanse_write.py", encoding="utf-8").read()
-    check("批次重建: 批大小已从 100 提到 1000(否则 2 万 SKU 要 200 批 ≈ 280s)",
-          "range(0, len(skus), 1000)" in _cw11 and "range(0, len(skus), 100)" not in _cw11,
+    check("批次重建: 批大小 ≥1000(否则 2 万 SKU 要 200 批 ≈ 280s, 撞死 90s 上限)",
+          "range(0, len(skus), 5000)" in _cw11 and "range(0, len(skus), 100)" not in _cw11,
           "routes/cleanse_write.py")
     # 订单段返回值: 曾是全局累计序号(含 day_from*1000000 偏移), 水位对账当场算出"预期 1500 万"
     _sf11 = open("routes/seed_fill.py", encoding="utf-8").read()
@@ -3045,8 +3047,20 @@ try:
           "_seg_rows += len(batch)" in _sf11 and "    return _seg_rows" in _sf11,
           "routes/seed_fill.py")
     check("落账段用内存 SKU 集合(省掉 2 万行的 SELECT DISTINCT, 实测 3.1s)",
-          "def seed_settle(skus_data=None)" in _sf11
-          and "def _seed_batches(skus_data=None)" in _sf11, "routes/seed_fill.py")
+          "def seed_settle(skus_data=None, channel='')" in _sf11
+          and "def _seed_batches(skus_data=None, channel='')" in _sf11, "routes/seed_fill.py")
+    # 拆段后最怕的事: 只清 jd 却按全表重建 → jd 双份、other 三份。删除范围必须跟重建范围同步
+    #   断言看**代码行**(去掉注释), 否则说明性注释里的旧写法定法会被误判成没改
+    _sb_src = _sf11.split("def _seed_batches")[1].split("def _seed_records")[0]
+    _sb_code = "\n".join(x for x in _sb_src.splitlines()
+                         if x.strip() and not x.strip().startswith("#"))
+    check("批次重建: DELETE 范围与重建范围同源(_chs), 不再写死 'jd','other'",
+          "DELETE FROM batches WHERE channel IN (%s)" in _sb_code
+          and "for _och in _chs:" in _sb_code
+          and "IN ('jd','other')" not in _sb_code,
+          "routes/seed_fill.py")
+    check("批次重建: 平台仓批次行也按 _chs 过滤(否则另一渠道批次被重复插入)",
+          "AND channel IN (%s)" in _sb_src, "routes/seed_fill.py")
     # 前端进度条此前写死 /10, 段号重排后是 12 → 停在 99%
     # __file__ = cloud-functions/api/local_test.py → 上 3 层才是仓库根
     _FE = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
@@ -3054,9 +3068,17 @@ try:
     _tc11 = open(_os.path.join(_FE, "components", "tasks", "TaskCard.tsx"), encoding="utf-8").read()
     check("任务卡进度条: seed 总段数从后端 total_step 取, 不写死 10",
           "params.total_step" in _tc11 and "(progStep / 10)" not in _tc11, "TaskCard.tsx")
-    # 相对时间: 纯渲染期计算 + 卡片不重渲染 = 跑 10 分钟仍显示"刚刚"
-    check("任务卡相对时间: running 时有定时器强制重渲染(否则一直显示「刚刚」)",
-          "setTick" in _tc11 and "}, [st])" in _tc11, "TaskCard.tsx")
+    # 相对时间: 只靠"重渲染才重算"不够 —— 见下条(数据层 created_at 根本不走)
+    check("任务卡相对时间: running 时统一 1s 时钟驱动(一个定时器同时供耗时与相对时间)",
+          "setNow(Date.now())" in _tc11 and "relTime(_stamp, now)" in _tc11
+          and "setTick" not in _tc11, "TaskCard.tsx")
+    # 「跑了几分钟还显示刚刚」的第一层根因在数据: 卡片拿 created_at(任务**创建**时刻),
+    #   seed 是分步长跑, 每步推进不改它 → 差值恒 0 → 永远「刚刚」。后端补 updated_at(进度心跳)。
+    _tk_src = open("routes/tasks.py", encoding="utf-8").read()
+    check("任务列表返回 updated_at(进度心跳), 卡片不再只能拿 created_at",
+          "created_at, updated_at" in _tk_src, "routes/tasks.py")
+    check("任务卡: running 优先用 updated_at, 无心跳才退回 created_at",
+          "st === 'running' && task.updated_at" in _tc11, "TaskCard.tsx")
     # loadAll 竞态: loading/orderLoading 原先只在正常路径复位, 被丢弃的那次会把 true 留在 state
     _st11 = open(_os.path.join(_FE, "store", "useAppStore.ts"), encoding="utf-8").read()
     check("loadAll 竞态: 最新那次无论走 return 还是正常结束都收起 loading",
@@ -3064,6 +3086,38 @@ try:
     check("任务页轮询竞态: loadTasks 带序号, 旧响应不覆盖新 state",
           "loadSeq" in open(_os.path.join(_FE, "pages", "TaskPage.tsx"), encoding="utf-8").read(),
           "TaskPage.tsx")
+
+    # ── 2026-11-05 第二轮用户实测: 「多页面卡加载中/同步中」「任务卡一直刚刚」──
+    _tp11 = open(_os.path.join(_FE, "pages", "TaskPage.tsx"), encoding="utf-8").read()
+    # ① 骨架屏死锁: setLoading(false) 曾挂在 `if (mySeq !== loadSeq.current) return` 之后,
+    #    而 3s 轮询每轮都 ++loadSeq → 首载一慢就永远过期 → 骨架永不消失。必须挪进 finally。
+    _tp_fin = _tp11.split("} finally {")[-1] if "} finally {" in _tp11 else ""
+    check("任务页骨架屏: setLoading(false) 在 finally 里(不再被竞态 return 跳过)",
+          "setLoading(false)" in _tp_fin, "TaskPage.tsx")
+    # ② 回调参数 `t` 遮蔽模块级翻译函数 t(): `t('task.done_toast',...)` 实际是调用任务对象 → TypeError
+    check("任务页完成提示: forEach 回调参数不叫 t(否则遮蔽 t(), 完成提示永远不弹)",
+          "function (t)" not in _tp11 and "function (task)" in _tp11, "TaskPage.tsx")
+    _cl11 = open(_os.path.join(_FE, "api", "client.ts"), encoding="utf-8").read()
+    # ③ 胶囊此前只信 store.syncing(9 处手工配对, 漏一处就卡死)。网络层补"真实在途请求数"硬信号。
+    check("同步胶囊: 在途请求数来自网络层(拦截器统一登记, 不靠页面手工配对)",
+          "_reqStart()" in _cl11 and "_reqEnd()" in _cl11 and "onActiveRequests" in _cl11,
+          "api/client.ts")
+    check("同步胶囊: 请求成功/失败/取消三条路径都注销(否则计数泄漏=永久转圈)",
+          _cl11.count("_reqEnd()") >= 3, _cl11.count("_reqEnd()"))
+    _app11 = open(_os.path.join(_FE, "App.tsx"), encoding="utf-8").read()
+    check("同步胶囊: 页面声明(syncing) ∪ 真实在途(reqBusy) 取或",
+          "badgeBusy" in _app11 and "syncing > 0 || reqBusy > 0" in _app11, "App.tsx")
+    # ④ loadAll 里 syncing 的增减必须同源(曾一边 get().syncing+1 一边 Math.max(0,-1))
+    check("loadAll: syncing 增减走同一个 setSyncing(不再直接赋值)",
+          "syncing: get().syncing + 1," not in _st11 and "get().setSyncing(1)" in _st11
+          and "get().setSyncing(-1)" in _st11,
+          "useAppStore.ts")
+    # ⑤ orderLoading 曾在 stock-risk(35s 超时)之后无序号保护地置 false → 旧请求踩新请求
+    check("loadAll: orderLoading 与订单数据同一次 set 收尾, 不挂在慢请求之后",
+          "orderLoading: false," in _st11, "useAppStore.ts")
+    _inv11 = open(_os.path.join(_FE, "pages", "InventoryPage.tsx"), encoding="utf-8").read()
+    check("进销存: 竞态丢弃分支不再改 loading(否则列表闪空白)",
+          "if (seq !== reqSeq.current) {\n        // 2026-11-05" in _inv11, "InventoryPage.tsx")
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 

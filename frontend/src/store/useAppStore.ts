@@ -144,6 +144,8 @@ const initAppStore = (set, get) => ({
   orderLoadErr: '',
   dataLoaded: false,
   // 2026-10-27 全局同步徽标计数(header 胶囊): 任一拉新 start +1 / settle -1; syncOld 决定文案(同步中/加载中)
+  //   2026-11-05 根治: 这个计数**只是页面声明的"整轮取数"**, 不再是胶囊的唯一依据。
+  //   见下方 badgeBusy 派生值 —— 网络层还有一份"真实在途请求数"兜底。
   syncing: 0,
   setSyncing: (d: number) => set(s => ({ syncing: Math.max(0, s.syncing + d) })),
   // 2026-10-27 同步场景: true=有旧值渲染后台拉新(徽标'同步中') / false=首载骨架(徽标'加载中')
@@ -409,9 +411,14 @@ const initAppStore = (set, get) => ({
     set({
       loading: true,
       orderLoading: true,
-      syncing: get().syncing + 1,
       syncOld: Boolean(get().dashboard || (get().orders || []).length), // 看板/订单有旧值→同步中
     })
+    // 2026-11-05 修: 这里原写 `syncing: get().syncing + 1` 直接赋值, 而收尾用的是
+    //   `Math.max(0, get().syncing - 1)`。两条路径对"计数"的语义不一致 —— 当其它页面
+    //   (Inventory/Insights/History) 的 -1 先把计数压到 0, 本函数收尾时又 -1 再夹 0,
+    //   于是"它减掉的是别人的名额", 剩余的那次真实取数就没人计数了 → 胶囊提前停。
+    //   统一走 setSyncing, 语义只有一处。
+    get().setSyncing(1)
     const ch = get().channel
     const s = get().hammerSearch || ''
     const st = get().orderStatus || ''
@@ -492,14 +499,22 @@ const initAppStore = (set, get) => ({
           r1[0] && r1[0].status === 'rejected'
             ? errText((r1[0] as { reason?: unknown }).reason as string)
             : '',
+        // 2026-11-05 修(用户报「多页面一直加载中/同步中」的关键一环):
+        //   原来 orderLoading 只在这一处(以及 stock-risk 之后)被置 false, 且**没有序号保护**。
+        //   场景: 用户在 0.5s 内从订单页切到别的页, 第二次 loadAll 已把 orderLoading 置 true,
+        //   而第一次的这次 set 无条件把它刷成 false → 列表闪一下骨架又空白; 反过来当第一次
+        //   卡在下面 stock-risk(35s 超时)时, orderLoading 会一直 true 长达 35s。
+        //   订单数据已经写入, 同一次 set 里收掉它 —— 既不依赖后续慢请求, 也不会互相踩。
+        orderLoading: false,
       })
-      // 最后: stock-risk 断货卡(重接口, 不阻塞; 失败保留旧值不闪空)
+      // 最后: stock-risk 断货卡(重接口, 不阻塞渲染; 失败保留旧值不闪空)
+      //   2026-11-05: 这里原有一次 `set({ orderLoading: false })` —— 位置在慢请求之后且无序号
+      //   保护, 是上面那条 bug 的第二个写入点。已随上面并入, 不再单独写。
       const sr = await Promise.allSettled([
         api.get('/api/dashboard/stock-risk', { timeout: 35000 }),
       ])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
       if (srData && _mySeq === _seq.v) set({ stockRisk: srData })
-      set({ orderLoading: false })
     } catch (e) {
       console.error('loadAll failed:', e)
       // 2026-11-05: 只在"自己仍是最新那次"时收起 loading —— 否则旧请求的失败会把
@@ -507,7 +522,7 @@ const initAppStore = (set, get) => ({
       if (_mySeq === _seq.v) set({ loading: false, orderLoading: false })
     } finally {
       // 2026-10-27 根治: settle 唯一在 finally——无论 return 竞态/abort/catch/正常尾必执行, 数不可能泄漏(曾散点 settle 被 return 跳过 → 永久'加载中')
-      set({ syncing: Math.max(0, get().syncing - 1) })
+      get().setSyncing(-1)
       // 2026-11-05 修(用户报「多数页面一直在加载中」): `loading` / `orderLoading` 此前只在
       //   **正常走到** set 时才置 false。而上面 4 处 `if (_mySeq !== _seq.v) return`
       //   全都在 finally 之前 —— 一旦发生"快速切换页面/连续两次 loadAll", 被丢弃的那次

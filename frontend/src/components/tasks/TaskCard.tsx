@@ -19,6 +19,8 @@ interface TaskItem {
   params?: string | Record<string, unknown>
   result?: string | Record<string, unknown> | null
   created_at?: string
+  /** 2026-11-05 进度心跳: 每续跑一步由后端 NOW() 刷新(见 task_seed.seed_fill_status) */
+  updated_at?: string
 }
 
 interface TaskCardProps {
@@ -43,14 +45,14 @@ function safeParse<T>(v: string | T | null | undefined, fallback: T): T {
 /** 2026-10-15 任务卡片可视化(进度条/步骤耗时/状态)——组件化不膨胀 TaskPage——CSS 全全局(styles.css .task-*) */
 
 // 2026-10-27 相对时间(卡片右上角): 刚刚 / N分钟前 / N小时前 / MM-DD
-const relTime = (iso?: string) => {
+const relTime = (iso?: string, nowMs?: number) => {
   if (!iso) return ''
   // 注意: 变量名不能叫 t —— 会遮蔽 locale 的 t(), 相对时间文案就永远出中文
   const _ts = new Date(
     String(iso).replace(' ', 'T') + (String(iso).includes('Z') ? '' : 'Z'),
   ).getTime()
   if (!_ts) return ''
-  const diff = Math.max(0, Date.now() - _ts)
+  const diff = Math.max(0, (nowMs ?? Date.now()) - _ts)
   const m = Math.floor(diff / 60000)
   if (m < 1) return t('tc.just_now')
   if (m < 60) return t('tc.mins_ago', { n: m })
@@ -96,23 +98,22 @@ export default function TaskCard({
     pct = Math.min(Math.round((progStep / seedTotalStep) * 100), 99)
 
   // 进行中步骤实时耗时(本地 1s 节流——now - started)
-  const [now, setNow] = useState(Date.now())
-  useEffect(() => {
-    if (!cur || st !== 'running') return
-    const _tid = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(_tid)
-  }, [cur, st])
-  // 2026-11-05 修: 右上角相对时间此前**只在重渲染时算一次** —— 任务跑 10 分钟, 只要卡片
-  //   自己不重渲染(轮询间隔 3s 但 state 内容没变 → React 不重渲染), 就一直显示"刚刚"。
-  //   这正是"卡片任务进行中都过去好几分钟了还显示刚刚"的成因。
-  //   任务运行中每 30s 强刷一次(1min 粒度下 30s 足够, 又不会每卡一条定时器)。
-  const [, setTick] = useState(0)
+  // 2026-11-05: 这个 now 同时驱动右上角相对时间 —— 一张卡片只挂**一个**定时器,
+  //   而不是"耗时用 1s、相对时间用 30s"两个(卡多时定时器翻倍)。
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (st !== 'running') return
-    const _tid = setInterval(() => setTick(x => x + 1), 30000)
+    const _tid = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(_tid)
   }, [st])
-
+  // 2026-11-05 修「任务跑了几分钟还显示刚刚」的两层根因:
+  //   ① 数据层: 卡片读的是 created_at(任务**创建**时刻), seed 分步长跑每步推进不改它 →
+  //      无论前端刷多勤, 这个时间永远是"创建时"的那个时刻, 差值为 0 → 恒「刚刚」。
+  //      后端 /api/tasks 已补 updated_at(每续跑一步 NOW() 刷新 = 进度心跳), 优先用它。
+  //   ② 渲染层: 组件不重渲染时 relTime 不会重算。上面那个 1s 的 now 一旦进函数体,
+  //      组件每秒都会重渲染, 相对时间自然跟着走。
+  //   idle/pending 没有心跳, 退回 created_at(此时确实只有创建时刻可讲)。
+  const _stamp = st === 'running' && task.updated_at ? task.updated_at : task.created_at
   const filename = String(resultInner?.filename || result?.filename || '')
   const lastStep = steps.length ? steps[steps.length - 1] : null
   // 2026-10-17 评估联动任务(cleansing_eval)专属: 窗口推进/评估计数/联动库存数——与导入任务同款
@@ -143,7 +144,9 @@ export default function TaskCard({
             </span>
           ) : null}
           {task.created_at ? (
-            <span className="task-reltime">{relTime(task.created_at)}</span>
+            <span className="task-reltime" title={task.updated_at || task.created_at}>
+              {relTime(_stamp, now)}
+            </span>
           ) : null}
           <span className={'task-status ' + st}>
             {st === 'running' && <IconRefresh size={11} className="task-spin" />}

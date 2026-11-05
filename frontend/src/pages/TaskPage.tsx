@@ -70,23 +70,31 @@ export default function TaskPage() {
         setTasks(d.data)
         setLoadErr('')
         // 检测任务从未完成 → 完成：提示 + 全局刷新数据
-        d.data.forEach(function (t) {
-          if ((t.status === 'done' || t.status === 'error') && !doneTasks.current[t.task_id]) {
-            doneTasks.current[t.task_id] = true
+        //   2026-11-05 修: 回调参数原叫 `t`, 与模块级翻译函数 t() **同名遮蔽** ——
+        //   于是 `t('task.done_toast', ...)` 实际是在"调用一个任务对象", 直接 TypeError。
+        //   这个错误被外层 try/catch 吞掉(只落 quality_logs), 后果是: ①完成提示永远不弹
+        //   ②后面的 loadAll/事件派发全被跳过 ③setTasks 已执行但 loading 只能等尾部兜底。
+        //   改名为 task 后, 语义与下面 TaskCard 的 task 变量一致。
+        d.data.forEach(function (task) {
+          if (
+            (task.status === 'done' || task.status === 'error') &&
+            !doneTasks.current[task.task_id]
+          ) {
+            doneTasks.current[task.task_id] = true
             if (firstLoad.current) return // 首载: 仅记录, 不弹历史完成提示
-            if (t.status === 'done') {
+            if (task.status === 'done') {
               toast.success(
                 t('task.done_toast', {
                   what:
-                    t.task_type === 'seed'
+                    task.task_type === 'seed'
                       ? t('task.what_seed')
-                      : t.task_type === 'clean'
+                      : task.task_type === 'clean'
                         ? t('task.what_cleansing')
-                        : t.task_type === 'cleansing_eval'
+                        : task.task_type === 'cleansing_eval'
                           ? t('task.what_eval')
-                          : t.task_type === 'export'
+                          : task.task_type === 'export'
                             ? t('task.what_export')
-                            : t.task_type,
+                            : task.task_type,
                 }),
               )
               // 数据已变更，通知各页面刷新；dashboard 强制同步重建拿最新值（不用旧值）
@@ -97,7 +105,7 @@ export default function TaskPage() {
               window.dispatchEvent(new Event('rules-changed'))
               window.dispatchEvent(new Event('insights-refresh'))
             } else {
-              toast.error(t('task.failed_toast', { msg: String(t.result || '').slice(0, 60) }))
+              toast.error(t('task.failed_toast', { msg: String(task.result || '').slice(0, 60) }))
             }
           }
         })
@@ -108,9 +116,17 @@ export default function TaskPage() {
     } catch (e) {
       if (mySeq !== loadSeq.current) return
       if (tasks.length === 0) setLoadErr(t('task.net_retry'))
+    } finally {
+      // 2026-11-05 根治「进任务页卡骨架屏」: 原来的 setLoading(false) 在 try/catch 之后、
+      //   带 `if (mySeq !== loadSeq.current) return` 守卫。而本函数被**三个源头**驱动:
+      //   3s 轮询 + visibilitychange + channel 变化, 且每次调用都会 ++loadSeq。
+      //   于是: 首载请求一慢(>3s, /api/tasks 在 50 条长 params 上确实会慢), 轮询就抢在前面
+      //   把序号推走 → 首载回来时 mySeq 已过期 → return, setLoading(false) 永不执行 →
+      //   骨架屏永久卡住。这正是用户说的"返回看板再进任务卡片发现卡在骨架加载中"。
+      //   改成: 只要有**任意一次**请求返回过(无论新旧), 就把骨架收掉 —— 因为"有没有数据"
+      //   这件事不依赖谁是最新; 数据内容仍由上面的序号守卫保证只让最新的写。
+      setLoading(false)
     }
-    if (mySeq !== loadSeq.current) return
-    setLoading(false)
   }
 
   useEffect(() => {

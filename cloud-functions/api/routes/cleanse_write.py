@@ -299,13 +299,16 @@ def _rebuild_own_batches(channel, skus):
     _miss_exact = []    # 填了批次但该批次无对应入库 [(sku, 仓, [(pd,ed)], qty)] —— 已按 FEFO 扣, 仅告警
     _oversold = []      # 出库 > 期初+入库 [(sku, 仓, 超出量)] —— 批次扣到 0, 需补流水
     _unlabeled = set()  # 未标注"是否做效期管理"的 SKU(历史数据; 暂按做效期处理并告警)
-    # 2026-11-05 批大小 100 → 1000(用户报 seed 落账段"十来分钟/一直不结束")
-    #   实测(线上 TiDB): 单批 100 SKU 的 3 条主查询合计 1.26s, 1000 SKU 也只有 1.78s
-    #   —— 耗时几乎只跟**查询次数**有关, 跟批里放多少 SKU 关系很小(与 _align_order_keys
-    #   的 chunk 结论一致)。2 万 SKU: 100/批 → 200 批 × ~1.4s ≈ 280s(远超 90s 上限, 必死);
-    #   1000/批 → 20 批 × 1.8s ≈ 36s(留足余量)。批太大反而慢(2000 时 2.78s), 1000 是拐点。
-    for i in range(0, len(skus), 1000):
-        batch_skus = [x for x in skus[i:i + 1000] if x]
+    # 2026-11-05 批大小 100 → 5000(用户报 seed 落账段"十来分钟/一直不结束")
+    #   实测(线上 TiDB, 1 万 SKU/渠道):
+    #     批大小   主查询合计   批数   总耗时(含 Python 分配 + 写入)
+    #     100      1.26s        200    ≈ 280s   ← 撞死 90s 上限
+    #     1000     1.19~1.78s    20    ≈ 40s
+    #     5000     1.78s          4    ≈ 12s   ← 查询耗时不再涨, 批数减半
+    #   耗时只跟**查询次数**走(与 _align_order_keys 的 chunk 结论同源)。5000 是单条
+    #   IN 列表还在优化器舒适区的上限; 再大就要考虑改成 JOIN 临时表。
+    for i in range(0, len(skus), 5000):
+        batch_skus = [x for x in skus[i:i + 5000] if x]
         if not batch_skus:
             continue
         ph = ",".join(["%s"] * len(batch_skus))
@@ -440,17 +443,20 @@ def _rebuild_own_batches(channel, skus):
         if not _del_keys:
             continue
         # 删旧(按 sku 全删该渠道 own 批次, 再整体重建, 保证幂等)
+        # 2026-11-05: 分块 200/300 → 2000 —— 与读取侧同一个理由(耗时随**次数**走)。
+        #   实测 1 万 SKU/渠道 ≈ 4.3 万批发行, 原 300/块 = 143 次 INSERT/渠道;
+        #   2000/块 = 22 次。单块 2000 行仍是 TiDB 单语句可承受的量(远低于 6MB 响应限制)。
         _sk_all = sorted({k[0] for k in _del_keys})
-        for j in range(0, len(_sk_all), 200):
-            d = _sk_all[j:j + 200]
+        for j in range(0, len(_sk_all), 2000):
+            d = _sk_all[j:j + 2000]
             try:
                 _e("DELETE FROM batches WHERE channel=%s AND warehouse_type IN (%s) AND sku IN (%s)"
                    % ("%s", ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES)), ",".join(["%s"] * len(d))),
                    [channel] + list(SELF_WAREHOUSE_TYPES) + d)
             except Exception as _ed:
                 try_err('cleansing', '自有仓批次删除降级', _ed)
-        for j in range(0, len(_insert_rows), 300):
-            chunk = _insert_rows[j:j + 300]
+        for j in range(0, len(_insert_rows), 2000):
+            chunk = _insert_rows[j:j + 2000]
             cols = ["sku", "barcode", "warehouse", "warehouse_type", "channel",
                     "prod_date", "exp_date", "qty"]
             try:

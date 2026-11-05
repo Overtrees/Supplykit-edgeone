@@ -190,10 +190,12 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         { timeout: 90000 },
       )
       if (seq !== reqSeq.current) {
-        setLoading(false)
-        setLoadingMore(false)
+        // 2026-11-05 修: 竞态丢弃分支原本会 setLoading(false) —— 但"被丢弃"意味着**已经
+        //   有更新的一次请求在跑**, 那次的 loading 是 true, 这里把它刷成 false 会让列表先
+        //   闪一下空白骨架再被新数据填上(用户看到的就是"加载中 → 空白 → 重试/数据"跳变)。
+        //   只有胜出的那次才有权改 loading。
         return
-      } // 竞态丢弃
+      }
       setLoadErr('')
       const d: WithSalesResp = r.data || {}
       if (p === 1 && d.summary) setInvSummary(d.summary)

@@ -301,9 +301,13 @@ async def seed_step_run(request: Request):
         d = await request.json()
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
-    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH)  # noqa: E402
+    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_SETTLE,
+                                  _SEED_MONTH)  # noqa: E402
     _LAST = _SEED_MONTH
     _ALLOWED = (_SEED_INV, _SEED_FLOW, _SEED_SETTLE, _SEED_MONTH)
+    # _SEED_SETTLE 是「落账起点」(= jd 段), 运维口一次把两渠道落账都做完:
+    #   它是进程内顺序调用, 不受单请求 120s 限制的**分段**约束(分段是给 seed 任务续跑用的);
+    #   但两渠道合计 50s+ 依然偏重, 所以下面把 jd/other 分开计时上报, 慢了能立刻看出是哪边。
     try:
         from_step = int(d.get("from_step") or d.get("step") or _SEED_SETTLE)
     except Exception:
@@ -368,11 +372,17 @@ async def seed_step_run(request: Request):
         # ── 落账段: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
         if from_step <= _SEED_SETTLE:
             from routes.seed_fill import seed_settle
-            _t0 = _t.time()
-            _st = seed_settle()
+            # 分渠道执行: 与 seed 任务的两段落账同一实现, 只是这里顺序跑完(运维口本来就要一次看到底)
+            _td = _t.time()
+            _st = seed_settle(channel='jd')
+            _t_jd = round(_t.time() - _td, 1)
+            _td = _t.time()
+            _st2 = seed_settle(channel='other')
+            _t_oth = round(_t.time() - _td, 1)
             _steps.append({"step": _SEED_SETTLE, "name": "可用重算+批次重建",
-                           "elapsed_s": round(_t.time() - _t0, 1),
-                           "result": _st})
+                           "elapsed_s": round(_t_jd + _t_oth, 1),
+                           "result": {"jd": _st, "other": _st2,
+                                      "t_jd_s": _t_jd, "t_other_s": _t_oth}})
         # ── 月汇总段: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
         _t0 = _t.time()
         groups = _sync_inv_month()
