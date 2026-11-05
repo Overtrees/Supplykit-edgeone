@@ -3588,6 +3588,21 @@ try:
     check("SQL 冒烟: report 兼容前置失败哨兵(连不上库时清楚报因, 不崩 traceback)",
           "def _detail(item)" in _sa29 and "isinstance(item, dict)" in _sa29
           and "_w, _s = _detail(item)" in _sa29, "sql_smoke.py")
+    # 前端: 401/403 是预期鉴权态(有 auth:may-expired → /auth/check 专门链路),
+    #   不该被当成 api_http_error warning 上报 —— 匿名访问部署预览域名必然 401,
+    #   每次部署刷一条噪音。三处 HTTP 状态上报点全部排除, 5xx/网络错误照常留痕。
+    _cl29 = open(_os.path.join(_FE2, "api", "client.ts"), encoding="utf-8").read()
+    check("前端日志: 401/403 归为预期鉴权态(isExpectedAuth)",
+          "isExpectedAuth" in _cl29 and "status === 401 || status === 403" in _cl29,
+          "api/client.ts")
+    check("前端日志: 三处 HTTP 状态上报点均排除预期鉴权态",
+          _cl29.count("!isExpectedAuth(") >= 3
+          and "status >= 400) && !isExpectedAuth(status)" in _cl29,
+          "api/client.ts")
+    # 反向红线: 网络错误与 5xx 仍上报(真异常留痕不被削弱)
+    check("前端日志: 网络错误/5xx 仍照常上报(不削弱真异常)",
+          "'network-error', 'warning'" in _cl29
+          and "status >= 500 ? 'error' : 'warning'" in _cl29, "api/client.ts")
 except Exception as _e29:
     check("日志噪音用例无异常", False, str(_e29)[:200])
 

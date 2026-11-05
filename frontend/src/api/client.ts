@@ -6,6 +6,18 @@ import type { ApiResult, ApiGetConfig, CacheEntry, InflightEntry } from './types
 /* eslint-disable no-console -- API 调试日志(开发期保留, 便于追接口链路) */
 const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
+/**
+ * 预期内的鉴权结果(2026-11-05 非真异常收口): 401 未登录 / 403 访客只读。
+ * 二者不是异常, 不该进 quality_logs:
+ *   · 401 有专门的认证态链路 —— 拦截器派发 auth:may-expired, App 调 /auth/check
+ *     确认后才 setLoggedIn(false), 冷实例偶发 401 不会误踢(见下方 401 分支);
+ *   · 403 是 demo 访客「仅可查看」的既定行为, 每次点写操作都会返回。
+ * 匿名访问部署预览域名(EdgeOne 构建期自动抓取)必然 401 —— 旧实现把它和 5xx、
+ * 网络错误一起上报成 warning, 每次部署都刷噪音, 把真错误淹掉。
+ * 5xx / 网络错误 / 400·422 校验错误照常上报, 真异常留痕不削弱。
+ */
+const isExpectedAuth = (status?: number) => status === 401 || status === 403
+
 // 响应缓存（内存）
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL = 30_000 // 30s 内复用缓存
@@ -230,8 +242,10 @@ instance.interceptors.response.use(
         window.dispatchEvent(new Event('auth:may-expired'))
       } catch {}
     }
-    // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜
-    if (!status || status >= 400) {
+    // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜。
+    // 2026-11-05: 401/403 是预期鉴权态(见 isExpectedAuth), 有专门的 auth:may-expired
+    // → /auth/check 链路处理, 不再重复上报一条 warning(匿名访问部署预览域名必然 401)。
+    if ((!status || status >= 400) && !isExpectedAuth(status)) {
       reportError(
         'api_http_error',
         ((err.message || '') + ' ' + (cfg.url || '')).slice(0, 200),
@@ -418,12 +432,16 @@ export async function uploadForm<T = unknown>(
           (data.detail ? ': ' + JSON.stringify(data.detail).slice(0, 120) : ''),
       )
       err.status = resp.status
-      reportError(
-        'api_http_error',
-        (err.message + ' ' + url).slice(0, 200),
-        'HTTP ' + resp.status,
-        'warning',
-      )
+      // 2026-11-05: 401/403 预期鉴权态不上报(见 isExpectedAuth), 但 throw 保留 ——
+      // 调用方仍需感知失败, 只是不再往质量日志写一条非真 warning。
+      if (!isExpectedAuth(resp.status)) {
+        reportError(
+          'api_http_error',
+          (err.message + ' ' + url).slice(0, 200),
+          'HTTP ' + resp.status,
+          'warning',
+        )
+      }
       throw err
     }
     if (data && typeof data === 'object' && 'ok' in data && !data.ok) {
@@ -470,12 +488,15 @@ export async function uploadRawBytes<T = unknown>(
         'Request failed with status code ' + resp.status,
       )
       err.status = resp.status
-      reportError(
-        'api_http_error',
-        (err.message + ' ' + url).slice(0, 200),
-        'HTTP ' + resp.status,
-        'warning',
-      )
+      // 2026-11-05: 401/403 预期鉴权态不上报(见 isExpectedAuth), throw 保留
+      if (!isExpectedAuth(resp.status)) {
+        reportError(
+          'api_http_error',
+          (err.message + ' ' + url).slice(0, 200),
+          'HTTP ' + resp.status,
+          'warning',
+        )
+      }
       throw err
     }
     if (d && typeof d === 'object' && 'ok' in d && !d.ok) {
