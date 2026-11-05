@@ -3282,6 +3282,18 @@ try:
           "routes/cleanse_write.py")
     check("导入链路: _write_rows 把 conflict_sql 透传给库存分支",
           "conflict_sql=_ksql" in _cw12, "routes/cleanse_write.py")
+    # 2026-11-05 线上事故根因: _sync_batches(sum) 逐行 SELECT + UPDATE/INSERT,
+    #   一份 2 万行入库单 = 4 万次往返 → 单请求 123s 被网关 120s 硬切, 流水段永远跑不完。
+    #   RU/耗时按查询次数计, 不按行数 —— 必须批量化, 且真实客户导入也走这条链路。
+    _sb12 = _cw12.split("def _sync_batches")[1].split("\ndef ")[0]
+    _sb12_code = "\n".join(x for x in _sb12.splitlines()
+                            if x.strip() and not x.strip().startswith("#"))
+    check("导入链路: 批次效期同步不再逐行 SQL(2 万行文件曾是 4 万次往返)",
+          "SELECT id, qty FROM batches WHERE sku=%s" not in _sb12_code
+          and '_em("UPDATE batches SET qty=%s WHERE id=%s", _upd)' in _sb12_code
+          and "WHERE channel=%s AND sku IN (%s)" in _sb12_code
+          and "(sku, warehouse) IN (%s)" in _sb12_code,
+          "routes/cleanse_write.py")
     # 库存导出模板补了本周口径(周一至今), 不能由 month_* 推导
     # 2026-11-05 线上实测: platform 仓被整体改写成 platform_b —— 库存表凭空多出 7 万行 B 仓
     _cw12_code = "\n".join(x for x in _cw12.splitlines()

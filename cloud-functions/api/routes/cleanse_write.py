@@ -1616,30 +1616,64 @@ def _sync_batches(channel, rows, conflict_mode="overwrite"):
                     "prod_date": pd, "exp_date": ed,
                     "qty": int(c.get("available_qty") or c.get("quantity") or c.get("qty") or 0)})
     if conflict_mode == "sum":
-        # 累加模式: 同 SKU×仓×效期批次 qty 累加(不同效期=不同批次独立行)
+        # 2026-11-05 批量化(线上事故根因): 原实现**逐行**发 2 条 SQL(SELECT + UPDATE/INSERT),
+        #   一份 2 万行的入库单 = 4 万次往返。RU/耗时按「查询次数」计而非行数 —— 单请求
+        #   实测 123s 被网关 120s 硬切, step14 永远跑不完。改成「内存聚合 → 分批预读 →
+        #   批量写」后降到几十次往返, 语义完全不变(同 SKU×仓×渠道×效期 qty 累加, 无则插入)。
+        # ① 本批按业务键聚合(与旧 SELECT 的 WHERE 逐列一致: 不含 warehouse_type)
+        _agg, _wt = {}, {}
         for it in ins:
+            _k = (it["sku"], it["warehouse"], it["channel"], it["prod_date"], it["exp_date"])
+            _agg[_k] = int(_agg.get(_k, 0)) + int(it["qty"] or 0)
+            _wt.setdefault(_k, it["warehouse_type"])
+        # ② 按 sku IN 分批读已存在批次(每片 500 个 SKU, 1 万 SKU ≈ 20 次查询)
+        _exist = {}
+        _skus = sorted({k[0] for k in _agg})
+        for _i in range(0, len(_skus), 500):
+            _part = _skus[_i:_i + 500]
             try:
-                exist = one("SELECT id, qty FROM batches WHERE sku=%s AND warehouse=%s "
-                            "AND channel=%s AND prod_date=%s AND exp_date=%s",
-                            [it["sku"], it["warehouse"], it["channel"],
-                             it["prod_date"], it["exp_date"]])
-                if exist:
-                    execute("UPDATE batches SET qty=%s WHERE id=%s",
-                            [int(exist.get("qty") or 0) + it["qty"], exist.get("id")])
-                else:
-                    execute("INSERT INTO batches(sku, warehouse, warehouse_type, channel, "
-                            "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                            [it["sku"], it["warehouse"], it["warehouse_type"], it["channel"],
-                             it["prod_date"], it["exp_date"], it["qty"]])
+                for _b in query("SELECT id, sku, warehouse, prod_date, exp_date, qty FROM batches "
+                                "WHERE channel=%s AND sku IN (%s)"
+                                % ",".join(["%s"] * len(_part)), [channel] + _part):
+                    _bk = (str(_b.get("sku") or ""), str(_b.get("warehouse") or ""),
+                           channel, str(_b.get("prod_date") or "")[:10],
+                           str(_b.get("exp_date") or "")[:10])
+                    _exist[_bk] = (int(_b.get("id") or 0), int(_b.get("qty") or 0))
             except Exception as _e:
-                    try_err('cleansing', '静默降级', _e)
+                try_err('cleansing', '批次累加预读降级', _e)
+        # ③ 内存分派 → executemany 批量 UPDATE / INSERT
+        _upd, _new = [], []
+        for _k, _qty in _agg.items():
+            _e = _exist.get(_k)
+            if _e:
+                _upd.append((_e[1] + _qty, _e[0]))
+            else:
+                _new.append((_k[0], _k[1], _wt.get(_k, ""), _k[2], _k[3], _k[4], _qty))
+        if _upd:
+            try:
+                _em("UPDATE batches SET qty=%s WHERE id=%s", _upd)
+            except Exception as _e:
+                try_err('cleansing', '批次累加批量更新降级', _e)
+        for _j in range(0, len(_new), 200):
+            try:
+                _em("INSERT INTO batches(sku, warehouse, warehouse_type, channel, "
+                    "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)", _new[_j:_j + 200])
+            except Exception as _e:
+                try_err('cleansing', '批次累加批量插入降级', _e)
         return len(ins)
-    for sku, wh, wt in touched:
+    # overwrite: 文件即权威 —— 删本批涉及的 (sku, warehouse) 旧批次。原实现逐组合 DELETE
+    #   同样是 O(行数) 往返, 改成行构造器 IN 一次删一片(语义逐列一致: 不含 warehouse_type)。
+    _tlist = sorted(touched)
+    for _i in range(0, len(_tlist), 500):
+        _part = _tlist[_i:_i + 500]
+        _args = [channel]
+        for _s, _w, _wt in _part:
+            _args += [_s, _w]
         try:
-            execute("DELETE FROM batches WHERE sku=%s AND warehouse=%s AND channel=%s",
-                    [sku, wh, channel])
+            execute("DELETE FROM batches WHERE channel=%s AND (sku, warehouse) IN (%s)"
+                    % ",".join(["(%s,%s)"] * len(_part)), _args)
         except Exception as _e:
-                try_err('cleansing', '静默降级', _e)
+            try_err('cleansing', '批次覆盖批量清理降级', _e)
     for i in range(0, len(ins), 200):
         chunk = ins[i:i + 200]
         cols = list(chunk[0].keys())
