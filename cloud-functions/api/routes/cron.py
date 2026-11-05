@@ -21,7 +21,7 @@ from fastapi import APIRouter
 from fastapi import Request
 
 from db import query, one, execute
-from routes.common import ok, fail, traced, try_err
+from routes.common import ok, fail, traced, try_err, log_info
 from routes.common import pipeline_run as _pipe  # 2026-11-02 S1-2: 运行流水
 from routes.common import ch_codes as _CHANNELS  # 2026-11-02 S1-5: 渠道数据驱动(原各处硬编码 ("jd","other"))
 from routes.common import ch_conf as _CH_CONF
@@ -46,7 +46,13 @@ def continue_tasks():
     try:
         rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
         _cutoff = (now_cn() - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
-        try_err('cron', 'continue-tasks 诊断: rows=%d cutoff=%s' % (len(rows or []), _cutoff))
+        # 2026-11-05 根治「非真异常连续噪音」: 这行诊断原无条件走 try_err(静默吞异常
+        #   通道, 固定 warning/quiet_error)。而空库/无 running 任务时 rows=0 是**正常空态**,
+        #   中间件每 60s 调一次 → 每分钟一条警告, 永不停止, 把真异常淹掉。
+        #   现在空态零写入(返回值 ok(done) 已表达结果), 真有任务才以 info 留一条摘要;
+        #   真异常仍由下面「续跑异常 / 整体异常」两处 try_err 原样留痕。
+        if rows:
+            log_info('cron', 'continue-tasks: 待推进 %d 个 running 任务' % len(rows))
         for r in (rows or []):
             tt = r.get("task_type") or ""
             tid = r.get("task_id") or ""

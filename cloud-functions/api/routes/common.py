@@ -201,6 +201,25 @@ def try_err(src, what, exc=None, details=""):
         pass  # 自身异常自吞(防递归)
 
 
+def log_info(src, message):
+    """正常态/成功态留痕(2026-11-05): 与 try_err **分离**, 两类日志不能混用。
+
+    try_err 是「静默吞异常」通道, 固定写 level='warning' / log_type='quiet_error';
+    诊断摘要、迁移/建表成功、空态返回这些**非异常**信息一旦走它, 质量日志页的
+    "警告"就会持续上涨, 把真异常淹掉(实证: 空库下 continue-tasks 每 60s 一条
+    `rows=0` 警告, 永不停止)。本函数写 info 级, 自身失败自吞(防递归)。
+
+    log_type 固定 'maint'(已在 misc._LOG_SCOPE_TYPES 白名单内, 字面量可被收口自检扫到)。
+    真异常一律继续用 try_err, 本函数不替代它。
+    """
+    try:
+        from db import execute as _ei
+        _ei("INSERT INTO quality_logs(log_type, level, message, source) "
+            "VALUES('maint','info',%s,%s)", (str(message)[:200], src))
+    except Exception:
+        pass
+
+
 # ── quality_logs 保留策略(单一真源) ──────────────────────────────────
 # 2026-11-02 S1-3: 原策略「只留最近 500 条」是按条数截断, 高峰期(规则评估+清洗+导入)一天就写满,
 # 回头查问题时前一天的证据已被冲掉; 低谷期又白留。改为按天保留 + 硬上限兜底。

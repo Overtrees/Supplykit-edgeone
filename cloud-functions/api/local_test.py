@@ -3541,6 +3541,56 @@ try:
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 
+# ── 2026-11-05 非真异常噪音根治: 正常态不进异常通道(链路判空 + 日志分级) ──
+# 背景: try_err 是「静默吞异常」通道(固定 warning/quiet_error)。三处正常态误走了它:
+#   ① continue-tasks 每 60s 一条 rows=0 警告(空库无任务, 永久连续)
+#   ② 空库 _db2='' → strptime('') 抛 ValueError → 每次 dashboard 一条 warning
+#   ③ 建表/迁移成功信息传空 exc → 记成 warning 且尾巴 ': str: '
+# 修法不是压日志/降级别, 而是链路入口判空 + 正常态走 log_info(info 级)。
+try:
+    _api29 = _os.path.dirname(_os.path.abspath(__file__))
+    _cm29 = open(_os.path.join(_api29, "routes", "common.py"), encoding="utf-8").read()
+    check("日志分级: 有独立的 log_info 正常态通道(info/maint)",
+          "def log_info(src, message)" in _cm29
+          and "VALUES('maint','info',%s,%s)" in _cm29, "routes/common.py")
+    # 反向红线: 真异常通道不能被削弱
+    check("日志分级: try_err 仍是 warning/quiet_error(真异常留痕未被削弱)",
+          "VALUES('quiet_error','warning',%s,%s,%s)" in _cm29, "routes/common.py")
+    _cr29 = open(_os.path.join(_api29, "routes", "cron.py"), encoding="utf-8").read()
+    check("continue-tasks: 空态(rows=0)不再写诊断 warning(否则每 60s 一条)",
+          "continue-tasks 诊断" not in _cr29
+          and "if rows:" in _cr29 and "log_info('cron'" in _cr29, "routes/cron.py")
+    _dm29 = open(_os.path.join(_api29, "routes", "dashboard_maintain.py"),
+                 encoding="utf-8").read()
+    check("快照续段: 链路入口判空(_db2='' 直接返回, 不再 strptime('') 抛异常)",
+          "if not _db2:\n        return" in _dm29, "routes/dashboard_maintain.py")
+    check("快照续段: _track_data 有订单才追平(空库不触发续段)",
+          "if _db2 and ((not _m) or _m < _db2):" in _dm29,
+          "routes/dashboard_maintain.py")
+    _pe29 = _dm29.find("if not _db2:")
+    _pp29 = _dm29.find("快照续段: ch=%s db2=%s")
+    check("快照续段: 判空早于 perf_debug 诊断(空库零写入)",
+          -1 < _pe29 < _pp29, "routes/dashboard_maintain.py")
+    _sc29 = open(_os.path.join(_api29, "schema_create.py"), encoding="utf-8").read()
+    _rn29 = open(_os.path.join(_api29, "migrations", "runner.py"),
+                 encoding="utf-8").read()
+    check("建表/迁移成功: 不再把空 exc 传给异常通道(否则 ': str: ' 警告)",
+          ", '')" not in _sc29 and ", '')" not in _rn29
+          and "_log('migration', '%s 完成" not in _rn29,
+          "schema_create.py / migrations/runner.py")
+    check("建表/迁移成功: 改走 log_info / _log_ok(info 级)",
+          "log_info('schema'" in _sc29 and "def _log_ok(src, what)" in _rn29
+          and "_log_ok('migration'" in _rn29,
+          "schema_create.py / migrations/runner.py")
+    # 门禁自身: 前置失败(连接/覆盖/指纹)第三项是空串哨兵, report 曾无条件
+    # item["where"] → TypeError, 把「配额耗尽 / 凭据连错库」的诊断崩成 traceback。
+    _sa29 = open(_os.path.join(_api29, "sql_smoke.py"), encoding="utf-8").read()
+    check("SQL 冒烟: report 兼容前置失败哨兵(连不上库时清楚报因, 不崩 traceback)",
+          "def _detail(item)" in _sa29 and "isinstance(item, dict)" in _sa29
+          and "_w, _s = _detail(item)" in _sa29, "sql_smoke.py")
+except Exception as _e29:
+    check("日志噪音用例无异常", False, str(_e29)[:200])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()

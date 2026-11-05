@@ -595,7 +595,7 @@ def table_ddl(name):
 
 def create_all_tables():
     """幂等建全表(新集群空库引导; 失败单表降级不阻塞)"""
-    from routes.common import try_err
+    from routes.common import try_err, log_info
     # 2026-10-30 渠道种子(幂等): 存量库补登记 jd/other, 语义与旧硬编码完全一致
     try:
         execute("INSERT IGNORE INTO channels(code,name,enabled,supports_b,default_mode,sort) VALUES"
@@ -638,7 +638,7 @@ def create_all_tables():
                 execute("DELETE FROM orders WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
                         "(PARTITION BY channel, order_no, sku, barcode ORDER BY id DESC) rn "
                         "FROM orders) t WHERE t.rn > 1)")
-                try_err('schema', '订单四维重复已合并(每组保留最新一行) %d 组' % _dn, '')
+                log_info('schema', '订单四维重复已合并(每组保留最新一行) %d 组' % _dn)
             execute("ALTER TABLE orders ADD UNIQUE KEY uq_orders_biz "
                     "(channel, order_no, sku, barcode)")
         _idx2 = {str(r.get("Key_name") or "") for r in _q("SHOW INDEX FROM orders")}
@@ -723,7 +723,7 @@ def create_all_tables():
                 _ek5("UPDATE inventory SET barcode='' WHERE barcode IS NULL")  # NULL 会让唯一键失效
                 _ek5("ALTER TABLE inventory ADD UNIQUE KEY uq_inventory_biz "
                      "(sku, barcode, warehouse, channel, warehouse_type)")
-                try_err('schema', 'inventory 唯一键 uq_inventory_biz 建立完成', '')
+                log_info('schema', 'inventory 唯一键 uq_inventory_biz 建立完成')
     except Exception as _eix5:
         try_err('schema', 'inventory 唯一键迁移降级', _eix5)
     return ok_n, _failed
@@ -740,7 +740,7 @@ def ensure_schema():
     并发安全: DDL 幂等, 版本写入 GREATEST 防回退; 两实例同时首跑 = 重复执行无害。
     """
     from db import one as _one, execute as _e
-    from routes.common import try_err
+    from routes.common import try_err, log_info
     # ① 热路径: 一次 SELECT(表不存在 → 异常 → 视为版本 0)
     try:
         _row = _one("SELECT version FROM schema_state WHERE name='main'")
@@ -821,6 +821,6 @@ def ensure_schema():
     try:
         _e("INSERT INTO schema_state(name, version) VALUES('main', %s) "
            "ON DUPLICATE KEY UPDATE version=GREATEST(version, VALUES(version))", [SCHEMA_VERSION])
-        try_err('schema', 'schema v%d 就绪(下次实例启动零 DDL)' % SCHEMA_VERSION, '')
+        log_info('schema', 'schema v%d 就绪(下次实例启动零 DDL)' % SCHEMA_VERSION)
     except Exception as _e6:
         try_err('schema', 'schema 版本写入降级', _e6)

@@ -97,7 +97,7 @@ def run_pending(reg=None):
                 finally:
                     cur.close()
             applied.append(sid)
-            _log('migration', '%s 完成 %.2fs: %s' % (sid, time.time() - t0, str(note or "")[:160]), '')
+            _log_ok('migration', '%s 完成 %.2fs: %s' % (sid, time.time() - t0, str(note or "")[:160]))
         except Exception as e:
             failed.append(sid)
             # 失败留见证(独立于回滚的事务): 否则下次会当成"从没跑过"。留见证失败也不能吞掉原因。
@@ -116,5 +116,18 @@ def _log(src, what, exc):
     try:
         from routes.common import try_err
         try_err(src, what, exc)
+    except Exception:
+        pass
+
+
+def _log_ok(src, what):
+    """迁移/建表**成功**留痕(2026-11-05): 走 log_info(info 级)而不是 _log → try_err。
+
+    迁移完成是正常态, 原来把空字符串当 exc 传给 try_err, 会拼出 ': str: ' 尾巴并
+    落成 warning/quiet_error —— 典型的「非真异常」。真失败仍由 _log → try_err 留痕。
+    """
+    try:
+        from routes.common import log_info
+        log_info(src, what)
     except Exception:
         pass

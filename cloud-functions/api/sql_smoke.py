@@ -321,6 +321,16 @@ def report(fail_n_before=0):
         print("  ⚠ 未执行: 缺 TIDB_* 凭据(不是通过 —— 只是没验)")
         return 1 if os.environ.get("SQL_SMOKE_REQUIRED") == "1" else 0
     failed, warned, skipped, checked = res
+
+    def _detail(item):
+        """前置失败(连接/覆盖率/库指纹)没有 _SEEN 条目, 三元组第三项是空串哨兵;
+        只有逐条 SQL 失败才带 dict。旧实现无条件 item["where"] → 前置失败时
+        崩成 TypeError, 把「配额耗尽 / 凭据指向错库」这类明确诊断淹没在 traceback 里,
+        门禁反而说不清为什么红。统一成 (where, sql) 二元组, 缺失就留空。"""
+        if isinstance(item, dict):
+            return item.get("where", ""), item.get("sql", "")
+        return "", ""
+
     print("  校验 %d 条(跳过非查询 %d 条) → ✓ %d / ✗ %d / ⚠ %d"
           % (checked, skipped, max(0, checked - len(failed) - len(warned)), len(failed), len(warned)))
     if skipped:
@@ -334,12 +344,18 @@ def report(fail_n_before=0):
         print("    (DDL/SHOW/SET 不在 EXPLAIN 能力范围内 —— 结构一致性由 schema 对账覆盖, 见 --schema-diff)")
     for code, why, item in failed:
         print("  ✗ [%s] %s" % (code, why))
-        print("      %s" % item["where"])
-        print("      %s" % (item["sql"][:200] + ("…" if len(item["sql"]) > 200 else "")))
+        _w, _s = _detail(item)
+        if _w:
+            print("      %s" % _w)
+        if _s:
+            print("      %s" % (_s[:200] + ("…" if len(_s) > 200 else "")))
     for code, why, item in warned[:10]:
         print("  ⚠ [%s] %s" % (code, why))
-        print("      %s" % item["where"])
-        print("      %s" % (item["sql"][:160] + ("…" if len(item["sql"]) > 160 else "")))
+        _w, _s = _detail(item)
+        if _w:
+            print("      %s" % _w)
+        if _s:
+            print("      %s" % (_s[:160] + ("…" if len(_s) > 160 else "")))
     if len(warned) > 10:
         print("  ⚠ 另有 %d 条告警未展开" % (len(warned) - 10))
 

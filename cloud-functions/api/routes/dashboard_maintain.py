@@ -83,6 +83,13 @@ def _clear_agg_dirty():
             try_err('dashboard', 'agg_dirty 清位降级', _e)
 
 def _snapshot_step(channel, _db2):
+    # 2026-11-05 根治「非真异常连续噪音」: 空库/无订单时 _db2=''(MAX(ordered_at) 为空),
+    #   下面的 strptime('') 必然抛 ValueError → try_err 记一条 warning, 且每次 dashboard
+    #   请求都会重复一次; 同时开头那条 perf_debug 诊断也是无效的。无订单 = 无快照可续,
+    #   是**合法空态**而非故障, 在链路入口判空直接返回, 零写入、零异常。
+    #   (调用方 _track_data 同样判空, 双保险: 其它调用点传空也不会踩。)
+    if not _db2:
+        return
     # 2026-11-03 S3-4: 下面两处日志原来把 `"..." % (...)` 的**字符串**直接当 params 传,
     #   pymysql 会逐字符当参数序列 → "not all arguments converted", 被 except 吞掉,
     #   于是"快照续段"的诊断日志**从未写入过**。params 必须是 tuple(str,), 不是 str。
@@ -199,7 +206,9 @@ def _track_data(channel, _db2):
                  "(SELECT COALESCE(MAX(`date`),'') FROM orders_day_agg) AS am", [channel]) or {}
         _db2 = str(_r.get("om") or "")[:10]
         _m = str(_r.get("sm") or "")[:10]
-        if (not _m) or (_db2 and _m < _db2):
+        # 2026-11-05: 空库(_db2='')时没有日期基准, 快照续段无条件触发只会在下游
+        #   strptime('') 抛异常并写一条非真 warning。先判空, 有订单才谈追平。
+        if _db2 and ((not _m) or _m < _db2):
             _snapshot_step(channel, _db2)
         _amax = str(_r.get("am") or "")[:10]
         if _db2 and _amax < _db2:
