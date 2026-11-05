@@ -111,12 +111,22 @@ def _carried(channel, wt, period):
 
 # ── 应用 ────────────────────────────────────────────────────────────────
 
-def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT):
+def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT, baseline=False):
     """把一次库存导入当作实盘校准期初; 返回 {ok, applied, skipped, delta, period}
 
     items: 清洗后的库存行(含 sku / barcode / warehouse; 数量取 snapshot_qty →
            beginning_stock → available_qty 第一个非空)
     调用点: routes/cleanse_write.py 的 inventory 写入成功后(失败只留痕, 绝不阻断导入)。
+
+    baseline (2026-11-05, 仅 seed 演示库用): 无视实盘窗口, 直接按导入值建本期基线。
+      为什么需要: 实盘窗口(上月末 ~ 当月 3 号)是为**真实客户**定的 —— 只有月末盘库才算数,
+      月中一次普通导入不该改写期初。但 seed 是**从空库建一份完整演示账**, 它跑在任意一天,
+      要的正是"这次导入量 = 期初"的建账语义。
+      不修会怎样(线上实测): jd 渠道结过 10 月账(ledger_state.status=closed) → 库存导入走
+      「已建账分支」把期初挪进 snapshot_qty 并 pop 掉 beginning_stock → apply_import 因
+      "今天 11-05 在窗口外"直接 return → beginning_stock 无人写回, 10,100 行期初全 0,
+      而 other 渠道没建过账(首建账分支)期初 211 万正常 —— 两渠道同一份数据两种命运。
+      seed 用它建立基线后, 落账核对(可用 = 期初 + Σ流水)才成立。
     """
     ts = ts or now_cn()
     res = {"ok": True, "applied": 0, "skipped": "", "period": "", "delta": 0,
@@ -124,14 +134,20 @@ def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT):
     if wt != OWN_WT:
         res["skipped"] = "仅自有仓走账期"
         return res
-    period = target_period(ts)
-    if not period:
-        res["skipped"] = "窗口外(仅上月末最后一天 ~ 当月 %d 号)" % WINDOW_END_DAY
-        return res
+    if baseline:
+        # 无视窗口: 直接取当期, 且不要求 period == current_period(seed 从零建账, 没有"已结的期不许动")
+        period = period_of(ts)
+    else:
+        period = target_period(ts)
+        if not period:
+            res["skipped"] = "窗口外(仅上月末最后一天 ~ 当月 %d 号)" % WINDOW_END_DAY
+            return res
     res["period"] = period
-    res["window"] = window_text(period)
+    res["window"] = "baseline(seed 建账)" if baseline else window_text(period)
     # 已结账的期不动: 期末已经按旧期初算过, 偷改期初 = 账实两套且无痕
-    if period != current_period(channel, wt):
+    #   baseline 模式跳过这条 —— seed 建账时 current_period 可能停在下一期(已结 10 月),
+    #   强行比对会把当前期判成"已结/未到"而整批丢弃, 正是这次期初全 0 的另一半原因。
+    if not baseline and period != current_period(channel, wt):
         res["skipped"] = "账期 %s 不是当前进行中的账期(已结/未到), 如需修正请重结" % period
         return res
 

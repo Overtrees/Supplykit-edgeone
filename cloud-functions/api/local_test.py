@@ -3219,6 +3219,30 @@ try:
           _sf.SEED_STEP_BUDGET_S == 90
           and "seed 段超预算 step=%d %.1fs > %ds" in _ts_src,
           "routes/seed_fill.py / task_seed.py")
+    # 2026-11-05 线上事故(step22 单段 122s 被网关切断): 月汇总 UPDATE 用 COALESCE(barcode,'')
+    #   做等值条件 → 唯一键 uq_inventory_biz 只能用 sku 前缀, Point_Get 退化
+    #   成 IndexRangeScan + 逐行回表; 2.1 万组 × 17 万行, 必然超 120s。
+    # 只看代码行(去注释): 说明性注释里会引用旧写法, 否则断言被自己的注释干成假红
+    _sf11_code = "\n".join(x for x in _sf11.splitlines()
+                           if x.strip() and not x.strip().startswith("#"))
+    check("月汇总: 不走 COALESCE(barcode,'') 等值条件(否则唯一键失效, 退化成逐行回表)",
+          "COALESCE(barcode,'')=%%s" not in _sf11_code
+          and "AND barcode=%%s " in _sf11_code
+          and "AND (barcode IS NULL OR barcode='') " in _sf11_code,
+          "routes/seed_fill.py")
+    # 2026-11-05 线上事故(jd 10100 行期初全 0): 实盘窗口只在「上月末~当月3号」, seed 跑在
+    #   任意一天; jd 已结过账 → cleanse_write 走「已建账分支」把期初挪进 snapshot_qty,
+    #   apply_import 又因窗口外 return → beginning_stock 无人写回。seed 必须显式 baseline。
+    _la11 = open("core/ledger_adj.py", encoding="utf-8").read()
+    check("seed 期初: apply_import 支持 baseline 建账模式(否则月中跑 seed 期初恒 0)",
+          "def apply_import(channel, items, ts=None, batch_id=\"\", wt=OWN_WT, baseline=False)"
+          in _la11 and "if not baseline and period != current_period(channel, wt):" in _la11,
+          "core/ledger_adj.py")
+    check("seed 期初: seed 自有仓库存导入显式带 baseline=True(真实客户入口不传, 行为不变)",
+          'label=\'自有仓库存\', baseline=True' in _sf11
+          and "baseline=baseline" in open("routes/cleanse_write.py", encoding="utf-8").read()
+          and "baseline=baseline" in open("routes/seed_import.py", encoding="utf-8").read(),
+          "routes/seed_fill.py")
     _sc10 = open("schema_create.py", encoding="utf-8").read()
     check("续跑锁: sync_tasks 已声明 lease_until 列",
           "lease_until DATETIME NULL" in _sc10, "schema_create.py")

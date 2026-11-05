@@ -412,7 +412,12 @@ def _seed_inventory(skus_data, channel='', wh_group=''):
         elif wh_group == 'own':
             _pf = []
         if _own:
-            _r = _imp('inventory', ch, _own, label='自有仓库存')
+            # baseline=True(仅 seed): 无视实盘窗口, 按导入值建本期期初。
+            #   不加这个, jd 已结过 10 月账 → 走「已建账分支」把期初挪成 snapshot_qty,
+            #   而 apply_import 因"今天在窗口外"(实盘窗口=上月末~当月3号)直接 return,
+            #   beginning_stock 无人写回 → 10,100 行期初全 0, 落账核对 1 万行不平。
+            #   真实客户的入口(cleanse_write 的导入请求)不传 baseline, 行为不变。
+            _r = _imp('inventory', ch, _own, label='自有仓库存', baseline=True)
             if _r.get('failed'):
                 try_err('seed_fill', '自有仓库存导入 %s 有 %d 行未落库(首因=%s)'
                         % (ch, _r['failed'],
@@ -847,14 +852,34 @@ def _sync_inv_month():
         _stat[target_col] = len(rows or [])
         if not rows:
             continue
-        _args = [(int(r.get('q') or 0), str(r.get('sku') or ''), str(r.get('bc') or ''),
-                  str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
-                  str(r.get('warehouse_type') or '')) for r in rows]
-        try:
-            executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s AND COALESCE(barcode,'')=%%s "
-                        "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args)
-        except Exception as _e:
-            try_err('seed_fill', '月汇总批量更新', _e)
+        # 2026-11-05 线上事故修复(step22 单段 122s): 原 WHERE 写 `COALESCE(barcode,'')=%%s`,
+        #   表达式让唯一键 uq_inventory_biz(sku,barcode,warehouse,channel,warehouse_type)
+        #   只能用上 sku 前缀 —— EXPLAIN 从 Point_Get 退化成 IndexRangeScan + 逐行
+        #   TableRowIDScan。inbound 7,869 + outbound 13,820 = 2.1 万组, 每组都要回表扫,
+        #   单请求实测 122s 被网关 120s 硬切。
+        #   改法: barcode 分两支 —— 有码走等值(命中完整唯一键, Point_Get);
+        #   空码走 `barcode IS NULL OR barcode=''`(既有有码行不会被误改, 因为条件限定了空/无)。
+        _n_bc = [r for r in rows if str(r.get('bc') or '')]
+        _n_nul = [r for r in rows if not str(r.get('bc') or '')]
+        if _n_bc:
+            _args = [(int(r.get('q') or 0), str(r.get('sku') or ''), str(r.get('bc') or ''),
+                      str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
+                      str(r.get('warehouse_type') or '')) for r in _n_bc]
+            try:
+                executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s AND barcode=%%s "
+                            "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args)
+            except Exception as _e:
+                try_err('seed_fill', '月汇总批量更新(有码)', _e)
+        if _n_nul:
+            _args2 = [(int(r.get('q') or 0), str(r.get('sku') or ''),
+                       str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
+                       str(r.get('warehouse_type') or '')) for r in _n_nul]
+            try:
+                executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s "
+                            "AND (barcode IS NULL OR barcode='') "
+                            "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args2)
+            except Exception as _e:
+                try_err('seed_fill', '月汇总批量更新(空码)', _e)
     # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
     #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
     #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**

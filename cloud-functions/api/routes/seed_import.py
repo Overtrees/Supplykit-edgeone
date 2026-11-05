@@ -250,7 +250,7 @@ def to_csv(target, rows):
 
 
 # ── 实际走导入链路 ────────────────────────────────────────────────────────
-def import_rows(target, channel, rows, conflict_sql="", label=""):
+def import_rows(target, channel, rows, conflict_sql="", label="", baseline=False):
     """把内存行**当作导入文件**灌进正式链路, 返回导入侧的回执
 
     链路(每一段都是线上真实实现, 不是影子):
@@ -273,7 +273,7 @@ def import_rows(target, channel, rows, conflict_sql="", label=""):
     sp = spec(target)
     cleaned = _clean_rows(parsed, sp["mp"])
     res = _write_rows(target, channel, spec(target)["conflict_mode"], cleaned,
-                      conflict_sql=conflict_sql)
+                      conflict_sql=conflict_sql, baseline=baseline)
     # _write_rows 各分支返回形状不同: 出入库/库存返回 (s, f, ed), 其余 (s, f)
     if isinstance(res, tuple) and len(res) == 3:
         s, f, ed = res

@@ -1105,7 +1105,7 @@ def _promote_empty_barcode(channel, pairs, chunk=500):
     return done
 
 
-def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
+def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", baseline=False):
     """按 target 分派写入; 返回 (success, failed)
     渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道
 
@@ -1289,7 +1289,8 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
                 from core.clock import now_cn as _nowc
                 from core.ledger_adj import apply_import as _adj_apply
                 _adj_apply(channel, cleaned,
-                           batch_id="inv-%s" % _nowc().strftime("%Y%m%d%H%M%S"))
+                           batch_id="inv-%s" % _nowc().strftime("%Y%m%d%H%M%S"),
+                           baseline=baseline)
             except Exception as _ea:
                 try_err('cleansing', '期初实盘校准降级(导入本身已成功)', _ea)
         return _s, _f, _ed
