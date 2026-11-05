@@ -16,7 +16,7 @@ export interface DisposalRow {
   reason?: string[]
   suggestion?: string
   disposed?: boolean
-  days_zero?: number | null   // null = 从未销售(不是 999)
+  days_zero?: number | null // null = 从未销售(不是 999)
   stock?: number
   [k: string]: unknown
 }

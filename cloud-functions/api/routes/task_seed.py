@@ -44,7 +44,6 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     try:
         import json as _json
         import time as _tt
-        from datetime import datetime, timezone as _tz
         params = _json.loads(row.get("params") or "{}")
         step = int(params.get("step") or 0)
         from routes.seed_fill import prepare_skus, seed_step
@@ -106,7 +105,6 @@ async def seed_fill(request: Request):
         # 创建 running 任务 + 执行步骤 0(商品/供应商, 秒级)
         import json as _json
         from routes.seed_fill import prepare_skus, seed_step
-        from datetime import datetime, timezone as _tz
         execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                 "VALUES(%s,'seed','running',%s,'{}',%s)",
                 (task_id, _json.dumps({"step": 0}), channel))

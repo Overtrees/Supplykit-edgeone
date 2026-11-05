@@ -408,10 +408,13 @@ export const en: Record<string, string> = {
   'inv.turnover_na': 'Not shipped',
   'inv.month_open': 'MTD',
   'inv.negative_stock': 'Negative stock',
-  'inv.end_stock_hint': 'Closing = opening + inbound − outbound this month; negative means outbound exceeded sellable',
+  'inv.end_stock_hint':
+    'Closing = opening + inbound − outbound this month; negative means outbound exceeded sellable',
   'inv.avg_stock_hint': 'Average stock = (opening + closing) ÷ 2, used as turnover numerator',
-  'inv.turnover_hint': 'Turnover = avg. stock × days ÷ outbound; avg. stock = (opening + closing) ÷ 2, closing = opening + inbound − outbound. Mid-month uses elapsed days (same window as outbound); month-end uses full month days',
-  'inv.total_turnover_hint': 'Warehouse turnover = total avg. stock × days in month ÷ total outbound; total avg. stock = (total opening + total closing) ÷ 2',
+  'inv.turnover_hint':
+    'Turnover = avg. stock × days ÷ outbound; avg. stock = (opening + closing) ÷ 2, closing = opening + inbound − outbound. Mid-month uses elapsed days (same window as outbound); month-end uses full month days',
+  'inv.total_turnover_hint':
+    'Warehouse turnover = total avg. stock × days in month ÷ total outbound; total avg. stock = (total opening + total closing) ÷ 2',
   'recycle.title': 'Recycle Bin',
   'recycle.deleted_rules': 'Deleted Rules',
   'recycle.deleted_orders': 'Deleted Orders',

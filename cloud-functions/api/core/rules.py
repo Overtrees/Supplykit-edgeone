@@ -238,81 +238,28 @@ def _rule_params_loaded(rule):
         return {}
 
 
-# ── 条件字段白名单(规则保存校验用, 防静默 0 致恒真/恒假) ──
-_VALID_FIELDS = {
-    "inv.available_qty", "inv.safety_qty", "inv.in_transit_qty", "inv.warehouse_type",
-    "inv.warehouse", "inv.product_name", "inv.adj_dos", "inv.buffer", "inv.otif",
-    "inv.ss_dyn", "inv.accel_rate",
-    # 2026-11-01 删除 "inv.days_since_last": ctx 里只有**顶层** days_since_last,
-    #   白名单放行它 → 用户可选、可保存, 但条件求值恒 None → 规则静默失效。
-    #   (本地测试早有提示"字段路径与 ctx 一致(无 inv.days_since_last)", 白名单漏删)
-    "barcode",
-    "order.quantity", "order.total_qty", "order.total_amount", "order.order_status",
-    "order.product_name", "order.max_quantity", "order.min_quantity", "order.line_count",
-    "flow.quantity", "flow.warehouse", "flow.date",
-    "inbound.quantity", "inbound.warehouse", "inbound.date",
-    "outbound.quantity", "outbound.warehouse", "outbound.date",
-    "batch.days_to_expire", "supplier.score", "inv.turnover_days",
-    "sku", "product_name", "days_since_last", "stock", "avail", "safety",
-    "lit_trad", "lit_bbcc", "health", "health_score",
-    # 2026-11-01 自有仓供给侧(own_transfer_gap / own_overstock 规则用)
-    #   —— 不加白名单则规则页保存直接被 validate_condition 拦下
-    "own.available", "own.transit", "own.po_transit", "own.can_ship",
-    "own.downstream_ds", "own.downstream_avail", "own.b2c_days",
-    "own.need", "own.gap", "own.cover_days",
-}
+# ── 条件字段: 唯一真源在 core/rule_fields.py(2026-11-05 根治"两份手工列表") ──
+#   白名单与"是否走计算注入"必须由同一张表派生。原实现是两份手写列表, 漏登记即
+#   静默吞规则(supplier.score / inv.turnover_days 可选可存却永不触发)。
+from core.rule_fields import (  # noqa: E402  (常量随迁, 放此处保持模块尾部集中)
+    CALC, FIELD_SPEC, calc_tokens as _calc_tokens, needs_calc, refs_in,
+    unknown_refs, validate_refs,
+)
+
+_VALID_FIELDS = frozenset(FIELD_SPEC)
+# 兼容层: 仅供既有断言("own." / "batch." in _CALC_VARS)使用, 判定逻辑一律走 needs_calc()
+_CALC_VARS = _calc_tokens()
 
 
-def validate_condition(cond):
+def validate_condition(cond, event=None):
     """校验规则条件引用的字段有效性(创建/更新规则时调用)
 
-    防笔误字段(如 inv.saftey_qty)静默解析为 0 → 条件恒真/恒假难排查;
-    返回错误列表, 空 = 通过; params.* 为动态键通配
+    两件事:
+      ① 字段必须登记过(拼错即拦, 含**无点**顶层字段 —— 原正则只查 a.b, 顶层拼错全放行)
+      ② 字段必须在该事件上下文中存在(如 flow.quantity 只能用在 inbound/outbound.created)
+    返回错误列表, 空 = 通过; params.* 为动态键通配。
     """
-    import re
-    errors = []
-
-    def _check_ref(s, side):
-        for m in re.finditer(r"[a-z_]+\.[a-z_]+", s):
-            ref = m.group(0)
-            if ref.startswith("params."):
-                continue
-            if ref not in _VALID_FIELDS:
-                errors.append("%s 字段无效: %s" % (side, ref))
-
-    def _walk(c):
-        if not isinstance(c, dict):
-            return
-        for k in ("left", "right"):
-            v = c.get(k)
-            if isinstance(v, str):
-                s = v.strip()
-                if s.startswith("max("):
-                    for p in s[4:-1].split(","):
-                        _check_ref(p.strip(), k)
-                else:
-                    _check_ref(s, k)
-        sub = c.get("and")
-        if isinstance(sub, dict):
-            _walk(sub)
-        for sub in (c.get("or") or []):
-            if isinstance(sub, dict):
-                _walk(sub)
-
-    _walk(cond)
-    return errors
-
-
-_CALC_VARS = ("adj_dos", "buffer", "otif", "ss_dyn", "accel_rate", "health.", "params.", "safety_qty",
-              # 2026-11-01 自有仓供给侧口径(own_transfer_gap / own_overstock 规则引用)
-              #   —— 这些键由 rule_eval 的 _need_calc 分支按需注入; 不进白名单则规则走"快速路径",
-              #   ctx 永远没有 own.* → 条件恒 None → 规则静默失效
-              "own.",
-              # 2026-11-01 batch.(效期): 原白名单没有它 —— 只因内置效期规则恰好还引用了
-              #   params.xxx 才顺带进了计算路径。若用户写一条**纯 batch.days_to_expire** 的规则
-              #   (不带任何 params), 就会走快速路径、batch 键不注入 → 规则静默失效。
-              #   补进白名单后与 ctx 注入点一致(rule_eval 里 _exp_map → base["batch"])。
-              "batch.")
+    return validate_refs(cond, event)
 
 
 

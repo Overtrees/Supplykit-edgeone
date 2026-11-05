@@ -281,7 +281,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           kind: 'replen',
           qty: (x.suggested_qty || 0) + (x.b_suggested || 0),
           note: x.note || '',
-          days_to_empty: x.days_to_empty ?? 999,   // 排序哨兵; null=无销量
+          days_to_empty: x.days_to_empty ?? 999, // 排序哨兵; null=无销量
           wh: x.warehouse || '',
         }))
       // 2026-10-17 allSettled: 采购/补货单接口失败不再拖累另一卡(曾 purchase 崩 → Promise.all reject → 双卡空)
@@ -295,7 +295,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           kind: 'purchase',
           qty: x.actual_purchase || 0,
           note: x.note || '',
-          days_to_empty: x.days_to_empty ?? 999,   // 排序哨兵; null=无销量
+          days_to_empty: x.days_to_empty ?? 999, // 排序哨兵; null=无销量
           wh: x.warehouse || '',
         }))
       // 采购在前(更紧急: 需向供应商采且可撑<14天), 随后补货按缺口

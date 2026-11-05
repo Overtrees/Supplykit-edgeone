@@ -1091,9 +1091,50 @@ try:
     # 7. 规则测试接口必须给 own./batch. 注入 ctx(2026-11-01)
     #    原测试 ctx 只有 inv/order/health → own.* 取不到键 → 条件判 False →
     #    自有仓三级规则在测试弹窗里**永远显示未触发**, 用户会误判规则写错。
-    _rr = open("routes/rules.py", encoding="utf-8").read()
+    #    2026-11-05: ctx 构造已抽出到 core/rule_sim.py(路由文件超 600 行红线), 断言指向新文件。
+    _rs = open("core/rule_sim.py", encoding="utf-8").read()
+    _rr = open("routes/rules.py", encoding="utf-8").read()   # 第 10 条断言仍读路由文件
     check("测试接口: own./batch. 模拟 ctx 已注入",
-          'ctx["own"]' in _rr and 'ctx["batch"]' in _rr, "routes/rules.py test_rule")
+          'ctx["own"]' in _rs and 'ctx["batch"]' in _rs, "core/rule_sim.py")
+    # 2026-11-05: 同类坑 —— 引擎注入 supplier.score / inv.turnover_days, 测试 ctx 没注
+    #   → 弹窗恒"未触发", 用户误判规则写错。
+    check("测试接口: supplier./inv.turnover_days 模拟 ctx 已注入",
+          'ctx["supplier"]' in _rs and '"turnover_days"' in _rs, "core/rule_sim.py")
+
+    # 7b. 2026-11-05 根治"两份手工列表": 白名单/注入判定/前端下拉必须同源
+    #    —— 原 _VALID_FIELDS 与 _CALC_VARS 各写一份, supplier.score / inv.turnover_days
+    #       在白名单却不在 _CALC_VARS → 走快速路径 → 键不注入 → 条件恒空、规则永不触发。
+    from core.rule_fields import FIELD_SPEC, needs_calc, refs_in, validate_refs
+    check("规则字段: supplier.score 需计算注入",
+          needs_calc({"left": "supplier.score", "op": "<", "right": "3"}), "rule_fields.needs_calc")
+    check("规则字段: inv.turnover_days 需计算注入",
+          needs_calc({"left": "inv.turnover_days", "op": ">", "right": "5"}), "rule_fields.needs_calc")
+    check("规则字段: 纯 base 条件不走计算注入",
+          not needs_calc({"left": "inv.available_qty", "op": "<", "right": "10"}), "needs_calc")
+    # 规则页下拉里能选中的字段必须全部登记(否则"能选能存但永不触发" = 界面说谎)
+    #   只截 LF 数组: 文件后半的 WHS/MODES 是仓库类型/补货模式枚举值('own'/'bbcc'),
+    #   不是字段引用, 整文件正则会把它们当成未登记字段误报。
+    import re as _r9
+    _lf = open("../../frontend/src/pages/rules/labels.tsx", encoding="utf-8").read()
+    _lf = _lf[_lf.index("export const LF = ["):_lf.index("export const OPS = [")]
+    _lf_refs = set()
+    for _m9 in _r9.finditer(r"v:\s*'([^']*)'", _lf):
+        for _f9 in refs_in({"left": _m9.group(1), "op": "<", "right": "0"}):
+            _lf_refs.add(_f9)
+    _lf_bad = sorted(x for x in _lf_refs if not x.startswith("params.") and x not in FIELD_SPEC)
+    check("规则字段: 规则页下拉字段全部已登记", not _lf_bad, _lf_bad)
+    # 事件作用域: 库存事件不能引用出入库上下文字段(该 ctx 没有 flow.* → 恒空)
+    check("规则字段: flow.quantity 在 inventory.changed 被拒",
+          validate_refs({"left": "flow.quantity", "op": ">", "right": "0"}, "inventory.changed") != [])
+    check("规则字段: 无点字段拼错也拦(原正则只查 a.b)",
+          validate_refs({"left": "daily_sale", "op": ">", "right": "0"}, "inventory.changed") != [])
+    # right 侧无点字段/引号字面量必须能求值(原实现落到字符串比较 → 恒 False)
+    from core.rule_cond import _check_single as _cs9
+    _ctx9 = {"inv": {"available_qty": 5, "warehouse_type": "own"}, "daily_sales": 10}
+    check("规则求值: right 侧无点字段可解析",
+          _cs9({"left": "inv.available_qty", "op": "<", "right": "daily_sales"}, _ctx9))
+    check("规则求值: right 侧 'own' 字面量可比较",
+          _cs9({"left": "inv.warehouse_type", "op": "==", "right": "'own'"}, _ctx9))
 
     # 8. 规则保存链路不得丢掉 and 子条件
     #    内置自有仓规则是 `warehouse_type==own and {own.gap>N}` 结构, 前端原只序列化 or →
@@ -2749,6 +2790,22 @@ try:
           "month_inbound = mi if mi is not None else 0" in _ins, "routes/insights.py")
     check("账期: 进销存汇总的自有仓月入出按流水现算(不 SUM 静态列)",
           'inbound_records "' in _ins and '_ri.get("q")' in _ins, "routes/insights.py")
+    # 2026-11-05 平台仓/ B 仓解绑(用户定案: 该维度不需要当月入出):
+    #   两列在平台仓没有任何消费方(页面列集无 / 导出只对 own / 周转列只在 own),
+    #   读进来只会让 API 返回一个"看起来是真值"的快照数。
+    check("账期: 平台仓/B 仓不读 inventory.month_inbound/month_outbound",
+          'if wh_type == "own" else ""' in _ins and "0 AS mi, 0 AS mo" in _ins
+          and "month_inbound = 0" in _ins, "routes/insights.py")
+    # 同类"能映射但写不进去"的洞: 清洗页 PROD_FIELDS 有 supplier_code, 写入白名单漏了它
+    _pb = open("routes/cleanse_write.py").read().split('_write_batch("products"')[1][:400]
+    check("导入: products 写入白名单含 supplier_code(否则映射了也是空)",
+          '"supplier_code"' in _pb, "routes/cleanse_write.py")
+    # 2026-11-05: 月汇总/行级聚合都必须**右开**(< 下月1日) —— 原只有下界,
+    #   表里若有下月/未来日期流水(提前导入/补录/日期错年)会被算进本月。
+    #   行级 2 处 + 汇总 2 处 = 各 2 条上界条件。
+    check("账期: 进销存流水聚合带下月1日上界(右开, 各 2 处)",
+          _ins.count("inbound_date<%s") == 2 and _ins.count("outbound_date<%s") == 2,
+          (_ins.count("inbound_date<%s"), _ins.count("outbound_date<%s")))
     check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
           _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
     # 右开区间: 流水列是 DATETIME, 写 `<= '2026-10-31'` 只会覆盖到当天 00:00:00,

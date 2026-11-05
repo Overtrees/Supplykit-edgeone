@@ -243,7 +243,6 @@ async def frontend_log(request: Request):
 def monitor():
     """APM(轻量实化, 2026-09-11 体检): quality_logs 实时聚合——错误/慢请求留痕即观测面
     (Makers 无状态请求环境, 无进程级 uptime/rps metrics; 慢路径与最新错误可下钻)"""
-    from datetime import datetime, timezone as _tz
     err = one("SELECT COUNT(*) AS c FROM quality_logs WHERE level='error'") or {}
     slow = one("SELECT COUNT(*) AS c FROM quality_logs WHERE log_type='slow_request'") or {}
     today = now_cn().strftime("%Y-%m-%d")

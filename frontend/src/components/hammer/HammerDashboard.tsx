@@ -24,7 +24,7 @@ export default function HammerDashboard({ channel }) {
   const [endVal, setEndVal] = useState(customDateEnd || '')
 
   if (!startVal) {
-    setStartVal(daysAgoCn(29))   // 北京时间近 30 天
+    setStartVal(daysAgoCn(29)) // 北京时间近 30 天
   }
   if (!endVal) {
     setEndVal(todayCn())

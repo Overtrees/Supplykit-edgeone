@@ -513,7 +513,9 @@ body {
   box-sizing: border-box;
 }
 .btn:active {
-  transform: scale(0.96);
+  /* 2026-11-05: 按压反馈由"几何缩放"改"变暗" —— 缩放会让键盘焦点环跟着缩,
+     视觉抖动; 变暗不改变几何, 环纹丝不动, 鼠标/键盘/触屏三端表现一致 */
+  filter: brightness(0.93);
 }
 .clickable:active,
 .pill:active {
@@ -594,7 +596,7 @@ body {
   background: #e8e8ed;
 }
 button:active {
-  transform: scale(0.97);
+  filter: brightness(0.94);
 }
 input,
 select,
@@ -1073,8 +1075,8 @@ input[type='file'] {
   opacity: 0.85;
 }
 .task-download:active {
-  transform: scale(0.94);
-  opacity: 0.75;
+  filter: brightness(0.9);
+  opacity: 0.85;
 }
 .hero-progress {
   height: 4px;
@@ -1638,12 +1640,12 @@ td.col-code {
     color 0.15s,
     opacity 0.15s,
     border-color 0.15s,
-    transform 0.15s;
+    filter 0.15s;
 }
 .clickable:active,
 .hammer-btn:active,
 .hammer-segment:active {
-  transform: scale(0.97);
+  filter: brightness(0.94);
 }
 .material-regular {
   animation: sheetIn 0.22s ease;
@@ -2760,4 +2762,89 @@ td.col-code {
   font-size: var(--font-10);
   color: var(--muted2);
   line-height: 1.5;
+}
+
+/* ══ 键盘焦点可见(2026-11-05) ══════════════════════════════════════════
+   现状: 全仓 142 个原生 button 没有任何自定义焦点样式; 13 处内联
+   `outline:'none'`(登录页输入框等)把浏览器默认环也去掉了, 且没有替代反馈
+   —— 纯键盘(桌面 Tab / iPad 外接键盘)操作时完全失去位置感。
+   这里一处集中定义, 不改 142 个 JSX。
+
+   三条原则:
+   ① 只对 :focus-visible 生效 —— 按钮不因鼠标/触摸点按出环; 文本输入框点按仍出环
+      (规范如此: 用户需要看清光标落在哪个框), 键盘 Tab 一律出环;
+   ② 用 outline 而非 box-shadow —— 不参与布局, Windows 高对比度(forced-colors)
+      能识别, 且圆角浏览器自动跟随;
+   ③ 环不吃 transform —— `button:active{transform:scale(.97)}` 会带着环一起缩,
+      键盘回车激活时视觉抖动, 键盘激活时取消缩放。
+   颜色比主色深一档(--focus-ring #0057d9): 主色按钮(#007aff)上若是同色环, 只靠 2px
+   白缝分隔, 对比偏弱; 深一档后与按钮、浅灰底(#f2f2f7)都拉开距离。 */
+:root {
+  --focus-ring: #0057d9;
+}
+:where(
+  button,
+  [role='button'],
+  a[href],
+  summary,
+  input:not([type='hidden']),
+  select,
+  textarea,
+  [tabindex]:not([tabindex='-1'])
+):focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px !important;
+}
+
+/* 护栏: 按压反馈已从"缩放"改为"变暗(亮度)"(见 .btn:active / button:active),
+   这里再兜一层 —— 将来若有人给按钮加回 transform, 键盘激活时也取消, 环不会跟着抖 */
+button:focus-visible:active,
+[role='button']:focus-visible:active {
+  transform: none;
+}
+
+/* 系统开了"减少动态效果" → 关掉过渡动画(亮度变化本身保留, 那是即时的按压反馈) */
+@media (prefers-reduced-motion: reduce) {
+  .clickable,
+  .btn,
+  .pill,
+  .hammer-btn,
+  .hammer-segment,
+  .task-download {
+    transition: none;
+  }
+}
+
+/* 老 Safari(<15.4)/老 Firefox 没有 :focus-visible → 回落 :focus,
+   但只在精确指针设备上启用, 避免手机点按后残留一圈环 */
+@supports not selector(:focus-visible) {
+  @media (pointer: fine) {
+    :where(
+      button,
+      [role='button'],
+      a[href],
+      summary,
+      input:not([type='hidden']),
+      select,
+      textarea
+    ):focus {
+      outline: 2px solid var(--focus-ring) !important;
+      outline-offset: 2px !important;
+    }
+  }
+}
+
+/* Windows 高对比度: 跟随系统高亮色, 自定义色会被系统强制替换 */
+@media (forced-colors: active) {
+  :where(
+    button,
+    [role='button'],
+    a[href],
+    summary,
+    input:not([type='hidden']),
+    select,
+    textarea
+  ):focus-visible {
+    outline: 3px solid Highlight !important;
+  }
 }

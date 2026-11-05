@@ -211,9 +211,11 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         setOutRange(`${s}${t('col.range_to')}${e}`)
         // 账期口径(2026-11-04): 当月未满时周转按"已过天数"折算, 表头必须把这件事说出来,
         //   否则用户会拿 4 天的周转跟整月的比, 以为数据错了
-        setLedgerOpen(items[0].is_open
-          ? { d: Number(items[0].period_days) || 0, m: Number(items[0].month_days) || 0 }
-          : null)
+        setLedgerOpen(
+          items[0].is_open
+            ? { d: Number(items[0].period_days) || 0, m: Number(items[0].month_days) || 0 }
+            : null,
+        )
       }
     } catch (e) {
       if (seq !== reqSeq.current) return
@@ -291,6 +293,10 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
   //   仓周转 = 总平均库存 × 当月自然天数 / Σ当月出库
   //   期初取导入原值(beginning_stock_raw / summary.beg), 不做反推
   const totalTurnover = useMemo(() => {
+    // 2026-11-05 平台仓/ B 仓不做进销存推算(用户定案): 该维度没有期初口径、没有流水,
+    //   月入出恒 0 → 仓周转算出来只有假值。列集本就没有 turnover 列,
+    //   这里再设一道护栏, 将来若给平台仓加列也不会显示 0 天。
+    if (whType !== 'own') return null
     // 优先后端全量汇总(该维度所有 SKU); 无 summary(搜索/翻页)时回退已加载行
     const beg = invSummary
       ? invSummary.beg || 0
@@ -308,7 +314,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     // 期间天数由后端给「当月自然月天数」(11 月=30), 与行值同一口径
     const days = invSummary?.pd || inventory[0].period_days || 30
     return ((avg * days) / mo).toFixed(2)
-  }, [inventory, invSummary])
+  }, [inventory, invSummary, whType])
 
   // 底部总计取值: 优先后端全量 summary(该维度所有 SKU), 缺失回退已加载行
   // 2026-11-01 修正签名: 原声明 3 个形参却从不使用 fallback, 而 4 处调用只传 2 个
@@ -487,7 +493,9 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         <br />
                         <span className="small" style={{ fontWeight: 'var(--fw-regular)' }}>
                           {inRange}
-                          {ledgerOpen ? ` · ${t('inv.month_open')} ${ledgerOpen.d}/${ledgerOpen.m}` : ''}
+                          {ledgerOpen
+                            ? ` · ${t('inv.month_open')} ${ledgerOpen.d}/${ledgerOpen.m}`
+                            : ''}
                         </span>
                       </th>
                     )
@@ -647,8 +655,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                       },
                       typeof _avg === 'number' ? _avg.toFixed(1) : _avg,
                     )
-                  }
-                  else if (col.id === 'prod_date')
+                  } else if (col.id === 'prod_date')
                     el = React.createElement(
                       'td',
                       { key: col.id, className: 'col-qty', style: { fontSize: 'var(--font-xs)' } },
@@ -895,14 +902,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                         dp > 0
                           ? Math.max(
                               0,
-                              Math.min(
-                                100,
-                                Math.round(
-                                  (daysSinceCn(b.prod_date) /
-                                    dp) *
-                                    100,
-                                ),
-                              ),
+                              Math.min(100, Math.round((daysSinceCn(b.prod_date) / dp) * 100)),
                             )
                           : 0
                     }
@@ -980,11 +980,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
                               86400000,
                           )
                           if (td > 0) {
-                            const cv = Math.round(
-                              (daysSinceCn(b.prod_date) /
-                                td) *
-                                100,
-                            )
+                            const cv = Math.round((daysSinceCn(b.prod_date) / td) * 100)
                             ot_st = cv >= 100 ? 'expired' : cv > 33 ? 'no' : 'ok'
                           }
                         }

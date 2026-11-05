@@ -71,7 +71,7 @@ export interface InventoryRow {
   in_transit_qty?: number
   locked_qty?: number
   days_since_last?: number
-  days_to_empty?: number | null   // null = 无销量(算不出), 不是 999
+  days_to_empty?: number | null // null = 无销量(算不出), 不是 999
   expiry_date?: string
   exp_date?: string
   prod_date?: string

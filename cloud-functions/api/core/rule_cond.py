@@ -5,6 +5,7 @@
 import re
 
 from routes.common import try_err
+from core.rule_fields import FIELD_SPEC  # 纯常量表(无 db 依赖), 用于判断 right 是否为字段引用
 
 
 
@@ -152,10 +153,17 @@ def _check_single(cond, ctx):
             right = max(_a0, _a1)
         elif str(right_raw).replace(".", "", 1).isdigit():
             right = float(right_raw)
-        elif "." in str(right_raw) or str(right_raw).startswith("inv.") or str(right_raw).startswith("order."):
-            right = _resolve_value(right_raw, ctx)
         else:
-            right = right_raw
+            # 2026-11-05 修复"右侧字段引用恒假": 原实现只对**带点**的 right 做解析,
+            #   无点字段(daily_sales / sellable / safety…)落到 else → 被当字符串比较
+            #   (int < str 抛异常被 except 吞) → 条件恒 False, 用户看不到任何错误。
+            #   现在: 登记过的字段/params.*/含运算符的表达式一律解析;
+            #   其余按字面量处理, 并剥掉引号('own' → own, 否则字符串相等也恒假)。
+            _rs = str(right_raw).strip()
+            if _rs in FIELD_SPEC or _rs.startswith("params.") or any(o in _rs for o in "+-*/"):
+                right = _resolve_value(_rs, ctx)
+            else:
+                right = _rs.strip("'\"")
         left = _resolve_value(left_raw, ctx)
         # 2026-10-29 字段缺失(未提供数据) → 该条件不成立(不误报), 而非按 0 比较
         if left is None or right is None:

@@ -177,7 +177,7 @@ const initAppStore = (set, get) => ({
     const _c = safeGet('c_channel') || 'jd'
     const _s = safeGet('c_hist_start_' + _c) || ''
     if (_s) return _s
-    return daysAgoCn(29)   // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
+    return daysAgoCn(29) // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
   })(),
   histEnd: (() => {
     const _c = safeGet('c_channel') || 'jd'
@@ -384,7 +384,7 @@ const initAppStore = (set, get) => ({
       histStart: (() => {
         const _s = safeGet('c_hist_start_' + ch) || ''
         if (_s) return _s
-        return daysAgoCn(29)   // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
+        return daysAgoCn(29) // 北京时间近 30 天(UTC 会在 00:00-08:00 差一天)
       })(),
       histEnd: safeGet('c_hist_end_' + ch) || todayCn(),
       histBy: (safeGet('c_hist_by_' + ch) as 'day' | 'month') || 'day',

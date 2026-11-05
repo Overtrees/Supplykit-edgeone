@@ -5868,3 +5868,227 @@ POST /ledger/reclose {"period":"2026-10"}
 - **`ledger_base` 目前仍是 NULL**（本次走的是「本期已存 begin_qty」分支）。
   下一次真正从零建账时才会固化，语义已备好。
 - **11 月账期会在 12-01 自动结**，届时走「上月期末」分支，不再碰 bootstrap 逻辑。
+
+## §15.148 规则字段单一真源：三份手工列表 → 一张注册表(2026-11-05)
+
+### 一、现象
+
+规则页能选中、能保存，但规则**永不触发**，也不报任何错。实测两个字段：
+
+| 字段 | 白名单 | 规则页下拉 | 注入判定 `_CALC_VARS` | 结果 |
+|---|---|---|---|---|
+| `supplier.score` | ✅ | ✅ | ❌ | 走快速路径 → ctx 无 `supplier` 键 → 条件恒 None |
+| `inv.turnover_days` | ✅ | ✅ | ❌ | 同上（`turnover_days` 只在 `if _need_calc` 分支里注入） |
+| `inv.locked_qty` | ❌ | ✅ | — | 反向：选中保存直接被 `validate_condition` 拒 |
+| `order.unit_price` | ❌ | ✅ | — | 同上 |
+
+### 二、根因（四个，叠在一起才"完全静默"）
+
+1. **两份手工列表**：`_VALID_FIELDS`(保存校验) 与 `_CALC_VARS`(是否进入计算注入) 各写一份，
+   任一处漏登记即失效。`_CALC_VARS` 还是**子串匹配**，与字段名没有结构关系。
+2. **校验正则只认 `a.b`**：`re.finditer(r"[a-z_]+\.[a-z_]+")` → 顶层字段(`daily_sales`/`sellable`)
+   根本不校验，拼错也放行。
+3. **求值端右侧只解析带点字段**：`_check_single` 的 `right` 走 `elif "." in right` 分支，
+   `right=daily_sales` 落到 else 被当字符串 → `int < str` 抛异常被 `except` 吞 → **恒 False**
+   （左侧正常，所以用户更难看出是哪边的问题）。
+4. **测试弹窗另有一份 ctx**：`test_rule` 只注入 inv/order/health(+own/batch)，
+   `supplier.score`/`turnover_days` 取不到 → 弹窗恒"未触发"，用户据此判断"规则写错了"，
+   而这条规则在真实评估里同样不触发 —— 两个错误互相印证。
+
+### 三、修法
+
+**新建 `core/rule_fields.py`（唯一真源）**：每个字段登记一次 `(kind, scopes)`
+- `kind=base` 快速路径 ctx 就有；`calc` 需 `_need_calc` 分支注入；`event` 由具体事件提供
+- `scopes` 标明该字段在哪些事件上下文里真实存在（`inv`/`order`/`flow`）
+
+派生关系：`_VALID_FIELDS = frozenset(FIELD_SPEC)`、`needs_calc(cond)` 解析条件里的字段引用后
+查表（不再子串匹配）、`validate_condition(cond, event)` 增加**事件作用域**校验。
+
+配套四处：
+| 文件 | 改动 |
+|---|---|
+| `core/rules.py` | 删手写白名单与 `_CALC_VARS`，全部派生；`_CALC_VARS` 仅留兼容别名 |
+| `core/rule_cond.py` | 右侧统一解析：登记过的字段 / `params.*` / 含运算符 → 求值；字面量剥引号(`'own'`→`own`) |
+| `core/rule_eval.py` | 注入判定改 `needs_calc()`；未登记字段每进程留痕一次（`try_err`），不再静默 |
+| `core/rule_sim.py`(新) | 测试弹窗 ctx 构造从 542→ 抽出（`routes/rules.py` 已 600 行红线），补 `supplier.*`/`turnover_days`/顶层别名 |
+
+**作用域收窄**（防"换一种静默"）：`inv.in_transit_qty`/`inv.safety_qty` 原来对 order/flow
+也放行，但那些 ctx 里是**写死的 0** → "低于安全线"恒不成立。现只允许 `inv` 事件。
+
+### 四、行为变化（用户可感知）
+
+- `supplier.score` / `inv.turnover_days` / `inv.locked_qty` / `order.unit_price`：保存通过，且**真的会触发**
+- `flow.quantity` 写进 `inventory.changed` 规则：保存被拒，提示"该事件上下文不提供此值"
+  （以前能存、永不触发）
+- 顶层字段拼错（`daily_sale`）：保存被拒（以前放行）
+- 右侧写 `daily_sales` / `'own'`：条件能正常判定（以前恒 False）
+
+### 五、验证
+
+`local_test.py` 475 通过 / 0 失败，新增 9 条断言：
+
+```
+✅ 规则字段: supplier.score 需计算注入
+✅ 规则字段: inv.turnover_days 需计算注入
+✅ 规则字段: 纯 base 条件不走计算注入
+✅ 规则字段: 规则页下拉字段全部已登记      ← 解析 labels.tsx 的 LF 数组，与注册表比对
+✅ 规则字段: flow.quantity 在 inventory.changed 被拒
+✅ 规则字段: 无点字段拼错也拦(原正则只查 a.b)
+✅ 规则求值: right 侧无点字段可解析
+✅ 规则求值: right 侧 'own' 字面量可比较
+✅ 测试接口: supplier./inv.turnover_days 模拟 ctx 已注入
+```
+
+红线：`core/rules.py` 318→265、`routes/rules.py` 606→542、`core/rule_sim.py` 96、
+`core/rule_fields.py` 236，均在 600 行内。
+
+## §15.149 进销存月汇总上界 + 键盘焦点可见 + 两列静态值的去留核实(2026-11-05)
+
+### 一、月汇总区间补右开上界
+
+`insights.py` 里自有仓的"本月入/出"原来只写 `日期 >= 本月1日`，没有上界。
+流水表 `inbound_date/outbound_date` 是 `VARCHAR('YYYY-MM-DD')`，字典序可比；一旦表里有
+**下月/未来日期**（提前导入、补录、日期解析错年份），就会被算进本月 —— 与账期/结账统一
+使用的 `< 下月1日` 口径不一致。
+
+修法：行级 2 处 + 汇总 2 处聚合全部改为 `>= 期初日 AND < 下月1日`，边界由
+`core.ledger.period_bounds_excl()` 提供（唯一真源，不手写月份算术）。
+
+断言：`账期: 进销存流水聚合带下月1日上界(右开, 各 2 处)`（count 精确匹配 2/2）。
+
+### 二、键盘焦点可见（142 个原生按钮，一处覆盖）
+
+**现状核实**：全仓 142 个 `<button>`；CSS 里**没有**全局 `button{outline:none}`，
+但 13 处内联 `outline:'none'`（登录页输入框等）把默认环去掉了，且**没有替代反馈**
+（登录页输入框聚焦后视觉毫无变化）。iOS/WKWebView 点按不出环、桌面默认环是系统细线，
+在玻璃拟态背景上对比不足 —— 观感就是"键盘操作没有焦点"。
+
+修法（`styles.css` 末尾集中一段，不改 JSX）：
+
+| 规则 | 作用 |
+|---|---|
+| `:where(button,[role=button],a[href],summary,input,select,textarea,[tabindex]):focus-visible` | 2px `--focus-ring`(#0057d9) 环 + `outline-offset:2px` |
+| `!important` | 突破 13 处内联 `outline:'none'`（那些位置没有替代反馈） |
+| `@supports not selector(:focus-visible)` + `(pointer:fine)` | 老 Safari 回落 `:focus`，只在精确指针设备启用，手机点按不残留环 |
+| `@media (forced-colors: active)` | 环改 `Highlight`，跟随 Windows 高对比度 |
+
+环色刻意比主色深一档：主色按钮(#007aff)上用同色环只靠 2px 白缝分隔，对比偏弱。
+
+**抖动修复（根因是"几何缩放"）**：`button:active{transform:scale(.97)}` 会让环跟着缩。
+把全站按压反馈从**缩放**改为**变暗**（`filter:brightness(.93/.94)`），几何不再变化，
+环纹丝不动；`.btn` / `.clickable` / `.hammer-btn` / `.hammer-segment` / `.task-download`
+一并改，`transition` 里的 `transform` 换 `filter`。鼠标/键盘/触屏按压观感一致。
+
+**实测（Playwright + Chromium，430×700 与 390×844 两档）**：
+
+```
+键盘聚焦 button     → outline solid 2px rgb(0,87,217), :focus-visible = true
+鼠标点按 button     → outline none,                  :focus-visible = false
+键盘按住 Space      → transform none + filter brightness(0.94)   ← 环不抖
+鼠标按住            → filter brightness(0.94)                     ← 按压反馈保留
+输入框点按          → 仍出环（规范如此：需要指示光标落点）
+```
+
+多形态截图验收：主色/次级/危险/圆形图标/表格内按钮/输入框/下拉/复选框，环均完整、
+圆角贴合、未被滚动容器裁切。
+
+### 三、`inventory.month_inbound / month_outbound` 能不能删（核实结论：不删）
+
+| 消费方 | 用途 | 删掉的影响 |
+|---|---|---|
+| `insights.py` 平台仓/ B 仓 | 月入出**只能**取静态列（流水聚合只在 `wh_type=='own'` 分支查） | 期末=期初、周转恒 `null` |
+| `task_export.py` | 导出 Excel"当月入库/当月出库"两列 | 导出少两列 |
+| `task_seed.py` / `test_inv_recalc.py` | 报表值 vs 流水值的对账巡检 | 失去核对基准 |
+| 清洗页 `fields.ts` | 库存报表可映射字段（用户 Excel 真有这两列） | 用户数据无处落 |
+| `inventory_archive` | 列必须与 `inventory` 逐一对应（恢复靠 INSERT 全列） | 两表要同删 + 历史数据迁移 |
+
+结论：**平台仓仍在用**（页面不展示，但期末/周转计算与导出在用），且这是导入文件里的
+原始字段 → 删列=丢数据资产。自有仓已经不读它（走流水），残留值无害，
+结账也不再写（只回写 `beginning_stock`）。
+
+若目的是"消除误解"，正解不是删列，而是**在自有仓页面标注月入/出取值来源是流水**，
+以及当月无流水时给出"请导入出入库明细"的提示（否则用户看到一排 0 不知道原因）。
+
+> **2026-11-05 修正**：上面"平台仓仍在用"的核查结论只对了一半 —— 所谓的"在用"是
+> `insights.py` 自己在用一个没人消费的派生字段（见 §15.150）。用户定案：平台仓/ B 仓
+> 不需要当月入出，已从计算链彻底解绑。删列仍不做（那是导入原始字段），但"仍在使用"
+> 这个理由不再成立。
+
+## §15.150 平台仓/B 仓与「当月入出」解绑 + Prettier 门禁归零(2026-11-05)
+
+### 一、先回答"自有仓这个维度还要不要"
+
+**要，而且是核心。** 自有仓页面上那两列（本月入 / 本月出）不是可选装饰，它们是
+「期初 + 入 − 出 = 期末」这条恒等式的两个操作数：
+
+| 页面元素 | 依赖 | 缺了会怎样 |
+|---|---|---|
+| 期末库存 | 期初 + 月入 − 月出 | 只剩期初，等于不承认本月动过货 |
+| 平均库存 | (期初 + 期末) / 2 | 同上 |
+| 周转天数 | 平均库存 × 月天数 ÷ 月出 | 除数为 0 → 恒 `null`（显示"未出库"） |
+| 仓周转（表尾） | Σ期初 / Σ月入 / Σ月出 | 同上 |
+| 与账期对账 | 期末 ≡ 该月末批次剩余 | 失去可复算性，只能"信结果" |
+
+要点在于：自有仓这两列的值**不是** `inventory.month_inbound`，而是当月
+`inbound_records/outbound_records` 按 `sku + 69码 + 仓` 现算（`insights.py`），
+`inventory` 上的同名列在自有仓只是导入留档。所以"保留自有仓维度"保留的是**列与算式**，
+不是那两个静态列。
+
+### 二、平台仓 / B 仓：从计算链解绑（用户定案：不需要）
+
+核查"到底谁在用"，四个可能的消费方全都不成立：
+
+| 消费方 | 实际情况 |
+|---|---|
+| 页面列集 | `INV_COLS.platform / platform_b` **没有** `month_in` / `month_out` / `end_stock` / `avg_stock` / `turnover` |
+| Excel 导出 | `task_export.py` 里这几列包在 `if _wh == "own"` 内 —— 平台仓根本不输出 |
+| 表尾合计 | 合计只在对应列存在时渲染（`visCols.map`），平台仓无列 |
+| 仓周转 | `turnover` 列只在 `own` 列集；`totalTurnover` 加了 `whType !== 'own' → null` 护栏 |
+
+也就是说，`insights.py` 里为平台仓算出来的 `month_inbound/month_outbound → end_stock
+→ avg_stock → turnover_days` **没有任何读者**，只是躺在 JSON 里冒充"真值"。
+更糟的是它算得不对：平台仓没有期初列，`期初 + 0 − 0` 恒等于期初(通常 0) → 期末恒 0。
+
+改动（3 处）：
+
+| 位置 | 改动 |
+|---|---|
+| `insights.py` 行查询 | 非 own 时 SELECT 不再带 `i.month_inbound, i.month_outbound` |
+| `insights.py` 行计算 | 非 own：`month_inbound = month_outbound = 0`；`end_stock = available_qty`（导出即权威），`avg = available`，`turnover_days = null` |
+| `insights.py` 汇总 | 非 own：SQL 不 SUM 这两列（`0 AS mi, 0 AS mo`），少扫两列 |
+| `InventoryPage.tsx` | `totalTurnover` 加 `whType !== 'own' → null` 护栏（列集本就没有，防将来加列算出 0 天） |
+
+**存储层不动**：`inventory.month_inbound/month_outbound` 仍保留并照常写入 ——
+它们是**导入文件里的原始字段**（清洗页可映射、`inventory_archive` 要求列一一对应、
+`test_inv_recalc` / `task_seed` 用它做"报表值 vs 流水值"对账）。删列 = 丢用户数据资产，
+且要连带迁移归档表；收益为零。区别只是：**不再有人拿它算东西**。
+
+### 三、Prettier 门禁归零
+
+门禁里唯一长期飘红的一项：10 个既有文件不符合 Prettier（HEAD 版本就不合规，
+与功能改动无关）。直接 `prettier --write` 全量格式化，逐文件 diff 只有 2~9 行，
+纯换行/引号/尾逗号，无语义变化。
+
+```
+src/api/types.ts                        2 ±
+src/components/hammer/HammerDashboard  2 ±
+src/locale.zh.ts / locale.en.ts         6 / 9 ±
+src/pages/DashboardPage.tsx             4 ±
+src/pages/InventoryPage.tsx            36 ±  (含本次解绑改动)
+src/pages/SettingsPage.tsx              2 ±
+src/pages/insights/SlowTab.tsx          2 ±
+src/store/useAppStore.ts                4 ±
+src/tests/configs.test.ts               9 ±
+```
+
+### 四、验证
+
+```
+preflight 7/7 全绿: Python3.10 语法 / pyflakes / local_test 477 通过 0 失败 /
+                    ESLint / Prettier 合规 / tsc / vitest 30 通过
+i18n_audit --gate: PASS(zh 1548 = en 1548, 中文硬编码 0 行)
+vite build: ✓ built in 8.21s
+```
+
+新增断言：`账期: 平台仓/B 仓不读 inventory.month_inbound/month_outbound`
+（同时校验 SELECT 分支、行级固定 0、汇总 `0 AS mi, 0 AS mo` 三处都在）。

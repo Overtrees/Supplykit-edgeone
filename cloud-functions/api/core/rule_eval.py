@@ -3,6 +3,7 @@
 依赖: core.rules(evaluate_many/load_rules_for——函数内延迟 import 防循环) + db + dashboard(已有延迟)
 """
 LAST_DIAG = {}   # 2026-10-29 诊断用: 最近一次评估的关键计数(供 /rules/evaluate 返回定位)
+_WARNED_REFS = set()  # 2026-11-05: 未登记字段只留痕一次(避免每次评估刷日志)
 
 import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import → NameError 被 except 吞
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
@@ -129,7 +130,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         _marks.append("%s=%.1f" % (_n, _now - _tick_last[0]))
         _tick_last[0] = _now
     _o_ctx_n = 0  # 审计用: order ctx 计数(作用域安全)
-    from core.rules import evaluate_many, load_rules_for, _CALC_VARS  # 延迟(防循环——_CALC_VARS 常量随迁依赖)
+    from core.rules import evaluate_many, load_rules_for  # 延迟(防循环——常量随迁依赖)
+    from core.rule_fields import needs_calc as _needs_calc, unknown_refs as _unknown_refs
     """对库存行批量评估 inventory.changed/scheduled.daily(批量版, 秒级)
 
     跳过 warehouse 为空的行(脏数据/导入错误行无实际仓归属, 不产生告警)
@@ -177,10 +179,20 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         _daily_rules = [r for r in _daily_rules if str(r.get("alert_type") or "") in _want_ats]
         _inv_rules = [r for r in _inv_rules if str(r.get("alert_type") or "") in _want_ats]
         _order_rules = [r for r in _order_rules if str(r.get("alert_type") or "") in _want_ats]
-    _need_calc_daily = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _daily_rules)
-    _need_calc_inv = any(any(_v in str(r.get("condition_json") or "") for _v in _CALC_VARS) for r in _inv_rules)
+    # 2026-11-05 根治: 原用 _CALC_VARS 子串匹配 —— 与保存白名单是两份手工列表,
+    #   supplier.score / inv.turnover_days 在白名单却不在子串表 → 走快速路径 → 键不注入
+    #   → 条件恒 None → 规则静默失效。现由 core/rule_fields 的注册表统一判定。
+    _need_calc_daily = any(_needs_calc(r.get("condition_json") or "") for r in _daily_rules)
+    _need_calc_inv = any(_needs_calc(r.get("condition_json") or "") for r in _inv_rules)
     _need_health = any("health." in str(r.get("condition_json") or "") for r in _daily_rules)
     _need_calc = _need_calc_daily or _need_calc_inv
+    # 未登记字段的历史规则: 留痕(每个字段进程内只记一次) —— 让"静默不触发"在日志里可见
+    for _r in _daily_rules + _inv_rules + _order_rules:
+        for _ref in _unknown_refs(str(_r.get("condition_json") or "")):
+            if _ref not in _WARNED_REFS:
+                _WARNED_REFS.add(_ref)
+                try_err("rules", "规则引用了未登记字段(该规则永不触发): %s" % _ref,
+                        KeyError(_ref))
     _tick("rules")
     last_map = {}
     for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",

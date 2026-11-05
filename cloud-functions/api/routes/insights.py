@@ -94,6 +94,11 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     #   跨月后自动从新月份 1 号/月末重新起算(month_bounds_cn)。
     month_in_end = month_end
     month_out_end = month_end
+    # 2026-11-05 月汇总区间补**上界**(右开): 原来只写 `日期 >= 本月1日`, 表里若有下月/未来
+    #   日期(提前导入、补录、日期解析错年份)会被算进本月 —— 与账期/结账的 `< 下月1日` 口径不一致。
+    #   流水表的时间列是 VARCHAR('YYYY-MM-DD'), 字典序比较对 'YYYY-MM-DD[ HH:MM:SS]' 都成立。
+    from core.ledger import period_bounds_excl as _pb_ex, period_of as _per_of
+    _, _next_month_start = _pb_ex(_per_of())
     where = "i.channel=%s AND i.warehouse_type=%s"
     params = [channel, wh_type]
     if search:
@@ -104,8 +109,13 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     # 2026-11-04 补 i.id: 进销存页的批量勾选依赖行主键, 此前 SELECT 未带 id →
     #   前端 x.id 恒为 undefined → indexOf(undefined) 对每行都成立, 点一行等于全选
     #   (视觉全勾、store 里只有 1 条)。id 也是 React key 的唯一来源, 一并能消掉重复 key 警告。
+    # 2026-11-05 平台仓/ B 仓不再读 inventory.month_inbound / month_outbound(用户定案: 该维度不需要当月入出)。
+    #   这两列在平台仓只是导出文件里的一个快照数字, 既不参与页面(列集无此两列)、不参与导出
+    #   (task_export 只对 own 输出)、也没有流水可核 —— 读进来只会出现在 API 返回里冒充"真值"。
+    #   自有仓仍要 SELECT: 但下面会用**流水聚合**覆盖它(静态列在自有仓仅作对账留档)。
+    _mm_sel = "i.month_inbound, i.month_outbound, " if wh_type == "own" else ""
     sel = ("SELECT i.id, i.sku, i.warehouse, i.warehouse_type, i.available_qty, i.in_transit_qty, i.c_transit, "
-           "i.safety_qty, i.product_name, i.month_inbound, i.month_outbound, i.beginning_stock, "
+           "i.safety_qty, i.product_name, " + _mm_sel + "i.beginning_stock, "
            "i.turnover_days, i.barcode, i.ext_json, p.brand, p.price, "
            # 2026-11-01 批次数按四维匹配: 原只带 sku/warehouse/channel → 同 SKU 同仓多码时
            #   每个码行都数到全部批次(批次数虚高 N 倍), 且不隔离仓型。加 barcode + warehouse_type
@@ -226,15 +236,17 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         _ph = ",".join(["%s"] * len(skus))
         for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
                         "FROM inbound_records WHERE channel=%s AND inbound_date>=%s "
+                        "AND inbound_date<%s "
                         "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
                         "GROUP BY sku, COALESCE(barcode,''), warehouse",
-                        [channel, month_start, wh_type] + skus):
+                        [channel, month_start, _next_month_start, wh_type] + skus):
             month_in[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
         for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
                         "FROM outbound_records WHERE channel=%s AND outbound_date>=%s "
+                        "AND outbound_date<%s "
                         "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
                         "GROUP BY sku, COALESCE(barcode,''), warehouse",
-                        [channel, month_start, wh_type] + skus):
+                        [channel, month_start, _next_month_start, wh_type] + skus):
             month_out[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
     # 动态安全线周期(own→采购周期 / platform→补货周期按渠道默认模式)
@@ -293,13 +305,17 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         mo = month_out.get(_k)
         # 自有仓: 当月量只认流水, **缺 = 0**(该 SKU 本月没入库/没出库), 不回落静态列 ——
         #   静态列在结账时会被写进"结账月"的量, 回落就等于把上月流水当本月用(跨月串号)。
-        # 平台仓/ B 仓: 仍然以后台导出为准, 静态列就是权威口径, 维持回落。
-        if str(r.get("warehouse_type") or "") == "own":
+        # 平台仓/ B 仓(2026-11-05 用户定案解绑): 该维度**不需要**当月入出 ——
+        #   没有期初口径、没有流水可核, 两列只是导出文件里的一个快照数,
+        #   页面列集没有、导出只对自有仓输出、周转列也只存在于自有仓 → 无任何消费方。
+        #   固定 0, 并让期末退回"导出即权威"的可用量(见下方 _end)。
+        _is_own = str(r.get("warehouse_type") or "") == "own"
+        if _is_own:
             month_inbound = mi if mi is not None else 0
             month_outbound = mo if mo is not None else 0
         else:
-            month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
-            month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
+            month_inbound = 0
+            month_outbound = 0
         _bm = batch_map.get((sku, _bc1)) or batch_map.get(sku) or {}
         _wt3 = str(r.get("warehouse_type") or "")
         _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
@@ -312,8 +328,15 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         #   另给 stock_abnormal 让前端标「负库存异常」——负值不能当正常周转看
         # 出库为 0 的行仍把库存计入仓级平均(占用库存), 但不参与 SKU 周转(见 _end 照算)
         _beg = int(r.get("beginning_stock") or 0)
-        _end = _beg + month_inbound - month_outbound
-        _avg = (_beg + _end) / 2.0
+        if _is_own:
+            _end = _beg + month_inbound - month_outbound
+            _avg = (_beg + _end) / 2.0
+        else:
+            # 平台仓/ B 仓: 不反推。导出里的库存数就是当前库存, 直接当期末。
+            #   以前这里走 `期初 + 0 - 0`(=期初), 平台仓没有期初列 → 恒 0,
+            #   等于给"期末 0"的假值, 一旦哪天有人用上就是错的。
+            _end = avail
+            _avg = float(avail)
         items.append({
             # id 必须显式带出来: 本函数是**逐字段重建 dict**, SELECT 里加了 i.id 也会在这里被丢掉
             # (2026-11-04 第一次就是这么修的 —— 改了 sel 却没改 append, 线上仍然没有 id)
@@ -359,24 +382,26 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                 from routes.analysis_cache import cache_get as _cg
                 def _build_sum():
                     # 期初/可用/在途始终来自 inventory; 当月入出: 自有仓按**流水**现算
-                    #   (inventory.month_* 不可信 —— 结账会写入结账月的量, 下月就串号了),
-                    #   平台仓/ B 仓仍取静态列(后台导出即权威)。
-                    _r0 = one("SELECT COUNT(*) AS c, SUM(beginning_stock) AS beg, "
-                              "COALESCE(SUM(month_inbound),0) AS mi, "
-                              "COALESCE(SUM(month_outbound),0) AS mo, "
+                    #   (inventory.month_* 不可信 —— 结账会写入结账月的量, 下月就串号了)。
+                    #   平台仓/ B 仓(2026-11-05 解绑): 该维度不需要当月入出, SQL 里连这两列都不查,
+                    #   mi/mo 恒 0 → 前端仓周转在平台仓不成立(列集本就没有 turnover 列)。
+                    _mm_sum = ("COALESCE(SUM(month_inbound),0) AS mi, "
+                               "COALESCE(SUM(month_outbound),0) AS mo, "
+                               if wh_type == "own" else "0 AS mi, 0 AS mo, ")
+                    _r0 = one("SELECT COUNT(*) AS c, SUM(beginning_stock) AS beg, " + _mm_sum +
                               "SUM(available_qty) AS av, SUM(in_transit_qty) AS tr "
                               "FROM inventory WHERE channel=%s AND warehouse_type=%s",
                               [channel, wh_type]) or {}
                     _mi, _mo = int(_r0.get("mi") or 0), int(_r0.get("mo") or 0)
                     if wh_type == "own":
                         _ri = one("SELECT COALESCE(SUM(quantity),0) AS q FROM inbound_records "
-                                  "WHERE channel=%s AND inbound_date>=%s "
+                                  "WHERE channel=%s AND inbound_date>=%s AND inbound_date<%s "
                                   "AND COALESCE(warehouse_type,'')=%s",
-                                  [channel, month_start, wh_type]) or {}
+                                  [channel, month_start, _next_month_start, wh_type]) or {}
                         _ro = one("SELECT COALESCE(SUM(quantity),0) AS q FROM outbound_records "
-                                  "WHERE channel=%s AND outbound_date>=%s "
+                                  "WHERE channel=%s AND outbound_date>=%s AND outbound_date<%s "
                                   "AND COALESCE(warehouse_type,'')=%s",
-                                  [channel, month_start, wh_type]) or {}
+                                  [channel, month_start, _next_month_start, wh_type]) or {}
                         _mi, _mo = int(_ri.get("q") or 0), int(_ro.get("q") or 0)
                     # 2026-11-04 合计与行值同口径: 先把该维度所有 SKU 的期初/月入/月出分别求和,
                     #   再除一次(期间天数 × Σ(期初+月入) / Σ月出); 不是各行天数的算术平均

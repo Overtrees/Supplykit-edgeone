@@ -1149,6 +1149,9 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                     it.pop("beginning_stock", None)
                 else:
                     it["beginning_stock"] = _bs
+        # 2026-11-05 month_inbound/month_outbound 仍照写: 它们是**导入文件里的原始字段**,
+        #   留档 + 供巡检脚本做"报表值 vs 流水值"对账(test_inv_recalc / task_seed)。
+        #   但已不参与任何计算 —— 自有仓走流水聚合, 平台仓/B 仓不再读这两列(见 insights.py)。
         _s, _f, _ed = _write_batch("inventory",
                                    ["sku", "product_name", "store", "warehouse", "warehouse_type",
                                     "available_qty", "in_transit_qty", "safety_qty", "channel", "barcode",
@@ -1191,10 +1194,14 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                                   % (channel, len(_bad_exp), _bad_exp[0])))
             except Exception:
                 pass
+        # 2026-11-05 补 supplier_code: 清洗页 PROD_FIELDS 里可选可映射(fields.ts:132)、
+        #   products 表也有该列(schema_create:92), 但这份写入白名单漏了它 →
+        #   用户映射"供应商编码"后导入成功、`products.supplier_code` 却恒空,
+        #   供应商评分(supplier.score)/供应商维度统计全部断链, 且不报任何错。
         return _write_batch("products",
                             ["sku", "product_name", "barcode", "store", "category", "price",
                              "box_qty", "unit", "status", "channel", "brand", "weight", "volume",
-                             "expiry_managed"],
+                             "expiry_managed", "supplier_code"],
                             cleaned, conflict_mode, "sku", channel=channel,
                             agg_key3="barcode", agg_overwrite=True)  # 同 SKU+69码 覆盖末行档案
     if target == "supplier":

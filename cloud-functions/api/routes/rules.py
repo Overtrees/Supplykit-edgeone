@@ -8,6 +8,7 @@ from fastapi import Request
 from db import query, one, execute, execute_id
 from routes.common import ok, fail, traced, try_err
 from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8: 关闭统一入口
+from core.rule_fields import FIELD_SPEC  # 2026-11-05: 字段注册表(测试回显与校验共用)
 
 router = APIRouter(tags=["rules"])
 
@@ -110,9 +111,9 @@ async def create_rule(request: Request):
     if not name:
         return fail("缺少 name")
     cond = d.get("condition") or d.get("condition_json") or {}
-    # 条件字段校验(防静默 0 恒真/恒假)
+    # 条件字段校验(防静默 0 恒真/恒假) —— 传 event, 让"该事件上下文不提供的字段"当场被拦
     from core.rules import validate_condition
-    _v_err = validate_condition(cond)
+    _v_err = validate_condition(cond, d.get("event") or None)
     if _v_err:
         return fail("条件字段无效: " + "; ".join(_v_err[:5]))
     _params = d.get("params")
@@ -150,7 +151,9 @@ async def update_rule(rid: int, request: Request):
         params.append(1 if d["is_active"] else 0)
     if "condition" in d:
         from core.rules import validate_condition
-        _v_err = validate_condition(d["condition"])
+        # 只改条件、不改事件时, 用库里的事件做 scope 校验(否则等于跳过校验)
+        _ev = d.get("event") or (one("SELECT event FROM rules WHERE id=%s", [rid]) or {}).get("event")
+        _v_err = validate_condition(d["condition"], _ev or None)
         if _v_err:
             return fail("条件字段无效: " + "; ".join(_v_err[:5]))
         sets.append("condition_json = %s")
@@ -471,8 +474,6 @@ async def test_rule(rid: int, request: Request):
         body = await request.json()
     except Exception as _e:
             try_err('rules', '静默降级', _e)
-    inv = body.get("inv") or {}
-    order = body.get("order") or {}
     # 规则参数: body.params 覆盖规则 params(测试弹窗可调, 模拟 params.* 引用)
     params = body.get("params")
     if not isinstance(params, dict):
@@ -482,71 +483,9 @@ async def test_rule(rid: int, request: Request):
             try_err('rules', '测试参数解析失败(静默置空)', _e)
             params = {}
     _cj_all = json.dumps(cond, ensure_ascii=False)
-    ctx = {
-        "inv": {
-            "available_qty": int(inv.get("available_qty") or 0),
-            "safety_qty": int(inv.get("safety_qty") or 0),
-            "in_transit_qty": int(inv.get("in_transit_qty") or 0),
-            "warehouse_type": inv.get("warehouse_type", ""),
-            "days_since_last": int(inv.get("days_since_last") or 0),
-            "adj_dos": float(inv.get("adj_dos") or 0),
-            "buffer": float(inv.get("buffer") or 0),
-        },
-        "order": {"quantity": int(order.get("quantity") or 0),
-                  "total_qty": int(order.get("total_qty") or order.get("quantity") or 0),
-                  "total_amount": float(order.get("total_amount") or 0)},
-        "channel": row.get("channel") or "jd",
-        "days_since_last": int(inv.get("days_since_last") or 0),
-        "stock": int(inv.get("available_qty") or 0),
-        "params": params,
-        "health": {"score": float((body.get("health") or {}).get("score") or 100)} if "health." in _cj_all else None,
-    }
-    # 2026-11-01 自有仓/效期变量组补齐 —— 原测试 ctx 只有 inv/order/health 三组:
-    #   own.* / batch.* 在真实评估里由 rule_eval 的 _need_calc 分支注入, 测试接口没注 →
-    #   `_resolve_single` 取不到键返回 None → 条件判 False → **任何自有仓三级规则怎么试都显示"未触发"**。
-    #   规则页测试弹窗是用户判"规则配对没有"的唯一手段, 恒 False 等于让用户误以为规则写错了。
-    #   入参约定: body.own / body.batch 直接传模拟值; 未传时给一组合乎业务的默认(让用户改数即可观察)。
-    _body_own = body.get("own")
-    _own_sim = dict(_body_own) if isinstance(_body_own, dict) else {}
-    if "own." in _cj_all:
-        # 默认: 下游日销 10/日, 调拨周期取规则参数(缺省 6 天, 与引擎 _lit_bbcc 同源口径)
-        try:
-            _b2c = float(params.get("b2c_days") or 6)
-        except Exception:
-            _b2c = 6.0
-        try:
-            _ds = float(_own_sim.get("downstream_ds") or 10)
-        except Exception:
-            _ds = 10.0
-        _avail = float(inv.get("available_qty") or 0)
-        _tran = float(inv.get("in_transit_qty") or 0)
-        # 关键: 前端留空的项是**不传**的, 所以这里先补基础量, 再按引擎同式推 need/gap/cover
-        _own_sim.setdefault("available", _avail)
-        _own_sim.setdefault("transit", _tran)
-        _own_sim.setdefault("po_transit", 0.0)
-        _own_sim.setdefault("can_ship", _avail + _tran + float(_own_sim["po_transit"]))
-        _own_sim.setdefault("downstream_ds", _ds)
-        _own_sim.setdefault("downstream_avail", 0.0)
-        _own_sim.setdefault("b2c_days", _b2c)
-        # 与引擎 rule_eval 同式: need = 下游日销 × 调拨周期; gap = need − 可发(0.5 件容差前端展示用)
-        _own_sim.setdefault("need", round(float(_own_sim["downstream_ds"]) *
-                                          float(_own_sim["b2c_days"]), 2))
-        if "gap" not in _own_sim:
-            try:
-                _own_sim["gap"] = round(float(_own_sim["need"]) - float(_own_sim["can_ship"]), 2)
-            except Exception as _e:
-                try_err('rules', '测试模式 own.gap 推导失败', _e)
-                _own_sim["gap"] = 0.0
-        if "cover_days" not in _own_sim:
-            _dsn = float(_own_sim["downstream_ds"])
-            _own_sim["cover_days"] = round(float(_own_sim["available"]) / _dsn, 2) if _dsn > 0 else 0.0
-        ctx["own"] = _own_sim
-    _body_batch = body.get("batch")
-    if isinstance(_body_batch, dict) and _body_batch:
-        ctx["batch"] = dict(_body_batch)
-    elif "batch." in _cj_all:
-        # 默认无批次 → days_to_expire 极大(远未临期), 用户改小即可观察触发
-        ctx["batch"] = {"days_to_expire": 365, "qty": float(inv.get("available_qty") or 0)}
+    # 2026-11-05 抽出(本文件已超 600 行红线): 模拟 ctx 的构造在 core/rule_sim.py, 与真实评估同形
+    from core.rule_sim import build_sim_ctx
+    ctx = build_sim_ctx(_cj_all, params, body, row.get("channel") or "jd")
     from core.rules import _check_condition, _resolve_value
     triggered = _check_condition(cond, ctx)
     detail = {}
@@ -561,10 +500,13 @@ async def test_rule(rid: int, request: Request):
             detail["right_value"] = "max(%s)" % right_raw[4:-1]
         elif str(right_raw).replace(".", "", 1).isdigit():
             detail["right_value"] = float(right_raw)
-        elif "." in str(right_raw):
+        elif (str(right_raw) in FIELD_SPEC or str(right_raw).startswith("params.")
+              or any(o in str(right_raw) for o in "+-*/")):
+            # 2026-11-05: 与 _check_single 同一判定 —— 原只解析带点字段, right 写
+            #   daily_sales/sellable 时弹窗回显字符串, 与判定结果对不上
             detail["right_value"] = _resolve_value(right_raw, ctx)
         else:
-            detail["right_value"] = right_raw
+            detail["right_value"] = str(right_raw).strip("'\"")
         detail["warehouse"] = cond.get("warehouse", "")
         # 2026-11-01 嵌套子条件逐条回显 —— 原只回顶层那一对比值:
         #   `A and B` / `A or [B,C]` 结构下, 用户看到 A 命中会以为整条规则该触发,

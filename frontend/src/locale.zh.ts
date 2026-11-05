@@ -415,8 +415,10 @@ export const zh: Record<string, string> = {
   'inv.negative_stock': '负库存异常',
   'inv.end_stock_hint': '期末库存 = 期初 + 当月入库 − 当月出库；为负说明出库超过可售量',
   'inv.avg_stock_hint': '平均库存 =(期初 + 期末)÷2，周转天数的分子',
-  'inv.turnover_hint': '在库周转 = 平均库存 × 天数 ÷ 当月出库；平均库存 =(期初 + 期末)÷2，期末 = 期初 + 当月入库 - 当月出库。当月未满时"天数"取已过天数（与出库同一时间窗），月末取整月天数',
-  'inv.total_turnover_hint': '仓周转 = 总平均库存 × 当月天数 ÷ 总出库；总平均库存 =(总期初 + 总期末)÷2',
+  'inv.turnover_hint':
+    '在库周转 = 平均库存 × 天数 ÷ 当月出库；平均库存 =(期初 + 期末)÷2，期末 = 期初 + 当月入库 - 当月出库。当月未满时"天数"取已过天数（与出库同一时间窗），月末取整月天数',
+  'inv.total_turnover_hint':
+    '仓周转 = 总平均库存 × 当月天数 ÷ 总出库；总平均库存 =(总期初 + 总期末)÷2',
   'recycle.title': '回收站',
   'recycle.deleted_rules': '已删除的规则',
   'recycle.deleted_orders': '已删除的订单',
