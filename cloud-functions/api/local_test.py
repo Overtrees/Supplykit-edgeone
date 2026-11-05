@@ -2715,6 +2715,13 @@ try:
     check("账期: 未来月份 elapsed = 0", elapsed_days(shift_period(_cur, 1)) == 0)
     check("账期: 未满月判定 is_current 只对当月为真",
           is_current(_cur) and not is_current(shift_period(_cur, -1)))
+    # 空表时 state_get 的 period 必须是空("已结账的账期"), 不能是当月 ——
+    #   否则首次结账被自己的默认值判成"跳期", 建账第一步就死锁(线上实证)
+    _src = open("core/ledger.py").read()
+    _def_seg = _src.split("if row:")[1].split("def begin_date")[0]
+    check("账期: state_get 空表默认 period 为空串(否则首结必被误拒)",
+          '"period": ""' in _def_seg and "period_of()" not in _def_seg.split('return {"period"')[-1][:40],
+          str(_def_seg[-200:]))
     check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
           _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
     # 右开区间: 流水列是 DATETIME, 写 `<= '2026-10-31'` 只会覆盖到当天 00:00:00,

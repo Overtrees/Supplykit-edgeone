@@ -114,7 +114,12 @@ def state_get(channel, warehouse_type=OWN_WT):
                 "reason": str(row.get("reason") or ""),
                 "rows": int(row.get("rows_count") or 0),
                 "closed_at": str(row.get("closed_at") or "")}
-    return {"period": period_of(), "status": STATUS_BOOTSTRAP, "begin_date": "",
+    # period 必须是空串: 它的语义是「**已结账**的账期」, 不是「当前账期」。
+    #   这里曾返回 period_of(), 后果是首次结账时链条判断看到 period=当月,
+    #   误认为"已经结到当月了", 于是把上一期当成跳期拒绝 —— 建账第一步就卡死
+    #   (2026-11-05 线上实证: 结 2026-10 被拒「请先结上月 2026-09」)。
+    #   需要"当前账期"的调用方走 current_period(), 那里以 status==CLOSED 为准。
+    return {"period": "", "status": STATUS_BOOTSTRAP, "begin_date": "",
             "reason": "", "rows": 0, "closed_at": ""}
 
 
