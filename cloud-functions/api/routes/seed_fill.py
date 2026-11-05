@@ -412,12 +412,11 @@ def _seed_inventory(skus_data, channel='', wh_group=''):
         elif wh_group == 'own':
             _pf = []
         if _own:
-            # baseline=True(仅 seed): 无视实盘窗口, 按导入值建本期期初。
-            #   不加这个, jd 已结过 10 月账 → 走「已建账分支」把期初挪成 snapshot_qty,
-            #   而 apply_import 因"今天在窗口外"(实盘窗口=上月末~当月3号)直接 return,
-            #   beginning_stock 无人写回 → 10,100 行期初全 0, 落账核对 1 万行不平。
-            #   真实客户的入口(cleanse_write 的导入请求)不传 baseline, 行为不变。
-            _r = _imp('inventory', ch, _own, label='自有仓库存', baseline=True)
+            # 期初由 core.ledger_adj.detect_scene 自己判: reset 清空 ledger_state 后
+            #   → 场景 C 首建, 导入值即基线。这里不再传任何"建账模式"开关 ——
+            #   曾加过 baseline=True 来绕开实盘窗口, 那是文档 §15.152 之外的第三条口径,
+            #   会导致"同样的导入, seed 与真实客户算出不同的期初"。
+            _r = _imp('inventory', ch, _own, label='自有仓库存')
             if _r.get('failed'):
                 try_err('seed_fill', '自有仓库存导入 %s 有 %d 行未落库(首因=%s)'
                         % (ch, _r['failed'],

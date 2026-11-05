@@ -221,7 +221,7 @@ _TABLES = {
         "task_type VARCHAR(32) DEFAULT '', status VARCHAR(16) DEFAULT 'pending', "
         "params TEXT, result TEXT, channel VARCHAR(20) DEFAULT 'jd', "
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
-        "lease_until DATETIME NULL, "
+        "lease_until DATETIME NULL, lease_token VARCHAR(96) NOT NULL DEFAULT '', "
         "UNIQUE KEY uk_tasks_id (task_id), KEY idx_tasks_status (status))"
     ),
     "cleansing_templates": (
@@ -561,7 +561,11 @@ _COLUMN_ADDS = {
     # 2026-11-05 seed 续跑租约(见 task_seed.py 事故说明)。
     #   为什么不用 updated_at 兼任: updated_at 是前端卡片上的"进度心跳", 租约要把它推到未来,
     #   前端就会算出"负几分钟前"。两件事语义不同, 必须两列。
-    "sync_tasks": [("lease_until", "DATETIME NULL")],
+    "sync_tasks": [("lease_until", "DATETIME NULL"),
+                   # v12(2026-11-05 租约心跳): 归属令牌 —— 只有当前持有者能续约。
+                   #   没有它, 上一任的心跳会替下一任续期: 两个实例同时在跑却永远不冲突,
+                   #   比没有锁更危险(无锁并发 + 看起来"锁工作正常")。
+                   ("lease_token", "VARCHAR(96) NOT NULL DEFAULT ''")],
 }
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
@@ -578,7 +582,9 @@ _COLUMN_ADDS = {
 #   3 秒窗口挡不住并发续跑, 线上每段订单被执行两遍(单日精确 3100 = 1550×2)。
 # v11(2026-11-05 seed 走导入链路): inventory 增 week_inbound/week_outbound(库存导出模板
 #   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
-SCHEMA_VERSION = 11
+# v12(2026-11-05 租约心跳): sync_tasks 增 lease_token —— 租约改由执行方心跳续期(TTL 30s),
+#   令牌保证只有当前持有者能续约; 没有它, 被网关切断的上一任会替下一任续期。
+SCHEMA_VERSION = 12
 
 
 def table_ddl(name):

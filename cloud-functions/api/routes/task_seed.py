@@ -13,6 +13,73 @@ from core.clock import now_cn
 router = APIRouter(tags=["task-seed"])
 
 
+# ── 租约心跳(2026-11-05) ─────────────────────────────────────────────────
+# 为什么不是"把租约调短就完事": 调太短, 正常跑 90s 的段会在中途被人抢走 → 两实例并发写
+#   同一段; 调太长, 被网关切断后残影拖住所有人。**固定时长无法同时满足两者**, 因为
+#   「请求还活着吗」这件事代码本身不掌握 —— 只有"还在写心跳"才是活着的证据。
+#
+# 所以: 时长交给心跳维持, TTL 只管"多久没心跳算死"。
+LEASE_TTL = 30             # 多久没心跳判定持有者已死(心跳间隔的 3 倍)
+LEASE_BEAT = 10            # 心跳间隔(秒)
+# 兜底: 单次请求绝不该活过网关 120s。心跳线程多转一会无害(它只写租约),
+#   但持有者本人超过这个时长还没结束, 说明已经异常 —— 由上层预算告警负责。
+LEASE_BEAT_MAX = 115
+
+
+def _tt_now():
+    import time as _t
+    return _t.time()
+
+
+def _start_heartbeat(task_id, tok):
+    """起一个后台线程续租约; 返回 stop 句柄(调用方在 finally 里 stop)
+
+    为什么用线程而不是"每个 await 前续一次": 段内是纯同步 SQL 长跑(可用重算、批次重建
+    一条语句几十秒), 没有 await 点可以插。线程是唯一能覆盖整个长查询期间的方案。
+
+    归属校验: 续期语句带 `lease_token=本请求的令牌`, 只有当前持有者能续 ——
+    否则上一任的心跳会替下一任续约, 两个实例同时在跑却永远不冲突(比没有锁更危险)。
+    """
+    import threading as _th
+    _stop = {"v": False}
+
+    def _beat():
+        while not _stop["v"]:
+            for _i in range(int(LEASE_BEAT * 2)):      # 100ms 粒度响应 stop
+                if _stop["v"]:
+                    return
+                _tt_sleep(0.1)
+            if _stop["v"]:
+                return
+            try:
+                execute("UPDATE sync_tasks SET lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND) "
+                        "WHERE task_id=%s AND lease_token=%s", [LEASE_TTL, task_id, tok])
+            except Exception as _e:
+                try_err('tasks', '租约心跳写入失败(下一拍重试)', _e)
+
+    try:
+        execute("UPDATE sync_tasks SET lease_token=%s WHERE task_id=%s", [tok, task_id])
+    except Exception as _e:
+        # 列还没加上(老库) → 心跳退化为"不校验归属", 仍然续期。
+        # 迁移缺失不该让 seed 直接不可用; 但必须留痕, 否则归属保护静默消失。
+        try_err('tasks', 'lease_token 列缺失, 心跳退化为无归属校验(请跑 schema 迁移)', _e)
+    _t = _th.Thread(target=_beat, daemon=True)
+    _t.start()
+
+    def _stop_hb():
+        _stop["v"] = True
+        try:
+            _t.join(timeout=1.0)
+        except Exception:
+            pass
+    return _stop_hb
+
+
+def _tt_sleep(s):
+    import time as _t
+    _t.sleep(s)
+
+
 
 @router.get("/seed/fill/status")
 @traced
@@ -68,18 +135,34 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     #      不会写重数据 —— 这是短租约能成立的前提, 也是原来最怕并发的原因已消失。
     #   ③ 抢不到锁时不再返回裸 `running`, 而是带上 step / stalled_s / lease 信息,
     #      让前端能明确显示「第 N 段处理中, 已等待 Xs」, 而不是假装还在加载。
-    _LEASE = 150
+    # 2026-11-05 第三次事故(用户连问三次「为什么跑了 1 百多还在跑」): 150s 租约仍然会
+    #   「死等」。复现路径完全可测 —— 三个并发请求打同一任务, 只有一个真拿到锁(实测
+    #   A0/A2 在 1.4s 返回 lease_held=True), 拿锁那个跑满 85s 后被网关切断, 它写的
+    #   `lease_until` 还留着 65s; 这 65s 里所有轮询都只能看到 step=11 / lease=True,
+    #   stalled_s 一路涨到 149, 前端只能显示「🏃 已等待 149s」—— 而台上根本没人。
+    #   **租约时长是猜的, 而"台上有没有人"是可观测的。**
+    #
+    # 改法: 租约持有者带**心跳**。执行方每 10s 把 `lease_until` 推到 NOW()+LEASE_TTL,
+    #   于是 TTL 可以缩到 30s —— 被切断的请求最多留下 30s 残影(而不是 150s),
+    #   正常路径的心跳又能让一段跑 90s 也不掉锁。三个数一起定, 缺一不可:
+    #     · LEASE_TTL   = 30s  租约时长(心跳间隔的 3 倍, 容忍两次抖动不失锁)
+    #     · LEASE_BEAT  = 10s  心跳间隔
+    #     · 抢锁语义不变(原子 UPDATE + lease_until < NOW()), 只是把时长换成 TTL。
+    #   心跳写入不碰 updated_at —— 那是「进度」时间轴(stalled_s 由它算), 混进心跳会让
+    #   「卡住」永远显示成 0s, 反而看不出问题。
+    _tok = "%s-%s" % (task_id, int(_tt_now() * 1000) % 100000000)
     try:
         _locked = execute(
             "UPDATE sync_tasks SET lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND) "
             "WHERE task_id=%s AND (lease_until IS NULL OR lease_until < NOW())",
-            [_LEASE, task_id])
+            [LEASE_TTL, task_id])
         if not _locked:
             return _prog({"lease": True})  # 已有请求持有租约: 带进度返回, 不再裸 running
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
         # 抢锁失败(DB 抖动)时**不能**继续执行 —— 否则就是无锁并发, 等于回到事故现场
         return _prog({"lease": True, "lock_error": str(_e)[:80]})
+    _hb = _start_heartbeat(task_id, _tok)
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json
@@ -108,7 +191,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         if nxt >= SEED_DONE:
             # 全部步骤完成 → done(汇总 part 简单展示); 同时释放租约
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, "
-                    "updated_at=NOW(), lease_until=NULL WHERE task_id=%s",
+                    "updated_at=NOW(), lease_until=NULL, lease_token='' WHERE task_id=%s",
                     (new_params, _json.dumps({"result": {"parts": part, "finished": True}}, ensure_ascii=False), task_id))
             from routes.analysis_cache import invalidate
             invalidate("all")  # seed 完成 → 分析缓存即时失效
@@ -120,7 +203,8 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
             except Exception as _e:
                     try_err('tasks', '静默降级', _e)
             return {"data": {"status": "done"}}
-        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW(), lease_until=NULL WHERE task_id=%s",
+        execute("UPDATE sync_tasks SET params=%s, updated_at=NOW(), lease_until=NULL, "
+                "lease_token='' WHERE task_id=%s",
                 (new_params, task_id))
         from routes.analysis_cache import invalidate
         invalidate("all")  # 每步数据变化 → 缓存失效
@@ -131,11 +215,18 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         import traceback as _tb
         try:
             execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW(), "
-                    "lease_until=NULL WHERE task_id=%s",
+                    "lease_until=NULL, lease_token='' WHERE task_id=%s",
                     (_json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
         except Exception as _e:
                 try_err('tasks', '静默降级', _e)
         return {"data": {"status": "error", "error": str(e)[:200]}}
+    finally:
+        # 心跳必须**无条件**停: 早停一拍都无害(只是租约少续一次), 晚停则会让下一任
+        #   持有者的租约被上一任替它续期 —— 归属校验已挡住这种写入, 但不能依赖它兜底。
+        try:
+            _hb()
+        except Exception:
+            pass
 
 @router.post("/seed/fill")
 @traced

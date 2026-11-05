@@ -3195,9 +3195,21 @@ try:
     check("续跑锁: 用 lease_until 独占租约, 不再用 3 秒窗口的 updated_at 判断",
           "lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND)" in _ts_code3
           and "INTERVAL 3 SECOND" not in _ts_code3, "routes/task_seed.py")
-    check("续跑锁: 租约缩到 150s(网关切断后最多静止 2.5 分钟, 不再是 600s)",
-          "_LEASE = 150" in _ts_code3 and "_LEASE = 600" not in _ts_code3,
+    # 2026-11-05 第三次事故(用户: "为什么跑了 1 百多还在跑"): 150s 固定租约仍会「死等」——
+    #   三个并发请求只有一个拿到锁, 拿锁那个被网关切断后, 它写的 lease_until 还留 65s,
+    #   期间所有轮询只能看到 step/lease_held, stalled 一路涨而台上没人。
+    #   固定时长无法同时满足"跑 90s 的段不被人抢走"和"被杀了不拖住所有人",
+    #   因为「请求还活着」代码本身不掌握 —— 只有"还在写心跳"才是活着的证据。
+    check("续跑锁: 租约改由执行方心跳续期(TTL 30s), 不再靠固定 150s 死等",
+          "LEASE_TTL = 30" in _ts_code3 and "LEASE_BEAT = 10" in _ts_code3
+          and "def _start_heartbeat(" in _ts_code3
+          and "_hb = _start_heartbeat(task_id, _tok)" in _ts_code3,
           "routes/task_seed.py")
+    check("续跑锁: 心跳带归属令牌(否则上一任替下一任续约 = 无锁并发却看着像锁正常)",
+          "AND lease_token=%s" in _ts_code3 and "lease_token=''" in _ts_code3,
+          "routes/task_seed.py")
+    check("续跑锁: 心跳在 finally 无条件停止(晚停会让下一任的租约被上一任续期)",
+          "finally:" in _ts_code3 and "_hb()" in _ts_code3, "routes/task_seed.py")
     check("续跑锁: 抢锁失败不许继续执行(否则正是双写本身)",
           "if not _locked:" in _ts_src and 'return _prog({"lease": True})' in _ts_src,
           "routes/task_seed.py")
@@ -3230,19 +3242,44 @@ try:
           and "AND barcode=%%s " in _sf11_code
           and "AND (barcode IS NULL OR barcode='') " in _sf11_code,
           "routes/seed_fill.py")
-    # 2026-11-05 线上事故(jd 10100 行期初全 0): 实盘窗口只在「上月末~当月3号」, seed 跑在
-    #   任意一天; jd 已结过账 → cleanse_write 走「已建账分支」把期初挪进 snapshot_qty,
-    #   apply_import 又因窗口外 return → beginning_stock 无人写回。seed 必须显式 baseline。
+    # 2026-11-05 期初全 0 的完整根因(三层叠加, 修一层露一层):
+    #   ① reset 不清 ledger_state → jd 带着 closed/2026-10 重跑;
+    #   ② 该状态让库存导入被判成「已建账」→ 期初挪进 snapshot_qty;
+    #   ③ apply_import 又因"11-05 在实盘窗口外"直接 return → beginning_stock 无人写回,
+    #      10,100 行期初 0; 而 other 无状态走首建账拿到 211 万 —— 同一份数据两种命运。
+    # 中途曾用 baseline=True 绕过窗口, 那是**在文档 §15.152 之外新造第三条口径**,
+    #   会让"同样的导入, seed 与真实客户算出不同的期初", 已回退。
+    # 现在的正解: 场景识别 + reset 清账期状态。
     _la11 = open("core/ledger_adj.py", encoding="utf-8").read()
-    check("seed 期初: apply_import 支持 baseline 建账模式(否则月中跑 seed 期初恒 0)",
-          "def apply_import(channel, items, ts=None, batch_id=\"\", wt=OWN_WT, baseline=False)"
-          in _la11 and "if not baseline and period != current_period(channel, wt):" in _la11,
+    check("期初场景: 四个场景统一识别(A结转/B实盘/C首建/D窗口外), 不再分散在各判断点",
+          all(x in _la11 for x in ('SCENE_CARRY = "A_carry"', 'SCENE_STOCKTAKE = "B_stocktake"',
+                                   'SCENE_FIRST = "C_first"', 'SCENE_OUTSIDE = "D_outside"',
+                                   'def detect_scene(')),
           "core/ledger_adj.py")
-    check("seed 期初: seed 自有仓库存导入显式带 baseline=True(真实客户入口不传, 行为不变)",
-          'label=\'自有仓库存\', baseline=True' in _sf11
-          and "baseline=baseline" in open("routes/cleanse_write.py", encoding="utf-8").read()
-          and "baseline=baseline" in open("routes/seed_import.py", encoding="utf-8").read(),
-          "routes/seed_fill.py")
+    # 只看代码行(去注释): 历史说明里会引用被废弃的写法, 否则断言被自己的注释干成假红
+    _la11_code = "\n".join(x for x in _la11.splitlines()
+                           if x.strip() and not x.strip().startswith("#"))
+    _sf11_code0 = "\n".join(x for x in _sf11.splitlines()
+                            if x.strip() and not x.strip().startswith("#"))
+    check("期初场景: 已无 baseline 开关(禁止在文档之外开第三条口径)",
+          "baseline" not in _la11_code and "baseline" not in _sf11_code0,
+          "core/ledger_adj.py / routes/seed_fill.py")
+    check("期初换算: Σ起点与可用重算同源(都取 ledger.state.begin_date)",
+          "state_get(channel, wt).get(\"begin_date\")" in _la11
+          and "_net_since(channel, wt, _sum_start, ts)" in _la11,
+          "core/ledger_adj.py")
+    check("期初换算: 重算/重建接受显式 begin_date(否则两次读之间状态变更会让两轨错开)",
+          "def _recalc_own_inventory(channel, skus, begin_date=None):"
+          in open("routes/cleanse_write.py", encoding="utf-8").read()
+          and "def _rebuild_own_batches(channel, skus, begin_date=None):"
+          in open("routes/cleanse_write.py", encoding="utf-8").read(),
+          "routes/cleanse_write.py")
+    # reset 必须清账期五表: 否则"重置成空库"只是假象, 下一轮 seed 带着上轮的账期状态起跑
+    _tk11 = open("routes/tasks.py", encoding="utf-8").read()
+    check("重置: 清 ledger_state/ledger_begin_adj/batch_opening/inventory_month/seed_watermark",
+          all('"%s"' % t in _tk11 for t in ("ledger_state", "ledger_begin_adj",
+                                           "batch_opening", "inventory_month", "seed_watermark")),
+          "routes/tasks.py")
     _sc10 = open("schema_create.py", encoding="utf-8").read()
     check("续跑锁: sync_tasks 已声明 lease_until 列",
           "lease_until DATETIME NULL" in _sc10, "schema_create.py")

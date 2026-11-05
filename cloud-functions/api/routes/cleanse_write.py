@@ -266,7 +266,7 @@ def _allocate_to_batches(pool, exact_need, nobatch_need, mode="fefo"):
     return max(0, rest), hit_exact, hit_fallback, miss_keys
 
 
-def _rebuild_own_batches(channel, skus):
+def _rebuild_own_batches(channel, skus, begin_date=None):
     """自有仓批次重建(2026-10-29 四维): 绑定键 = 仓库类型 + SKU + **69码** + 批次信息
 
     批次信息 = (prod_date, exp_date) —— 入库记录里的生产/到期日期即批次标识
@@ -287,9 +287,15 @@ def _rebuild_own_batches(channel, skus):
     # 2026-11-04 账期改造: 批次池 = **月初余额(带日期)** + 本账期入库, 出库也只扣本账期
     #   不这么切, 上月批次到本月就退化成"无日期期初批次" → 指定批次出库全部命中不了、
     #   只能降级 FIFO, 用户"以导入指定批次为准"的口径当场失效。
-    _bd = _ledger_begin(channel)
+    # 起点优先级: 调用方显式传入 > ledger_state。显式传入的场景是"期初刚被校准",
+    #   此刻 ledger_state 可能与校准时的口径不一致(结账/cron 会改它), 必须用同一个值,
+    #   否则批次池区间与库存期初区间错开 —— 见 core/ledger_adj._refresh 的说明。
+    if begin_date is None:
+        _bd = _ledger_begin(channel)
+    else:
+        _bd = str(begin_date or "")
     if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
-        _bd = ""
+        _bd = ""          # '1970-01-01' 之类"全期"哨兵值 → 不加日期下界, 等价 bootstrap
     _is_ledger = bool(_bd)                       # True = 已结过账, 期初来自 batch_opening
     _cur_p = _cur_period(channel) if _is_ledger else ""
     _d_in = " AND inbound_date >= '%s' " % _bd if _bd else " "
@@ -569,7 +575,7 @@ def _ensure_inventory_rows(channel, rows):
         return 0
 
 
-def _recalc_own_inventory(channel, skus):
+def _recalc_own_inventory(channel, skus, begin_date=None):
     """自有仓库存重算(账期版 2026-11-04): available = 期初 + Σ入库 − Σ出库(**限本账期**)
 
     绑定键 = 仓库类型 + SKU + **69码** + 仓库名
@@ -604,7 +610,10 @@ def _recalc_own_inventory(channel, skus):
     from core.ledger import begin_date as _ledger_begin
     _ph_wt = ",".join(["%s"] * len(SELF_WAREHOUSE_TYPES))
     # 账期下界: 严格校验成 YYYY-MM-DD 后内联(值来自 ledger_state, 非用户输入)
-    _bd = _ledger_begin(channel)
+    if begin_date is None:
+        _bd = _ledger_begin(channel)
+    else:
+        _bd = str(begin_date or "")   # 显式传入优先, 理由同 _rebuild_own_batches
     if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
         _bd = ""
     _d_in = " AND r.inbound_date >= '%s' " % _bd if _bd else " "
@@ -1105,7 +1114,7 @@ def _promote_empty_barcode(channel, pairs, chunk=500):
     return done
 
 
-def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", baseline=False):
+def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
     """按 target 分派写入; 返回 (success, failed)
     渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道
 
@@ -1284,13 +1293,16 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", baseli
         # 2026-11-05 期初实盘校准(用户定案): 上月末最后一天 ~ 当月 3 号之间的库存导入
         #   = 实盘最终量 → 覆盖本期期初(snapshot_qty 只是对账用, 不足以让"以导入为准"成立);
         #   窗口外只保留 snapshot_qty, 走正常结转。失败只留痕, 绝不阻断导入。
+        #
+        # 2026-11-05: 场景判定统一收到 core.ledger_adj.detect_scene —— 这里不再传"要不要建账"
+        #   之类的开关(曾加过 baseline=True, 等于在文档 §15.152 之外开第三条口径, 后来回退)。
+        #   本层只负责"导入成功后接线", 走 A/B/C/D 哪个场景由账期状态与导入时刻自己决定。
         if wt == "own":
             try:
                 from core.clock import now_cn as _nowc
                 from core.ledger_adj import apply_import as _adj_apply
                 _adj_apply(channel, cleaned,
-                           batch_id="inv-%s" % _nowc().strftime("%Y%m%d%H%M%S"),
-                           baseline=baseline)
+                           batch_id="inv-%s" % _nowc().strftime("%Y%m%d%H%M%S"))
             except Exception as _ea:
                 try_err('cleansing', '期初实盘校准降级(导入本身已成功)', _ea)
         return _s, _f, _ed

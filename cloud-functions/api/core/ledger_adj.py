@@ -31,7 +31,7 @@
 from db import query, one, execute, executemany
 
 from core.clock import now_cn
-from core.ledger import period_of, shift_period, period_bounds, current_period
+from core.ledger import period_of, shift_period, period_bounds, current_period, state_get
 
 WINDOW_END_DAY = 3          # 当月 1~3 号
 OWN_WT = "own"
@@ -109,51 +109,114 @@ def _carried(channel, wt, period):
     return out
 
 
+# ── 场景识别(2026-11-05 补: 让 §15.152 的两个场景真正自动识别执行) ──────
+#
+# 文档 §15.152 定的是**两个场景**, 但原实现只有一条路径: `target_period()` 把窗口外的
+# 导入一律 skip。这带来一个结构性问题 —— **窗口外发生的导入没有任何出口**:
+#   · 真实客户月初导了一次库存报表(4 号以后), 盘库结果无处落地, 只能手改库;
+#   · seed 在建账时跑在月中, 期初拿不到来源, 只能退成 0。
+# 之前为了救 seed 加过一个 `baseline=True` 开关, 那是**在文档之外新造第三条路** ——
+# 口径分叉的代价是后续每一次调账都会有人问"这两条路以谁为准"。现在撤掉它, 改成:
+#
+#   场景由「导入时刻 + 该渠道账期状态 + 流入的量」共同判定, 只有这四种:
+#
+#   | 场景 | 判定 | 本期期初 | 依据 |
+#   |---|---|---|---|
+#   | A 结转 | 账期已建、窗口内无导入 | 上月期末 | 0002 §47 |
+#   | B 实盘 | 窗口内导入(上月末最后一天 ~ 当月 3 号) | 导入量 − Σ净流水[本月1日, 导入时刻) | §15.152 |
+#   | C 首建 | 该渠道从未建过账 | 导入值(本期即首期, 无上月可结转) | 0002 §47「首期才用导入值当基线」 |
+#   | D 窗口外 | 已建账 + 窗口外导入 | **不改期初**, 只存 snapshot_qty 做对账 | §15.152「4 号以后掺了流水, 当期初双算」|
+#
+# C 是本轮补上的: 原来"首期"靠 `_ledger_started()` 在写入侧分支, 与 `apply_import`
+#   各自判断, 两边口径能分叉(实测 other 渠道走 C 拿到 211 万, jd 走 A 拿到 0)。
+#   现在统一到这里判定, 写入侧只看判定结果, 不再自己猜。
+#
+# D 是**正常且正确**的行为, 不是缺口: 月中导入的可用量本来就含了本月流水, 拿来当期初
+#   必然双算。用户的期望("我盘完要能改期初")由 B 满足; 月中普通导入不属于盘库。
+SCENE_CARRY = "A_carry"      # 窗口内无导入 → 本月期初 = 上月期末
+SCENE_STOCKTAKE = "B_stocktake"  # 窗口内实盘 → 导入量反推期初
+SCENE_FIRST = "C_first"      # 从未建账 → 首期, 导入值即基线
+SCENE_OUTSIDE = "D_outside"  # 已建账 + 窗口外 → 只对账不改期初
+
+
+def detect_scene(channel, ts=None, wt=OWN_WT, has_import=True):
+    """判定本次库存导入该走哪个场景; 返回 (scene, period, 说明)
+
+    · 只有 own 进账期(0002 §17: 平台仓/B 仓是快照制);
+    · period 是「这次导入要落的账期」, 窗口外时为当期(仅用于展示/留痕, 不改期初);
+    · has_import=False 表示"查询当期应结转多少"(场景 A 的读侧), 不涉及导入值。
+    """
+    ts = ts or now_cn()
+    if wt != OWN_WT:
+        return "", "", "仅自有仓走账期"
+    started = bool(state_get(channel, wt).get("begin_date"))
+    if not started:
+        return SCENE_FIRST, period_of(ts), "该渠道从未建账 → 首期, 导入值即基线"
+    if has_import:
+        p = target_period(ts)
+        if p:
+            return SCENE_STOCKTAKE, p, "窗口内实盘导入(%s)" % window_text(p)
+        return SCENE_OUTSIDE, period_of(ts), "窗口外导入(仅 %d 号前算实盘)" % WINDOW_END_DAY
+    return SCENE_CARRY, current_period(channel, wt), "上月期末结转"
+
+
 # ── 应用 ────────────────────────────────────────────────────────────────
 
-def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT, baseline=False):
-    """把一次库存导入当作实盘校准期初; 返回 {ok, applied, skipped, delta, period}
+def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT):
+    """把一次库存导入按场景落成期初; 返回 {ok, applied, skipped, delta, period, scene}
 
     items: 清洗后的库存行(含 sku / barcode / warehouse; 数量取 snapshot_qty →
            beginning_stock → available_qty 第一个非空)
     调用点: routes/cleanse_write.py 的 inventory 写入成功后(失败只留痕, 绝不阻断导入)。
 
-    baseline (2026-11-05, 仅 seed 演示库用): 无视实盘窗口, 直接按导入值建本期基线。
-      为什么需要: 实盘窗口(上月末 ~ 当月 3 号)是为**真实客户**定的 —— 只有月末盘库才算数,
-      月中一次普通导入不该改写期初。但 seed 是**从空库建一份完整演示账**, 它跑在任意一天,
-      要的正是"这次导入量 = 期初"的建账语义。
-      不修会怎样(线上实测): jd 渠道结过 10 月账(ledger_state.status=closed) → 库存导入走
-      「已建账分支」把期初挪进 snapshot_qty 并 pop 掉 beginning_stock → apply_import 因
-      "今天 11-05 在窗口外"直接 return → beginning_stock 无人写回, 10,100 行期初全 0,
-      而 other 渠道没建过账(首建账分支)期初 211 万正常 —— 两渠道同一份数据两种命运。
-      seed 用它建立基线后, 落账核对(可用 = 期初 + Σ流水)才成立。
+    场景(见 detect_scene):
+      B 实盘 / C 首建 → 写期初(换算见 §15.152: 期初 = 导入量 − Σ净流水)
+      D 窗口外       → 返回 skipped, 调用方已把导入值写进 snapshot_qty 做对账
+      A 结转         → 不经过本函数(没有导入就没有校准)
+
+    为什么 seed 不需要单独开关: seed 在空库首跑时 `ledger_state` 为空 → 自动落 C;
+      若上次残留了 `status=closed`(上一轮 seed 建过账), `reset` 会清 `ledger_state`,
+      所以每轮 seed 都从 C 开始, 与"真实客户首次导入"走同一条路。
     """
     ts = ts or now_cn()
     res = {"ok": True, "applied": 0, "skipped": "", "period": "", "delta": 0,
-           "carried": 0, "begin": 0, "window": ""}
+           "carried": 0, "begin": 0, "window": "", "scene": ""}
     if wt != OWN_WT:
         res["skipped"] = "仅自有仓走账期"
         return res
-    if baseline:
-        # 无视窗口: 直接取当期, 且不要求 period == current_period(seed 从零建账, 没有"已结的期不许动")
-        period = period_of(ts)
-    else:
-        period = target_period(ts)
-        if not period:
-            res["skipped"] = "窗口外(仅上月末最后一天 ~ 当月 %d 号)" % WINDOW_END_DAY
-            return res
+    scene, period, why = detect_scene(channel, ts, wt, has_import=True)
+    res["scene"] = scene
     res["period"] = period
-    res["window"] = "baseline(seed 建账)" if baseline else window_text(period)
-    # 已结账的期不动: 期末已经按旧期初算过, 偷改期初 = 账实两套且无痕
-    #   baseline 模式跳过这条 —— seed 建账时 current_period 可能停在下一期(已结 10 月),
-    #   强行比对会把当前期判成"已结/未到"而整批丢弃, 正是这次期初全 0 的另一半原因。
-    if not baseline and period != current_period(channel, wt):
-        res["skipped"] = "账期 %s 不是当前进行中的账期(已结/未到), 如需修正请重结" % period
+    res["window"] = why
+    if scene == SCENE_OUTSIDE:
+        # 已建账 + 窗口外: 期中导入的可用量含本月流水, 当期初必双算(§15.152)。
+        # 不改期初 —— 导入值已在 snapshot_qty 里, 由对账/巡检暴露差异。
+        res["skipped"] = "窗口外(仅上月末最后一天 ~ 当月 %d 号), 只对账不改期初" % WINDOW_END_DAY
         return res
+    if scene == SCENE_FIRST:
+        # 首期: 导入值即基线, 没有上月可结转 → carried 全 0, 不做"减去本月净流水"的换算。
+        # 这不是特例, 是 §15.152 换算式在"本期第一天之前没有流水"时的自然结果。
+        pass
+    else:
+        # B 实盘: 只对**当前进行中的账期**生效 —— 已结的期改期初, 期末就与月报不符
+        if period != current_period(channel, wt):
+            res["skipped"] = "账期 %s 不是当前进行中的账期(已结/未到), 如需修正请重结" % period
+            return res
 
-    start = period_bounds(period)[0]
-    off = _net_since(channel, wt, start, ts)
-    carried = _carried(channel, wt, period)
+    # Σ 起点必须与**可用重算/批次重建**同源(core.ledger.begin_date), 否则两条轨算的不是
+    #   同一个量 —— 线上"available 与 beginning_stock 差 1~651 不等、10,100 行只对得上 323 行"
+    #   就是这么来的(排查两轮才定位, 之前一直误以为是换算式本身写错了)。
+    #
+    #   语义对齐(不是取巧): §15.152 换算式 `期初 = 导入量 − Σ净流水[本月1日, 导入时刻)` 里的
+    #   "本月 1 日", 本质是**本期起算日**。已建账时它就是 begin_date; 从未建账时(bootstrap)
+    #   系统把"本期"定义为全期, 起算日就是"有流水之前"。两处取同一个值, 期初与可用才自洽。
+    #   写死本月 1 号正是分裂的来源, 不能再写回去。
+    _bd = state_get(channel, wt).get("begin_date") or ""
+    _sum_start = _bd if _bd else "1970-01-01"
+    res["sum_start"] = _sum_start
+    # 首期(fresh 账)没有上月可结转: carried 全 0, 免得把上轮残留的 inventory_month 当结转。
+    carried = {} if scene == SCENE_FIRST else _carried(channel, wt, period)
+    off = _net_since(channel, wt, _sum_start, ts)
     rows, args = [], []
     for it in items or []:
         sku = str(it.get("sku") or "").strip()
@@ -191,7 +254,7 @@ def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT, baseline=False
 
     _apply_to_inventory(rows, channel, wt)
     _adjust_batches(period, channel, wt, rows)
-    _refresh(channel, [r["sku"] for r in rows])
+    _refresh(channel, [r["sku"] for r in rows], begin_date=_sum_start)
 
     res["applied"] = len(rows)
     res["delta"] = sum(r["delta"] for r in rows)
@@ -253,19 +316,24 @@ def _adjust_batches(period, channel, wt, rows):
                     list(k) + [ADJ_EXP_DATE, -need])
 
 
-def _refresh(channel, skus):
+def _refresh(channel, skus, begin_date=""):
     """校准后立刻重算库存/批次 —— 页面与补货读到的是新基线, 不等下一次导入
 
     放在这里而不是让调用方补: 调用方只做"写入 → 重算", 期初校准夹在两者之间,
     谁忘了调重算, 期初就只改了列、可用还是旧值(静默错账)。
+
+    begin_date: 本次换算用的 Σ 起点, **显式传下去**, 让重算/重建与期初用同一个区间。
+      不传的话它们会各自再查一次 `ledger_state`, 两次读之间状态若被结账/cron 改动,
+      就出现"期初按 A 区间算、可用按 B 区间算"—— 这正是本轮那个差 1~651 的来源。
+      (两次查询之间隔几十秒, 期初校准又是长事务, 这个窗口是真实存在的。)
     """
     skus = sorted({s for s in skus if s})
     if not skus:
         return
     try:
         from routes.cleanse_write import _recalc_own_inventory, _rebuild_own_batches
-        _recalc_own_inventory(channel, skus)
-        _rebuild_own_batches(channel, skus)
+        _recalc_own_inventory(channel, skus, begin_date=begin_date)
+        _rebuild_own_batches(channel, skus, begin_date=begin_date)
     except Exception as e:
         from routes.common import try_err
         try_err("ledger_adj", "期初校准后重算/重建失败", e)

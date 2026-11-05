@@ -41,7 +41,17 @@ _TABLES_RESET = ["orders", "inventory", "products", "daily_sales_snapshot", "sku
                  "outbound_records", "daily_stats", "warehouse_registry", "sync_tasks",
                  "orders_day_agg", "health_snapshot", "maintenance_log", "log_archives",
                  "gmv_flows", "data_freshness", "export_files", "eval_pending", "agg_dirty",
-                 "eval_tasks"]
+                 "eval_tasks",
+                 # 2026-11-05 账期五表(原缺失 → 重置后账期残留, 演示库"看着重置了, 其实带着上轮账"):
+                 #   · ledger_state 残留 `closed/2026-10` → 下轮 seed 的库存导入被判成
+                 #     「已建账 + 窗口外」→ 期初全 0(线上实测 jd 10,100 行期初 0、other 211 万,
+                 #     同一份数据两种命运, 就是这张表一行残留造成的);
+                 #   · ledger_begin_adj / batch_opening / inventory_month 残留 → 期初校准明细、
+                 #     批次月初余额、月结切片都是上轮的数, 与新一轮的库存完全对不上;
+                 #   · seed_watermark 残留 → 水位对账拿旧 run_id 的预期值比新一轮的实际值。
+                 # 重置的语义是"回到干净的空库", 账期状态属于数据的一部分, 不能例外。
+                 "ledger_state", "ledger_begin_adj", "batch_opening", "inventory_month",
+                 "seed_watermark"]
 
 _BRANDS_FOOD = ["禾味", "山泉", "椒香", "酱乡", "醋乡", "味源", "禾田", "青禾", "禾风",
                 "谷香", "醇味", "鲜禾", "禾记"]
