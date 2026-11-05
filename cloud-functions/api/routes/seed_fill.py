@@ -1143,13 +1143,32 @@ def _assert_barcode_aligned():
 # 调用方(task_seed)只把它当"下一个 step 号"用, 不依赖具体含义, 所以新增段不需改协议。
 # 订单 6 → 9 段(2026-11-05 线上实测): 单段 15 天双渠道实测 71~148s, 第 4 段 148s 已越过平台
 #   建议的 90s 且贴着 120s 网关。拆到 10 天/段后单段订单量降 1/3, 单请求回到 ~50s 量级。
-_SEED_ORDER_SEGS = 9                                   # step 1..9 = 订单 9 段(90 天 ÷ 10 天)
+# 订单 9 → 12 段(2026-11-05 二轮线上实测: `orders_part_2` 102.9s > 90s 预算)。
+#   根因不是"段太粗"而是**段不均匀**: 促销窗(618: day 5~19; 月末 day 45~54)横跨段边界,
+#   10 天/段时第 2 段(day 10~20)整段压在 618 里 —— 单渠道日量约常态的 2 倍,
+#   双渠道就是 ~6.2 万单/段, 而常态段只有 ~3 万单。均匀切分治不了这个偏斜。
+#   12 段时前 11 段各 7 天(77 天)、末段 13 天(day 77~90, 不落在任何促销窗, 日量即常态):
+#   吃促销的最重段从 ~6.2 万单降到 ~4.3 万单, 按 102.9s × 0.7 ≈ 72s 回到 90s 预算内。
+_SEED_ORDER_SEGS = 12                                  # step 1..12 = 订单 12 段(7 天/段 + 末段 13 天)
+
+
+def _order_seg_days(step):
+    """订单第 step 段(1 基)覆盖的 [day_from, day_to) 偏移 —— 唯一定义处
+
+    90 天切成 12 段: 前 11 段各 7 天(0..77), 末段吃掉剩下的 13 天(77..90)。
+    末段故意多几天: 促销窗只到 day 54, 77 之后全是常态日, 日量最低, 13 天也不会超预算;
+    反过来如果让**前面**某段多吃几天, 就会把促销段重新撑厚, 又回到 102.9s 那个坑。
+    """
+    span = ORDER_DAYS // _SEED_ORDER_SEGS              # 7 天/段
+    day_from = (step - 1) * span
+    day_to = ORDER_DAYS if step == _SEED_ORDER_SEGS else day_from + span
+    return day_from, day_to
 # 库存按渠道 × 仓型拆 4 段(2026-11-05 线上实测): 两渠道一次导入 **362s**, 是整链最重的一步,
 #   把 90s/120s 两条线一起踩穿。拆开后单段约 90s(自有仓)以内。
-_SEED_INV_JD_PF = _SEED_ORDER_SEGS + 1                 # 10 库存 jd 平台/B 仓
-_SEED_INV_JD_OWN = _SEED_INV_JD_PF + 1                 # 11 库存 jd 自有仓
-_SEED_INV_OT_PF = _SEED_INV_JD_OWN + 1                 # 12 库存 other 平台/B 仓
-_SEED_INV_OT_OWN = _SEED_INV_OT_PF + 1                 # 13 库存 other 自有仓
+_SEED_INV_JD_PF = _SEED_ORDER_SEGS + 1                 # 13 库存 jd 平台/B 仓
+_SEED_INV_JD_OWN = _SEED_INV_JD_PF + 1                 # 14 库存 jd 自有仓
+_SEED_INV_OT_PF = _SEED_INV_JD_OWN + 1                 # 15 库存 other 平台/B 仓
+_SEED_INV_OT_OWN = _SEED_INV_OT_PF + 1                 # 16 库存 other 自有仓
 _SEED_INV = _SEED_INV_JD_PF                            # 兼容别名: 「库存起点」
 _SEED_INV_SEGS = (
     (_SEED_INV_JD_PF,  'jd',    'platform'),
@@ -1212,7 +1231,7 @@ _TAIL_SEGS = (
     (_SEED_MONTH + 4, 'stats_other'),
 )
 _SEED_TAIL = _TAIL_SEGS[0][0]                          # 兼容别名: 尾段起点
-SEED_DONE = _TAIL_SEGS[-1][0] + 1                      # 27 = 完成
+SEED_DONE = _TAIL_SEGS[-1][0] + 1                      # 30 = 完成(段数会变, 别再写死数字)
 
 
 # ── 水位 / 回滚 / 行数对账(2026-11-05) ──────────────────────────────────
@@ -1360,11 +1379,10 @@ def seed_step(step, today, skus_data, run_id=''):
         n_prod, n_sup = _seed_products_suppliers(skus_data)
         return 1, {'products': len(n_prod), 'suppliers': len(n_sup)}
     if 1 <= step <= _SEED_ORDER_SEGS:
-        _span = ORDER_DAYS // _SEED_ORDER_SEGS          # 10 天/段(90 ÷ 9)
-        day_from = (step - 1) * _span
+        day_from, day_to = _order_seg_days(step)
         if run_id:
             wm_begin(run_id, step, ('orders',), channel='jd,other')
-        n = _seed_orders_range(today, skus_data, day_from, day_from + _span)
+        n = _seed_orders_range(today, skus_data, day_from, day_to)
         if run_id:
             wm_end(run_id, step, {'orders': n}, channel='jd,other')
         return step + 1, {'orders_part_%d' % step: n}

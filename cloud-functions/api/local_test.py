@@ -2997,15 +2997,20 @@ try:
                        if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
-    # 段号自成体系: 订单 9 + 库存 4 + 流水 4 + 落账 4 + 月 1 + 尾 4 + 完成 1 = 27
-    # 2026-11-05 线上实测: 15 天/段双渠道 71~148s(第 4 段 148s 贴穿 120s 网关) → 改 10 天/段
-    check("seed 段号: 订单 9 段(90 天 ÷ 10 天, 单段订单量降到 1/3)",
-          _sf._SEED_ORDER_SEGS == 9 and 90 % _sf._SEED_ORDER_SEGS == 0,
+    # 段号自成体系: 订单 12 + 库存 4 + 流水 4 + 落账 4 + 月 1 + 尾 4 + 完成 1 = 30
+    # 2026-11-05 线上实测: 15 天/段 71~148s → 改 10 天/段 → 第 2 段仍 102.9s(整段压促销窗)
+    #   → 改 12 段 × 7 天, 末段吃 13 天余量(77..90 无促销窗, 日量最低)
+    check("seed 段号: 订单 12 段(90 天 = 11×7 + 末段 13), 首尾覆盖完整无空洞",
+          _sf._SEED_ORDER_SEGS == 12
+          and [(_sf._order_seg_days(i)) for i in range(1, 13)][0] == (0, 7)
+          and [_sf._order_seg_days(i) for i in range(1, 13)][-1] == (77, 90)
+          and all(_sf._order_seg_days(i)[1] == _sf._order_seg_days(i + 1)[0]
+                  for i in range(1, 12)),
           _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 27(订单9+库存4+流水4+落账4+月1+尾4+1)",
+    check("seed 段号: 各段严格递增且完成值 = 30(订单12+库存4+流水4+落账4+月1+尾4+1)",
           _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW
           < _sf._SETTLE_SEGS[0][0] < _sf._SEED_MONTH < _sf._SEED_TAIL
-          < _sf.SEED_DONE == 27,
+          < _sf.SEED_DONE == 30,
           (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SETTLE_SEGS[0][0],
            _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
     # 事故根因: step14 一个请求发 4 份导入文件(2 渠道 × 2 类型) → >120s 被网关切断。
@@ -3030,9 +3035,11 @@ try:
     _all_nos = ([x[0] for x in _sf._SEED_INV_SEGS] + [x[0] for x in _sf._FLOW_SEGS]
                 + [x[0] for x in _sf._SETTLE_SEGS] + [_sf._SEED_MONTH]
                 + [x[0] for x in _sf._TAIL_SEGS])
-    check("段表完整: 10..SEED_DONE-1 无空洞无重复(否则 seed_step 会跳段或空转)",
-          sorted(_all_nos) == list(range(10, _sf.SEED_DONE)),
-          (len(_all_nos), _sf.SEED_DONE))
+    # 起点不写死 10: 段数改过两次(9 → 12), 写死会让"改段数"顺手把断言变成假绿/假红
+    _first_tail_seg = _sf._SEED_ORDER_SEGS + 1
+    check("段表完整: 订单后首段..SEED_DONE-1 无空洞无重复(否则 seed_step 会跳段或空转)",
+          sorted(_all_nos) == list(range(_first_tail_seg, _sf.SEED_DONE)),
+          (len(_all_nos), _first_tail_seg, _sf.SEED_DONE))
     # SKU 编号位宽: 4 位到 9999 就撞名, 10000 个必须 5 位
     _sk_t = _sf._make_skus('-T', 10000, 0.01)
     check("seed SKU: 10000 个编号无撞名", len({x['sku'] for x in _sk_t}) == 10000,
