@@ -6974,3 +6974,98 @@ preflight 八步全绿; schema 对账 47 表 / 463 列 / 13 索引 无差异
 链路实测  本地连库发 3 行商品 + 1 行库存 + 1 行入库:
           批次自动生成(exp_date 正确)、barcode 按档案归码、可用保持导入值
 ```
+
+## §15.161 非真异常连续噪音的根治: 日志通道按「正常态 / 异常态」分流(2026-11-05)
+
+### 一、现象：空库下每分钟一条告警，且告警内容其实什么也没发生
+
+第二集群重建为干净空库后，质量日志仍持续增长。按 source/level/message 分组核对，
+主体不是故障，而是**三种正常态被送进了异常通道**：
+
+| 日志 | 频率 | 真实语义 |
+|---|---|---|
+| `continue-tasks 诊断: rows=0 cutoff=...` (warning/quiet_error) | 每 60s 一条，永不停止 | 中间件周期触发续跑，空库无 running 任务 → `rows=0` 是正常空态 |
+| `快照续段降级: time data '' does not match format` (warning) | 每次 dashboard 请求 | 空库 `MAX(ordered_at)=''` → `strptime('')` 必抛异常；无订单 = 无快照可续 |
+| `schema v12 就绪` / `迁移完成` / `唯一键建立完成` (warning, 带 `: str: ` 尾巴) | 冷启动一次性 | 建表/迁移**成功**，却把空字符串当 `exc` 传给了异常通道 |
+
+### 二、根因：`try_err` 被当成通用日志函数
+
+`routes/common.py:try_err` 的契约是「静默吞异常留痕」——固定写
+`level='warning' / log_type='quiet_error'`，带 traceback、同源 10s 合并计数。
+它是 `except` 分支的纪律收口，**不是**「我想记点什么」的通用入口。
+
+一旦诊断摘要、成功信息、正常空态也走它，后果不是「多几行日志」这么简单：
+- 质量日志页 / Markdown 导出按 level 汇总「警告 N 条」，N 被正常态持续推高，真异常被淹没；
+- 60s 周期 > `try_err` 的 10s 合并窗口，所以 `rows=0` 每条都完整落库，合并计数拦不住；
+- 匿名访问部署预览域名必然 401，前端把 401/403 与网络错误/5xx 一起上报成
+  `api_http_error/warning` → **每次部署都刷一批**，纯属噪音。
+
+### 三、修法：从链路源头判空 + 通道分离，而不是压日志或降级别
+
+没有改 `try_err` 本体一个字（真异常留痕能力必须原样保留），也没有把 warning 降成
+info 来「让数字好看」。分两层：
+
+**① 正常态不进入异常分支（链路判空）**
+
+```
+cron.continue_tasks        rows 非空才 log_info 一条摘要；空态零写入
+                           (真异常仍由「续跑异常 / 整体异常」两处 try_err 留痕)
+dashboard._track_data      _db2='' → 不触发快照续段(没有订单就谈不上追平)
+dashboard._snapshot_step   入口判空直接 return，双保险；
+                           判空放在 perf_debug 诊断之前 → 空库零写入
+```
+
+**② 正常态 / 成功态走独立通道（`log_info`）**
+
+| 维度 | `try_err`（异常） | `log_info`（正常态/成功） |
+|---|---|---|
+| level / log_type | `warning` / `quiet_error` | `info` / `maint` |
+| 内容 | 异常类型 + 消息 + traceback | 一句摘要 |
+| 适用 | `except` 分支、降级、需人工介入 | 诊断摘要、迁移/建表成功、空态返回 |
+| 失败处理 | 自身异常自吞防递归 | 同 |
+
+`schema_create.py` 三处成功信息、`migrations/runner.py` 的迁移完成改走
+`log_info` / `_log_ok`；后者的 `_log`(走 try_err) 仍专用于「失败且见证写入也失败」
+等真异常。`log_type` 固定 `maint`（已在 `misc._LOG_SCOPE_TYPES` 白名单内，
+字面量可被收口自检扫到，不新增类型）。
+
+**③ 前端：预期鉴权态不是异常**
+
+401 有专门的认证态链路（拦截器派发 `auth:may-expired` → App 调 `/auth/check`
+确认后才 `setLoggedIn(false)`，冷实例偶发 401 不误踢）；403 是访客「仅可查看」
+的既定行为。新增 `isExpectedAuth(status)` 单一判定，axios / `apiJson` /
+`uploadRawBytes` 三处 HTTP 状态上报点统一排除；**`throw` 保留**（业务层仍感知失败），
+5xx / 网络错误 / 400·422 照常上报。
+
+**④ 门禁自身：`sql_smoke.report` 不再把诊断崩成 traceback**
+
+前置失败（连接失败 / 覆盖率不足 / 目标库缺表）返回的三元组第三项是空串哨兵，
+而 `report()` 无条件 `item["where"]` → 连不上库时崩成 `TypeError`，
+把「配额耗尽 / 凭据指向错库」这个明确原因淹没在堆栈里。补 `_detail(item)`：
+dict 才取 where/sql，否则留空，门禁能清楚说出为什么红。
+
+### 四、顺带收尾：切集群的本地侧
+
+线上 EdgeOne Production env 已切第二集群，但本地 `.env` 仍是旧集群凭据
+（RU 配额已耗尽）→ preflight 的 SQL 冒烟连不上库。将 `.env` 的
+`TIDB_USER/PASSWORD/DB` 对齐 `.env.local`（该文件 gitignore，不进仓库、不改线上其它键）。
+CI 侧无需改动：`scripts/ci_fetch_env.py` 从 EdgeOne 线上 env 优先拉取，`FB_*` 仅作回落。
+
+### 五、验证与防回归
+
+```
+本地回归   606 → 618 通过 / 0 失败(新增 12 条断言)
+preflight  八步全绿; 新库真实 SQL 冒烟 267 条 0 失败; schema 47 表 464 列 13 索引
+线上       部署 92a9cc3 Success 后清空日志基线 →
+           匿名 401 访问 + 12 个模块接口全 200 + 跨 75s(覆盖 60s 周期)持续请求
+           → 5 类非真异常(rows=0 诊断 / 快照续段降级 / 无效 perf_debug /
+             建表成功误记 / 前端 401·403 误报)全部归零
+```
+
+库内仅剩 1 条 `slow_request` warning(`GET /dashboard/summary 3.0s`)。它是
+`>3s` 才触发的真实性能监控信号(撑 `monitor.slow_count`)、不连续、也不是
+「正常态被当成异常」，**刻意保留** —— 若为凑「零日志」把它也压掉，就是拿
+可观测性换好看的数字，与本次修法背道而驰。
+
+断言里留了**反向红线**：`try_err` 仍固定 `warning/quiet_error`、前端网络错误与
+5xx 仍照常上报 —— 消除噪音不能以削弱真异常留痕为代价。
