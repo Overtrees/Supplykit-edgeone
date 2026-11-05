@@ -591,16 +591,19 @@ def _seed_batches(skus_data=None, channel='', wh_group=''):
     return len(bdata)
 
 
-def _seed_records():
-    """当月出入库记录(进销存页展示): 按批次池随机, INSERT IGNORE 防唯一冲突"""
+def _seed_records(channel='', flow_type=''):
+    """当月出入库记录(进销存页展示): 按批次池随机, 走导入链路落库
+
+    一段一文件(2026-11-05): 给了 channel + flow_type = 只处理这一份导入文件,
+      只删/只写自己那张表那个渠道; 两者都不给 = 全量(一键 seed / 运维口 / 本地回归
+      的老行为, 语义不变)。四种 (渠道, 类型) 组合互不重叠, 重跑任一段不会写重数据。
+
+    幂等为什么靠「按渠道删本表」而不是 ON DUPLICATE: inbound_records / outbound_records
+      **没有唯一键**(schema_create 只给了 idx_ib_sku_date), ON DUPLICATE 对它们不成立,
+      重复导入必然翻倍。原实现无条件 DELETE 两渠道两张全表 —— 每次重跑都把线上数据
+      清空, 页面读到中间态、聚合接口随之 38~40s 超时; 现改为只清自己那一片。
+    """
     today = now_cn()
-    # 2026-10-29 幂等: 先清空该渠道旧出入库记录(原纯 INSERT → 重复执行翻倍,
-    #   实测 8061 条入库中 4029 组同 SKU+日期+仓 重复)
-    try:
-        execute("DELETE FROM inbound_records WHERE channel IN ('jd','other')")
-        execute("DELETE FROM outbound_records WHERE channel IN ('jd','other')")
-    except Exception as _edr:
-        try_err('seed_fill', '出入库记录清理降级', _edr)
 
     # 2026-10-29 业务定案: 出入库只属于自有仓 → 批次池只取 warehouse_type='own'
     # (原取全部批次 → 生成出"沈阳仓/上海仓/B仓"的虚假出入库记录)
@@ -778,11 +781,22 @@ def _seed_records():
     # 冲突模式用 sum(与导入页默认一致): 同 SKU+日期+69码 的行累加数量。
     #   这不是给 seed 开的特例 —— 真实客户把同一张入库单导两次, 语义就是"再入一次"。
     from routes.seed_import import import_rows as _imp
+    _chs = (channel,) if channel else ('jd', 'other')
+    _fts = (flow_type,) if flow_type else ('inbound', 'outbound')
     _stat = {}
-    for ch in ('jd', 'other'):
-        for _tgt, _rows in (('inbound', [r for r in in_rows if r.get('channel') == ch]),
-                            ('outbound', [r for r in out_rows if r.get('channel') == ch])):
+    for ch in _chs:
+        for _tgt in _fts:
+            _tbl = 'inbound_records' if _tgt == 'inbound' else 'outbound_records'
+            # 幂等: 只删「本次要导入的那张表 + 那个渠道」(另一张表/另一渠道的行不动)。
+            #   四段各占一个 (渠道, 表) 组合, 互不重叠 → 任一段重跑都不会清空别的段。
+            try:
+                execute("DELETE FROM `%s` WHERE channel=%%s" % _tbl, [ch])
+            except Exception as _edr:
+                try_err('seed_fill', '出入库分片清理降级 %s/%s' % (_tbl, ch), _edr)
+            _src = in_rows if _tgt == 'inbound' else out_rows
+            _rows = [r for r in _src if str(r.get('channel') or '') == ch]
             if not _rows:
+                _stat[_tgt + '_' + ch] = 0
                 continue
             _r = _imp(_tgt, ch, _rows, label=_tgt)
             _stat[_tgt + '_' + ch] = _r.get('rows')
@@ -790,7 +804,7 @@ def _seed_records():
                 try_err('seed_fill', '%s 导入 %s 有 %d 行未落库(首因=%s)'
                         % (_tgt, ch, _r['failed'],
                            str((_r.get('errors') or [{}])[0].get('reason') or '')[:150]), None)
-    return len(in_rows), len(out_rows)
+    return sum(int(v or 0) for v in _stat.values())
 
 
 def _sync_inv_month():
@@ -1119,28 +1133,62 @@ _SEED_INV_SEGS = (
     (_SEED_INV_OT_PF,  'other', 'platform'),
     (_SEED_INV_OT_OWN, 'other', 'own'),
 )
-_SEED_FLOW = _SEED_INV_OT_OWN + 1                      # 14 流水
-# 落账拆四段(2026-11-05, 两次拆分):
-#   ① 按渠道: 原一段做两渠道 = 21.6s×2(批次) + 重算 ≈ 50s
-#   ② 按仓型: 第一次只按渠道拆**线上仍 504(123s)** —— jd 有 68,322 平台仓行 + 9,637 B 仓行,
-#      每行 1~3 批 ≈ 16.8 万批次, 单请求必爆。于是每渠道再按仓型切 'platform' / 'own'。
-#   四段实测各 ≤40s, 单请求余量充足。仓储口径不变, 只是执行分段。
-_SEED_SETTLE_JD_PF = _SEED_FLOW + 1                    # 9  落账 jd 平台/B 仓
-_SEED_SETTLE_JD_OWN = _SEED_SETTLE_JD_PF + 1           # 10 落账 jd 自有仓(含可用重算)
-_SEED_SETTLE_OT_PF = _SEED_SETTLE_JD_OWN + 1           # 11 落账 other 平台/B 仓
-_SEED_SETTLE_OT_OWN = _SEED_SETTLE_OT_PF + 1           # 12 落账 other 自有仓 + 跨渠道自检
-_SEED_SETTLE = _SEED_SETTLE_JD_PF                      # 兼容别名: 「落账起点」
-_SEED_MONTH = _SEED_SETTLE_OT_OWN + 1                  # 13 月汇总+配置
-_SEED_TAIL = _SEED_MONTH + 1                           # 14 告警+快照+物化
-SEED_DONE = _SEED_TAIL + 1                             # 15 = 完成
-# 落账四段的执行顺序(渠道, 仓型) —— 顺序有意义: 平台仓在前(量大), 自有仓在后(含可用重算
-#   与 best_before 回写, 必须最后, 因为它要读全部仓型的批次)
-_SETTLE_SEGS = (
-    (_SEED_SETTLE_JD_PF,  'jd',    'platform'),
-    (_SEED_SETTLE_JD_OWN, 'jd',    'own'),
-    (_SEED_SETTLE_OT_PF,  'other', 'platform'),
-    (_SEED_SETTLE_OT_OWN, 'other', 'own'),
+_SEED_FLOW = _SEED_INV_OT_OWN + 1                      # 14 流水起点
+# ── 一段一文件协议(2026-11-05 线上事故逼出来的架构改造) ────────────────
+# 事故链: step14 一个请求要 DELETE 两张流水表 + 内存生成全量行 + 按渠道×类型发 **4 份导入
+#   文件**(每份走完整链路) → 实测 >120s 被网关硬切 → `lease_until=NULL` 那行没执行 →
+#   600s 租约挂死 → 期间所有页面/轮询拿不到进度 → 租约一过期又被 3 个驱动抢到重跑,
+#   从 DELETE 全表开始再超一次。用户看到的就是「卡在 14 几百秒」。
+#
+# 「再拆一段」只是把大请求挪个位置, 不解决机制问题。这次两条一起改:
+#   ① **一个请求 = 一份导入文件 = 一个步骤窗口**: 流水按 (渠道 × 出/入类型) 拆 4 段,
+#      每段只删/只写自己那张表那个渠道 → 幂等可重跑, 不再清空线上数据;
+#   ② 租约 600s → 150s(见 task_seed), 被网关切断最多静止 2.5 分钟而非 10 分钟;
+#      配合每段幂等, 租约过期后重跑同一段不会写重数据。
+#
+# 单段预算 90s(平台建议), 网关硬上限 120s 留 30s 余量。段粒度依据(不预拆到最细):
+#   · 流水单份文件 = 原 step14 的 1/4(4 份一起 >120s, 单份 ≈30~60s)
+#   · 落账 4 段(渠道 × 仓型)线上已实测各 ≤40s, 保持不动
+#   · 尾段原 1 段同时跑 alerts+snapshot+两渠道物化, 历史实测 456s → 拆 4 段
+# 兼容性: 前 13 段段号**完全不动** —— 那 13 段线上已实测完成且数据正确, 改动只会逼
+#   用户重灌、白烧 RU。新协议从 step14 起生效, 已有任务 params.step=14 天然落在
+#   流水第一段上, 无需迁移、不用重灌。
+SEED_STEP_BUDGET_S = 90
+
+# 流水 4 段 = 渠道(2) × 出/入类型(2)。一段 = 一份文件 = 一个步骤窗口。
+_FLOW_SEGS = tuple(
+    (_SEED_FLOW + i, ch, ft)
+    for i, (ch, ft) in enumerate(
+        (ch, ft) for ch in ('jd', 'other') for ft in ('inbound', 'outbound')
+    )
 )
+_FLOW_NOS = tuple(x[0] for x in _FLOW_SEGS)
+
+# 落账 4 段 = 渠道 × 仓型。顺序有意义: 平台仓在前(量大), 自有仓在后(含可用重算与
+#   best_before 回写, 必须最后, 因为它要读全部仓型的批次)。线上实测各 ≤40s, 保持原样。
+_SETTLE_BASE = _FLOW_SEGS[-1][0] + 1                   # 18
+_SETTLE_SEGS = (
+    (_SETTLE_BASE,     'jd',    'platform'),
+    (_SETTLE_BASE + 1, 'jd',    'own'),
+    (_SETTLE_BASE + 2, 'other', 'platform'),
+    (_SETTLE_BASE + 3, 'other', 'own'),
+)
+_SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)
+_SEED_SETTLE_JD_PF = _SETTLE_SEGS[0][0]
+_SEED_SETTLE = _SETTLE_SEGS[0][0]                      # 兼容别名: 落账起点
+_SEED_SETTLE_OT_OWN = _SETTLE_SEGS[-1][0]              # 兼容别名: 最后一段(自检点)
+
+_SEED_MONTH = _SETTLE_SEGS[-1][0] + 1                  # 22 月汇总 + 配置
+# 尾段 4 段: 原一段同时跑 alerts + snapshot + 两渠道物化(历史实测 456s, 必然踩穿),
+#   拆成 4 个独立单请求, 每个只做一件事。
+_TAIL_SEGS = (
+    (_SEED_MONTH + 1, 'alerts'),
+    (_SEED_MONTH + 2, 'snapshot'),
+    (_SEED_MONTH + 3, 'stats_jd'),
+    (_SEED_MONTH + 4, 'stats_other'),
+)
+_SEED_TAIL = _TAIL_SEGS[0][0]                          # 兼容别名: 尾段起点
+SEED_DONE = _TAIL_SEGS[-1][0] + 1                      # 27 = 完成
 
 
 # ── 水位 / 回滚 / 行数对账(2026-11-05) ──────────────────────────────────
@@ -1307,21 +1355,22 @@ def seed_step(step, today, skus_data, run_id=''):
         if run_id:
             wm_end(run_id, step, {'inventory': n}, channel=_seg_ch)
         return _seg_no + 1, {'inventory_%s_%s' % (_seg_ch, _seg_wg): n}
-    if step == _SEED_FLOW:
-        # 2026-10-29 顺序修正: 先流水(原 step6 生成批次 → 早于流水, 批次基于旧库存)
-        if run_id:
-            wm_begin(run_id, step, ('inbound_records', 'outbound_records'), channel='jd,other')
-        a, b = _seed_records()
-        if run_id:
-            wm_end(run_id, step, {'inbound_records': a, 'outbound_records': b}, channel='jd,other')
-        return _SEED_SETTLE_JD_PF, {'inbound': a, 'outbound': b}
-    # 落账四段: 由 _SETTLE_SEGS 表驱动(顺序有意义, 见常量处注释)
-    for _seg_no, _seg_ch, _seg_wg in _SETTLE_SEGS:
-        if step != _seg_no:
+    # 流水 4 段: 每段只发 1 份导入文件, 只删/只写自己的 (渠道, 表) 组合。
+    #   不登记水位: 水位语义是「插入型目标按 id 递增」, 而这里按 (渠道 × 表) DELETE 已经
+    #   幂等, 多段写同一张表时水位回滚会误删别的段的行(见 wm_rollback 注释)。
+    for _no, _ch, _ft in _FLOW_SEGS:
+        if step != _no:
             continue
-        _st = seed_settle(skus_data, channel=_seg_ch, wh_group=_seg_wg)
-        # 最后一段(other 自有仓)做完 → 才做跨段自检: 此时两渠道 × 两仓型才全部落完
-        if _seg_no == _SEED_SETTLE_OT_OWN:
+        # 一个请求 = 一份导入文件 = 一个步骤窗口(渠道 × 出/入类型)
+        n = _seed_records(channel=_ch, flow_type=_ft)
+        return _no + 1, {'flow_%s_%s' % (_ch, _ft): n}
+    # 落账 4 段: 渠道 × 仓型, 线上已实测各 ≤40s, 段内 DELETE 与重建范围严格一致。
+    for _no, _ch, _wg in _SETTLE_SEGS:
+        if step != _no:
+            continue
+        _st = seed_settle(skus_data, channel=_ch, wh_group=_wg)
+        # 最后一段做完 → 才做跨段自检: 此时两渠道 × 两仓型才全部落完
+        if _no == _SETTLE_SEGS[-1][0]:
             try:
                 _st = dict(_st or {})
                 _st['barcode_aligned'] = _assert_barcode_aligned()
@@ -1329,26 +1378,35 @@ def seed_step(step, today, skus_data, run_id=''):
                 _st = dict(_st or {})
                 _st['degraded'] = ((_st.get('degraded') or '') +
                                    '; selfcheck: %s' % str(_ea)[:100]).strip('; ')
-        return _seg_no + 1, _st
+        return _no + 1, _st
     if step == _SEED_MONTH:
         _ms = _sync_inv_month()
         _seed_config()
-        return _SEED_TAIL, {'config': 'ok', 'inv_month': _ms}
-    if step == _SEED_TAIL:
-        n_alert = _seed_alerts()
-        n_snap = _build_snapshot()
-        # 2026-10-29 补: 日销物化重建(必须跟在快照之后)
-        #   补货/采购/断货/健康全部读 sku_sales_stats; 原 seed 不重建 → 物化为空/残缺
-        _rb = {}
-        try:
-            from biz.sales import _rebuild_sku_sales_stats as _rss
-            for _ch in ('jd', 'other'):
-                _rb[_ch] = _rss(_ch, days=ORDER_DAYS)
-        except Exception as _erb:
-            try_err('seed_fill', 'seed 物化重建降级', _erb)
-            _rb = {'error': str(_erb)[:150]}
-        return SEED_DONE, {'alerts': n_alert, 'snapshot': n_snap, 'sales_stats': _rb}
+        return _SEED_MONTH + 1, {'config': 'ok', 'inv_month': _ms}
+    # 尾段 4 段: 一个请求只做一件事, 不再把 alerts + snapshot + 两渠道物化塞进同一段
+    for _no, _kind in _TAIL_SEGS:
+        if step != _no:
+            continue
+        return _no + 1, {_kind: _seed_tail_piece(_kind)}
     return SEED_DONE, {}
+
+
+def _seed_tail_piece(kind):
+    """尾段单片: alerts / snapshot / stats_jd / stats_other —— 每段一个独立单请求
+
+    历史教训: 原 step 把四件事塞进一个请求, 实测 456s(平台单请求上限 120s),
+    运维口文档里明写「拒绝单跑」, 但 seed 主链路仍在跑 —— 等于留了一颗定时炸弹。
+    """
+    if kind == 'alerts':
+        return _seed_alerts()
+    if kind == 'snapshot':
+        return _build_snapshot()
+    try:
+        from biz.sales import _rebuild_sku_sales_stats as _rss
+        return _rss('jd' if kind == 'stats_jd' else 'other', days=ORDER_DAYS)
+    except Exception as _erb:
+        try_err('seed_fill', 'seed 物化重建降级 %s' % kind, _erb)
+        return {'error': str(_erb)[:150]}
 
 
 def seed_settle(skus_data=None, channel='', wh_group=''):
@@ -1428,7 +1486,7 @@ def run_seed_fill():
     orders_db = int(r.get('c') or 0)
     # 2026-10-29 顺序修正: 流水 → 重算 own available → 再生成批次(批次必须基于最终库存)
     #   原顺序(批次→流水→重算)会让批次基于重算前的旧库存, 与 available 不齐
-    n_in, n_out = _seed_records()
+    n_flow = _seed_records()   # 全量模式返回本轮导入总行数(分片模式每段返回自己那片)
     # 2026-11-05 落账统一: 原此处内联了一份"重算 → 批次 → 自检", 与 seed_step 里那份各自演化
     #   → 抽出 seed_settle() 单一实现, 一键与分步走同一条路径
     _st = seed_settle(skus_data)
@@ -1440,7 +1498,7 @@ def run_seed_fill():
     n_snap = _build_snapshot()
     return {'orders': n_orders, 'products': len(n_prod), 'suppliers': len(n_sup),
             'inventory': n_inv, 'inventory_db': inv_counts, 'orders_db': orders_db, 'batches': n_batch,
-            'inbound': n_in, 'outbound': n_out, 'alerts': n_alert, 'snapshot': n_snap,
+            'flow_rows': n_flow, 'alerts': n_alert, 'snapshot': n_snap,
             'recalc': _st.get('recalc', 0), 'degraded': _st.get('degraded', ''),
             'barcode_aligned': _bc_chk,
             'elapsed': round(time.time() - started, 1)}

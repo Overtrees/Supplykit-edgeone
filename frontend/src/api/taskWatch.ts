@@ -20,8 +20,9 @@ import { apiJson } from '../api/client'
 
 const API = import.meta.env.VITE_API_BASE_URL || ''
 
-/** 续跑请求超时: 必须小于后端单步预算(平台建议 ≤90s)与网关硬上限 120s */
-export const DRIVE_TIMEOUT = 115000
+/** 续跑请求超时: 后端单段预算 90s + 10s 余量, 且必须小于网关硬上限 120s。
+ *  旧值 115000 贴着网关 —— 后端一旦跑满 120s, 前端和网络层一起断, 更难判断是谁的问题。 */
+export const DRIVE_TIMEOUT = 100000
 
 /** 心跳: 每隔多久问一次状态(有在跑的任务时) */
 const BEAT_MS = 3000
@@ -35,6 +36,8 @@ type Watch = {
   stalls: number
   /** 最近一次看到的进度指纹(step/offset), 用来判断有没有推进 */
   sig: string
+  /** 最近一次 status 返回的进度快照(供胶囊/全局提示显示"第 N/M 段") */
+  lastTick: Record<string, unknown> | null
   onDone?: (id: string) => void
   onFail?: (id: string, err: string) => void
   onTick?: (id: string, payload: unknown) => void
@@ -96,6 +99,8 @@ async function _drive(w: Watch) {
       unknown
     >
     const st = String(body.status || '')
+    // 指纹只看「进度是否前进」, 不能把 stalled_s 放进来 —— 它每秒都在变,
+    //   会让 stalls 永远归零, 退避失效, 租约被别人持有时前端反而刷得更凶(空烧 RU)。
     const sig = [body.step ?? '', body.offset ?? '', st].join('|')
     if (sig !== w.sig) {
       w.sig = sig
@@ -103,6 +108,7 @@ async function _drive(w: Watch) {
     } else {
       w.stalls += 1
     }
+    w.lastTick = body
     w.onTick && w.onTick(w.taskId, body)
     if (st === 'done') {
       unwatch(w.taskId)
@@ -111,14 +117,21 @@ async function _drive(w: Watch) {
       unwatch(w.taskId)
       w.onFail && w.onFail(w.taskId, String(body.error || st))
     }
-  } catch (e) {
-    // 超时/断网都不摘掉看守: 服务端可能仍在跑(租约保护着), 下次心跳会看到真实状态。
-    // 只在连续失败很多次后放弃, 并把原因交给调用方提示。
+  } catch {
+    // 超时/断网 **绝不摘掉看守, 也不报"任务失败"**: 后端单段可能被网关切断,
+    //   但租约 150s 后会自动释放并重跑(每段幂等), 任务最终会由 status 明确落到
+    //   done / error。旧实现连续失败 40 次就 unwatch + onFail, 会把"响应丢了但任务
+    //   还在跑"误报成失败, 用户看到的就是"刚才还好好的怎么突然失败了"。
+    //   这里只累加 stalls 触发指数退避(最多 15s), 保持看守直到后端给终态。
     w.stalls += 1
-    if (w.stalls >= 40) {
-      unwatch(w.taskId)
-      w.onFail && w.onFail(w.taskId, String((e as Error)?.message || 'network'))
+    w.lastTick = {
+      ...(w.lastTick || {}),
+      status: 'running',
+      network_stalled: true,
+      stalled_s: w.stalls * 3,
     }
+    w.onTick && w.onTick(w.taskId, w.lastTick)
+    _notify()
   } finally {
     _inflight = false
   }
@@ -161,6 +174,7 @@ export function watch(
     lastDrive: prev ? prev.lastDrive : 0,
     stalls: prev ? prev.stalls : 0,
     sig: prev ? prev.sig : '',
+    lastTick: prev ? prev.lastTick : null,
     onDone: cb.onDone || prev?.onDone,
     onFail: cb.onFail || prev?.onFail,
     onTick: cb.onTick || prev?.onTick,
@@ -178,6 +192,33 @@ export function unwatch(taskId: string) {
 /** 该任务是否正在被看守(用于任务卡显示"前端驱动中") */
 export function isWatched(taskId: string): boolean {
   return _watches.has(taskId)
+}
+
+/**
+ * 全局看守摘要(胶囊/全局提示用)
+ *
+ * 回答「持锁期间别的页面怎么办 / 多次切页面怎么办」: 看守是模块级的, 与页面无关,
+ * 任何页面都能从这里读到同一份真实进度 —— 不需要每个页面自己去轮询一遍任务表,
+ * 也不需要在页面上假装有 loading。后端抢不到锁时也会返回 step/stalled_s,
+ * 所以这里拿到的永远是「第几段、卡了多久」, 而不是一个空泛的"同步中"。
+ */
+export function watchSummary(): {
+  count: number
+  step: number
+  total: number
+  stalled: number
+  lease: boolean
+} {
+  const w = _watches.size ? [..._watches.values()][0] : null
+  // 不能叫 t —— i18n 门禁会把它当成遮蔽翻译函数 t() 的局部变量(红线判定)
+  const tick = (w?.lastTick || {}) as Record<string, unknown>
+  return {
+    count: _watches.size,
+    step: Number(tick.step ?? 0),
+    total: Number(tick.total_step ?? 0),
+    stalled: Number(tick.stalled_s ?? w?.stalls ?? 0),
+    lease: Boolean(tick.lease_held),
+  }
 }
 
 /**

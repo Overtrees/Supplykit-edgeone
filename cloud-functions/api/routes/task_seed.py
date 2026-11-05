@@ -24,57 +24,87 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     """任务状态查询(Makers 异步适配: running 时续跑下一步, 客户端轮询推进直到 done)"""
     if not task_id:
         return {"data": {"status": "not_found"}}
-    row = one("SELECT status, params FROM sync_tasks WHERE task_id=%s", [task_id])
+    row = one("SELECT status, params, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS stalled_s, "
+              "UNIX_TIMESTAMP(NOW()) AS now_ts FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"data": {"status": "not_found"}}
     status = row.get("status") or "not_found"
     if status in ("done", "error"):
         return {"data": {"status": status}}
-    # 防并发续跑(前端 App+Settings 双轮询/多实例/运维口同时驱动): 原子抢占并**持有**租约
+    # 进度快照: **任何**返回(含抢不到锁)都带它, 前端不再需要靠"这一秒刚好推进了"猜状态
+    import json as _json0
+    try:
+        _pj0 = _json0.loads(row.get("params") or "{}")
+    except Exception:
+        _pj0 = {}
+    _step0 = int(_pj0.get("step") or 0)
+    _total0 = int(_pj0.get("total_step") or 0)
+    _last0 = (_pj0.get("steps") or [])
+    _last_name0 = str((_last0[-1] or {}).get("name") or "")[:80] if _last0 else ""
+    def _prog(extra=None):
+        d = {"status": "running", "step": _step0, "total_step": _total0,
+             "stalled_s": max(0, int(row.get("stalled_s") or 0)),
+             "now_ts": int(row.get("now_ts") or 0),
+             "last_step": _last_name0,
+             "lease_held": bool(extra and extra.get("lease"))}
+        if extra:
+            d.update(extra)
+        return {"data": d}
+    # 防并发续跑: 原子抢占短租约 + **响应丢失可自愈**
     #
-    # 2026-11-05 线上事故(水位对账抓出来的): 每段订单都被执行了**两次**, 单日订单精确为
-    #   3100(= 1550×2), jd016 那一格高达 11,609(≈3 次)。旧锁是:
-    #       UPDATE ... SET updated_at=NOW() WHERE updated_at < NOW() - INTERVAL 3 SECOND
-    #   两个缺陷:
-    #     ① 锁没有"持有期" —— 抢到锁的请求要执行 40~60s, 而这期间 updated_at 停在抢锁那刻,
-    #        3 秒后第二个轮询就能再抢一次, 于是同一步并发跑两遍, 两遍都往库里写。
-    #     ② updated_at 同时被前端当"进度心跳"用, 兼任锁会互相干扰(一个要推未来, 一个要写现在)。
-    #   现在: 独立列 `lease_until` 表达租约, 抢锁 = 把租约推到 NOW()+600s 且要求"已过期或无租约"。
-    #   执行期间任何并发请求看到的都是未过期的租约, 抢不到; 步末释放(置 NULL)。
-    #   进程崩溃会把任务卡 10 分钟 —— 有意的: 宁可等, 也不能让同一步跑两遍把数据写重。
-    _LEASE = 600
+    # 2026-11-05 第二次线上事故(用户看到「卡在 14 几百秒」): 600s 长租约是上一轮为
+    #   「同一步被两个轮询并发跑两遍」加的护栏, 但它引入了更坏的失效模式 ——
+    #   单段一旦 >120s 被网关**硬杀进程**, `lease_until=NULL` 那行根本没执行到,
+    #   租约就挂满 600s; 期间所有页面/轮询/cron 全被挡回 `running`, 进度心跳停跳,
+    #   前端只能显示「刚刚」; 租约一过期又被多个驱动抢到, 从 DELETE 全表重跑同一个
+    #   必超时的段 → 循环。用户看到的「几百秒」不是一次慢查询, 是重跑+锁死+再重跑。
+    #
+    # 现在两条一起改(不靠"再拆一段"碰运气):
+    #   ① 租约 = 单段预算(90s) + 网关余量, 取 150s。进程被杀最多静止 2.5 分钟,
+    #      而不是 10 分钟; 且每一段都被拆到 ≤90s(seed_fill 的 _FLOW_SEGS/_SETTLE_SEGS/
+    #      _TAIL_SEGS), 正常路径根本不会被杀。
+    #   ② **每段幂等**(流水按「渠道 × 表」精确 DELETE 后重写, 落账按「渠道 × 仓型」
+    #      DELETE 后重建; 订单/库存走业务唯一键 upsert), 所以租约过期后重跑同一段
+    #      不会写重数据 —— 这是短租约能成立的前提, 也是原来最怕并发的原因已消失。
+    #   ③ 抢不到锁时不再返回裸 `running`, 而是带上 step / stalled_s / lease 信息,
+    #      让前端能明确显示「第 N 段处理中, 已等待 Xs」, 而不是假装还在加载。
+    _LEASE = 150
     try:
         _locked = execute(
             "UPDATE sync_tasks SET lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND) "
             "WHERE task_id=%s AND (lease_until IS NULL OR lease_until < NOW())",
             [_LEASE, task_id])
         if not _locked:
-            return {"data": {"status": "running"}}  # 已有请求持有租约, 跳过本次(防并发)
+            return _prog({"lease": True})  # 已有请求持有租约: 带进度返回, 不再裸 running
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
         # 抢锁失败(DB 抖动)时**不能**继续执行 —— 否则就是无锁并发, 等于回到事故现场
-        return {"data": {"status": "running"}}
+        return _prog({"lease": True, "lock_error": str(_e)[:80]})
     # running → 续跑下一步(每步 ≤90s, 函数 120s 上限内)
     try:
         import json as _json
         import time as _tt
-        params = _json.loads(row.get("params") or "{}")
-        step = int(params.get("step") or 0)
-        from routes.seed_fill import prepare_skus, seed_step, SEED_DONE
+        params = _pj0
+        step = _step0
+        from routes.seed_fill import prepare_skus, seed_step, SEED_DONE, SEED_STEP_BUDGET_S
         _t0 = _tt.time()
         skus_data = prepare_skus()
         today = now_cn()
         # 2026-11-05 带 run_id: 每步写入前登记 id 水位 → 可精确回滚本轮新增行 + 行数对账
         nxt, part = seed_step(step, today, skus_data, run_id=task_id)
         _sq = round(_tt.time() - _t0, 1)
+        # 超预算留痕: 分片协议的目标是每段 ≤90s, 一旦某段贴线就要看得见(而不是等网关先杀)
+        if _sq > SEED_STEP_BUDGET_S:
+            try_err('tasks', 'seed 段超预算 step=%d %.1fs > %ds' % (step, _sq, SEED_STEP_BUDGET_S), '')
         # 2026-10-15 每步耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
         _steps = (params.get("steps") or []) + [{"name": str(part) or ("步骤%d" % step), "elapsed": _sq}]
-        # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 原写死 10, 而段号重排后完成值是 12
-        #   → 任务越过 10 后永不落 done, status 轮询会一直续跑(空转烧 RU)
+        # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 原写死 10, 而段号重排后
+        #   完成值一路变到 27; 写死会让任务越过 10 后永不落 done, 空转烧 RU。
         # total_step 一并下发: 前端进度条此前也写死 10 段, step>10 时顶在 99% 不动
         _cur = {"name": ("步骤%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
         new_params = _json.dumps({"step": nxt, "steps": _steps, "total_step": SEED_DONE,
-                                  "cur_step": None if nxt >= SEED_DONE else _cur})
+                                  "cur_step": None if nxt >= SEED_DONE else _cur,
+                                  "step_started_ts": int(_tt.time())})
         if nxt >= SEED_DONE:
             # 全部步骤完成 → done(汇总 part 简单展示); 同时释放租约
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, "
@@ -94,7 +124,9 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
                 (new_params, task_id))
         from routes.analysis_cache import invalidate
         invalidate("all")  # 每步数据变化 → 缓存失效
-        return {"data": {"status": "running", "step": nxt, "part": part}}
+        return {"data": {"status": "running", "step": nxt, "part": part,
+                         "total_step": SEED_DONE, "elapsed": _sq, "stalled_s": 0,
+                         "now_ts": int(_tt.time()), "lease_held": False}}
     except Exception as e:
         import traceback as _tb
         try:
@@ -317,27 +349,30 @@ async def seed_step_run(request: Request):
         d = await request.json()
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
-    from routes.seed_fill import (_SEED_FLOW, _SEED_MONTH, _SEED_INV_SEGS,
-                                  _SETTLE_SEGS)  # noqa: E402
-    _LAST = _SEED_MONTH
-    # 白名单 = 库存 / 流水 / 落账四段 / 月汇总。落账四段由 _SETTLE_SEGS 推导, 段数再变不用改这里。
-    _SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)
-    _SETTLE_FIRST = _SETTLE_NOS[0]
-    # 库存段也拆了(渠道 × 仓型四段), 白名单同样从常量推导 —— 写死单段会让 11~13 段全被拒
+    from routes.seed_fill import (_SEED_MONTH, _SEED_INV_SEGS, _FLOW_SEGS,
+                                  _SETTLE_SEGS, _TAIL_SEGS, SEED_DONE,
+                                  _seed_inventory, prepare_skus, _seed_records,
+                                  seed_settle, _seed_tail_piece)  # noqa: E402
+    # 2026-11-05 段表扩到 27 段后, 运维口「从 from_step 连续跑到末步」会一个请求
+    #   跑十几段, 必然踩穿 120s —— 正是这次事故的形状。改成**默认只跑指定那一段**,
+    #   需要连续时显式传 single=false(且调用方自己承担超时风险)。
     _INV_NOS = tuple(x[0] for x in _SEED_INV_SEGS)
-    _ALLOWED = _INV_NOS + (_SEED_FLOW,) + _SETTLE_NOS + (_SEED_MONTH,)
+    _FLOW_NOS = tuple(x[0] for x in _FLOW_SEGS)
+    _SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)
+    _TAIL_NOS = tuple(x[0] for x in _TAIL_SEGS)
+    _ALLOWED = _INV_NOS + _FLOW_NOS + _SETTLE_NOS + (_SEED_MONTH,) + _TAIL_NOS
+    _LAST = _TAIL_NOS[-1]
+    _SETTLE_FIRST = _SETTLE_NOS[0]
     try:
-        # 默认 = 落账起点(第一段落账), 与旧行为一致: 不带参数就重算可用 + 重建全部批次
         from_step = int(d.get("from_step") or d.get("step") or _SETTLE_FIRST)
     except Exception:
         return fail("from_step 必须是整数", 400)
     if from_step not in _ALLOWED:
-        return fail("from_step 只支持 %s, 且必须连续执行到 %d —— "
-                    "%s 库存导入(渠道×仓型) / %d 重建流水 / %s 落账四段(渠道×仓型) / %d 月汇总; "
-                    "更早的段会写商品与订单, 流水段单跑会让可用与流水脱节"
-                    % ("/".join(str(x) for x in _ALLOWED), _LAST,
-                       "/".join(str(x) for x in _INV_NOS), _SEED_FLOW,
-                       "/".join(str(x) for x in _SETTLE_NOS), _SEED_MONTH), 400)
+        return fail("from_step 只支持 %d~%d 的派生段(库存/流水/落账/月汇总/尾段); "
+                    "更早的段会写商品与订单, 不在运维口范围"
+                    % (_ALLOWED[0], _ALLOWED[-1]), 400)
+    single = bool(d.get("single", True))
+    to_step = int(d.get("to_step") or (from_step if single else _LAST))
     # 库存段会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
     #   否则等于往真实客户库里塞演示库存。orders.data_source='seed' 是"这是 seed 库"的可靠标记。
     if from_step <= _INV_NOS[-1]:
@@ -367,62 +402,34 @@ async def seed_step_run(request: Request):
         before = _inv_fingerprint()
         bad_before = _month_sum_diff(month_start)
         _steps = []
-        # ── 库存段: 生成库存行(新 SKU 才真正插入; 已存在行 INSERT IGNORE 跳过) ──
-        #   这是"让 seed 生成器的新逻辑(多码拆行)真正落地"的唯一途径 —— 不跑它,
-        #   inventory 里永远只有旧的单码行, 双码链路无从验证。
-        if any(from_step <= x for x in _INV_NOS):
-            import random as _rnd
-            from routes.seed_fill import _seed_inventory, prepare_skus
-            # 每段独立 seed: 各段生成的是**不同渠道/仓型**的子集, 若共用全局随机流,
-            #   单跑第 11 段会和连跑 10→11 得到不同的库存量(重跑就漂移)。
-            _iseg = []
-            for _no, _ch, _wg in _SEED_INV_SEGS:
-                if from_step > _no:
-                    continue
-                _rnd.seed(42)
-                _t0 = _t.time()
-                _nin = _seed_inventory(prepare_skus(), channel=_ch, wh_group=_wg)
-                _iseg.append({"step": _no, "channel": _ch, "wh_group": _wg,
-                              "elapsed_s": round(_t.time() - _t0, 1),
-                              "result": {"rows": _nin}})
-            _steps.append({"step": _INV_NOS[0], "name": "库存导入(渠道×仓型)",
-                           "elapsed_s": round(sum(x["elapsed_s"] for x in _iseg), 1),
-                           "result": _iseg})
-        # ── 流水段: 重建出入库流水(带 warehouse_type) ──────────────────────
-        if from_step <= _SEED_FLOW:
-            import random as _rnd
-            from routes.seed_fill import _seed_records
-            _rnd.seed(42)   # 与 seed_step(流水段) 同语义: 每步独立确定性(否则依赖进程随机态)
+        # ── 统一段表驱动: 一段 = 一个可独立重跑的片, 逐段计时上报 ──────────
+        #   与 seed_fill.seed_step 完全同一张表, 不再各抄一份段号/参数(历史上两处各自
+        #   演化出过「批次基于重算前旧库存」的顺序错)。每段独立 random.seed(42):
+        #   各段生成的是不同渠道/仓型/出-入类型的子集, 共用随机流会让单跑与连跑漂移。
+        import random as _rnd
+        from routes.seed_fill import _sync_inv_month as _sim
+        _plan = {}
+        for _no, _ch, _wg in _SEED_INV_SEGS:
+            _plan[_no] = ("库存导入 %s/%s" % (_ch, _wg),
+                          lambda ch=_ch, wg=_wg: _seed_inventory(prepare_skus(), channel=ch, wh_group=wg))
+        for _no, _ch, _ft in _FLOW_SEGS:
+            _plan[_no] = ("流水 %s/%s" % (_ch, _ft),
+                          lambda ch=_ch, ft=_ft: _seed_records(channel=ch, flow_type=ft))
+        for _no, _ch, _wg in _SETTLE_SEGS:
+            _plan[_no] = ("落账 %s/%s" % (_ch, _wg),
+                          lambda ch=_ch, wg=_wg: seed_settle(channel=ch, wh_group=wg))
+        _plan[_SEED_MONTH] = ("月汇总重算", lambda: _sim())
+        for _no, _kind in _TAIL_SEGS:
+            _plan[_no] = ("尾段 %s" % _kind, lambda k=_kind: _seed_tail_piece(k))
+        for _no in sorted(k for k in _plan if from_step <= k <= to_step):
+            _name, _fn = _plan[_no]
+            _rnd.seed(42)
             _t0 = _t.time()
-            _ib, _ob = _seed_records()
-            _steps.append({"step": _SEED_FLOW, "name": "出入库流水重建",
-                           "elapsed_s": round(_t.time() - _t0, 1),
-                           "result": {"inbound": _ib, "outbound": _ob}})
-        # ── 落账段: 按新流水重算自有仓可用 + 重建批次(恢复 Σ批次=可用) ──────
-        #   2026-11-05 二次拆段: 线上实测「按渠道拆」仍 504(jd 单渠道 123s)——
-        #   jd 有 68,322 平台仓行 + 9,637 B 仓行, 每行 1~3 批 ≈ 16.8 万批次。
-        #   现按 (渠道 × 仓型) 四段顺序执行, 运维口一次跑完但**逐段计时上报**,
-        #   哪段慢立刻能看出来(seed 任务里这四段是分开的四个单请求)。
-        if any(from_step <= x for x in _SETTLE_NOS):
-            from routes.seed_fill import seed_settle
-            _segs = []
-            for _no, _ch, _wg in _SETTLE_SEGS:
-                if from_step > _no:
-                    continue          # 起点晚于本段 → 跳过(但起点之前的段一定不做)
-                _td = _t.time()
-                _st = seed_settle(channel=_ch, wh_group=_wg)
-                _segs.append({"step": _no, "channel": _ch, "wh_group": _wg,
-                              "elapsed_s": round(_t.time() - _td, 1),
-                              "result": {k: v for k, v in (_st or {}).items()
-                                         if k != 'barcode_aligned'}})
-            _steps.append({"step": _SETTLE_NOS[0], "name": "可用重算+批次重建",
-                           "elapsed_s": round(sum(x["elapsed_s"] for x in _segs), 1),
-                           "result": _segs})
-        # ── 月汇总段: 月汇总(刻意跳过 _seed_config, 不碰补货参数/规则) ─────────
-        _t0 = _t.time()
-        groups = _sync_inv_month()
-        _steps.append({"step": _SEED_MONTH, "name": "月汇总重算",
-                       "elapsed_s": round(_t.time() - _t0, 1), "result": groups})
+            _res = _fn()
+            if isinstance(_res, dict):
+                _res = {k: v for k, v in _res.items() if k != 'barcode_aligned'}
+            _steps.append({"step": _no, "name": _name,
+                           "elapsed_s": round(_t.time() - _t0, 1), "result": _res})
         after = _inv_fingerprint()
         bad_after = _month_sum_diff(month_start)
         # 诊断: 流水仓型为空 → 聚合组匹配不到 inventory(不会写错值, 但月汇总不更新)
@@ -433,11 +440,12 @@ async def seed_step_run(request: Request):
         _hint = "ok"
         if _empty_wt:
             _hint = ("流水 warehouse_type 仍为空(%d 条) → 月汇总匹配不到库存行; "
-                     "用 from_step=6 重建流水, 或传 fix_flow_wh_type=true(仅 seed 库)" % _empty_wt)
+                     "重跑流水段(%d~%d), 或传 fix_flow_wh_type=true(仅 seed 库)"
+                     % (_empty_wt, _FLOW_NOS[0], _FLOW_NOS[-1]))
         elif bad_after:
             _hint = "月汇总仍有 %d 行与流水不一致, 需排查库存行是否缺失或仓型不匹配" % bad_after
         return ok({
-            "from_step": from_step, "to_step": _LAST,
+            "from_step": from_step, "to_step": to_step, "single": single,
             "total_s": round(_t.time() - _ta, 1),
             "steps": _steps,
             "rows_delta": after["rows"] - before["rows"],

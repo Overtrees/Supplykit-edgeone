@@ -2997,30 +2997,42 @@ try:
                        if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
-    # 段号自成体系: 订单 6 段 + 库存/流水/落账×4/月汇总/尾段 = 完成值 15
+    # 段号自成体系: 订单 9 + 库存 4 + 流水 4 + 落账 4 + 月 1 + 尾 4 + 完成 1 = 27
     # 2026-11-05 线上实测: 15 天/段双渠道 71~148s(第 4 段 148s 贴穿 120s 网关) → 改 10 天/段
     check("seed 段号: 订单 9 段(90 天 ÷ 10 天, 单段订单量降到 1/3)",
           _sf._SEED_ORDER_SEGS == 9 and 90 % _sf._SEED_ORDER_SEGS == 0,
           _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 21(订单9 + 库存4 + 流水1 + 落账4 + 月1 + 尾1 + 1)",
-          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE_JD_PF
-          < _sf._SEED_SETTLE_JD_OWN < _sf._SEED_SETTLE_OT_PF < _sf._SEED_SETTLE_OT_OWN
-          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 21,
-          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE_JD_PF, _sf._SEED_SETTLE_JD_OWN,
-           _sf._SEED_SETTLE_OT_PF, _sf._SEED_SETTLE_OT_OWN, _sf._SEED_MONTH,
-           _sf._SEED_TAIL, _sf.SEED_DONE))
-    # 线上实测: 按渠道拆完 jd 单渠道仍 504(123s) —— jd 有 68,322 平台仓行, 每行 1~3 批
-    #   ≈ 16.8 万批次。必须再按仓型切。
-    check("落账四段: 顺序为 jd平台→jd自有→other平台→other自有(自有段必须最后, 要读全部仓型批次)",
-          _sf._SETTLE_SEGS == ((_sf._SEED_SETTLE_JD_PF, 'jd', 'platform'),
-                               (_sf._SEED_SETTLE_JD_OWN, 'jd', 'own'),
-                               (_sf._SEED_SETTLE_OT_PF, 'other', 'platform'),
-                               (_sf._SEED_SETTLE_OT_OWN, 'other', 'own')),
-          _sf._SETTLE_SEGS)
-    check("落账四段: 段号连续(否则 seed_step 会跳段)",
-          [x[0] for x in _sf._SETTLE_SEGS] == list(range(_sf._SEED_SETTLE_JD_PF,
-                                                         _sf._SEED_SETTLE_OT_OWN + 1)),
+    check("seed 段号: 各段严格递增且完成值 = 27(订单9+库存4+流水4+落账4+月1+尾4+1)",
+          _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW
+          < _sf._SETTLE_SEGS[0][0] < _sf._SEED_MONTH < _sf._SEED_TAIL
+          < _sf.SEED_DONE == 27,
+          (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SETTLE_SEGS[0][0],
+           _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
+    # 事故根因: step14 一个请求发 4 份导入文件(2 渠道 × 2 类型) → >120s 被网关切断。
+    #   收敛口径: 一个请求 = 一份导入文件 = 一个步骤窗口, 4 段, 不按 SKU 半区预拆。
+    check("流水 4 段: 渠道×出/入类型, 一段一文件, 段号连续且恰为 2×2",
+          len(_sf._FLOW_SEGS) == 4
+          and [x[0] for x in _sf._FLOW_SEGS] == list(range(_sf._SEED_FLOW, _sf._SEED_FLOW + 4))
+          and {x[1] for x in _sf._FLOW_SEGS} == {'jd', 'other'}
+          and {x[2] for x in _sf._FLOW_SEGS} == {'inbound', 'outbound'}
+          and all(len(x) == 3 for x in _sf._FLOW_SEGS),
+          [x[0] for x in _sf._FLOW_SEGS])
+    check("落账 4 段: 渠道×仓型, 段号连续(沿用线上已实测各 ≤40s 的粒度)",
+          len(_sf._SETTLE_SEGS) == 4
+          and [x[0] for x in _sf._SETTLE_SEGS] == list(range(_sf._SETTLE_SEGS[0][0],
+                                                             _sf._SETTLE_SEGS[-1][0] + 1))
+          and all(len(x) == 3 for x in _sf._SETTLE_SEGS),
           [x[0] for x in _sf._SETTLE_SEGS])
+    check("尾段 4 段: 告警/快照/物化双渠道各自独立(原一段实测 456s 必踩穿)",
+          len(_sf._TAIL_SEGS) == 4
+          and {x[1] for x in _sf._TAIL_SEGS} == {'alerts', 'snapshot', 'stats_jd', 'stats_other'},
+          [x[1] for x in _sf._TAIL_SEGS])
+    _all_nos = ([x[0] for x in _sf._SEED_INV_SEGS] + [x[0] for x in _sf._FLOW_SEGS]
+                + [x[0] for x in _sf._SETTLE_SEGS] + [_sf._SEED_MONTH]
+                + [x[0] for x in _sf._TAIL_SEGS])
+    check("段表完整: 10..SEED_DONE-1 无空洞无重复(否则 seed_step 会跳段或空转)",
+          sorted(_all_nos) == list(range(10, _sf.SEED_DONE)),
+          (len(_all_nos), _sf.SEED_DONE))
     # SKU 编号位宽: 4 位到 9999 就撞名, 10000 个必须 5 位
     _sk_t = _sf._make_skus('-T', 10000, 0.01)
     check("seed SKU: 10000 个编号无撞名", len({x['sku'] for x in _sk_t}) == 10000,
@@ -3060,9 +3072,11 @@ try:
     _sf11 = open("routes/seed_fill.py", encoding="utf-8").read()
     check("订单段返回值 = 本段新增行数(不再是含偏移的全局序号)",
           "_seg_rows += int(_r.get('rows') or 0)" in _sf11, "routes/seed_fill.py")
-    check("落账段用内存 SKU 集合(省掉 2 万行的 SELECT DISTINCT, 实测 3.1s)",
+    check("落账段用内存 SKU 集合(省掉 2 万行的 SELECT DISTINCT, 实测 3.1s), 且不再按 SKU 半区切",
           "def seed_settle(skus_data=None, channel='', wh_group='')" in _sf11
-          and "def _seed_batches(skus_data=None, channel='', wh_group='')" in _sf11,
+          and "def _seed_batches(skus_data=None, channel='', wh_group='')" in _sf11
+          and "sku_half" not in _sf11
+          and "if skus_data and skus_data.get(_och):" in _sf11,
           "routes/seed_fill.py")
     # 拆段后最怕的事: 只清 jd 却按全表重建 → jd 双份、other 三份。删除范围必须跟重建范围同步
     #   断言看**代码行**(去掉注释), 否则说明性注释里的旧写法定法会被误判成没改
@@ -3155,21 +3169,56 @@ try:
     # seed_step 若仍按单段硬编码, 四段只会跑第一段 → 落账永远不完整
     _ss_src = _sf11.split("def seed_step")[1].split("\ndef ")[0]
     check("落账四段: seed_step 用 _SETTLE_SEGS 表驱动(不再单段硬编码)",
-          "for _seg_no, _seg_ch, _seg_wg in _SETTLE_SEGS:" in _ss_src, "routes/seed_fill.py")
-    # task_seed 的 /seed/step 白名单必须从 _SETTLE_SEGS 推导, 否则 10~12 段全被拒
+          "for _no, _ch, _wg in _SETTLE_SEGS:" in _ss_src
+          and "seed_settle(skus_data, channel=_ch, wh_group=_wg)" in _ss_src,
+          "routes/seed_fill.py")
+    check("流水四段: seed_step 用 _FLOW_SEGS 表驱动且每段只发 1 份导入文件",
+          "for _no, _ch, _ft in _FLOW_SEGS:" in _ss_src
+          and "_seed_records(channel=_ch, flow_type=_ft)" in _ss_src,
+          "routes/seed_fill.py")
+    check("尾段四段: seed_step 用 _TAIL_SEGS 表驱动, 每片只做一件事",
+          "for _no, _kind in _TAIL_SEGS:" in _ss_src
+          and "_seed_tail_piece(_kind)" in _ss_src, "routes/seed_fill.py")
+    # task_seed 的 /seed/step 白名单必须从段表推导, 否则新段全被拒
     check("/seed/step 白名单: 落账段号从 _SETTLE_SEGS 推导(不写死单段)",
           "_SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)" in _ts_src, "routes/task_seed.py")
-    # ② 订单双写: 水位对账抓出每段执行两遍(单日 3100 = 1550×2, JD-jd016 达 11,609)。
-    #    旧锁 `updated_at < NOW() - INTERVAL 3 SECOND` 没有持有期 —— 执行 40~60s 期间
-    #    第二个轮询照样能抢。改独立 lease_until 列 + 600s 租约。
+    check("/seed/step: 默认只跑指定一段(single=true), 不再一个请求连跑十几段超时",
+          'single = bool(d.get("single", True))' in _ts_src
+          and 'to_step = int(d.get("to_step") or (from_step if single else _LAST))' in _ts_src,
+          "routes/task_seed.py")
+    # ② 订单双写: 水位对账抓出每段执行两遍(单日 3100 = 1550×2)。
+    #    旧锁 `updated_at < NOW() - INTERVAL 3 SECOND` 没有持有期 → 改 lease_until。
+    #    但 600s 长租约引入更坏的失效: 单段被网关硬杀 → 租约不释放 → 静止 10 分钟
+    #    → 多个驱动反复抢锁重跑。现缩到 150s + 每段幂等, 响应丢失最多静止 2.5 分钟。
     _ts_code3 = "\n".join(x for x in _ts_src.splitlines()
                           if x.strip() and not x.strip().startswith("#"))
     check("续跑锁: 用 lease_until 独占租约, 不再用 3 秒窗口的 updated_at 判断",
           "lease_until=DATE_ADD(NOW(), INTERVAL %s SECOND)" in _ts_code3
           and "INTERVAL 3 SECOND" not in _ts_code3, "routes/task_seed.py")
-    check("续跑锁: 抢锁失败不许继续执行(否则正是双写本身)",
-          "if not _locked:" in _ts_src and 'return {"data": {"status": "running"}}' in _ts_src,
+    check("续跑锁: 租约缩到 150s(网关切断后最多静止 2.5 分钟, 不再是 600s)",
+          "_LEASE = 150" in _ts_code3 and "_LEASE = 600" not in _ts_code3,
           "routes/task_seed.py")
+    check("续跑锁: 抢锁失败不许继续执行(否则正是双写本身)",
+          "if not _locked:" in _ts_src and 'return _prog({"lease": True})' in _ts_src,
+          "routes/task_seed.py")
+    check("续跑锁: 抢不到锁也返回进度快照(step/stalled_s), 不再裸 running",
+          '"stalled_s": max(0, int(row.get("stalled_s") or 0))' in _ts_src
+          and "TIMESTAMPDIFF(SECOND, updated_at, NOW())" in _ts_src,
+          "routes/task_seed.py")
+    check("流水幂等: 不再 DELETE 两张全表, 改为按 (渠道, 表) 精确删除",
+          'execute("DELETE FROM `%s` WHERE channel=%%s" % _tbl, [ch])' in _sf11,
+          "routes/seed_fill.py")
+    check("流水幂等: 旧的无条件全表 DELETE 已移除(否则每次重跑清空线上数据)",
+          "DELETE FROM inbound_records WHERE channel IN ('jd','other')" not in _sf11,
+          "routes/seed_fill.py")
+    check("批次重建: DELETE 与重建范围同源(渠道 × 仓型), 不再引入 SKU 半区范围",
+          "_del_sql += _rng" not in _sf11 and "_del_args = list(_chs)" in _sf11
+          and "_rng" not in _sf11,
+          "routes/seed_fill.py")
+    check("单段预算: 声明 90s 且超预算留痕(贴线要看得见, 不等网关先杀)",
+          _sf.SEED_STEP_BUDGET_S == 90
+          and "seed 段超预算 step=%d %.1fs > %ds" in _ts_src,
+          "routes/seed_fill.py / task_seed.py")
     _sc10 = open("schema_create.py", encoding="utf-8").read()
     check("续跑锁: sync_tasks 已声明 lease_until 列",
           "lease_until DATETIME NULL" in _sc10, "schema_create.py")
@@ -3274,8 +3323,8 @@ try:
     _tw = open(_os.path.join(_FE2, "api", "taskWatch.ts"), encoding="utf-8").read()
     check("任务看守: 全局串行(同一时刻只有一个续跑请求, 不并发抢锁)",
           "_inflight" in _tw and "if (_inflight) return" in _tw, "api/taskWatch.ts")
-    check("任务看守: 单请求超时 < 网关硬上限 120s",
-          "DRIVE_TIMEOUT = 115000" in _tw, "api/taskWatch.ts")
+    check("任务看守: 单请求超时 < 网关硬上限 120s(后端预算 90s + 余量)",
+          "DRIVE_TIMEOUT = 100000" in _tw, "api/taskWatch.ts")
     check("任务看守: 无进展时指数退避(租约被持有时不硬撞、不烧 RU)",
           "Math.pow(1.25" in _tw, "api/taskWatch.ts")
     _app12 = open(_os.path.join(_FE2, "App.tsx"), encoding="utf-8").read()

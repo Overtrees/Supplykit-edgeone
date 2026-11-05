@@ -94,7 +94,12 @@ export function activeRequests(): number {
 // 底层 axios 实例
 const instance = axios.create({
   baseURL: BASE,
-  timeout: 30000,
+  // 2026-11-05: 30s 太短 —— seed 期间线上实测 `/insights/replenishment` 40.8s、
+  //   `/dashboard/stock-risk` 38.3s, 30s 必然 abort → 页面拿到失败态; 而下面的在途
+  //   「挂起兜底」又会自动补发, 于是同一个 URL 每 15s 叠一个新请求、旧的还挂着,
+  //   胶囊(真实在途计数)永远归不了零 —— 这就是用户说的「多页面卡加载中/同步中」。
+  //   统一放宽到 45s(覆盖实测最慢 + 余量), 且挂起阈值同步 ≥ 超时(见下)。
+  timeout: 45000,
 })
 
 // 请求拦截器：自动注入全局 channel 参数 + 认证 token
@@ -133,7 +138,10 @@ instance.interceptors.request.use(config => {
 //   后续同 URL 请求全部卡死(loadCfg 等永不返回 → UI 显示旧值, 重进页面才恢复)
 //   → 超过 INFLIGHT_TTL 的在途视为挂起, 删除并重新发起
 const inflight = new Map<string, InflightEntry<ApiResult<unknown>>>()
-const INFLIGHT_TTL = 15000
+// 2026-11-05: 必须 ≥ axios timeout。原来 15s 会在一个正常但偏慢的请求(40s)还没回来时
+//   就判定"挂起"并**自动补发**新请求 → 请求风暴 + 胶囊永久转圈。现在在途请求在自己的
+//   超时内一律复用, 超时后由 axios 明确 reject(页面显示可重试的错误态), 不再偷偷补发。
+const INFLIGHT_TTL = 50000
 
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
 instance.interceptors.response.use(
@@ -230,47 +238,22 @@ const apiGet = async <T = unknown>(
     return { data: _d as T, status: 200, statusText: 'OK', headers: {}, config }
   }
 
-  // 2) 在途去重(挂起兜底: 超 INFLIGHT_TTL 的旧在途不再复用, 防慢请求卡死后续刷新)
-  // 2026-10-27 根治跨卸载复用卡骨架: 快速切走/切回(数秒内)会复用到旧页面实例的挂起 promise
-  // (旧接口 30-60s 才超时) → 新页卡骨架等旧 promise。对复用 promise 设等待上限: 剩余 TTL 内未完成
-  // → 自动发起新请求替换(旧 promise 作废), 保证"切回最多等~15s 后必成功刷新", 不再无限期挂。
+  // 2) 在途去重: 同一 URL 只发一次, 正常在途一律复用
+  // 2026-10-27 快速切走/切回会复用到旧页面实例的挂起 promise → 那时靠 abortScope(见下)
+  //   在卸载时把该 scope 的请求从 inflight 移除并 abort, 切回即全新请求, 不会卡骨架。
+  // 2026-11-05 撤掉「等待上限到了就自动补发」: 它曾让一个 40s 的慢接口每 15s 叠一个新请求,
+  //   旧请求仍挂着 → 在途计数永不归零(胶囊一直转)。现在只复用, 超时由 axios 明确失败。
   if (inflight.has(key)) {
     const p = inflight.get(key)
     if (p && p.__ts && Date.now() - p.__ts > INFLIGHT_TTL) {
+      // 超过自身超时仍未结束 = 真挂死: 作废, 下面重新发一次(只一次)
       inflight.delete(key)
     } else if (p) {
-      const remain = INFLIGHT_TTL - (Date.now() - (p.__ts || Date.now()))
-      const waiter = Promise.race([
-        p,
-        new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('INFLIGHT_STALE')), Math.max(remain, 500)),
-        ),
-      ])
-      return waiter.catch(() => {
-        if (!p.__dead && inflight.get(key) === p) {
-          p.__dead = true
-          inflight.delete(key)
-          // Object.assign 给原生 Promise 挂元数据, 与旧版 `promise.__ts = ...` 同一对象、零行为差异
-          const np = Object.assign(
-            instance.get(url, config).then(r => ({
-              data: r.data as unknown,
-              status: r.status,
-              statusText: r.statusText,
-              headers: r.headers as unknown,
-              config: r.config as unknown,
-            })),
-            {
-              __ts: Date.now(),
-              __scope: '',
-              __ac: undefined as AbortController | undefined,
-              __dead: false,
-            },
-          )
-          inflight.set(key, np)
-          return np
-        }
-        return p
-      }) as unknown as Promise<ApiResult<T>>
+      // 正常在途: 直接复用, 不再 race + 自动补发。
+      //   旧实现每 15s 判定"挂起"就补发一个新请求, 旧请求还挂着 → 同一 URL 请求越叠越多,
+      //   网络层在途计数永远归不了零(胶囊一直转), 页面也一直停在"加载中"。
+      //   axios 45s timeout 保证 p 一定会 reject/resolve, 不需要前端再猜一个更短的 TTL。
+      return p as unknown as Promise<ApiResult<T>>
     }
   }
 
