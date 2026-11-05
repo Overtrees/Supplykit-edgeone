@@ -484,7 +484,11 @@ _COLUMN_ADDS = {
     "inventory": [("safety_days", "DECIMAL(10,2) DEFAULT 0"),    # 曾漏(采购建议 SELECT 用, 1054 实证)
                   ("ext_json", "TEXT"),
                   # 2026-11-04 账期: 导入的"当时可用"存这里做对账, 不再覆盖期初
-                  ("snapshot_qty", "INT DEFAULT 0")],
+                  ("snapshot_qty", "INT DEFAULT 0"),
+                  # 2026-11-05 账期: 建账基线(首次结账时固化, 此后**永不覆盖**)。
+                  #   beginning_stock 会被结账回写成"当期期初", 若再拿它当基线,
+                  #   重跑结账就会把已结转的量再叠一次(不幂等)。基线必须独立存放。
+                  ("ledger_base", "INT DEFAULT NULL")],
     # 2026-11-01 商品是否做效期管理: 存量表补列(空=待标注, 由一次性推导/导入填)
     # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
     "products": [("expiry_managed", "VARCHAR(8) DEFAULT ''"), ("ext_json", "TEXT")],

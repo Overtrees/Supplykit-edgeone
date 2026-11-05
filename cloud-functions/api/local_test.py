@@ -2722,6 +2722,22 @@ try:
     check("账期: state_get 空表默认 period 为空串(否则首结必被误拒)",
           '"period": ""' in _def_seg and "period_of()" not in _def_seg.split('return {"period"')[-1][:40],
           str(_def_seg[-200:]))
+    # 切片必须聚合: batches 以自增 id 为主键(同批次键可多行), batch_opening 以批次键为主键,
+    #   直接 SELECT 搬运必撞 1062(线上实证 78 组重复)
+    check("账期: 批次切片 GROUP BY 聚合(否则撞 batch_opening 主键)",
+          "GROUP BY channel, warehouse_type, sku, bc, warehouse, pd, ed" in _src
+          and "SUM(qty) AS q FROM batches" in _src, "core/ledger.py")
+    # 重跑幂等: 期初优先取该期已存的 begin_qty, 而不是拿被回写过的 beginning_stock 再叠
+    check("账期: 重结同期期初取自己已存的 begin_qty(重跑幂等)",
+          "same_begin" in _src and "begin_qty FROM inventory_month" in _src, "core/ledger.py")
+    # 改现有库存必须排在两张新表之后: 否则切片一失败就留下"数字变了账没结"的中间态
+    _cp = _src.split("def close_period")[1]
+    check("账期: 回写库存排在写账期/切片之后(失败不留中间态)",
+          _cp.find("_apply_to_inventory(rows)") > _cp.find("freeze_batches(nxt")
+          and _cp.find("_apply_to_inventory(rows)") > _cp.find("_write_month(period"),
+          "core/ledger.py")
+    check("账期: 建账基线独立成列 ledger_base(不被结账回写污染)",
+          "ledger_base" in _src and "ledger_base IS NULL" in _src, "core/ledger.py")
     check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
           _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
     # 右开区间: 流水列是 DATETIME, 写 `<= '2026-10-31'` 只会覆盖到当天 00:00:00,
@@ -2737,7 +2753,8 @@ try:
           "<= %%s" not in _lg, "core/ledger.py")
     # 首次建账期初 = 基线 + 基线之后、账期之前的净流水; 少了它会低估一整段历史流水
     check("账期: bootstrap 期初回算账期前的净流水(_net_before)",
-          "def _net_before" in _lg and "boot_net = _net_before(" in _lg, "core/ledger.py")
+          "def _net_before" in _lg and "_net_before(channel, warehouse_type, start)" in _lg,
+          "core/ledger.py")
     # 批次月初余额必须带日期: 少了它, 上月批次到本月退化成无日期期初批次, 指定批次出库失效
     _cw = open("routes/cleanse_write.py").read()
     check("账期: 批次池期初读 batch_opening(带日期), 不是只读 beginning_stock",

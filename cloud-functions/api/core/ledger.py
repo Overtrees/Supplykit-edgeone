@@ -212,6 +212,21 @@ def _flow_agg(table, date_col, period, channel, wh_types):
     return out
 
 
+def _ensure_base(channel, warehouse_type):
+    """固化建账基线: 把当前 beginning_stock 抄进 ledger_base(仅对 NULL 行, 只做一次)
+
+    时机必须在 ``_apply_to_inventory`` 之前 —— 该函数会把 beginning_stock 回写成
+    "当期期初", 一旦被写就再也分不清"基线"和"某个已结转账期的期初"。
+    固化语义: ledger_base = **首次结账前**的 beginning_stock(系统恒等式
+    `可用 = 期初 + Σ全期流水` 里的那个基线), 此后结账只读它, 与 beginning_stock 解耦。
+
+    这解决的是"重跑结账不幂等": 没有它, 第二次结账会把已结转的期初又当基线叠一遍。
+    """
+    execute("UPDATE inventory SET ledger_base=beginning_stock WHERE channel=%s AND warehouse_type=%s "
+            "AND ledger_base IS NULL AND (deleted_at IS NULL OR deleted_at='')",
+            [channel, warehouse_type])
+
+
 def _net_before(channel, warehouse_type, start):
     """账期起点**之前**的累计净流水(入 − 出), key = (sku, 69码, 仓)
 
@@ -247,8 +262,11 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
 
     期初来源, 按优先级:
       ① 上月已结账 → 直接取 inventory_month 的 end_qty(结转, 会计等价)
-      ② 首次建账(没结过) → beginning_stock(流水起点之前的基线) **+ 基线之后到
-         账期起点之前的净流水**。少了后半段, 期初会低估一整段历史流水。
+      ② 本期已落过账期行(重结/补跑) → 取该期自己的 begin_qty。
+         期初是外部给定的事实, 重算改不了它; 拿回来用才能保证**重跑幂等**,
+         否则第二次结账会拿已被回写的 beginning_stock 当基线再叠一遍净流水。
+      ③ 首次建账(既无上期、也无本期) → ledger_base(流水起点之前的基线)
+         **+ 基线之后到账期起点之前的净流水**。少了后半段, 期初会低估一整段历史。
     """
     start, _end = period_bounds(period)
     prev = shift_period(period, -1)
@@ -261,11 +279,21 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
                        [prev, channel, warehouse_type]) or []:
             prev_end[(str(r.get("sku") or ""), str(r.get("barcode") or ""),
                       str(r.get("warehouse") or ""))] = int(r.get("end_qty") or 0)
-    # 首次建账(没有任何上期账期行): 期初 = 基线 + 基线之后、账期之前的净流水
-    boot_net = _net_before(channel, warehouse_type, start) if not prev_end else {}
+    # ② 本期已落过账期行(重结/补跑): 期初直接用该期自己的 begin_qty
+    same_begin = {}
+    if not prev_end:
+        for r in query("SELECT sku, barcode, warehouse, begin_qty FROM inventory_month "
+                       "WHERE period=%s AND channel=%s AND warehouse_type=%s",
+                       [period, channel, warehouse_type]) or []:
+            same_begin[(str(r.get("sku") or ""), str(r.get("barcode") or ""),
+                        str(r.get("warehouse") or ""))] = int(r.get("begin_qty") or 0)
+    # ③ 首次建账(既无上期、也无本期): 期初 = 基线 + 基线之后、账期之前的净流水
+    boot_net = {} if (prev_end or same_begin) else _net_before(channel, warehouse_type, start)
+    if boot_net:
+        _ensure_base(channel, warehouse_type)     # 必须在回写 beginning_stock 之前
     rows = []
     for r in query("SELECT id, sku, COALESCE(barcode,'') AS bc, warehouse, "
-                   "COALESCE(beginning_stock,0) AS beg FROM inventory "
+                   "COALESCE(ledger_base, beginning_stock, 0) AS base FROM inventory "
                    "WHERE channel=%s AND warehouse_type=%s "
                    "AND (deleted_at IS NULL OR deleted_at='')",
                    [channel, warehouse_type]) or []:
@@ -273,7 +301,14 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
         bc = str(r.get("bc") or "")
         wh = str(r.get("warehouse") or "")
         k3 = (sku, bc, wh)
-        beg = prev_end[k3] if k3 in prev_end else int(r.get("beg") or 0) + boot_net.get(k3, 0)
+        # 期初只从三处取: 上期期末 / 本期已存的期初 / (建账基线 + 账期之前的净流水)。
+        #   **不读 beginning_stock** —— 它被结账回写成"当期期初", 重跑会互相污染。
+        if k3 in prev_end:
+            beg = prev_end[k3]
+        elif k3 in same_begin:
+            beg = same_begin[k3]
+        else:
+            beg = int(r.get("base") or 0) + boot_net.get(k3, 0)
         mi = _pick(ins, sku, bc, wh, warehouse_type)
         mo = _pick(outs, sku, bc, wh, warehouse_type)
         rows.append({"id": r.get("id"), "sku": sku, "barcode": bc, "warehouse": wh,
@@ -324,14 +359,23 @@ def _apply_to_inventory(rows):
 
 
 def freeze_batches(period_next, channel, warehouse_type=OWN_WT):
-    """把当前 batches 余额切片存进下期 batch_opening(带日期), 供下月批次池起算"""
+    """把当前 batches 余额切片存进下期 batch_opening(带日期), 供下月批次池起算
+
+    必须 **GROUP BY 聚合**: batches 以自增 id 为主键, 同一批次键(同 SKU/仓/生产日/到期日)
+    允许存在多行(每次入库一行), 而 batch_opening 以批次键为主键。直接 SELECT 搬运会撞
+    PRIMARY(线上实证 1062, 2026-11-05: 78 组重复/多 118 行)。语义上同日期同效期的多行
+    本就是一个批次余额, 相加即正确, 也不影响 FEFO(同键批次顺序等价)。
+    """
+    if not period_next:
+        return 0
     execute("DELETE FROM batch_opening WHERE period=%s AND channel=%s AND warehouse_type=%s",
             [period_next, channel, warehouse_type])
     execute("INSERT INTO batch_opening(period, channel, warehouse_type, sku, barcode, warehouse, "
             "prod_date, exp_date, qty) "
-            "SELECT %s, channel, warehouse_type, sku, COALESCE(barcode,''), warehouse, "
-            "COALESCE(prod_date,''), COALESCE(exp_date,''), qty FROM batches "
-            "WHERE channel=%s AND warehouse_type=%s AND qty > 0",
+            "SELECT %s, channel, warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, "
+            "COALESCE(prod_date,'') AS pd, COALESCE(exp_date,'') AS ed, SUM(qty) AS q FROM batches "
+            "WHERE channel=%s AND warehouse_type=%s AND qty > 0 "
+            "GROUP BY channel, warehouse_type, sku, bc, warehouse, pd, ed",
             [period_next, channel, warehouse_type])
     row = one("SELECT COUNT(*) AS c FROM batch_opening WHERE period=%s AND channel=%s "
               "AND warehouse_type=%s", [period_next, channel, warehouse_type]) or {}
@@ -362,10 +406,13 @@ def close_period(period, channel, warehouse_type=OWN_WT, force=False):
         return {"ok": False, "period": period, "reason": why}
     data = build_rows(period, channel, warehouse_type)
     rows = data["rows"]
-    n = _write_month(period, channel, warehouse_type, rows)
-    _apply_to_inventory(rows)
-    nb = freeze_batches(shift_period(period, 1), channel, warehouse_type)
     nxt = shift_period(period, 1)
+    # 顺序有意为之(2026-11-05 线上事故后调整): 先写两张**新表**(幂等可重跑),
+    #   最后才改现有 inventory。切片曾因主键冲突失败, 而当时 inventory 的期初已被
+    #   回写 —— 界面数字变了、账期却没结, 属于最难查的中间态。改序后同一故障只需重跑。
+    n = _write_month(period, channel, warehouse_type, rows)
+    nb = freeze_batches(nxt, channel, warehouse_type)
+    _apply_to_inventory(rows)
     _set_state(channel, warehouse_type, period, STATUS_CLOSED,
                "%s-01" % nxt if nxt else "", "强制结账" if force else "", n)
     return {"ok": True, "period": period, "rows": n, "batches": nb,
