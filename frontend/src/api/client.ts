@@ -64,6 +64,19 @@ function cacheKey(method?: string, url?: string, params?: unknown) {
  *   某个页面忘了配对, 胶囊也不会永久卡住 —— 计数由网络层保证归零。
  */
 let _activeReq = 0
+/**
+ * 「后台请求」计数(2026-11-05 根治「任务在跑时胶囊一直转」)
+ *
+ * 上面那条 45s 超时的教训只解决了"请求叠加", 还差一层: **后台看守的续跑请求不该算用户可见的忙**。
+ *   taskWatch 每 3s 打一次驱动端点, 单次预算 75s —— 也就是说一个长任务在跑时, 网络层
+ *   几乎**永远有一个请求在途**, `activeRequests()` 恒 > 0, 胶囊就从"任务在跑"被误读成"页面在拉数",
+ *   用户看到的是"什么页面都在加载中/同步中"(问题 4 的另一半)。
+ * 所以把在途分成两档: 前台(页面取数) 与 后台(看守/轮询)。徽标只认前台;
+ *   后台请求仍照常登记/注销, 只是不进徽标分子 —— 将来要做"任务在跑"的独立指示也有数据可用。
+ */
+let _bgReq = 0
+/** 当前正在登记的请求是否为"后台"(由 markBackground 在发请求前设定, _reqEnd 时复位) */
+let _reqBg = false
 const _reqListeners = new Set<() => void>()
 function _notifyReq() {
   _reqListeners.forEach(fn => {
@@ -72,15 +85,25 @@ function _notifyReq() {
     } catch {}
   })
 }
+/** 标记一个请求为"后台"(不点亮用户可见的忙徽标)。必须在发请求**之前**调用。 */
+export function markBackground(on = true) {
+  _reqBg = on
+}
 function _reqStart() {
   _activeReq += 1
+  if (_reqBg) _bgReq += 1
   _notifyReq()
 }
 function _reqEnd() {
+  if (_reqBg) _bgReq = Math.max(0, _bgReq - 1)
+  _reqBg = false
   _activeReq = Math.max(0, _activeReq - 1)
   _notifyReq()
 }
-/** 订阅"当前有多少个 HTTP 请求在途"(0 = 没有任何取数) */
+/**
+ * 订阅"当前有多少个**前台** HTTP 请求在途"(0 = 用户可见的取数已全部结束)
+ *   后台请求(看守/轮询)不计入 —— 见 markBackground。
+ */
 export function onActiveRequests(fn: () => void): () => void {
   _reqListeners.add(fn)
   return () => {
@@ -88,7 +111,11 @@ export function onActiveRequests(fn: () => void): () => void {
   }
 }
 export function activeRequests(): number {
-  return _activeReq
+  return Math.max(0, _activeReq - _bgReq)
+}
+/** 后台在途数(诊断用: 胶囊不显示, 但可在 devtools 里看到看守是否真的在跑) */
+export function backgroundRequests(): number {
+  return _bgReq
 }
 
 // 底层 axios 实例
@@ -309,7 +336,14 @@ function invalidateCache() {
 export async function apiJson<T = unknown>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
-  opts: { data?: unknown; timeout?: number; signal?: AbortSignal; raw?: boolean } = {},
+  opts: {
+    data?: unknown
+    timeout?: number
+    signal?: AbortSignal
+    raw?: boolean
+    /** true = 后台请求(看守/轮询): 照常超时与鉴权, 但不点亮用户可见的忙徽标 */
+    background?: boolean
+  } = {},
 ): Promise<T> {
   const token = (() => {
     try {
@@ -327,6 +361,7 @@ export async function apiJson<T = unknown>(
     else opts.signal.addEventListener('abort', onAbort)
   }
   const hasBody = opts.data !== undefined
+  if (opts.background) markBackground(true)
   _reqStart()
   try {
     const resp = await fetch(target, {

@@ -83,12 +83,49 @@ def _tt_sleep(s):
 
 @router.get("/seed/fill/status")
 @traced
-def seed_fill_status(task_id: str = "", driver: str = "frontend"):
+def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0):
+    """任务状态(Makers 异步适配: running 时续跑下一步, 客户端轮询推进直到 done)
+
+    probe=1 → **纯读**: 只 SELECT 一次返回进度快照, 不写 driver / 不抢锁 / 不推进。
+      2026-11-05 竞态根治: 本端点此前是「查一次 = 推进一步 + 抢锁 + 写库」的副作用端点,
+      却被 App 层 4 个轮询 + 看守 + DevMode/任务页同时打 —— 多页面并发时全部抢同一把锁,
+      只有一个推进, 其余空转仍各写一次 params; 且 background 看守每 3s 必有请求在途,
+      用户可见徽标恒为「同步中」。现在「看状态」一律走 probe(纯读), 只有 taskWatch 看守
+      保留 drive 语义(全仓单一驱动源), 竞态与空转从根上消失。
+      纯读分支不触碰 updated_at / lease / params, 对真实推进链路零影响。
+    """
+    # ① 纯读优先: 在任何写操作(mark_driver)之前返回, 保证零副作用
+    if probe:
+        if not task_id:
+            return {"data": {"status": "not_found"}}
+        _pr = one("SELECT status, params, created_at, updated_at, "
+                  "TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS stalled_s, "
+                  "UNIX_TIMESTAMP(NOW()) AS now_ts FROM sync_tasks WHERE task_id=%s", [task_id])
+        if not _pr:
+            return {"data": {"status": "not_found"}}
+        import json as _jsonp
+        try:
+            _pjp = _jsonp.loads(_pr.get("params") or "{}")
+        except Exception:
+            _pjp = {}
+        _steps_p = _pjp.get("steps") or []
+        return {"data": {
+            "status": _pr.get("status") or "not_found",
+            "step": int(_pjp.get("step") or 0),
+            "total_step": int(_pjp.get("total_step") or 0),
+            "offset": int(_pjp.get("offset") or 0),
+            "stalled_s": max(0, int(_pr.get("stalled_s") or 0)),
+            "now_ts": int(_pr.get("now_ts") or 0),
+            "last_step": str((_steps_p[-1] or {}).get("name") or "")[:80] if _steps_p else "",
+            "created_at": str(_pr.get("created_at") or ""),
+            "updated_at": str(_pr.get("updated_at") or ""),
+            "probe": True,
+        }}
+    # ② 驱动模式(仅 taskWatch 看守调用): 保持原有 抢锁 → 续跑 语义, 一字未改
     from routes.tasks import _new_task_id, _log_task  # 延迟(防循环)
     from routes.tasks import _TABLES_RESET  # 延迟(表清单)
     from routes.common import mark_driver as _mkdrv
     _mkdrv(task_id, driver)
-    """任务状态查询(Makers 异步适配: running 时续跑下一步, 客户端轮询推进直到 done)"""
     if not task_id:
         return {"data": {"status": "not_found"}}
     row = one("SELECT status, params, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS stalled_s, "

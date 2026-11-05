@@ -31,3 +31,6 @@ export_files/
 
 # UI 快照产物(截图 + report.json)只做本地验证, 不入库
 .artifacts/ui_shots/
+
+# 第二集群重建的审计留痕(本地留存, 不入库)
+.artifacts/supplykit_legacy_audit.json

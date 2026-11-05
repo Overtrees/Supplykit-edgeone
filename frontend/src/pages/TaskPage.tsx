@@ -47,21 +47,25 @@ export default function TaskPage() {
   const toast = useToast()
   const [tasks, setTasks] = useState([])
   const [downloading, setDownloading] = useState({})
-  const [loading, setLoading] = useState(true)
-  // 2026-11-05 修「骨架后才闪一下空态」: 首个响应回来了但**一条任务都没有**时, 不能立刻判定
-  //   "空"。channel 变化的那个 effect 会先 setTasks([]) 再置 loading —— 若此时 state 还是上一轮
-  //   的 tasks(非空), 渲染会先走"有数据"分支; 而这一轮任务列表真的为空时, 骨架消失的同一帧
-  //   就落进 EmptyState。加一个"至少成功拉到过一次"的标记: 没到过就不渲染空态, 继续骨架。
-  const [loadedOnce, setLoadedOnce] = useState(false)
+  /**
+   * 2026-11-05 第三次返工, 这次是**单一状态机**而不是三个独立变量拼:
+   *   原来渲染判定是 `loading || (!loadedOnce && tasks.length===0)` + 外层 `tasks.length===0`。
+   *   三个变量各自 set, 谁先谁后取决于请求回来的顺序 —— 只要一次 setTasks([]) 抢在
+   *   setLoading(true) 之后落下, 就会渲染出"非骨架 + 空数组" → EmptyState 闪一下。
+   *   现在只有一个 phase, 转移是**单向**的:
+   *     load(骨架) → ready(空态 或 数据, 二者互斥, 同一次渲染里决定)
+   *   空态只可能在 phase==='ready' 时出现, 不可能被中间态穿透。
+   */
+  const [phase, setPhase] = useState<'load' | 'ready'>('load')
   const [showAllDone, setShowAllDone] = useState(false) // 已完成折叠(默认 10 条)
 
   const [loadErr, setLoadErr] = useState('')
   const doneTasks = useRef({}) // 已触发完成提示的任务
   const firstLoad = useRef(true) // 首载只记录历史完成, 不弹提示(避免进页一堆历史任务 toast)
   // 2026-11-05 修: 三个触发源(3s 轮询 / visibilitychange / channel 变化)会并发调 loadTasks,
-  //   而旧实现谁后回来谁生效 —— 慢的那个(切回页面时首次请求常常最慢)后到, 会 setLoading(false)
-  //   之后再被 3s 后的新调用 setLoading(true) 覆盖, 视觉上就是"一直卡在骨架屏"。
-  //   加序号后只有**最新一次**请求允许写入 state(与 loadAll 的 _loadSeq 同一套办法)。
+  //   而旧实现谁后回来谁生效 —— 慢的那个(切回页面时首次请求常常最慢)后到, 会把 loading
+  //   先收掉再被 3s 后的新调用重置, 视觉上就是"一直卡在骨架屏"。
+  //   加序号后只有**最新一次**请求允许写入 tasks(与 loadAll 的 _seq 同一套办法)。
   const loadSeq = useRef(0)
   // 看守回调里拿不到最新的 toast/翻译上下文, 用一个 ref 把"报告失败"这件事挂出来
   const reportTaskFail = (id: string, err: string) => {
@@ -83,7 +87,6 @@ export default function TaskPage() {
       if (d.ok && Array.isArray(d.data)) {
         setTasks(d.data)
         setLoadErr('')
-        setLoadedOnce(true)
         // 把 running 的任务交给 App 层看守推进(幂等: 已在看守里的只更新回调)
         adoptRunning(d.data, {
           onDone: () => {
@@ -104,7 +107,7 @@ export default function TaskPage() {
         //   2026-11-05 修: 回调参数原叫 `t`, 与模块级翻译函数 t() **同名遮蔽** ——
         //   于是 `t('task.done_toast', ...)` 实际是在"调用一个任务对象", 直接 TypeError。
         //   这个错误被外层 try/catch 吞掉(只落 quality_logs), 后果是: ①完成提示永远不弹
-        //   ②后面的 loadAll/事件派发全被跳过 ③setTasks 已执行但 loading 只能等尾部兜底。
+        //   ②后面的 loadAll/事件派发全被跳过。
         //   改名为 task 后, 语义与下面 TaskCard 的 task 变量一致。
         d.data.forEach(function (task) {
           if (
@@ -148,23 +151,27 @@ export default function TaskPage() {
       if (mySeq !== loadSeq.current) return
       if (tasks.length === 0) setLoadErr(t('task.net_retry'))
     } finally {
-      // 2026-11-05 根治「进任务页卡骨架屏」: 原来的 setLoading(false) 在 try/catch 之后、
-      //   带 `if (mySeq !== loadSeq.current) return` 守卫。而本函数被**三个源头**驱动:
-      //   3s 轮询 + visibilitychange + channel 变化, 且每次调用都会 ++loadSeq。
-      //   于是: 首载请求一慢(>3s, /api/tasks 在 50 条长 params 上确实会慢), 轮询就抢在前面
-      //   把序号推走 → 首载回来时 mySeq 已过期 → return, setLoading(false) 永不执行 →
-      //   骨架屏永久卡住。这正是用户说的"返回看板再进任务卡片发现卡在骨架加载中"。
-      //   改成: 只要有**任意一次**请求返回过(无论新旧), 就把骨架收掉 —— 因为"有没有数据"
-      //   这件事不依赖谁是最新; 数据内容仍由上面的序号守卫保证只让最新的写。
-      setLoading(false)
+      // 2026-11-05 根治「进任务页卡骨架屏」+「骨架后闪空态」:
+      //   ① 卡骨架的老原因: 收尾原来带 `if (mySeq !== loadSeq.current) return` 守卫, 而本函数被
+      //      **三个源头**驱动(3s 轮询 + visibilitychange + channel 变化), 每次都 ++loadSeq。
+      //      首载一慢(>3s, /api/tasks 在 50 条长 params 上确实会慢), 轮询抢先把序号推走 →
+      //      首载回来时已过期 → return → 骨架永不收起。
+      //   ② 闪空态的老原因: 骨架收起后, "空态还是数据"由另外两个独立变量此刻的瞬时值决定,
+      //      中间态就会被渲染出去。
+      //   现在只有一条规则: **任意一次请求返回(不论新旧)就把 phase 推到 ready**;
+      //   而"空态"的可见性要求 phase==='ready' **且** 拿到过成功响应(tasks 已被 setTasks 写过)。
+      //   数据内容仍由上面的序号守卫保证只让最新的写。
+      setPhase('ready')
     }
   }
 
   useEffect(() => {
+    // 切渠道: 回到骨架(此时旧渠道的任务列表已不属于新渠道, 留着就是错的数据),
+    //   但**只**把 phase 推回 load —— 不去 setTasks([]) 制造"非骨架 + 空数组"那一帧。
+    setPhase('load')
     setTasks([])
-    setLoadedOnce(false)
-    setLoading(true)
     loadTasks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel])
   // 2026-11-05 修「切页面回来任务卡住」: 原来这里有第二个 3s 轮询, 与 App 层的看守
   //   并行驱动同一个任务 —— 两边各发一次 /seed/fill/status, 服务端租约只让其中一个推进,
@@ -239,8 +246,9 @@ export default function TaskPage() {
       <div className="small muted" style={{ padding: '0 0 8px 0', fontSize: 12 }}>
         {t('task.subtitle', { ch: channel === 'jd' ? t('task.ch_jd') : t('task.ch_other') })}
       </div>
-      <div key={loading ? 'skeleton' : 'data'} className="fade-in">
-        {loading || (!loadedOnce && tasks.length === 0) ? (
+      {/* 单一状态机渲染: load → 骨架; ready → (空态 | 空态带重试 | 数据), 三者互斥且同一帧决定 */}
+      <div key={phase} className="fade-in">
+        {phase === 'load' ? (
           <div className="skeleton" style={{ height: 40 }} />
         ) : tasks.length === 0 ? (
           <div style={{ padding: 24 }}>

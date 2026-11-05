@@ -4,7 +4,12 @@
  * ## 为什么需要
  *
  * 后端的续跑是**前端轮询驱动**的:`GET /api/seed/fill/status` 每被调一次, 就推进一步。
- * 而这一步由服务端用 `lease_until` 独占租约(600s), 防止两次轮询并发跑同一步把数据写重。
+ * 而这一步由服务端用租约独占(`lease_until` + `lease_token`, TTL 30s、每 10s 心跳),
+ * 防止两次轮询并发跑同一步把数据写重。
+ *
+ * ⚠️ 本模块是全仓**唯一**的驱动源(2026-11-05)。其余任何"看状态"的调用都必须带 `probe=1`
+ *    走纯读分支 —— 否则就会出现同一任务被 5~6 处轮询同时推进: 抢不到锁的白烧 RU,
+ *    抢到的把用户可见的忙徽标拖成一直转(用户报「什么页面都在加载中/同步中」的真因)。
  *
  * 三件事必须同时成立, 才不会出现"租约把任务锁死":
  *   1. **单次续跑必须短**: 每步都要在自己的 `timeout` 内结束。请求被中断(切走/关页/网关掐断)
@@ -74,8 +79,10 @@ function _url(kind: 'seed' | 'cleansing', id: string): string {
   return (
     API +
     (kind === 'seed'
-      ? '/api/seed/fill/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
-      : '/api/cleansing/status?task_id=' + encodeURIComponent(id))
+      ? // driver=frontend 是**写**进来的: 本端点是驱动端点(查一次推进一窗),
+        //   绝不能加 probe —— probe 是给"只看进度"的调用方用的纯读分支。
+        '/api/seed/fill/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
+      : '/api/cleansing/status?task_id=' + encodeURIComponent(id) + '&driver=frontend&probe=0')
   )
 }
 
@@ -92,6 +99,10 @@ async function _drive(w: Watch) {
   try {
     const d = await apiJson<Record<string, unknown>>('GET', _url(w.kind, w.taskId), {
       timeout: DRIVE_TIMEOUT,
+      // 2026-11-05: 看守请求是**后台**的 —— 它不该点亮"加载中/同步中"徽标。
+      //   一个长任务在跑时本守卫几乎永远有一个请求在途(每 3s 一次、单次预算 75s),
+      //   计入前台计数就会让用户在任何页面都看到"同步中", 误以为页面在卡。
+      background: true,
     })
     // 后端两种形状: seed 是 {data:{status,...}}, cleansing 是 {ok,status,...}
     const body = ((d && ((d as Record<string, unknown>).data || d)) || {}) as Record<
@@ -119,9 +130,9 @@ async function _drive(w: Watch) {
     }
   } catch {
     // 超时/断网 **绝不摘掉看守, 也不报"任务失败"**: 后端单段可能被网关切断,
-    //   但租约 150s 后会自动释放并重跑(每段幂等), 任务最终会由 status 明确落到
-    //   done / error。旧实现连续失败 40 次就 unwatch + onFail, 会把"响应丢了但任务
-    //   还在跑"误报成失败, 用户看到的就是"刚才还好好的怎么突然失败了"。
+    //   但租约(30s TTL + 心跳)停止续期后会自动释放并重跑(每段幂等), 任务最终会由
+    //   status 明确落到 done / error。旧实现连续失败 40 次就 unwatch + onFail, 会把
+    //   "响应丢了但任务还在跑"误报成失败, 用户看到的就是"刚才还好好的怎么突然失败了"。
     //   这里只累加 stalls 触发指数退避(最多 15s), 保持看守直到后端给终态。
     w.stalls += 1
     w.lastTick = {

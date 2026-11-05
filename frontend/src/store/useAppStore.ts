@@ -403,6 +403,32 @@ const initAppStore = (set, get) => ({
   },
   bumpPageVersion: () => set(s => ({ pageVersion: s.pageVersion + 1 })),
 
+  /**
+   * 让"已渲染出去的快照"整体失效(2026-11-05 修「重置后健康卡片还有数据」)
+   *
+   * 为什么不能只 clearCache: 请求缓存是**输入**, store 里的 dashboard/ownHealth/stockRisk
+   * 是**输出** —— 已经渲染在页面上了。清输入不会让输出消失, 下一次 loadAll 又是浅合并
+   * （dashboard: {..._prev, ...data}）, 新响应里没带的字段会永远留旧值。
+   * 重置/清库这类"服务端数据被整体改写"的场景, 必须把输出也清掉, 让页面回到真实空态。
+   * pageVersion 递增用于驱动页面级 useEffect 重新拉取(那些不读 store 的模块快照)。
+   */
+  invalidateSnapshots: () =>
+    set(s => ({
+      dashboard: null,
+      orders: [],
+      orderTotal: 0,
+      inventory: [],
+      qualityLogs: [],
+      alerts: [],
+      stockRisk: [],
+      bcOutOfStock: [],
+      _stockOverview: null,
+      ownHealth: null,
+      alertCounts: null,
+      dataLoaded: false,
+      pageVersion: s.pageVersion + 1,
+    })),
+
   async loadAll(page?, opts?) {
     // 2026-11-05: 序号放在闭包对象里而不是 this 上 —— `this` 在 setState 回调/延迟执行里
     //   不一定还指向 store, 而竞态判定必须用同一个引用

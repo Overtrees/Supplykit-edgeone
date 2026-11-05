@@ -149,10 +149,12 @@ export default function App() {
   const [freshOpen, setFreshOpen] = useState(false)
   const syncOld = useAppStore(s => s.syncOld)
   // 2026-11-05 根治「多页面卡加载中/同步中」: 胶囊此前只看 store.syncing ——
-  //   那是**页面手动配对**的计数器(全仓 9 处 setSyncing), 任何一处漏配对或多配一次, 胶囊就卡住。
+  //   那是**页面手动配对**的计数器(全仓 20+ 处 setSyncing), 任何一处漏配对或多配一次, 胶囊就卡住。
   //   历史修法是"20s 强制归零"补丁, 但那只是让徽标消失, 页面自己的 loading 还是卡着。
-  //   现在补一条来自网络层的硬信号 reqBusy: 只要**真有 HTTP 请求在途**就转, 全都回来了就停。
+  //   现在补一条来自网络层的硬信号 reqBusy: 只要**真有前台 HTTP 请求在途**就转, 全都回来了就停。
   //   两者取或 —— 页面声明的整轮取数(粒度更粗, 含请求间隙) ∪ 真实在途请求(不可能漏配对)。
+  //   ⚠️ 后台请求(任务看守 taskWatch)在 client 层已标 background, 不计入 reqBusy ——
+  //   否则一个长任务在跑时"每个页面都在同步中", 用户会以为是页面卡了(问题 4 的根)。
   const [reqBusy, setReqBusy] = useState(0)
   useEffect(() => {
     const sync = () => setReqBusy(activeRequests())
@@ -160,14 +162,17 @@ export default function App() {
     return onActiveRequests(sync)
   }, [])
   const badgeBusy = syncing > 0 || reqBusy > 0
-  // 2026-11-05 任务看守(回答"持锁 600s 时别的页面怎么办 / 多次切页面怎么办"):
-  //   后端续跑是**前端轮询驱动**的, 每推进一次服务端就占 600s 租约防并发重写。
+  // 2026-11-05 任务看守(回答「持锁期间别的页面怎么办 / 多次切页面怎么办」):
+  //   后端续跑是**前端轮询驱动**的, 每推进一窗服务端持一次租约防并发重写。
+  //   租约现为 **TTL 30s + 每 10s 心跳 + lease_token 归属令牌**(旧实现是 600s 死等,
+  //   所以「停止任务要等十来分钟」—— 那个数字已经过期, 见 task_seed.py 的 _start_heartbeat)。
   //   原来驱动只挂在任务页 —— 一切走就没人推进; 而用户根本不知道这个任务还在跑。
   //   现在改成 App 层看守: 任何页面停留期间都持续推进(与页面无关注视), 且
   //   ① 全局串行(同一时刻只有一个续跑请求, 不并发抢锁、不把胶囊拖成一直转);
-  //   ② 单请求超时 115s(< 网关 120s 硬上限), 被掐断也不会让服务端留半个事务;
+  //   ② 单请求超时 100s(< 网关 120s 硬上限), 被掐断也不会让服务端留半个事务;
   //   ③ 无进展时按指数退避(3s→15s), 租约被别人持有时不硬撞、不烧 RU;
-  //   ④ 切页面不影响: 看守在模块层, 组件卸载不摘监听(见 taskWatch 的 _watches)。
+  //   ④ 切页面不影响: 看守在模块层, 组件卸载不摘监听(见 taskWatch 的 _watches);
+  //   ⑤ 它是**唯一**驱动源: 其余状态查询一律 probe=1 纯读(只看看, 不推进)。
   const [watching, setWatching] = useState(0)
   useEffect(() => onWatchChange(() => setWatching(watchCount())), [])
   // 首次挂载 + 每次页面可见: 轻轻拉一次任务列表, 把 running 的接管进来
@@ -302,13 +307,21 @@ export default function App() {
   const headerPill = ops.length > 0 ? <OpPill /> : syncBadge
   // 2026-11-03 顶层提示统一走 notify(Provider 在下方, 这里的 useToast 只会拿到 no-op)
   // 任务完成统一静默刷新(不整页 reload —— 消除闪烁): 清前端缓存 + store 重载 + 事件通知各页
-  const refreshAll = () => {
+  // 2026-11-05 修「重置后自有仓健康卡片还有数据」: 原来只 clearCache/clearInflight,
+  //   清的是**请求缓存**, 而 store 里的 `ownHealth` / `dashboard` / `stockRisk` 是上一轮
+  //   已经渲染出去的**快照**, 一个字节都没动 —— 于是重置完页面照旧显示旧数字,
+  //   直到下一次 loadAll 真正把每个字段覆盖一遍(而 loadAll 对 dashboard 是浅合并,
+  //   新响应里没带的字段会**永远保留旧值**)。
+  //   所以这里必须显式把"服务端已变但可能不再返回"的分片清空, 再重载。
+  //   reset 语义最重(整库清空重建), 单独走 resetStore()。
+  const refreshAll = (opts?: { storeReset?: boolean }) => {
     clearCache()
     clearInflight()
-    useAppStore
-      .getState()
-      .loadAll(1, { refresh: true })
-      .catch(() => {})
+    const st = useAppStore.getState()
+    if (opts?.storeReset) {
+      st.invalidateSnapshots()
+    }
+    st.loadAll(1, { refresh: true }).catch(() => {})
     window.dispatchEvent(new Event('rules-changed'))
     window.dispatchEvent(new Event('insights-refresh'))
   }
@@ -383,9 +396,13 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
+          // 2026-11-05 竞态根治: 这里只**看**进度, 一律走 probe=1 纯读。
+          //   本端点原是"查一次 = 抢锁 + 推进一步 + 写库"的副作用端点, 而 App 层 3 个老轮询
+          //   (seed/reset/export) + 任务页 + 各页面又各打一遍 —— 6 个驱动源抢同一把租约,
+          //   抢不到的白烧 RU, 抢到的把胶囊拖成一直转。现在仅 taskWatch 看守负责推进。
           const d = await apiJson<JobStatusResp>(
             'GET',
-            API + '/api/seed/fill/status?task_id=' + seedTask,
+            API + '/api/seed/fill/status?task_id=' + seedTask + '&probe=1',
           )
           if (document.visibilityState === 'hidden') return // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
@@ -436,23 +453,17 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          // 小窗(实时进度——大窗 263s 超时积压教训)
+          // 2026-11-05 竞态根治: 本处原为「GET /cleansing/status + 并行 POST /cleansing/driver」
+          //   两个请求, 而两者**都会推进任务**; taskWatch 看守再加一份 → 同一任务 3 个驱动源。
+          //   现在只读: status 走 probe=1, 并删掉那次 driver POST(推进由看守唯一负责)。
           const d = await apiJson<{ status?: string }>(
             'GET',
-            API + '/api/cleansing/status?task_id=' + cleansingTask.task_id + '&page_size=1000',
+            API +
+              '/api/cleansing/status?task_id=' +
+              cleansingTask.task_id +
+              '&page_size=1000&probe=1',
           )
           if (document.visibilityState === 'hidden') return
-          // 2026-10-15 App 级续跑: status 续跑一窗 + 写 driver=frontend——任意页面在线=前端推进(不再全靠后端保活)
-          try {
-            apiJson(
-              'POST',
-              API +
-                '/api/cleansing/driver?task_id=' +
-                cleansingTask.task_id +
-                '&driver=frontend&channel=' +
-                (cleansingTask.channel || 'jd'),
-            )
-          } catch {}
           if (d.status === 'done') {
             clearInterval(poll)
             try {
@@ -502,9 +513,10 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
+          // 2026-11-05: 只读进度(probe=1), 推进交给 taskWatch —— 见上方 seed 轮询的说明
           const d = await apiJson<JobStatusResp>(
             'GET',
-            API + '/api/seed/fill/status?task_id=' + resetTask,
+            API + '/api/seed/fill/status?task_id=' + resetTask + '&probe=1',
           )
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
@@ -515,7 +527,8 @@ export default function App() {
             useAppStore.getState().opDone(_opId)
             if (d.data?.status === 'done') {
               notify.success(t('op.reset_done'))
-              refreshAll()
+              // reset = 整库清空重建, 旧的健康卡/看板快照全都作废 → 必须整体失效而不是"再拉一遍"
+              refreshAll({ storeReset: true })
             }
           }
         } catch {}
@@ -541,9 +554,10 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
+          // 2026-11-05: 只读进度(probe=1), 推进交给 taskWatch —— 见上方 seed 轮询的说明
           const d = await apiJson<JobStatusResp>(
             'GET',
-            API + '/api/seed/fill/status?task_id=' + exportTask.task_id,
+            API + '/api/seed/fill/status?task_id=' + exportTask.task_id + '&probe=1',
           )
           if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done') {

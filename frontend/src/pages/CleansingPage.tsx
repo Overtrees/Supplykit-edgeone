@@ -523,10 +523,9 @@ export default function CleansingPage() {
         try {
           localStorage.setItem('c_clean_task', JSON.stringify({ task_id: d.task_id, channel: ch }))
         } catch {}
-        // 前端轮询驱动标记(后端 continue_tasks 写 params.driver=backend——卡片动态显示)
-        try {
-          api.post('/api/cleansing/driver?task_id=' + d.task_id + '&driver=frontend&channel=' + ch)
-        } catch {}
+        // 2026-11-05 竞态根治: 这里原每轮另发一次 POST /cleansing/driver 写 driver 标记 ——
+        //   任务卡只用到 params.driver, 且现在还有 taskWatch 看守(它打 /cleansing/status 时
+        //   服务端 mark_driver 已写 frontend)。随轮询转 probe 纯读一并去掉, 一个任务只剩一个驱动源。
         let finished = false
         const threshold = setTimeout(() => {
           if (!finished) {
@@ -545,21 +544,17 @@ export default function CleansingPage() {
             execLock.current = false
           }
         }, 8000)
-        // 本地轮询（页面内）
+        // 本地轮询（页面内）—— 2026-11-05: 只读(probe=1)
+        //   本处原每 5s 打一次 GET /cleansing/status(带推进副作用) + 一次 POST /cleansing/driver,
+        //   而 App 层 taskWatch 看守同时也在推进同一个任务 → 同一任务 3 个驱动源抢一把租约,
+        //   抢不到的白烧 RU、抢到的会把全局胶囊拖成一直转。现在页面只展示, 推进交给看守。
         const poll = setInterval(async () => {
           if (finished) return
           try {
-            // 接力式: status 端点触发续跑并返回进度(done/error/running+page,total)
             const sr = await api.get<CleanseData>(
-              '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000',
+              '/api/cleansing/status?task_id=' + d.task_id + '&page_size=1000&probe=1',
               { timeout: 150000 },
-            ) // 2026-10-15 回小窗(1000): 四维评估大窗 263s+轮询超时积压(9分钟) vs 小窗每窗<40s 实时进度无积压——小窗优; 联动批量修复已使每窗更快
-            // 2026-10-15 driver 每轮标记: 轮询活跃=前端推进(覆盖保活 backend 标签——保活只在无轮询时生效)
-            try {
-              api.post(
-                '/api/cleansing/driver?task_id=' + d.task_id + '&driver=frontend&channel=' + ch,
-              )
-            } catch {}
+            )
             const sd = sr.data
             if (sd.status === 'done') {
               finished = true

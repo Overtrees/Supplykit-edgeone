@@ -125,23 +125,34 @@ export default function TaskCard({
     const _tid = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(_tid)
   }, [st])
-  // 2026-11-05 修「任务跑了几分钟还显示刚刚」的两层根因:
-  //   ① 数据层: 卡片读的是 created_at(任务**创建**时刻), seed 分步长跑每步推进不改它 →
-  //      无论前端刷多勤, 这个时间永远是"创建时"的那个时刻, 差值为 0 → 恒「刚刚」。
-  //      后端 /api/tasks 已补 updated_at(每续跑一步 NOW() 刷新 = 进度心跳), 优先用它。
-  //   ② 渲染层: 组件不重渲染时 relTime 不会重算。上面那个 1s 的 now 一旦进函数体,
-  //      组件每秒都会重渲染, 相对时间自然跟着走。
+  // 2026-11-05 修「任务跑了几分钟还显示刚刚」——第三次返工, 这次挖到底:
+  //   ① 数据层: 卡片读的是 created_at(任务**创建**时刻), 分步长跑每步推进不改它。
+  //      后端 /api/tasks 补了 updated_at(每次续跑 NOW() 刷新 = 进度心跳)。
+  //   ② 但把 _stamp 换成 updated_at **仍然错**: 任务持续在跑时 updated_at 一直在刷新,
+  //      "距最后活动多久"永远 < 1s → 恒「刚刚」。这就是换了心跳还是「刚刚」的真因:
+  //      它回答的是「最后一次心跳有多新」, 而用户问的是「这个任务已经跑了多久」。
+  //   ③ 所以进行中的卡片直接显示**已运行总时长**(now - created_at, 由下面 1s 时钟驱动
+  //      每秒重算), 已完成/待运行才用「N 分钟前」讲"这个时间点离现在多久"。
   //   idle/pending 没有心跳, 退回 created_at(此时确实只有创建时刻可讲)。
-  const _stamp = st === 'running' && task.updated_at ? task.updated_at : task.created_at
-  // 心跳年龄(秒): 由 1s 时钟驱动, 与 relTime 共用同一个 now —— 只服务"不推进时仍能看见在跑"
-  const _stampMs = (() => {
-    const _r = String(_stamp || '').trim()
+  const _startStamp = task.created_at || task.updated_at
+  const _stamp = st === 'running' ? _startStamp : _startStamp
+  const _toMs = (v?: string) => {
+    const _r = String(v || '').trim()
     if (!_r) return 0
     const _s = _r.replace(' ', 'T') + (/(?:Z|[+-]\d{2}:?\d{2})$/.test(_r) ? '' : '+08:00')
-    const _v = new Date(_s).getTime()
-    return _v || 0
-  })()
-  const _beatAge = _stampMs ? Math.max(0, Math.round((now - _stampMs) / 1000)) : 0
+    const _vv = new Date(_s).getTime()
+    return _vv || 0
+  }
+  const _stampMs = _toMs(_stamp)
+  const _runSec = _stampMs ? Math.max(0, Math.round((now - _stampMs) / 1000)) : 0
+  // 人话时长: 45s / 3分12秒 / 1小时5分 —— 卡片窄, 不铺 00:03:12 这种机器格式
+  const runLabel = (s: number) => {
+    if (s < 60) return t('tc.running_sec', { n: s })
+    const m = Math.floor(s / 60)
+    const ss = s % 60
+    if (m < 60) return t('tc.running_min', { m, s: ss })
+    return t('tc.running_hr', { h: Math.floor(m / 60), m: m % 60 })
+  }
   const filename = String(resultInner?.filename || result?.filename || '')
   const lastStep = steps.length ? steps[steps.length - 1] : null
   // 2026-10-17 评估联动任务(cleansing_eval)专属: 窗口推进/评估计数/联动库存数——与导入任务同款
@@ -172,10 +183,11 @@ export default function TaskCard({
             </span>
           ) : null}
           {task.created_at ? (
-            <span className="task-reltime" title={task.updated_at || task.created_at}>
-              {st === 'running' && _beatAge >= 1
-                ? t('tc.running_for', { n: _beatAge })
-                : relTime(_stamp, now)}
+            <span
+              className="task-reltime"
+              title={t('tc.started_at', { t: relTime(task.created_at, now) })}
+            >
+              {st === 'running' ? runLabel(_runSec) : relTime(_stamp, now)}
             </span>
           ) : null}
           <span className={'task-status ' + st}>

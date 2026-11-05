@@ -3160,8 +3160,14 @@ try:
     _tk_src = open("routes/tasks.py", encoding="utf-8").read()
     check("任务列表返回 updated_at(进度心跳), 卡片不再只能拿 created_at",
           "created_at, updated_at" in _tk_src, "routes/tasks.py")
-    check("任务卡: running 优先用 updated_at, 无心跳才退回 created_at",
-          "st === 'running' && task.updated_at" in _tc11, "TaskCard.tsx")
+    # 2026-11-05 第三次返工: 前两轮把 _stamp 换成 updated_at(进度心跳) 仍然显示「刚刚」——
+    #   因为心跳一直在刷新, "距最后活动多久"永远 <1s。这是**语义错位**: 用户问的是
+    #   「这个任务已经跑了多久」, 不是「上一次心跳有多新」。所以 running 用 created_at 算
+    #   累计时长, updated_at 只作 created_at 缺失时的兜底。
+    check("任务卡: running 用 created_at 算累计运行时长(不再拿心跳当时间戳)",
+          "const _startStamp = task.created_at || task.updated_at" in _tc11
+          and "_runSec" in _tc11 and "runLabel(_runSec)" in _tc11,
+          "TaskCard.tsx")
     # loadAll 竞态: loading/orderLoading 原先只在正常路径复位, 被丢弃的那次会把 true 留在 state
     _st11 = open(_os.path.join(_FE, "store", "useAppStore.ts"), encoding="utf-8").read()
     check("loadAll 竞态: 最新那次无论走 return 还是正常结束都收起 loading",
@@ -3172,11 +3178,12 @@ try:
 
     # ── 2026-11-05 第二轮用户实测: 「多页面卡加载中/同步中」「任务卡一直刚刚」──
     _tp11 = open(_os.path.join(_FE, "pages", "TaskPage.tsx"), encoding="utf-8").read()
-    # ① 骨架屏死锁: setLoading(false) 曾挂在 `if (mySeq !== loadSeq.current) return` 之后,
-    #    而 3s 轮询每轮都 ++loadSeq → 首载一慢就永远过期 → 骨架永不消失。必须挪进 finally。
+    # ① 骨架屏死锁: 收尾曾挂在 `if (mySeq !== loadSeq.current) return` 之后, 而 3s 轮询每轮
+    #    都 ++loadSeq → 首载一慢就永远过期 → 骨架永不消失。必须挪进 finally。
+    #    2026-11-05 第三次返工: 三态收敛成单一 phase 状态机, finally 里推的是 phase。
     _tp_fin = _tp11.split("} finally {")[-1] if "} finally {" in _tp11 else ""
-    check("任务页骨架屏: setLoading(false) 在 finally 里(不再被竞态 return 跳过)",
-          "setLoading(false)" in _tp_fin, "TaskPage.tsx")
+    check("任务页骨架屏: phase→ready 在 finally 里(不再被竞态 return 跳过)",
+          "setPhase('ready')" in _tp_fin, "TaskPage.tsx")
     # ② 回调参数 `t` 遮蔽模块级翻译函数 t(): `t('task.done_toast',...)` 实际是调用任务对象 → TypeError
     check("任务页完成提示: forEach 回调参数不叫 t(否则遮蔽 t(), 完成提示永远不弹)",
           "function (t)" not in _tp11 and "function (task)" in _tp11, "TaskPage.tsx")
@@ -3243,7 +3250,7 @@ try:
     # ② 订单双写: 水位对账抓出每段执行两遍(单日 3100 = 1550×2)。
     #    旧锁 `updated_at < NOW() - INTERVAL 3 SECOND` 没有持有期 → 改 lease_until。
     #    但 600s 长租约引入更坏的失效: 单段被网关硬杀 → 租约不释放 → 静止 10 分钟
-    #    → 多个驱动反复抢锁重跑。现缩到 150s + 每段幂等, 响应丢失最多静止 2.5 分钟。
+    #    → 多个驱动反复抢锁重跑。后改为心跳续期(TTL 30s), 见下方第三次事故条目。
     _ts_code3 = "\n".join(x for x in _ts_src.splitlines()
                           if x.strip() and not x.strip().startswith("#"))
     check("续跑锁: 用 lease_until 独占租约, 不再用 3 秒窗口的 updated_at 判断",
@@ -3439,15 +3446,23 @@ try:
     _FE2 = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
         _os.path.abspath(__file__)))), "frontend", "src")
     _tp12 = open(_os.path.join(_FE2, "pages", "TaskPage.tsx"), encoding="utf-8").read()
-    check("任务页: 未成功拉到过一次之前不渲染空态(否则骨架后闪一下空列表)",
-          "loadedOnce" in _tp12 and "!loadedOnce && tasks.length === 0" in _tp12, "TaskPage.tsx")
+    # 2026-11-05 第三次返工: `loadedOnce` 那套是"再加一个标记", 三态变四态, 中间态仍能被渲染。
+    #   现在收敛成单一 phase 状态机: load → ready 单向, 空态与数据同一次渲染二选一。
+    #   判据只取**代码行**(去注释) —— 历史注释里提到旧方案不算回归。
+    _tp12_code = "\n".join(x for x in _tp12.splitlines()
+                           if x.strip() and not x.strip().startswith(("*", "//")))
+    check("任务页: 三态收敛成单一 phase 状态机(空态与数据同帧二选一, 不闪中间态)",
+          "useState<'load' | 'ready'>('load')" in _tp12_code
+          and "phase === 'load' ?" in _tp12_code
+          and "loadedOnce" not in _tp12_code,
+          "TaskPage.tsx")
     _tc12 = open(_os.path.join(_FE2, "components", "tasks", "TaskCard.tsx"),
                  encoding="utf-8").read()
     # 相对时间曾把"带 +08:00 的时间串"再补一个 Z → 解析失败 → 恒「刚刚」
     check("任务卡: 时间解析不再无脑补 Z(带 +08:00 时会解析失败塌成刚刚)",
           "+08:00" in _tc12 and "String(iso).includes('Z')" not in _tc12, "TaskCard.tsx")
     check("任务卡: running 显示累计运行时长(不再依赖'这一秒刚好在推进')",
-          "tc.running_for" in _tc12, "TaskCard.tsx")
+          "runLabel(_runSec)" in _tc12 and "_runSec" in _tc12, "TaskCard.tsx")
     # 看守: 驱动从任务页搬到 App 层 —— 切页面/持锁期间都有推进, 且全局串行
     _tw = open(_os.path.join(_FE2, "api", "taskWatch.ts"), encoding="utf-8").read()
     check("任务看守: 全局串行(同一时刻只有一个续跑请求, 不并发抢锁)",
@@ -3459,6 +3474,70 @@ try:
     _app12 = open(_os.path.join(_FE2, "App.tsx"), encoding="utf-8").read()
     check("任务看守: 挂在 App 层(不在任务页), 切页面照样推进",
           "adoptRunning" in _app12 and "onWatchChange" in _app12, "App.tsx")
+
+    # ── 2026-11-05 竞态根治: 状态端点必须是"纯读", 全仓只留一个驱动源 ──
+    # 背景: /seed/fill/status、/cleansing/status、/cleansing/eval-status 每被调一次就
+    #   「抢锁 + 推进一步 + 写库」, 而前端曾有 6 处在打它们 → 用户可见的忙徽标恒亮、
+    #   抢不到锁的白烧 RU、进度条不动而租约一直被占。现在除 taskWatch 外一律带 probe=1。
+    _cl12 = open(_os.path.join(_FE2, "api", "client.ts"), encoding="utf-8").read()
+    # 后台请求不进用户可见的忙徽标(否则长任务在跑时任何页面都显示"同步中")
+    check("同步胶囊: 后台请求(看守/轮询)不计入用户可见在途数",
+          "markBackground" in _cl12 and "backgroundRequests" in _cl12
+          and "_activeReq - _bgReq" in _cl12, "api/client.ts")
+    check("同步胶囊: apiJson 支持 background 标记(看守单走后台通道)",
+          "background?: boolean" in _cl12 and "if (opts.background) markBackground(true)" in _cl12,
+          "api/client.ts")
+    check("任务看守: 驱动请求标为 background(自己不点亮忙徽标)",
+          "background: true" in _tw, "api/taskWatch.ts")
+    # 反向红线: 除 taskWatch 外, 前端不得再有不带 probe 的状态查询(否则又多一个驱动源)
+    _fe_files = []
+    for _root, _dirs, _files in _os.walk(_FE2):
+        for _f in _files:
+            if _f.endswith((".ts", ".tsx")):
+                _fe_files.append(_os.path.join(_root, _f))
+    _bad = []
+    for _p in _fe_files:
+        if _p.endswith(_os.path.join("api", "taskWatch.ts")):
+            continue  # 唯一驱动源, 必须不带 probe
+        _src = open(_p, encoding="utf-8").read()
+        # 多行拼接的 URL 要按「语句」而不是按行判: 把连续的行合成一句再看有没有 probe
+        _stmt = ""
+        for _ln in _src.splitlines():
+            _s = _ln.strip()
+            if _s.startswith(("//", "*", "/*")):
+                continue
+            _stmt += " " + _s
+            if _s.endswith((",", "(", "+", "?", "'", '"')) or "=" in _s[-1:]:
+                continue  # 语句未结束, 继续累加
+            for _ep in ("/api/seed/fill/status?", "/api/cleansing/status?",
+                        "/api/cleansing/eval-status?"):
+                if _ep in _stmt and "probe=1" not in _stmt:
+                    _bad.append(_os.path.basename(_p) + ": " + _stmt.strip()[:80])
+            _stmt = ""
+    check("状态查询: 除 taskWatch 外全部带 probe=1(否则同一任务被多处推进 → 抢锁/白烧 RU)",
+          not _bad, _bad[:3])
+
+    # 后端: 三条 status 端点都有 probe 纯读分支, 且 claim 早于任何写操作
+    _cfs = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "routes")
+    for _fname, _sig in (("task_seed.py", "probe: int = 0"),
+                         ("cleansing.py", "probe: int = 0")):
+        _src = open(_os.path.join(_cfs, _fname), encoding="utf-8").read()
+        check("probe 纯读: %s 的 status 接受 probe 参数" % _fname, _sig in _src,
+              "routes/" + _fname)
+    _cc = open(_os.path.join(_cfs, "cleansing.py"), encoding="utf-8").read()
+    check("probe 纯读: eval-status 也支持 probe(三类任务口径一致)",
+          _cc.count("probe: int = 0") >= 2 and _cc.count("if probe:") >= 2,
+          "routes/cleansing.py")
+    _tsrc = open(_os.path.join(_cfs, "task_seed.py"), encoding="utf-8").read()
+    # probe 分支必须**早于** mark_driver(那是写库), 否则"纯读"是假的
+    _p1 = _tsrc.find("if probe:")
+    _p2 = _tsrc.find("_mkdrv(task_id, driver)")
+    check("probe 纯读: seed 的 probe 分支早于 mark_driver(否则仍是写端点)",
+          -1 < _p1 < _p2, "routes/task_seed.py")
+    _q1 = _cc.find("if probe:\n        if not task_id:")
+    _q2 = _cc.find("_mkdrv(task_id, driver)\n    row = one(")
+    check("probe 纯读: cleansing 的 probe 分支早于 mark_driver 与超时自愈(否则仍会抢锁/自愈写库)",
+          -1 < _q1 < _q2, "routes/cleansing.py")
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 

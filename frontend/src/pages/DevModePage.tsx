@@ -165,11 +165,14 @@ export default function DevModePage() {
         } catch {}
         toast.success(t('dev.reset_submitted'))
         // 轮询等待重置完成
+        //   2026-11-05: 走 probe=1 纯读 —— 推进统一由 App 层 taskWatch 看守负责。
+        //   本端点原带副作用(查一次 = 抢锁 + 推进一步), 页面轮询 + App 轮询 + 看守
+        //   三处同打 → 竞态抢锁、胶囊一直转; probe 后本处只读, 不推进、不写 driver。
         const poll = setInterval(async () => {
           try {
             const sr = await apiJson<Response>(
               'GET',
-              API + '/api/seed/fill/status?task_id=' + d.data.task_id,
+              API + '/api/seed/fill/status?task_id=' + d.data.task_id + '&probe=1',
             )
             const sd = await sr.json()
             if (sd.data?.status === 'done' || sd.data?.status === 'error') {

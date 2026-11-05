@@ -1360,8 +1360,12 @@ export const zh: Record<string, string> = {
   'task.imp_outbound': '出库记录表',
   'task.imp_product': '商品表',
   'tc.just_now': '刚刚',
-  // 2026-11-05 任务卡右上角: 进行中的任务要看得见在跑, 不能永远「刚刚」
-  'tc.running_for': '已运行 {n}s',
+  // 2026-11-05 任务卡右上角: 进行中的任务显示**已运行总时长**, 不是「距最后心跳多久」
+  //   (后者在任务持续推进时永远 <1s → 恒显示「刚刚」, 这是用户反复反馈的那条)
+  'tc.running_sec': '已运行 {n}s',
+  'tc.running_min': '已运行 {m}分{s}秒',
+  'tc.running_hr': '已运行 {h}小时{m}分',
+  'tc.started_at': '开始于 {t}',
   'tc.mins_ago': '{n} 分钟前',
   'tc.hours_ago': '{n} 小时前',
   'tc.backend_run': '后端推进',

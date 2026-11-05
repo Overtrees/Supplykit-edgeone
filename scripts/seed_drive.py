@@ -29,9 +29,23 @@ def task_row():
     return r[0] if r else None
 
 
+def _token():
+    """全局鉴权中间件只认 X-Auth-Token(网关会改写 Authorization 为 q-sign)。
+    不带它每次推进请求都 401 —— 任务看着在跑, 实际一步没走。
+    """
+    t = os.environ.get('SK_TOKEN', '')
+    if not t:
+        try:
+            t = open('/tmp/sk_token', encoding='utf-8').read().strip()
+        except Exception:
+            t = ''
+    return t
+
+
 def drive():
     url = '%s/api/seed/fill/status?task_id=%s&driver=script' % (API, TASK)
-    req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+    req = urllib.request.Request(
+        url, headers={'Accept': 'application/json', 'X-Auth-Token': _token()})
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=REQ_TIMEOUT) as f:

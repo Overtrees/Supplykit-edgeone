@@ -478,11 +478,41 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
 
 @router.get("/cleansing/status")
 @traced
-def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "frontend"):
+def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "frontend", probe: int = 0):
+    """导入续跑(前端轮询触发): 每步读源文件 → 解析 → 窗口清洗写入(5000 行/步, ≤120s)
+    全部完成 → 最后步全量重清洗做库存联动+规则评估+汇总 → done
+
+    probe=1 → 纯读(2026-11-05 竞态根治): 只 SELECT 返回状态, 不写 driver / 不做超时自愈
+      写操作 / 不抢锁 / 不续跑。App 层老轮询等「只看结果」的调用方一律走 probe,
+      推进统一交给 taskWatch 看守(全仓单一驱动源)。原驱动链路一字未改。
+    """
+    # ① 纯读: 早于 mark_driver 与 30 分钟超时自愈(写操作), 保证零副作用
+    if probe:
+        if not task_id:
+            return {"ok": True, "status": "not_found"}
+        _p = one("SELECT status, params, result, created_at, updated_at FROM sync_tasks "
+                 "WHERE task_id=%s", [task_id])
+        if not _p:
+            return {"ok": True, "status": "not_found"}
+        _st = _p.get("status") or ""
+        _d = {"ok": True, "task_id": task_id, "status": _st, "probe": True,
+              "created_at": str(_p.get("created_at") or ""),
+              "updated_at": str(_p.get("updated_at") or "")}
+        try:
+            _pj = json.loads(_p.get("params") or "{}") or {}
+            _d["offset"] = int(_pj.get("offset") or 0)
+            _d["total"] = int(_pj.get("total") or 0)
+        except Exception:
+            pass
+        if _st in ("done", "error"):
+            _ri = (json.loads(_p.get("result") or "{}") or {}).get("result") or {}
+            _d.update({"success": _ri.get("success"), "failed": _ri.get("failed"),
+                       "message": _ri.get("message"), "error": _ri.get("error"),
+                       "failed_details": _ri.get("failed_details") or []})
+        return _d
+    # ② 驱动模式(taskWatch 看守): 保持原有语义
     from routes.common import mark_driver as _mkdrv
     _mkdrv(task_id, driver)
-    """导入续跑(前端轮询触发): 每步读源文件 → 解析 → 窗口清洗写入(5000 行/步, ≤120s)
-    全部完成 → 最后步全量重清洗做库存联动+规则评估+汇总 → done"""
     row = one("SELECT status, params, result, updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
@@ -776,12 +806,37 @@ def cleansing_templates():
 
 @router.get("/cleansing/eval-status")
 @traced
-def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str = "frontend"):
+def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str = "frontend", probe: int = 0):
+    """2026-10-16 评估联动独立任务——分窗接力(每请求 ≤90s 安全——SKU 清单驱动——不重读源)
+    读 sku_list → 处理 offset 起 page_size 个 SKU(评估+联动该片——幂等 existing 去重+事务联动) → offset 推进 → done
+
+    probe=1 → 纯读(2026-11-05 竞态根治): 只 SELECT 返回进度快照, 不写 driver / 不抢锁 / 不推进。
+      与 /seed/fill/status、/cleansing/status 三类任务口径保持一致。
+    """
+    import time as _t
+    if probe:
+        if not task_id:
+            return {"ok": True, "status": "not_found"}
+        _p = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+        if not _p:
+            return {"ok": True, "status": "not_found"}
+        _st = _p.get("status") or ""
+        _d = {"ok": True, "task_id": task_id, "status": _st, "probe": True}
+        try:
+            _pj = json.loads(_p.get("params") or "{}") or {}
+            _d["offset"] = int(_pj.get("offset") or 0)
+            _d["total"] = len(_pj.get("sku_list") or [])
+        except Exception:
+            pass
+        if _st in ("done", "error"):
+            _ri = (json.loads(_p.get("result") or "{}") or {}).get("result") or {}
+            _d.update({"success": _ri.get("success"), "failed": _ri.get("failed"),
+                       "error": _ri.get("error"),
+                       "rules_evaluated": _ri.get("rules_evaluated"),
+                       "inventory_adjusted": _ri.get("inventory_adjusted")})
+        return _d
     from routes.common import mark_driver as _mkdrv
     _mkdrv(task_id, driver)
-    """2026-10-16 评估联动独立任务——分窗接力(每请求 ≤90s 安全——SKU 清单驱动——不重读源)
-    读 sku_list → 处理 offset 起 page_size 个 SKU(评估+联动该片——幂等 existing 去重+事务联动) → offset 推进 → done"""
-    import time as _t
     row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
