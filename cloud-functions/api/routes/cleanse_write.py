@@ -294,8 +294,11 @@ def _rebuild_own_batches(channel, skus, begin_date=None):
         _bd = _ledger_begin(channel)
     else:
         _bd = str(begin_date or "")
-    if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
-        _bd = ""          # '1970-01-01' 之类"全期"哨兵值 → 不加日期下界, 等价 bootstrap
+    # 哨兵/非法值一律归空。注意 "1970-01-01" **符合**日期格式, 单靠正则挡不住:
+    #   它曾是"全期"哨兵, 若留着, `bool(_bd)` 会被判成"已结过账" → 改从 batch_opening
+    #   取月初余额, 首建时该表为空 → 期初批次池缺 beginning_stock → Σ批次 ≠ 可用。
+    if _bd == "1970-01-01" or (_bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd)):
+        _bd = ""
     _is_ledger = bool(_bd)                       # True = 已结过账, 期初来自 batch_opening
     _cur_p = _cur_period(channel) if _is_ledger else ""
     _d_in = " AND inbound_date >= '%s' " % _bd if _bd else " "
@@ -449,9 +452,11 @@ def _rebuild_own_batches(channel, skus, begin_date=None):
         if not _del_keys:
             continue
         # 删旧(按 sku 全删该渠道 own 批次, 再整体重建, 保证幂等)
-        # 2026-11-05: 分块 200/300 → 2000 —— 与读取侧同一个理由(耗时随**次数**走)。
+        # 2026-11-05: 分块 200/300 → 2000 → 插入侧 5000 —— 与读取侧同一个理由(耗时随**次数**走)。
         #   实测 1 万 SKU/渠道 ≈ 4.3 万批发行, 原 300/块 = 143 次 INSERT/渠道;
-        #   2000/块 = 22 次。单块 2000 行仍是 TiDB 单语句可承受的量(远低于 6MB 响应限制)。
+        #   2000/块 = 22 次, 5000/块 = 9 次。单条 INSERT 5 万行实测 0.645s / 808KB,
+        #   max_allowed_packet=64MB, 5000 行远在安全区(仅删除侧 IN 列表仍留 2000,
+        #   那个是优化器 IN 列表舒适区, 不是写请求数, 不一起抬)。
         _sk_all = sorted({k[0] for k in _del_keys})
         for j in range(0, len(_sk_all), 2000):
             d = _sk_all[j:j + 2000]
@@ -461,8 +466,8 @@ def _rebuild_own_batches(channel, skus, begin_date=None):
                    [channel] + list(SELF_WAREHOUSE_TYPES) + d)
             except Exception as _ed:
                 try_err('cleansing', '自有仓批次删除降级', _ed)
-        for j in range(0, len(_insert_rows), 2000):
-            chunk = _insert_rows[j:j + 2000]
+        for j in range(0, len(_insert_rows), 5000):
+            chunk = _insert_rows[j:j + 5000]
             cols = ["sku", "barcode", "warehouse", "warehouse_type", "channel",
                     "prod_date", "exp_date", "qty"]
             try:
@@ -603,7 +608,7 @@ def _recalc_own_inventory(channel, skus, begin_date=None):
       所以改成 **一条 SELECT 取全量 → Python 算 → executemany 回写**:
         · 流水侧 UNION ALL 后按 (sku,69码,仓,仓型) 聚合一次, LEFT JOIN 库存行;
         · 只拉 own 维度的行(与旧实现 WHERE 一致), 行数 = 库存行数, 不随订单/流水增长;
-        · 回写按 1000 行一批 executemany(与 _write_batch 同参数), 写侧 RU 与旧路径同量级。
+        · 回写按 2000 行一批 executemany(与 _write_batch 同参数), 写侧 RU 与旧路径同量级。
       **不再按 SKU 分批** —— `skus` 参数只用于"只重算这些 SKU"的语义, 不用于切批。
     """
     from db import query as _q, executemany as _em
@@ -614,7 +619,9 @@ def _recalc_own_inventory(channel, skus, begin_date=None):
         _bd = _ledger_begin(channel)
     else:
         _bd = str(begin_date or "")   # 显式传入优先, 理由同 _rebuild_own_batches
-    if _bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd):
+    # 与 _rebuild_own_batches 同一套哨兵归空规则(见该函数注释): "1970-01-01" 是合法
+    #   日期格式, 正则挡不住, 必须显式判。留着会让 Σ 起点与批次池区间错开。
+    if _bd == "1970-01-01" or (_bd and not re.match(r"^\d{4}-\d{2}-\d{2}$", _bd)):
         _bd = ""
     _d_in = " AND r.inbound_date >= '%s' " % _bd if _bd else " "
     _d_out = " AND r.outbound_date >= '%s' " % _bd if _bd else " "
@@ -669,8 +676,8 @@ def _recalc_own_inventory(channel, skus, begin_date=None):
             continue
         upd.append((val, r.get("id")))
     out = 0
-    for i in range(0, len(upd), 1000):
-        chunk = upd[i:i + 1000]
+    for i in range(0, len(upd), 2000):
+        chunk = upd[i:i + 2000]
         try:
             _em("UPDATE inventory SET available_qty=%s WHERE id=%s", chunk)
             out += len(chunk)
@@ -1516,8 +1523,13 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
     #   实测(TiDB, 2000 行/1000 一批): 纯 INSERT 2.14s vs upsert 1.03s —— 没有注释里说的
     #   "ON DUP 慢 10 倍", 那条结论来自旧表结构, 不适用于有四维唯一键的现在。
     ord_upsert = table == "orders"
-    for i in range(0, len(cleaned), 500):
-        chunk = cleaned[i:i + 500]
+    # 写批 500 → 2000(2026-11-05 TiDB 实测: 单条 INSERT 40 万行 2.948s / 4.9MB,
+    #   64MB max_allowed_packet 的 7.6%, 写入行数不是瓶颈; RU 按**写请求次数**计)。
+    #   500/片时内层 1000/批永远只跑一次, 实际写批 = 500 行 —— 两个值必须一起抬。
+    #   列并集按片算, 片变大后补的默认值(数值 0 / 其余 '')与相关表列默认值一致,
+    #   已逐表核对 information_schema, 不会把缺列行写成错值。
+    for i in range(0, len(cleaned), 2000):
+        chunk = cleaned[i:i + 2000]
         rows = []
         for it in chunk:
             row = {}
@@ -1582,10 +1594,11 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
         else:
             # 2026-10-15 性能: 非 sum 模式已做已存在跳过(rows 全新键)——纯 INSERT 无 ON DUPLICATE(executemany+ON DUP 对 TiDB 慢 10 倍——seed 5000/批 36s vs 此处 5.5 分钟)
             pass
-        # 批量写入(1000/批 executemany 单语句——TiDB 单语句原子无需事务; 事务(5000行大=持锁慢/500×10小=往返多)均慢——
-        # 无事务 + 1000 行/批: 5 批单语句(原子 + 往返少)——5000 行每步 ~5-15s)
-        for _bi in range(0, len(rows), 1000):
-            _b = rows[_bi:_bi + 1000]
+        # 批量写入(2000/批 executemany 单语句——TiDB 单语句原子无需事务; 事务(5000行大=持锁慢/小批往返多)均慢)。
+        #   与上层清洗切片同为 2000, 一次 executemany 就是一条 2000 行多值 INSERT,
+        #   写请求数 = ceil(行数/2000); 事务仍不启用(单语句本身原子)。
+        for _bi in range(0, len(rows), 2000):
+            _b = rows[_bi:_bi + 2000]
             try:
                 executemany(sql, [tuple(r.get(c, 0 if c in _num_fill else "") for c in cols) for r in _b])
                 success += len(_b)
@@ -1667,10 +1680,10 @@ def _sync_batches(channel, rows, conflict_mode="overwrite"):
                 _em("UPDATE batches SET qty=%s WHERE id=%s", _upd)
             except Exception as _e:
                 try_err('cleansing', '批次累加批量更新降级', _e)
-        for _j in range(0, len(_new), 200):
+        for _j in range(0, len(_new), 2000):
             try:
                 _em("INSERT INTO batches(sku, warehouse, warehouse_type, channel, "
-                    "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)", _new[_j:_j + 200])
+                    "prod_date, exp_date, qty) VALUES(%s,%s,%s,%s,%s,%s,%s)", _new[_j:_j + 2000])
             except Exception as _e:
                 try_err('cleansing', '批次累加批量插入降级', _e)
         return len(ins)
@@ -1687,8 +1700,8 @@ def _sync_batches(channel, rows, conflict_mode="overwrite"):
                     % ",".join(["(%s,%s)"] * len(_part)), _args)
         except Exception as _e:
             try_err('cleansing', '批次覆盖批量清理降级', _e)
-    for i in range(0, len(ins), 200):
-        chunk = ins[i:i + 200]
+    for i in range(0, len(ins), 2000):
+        chunk = ins[i:i + 2000]
         cols = list(chunk[0].keys())
         try:
             _em("INSERT INTO batches(%s) VALUES(%s)" % (

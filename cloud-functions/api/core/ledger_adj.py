@@ -212,7 +212,12 @@ def apply_import(channel, items, ts=None, batch_id="", wt=OWN_WT):
     #   系统把"本期"定义为全期, 起算日就是"有流水之前"。两处取同一个值, 期初与可用才自洽。
     #   写死本月 1 号正是分裂的来源, 不能再写回去。
     _bd = state_get(channel, wt).get("begin_date") or ""
-    _sum_start = _bd if _bd else "1970-01-01"
+    # 从未建账 → 空串(全期), **不造 "1970-01-01" 哨兵**。下游 _rebuild_own_batches 用
+    #   `bool(begin_date)` 判"是否已结过账": 合法日期会被判成已结账 → 改从 batch_opening
+    #   取月初余额, 而首建时该表为空 → 期初批次池缺 beginning_stock → Σ批次 ≠ 可用。
+    #   空串同时满足: _net_since 的 `col >= ''` 走全期(字典序下 '' 小于任何日期),
+    #   批次重建走 bootstrap 分支用 beginning_stock。两轨同源且都正确。
+    _sum_start = _bd
     res["sum_start"] = _sum_start
     # 首期(fresh 账)没有上月可结转: carried 全 0, 免得把上轮残留的 inventory_month 当结转。
     carried = {} if scene == SCENE_FIRST else _carried(channel, wt, period)

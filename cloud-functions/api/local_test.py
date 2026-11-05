@@ -3095,6 +3095,33 @@ try:
     check("批次重建: 批大小 ≥1000(否则 2 万 SKU 要 200 批 ≈ 280s, 撞死 90s 上限)",
           "range(0, len(skus), 5000)" in _cw11 and "range(0, len(skus), 100)" not in _cw11,
           "routes/cleanse_write.py")
+    # ── 2026-11-05 写批次放大 + 账期哨兵口径 ──
+    # 断言只看**代码行**(去注释): 注释里会引用旧值/哨兵名, 全文匹配会假红(踩过两次)
+    _cw_code = "\n".join(x for x in _cw11.splitlines()
+                         if x.strip() and not x.strip().startswith("#"))
+    check("写批次: 清洗切片与内层 executemany 同为 2000(否则实际写批仍被切片卡在 500)",
+          "range(0, len(cleaned), 2000)" in _cw_code
+          and "range(0, len(rows), 2000)" in _cw_code
+          and "range(0, len(cleaned), 500)" not in _cw_code,
+          "routes/cleanse_write.py")
+    check("写批次: 可用回写 2000 / 批次插入 5000 / 批次累加·覆盖 2000",
+          "range(0, len(upd), 2000)" in _cw_code
+          and "range(0, len(_insert_rows), 5000)" in _cw_code
+          and "range(0, len(_new), 2000)" in _cw_code
+          and "range(0, len(ins), 2000)" in _cw_code,
+          "routes/cleanse_write.py")
+    check("写批次: 删除侧 IN 列表仍留 2000(优化器舒适区, 不跟插入批一起抬)",
+          "range(0, len(_sk_all), 2000)" in _cw_code, "routes/cleanse_write.py")
+    _la_code_lines = "\n".join(
+        x for x in open("core/ledger_adj.py", encoding="utf-8").read().splitlines()
+        if x.strip() and not x.strip().startswith("#"))
+    check("账期哨兵: 首建不再造 '1970-01-01'(会被批次重建误判成已结账 → 期初批次缺失)",
+          "_sum_start = _bd" in _la_code_lines
+          and 'else "1970-01-01"' not in _la_code_lines,
+          "core/ledger_adj.py")
+    check("账期哨兵: 重算/重建两处都显式归空(日期格式正则挡不住合法日期哨兵)",
+          _cw_code.count('if _bd == "1970-01-01"') == 2,
+          "routes/cleanse_write.py")
     # 订单段返回值: 曾是全局累计序号(含 day_from*1000000 偏移), 水位对账当场算出"预期 1500 万"
     _sf11 = open("routes/seed_fill.py", encoding="utf-8").read()
     check("订单段返回值 = 本段新增行数(不再是含偏移的全局序号)",
