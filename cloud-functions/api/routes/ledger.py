@@ -40,7 +40,11 @@ def ledger_status(channel: str = "jd"):
         target = shift_period(period_of(), -1)
         ready, why = (False, "") if not target else close_check(target, channel, wt)
         out.append({
-            "warehouse_type": wt, "period": cur, "status": st.get("status"),
+            "warehouse_type": wt, "period": cur,
+            # status 描述的是 **cur 这个账期**: 只有当已结到 cur 时才是 closed,
+            #   否则是进行中(open)。原样返回 st.status 会出现「period=2026-11 + closed」——
+            #   那个 closed 指的是 2026-10, 读的人会以为 11 月已结(2026-11-05 实测踩到)。
+            "status": (st.get("status") if st.get("period") == cur else "open"),
             "begin_date": st.get("begin_date"), "closed_period": st.get("period"),
             "reason": st.get("reason"), "closed_at": st.get("closed_at"),
             "days": elapsed_days(cur), "month_days": period_days(cur),
