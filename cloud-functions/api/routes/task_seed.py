@@ -57,8 +57,9 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         _steps = (params.get("steps") or []) + [{"name": str(part) or ("步骤%d" % step), "elapsed": _sq}]
         # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 原写死 10, 而段号重排后完成值是 12
         #   → 任务越过 10 后永不落 done, status 轮询会一直续跑(空转烧 RU)
+        # total_step 一并下发: 前端进度条此前也写死 10 段, step>10 时顶在 99% 不动
         _cur = {"name": ("步骤%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
-        new_params = _json.dumps({"step": nxt, "steps": _steps,
+        new_params = _json.dumps({"step": nxt, "steps": _steps, "total_step": SEED_DONE,
                                   "cur_step": None if nxt >= SEED_DONE else _cur})
         if nxt >= SEED_DONE:
             # 全部步骤完成 → done(汇总 part 简单展示)
@@ -108,15 +109,15 @@ async def seed_fill(request: Request):
     try:
         # 创建 running 任务 + 执行步骤 0(商品/供应商, 秒级)
         import json as _json
-        from routes.seed_fill import prepare_skus, seed_step
+        from routes.seed_fill import prepare_skus, seed_step, SEED_DONE
         execute("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                 "VALUES(%s,'seed','running',%s,'{}',%s)",
-                (task_id, _json.dumps({"step": 0}), channel))
+                (task_id, _json.dumps({"step": 0, "total_step": SEED_DONE}), channel))
         skus_data = prepare_skus()
         today = now_cn()
         nxt, part = seed_step(0, today, skus_data, run_id=task_id)
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
-                (_json.dumps({"step": nxt}), task_id))
+                (_json.dumps({"step": nxt, "total_step": SEED_DONE}), task_id))
         return ok({"task_id": task_id, "started": True})
     except Exception as e:
         import traceback as _tb

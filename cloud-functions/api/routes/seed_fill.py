@@ -194,6 +194,12 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     # 2026-11-05 偏移量 10 万 → 100 万: 单段(15 天)已约 3.5 万单, 双渠道 7 万;
     #   原 10 万偏移在多实例/重跑叠加时余量太薄, 而 order_no 唯一是硬约束(撞了就是整批 1062)
     total = int(day_from) * 1000000
+    # 2026-11-05 修: 返回值此前是**全局累计序号 total**(含 day_from*1000000 的步偏移),
+    #   不是本段新增行数 —— 水位对账第一次跑就把它抓了出来:
+    #   第 2 段报"预期 15,072,115 / 实际 72,115"(差正好 1500 万 = 偏移量本身)。
+    #   旧代码拿这个值当"生成了多少单"用(step summary 展示), 一直显示的是天文数字,
+    #   只是没人核对过。这里显式累加本段实际 flush 的行数。
+    _seg_rows = 0
     batch = []
 
     def _amt(q, price, disc_r, freight_r, sub_r):
@@ -204,7 +210,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 'actual_amount': round(base - disc - sub_r + freight_r, 2)}
 
     def flush():
-        nonlocal batch
+        nonlocal batch, _seg_rows
         if not batch:
             return
         cols = ['order_no', 'store', 'warehouse', 'sku', 'product_name', 'quantity', 'unit_price',
@@ -216,6 +222,7 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
         executemany("INSERT IGNORE INTO orders(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
                                                                   ", ".join(["%s"] * len(cols))),
                     [tuple(o[c] for c in cols) for o in batch])
+        _seg_rows += len(batch)
         batch = []
 
     for ch, label, skus, base in [('jd', 'jd', skus_data['jd'], ORDER_BASE_PER_DAY),
@@ -295,7 +302,8 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                 if len(batch) >= 500:
                     flush()
     flush()
-    return total
+    # 返回**本段实际写入行数**(非全局序号; 历史调用方拿它当"生成了多少单"展示, 见上方注释)
+    return _seg_rows
 
 
 def _seed_inventory(skus_data):
@@ -362,7 +370,7 @@ def _seed_inventory(skus_data):
     return len(inv)
 
 
-def _seed_batches():
+def _seed_batches(skus_data=None):
     # 2026-10-29 按 69码: 批次从库存行取码(该 SKU+仓 唯一码时归属明确)
     bc_map = {}
     try:
@@ -447,8 +455,12 @@ def _seed_batches():
     #   但任何一次真实导入触发重建就被按"空日期流水"重算而塌缩(本次 65 项偏差的成因之一)。
     from routes.cleanse_write import _rebuild_own_batches as _rbb
     for _och in ('jd', 'other'):
-        _osk = [str(x.get('sku') or '') for x in query(
-            "SELECT DISTINCT sku FROM inventory WHERE channel=%s AND warehouse_type='own'", [_och])]  # no-barcode-ok: SKU 枚举
+        # 2026-11-05: 有内存 SKU 集合就用它(省一次 3.1s 的 DISTINCT); 没有才查库(/seed/step 单跑)
+        if skus_data and skus_data.get(_och):
+            _osk = [str(x.get('sku') or '') for x in skus_data[_och]]
+        else:
+            _osk = [str(x.get('sku') or '') for x in query(
+                "SELECT DISTINCT sku FROM inventory WHERE channel=%s AND warehouse_type='own'", [_och])]  # no-barcode-ok: SKU 枚举
         _osk = [x for x in _osk if x]
         if _osk:
             _rbb(_och, _osk)
@@ -995,6 +1007,9 @@ def wm_end(run_id, step, expected, channel=''):
                      "WHERE run_id=%s AND step=%s AND target=%s AND channel=%s",
                      (run_id, int(step), t, channel)) or {}
             _hwm = int(_r.get('hwm_before') or 0)
+            # 计数用 `COUNT(*) WHERE id > hwm`(同一过滤条件, 精确) —— **不能用
+            # MAX(id) - hwm**: INSERT IGNORE 撞键也会消耗 auto_increment, 两个数会差出一截,
+            # 而且差得越多越像是"多写了"(实际是被 IGNORE 掉的空号)。
             _a = one("SELECT COUNT(*) AS c FROM `%s` WHERE id > %%s" % t, [_hwm]) or {}
             _act = int(_a.get('c') or 0)
             _exp = int(exp or 0)
@@ -1102,7 +1117,7 @@ def seed_step(step, today, skus_data, run_id=''):
     if step == _SEED_SETTLE:
         # 批次是"先 DELETE 再 INSERT"的重建 → id 水位对这个目标不成立(删过之后 id 不连续),
         #   所以这里只登记 expected/actual 对账, 不参与回滚(回滚靠上一步的流水+库存水位即可)
-        _st = seed_settle()
+        _st = seed_settle(skus_data)
         return _SEED_MONTH, _st
     if step == _SEED_MONTH:
         _ms = _sync_inv_month()
@@ -1125,13 +1140,16 @@ def seed_step(step, today, skus_data, run_id=''):
     return SEED_DONE, {}
 
 
-def seed_settle():
+def seed_settle(skus_data=None):
     """落账: 重算自有仓可用 → 重建批次 → 自检(2026-11-05 抽成独立函数, seed 与运维口共用)
 
     为什么单独成函数: 这段是"数据写完之后的账要平"的唯一实现 ——
       available = 期初 + Σ入库 − Σ出库, 且 Σ批次 ≡ available。
     原来它内联在 seed_step(7) 里, /api/seed/step 运维口又抄了一份, 两处各自演化
     (历史上就因此出现过"批次基于重算前旧库存"的顺序错误)。现在只有一个实现。
+
+    skus_data: 传了就**用它枚举 SKU**(内存里现成的), 省掉一次 `SELECT DISTINCT sku
+      FROM inventory` —— 实测 2 万行上这条要 3.1s, 而它拿到的集合与 skus_data 完全一致。
 
     失败**不重抛**: 走到这一步库存/流水都已落库, 抛出去只会留下半张账;
     留痕 + 在返回里标 degraded, 由调用方决定要不要重跑这一步。
@@ -1140,15 +1158,18 @@ def seed_settle():
     try:
         from routes.cleanse_write import _recalc_own_inventory as _rc
         for _ch in ('jd', 'other'):
-            _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
-                                               "WHERE channel=%s AND warehouse_type='own'", [_ch])]
+            if skus_data and skus_data.get(_ch):
+                _sk = [x.get('sku') for x in skus_data[_ch]]
+            else:
+                _sk = [r.get('sku') for r in query("SELECT DISTINCT sku FROM inventory "  # no-barcode-ok: SKU 枚举
+                                                   "WHERE channel=%s AND warehouse_type='own'", [_ch])]
             if _sk:
                 out['recalc'] += int(_rc(_ch, [x for x in _sk if x]) or 0)
     except Exception as _e_s:
         out['degraded'] = 'recalc: %s' % str(_e_s)[:120]
         try_err('seed_fill', '落账-重算降级', _e_s)
     try:
-        out['batches'] = _seed_batches()
+        out['batches'] = _seed_batches(skus_data)
     except Exception as _e_b:
         out['degraded'] = (out['degraded'] + '; ' if out['degraded'] else '') + 'batches: %s' % str(_e_b)[:120]
         try_err('seed_fill', '落账-批次重建降级', _e_b)
@@ -1181,7 +1202,7 @@ def run_seed_fill():
     n_in, n_out = _seed_records()
     # 2026-11-05 落账统一: 原此处内联了一份"重算 → 批次 → 自检", 与 seed_step 里那份各自演化
     #   → 抽出 seed_settle() 单一实现, 一键与分步走同一条路径
-    _st = seed_settle()
+    _st = seed_settle(skus_data)
     n_batch = _st.get('batches', 0)
     _bc_chk = _st.get('barcode_aligned', {})
     _sync_inv_month()

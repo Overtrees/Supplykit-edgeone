@@ -299,8 +299,13 @@ def _rebuild_own_batches(channel, skus):
     _miss_exact = []    # 填了批次但该批次无对应入库 [(sku, 仓, [(pd,ed)], qty)] —— 已按 FEFO 扣, 仅告警
     _oversold = []      # 出库 > 期初+入库 [(sku, 仓, 超出量)] —— 批次扣到 0, 需补流水
     _unlabeled = set()  # 未标注"是否做效期管理"的 SKU(历史数据; 暂按做效期处理并告警)
-    for i in range(0, len(skus), 100):
-        batch_skus = [x for x in skus[i:i + 100] if x]
+    # 2026-11-05 批大小 100 → 1000(用户报 seed 落账段"十来分钟/一直不结束")
+    #   实测(线上 TiDB): 单批 100 SKU 的 3 条主查询合计 1.26s, 1000 SKU 也只有 1.78s
+    #   —— 耗时几乎只跟**查询次数**有关, 跟批里放多少 SKU 关系很小(与 _align_order_keys
+    #   的 chunk 结论一致)。2 万 SKU: 100/批 → 200 批 × ~1.4s ≈ 280s(远超 90s 上限, 必死);
+    #   1000/批 → 20 批 × 1.8s ≈ 36s(留足余量)。批太大反而慢(2000 时 2.78s), 1000 是拐点。
+    for i in range(0, len(skus), 1000):
+        batch_skus = [x for x in skus[i:i + 1000] if x]
         if not batch_skus:
             continue
         ph = ",".join(["%s"] * len(batch_skus))

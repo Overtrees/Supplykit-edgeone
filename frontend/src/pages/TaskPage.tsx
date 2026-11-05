@@ -52,13 +52,20 @@ export default function TaskPage() {
   const [loadErr, setLoadErr] = useState('')
   const doneTasks = useRef({}) // 已触发完成提示的任务
   const firstLoad = useRef(true) // 首载只记录历史完成, 不弹提示(避免进页一堆历史任务 toast)
+  // 2026-11-05 修: 三个触发源(3s 轮询 / visibilitychange / channel 变化)会并发调 loadTasks,
+  //   而旧实现谁后回来谁生效 —— 慢的那个(切回页面时首次请求常常最慢)后到, 会 setLoading(false)
+  //   之后再被 3s 后的新调用 setLoading(true) 覆盖, 视觉上就是"一直卡在骨架屏"。
+  //   加序号后只有**最新一次**请求允许写入 state(与 loadAll 的 _loadSeq 同一套办法)。
+  const loadSeq = useRef(0)
   const loadTasks = async () => {
+    const mySeq = ++loadSeq.current
     try {
       // S3-2 收口: raw 保留 r.status(401 判断), apiJson 补超时/token/BASE
       const r = await apiJson<Response>('GET', API + '/api/tasks?channel=' + channel, {
         raw: true,
       })
       const d = await r.json()
+      if (mySeq !== loadSeq.current) return // 已有更新的请求在跑, 本次结果丢弃
       if (d.ok && Array.isArray(d.data)) {
         setTasks(d.data)
         setLoadErr('')
@@ -99,8 +106,10 @@ export default function TaskPage() {
         if (tasks.length === 0) setLoadErr(t('task.db_busy'))
       } else setLoadErr(t('task.load_failed_msg', { msg: d.error || 'HTTP ' + r.status }))
     } catch (e) {
+      if (mySeq !== loadSeq.current) return
       if (tasks.length === 0) setLoadErr(t('task.net_retry'))
     }
+    if (mySeq !== loadSeq.current) return
     setLoading(false)
   }
 

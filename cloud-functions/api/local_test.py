@@ -3032,6 +3032,38 @@ try:
     _sc11 = open("schema_create.py", encoding="utf-8").read()
     check("seed 水位: seed_watermark 表已声明",
           "seed_watermark" in _sc11 and "uq_wm_run_step" in _sc11, "schema_create.py")
+    # ── 2026-11-05 用户实测反馈: 任务卡"十来分钟不结束" / 进度写死 10 段 ──
+    # 批大小: 单批 100 SKU 实测 1.26s、1000 SKU 也只有 1.78s —— 耗时只跟**查询次数**有关。
+    #   2 万 SKU: 100/批 = 200 批 ≈ 280s(必超 90s), 1000/批 = 20 批 ≈ 36s。这是硬约束。
+    _cw11 = open("routes/cleanse_write.py", encoding="utf-8").read()
+    check("批次重建: 批大小已从 100 提到 1000(否则 2 万 SKU 要 200 批 ≈ 280s)",
+          "range(0, len(skus), 1000)" in _cw11 and "range(0, len(skus), 100)" not in _cw11,
+          "routes/cleanse_write.py")
+    # 订单段返回值: 曾是全局累计序号(含 day_from*1000000 偏移), 水位对账当场算出"预期 1500 万"
+    _sf11 = open("routes/seed_fill.py", encoding="utf-8").read()
+    check("订单段返回值 = 本段新增行数(不再是含偏移的全局序号)",
+          "_seg_rows += len(batch)" in _sf11 and "    return _seg_rows" in _sf11,
+          "routes/seed_fill.py")
+    check("落账段用内存 SKU 集合(省掉 2 万行的 SELECT DISTINCT, 实测 3.1s)",
+          "def seed_settle(skus_data=None)" in _sf11
+          and "def _seed_batches(skus_data=None)" in _sf11, "routes/seed_fill.py")
+    # 前端进度条此前写死 /10, 段号重排后是 12 → 停在 99%
+    # __file__ = cloud-functions/api/local_test.py → 上 3 层才是仓库根
+    _FE = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__)))), "frontend", "src")
+    _tc11 = open(_os.path.join(_FE, "components", "tasks", "TaskCard.tsx"), encoding="utf-8").read()
+    check("任务卡进度条: seed 总段数从后端 total_step 取, 不写死 10",
+          "params.total_step" in _tc11 and "(progStep / 10)" not in _tc11, "TaskCard.tsx")
+    # 相对时间: 纯渲染期计算 + 卡片不重渲染 = 跑 10 分钟仍显示"刚刚"
+    check("任务卡相对时间: running 时有定时器强制重渲染(否则一直显示「刚刚」)",
+          "setTick" in _tc11 and "}, [st])" in _tc11, "TaskCard.tsx")
+    # loadAll 竞态: loading/orderLoading 原先只在正常路径复位, 被丢弃的那次会把 true 留在 state
+    _st11 = open(_os.path.join(_FE, "store", "useAppStore.ts"), encoding="utf-8").read()
+    check("loadAll 竞态: 最新那次无论走 return 还是正常结束都收起 loading",
+          "_mySeq === _seq.v" in _st11 and "_seqBox" in _st11, "useAppStore.ts")
+    check("任务页轮询竞态: loadTasks 带序号, 旧响应不覆盖新 state",
+          "loadSeq" in open(_os.path.join(_FE, "pages", "TaskPage.tsx"), encoding="utf-8").read(),
+          "TaskPage.tsx")
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 

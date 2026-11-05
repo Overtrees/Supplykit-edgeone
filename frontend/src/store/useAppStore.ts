@@ -99,6 +99,10 @@ const safeGetJSON = (key, def = null) => {
   }
 }
 
+// 2026-11-05 并发序号(模块级, 不在 store state 里): 只用于"丢弃过期响应", 不参与渲染,
+//   所以不该进 state(进 state 会额外触发订阅者重渲染, 且 reset() 时还得记着复位)
+const _seqBox = { v: 0 }
+
 const initAppStore = (set, get) => ({
   channel: safeGet('c_channel') || 'jd',
   // 2026-10-30 渠道注册表(数据驱动): 下拉/渠道名/默认模式都读它, 新增渠道无需改代码
@@ -397,9 +401,11 @@ const initAppStore = (set, get) => ({
   },
   bumpPageVersion: () => set(s => ({ pageVersion: s.pageVersion + 1 })),
 
-  _loadSeq: 0,
   async loadAll(page?, opts?) {
-    const _mySeq = ++this._loadSeq
+    // 2026-11-05: 序号放在闭包对象里而不是 this 上 —— `this` 在 setState 回调/延迟执行里
+    //   不一定还指向 store, 而竞态判定必须用同一个引用
+    const _seq = _seqBox
+    const _mySeq = ++_seq.v
     set({
       loading: true,
       orderLoading: true,
@@ -432,13 +438,13 @@ const initAppStore = (set, get) => ({
       // (15:58/16:25 两次 35s 超时, 同时刻后端 perf_debug 显示 1.1s 正常)——静默重试 1 次(1.2s 后, 破缓存)
       if (r0[0].status === 'rejected') {
         await new Promise<void>(res => setTimeout(res, 1200))
-        if (_mySeq !== this._loadSeq) return
+        if (_mySeq !== _seq.v) return
         r0 = await Promise.allSettled([
           api.get(dashUrl + _sep + 'part=main&t=' + freshStamp(), { timeout: 35000 }),
         ])
       }
       const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
-      if (_mySeq !== this._loadSeq) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
+      if (_mySeq !== _seq.v) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
       // ⚠️ 合并而非替换: part=main 不含 charts —— 若整体替换, 静默刷新时图表会闪空等 charts 回填
       const _prev: Record<string, unknown> = get().dashboard || {}
       set({
@@ -456,7 +462,7 @@ const initAppStore = (set, get) => ({
           )
         })
         .then(rc => {
-          if (_mySeq !== this._loadSeq) return
+          if (_mySeq !== _seq.v) return
           const cur: Record<string, unknown> = get().dashboard || {}
           set({ dashboard: { ...cur, ...(rc?.data || {}) } })
         })
@@ -475,7 +481,7 @@ const initAppStore = (set, get) => ({
         api.get('/api/alerts'),
       ])
       const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
-      if (_mySeq !== this._loadSeq) return // 旧 loadAll 丢弃
+      if (_mySeq !== _seq.v) return // 旧 loadAll 丢弃
       set({
         orders: arr[0].data?.items || arr[0].data || [],
         orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
@@ -492,14 +498,27 @@ const initAppStore = (set, get) => ({
         api.get('/api/dashboard/stock-risk', { timeout: 35000 }),
       ])
       const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
-      if (srData && _mySeq === this._loadSeq) set({ stockRisk: srData })
+      if (srData && _mySeq === _seq.v) set({ stockRisk: srData })
       set({ orderLoading: false })
     } catch (e) {
       console.error('loadAll failed:', e)
-      set({ loading: false, orderLoading: false })
+      // 2026-11-05: 只在"自己仍是最新那次"时收起 loading —— 否则旧请求的失败会把
+      //   新请求正在加载的界面误判为"已加载完"(反过来同样致命, 见 finally 注释)
+      if (_mySeq === _seq.v) set({ loading: false, orderLoading: false })
     } finally {
       // 2026-10-27 根治: settle 唯一在 finally——无论 return 竞态/abort/catch/正常尾必执行, 数不可能泄漏(曾散点 settle 被 return 跳过 → 永久'加载中')
       set({ syncing: Math.max(0, get().syncing - 1) })
+      // 2026-11-05 修(用户报「多数页面一直在加载中」): `loading` / `orderLoading` 此前只在
+      //   **正常走到** set 时才置 false。而上面 4 处 `if (_mySeq !== _seq.v) return`
+      //   全都在 finally 之前 —— 一旦发生"快速切换页面/连续两次 loadAll", 被丢弃的那次
+      //   会把 `loading: true` 留在 state 里, 而胜出的那次只写 dashboard 不写 loading……
+      //   结果就是骨架屏永不消失。这里以"自己仍是最新那次"为条件统一兜底:
+      //   最新那次无论走 return 还是正常结束, 都必须把 loading 收掉。
+      if (_mySeq === _seq.v) {
+        const st = get()
+        if (st.loading) set({ loading: false })
+        if (st.orderLoading) set({ orderLoading: false })
+      }
     }
   },
 

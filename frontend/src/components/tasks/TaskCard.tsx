@@ -84,11 +84,16 @@ export default function TaskCard({
   const failed = Number(resultInner?.failed ?? params.failed ?? 0)
   const elapsed = resultInner?.elapsed ? Number(resultInner.elapsed) : 0
 
-  // 进度 %: cleansing/export 用 offset/total; seed 用 step/10
+  // 进度 %: cleansing/export 用 offset/total; seed 用 step/总段数
+  // 2026-11-05 修: seed 总段数写死 10 —— 段号重排后已完成值是 12(订单 6 段 + 库存/流水/落账/
+  //   月汇总/尾段), 写死 10 会让进度条在 step>10 时顶到 99% 停住、看起来"卡在最后一步"。
+  //   后端把总步数放在 params.total_step 里下发; 没有该字段(老任务)时按 10 兜底。
+  const seedTotalStep = Number(params.total_step || 0) || 10
   let pct = 0
   if (st === 'done') pct = 100
   else if (total > 0) pct = Math.min(Math.round((offset / total) * 100), 99)
-  else if (params.step !== undefined) pct = Math.min(Math.round((progStep / 10) * 100), 99)
+  else if (params.step !== undefined)
+    pct = Math.min(Math.round((progStep / seedTotalStep) * 100), 99)
 
   // 进行中步骤实时耗时(本地 1s 节流——now - started)
   const [now, setNow] = useState(Date.now())
@@ -97,6 +102,16 @@ export default function TaskCard({
     const _tid = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(_tid)
   }, [cur, st])
+  // 2026-11-05 修: 右上角相对时间此前**只在重渲染时算一次** —— 任务跑 10 分钟, 只要卡片
+  //   自己不重渲染(轮询间隔 3s 但 state 内容没变 → React 不重渲染), 就一直显示"刚刚"。
+  //   这正是"卡片任务进行中都过去好几分钟了还显示刚刚"的成因。
+  //   任务运行中每 30s 强刷一次(1min 粒度下 30s 足够, 又不会每卡一条定时器)。
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (st !== 'running') return
+    const _tid = setInterval(() => setTick(x => x + 1), 30000)
+    return () => clearInterval(_tid)
+  }, [st])
 
   const filename = String(resultInner?.filename || result?.filename || '')
   const lastStep = steps.length ? steps[steps.length - 1] : null
