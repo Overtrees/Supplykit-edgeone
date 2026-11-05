@@ -12,7 +12,7 @@
 └──────────────────────┬────────────────────────┘
                        │ HTTPS (supplykit.top, 免签公开)
 ┌─ 后端 (EdgeOne Makers 函数) ────────────────┐
-│  FastAPI · 22 路由 · 33 模块 · 回归 392 项    │
+│  FastAPI · 23 路由 · 33 模块 · 回归 497 项    │
 │  ├─ 入口: index.py(行首 app=, 鉴权, 启动自愈) │
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
@@ -76,7 +76,7 @@ cloud-functions/api/
 ├── core/alert_lifecycle.py       告警生命周期单一入口(维度键/关闭原因/重开复用, 2026-11-03 D8)
 ├── routes/ (31个 = 22 router + 9 支撑)  路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
-├── local_test.py                 本地回归 392 项（mock db + TestClient）
+├── local_test.py                 本地回归 497 项（mock db + TestClient）
 └── sql_smoke.py                  真实 SQL 冒烟（EXPLAIN 388 条 + schema 对账, 2026-11-03 S3-4）
 
 scripts/gen_schema.py             SQLite→TiDB DDL 转换器
@@ -120,7 +120,7 @@ B建议补 = C缺口 − B可用 − B在途 + 调拨期消耗（箱规取整）
 ## 测试
 
 ```bash
-cd cloud-functions/api && python3 local_test.py   # 392 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/cron窗口/S2 系列）
+cd cloud-functions/api && python3 local_test.py   # 497 项（auth/看板/补货/清洗/规则/开关联动/agg路径/接力导出/历史归档/cron窗口/S2 系列）
 cd cloud-functions/api && python3 local_test.py --sql-smoke   # 另加 388 条 EXPLAIN + schema 对账(需 TIDB_*)
 ```
 

@@ -1,3 +1,114 @@
+### 2026-11-05 追加（文档级语言同步：title / meta / html lang）
+
+`app.name` / `app.desc` 从"全仓零引用的死键"变成活键：`locale.ts` 新增 `applyDocumentLang()`，
+在 `setLocale()` 与 `main.tsx` 启动时各调一次，同步 `document.title`、
+`meta[name=description]`、`<html lang>`（zh→`zh-CN`，en→`en`）。
+
+两处调用缺一不可：首访语言由 `localStorage`/`navigator` 探测，**走不到 `setLocale`**，
+只在 setLocale 里做等于"英文系统首访仍看到中文标题"。
+
+关键防御：`t()` 缺键时回落到键名，所以加了 `name !== 'app.name'` 判断 ——
+否则哪天删了词条，标签页会直接显示 `app.name`（同类事故在 RiskSheet / renderNoteSegs 上都发生过）。
+
+```
+死键   2 → 0
+vitest 30 → 35（新增 documentLang.test.ts 5 条）
+门禁   八步全绿
+```
+
+**残余**：语言切换入口本身不存在 —— 全仓只有 `setLocale()` 定义，无任何 UI 调用它，
+en 字典目前只能靠 `localStorage.c_locale` 手工设置。红线 B 的前提是"能切"，这条单独定。
+
+详见 DEVELOPMENT §15.156。
+
+### 2026-11-05 追加（清理 125 条死键，字典 1548 → 1423）
+
+删掉 §15.154 核实出的 127 条中的 125 条，`app.name`/`app.desc` 保留。
+
+`dash.*` 58 条曾担心是"卡片临时下线"，逐条比对后否掉：40 条同文案改名
+（`vs_yesterday→vs_prev_day`、`proc_buy→line_purchase`、`gross→view_total`…）、
+3 条换说法、15 条功能真没了（`dup_rows` 三条同文案，只剩一句注释）。整组是重构残骸。
+
+zh/en 各删 125 行，删完断言两份键集合一致（只删 en 更隐蔽：zh 兜底，切 EN 才露馅）。
+
+```
+字典   1548 → 1423（zh/en 对齐）
+死键   127 → 2（app.name / app.desc，按计划保留）
+diff   各 -125 行，无其它改动
+门禁   八步全绿（回归 497 / SQL 冒烟 263 ✓ / vitest 30 / i18n PASS）
+```
+
+`app.*` 保留原因：前端从未读过这两条，标题写死 `index.html` 且 `document.title` 不更新 ——
+**切 EN 时标签页标题/PWA 名/分享卡片全是中文**。应先接 `document.title = t('app.name')` 再删。
+
+详见 DEVELOPMENT §15.155。
+
+### 2026-11-05 追加（死键核实：513 → 127，差额全是审计脚本误报）
+
+「死键 513」这个数字从产生就不准 —— `i18n_audit.used_keys()` 只认 `t('字面量')`，
+于是 `t('col.'+id)` / `t('fld.'+name)` / `t('seg.'+k)` 共 161 条活键、词表键字段
+`{ l: 'rf.lf.3' }`、对象简写 `{ lit: 'rf.vars.lit' }`、后端下发的 `name_key` 全被算成死键。
+
+改法三层：动态前缀登记为命名空间（改由 `scan_dynamic_prefix_health()` 盯产键函数本身）
++ 通用键识别（键字段 / 元组元素 / 简写 / 后端 `name_key`）+ 字面量兜底。
+
+```
+死键      513 → 127（与人工逐条核对集合完全相等）
+缺键      0（中途被自己的改动报成 43 条假缺失，已修）
+自检      新增 --selftest 18 条正负例，接进 preflight [8/8] 与 CI
+```
+
+127 条构成：`dash.*` 58（卡片重构弃用）／`common.*` 12／`settings.*` 11（搬进 DevMode，改 `dev.*`）／
+清洗页旧前缀 8／其余 38。`app.name`/`app.desc` 特殊：前端从未消费，标题写死 `index.html`，
+**切 EN 时标题不变**，删键前应先补消费点。
+
+详见 DEVELOPMENT §15.154。
+
+### 2026-11-05 追加（红线 B 接入门禁：i18n 审计不再只是"手跑"）
+
+`scripts/i18n_audit.py --gate` 早就写好了判据，但 preflight 七步与 CI 都没调它 ——
+三条红线里 any 有 ESLint 门禁、i18n 只有文档里一句话。补齐：
+
+- `preflight.sh` 七步 → **八步**，新增 `[8/8] i18n 门禁`（中文硬编码残留 / zh-en 键集相等 /
+  `t()` 引用缺失 / 变量遮蔽 / 空串假翻译）；
+- CI `frontend` job 在 `npm test` 后加同名一步，**每推必跑**；
+- 探针反证：插入 `<button title="保存并关闭">` → 第 8 步 FAIL、preflight exit 1；
+  插入 `(x: any)` → 第 4 步 FAIL。删探针后八步全绿。
+- 当前基线：zh/en **各 1548 键对齐**、中文残留 **0 行 / 0 文件**、死键 513（只报数不拦）。
+
+详见 DEVELOPMENT §15.153。
+
+### 2026-11-05 追加（期初双场景：结转 / 窗口内实盘导入）
+
+回归 487 → **497 通过 / 0 失败**；schema 45 → 46 表（`SCHEMA_VERSION` 7→8）。
+
+用户定的两个场景，原实现只覆盖了第一个：
+
+| 场景 | 触发 | 本期期初 |
+|---|---|---|
+| A 默认 | 窗口内没导入库存 | 上月期末（结转，原逻辑） |
+| B 实盘 | 上月末最后一天 ~ 当月 3 号导入过库存 | **导入值**覆盖结转，并留痕 |
+
+关键设计：**校准的是「导入时点结存」，不是硬塞期初** —— `期初 = 导入量 − Σ净流水[本月1日, 导入时刻)`，
+所以 2-3 号导入不会把 1-3 号流水算两遍；上月末导入时区间为空，期初 = 导入量。
+期初优先级 ⓪（压过「上月结转」），`inventory_month.src` 逐行标 `import`/`derived`。
+
+配套：新表 `ledger_begin_adj`（原结转/导入量/回退流水/差额/批次 + 应用时间，可审计）；
+盘盈补 `9999-12-31` 调整批次、盘亏按 FEFO 逐批扣，维持 `Σ批次 ≡ 可用`；
+`/ledger/status` 增 `begin_source / begin_adj_rows / begin_adj_delta / begin_window`；
+用户日志新增 `ledger_override`。详见 DEVELOPMENT §15.152。
+
+### 2026-11-05 追加（对账 key 列盲区 + 测试弹窗仓型说谎）
+
+回归 478 → **487 通过 / 0 失败**（新增 9 条断言，含 1 条反证）。
+
+| 主题 | 一句话 |
+|---|---|
+| 对账报"库里多出 3 列" | `sql_smoke.parse_columns` 只看首 token 判约束行, 列名恰好叫 `key` 的三张表被当成 `KEY idx_x (...)` 跳过 → **声明了却不校验**(真缺列会漏报)。改为"关键字后跟类型 = 列, 跟索引名/括号 = 约束" |
+| 规则测试弹窗恒"未触发" | `rule_sim` 的 `inv.warehouse_type` 默认空串, 而规则上的仓型守卫判 `"" != "own"` → 直接 False。真实评估每行都有具体仓型, 空串是不存在的输入。默认落 `own`, `own.*` 也只在该行注入(与 `rule_eval` 同条件) |
+
+补账结果：声明 45 表 / **433 列**（原 430，三列 `key` 归位）、缺失 0 / 多余 0 / 缺索引 0。详见 DEVELOPMENT §15.151。
+
 ## 2026-11-05 总览（10 月账期首次结账实跑）
 
 回归 458 → **466 通过 / 0 失败**；i18n PASS；四次构建 Success 并上生产。

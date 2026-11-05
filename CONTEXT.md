@@ -15,7 +15,7 @@
 
 | 主题 | 位置 |
 |---|---|
-| **一屏入口(口径/坑位/七步闭环/失败黑名单)** | `docs/SKILL.md` |
+| **一屏入口(口径/坑位/八步闭环/失败黑名单)** | `docs/SKILL.md` |
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
 | 开发经验与根因记录(按天追加) | `docs/DEVELOPMENT.md` §15.x |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/DEVELOPMENT.md` §15.105 |
@@ -42,6 +42,9 @@
 4. **计数与列表分离** — 卡面 `(N)` 用后端独立 COUNT(`alertCounts`), 列表可能截断, 二者天然不等
 5. **库存月汇总** = 仓型×SKU×69码×仓 聚合, 先清零再覆盖
 6. **效期管理三态** — `expiry_managed` 是/否: 是→FEFO 精确批次, 否→到货序 FIFO
+7. **期初两场景** — 窗口(上月末最后一天 ~ 当月 3 号)内**导入过库存** → 本期期初以导入实盘为准
+   (台账 `ledger_begin_adj` + 用户日志 `ledger_override`), 换算 `期初 = 导入量 − 本期净流水`;
+   否则用上月期末结转。已结账的期不回改, 要改走 `/ledger/reclose`
 
 ## 工作流程铁律
 
@@ -80,8 +83,8 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 437 通过/0 失败
-  (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 22
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 497 通过/0 失败
+  (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 30
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
   - **i18n 专项快照**: `python3 scripts/ui_shot_matrix.py --serve --locale zh|en --viewport 375|390|844|1440`
     (可分批跑, report.json 自动合并)。三个必踩坑已在 `scripts/ui_preview_env.py` 里处理:

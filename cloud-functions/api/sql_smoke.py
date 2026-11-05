@@ -362,6 +362,18 @@ def report(fail_n_before=0):
 # ── 结构对账(DDL 无法 EXPLAIN, 但"声明了却没建"是同一类事故) ─────────
 _CONSTRAINT_HEADS = {"primary", "unique", "key", "index", "constraint",
                      "fulltext", "spatial", "foreign", "check"}
+# 列定义里紧跟列名的第一个词一定是类型。用它区分「列名恰好叫 key」与「KEY idx_x (...)」:
+#   约束行的关键字后面跟的是**索引名或括号**, 列定义后面跟的是**类型关键字**。
+#   2026-11-05 修: 原来只按首 token 判约束, 于是 replenishment_config /
+#   replenishment_config_history / analysis_cache 三张表的 `key` 列被当成索引行跳过 ——
+#   方向是"声明了却不校验"(真缺列会漏报), 表面则表现为对账报"库里多出 3 列"的假阳性。
+_TYPE_HEADS = {"varchar", "char", "tinytext", "text", "mediumtext", "longtext",
+               "tinyint", "smallint", "mediumint", "int", "integer", "bigint",
+               "decimal", "numeric", "float", "double", "real",
+               "date", "datetime", "timestamp", "time", "year",
+               "json", "boolean", "bool", "enum", "set", "bit",
+               "blob", "tinyblob", "mediumblob", "longblob",
+               "binary", "varbinary", "geometry", "point"}
 
 
 def parse_columns(ddl):
@@ -396,7 +408,11 @@ def parse_columns(ddl):
             continue
         name = tok.group(1)
         if name.lower() in _CONSTRAINT_HEADS:
-            continue
+            # 关键字后面跟类型 = 这是一列(列名与约束关键字同名, 如 `key`/`index`);
+            # 跟索引名或 `(` = 真的是约束/索引行, 跳过。
+            _nxt = re.match(r"\s*`?([A-Za-z_][A-Za-z0-9_]*)`?", p[tok.end():])
+            if not _nxt or _nxt.group(1).lower() not in _TYPE_HEADS:
+                continue
         cols.append(name)
     return cols
 

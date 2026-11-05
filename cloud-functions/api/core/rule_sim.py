@@ -3,14 +3,18 @@
 2026-11-05 从 routes/rules.py 抽出(该文件已超 600 行红线)。
 单一职责: 把测试弹窗入参(body.inv/order/own/batch/supplier/params)拼成**与真实评估同形**的 ctx。
 
-踩过三次的坑, 每次表现都一样: 引擎里有注入、测试 ctx 没注入 → `_resolve_single` 取到 None
+踩过四次, 每次表现都一样: 引擎里有注入、测试 ctx 没注入 → `_resolve_single` 取到 None
 → `_check_single` 直接 False → 弹窗永远显示"未触发", 用户以为规则写错了。
   ① own.*      (2026-11-01)
   ② batch.*    (2026-11-01)
   ③ supplier.score / inv.turnover_days (2026-11-05)
+  ④ inv.warehouse_type 默认空串 → 规则上的仓型守卫 `"" != "own"` 恒 False (2026-11-05)
 新增计算变量时**必须同步这里**; local_test 有静态断言兜底。
 """
 from routes.common import try_err
+
+# 评估链路上真实存在的仓型; 其它值(含空串)一律落到 own, 见 build_sim_ctx 注释
+_WT_OK = ("own", "platform", "platform_b", "bc")
 
 
 def build_sim_ctx(cond_json, params, body, channel="jd"):
@@ -21,12 +25,20 @@ def build_sim_ctx(cond_json, params, body, channel="jd"):
     av0 = int(inv.get("available_qty") or 0)
     tr0 = int(inv.get("in_transit_qty") or 0)
     sf0 = int(inv.get("safety_qty") or 0)
+    # 仓型: 真实评估里每一行**都有**具体仓型(own / platform / platform_b, bbcc 另有 bc 桶),
+    #   从来没有"空仓型"的行。原默认 "" 会让规则上的仓型守卫(`cond.warehouse`)判
+    #   `"" != "own"` → 直接 False → 弹窗永远"未触发"(第四次同类: 引擎里有, 测试 ctx 里没有)。
+    #   未传/非法值统一落 own —— 自有仓是主场景, 也是内置自有仓规则的前置;
+    #   要测别的仓型由弹窗下拉显式选择, 不再用空串冒充"任意仓型"。
+    _wt = str(inv.get("warehouse_type") or "").strip()
+    if _wt not in _WT_OK:
+        _wt = "own"
     ctx = {
         "inv": {
             "available_qty": av0,
             "safety_qty": sf0,
             "in_transit_qty": tr0,
-            "warehouse_type": inv.get("warehouse_type", ""),
+            "warehouse_type": _wt,
             "days_since_last": int(inv.get("days_since_last") or 0),
             "adj_dos": float(inv.get("adj_dos") or 0),
             "buffer": float(inv.get("buffer") or 0),
@@ -58,9 +70,12 @@ def build_sim_ctx(cond_json, params, body, channel="jd"):
         ctx["inv"]["turnover_days"] = (float(_td) if _td is not None
                                        else (round(av0 / _ds, 2) if _ds > 0 else 0.0))
     # own.*: 先补基础量, 再按引擎同式推 need/gap/cover_days(前端留空 = 不传)
+    #   注入条件与引擎对齐: **仅 own 行**有 own.* 键(rule_eval: `warehouse_type == 'own'`)。
+    #   以前这里无条件注入 → 选"平台仓"测自有仓规则会显示"已触发", 而线上永远不触发,
+    #   是"弹窗说谎"的另一个方向。
     _own = body.get("own")
     _sim = dict(_own) if isinstance(_own, dict) else {}
-    if "own." in cj:
+    if "own." in cj and _wt == "own":
         try:
             _b2c = float(params.get("b2c_days") or 6)
         except Exception:

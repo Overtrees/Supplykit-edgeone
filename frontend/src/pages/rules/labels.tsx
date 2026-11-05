@@ -256,7 +256,7 @@ export const defaultTestInv = condInfo => {
     available_qty: 0,
     safety_qty: 0,
     in_transit_qty: 0,
-    warehouse_type: condInfo.warehouse || '',
+    warehouse_type: condInfo.warehouse || 'own',
     days_since_last: 0,
     order_quantity: 0,
     adj_dos: '',

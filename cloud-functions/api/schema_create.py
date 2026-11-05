@@ -419,6 +419,24 @@ _TABLES = {
         "rows_count INT DEFAULT 0, closed_at DATETIME NULL, "
         "PRIMARY KEY (channel, warehouse_type))"
     ),
+    # ledger_begin_adj: 期初实盘校准(2026-11-05 用户定案)。
+    #   窗口(上月末最后一天 ~ 当月 3 号)内导入的库存 = 实盘最终量 → 覆盖本期期初;
+    #   窗口外只落 inventory.snapshot_qty 做对账, 不写这张表。
+    #   一行 = 一个 (账期 × SKU × 69码 × 仓) 的校准结果, 保留原结转值与导入量供审计,
+    #   窗口内多次导入以最后一次为准(UPSERT), 每次都刷新 applied_at/batch_id。
+    "ledger_begin_adj": (
+        "CREATE TABLE IF NOT EXISTS ledger_begin_adj ("
+        "period CHAR(7) NOT NULL, channel VARCHAR(20) NOT NULL DEFAULT 'jd', "
+        "warehouse_type VARCHAR(20) NOT NULL DEFAULT 'own', "
+        "sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(64) NOT NULL DEFAULT '', "
+        "qty INT NOT NULL DEFAULT 0, imported_qty INT NOT NULL DEFAULT 0, "
+        "offset_qty INT NOT NULL DEFAULT 0, carried_qty INT NOT NULL DEFAULT 0, "
+        "delta INT NOT NULL DEFAULT 0, src VARCHAR(16) NOT NULL DEFAULT 'import', "
+        "batch_id VARCHAR(64) NOT NULL DEFAULT '', "
+        "applied_at DATETIME DEFAULT CURRENT_TIMESTAMP, note VARCHAR(255) NOT NULL DEFAULT '', "
+        "PRIMARY KEY (period, channel, warehouse_type, sku, barcode, warehouse))"
+    ),
 }
 
 # ── 索引声明(2026-11-02 S2-8: 原 index.py 启动段三组, 收敛到同一处) ─────────
@@ -523,7 +541,7 @@ _COLUMN_ADDS = {
 #   全量路径 → run_pending 只执行未登记的步骤, 已应用的靠 legacy_log_sync 归并, 不会被重跑)
 # v6(2026-11-04 账期): 新增 inventory_month / batch_opening / ledger_state(月结三表)
 # v7(2026-11-05 账期): inventory 增 ledger_base(建账基线, 与会被回写的 beginning_stock 解耦)
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def table_ddl(name):

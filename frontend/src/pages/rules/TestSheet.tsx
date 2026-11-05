@@ -58,7 +58,9 @@ export default function RuleTestSheet({
     available_qty: 0,
     safety_qty: 0,
     in_transit_qty: 0,
-    warehouse_type: '',
+    // 仓型没有"全部"这个选项: 真实评估的每一行都是具体仓型, 空串只会让
+    //   规则上的仓型守卫恒不成立(弹窗永远"未触发")。默认自有仓 = 主场景。
+    warehouse_type: 'own',
     days_since_last: 0,
     order_quantity: 0,
   })
@@ -315,12 +317,12 @@ export default function RuleTestSheet({
                   onChange={e => setTestInv(p => ({ ...p, warehouse_type: e.target.value }))}
                   style={IS}
                 >
-                  <option value="">{t('rf.wh.all')}</option>
+                  <option value="own">{t('rf.wh.own')}</option>
                   <option value="platform">{t('rf.wh.platform')}</option>
                   {globalChannel === 'jd' && (
                     <option value="platform_b">{t('rf.wh.platform_b')}</option>
                   )}
-                  <option value="own">{t('rf.wh.own')}</option>
+                  <option value="bc">{t('rf.wh.bc')}</option>
                 </select>
               </label>
             </div>

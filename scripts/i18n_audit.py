@@ -236,6 +236,94 @@ TABLE_KEY_FILES = (
 )
 
 
+# 动态拼键的前缀: `t('col.' + id)` 这类无法静态求值。2026-11-05 之前只认字面量, 于是
+#   这三组共 161 条活键被算成"死键"(占当时的 31%) —— 死键清单里混着三分之一的误报,
+#   等于这条指标一开始就没人能信。前缀一旦确认是**命名空间**(该前缀下的键只可能通过拼接产生),
+#   就不再逐条判死, 改为「该前缀整体由产键函数兜底」(见 scan_dynamic_prefix_health)。
+DYNAMIC_PREFIXES = {
+    "col": "components/colLabels.ts",          # colLabel(id) -> t('col.' + id)
+    "fld": "pages/cleansing/fieldNames.ts",    # fldLabel(name) -> t('fld.' + name)
+    "seg": "pages/insights/shared.tsx",        # 备注片段 k -> t('seg.' + k)
+}
+
+# 后端下发的词条键(task 进度步的 name_key), 前端 t(s.name_key) 渲染 —— 静态扫不到
+BACKEND_I18N_KEY_RE = re.compile(r'"name_key"\s*:\s*"([a-z][a-z0-9_]*\.[a-z0-9_.]+)"')
+BACKEND_DIR = os.path.join(ROOT, "cloud-functions", "api")
+
+
+def backend_keys():
+    """后端下发、前端按字符串渲染的词条键。扫 .py, 跳过 __pycache__/测试。"""
+    out = set()
+    for root, dirs, fs in os.walk(BACKEND_DIR):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for f in fs:
+            if not f.endswith(".py"):
+                continue
+            with open(os.path.join(root, f), encoding="utf-8", errors="ignore") as fh:
+                out |= set(BACKEND_I18N_KEY_RE.findall(fh.read()))
+    return out
+
+
+def scan_dynamic_prefix_health() -> list[tuple[str, str]]:
+    """动态前缀的产键函数还在不在 —— 前缀文件删了/改名了, 该前缀下的键就真的全死了。
+
+    这是「放过动态键」的代价: 不逐条判活, 就必须有另一种方式发现整体失效。
+    """
+    bad = []
+    for pref, rel in DYNAMIC_PREFIXES.items():
+        path = os.path.join(SRC, rel)
+        if not os.path.exists(path):
+            bad.append((pref, "产键文件不存在: " + rel))
+            continue
+        with open(path, encoding="utf-8") as fh:
+            if not re.search(r"'%s\.'\s*\+" % pref, fh.read()):
+                bad.append((pref, "文件里找不到 t('%s.' + ...) 拼接" % pref))
+    return bad
+
+
+def _all_source_texts():
+    for path in iter_sources():
+        with open(path, encoding="utf-8") as fh:
+            yield fh.read()
+
+
+def dead_keys(zh=None, used=None):
+    """死键 = 字典里有、但引用不到、且不属于动态前缀命名空间的键。
+
+    动态前缀(col./fld./seg.)是**命名空间**而非逐条引用: 该前缀下的键只可能由
+    `t('col.' + id)` 这类拼接产生, 静态永远扫不到 —— 所以不逐条判死, 改由
+    scan_dynamic_prefix_health() 盯住产键函数本身(文件删了/拼接没了 = 整片失效)。
+    """
+    zh = locale_keys()[0] if zh is None else zh
+    used = used_keys() if used is None else used
+    _dynp = tuple(x + "." for x in DYNAMIC_PREFIXES)
+    # 兜底: 只要键以完整字面量在任何源文件出现过(对象键 / 三元 / 查表 / 注释), 就算有人引用。
+    #   静态求值做不到全知 —— 与其逐条攻各种写法(元组/简写/三元/条件表达式), 不如承认
+    #   "字面量存在即未死"; 死键统计的用途是**清理候选**, 漏报几条远好于误报一堆。
+    texts = list(_all_source_texts())
+    out = []
+    for k in zh:
+        if k in used or k.startswith(_dynp):
+            continue
+        if any(("'%s'" % k) in t or ('"%s"' % k) in t for t in texts):
+            continue
+        out.append(k)
+    return sorted(out)
+
+
+# 词表条目的键字段: { l: 'rf.lf.3', v: '...' } 渲染时 t(o.l) —— 键以字面量存, 但不在 t() 里。
+# 2026-11-05 之前只白名单了几张已知表(TABLE_KEY_FILES), 于是 rf.* / task.type_* / oms.st.*
+# 这些表里的键全被算成死键。改成按字段名通用识别, 表再增也不用维护白名单。
+BARE_KEY_RE = re.compile(r"'([a-z][a-z0-9_]{0,20}(?:\.[a-z0-9_]{1,24}){1,3})'")
+# 元组数组元素: ['lit', 'p.lit'] / ['x', 'oms.st.done'] —— 键前是逗号或 `[`
+TUPLE_KEY_RE = re.compile(r"(?:\[|,)\s*'([a-z][a-z0-9_]{0,20}(?:\.[a-z0-9_]{1,24}){1,3})'\s*[,\]]")
+# 对象字面量简写: const VARS = { lit: 'rf.vars.lit', ss_z: 'rf.vars.ss_z' }
+#   渲染处是 Object.entries(VARS) -> t(v), 没有 l:/label: 这样的字段名可依
+SHORTHAND_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*:\s*'([a-z][a-z0-9_]{0,20}(?:\.[a-z0-9_]{1,24}){1,3})'")
+KEY_FIELD_RE = re.compile(
+    r"\b(?:l|label|label_key|name_key|title_key|k|key|desc_key|msg_key)\s*:\s*'([a-z][a-z0-9_]*\.[a-z0-9_.]+)'")
+
+
 def used_keys():
     used = set()
     call_re = re.compile(r"\bt\(\s*'([^']+)'")
@@ -249,6 +337,20 @@ def used_keys():
             continue
         with open(path, encoding="utf-8") as fh:
             used |= set(lit_re.findall(fh.read()))
+    # 全仓词表条目的键字段(不限于白名单文件)
+    for path in iter_sources():
+        with open(path, encoding="utf-8") as fh:
+            used |= set(KEY_FIELD_RE.findall(fh.read()))
+    # 裸元组表 [['rules', 'hr.tab_rules'], ...].map(([id, label]) => t(label))
+    #   键作为数组元素出现。只认**元素开头**的那个字面量([, 'x.y'), 不认第二个:
+    #   第二项往往是字段名({ v: 'flow.date' } / ['lit', 'params.lit']), 不是词条键。
+    for path in iter_sources():
+        with open(path, encoding="utf-8") as fh:
+            _t = fh.read()
+            used |= set(TUPLE_KEY_RE.findall(_t))
+            used |= set(SHORTHAND_KEY_RE.findall(_t))
+    # 后端下发的键(task.win / task.eval_seg …)
+    used |= backend_keys()
     return used
 
 
@@ -331,11 +433,79 @@ def scan_empty_values() -> list[tuple[str, str, str]]:
     return out
 
 
+def selftest() -> int:
+    """判定自身正负例 —— 防止改坏扫描后"什么都查不出"仍然 PASS。
+
+    2026-11-05 实际踩到过: 新加的后端 key 正则变量与既有的中文字段豁免正则**同名覆盖**,
+    于是 `i['日期']` 这类豁免失效 → 冒出一个并不存在的"硬编码残留"。门禁红了,
+    但红的原因是工具 bug 而不是代码问题 —— 与 §15.151 的 schema 对账假阳性同类。
+    """
+    ok = True
+
+    def chk(name, cond, detail=""):
+        nonlocal ok
+        print(("  ✅ " if cond else "  ❌ ") + name + ("" if cond else "  " + detail))
+        ok = ok and cond
+
+    # 1) 中文字段访问不算文案(豁免规则仍然有效)
+    for line in ("data: periodTrend.map(i => i['日期']) || [],",
+                 'const x = row["订单数"]'):
+        chk("豁免被识别: " + line[:30], bool(BACKEND_KEY_RE.search(line)), "豁免规则失效")
+    chk("中文字段访问被识别", bool(BACKEND_KEY_RE.search("i['日期']")))
+
+    # 2) 真正的硬编码必须被抓到
+    chk("JSX 文本被抓", CJK.search("<button>确定提交</button>") is not None)
+    chk("中文注释不被抓", "注释" in "// 中文注释")
+
+    # 3) 后端下发键: 正例抓得到, 反例(普通中文)抓不到
+    got = BACKEND_I18N_KEY_RE.findall('{"name_key": "task.eval_seg", "p": {}}')
+    chk("后端 name_key 正例", got == ["task.eval_seg"], str(got))
+    chk("后端 name_key 反例", BACKEND_I18N_KEY_RE.findall('{"name": "评估"}') == [])
+
+    # 4) 两个正则不是同一个对象(同名覆盖会导致上面第 1 组静默失效)
+    chk("豁免正则 != 后端键正则", BACKEND_KEY_RE is not BACKEND_I18N_KEY_RE)
+
+    # 5) 动态前缀的产键函数必须还在
+    bad = scan_dynamic_prefix_health()
+    chk("动态前缀 3/3 就位", not bad, str(bad))
+
+    # 6) 动态前缀确实不在死键清单里
+    zh, en = locale_keys()
+    used = used_keys()
+    # 判的是"死键清单里有没有它们"(主流程的过滤逻辑), 不是"字典里有没有" —— 后者永远为真
+    _dynp = tuple(x + "." for x in DYNAMIC_PREFIXES)   # 不用 p: 上面 chk 的 detail 变量就叫 p
+    ns_all = [x for x in zh if x.startswith(_dynp)]
+    dead_now = dead_keys()
+    leaked = [x for x in ns_all if x in dead_now]
+    chk("动态前缀未混进死键", not leaked, str(leaked[:5]))
+    chk("动态前缀确实有键(否则本条断言无意义)", len(ns_all) > 50, f"ns={len(ns_all)}")
+
+    # 7) 词表键字段 / 元组数组元素 / 后端下发键 都要算引用
+    for t, rx in (("{ l: 'rf.lf.3' }", KEY_FIELD_RE),
+                  ("['lit', 'p.lit'],", TUPLE_KEY_RE),
+                  ("'p.log'", BARE_KEY_RE),
+                  ('{"name_key": "task.win"}', BACKEND_I18N_KEY_RE)):
+        chk("键识别: " + t, rx.findall(t), "正则没抓到")
+    chk("单字母前缀不被吞(p.lit)", "p.lit" in BARE_KEY_RE.findall("'p.lit'"))
+    chk("同义键不误判(rules.new_btn != rules.new)",
+        "rules.new" not in BARE_KEY_RE.findall("t('rules.new_btn')"))
+
+    # 8) 键集合本身可解析(空集也算"解析成功", 所以要有下限)
+    chk("字典规模合理", len(zh) > 500 and len(en) > 500, f"zh={len(zh)} en={len(en)}")
+
+    print("自检:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--lines", action="store_true", help="逐条打印残留")
     ap.add_argument("--gate", action="store_true", help="有残留则 exit 1")
+    ap.add_argument("--selftest", action="store_true", help="判定规则的正负例自检(不进业务扫描)")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     zh, en = locale_keys()
     used = used_keys()
@@ -348,11 +518,19 @@ def main() -> int:
     # 动态前缀(t('col.' + id) / t('fld.' + name) / t('seg.' + k) / t('seg.trend_x_' + x))
     # 由字典文件的键集合兜住, 不按字面量核对; 'seg.' 这类带尾点的键是拼接左半, 同样跳过
     _dyn_prefix = ("col.", "fld.", "seg.", "seg.trend_x_", "task.")
-    missing = sorted(k for k in used if k not in zh and k not in _dyn_prefix
+    # 缺键只认**真正的 t('字面量')** 调用: used_keys() 里还混着词表键字段(v: 'flow.date'
+    #   这类是后端字段名), 拿它判缺键会冒出 40+ 条假缺失。
+    t_lit = set()
+    for _p in iter_sources():
+        with open(_p, encoding="utf-8") as _fh:
+            t_lit |= set(re.findall(r"\bt\(\s*'([^']+)'", _fh.read()))
+    missing = sorted(k for k in t_lit if k not in zh and k not in _dyn_prefix
                      and not k.endswith("."))
-    dead = sorted(k for k in zh if k not in used)
+    # 动态前缀命名空间不逐条判死(由 scan_dynamic_prefix_health 兜底),
+    #   否则 col./fld./seg. 下 161 条活键全被算成死键
+    dead = dead_keys(zh, used)
     print(f"  t() 引用但字典缺失: {len(missing)} {missing[:8]}")
-    print(f"  字典有但未被引用(死键): {len(dead)} {dead[:8]}")
+    print(f"  字典有但未被引用(死键, 不含动态前缀): {len(dead)} {dead[:8]}")
 
     shadow = scan_shadow()
     print(f"  变量名遮蔽 t(): {len(shadow)} {[f'{r}:{n}' for r, n, _ in shadow][:4]}")
@@ -365,6 +543,10 @@ def main() -> int:
 
     empt = scan_empty_values()
     print(f"  空串词条(假翻译): {len(empt)} {[f'{l}:{k}' for l, k, _ in empt][:6]}")
+
+    dyn_bad = scan_dynamic_prefix_health()
+    print(f"  动态前缀产键函数: {len(DYNAMIC_PREFIXES) - len(dyn_bad)}/{len(DYNAMIC_PREFIXES)} 就位 "
+          f"{[f'{p}: {why}' for p, why in dyn_bad][:3]}")
 
     hits = scan()
     by_file: dict[str, int] = {}
@@ -391,6 +573,7 @@ def main() -> int:
             and not no_col
             and not ph
             and not empt
+            and not dyn_bad
         )
         print("\n门禁:", "PASS" if ok else "FAIL")
         return 0 if ok else 1

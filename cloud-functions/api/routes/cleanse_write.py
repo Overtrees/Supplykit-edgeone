@@ -1174,6 +1174,17 @@ def _write_rows(target, channel, conflict_mode, cleaned):
                         ValueError('首行原因: %s' % _held_rows[0][1]))
             except Exception:
                 pass
+        # 2026-11-05 期初实盘校准(用户定案): 上月末最后一天 ~ 当月 3 号之间的库存导入
+        #   = 实盘最终量 → 覆盖本期期初(snapshot_qty 只是对账用, 不足以让"以导入为准"成立);
+        #   窗口外只保留 snapshot_qty, 走正常结转。失败只留痕, 绝不阻断导入。
+        if wt == "own":
+            try:
+                from core.clock import now_cn as _nowc
+                from core.ledger_adj import apply_import as _adj_apply
+                _adj_apply(channel, cleaned,
+                           batch_id="inv-%s" % _nowc().strftime("%Y%m%d%H%M%S"))
+            except Exception as _ea:
+                try_err('cleansing', '期初实盘校准降级(导入本身已成功)', _ea)
         return _s, _f, _ed
     if target == "product":
         # 2026-11-01 效期管理标记归一(是/否 → yes/no); 非法值留痕并留空,

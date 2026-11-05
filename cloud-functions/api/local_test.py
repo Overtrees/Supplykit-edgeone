@@ -1100,6 +1100,30 @@ try:
     #   → 弹窗恒"未触发", 用户误判规则写错。
     check("测试接口: supplier./inv.turnover_days 模拟 ctx 已注入",
           'ctx["supplier"]' in _rs and '"turnover_days"' in _rs, "core/rule_sim.py")
+    # 2026-11-05 ④: 仓型默认空串 —— 规则上的仓型守卫(`cond.warehouse`, 见 rule_cond._check_single)
+    #   判 `"" != "own"` → 直接 False → 规则的 and 子条件被一起否掉, 弹窗永远"未触发"。
+    #   真实评估里不存在"空仓型"的行, 所以空串本身就是个不存在的输入。
+    from core.rule_sim import build_sim_ctx as _bs
+    from core.rule_cond import _check_condition as _cc
+
+    _cond_wh = {"left": "inv.available_qty", "op": "<", "right": "10", "warehouse": "own"}
+    check("测试接口: 未传仓型时模拟 ctx 落 own(不再用空串冒充)",
+          _bs("{}", {}, {"inv": {}})["inv"]["warehouse_type"] == "own",
+          _bs("{}", {}, {"inv": {}})["inv"]["warehouse_type"])
+    check("测试接口: 仓型守卫在弹窗里真能命中(修复前恒 False)",
+          _cc(_cond_wh, _bs("{}", {}, {"inv": {"available_qty": 5}})) is True,
+          "own 守卫")
+    check("测试接口: 选平台仓时 own 规则确实不命中(不造反向谎)",
+          _cc(_cond_wh, _bs("{}", {}, {"inv": {"available_qty": 5,
+                                               "warehouse_type": "platform"}})) is False,
+          "platform 守卫")
+    check("测试接口: 非法仓型值落回 own",
+          _bs("{}", {}, {"inv": {"warehouse_type": "OWN"}})["inv"]["warehouse_type"] == "own",
+          _bs("{}", {}, {"inv": {"warehouse_type": "OWN"}})["inv"]["warehouse_type"])
+    check("测试接口: own.* 仅在 own 行注入(与 rule_eval 同条件)",
+          "own" not in _bs("own.gap>0", {}, {"inv": {"warehouse_type": "platform"}})
+          and "own" in _bs("own.gap>0", {}, {"inv": {"warehouse_type": "own"}}),
+          "core/rule_sim.py")
 
     # 7b. 2026-11-05 根治"两份手工列表": 白名单/注入判定/前端下拉必须同源
     #    —— 原 _VALID_FIELDS 与 _CALC_VARS 各写一份, supplier.score / inv.turnover_days
@@ -2850,6 +2874,102 @@ try:
           str(len(json.load(open("../../edgeone.json")).get("schedules") or [])))
 except Exception as _e25:
     check("账期用例无异常", False, str(_e25)[:200])
+
+# ── 对账工具自身: 列名解析不能把「列名恰好叫 key」当成索引行跳过(2026-11-05) ──
+#   症状: 三张表的 `key` 列从未参与"声明了是否建出来"的校验(真缺列会漏报),
+#   表面却报"库里多出 3 列"的假阳性。下面两条一正一反, 防止"正则什么都没扫到"也算绿。
+try:
+    import schema_create as _sc9
+
+    _ddl_key = ("CREATE TABLE IF NOT EXISTS t_probe (`key` VARCHAR(80) NOT NULL, value TEXT, "
+                "channel VARCHAR(20) DEFAULT '', PRIMARY KEY(`key`, channel))")
+    _cols_key = _sa.parse_columns(_ddl_key)
+    check("对账: 列名恰好叫 key 也能解析(不再被当成 KEY idx_xxx 索引行)",
+          "key" in _cols_key and "value" in _cols_key and "primary" not in [c.lower() for c in _cols_key],
+          str(_cols_key))
+    # 反证: 把 key 列从 DDL 里删掉, 解析结果必须少它 —— 否则上面那条只是"没扫到东西"
+    _ddl_no_key = _ddl_key.replace("`key` VARCHAR(80) NOT NULL, ", "").replace(
+        "PRIMARY KEY(`key`, channel)", "PRIMARY KEY(channel, value)")
+    check("对账: 删掉 key 列后解析结果确实不含它(反证断言覆盖到该列)",
+          "key" not in _sa.parse_columns(_ddl_no_key), str(_sa.parse_columns(_ddl_no_key)))
+
+    _decl = {t: set(_sa.parse_columns(d)) for t, d in _sc9._TABLES.items()}
+    check("对账: 三张表的 key 列都在声明解析结果里",
+          all("key" in _decl.get(t, set()) for t in
+              ("replenishment_config", "replenishment_config_history", "analysis_cache")),
+          {t: sorted(_decl.get(t, [])) for t in ("replenishment_config", "analysis_cache")})
+    check("对账: 真正的索引行(KEY idx_xxx (...))不被解析成列",
+          "idx_rules_ch_active" not in _decl.get("rules", set())
+          and "idx_rules_ch_active" in _sc9._TABLES["rules"], "rules")
+except Exception as _e26:
+    check("对账列解析用例无异常", False, str(_e26)[:200])
+
+# ── 期初双场景: 结转(默认) / 窗口内实盘导入(覆盖 + 留痕), 2026-11-05 用户定案 ──
+try:
+    from datetime import datetime as _dtm
+    from core.ledger_adj import (target_period as _tp, begin_from_import as _bfi,
+                                 window_text as _wtx)
+
+    check("期初校准: 上月末最后一天算「次月期初」(结账在 1 号 03:05, 月末盘库常见)",
+          _tp(_dtm(2026, 10, 31, 23, 0)) == "2026-11", _tp(_dtm(2026, 10, 31, 23, 0)))
+    check("期初校准: 当月 1~3 号算「当月期初」",
+          _tp(_dtm(2026, 11, 1, 0, 1)) == "2026-11" and _tp(_dtm(2026, 11, 3, 23, 59)) == "2026-11",
+          (_tp(_dtm(2026, 11, 1, 0, 1)), _tp(_dtm(2026, 11, 3, 23, 59))))
+    check("期初校准: 4 号起不再算期初(否则把本月流水当期初, 双算)",
+          _tp(_dtm(2026, 11, 4, 0, 0)) == "", _tp(_dtm(2026, 11, 4, 0, 0)))
+    check("期初校准: 窗口文字与判定同源(不含手写月份算术)",
+          "2026-10-31" in _wtx("2026-11") and "2026-11-03" in _wtx("2026-11"), _wtx("2026-11"))
+    # 换算: 期初 = 导入量(导入时点结存) − 本月净流水; 净出库为负 → 期初反而变大
+    check("期初校准: 换算 = 导入量 − 本月净流水(净出库则回加)",
+          _bfi(100, 30) == 70 and _bfi(100, -20) == 120, (_bfi(100, 30), _bfi(100, -20)))
+
+    # 结账期初优先级 ⓪: 校准值必须压过"上月结转", 否则窗口内导入等于白导
+    import core.ledger as _lg3
+    _oq3 = _lg3.query
+    _sqls3 = []
+
+    def _fake_q(sql, p=None):
+        s = str(sql)
+        _sqls3.append(s)
+        if "FROM ledger_begin_adj" in s:
+            return [{"sku": "S1", "barcode": "", "warehouse": "W1", "qty": 77}]
+        if "FROM inbound_records" in s or "FROM outbound_records" in s:
+            return []
+        if "FROM inventory_month" in s:
+            return [{"sku": "S1", "barcode": "", "warehouse": "W1", "end_qty": 10,
+                     "begin_qty": 10}]
+        if "FROM inventory " in s or "FROM inventory\n" in s:
+            return [{"id": 1, "sku": "S1", "bc": "", "warehouse": "W1", "base": 0}]
+        return []
+
+    _lg3.query = _fake_q
+    import core.ledger_adj as _la3
+    _oq3b = _la3.query
+    _la3.query = lambda sql, p=None: ([{"sku": "S1", "barcode": "", "warehouse": "W1", "qty": 77}]
+                                      if "FROM ledger_begin_adj" in str(sql) else [])
+    try:
+        _br3 = _lg3.build_rows("2026-11", "jd")
+    finally:
+        _lg3.query = _oq3
+        _la3.query = _oq3b
+    check("期初校准: 结账期初以校准值为准(压过上月结转 end_qty=10)",
+          _br3["rows"] and _br3["rows"][0]["begin"] == 77, _br3["rows"][:1])
+    check("期初校准: 校准行的 src 标 import(报表/对账能区分「盘出来的」)",
+          _br3["rows"] and _br3["rows"][0].get("src") == "import", _br3["rows"][:1])
+
+    _sc10 = open("schema_create.py", encoding="utf-8").read()
+    check("期初校准: 表声明存在 + SCHEMA_VERSION 已 bump(改 schema 必 bump)",
+          "ledger_begin_adj" in _sc10 and "SCHEMA_VERSION = 8" in _sc10, "schema_create.py")
+    _ms10 = open("routes/misc.py", encoding="utf-8").read()
+    check("期初校准: 日志类型 ledger_override 登记到用户可见域",
+          "ledger_override" in _ms10.split("_LOG_SCOPE_TYPES")[1].split('"dev"')[0],
+          "routes/misc.py")
+    _cw10 = open("routes/cleanse_write.py", encoding="utf-8").read()
+    check("期初校准: 库存导入写入后接线(仅 own, 失败不阻断导入)",
+          "core.ledger_adj import apply_import" in _cw10 and 'if wt == "own"' in _cw10,
+          "routes/cleanse_write.py")
+except Exception as _e27:
+    check("期初校准用例无异常", False, str(_e27)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

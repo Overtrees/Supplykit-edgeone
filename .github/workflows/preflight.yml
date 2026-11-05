@@ -25,6 +25,11 @@ jobs:
       - run: cd frontend && npx prettier --check "src/**/*.{ts,tsx,css}"
       - run: cd frontend && npx tsc --noEmit
       - run: cd frontend && npm test
+      # 红线 B 必须是"每推必跑", 否则只剩文档里的一句话 —— 与本地 preflight [8/8] 同一脚本
+      - name: i18n 判定自检(正负例 —— 防止扫描规则改坏后"什么都查不出"仍 PASS)
+        run: python3 scripts/i18n_audit.py --selftest
+      - name: i18n 门禁(中文硬编码为零 + zh/en 键集合相等 + 无死引用)
+        run: python3 scripts/i18n_audit.py --gate
 
   backend:
     name: 后端回归/审计

@@ -19,13 +19,13 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 平台 | EdgeOne Makers, ProjectId `makers-8gstkvheqm2c`(名 supplykit, Area=overseas 免备案) |
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
-| 规模 | 22 个 APIRouter / 31 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
-| 回归 | `local_test.py` **417 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(389 条 EXPLAIN + schema 对账) |
+| 规模 | 23 个 APIRouter / 32 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
+| 回归 | `local_test.py` **497 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(395 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
 python3 scripts/env_check.py                  # 换机/新会话第一条: 缺凭据一次性列全
-bash scripts/preflight.sh                     # 七步门禁, 全绿才算可推(有 TIDB 凭据时含 SQL 冒烟)
+bash scripts/preflight.sh                     # 八步门禁, 全绿才算可推(有 TIDB 凭据时含 SQL 冒烟)
 cd cloud-functions/api && python3 local_test.py   # 单跑回归(注意目录!)
 cd cloud-functions/api && python3 local_test.py --sql-smoke  # 回归 + 真实 SQL 冒烟(需 TIDB_*)
 python3 scripts/push_api.py -m "feat(x): ..."     # 推送(= 触发部署)
@@ -70,7 +70,7 @@ cloud-functions/api/
   migrations/       有序迁移框架: steps/*.py 单步事务 + schema_migrations 记账(只跑未应用的)
   biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判)
   routes/common.py  @traced(异常统一 200 + ok:false) / try_err / 日志落库
-  routes/*.py       22 个 APIRouter: auth dashboard orders products inventory replenishment
+  routes/*.py       23 个 APIRouter: auth dashboard orders products inventory replenishment ledger
                     purchase alerts insights history cleansing channels rules suppliers tasks
                     batches ops misc debug cron task_seed task_export
   local_test.py     回归; test_audit.py 静态审计(CI 也跑)
@@ -125,13 +125,14 @@ recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— �
 - **先把验收指标写成数字**("四维偏差 0 项" / "日均从 71.16 万降到 16.01 万"), 否则无法判断改完;
 - 涉及口径改动: 先确认六条口径哪条被触碰。
 
-### ② 本地验证(preflight 七步)
+### ② 本地验证(preflight 八步)
 
 ```bash
 bash scripts/preflight.sh
-# [1/7] 后端 Python 3.10 语法   [2/7] pyflakes(undefined name / 重定义)
-# [3/7] local_test 回归 417 (+SQL 冒烟)  [4/7] ESLint  [5/7] Prettier  [6/7] tsc
-# [7/7] vitest 单测(2026-11-03 纳入: 此前从未执行, 攒了 12 个长期失败)
+# [1/8] 后端 Python 3.10 语法   [2/8] pyflakes(undefined name / 重定义)
+# [3/8] local_test 回归 497 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
+# [5/8] Prettier  [6/8] tsc  [7/8] vitest 单测
+# [8/8] i18n 门禁(红线 B: 中文硬编码为 0 + zh/en 键集相等 + 无死引用)
 ```
 
 **规模 mock 不能省**: 单 SKU 样本会让批次/分摊/分组类缺陷全过(每次只走一条分支), 至少 ≥200 SKU 跑一轮。
@@ -310,9 +311,21 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - **注释不算文案**, 不受限(本仓库注释一律中文, 这是刻意的);
 - 后端 `error` 字段是**诊断文本**, 允许中文; 但它不能是唯一用户提示 —— 前端展示时用 `t()` 的可读前缀, 或按接口返回的 `code` 本地化;
 - 判据: 改动文件里 `grep -nE "[\u4e00-\u9fa5]"` 的命中, 只应出现在注释与 `locale.ts` 内;
-- 回归: `local_test.py` 的 "i18n 键中英对齐" 用例会拦 zh/en 键集合不一致。
+- **可执行门禁(2026-11-05 接上)**: `python3 scripts/i18n_audit.py --gate`, 已进
+  `preflight.sh` 第 [8/8] 步与 CI `frontend` job —— 中文硬编码残留 > 0 / zh-en 键集不等 /
+  `t()` 引用了不存在的键 / 变量名遮蔽 `t` / 空串假翻译, 任一命中即 exit 1。
+  逐条定位用 `--lines`, 按文件汇总 `--by-file`。
+- 死键(字典有但没被引用)只报数、不拦门禁。**当前基线 0 条**, 新增即说明有文案下线却没删词条。
+  2026-11-05 从 513(其中 386 条是脚本误报)→ 127 → 0, 详见 DEVELOPMENT §15.154~§15.156。
+- **门禁扫不到的地方**: `document.title` / `<html lang>` / `meta description` 不在 React 树里,
+  也不经过 `t()` —— 它们由 `locale.ts` 的 `applyDocumentLang()` 同步(setLocale + 启动各一次)。
+  新增这类"文档级字符串"要挂进同一个函数, 否则切语言时它会留在中文。
+  动态前缀 `col./fld./seg.` 不逐条判死, 由「产键函数是否还在」兜底;
+  新增死键说明有文案下线却没删词条, 顺手清掉即可。
+- 判定自检: `python3 scripts/i18n_audit.py --selftest`(18 条正负例)。改扫描规则必先过它 ——
+  这条命令也进了 preflight [8/8] 与 CI, 自检红说明规则坏了, 后面的 PASS 不可信。
 
-**为什么较真**: 项目已有中英双份字典(173 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
+**为什么较真**: 项目已有中英双份字典(1548 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
 
 ### 红线 C: 禁用显式 any, 按 TS 原生类型写
 
@@ -332,6 +345,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 - **门禁**: `frontend/.eslintrc.cjs` 的 `@typescript-eslint/no-explicit-any` 为 `error`,
   `npx eslint src` 必须 0 error; 共享契约集中放 `frontend/src/api/types.ts`。
+  执行位置: `preflight.sh` 第 [4/8] 步 + CI `frontend` job(`--max-warnings 0`)。
 - **不许绕过**: `as unknown as any`、`@ts-ignore`、`// eslint-disable ...no-explicit-any` 一律视为违规。
 - **不造假严格**(§15.38): 动态数据用 `unknown` 索引签名如实表达"不知道", 不要为了过编译
   把字段声明成假的具体类型, 也不要用 `ReturnType<typeof JSON.parse>` 之类的 any 替身。

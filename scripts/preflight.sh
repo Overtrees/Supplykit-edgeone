@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SupplyKit 本地质量门禁(preflight)
-# 用途: push/部署前强制检查 —— 后端 3.10 语法 + pyflakes 静态分析 + local_test 回归; 前端 lint + 格式 + tsc + 单测
+# 用途: push/部署前强制检查 —— 后端 3.10 语法 + pyflakes 静态分析 + local_test 回归;
+#       前端 lint(含红线 C 禁 any) + 格式 + tsc + 单测 + i18n 门禁(红线 B 禁中文硬编码)
 # 依赖: python3, pyflakes(apk add pyflakes); node, npm, eslint, typescript
 # 用法: scripts/preflight.sh [--skip-frontend] [--skip-backend]
 # 退出码: 0=全部通过(可 push)  1=存在失败(禁止 push)
@@ -25,7 +26,7 @@ SKIP_SQL_SMOKE="${SKIP_SQL_SMOKE:-0}"
 echo "════════ SupplyKit preflight ════════"
 
 if [ "$SKIP_BACK" = "0" ]; then
-  echo "── [1/7] 后端 Python 3.10 语法门禁 ──"
+  echo "── [1/8] 后端 Python 3.10 语法门禁 ──"
   BAD=0
   for f in $(find "$API" -name "*.py"); do
     if ! python3 -c "import ast; ast.parse(open('$f').read(), feature_version=(3,10))" 2>"$API/../.syntax_err"; then
@@ -35,7 +36,7 @@ if [ "$SKIP_BACK" = "0" ]; then
   rm -f "$API/../.syntax_err"
   [ "$BAD" = "0" ] && echo "  ✓ 全部 .py 通过" || FAILS+=("后端语法")
 
-  echo "── [2/7] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
+  echo "── [2/8] pyflakes 静态分析(治本: try 吞 NameError = 功能从未生效) ──"
   if command -v pyflakes >/dev/null 2>&1; then
     ERR=$(cd "$API" && pyflakes . 2>&1 | grep -vE "imported but unused|unable to detect undefined names" | grep -E "undefined name|redefin|used before assignment" || true)
     if [ -n "$ERR" ]; then
@@ -47,7 +48,7 @@ if [ "$SKIP_BACK" = "0" ]; then
     echo "  ⚠ pyflakes 未安装(apk add pyflakes)——跳过"
   fi
 
-  echo "── [3/7] local_test 回归 ──"
+  echo "── [3/8] local_test 回归 ──"
   # 2026-11-03 S3-4: 有 TIDB 凭据时在同一个进程里顺带做真实 SQL 冒烟(EXPLAIN) ——
   #   不能"另跑一遍", 冒烟复用的正是这次运行收集到的 SQL。没有凭据时显式说明未验证,
   #   绝不静默当作通过(否则又是一条"不跑的测试")。
@@ -75,7 +76,7 @@ if [ "$SKIP_BACK" = "0" ]; then
 fi
 
 if [ "$SKIP_FRONT" = "0" ]; then
-  echo "── [4/7] 前端 ESLint(默认 --max-warnings 0, 无警告才通过) ──"
+  echo "── [4/8] 前端 ESLint(默认 --max-warnings 0, 无警告才通过) ──"
   echo "  ⚠ iSH 沙箱内存受限, 全量扫描可能假通过/崩溃——权威 lint 门禁以 GitHub Actions(CI) 为准"
   if (cd "$FRONT" && npm run lint 2>&1 | grep -vE "expose_wasm|^$|^>" | grep -E "error|warning|✖|problem" ); then
     FAILS+=("eslint")
@@ -83,21 +84,21 @@ if [ "$SKIP_FRONT" = "0" ]; then
     echo "  ✓ lint 通过"
   fi
 
-  echo "── [5/7] 前端 Prettier 格式检查 ──"
+  echo "── [5/8] 前端 Prettier 格式检查 ──"
   if (cd "$FRONT" && npm run format:check 2>&1 | grep -vE "expose_wasm|^$|^>" | grep -iE "warn|error" ); then
     FAILS+=("prettier")
   else
     echo "  ✓ 格式合规"
   fi
 
-  echo "── [6/7] TypeScript 类型检查(tsc --noEmit) ──"
+  echo "── [6/8] TypeScript 类型检查(tsc --noEmit) ──"
   if (cd "$FRONT" && npx tsc --noEmit 2>&1 | grep -vE "expose_wasm" | grep -E "error TS"); then
     FAILS+=("tsc")
   else
     echo "  ✓ tsc 通过"
   fi
 
-  echo "── [7/7] 前端单元测试(vitest) ──"
+  echo "── [7/8] 前端单元测试(vitest) ──"
   # 2026-11-03 纳入门禁: 这套测试此前**从未被 preflight/CI 执行**, 于是攒下 12 个
   #   长期失败(Toast 假定时器 3 个 + 列定义数字过时 9 个)却无人知晓 —— 不跑的测试等于没有。
   _vt_out=$(cd "$FRONT" && npx vitest run 2>&1)
@@ -109,6 +110,29 @@ if [ "$SKIP_FRONT" = "0" ]; then
     echo "$_vt_out" | grep -E "FAIL|AssertionError|×" | head -8
     FAILS+=("vitest")
   fi
+
+  echo "── [8/8] i18n 门禁(红线 B: 界面文案禁硬编码中文 / zh-en 键集合相等) ──"
+  # 2026-11-05: 红线 B 长期是「有判据、没执行」—— scripts/i18n_audit.py 早就写好了 --gate,
+  #   但 preflight 七步与 CI 都没调它, 于是红线只写在文档里。同理 §15.147「不跑的测试等于没有」。
+  #   它 0.3s, 一并跑; 前端段被跳过时这条也跳过(扫的就是 frontend/src)。
+  # 先跑判定自检(正负例), 再跑业务扫描 —— 自检不过说明扫描规则本身坏了, 后面的 PASS 不可信
+  _st_out=$(cd "$SK" && python3 scripts/i18n_audit.py --selftest 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "$_st_out" | grep -E "❌|自检:" | sed 's/^/  /'
+    FAILS+=("i18n-selftest")
+  else
+    echo "  ✓ 判定自检通过(豁免/硬编码/动态前缀/词表键 共 18 条正负例)"
+  fi
+  _i18n_out=$(cd "$SK" && python3 scripts/i18n_audit.py --gate 2>&1)
+  _i18n_rc=$?
+  echo "$_i18n_out" | grep -E "字典:|键集合相等|t\(\) 引用但|变量名遮蔽|中文硬编码残留|门禁:" | sed 's/^/  /'
+  if [ "$_i18n_rc" = "0" ]; then
+    echo "  ✓ 无中文硬编码残留"
+  else
+    echo "$_i18n_out" | sed -n '/中文硬编码残留/,$p' | head -12
+    echo "  提示: python3 scripts/i18n_audit.py --lines  # 逐条 file:line"
+    FAILS+=("i18n")
+  fi
 fi
 
 echo "═══════════════════════════════════"
@@ -117,7 +141,7 @@ if [ "${#FAILS[@]}" -gt 0 ]; then
   exit 1
 fi
 echo "✓ preflight 全部通过, 可 push"
-# 密钥/历史泄露审计不占六步名额(要 3~4s, 且 CI 每次推送+每周一定时强制跑),
+# 密钥/历史泄露审计不占八步名额(要 3~4s, 且 CI 每次推送+每周一定时强制跑),
 # 但改过配置/凭据/文档示例行时应当手动过一遍 —— 它扫的是全历史 blob, 不只是工作区
 echo "  提示: python3 scripts/audit_secrets.py  (硬编码 / .env 跟踪 / git 全历史)"
 exit 0

@@ -14,7 +14,9 @@
 | `push_api.py` | 推代码(github:443 在沙箱不可达, 走 API, 一次一个 squash 提交) |
 | `smoke_check.py` | 线上冒烟: health JSON + 首页 #root |
 | `audit_secrets.py` | 提交前查密钥/明文口令泄漏 |
-| `preflight.sh` | 提交前一把梭(密钥扫描 + 语法 + 关键断言) |
+| `preflight.sh` | 提交前一把梭, 八步: 3.10 语法 / pyflakes / 回归+SQL冒烟 / ESLint(含禁 any) / Prettier / tsc / vitest / i18n 门禁 |
+| `i18n_audit.py` | 红线 B 可执行版: 中文硬编码残留 + zh/en 键集三向校验; `--gate` 进 preflight 与 CI, `--lines` 逐条定位 |
+| `i18n_extract.py` | 从源码抽 `t()` 引用, 生成/补齐字典键(写文件前人工确认) |
 
 ## 二、后端逻辑(不部署就能验)
 
@@ -24,7 +26,7 @@
 | `test_inv_recalc.py` | 库存重算口径 |
 | `test_inv_idempotent.py` | 库存批量操作幂等 |
 | `test_barcode_q3.py` | 条码/两码合并 |
-| `cloud-functions/api/local_test.py` | **主回归**: 421 条用例。必须在 `cloud-functions/api/` 目录跑 |
+| `cloud-functions/api/local_test.py` | **主回归**: 497 条用例。必须在 `cloud-functions/api/` 目录跑 |
 | `cloud-functions/api/sql_smoke.py` | 真实 SQL 冒烟(表名/列名 mock 测不出), `local_test.py --sql-smoke` 顺带跑 |
 
 ## 三、前端/界面

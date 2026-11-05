@@ -39,6 +39,10 @@ def ledger_status(channel: str = "jd"):
         cur = current_period(channel, wt)
         target = shift_period(period_of(), -1)
         ready, why = (False, "") if not target else close_check(target, channel, wt)
+        # 期初来源: carryover(上月结转) / import(窗口内实盘校准过) —— 前端顶部挂徽标,
+        #   用户要能一眼看出"这期期初是算出来的还是盘出来的"(2026-11-05 期初双场景)。
+        from core.ledger_adj import summary as _adj_sum
+        _adj = _adj_sum(cur, channel, wt)
         out.append({
             "warehouse_type": wt, "period": cur,
             # status 描述的是 **cur 这个账期**: 只有当已结到 cur 时才是 closed,
@@ -50,6 +54,8 @@ def ledger_status(channel: str = "jd"):
             "days": elapsed_days(cur), "month_days": period_days(cur),
             "is_open": cur == period_of(),
             "target_period": target, "target_ready": ready, "target_reason": why,
+            "begin_source": _adj.get("begin_source"), "begin_adj_rows": _adj.get("adj_rows"),
+            "begin_adj_delta": _adj.get("adj_delta"), "begin_window": _adj.get("window"),
         })
     return ok({"channel": channel, "items": out})
 

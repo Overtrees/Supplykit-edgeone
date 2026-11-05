@@ -3,7 +3,13 @@ import ReactDOM from 'react-dom/client'
 import * as Sentry from '@sentry/react'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+import { syncDocumentLang } from './locale'
 import './styles.css'
+
+// 文档级语言同步(title / <html lang>)—— 必须在首次 render 前跑, 且不能只挂在 setLocale 里:
+// 首访时语言是从 localStorage / navigator 探测的(走不到 setLocale), 而 index.html 里的
+// <title>Supplykit</title> 与 lang="zh-CN" 是静态中文, 切 EN 时不会自己变。
+syncDocumentLang()
 
 Sentry.init({
   dsn: import.meta.env.VITE_SENTRY_DSN || '',

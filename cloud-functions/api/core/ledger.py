@@ -291,6 +291,14 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
     boot_net = {} if (prev_end or same_begin) else _net_before(channel, warehouse_type, start)
     if boot_net:
         _ensure_base(channel, warehouse_type)     # 必须在回写 beginning_stock 之前
+    # ⓪ 本期期初被实盘校准过 → 校准值优先(2026-11-05 用户定案: 实盘是最终量)
+    #   优先级高于"上月结转": 月末盘库后又在 1~3 号补盘, 结转值已经不是事实。
+    #   校准只在窗口内发生, 且只对当前进行中的账期生效(见 core/ledger_adj)。
+    try:
+        from core.ledger_adj import begin_map as _begin_map
+        adj_beg = _begin_map(period, channel, warehouse_type)
+    except Exception:
+        adj_beg = {}
     rows = []
     for r in query("SELECT id, sku, COALESCE(barcode,'') AS bc, warehouse, "
                    "COALESCE(ledger_base, beginning_stock, 0) AS base FROM inventory "
@@ -301,18 +309,25 @@ def build_rows(period, channel, warehouse_type=OWN_WT):
         bc = str(r.get("bc") or "")
         wh = str(r.get("warehouse") or "")
         k3 = (sku, bc, wh)
-        # 期初只从三处取: 上期期末 / 本期已存的期初 / (建账基线 + 账期之前的净流水)。
+        # 期初只从四处取: 实盘校准 / 上期期末 / 本期已存的期初 / (建账基线 + 账期之前的净流水)。
         #   **不读 beginning_stock** —— 它被结账回写成"当期期初", 重跑会互相污染。
-        if k3 in prev_end:
+        if k3 in adj_beg:
+            beg = adj_beg[k3]
+            src = "import"
+        elif k3 in prev_end:
             beg = prev_end[k3]
+            src = "derived"
         elif k3 in same_begin:
             beg = same_begin[k3]
+            src = "derived"
         else:
             beg = int(r.get("base") or 0) + boot_net.get(k3, 0)
+            src = "derived"
         mi = _pick(ins, sku, bc, wh, warehouse_type)
         mo = _pick(outs, sku, bc, wh, warehouse_type)
         rows.append({"id": r.get("id"), "sku": sku, "barcode": bc, "warehouse": wh,
-                     "begin": beg, "in": mi, "out": mo, "end": beg + mi - mo})
+                     "begin": beg, "in": mi, "out": mo, "end": beg + mi - mo,
+                     "src": src})
     # 流水有、库存无(空码/仓名不一致)的行: 不静默吞掉, 单独统计给对账用
     orphan = _orphan_count(ins, outs, rows)
     return {"period": period, "start": start, "rows": rows, "orphan": orphan,
@@ -328,15 +343,19 @@ def _orphan_count(ins, outs, rows):
 
 
 def _write_month(period, channel, warehouse_type, rows):
-    """UPSERT 账期行(同账期重复结账 = 覆盖, 永不累加)"""
+    """UPSERT 账期行(同账期重复结账 = 覆盖, 永不累加)
+
+    src 逐行写: 期初来自实盘校准的行标 'import' —— 报表/对账要能区分
+    「这期期初是结转来的」和「这期期初是盘出来的」, 而不是统统标 derived。
+    """
     if not rows:
         return 0
     args = [(period, channel, warehouse_type, x["sku"], x["barcode"], x["warehouse"],
              int(x["begin"]), int(x["in"]), int(x["out"]), int(x["end"]),
-             period_bounds(period)[1]) for x in rows]
+             str(x.get("src") or "derived"), period_bounds(period)[1]) for x in rows]
     executemany("INSERT INTO inventory_month(period, channel, warehouse_type, sku, barcode, "
                 "warehouse, begin_qty, in_qty, out_qty, end_qty, src, closed, as_of) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'derived',1,%s) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s) "
                 "ON DUPLICATE KEY UPDATE begin_qty=VALUES(begin_qty), in_qty=VALUES(in_qty), "
                 "out_qty=VALUES(out_qty), end_qty=VALUES(end_qty), src=VALUES(src), "
                 "closed=VALUES(closed), as_of=VALUES(as_of), updated_at=NOW()", args)

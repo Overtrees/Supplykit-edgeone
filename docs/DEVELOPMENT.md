@@ -6092,3 +6092,397 @@ vite build: ✓ built in 8.21s
 
 新增断言：`账期: 平台仓/B 仓不读 inventory.month_inbound/month_outbound`
 （同时校验 SELECT 分支、行级固定 0、汇总 `0 AS mi, 0 AS mo` 三处都在）。
+
+## §15.151 对账工具的两处「声明了却不校验」+ 测试弹窗的仓型空串(2026-11-05)
+
+### 一、schema 对账报「库里多出 3 列」是假阳性，真问题是反的
+
+冒烟输出：
+
+```
+声明 45 张表 / 430 列 / 13 个索引
+✓ 所有声明的列都存在
+⚠ 库里多出 3 列(代码未声明): replenishment_config.key / replenishment_config_history.key / analysis_cache.key
+```
+
+三列在 `schema_create.py` 里都**明确声明了**（146 / 152 / 313 行，且带反引号）。
+根因在 `sql_smoke.parse_columns()`：它按括号深度切分后，**只拿首 token 判约束行**：
+
+```python
+name = tok.group(1)
+if name.lower() in _CONSTRAINT_HEADS:   # {"primary","unique","key","index",...}
+    continue                            # `key` VARCHAR(80) 也在这里被丢掉
+```
+
+列名恰好等于约束关键字（`key` / `index`）时就被当成 `KEY idx_x (...)` 跳过。方向其实更糟：
+这三列**从未参与"声明了是否建出来"的校验** —— 哪天真缺列，对账会漏报，而不是报错。
+
+修法：关键字后面跟的是**类型** → 这是列；跟的是**索引名或括号** → 才是约束/索引。
+
+```python
+_nxt = re.match(r"\s*`?([A-Za-z_][A-Za-z0-9_]*)`?", p[tok.end():])
+if not _nxt or _nxt.group(1).lower() not in _TYPE_HEADS:
+    continue
+```
+
+`PRIMARY KEY (a)`（下一词 `KEY`）/ `KEY idx_x (a)`（下一词 `idx_x`）仍判约束；
+`` `key` VARCHAR(80) `` 判列。补账后 **433 列 / 缺失 0 / 多余 0**。
+
+断言 4 条，其中一条是**反证**（把 `key` 列从 DDL 删掉，解析结果必须不含它）——
+否则"正则什么都没扫到"也会绿，和 §9 的教训同类。
+
+### 二、`rule_sim` 的仓型默认空串 → 弹窗永远「未触发」
+
+```python
+"warehouse_type": inv.get("warehouse_type", "")     # 空串
+```
+
+`rule_cond._check_single` 里的仓型守卫：
+
+```python
+wh = cond.get("warehouse", "")
+if wh:
+    if (ctx.get("inv") or {}).get("warehouse_type", "") != wh:
+        return False          # "" != "own" → 恒 False
+```
+
+于是带仓型作用域的规则在测试弹窗里恒不触发，`and` 子条件被一起否掉，用户以为规则写错。
+真实评估里**每一行都有具体仓型**（`own` / `platform` / `platform_b`，bbcc 另有合成 `bc` 桶），
+空串是个不存在的输入 —— 和前三次（own.\* / batch.\* / supplier.score）是同一类"测试 ctx 说谎"。
+
+三处一起改：
+
+| 位置 | 改动 | 为什么 |
+|---|---|---|
+| `core/rule_sim.py` | 空串/非法值 → `own` | 自有仓是主场景，也是内置自有仓规则的前置 |
+| `core/rule_sim.py` | `own.*` 仅 `_wt == "own"` 时注入 | 与 `rule_eval`（`warehouse_type == 'own'` 才注入）对齐；原无条件注入 → 选平台仓测自有仓规则会显示"已触发"，反向说谎 |
+| `TestSheet.tsx` / `labels.tsx` | 去掉「全部」选项、默认 `own`、补 `bc` | 没有"空仓型"的行，选项就该只列真实仓型 |
+
+断言 5 条：默认落 own / own 守卫生效 / 选 platform 时 own 规则确实不命中 / 非法值回落 /
+`own.*` 仅在 own 行注入。
+
+### 三、验证
+
+```
+local_test        478 → 487 通过 / 0 失败（+9）
+schema 对账       声明 45 表 / 433 列，缺失 0 / 多余 0 / 缺索引 0
+tsc / prettier    ✓（TestSheet.tsx、labels.tsx）
+vitest            30 通过
+```
+
+## §15.152 期初双场景: 结转 vs 窗口内实盘导入(2026-11-05 用户定案)
+
+### 一、原来的缺口
+
+账期改造(§15.146/§15.147)只实现了**一个场景**: 本月期初 = 上月期末(carryover)。
+实盘导入被降级成 `snapshot_qty`(只对账)，理由是"每次导入都写期初 = 每月累加一次双算"。
+但真实业务里"盘库"是**月末/月初一次性的外部事实**，与"每周导一次库存报表"不是一回事 ——
+一律不认，等于用户盘完也改不动期初，只能手改库。
+
+所以按**时机**区分两个场景(而不是按导入次数):
+
+| 场景 | 触发条件 | 本期期初 |
+|---|---|---|
+| A 默认 | 窗口内没有导入库存 | 上月期末(结转，既有口径) |
+| B 实盘 | 上月末最后一天 00:00 ~ 当月 3 日 23:59:59 之间导入过库存 | **导入值**，覆盖结转并留痕 |
+
+窗口为什么这么定: 结账在次月 1 号 03:05(平台调度)才跑，月末最后一天盘库很常见，它描述
+的就是"下月期初"；4 号以后再导入，量里已经掺了本月流水，再当期初必然双算。
+
+### 二、换算: 校准"导入时点结存"，不是硬塞期初
+
+```
+期初 = 导入量 − Σ净流水[本月 1 日 00:00, 导入时刻)
+```
+
+导入量永远被当作"导入那一刻仓库里有多少"，用户不需要倒推成月初数。上月末导入时区间为空，
+期初 = 导入量，天然正确。净流水为负(净出库)时直接回加，**不夹 0** —— 实盘与流水打架要暴露。
+
+### 三、落点
+
+| 表/文件 | 作用 |
+|---|---|
+| `ledger_begin_adj`(新表) | 一行 = 账期×SKU×69码×仓，存 `qty`(校准后) / `imported_qty` / `offset_qty` / `carried_qty`(原结转) / `delta` / `batch_id` / `applied_at`，供审计 |
+| `core/ledger_adj.py`(新模块) | 窗口判定 + 换算 + 写库存期初 + 批次差额 + 留痕 + `begin_map/summary` 读侧 |
+| `core/ledger.build_rows` | 期初优先级新增 ⓪ 校准值（压过 ①上月结转）；`inventory_month.src` 逐行写 `import`/`derived` |
+| `routes/cleanse_write.py` | 库存写入成功后接线（仅 own，异常只 `try_err`，绝不阻断导入） |
+| `routes/ledger.py` | `/ledger/status` 增 `begin_source / begin_adj_rows / begin_adj_delta / begin_window` |
+| `routes/misc._LOG_SCOPE_TYPES` | 新增 `ledger_override`(user 域) —— 不登记＝日志页按类型过滤时"写了等于没写" |
+
+**批次轨**: 期初一变，`Σbatch_opening` 与库存轨就差 `delta`。盘盈补一条到期日 `9999-12-31`
+的调整批次(FEFO 末位，不吃掉真实批次)；盘亏按到期日从早到晚逐批扣，扣不干净才留负数暴露。
+随后 `_recalc_own_inventory` + `_rebuild_own_batches` 立刻重算 —— 不等下一次导入，
+否则"期初改了列、可用还是旧值"。
+
+**只对当前进行中的账期生效**: 已结账的期再改期初，期末就与月报不符 → 返回 skipped，
+让用户走 `/ledger/reclose`。窗口内多次导入以**最后一次**为准(UPSERT)，每次都写一条日志。
+
+### 四、验证
+
+```
+窗口判定      10-31 23:00 → 2026-11 / 11-01 00:01 → 2026-11 / 11-03 23:59 → 2026-11 / 11-04 → 空
+换算          导入 100 + 本月净流水 30 → 期初 70；净流水 −20 → 期初 120
+结账优先级    上月结转 end_qty=10 + 校准 77 → begin=77, src=import（mock 直连 build_rows）
+线上冒烟      临时渠道连续两次导入 → 期初 100 → 80，两条日志(原结转 → 校准后 → 差额)，清理后 0 残留
+门禁          local_test 487 → 497 通过 0 失败；SQL 冒烟 395 条 ✓263/✗0；schema 46 表(含新表)全对齐
+```
+
+### 五、残余与边界
+
+- **流水日期是 VARCHAR**，只标日期的行按"当日 00:00"参与回退；假设导入量是"导入那一刻的结存"，
+  与文件实际含义(导出时点)可能有几小时误差 —— 但方向一致，且差异会在月末对账里显形。
+- **盘亏扣批次**按到期日升序，与出库 FEFO 同序；期初被调到低于批次余额时留负数批次，
+  由 `_rebuild_own_batches` 的"Σ批次≡可用"告警继续盯着。
+- 平台仓/B 仓**不参与**(快照制，不进账期)。
+
+## §15.153 红线 B 从「有判据」到「有执行」: i18n 门禁接入 preflight 与 CI(2026-11-05)
+
+### 一、问题: 三条红线里, 两条有门禁, 一条只有一句话
+
+`docs/SKILL.md §11`(2026-11-04 定案)把三条定为**准入条件**。落到执行处是这样:
+
+| 红线 | 判据 | 执行位置(改前) |
+|---|---|---|
+| A 非内联/不造上帝文件 | 行数/职责 | 无自动门禁(靠 review) |
+| B 界面文案禁硬编码中文 | `scripts/i18n_audit.py --gate`(2026-11-04 就写好了) | **没有任何地方调它** |
+| C 禁显式 any | `@typescript-eslint/no-explicit-any: error` | preflight [4/7] + CI ✓ |
+
+`i18n_audit.py` 有完整判据(中文残留扫描 / zh-en 键集双向相等 / `t()` 引用缺失键 /
+死键 / 变量名遮蔽 `t` / 列 id 缺 `col.*` / 传参缺占位符 / 空串假翻译), 却只在有人想起来时手跑。
+这正是 §15.147 那条「不跑的测试等于没有」的同一个形状 —— 区别是这次连"跑过一次就绿"都没有。
+
+### 二、改法
+
+| 文件 | 改动 |
+|---|---|
+| `scripts/preflight.sh` | 步号 7 → **8**; 新增 `[8/8] i18n 门禁`, 调 `python3 scripts/i18n_audit.py --gate`, 失败入 `FAILS` 并打印残留文件清单 + `--lines` 提示 |
+| `.github/workflows/preflight.yml` | `frontend` job 在 `npm test` 之后加一步同名检查 —— **每推必跑**, 不依赖本地自觉 |
+| `docs/SKILL.md` | §4 ② 步骤清单补 `[8/8]`; 红线 B 补「可执行门禁」一段(含死键为何不拦); 红线 C 补执行位置 |
+| `CONTEXT.md` / `scripts/README.md` | 「七步闭环」→「八步」; 补 `i18n_audit.py` / `i18n_extract.py` 两行; 顺带修「主回归 421 条」→ 497 |
+
+`preflight.sh` 的前端段整体在 `SKIP_FRONT=0` 里, 所以 `--skip-frontend` 时第 8 步也跳过 —— 它扫的就是 `frontend/src`。
+
+### 三、验证(两条都是反证, 不是"跑绿了就算")
+
+门禁最容易的死法是「正则什么都匹配不到, 于是永远绿」。两个探针各插一次, 跑完整门禁, 再删:
+
+```
+探针 A  frontend/src/__any_probe.ts   export const probe = (x: any) => x
+        → [4/8] 1:26 error Unexpected any @typescript-eslint/no-explicit-any → FAILS=(eslint)
+
+探针 B  frontend/src/__i18n_probe.tsx  <button title="保存并关闭">确定提交</button>
+        → [8/8] 中文硬编码残留: 1 行 / 1 个文件 → 门禁: FAIL
+        → ✗ preflight 失败: i18n —— 修复后再 push   (exit 1)
+```
+
+探针删除后全量复跑:
+
+```
+[1/8] 3.10 语法 ✓   [2/8] pyflakes ✓   [3/8] 回归 497 + SQL 冒烟 ✓263/✗0 + schema 46 表全对齐 ✓
+[4/8] ESLint ✓   [5/8] Prettier ✓   [6/8] tsc ✓   [7/8] vitest 30 ✓
+[8/8] i18n: zh 1548 / en 1548 键, 键集相等, 中文硬编码残留 0 行 / 0 文件 ✓
+✓ preflight 全部通过, 可 push
+```
+
+当前 i18n 基线: **1548 键对齐 / 中文残留 0 / 死键 513**(死键只报数, 不拦门禁 —— 动态拼接键
+与阶段性下线文案会正常产生死键, 硬拦会逼人删掉还没接回来的词条)。
+
+### 四、残余
+
+- 红线 A(行数/职责)仍是人工 review, 没有自动门禁 —— 行数阈值可脚本化, 但"第二套职责"不可,
+  半自动化的收益不抵误报成本, 暂不做。
+- 死键 513 条是一次性清账的候选(多半是重构后没删的旧词条), 与门禁无关, 单独开活。
+
+## §15.154 死键核实: 513 → 127, 差额是审计脚本自己的误报(2026-11-05)
+
+### 一、起因
+
+§15.153 接入 i18n 门禁时报「死键 513」, 我当时判断"只报数不拦门禁, 单独开活"。
+用户要求核实这 513 条到底是不是死的 —— 结论是**只有 127 条是死的, 差额 386 条全是脚本漏检**。
+
+### 二、死键从来就不准: `used_keys()` 只认 `t('字面量')`
+
+| 引用形态 | 条数 | 脚本原来认不认 | 实例 |
+|---|---|---|---|
+| `t('col.' + id)`（`colLabel()`） | 68 | ❌ | `colLabels.ts:109` |
+| `t('fld.' + name)`（`fldLabel()`） | 61 | ❌ | `fieldNames.ts:155` |
+| `t('seg.' + k)`（备注片段） | 32 | ❌ | `insights/shared.tsx:206` |
+| 后端下发 `name_key`，前端 `t(s.name_key)` | 3 | ❌ | `cleansing.py` → `TaskCard.tsx:165` |
+| 词表键字段 `{ l: 'rf.lf.3' }` → `t(o.l)` | 一大部分 | 仅白名单 5 个文件 | `rules/labels.tsx` |
+| 对象简写 `VARS = { lit: 'rf.vars.lit' }` | 一大部分 | ❌ | `rules/labels.tsx:21` |
+| 三元/条件里的键 `? 'inv.exp.warn' : ...` | 少量 | ❌ | `statusLabels.ts:63` |
+
+也就是说 **513 这个数字一开始就没人能信** —— 里面混着 3/4 的活键。一个"报得不准"的指标
+比没有指标更糟: 真出现新死键时, 它淹没在 386 条噪音里。
+
+### 三、改法(分三层, 从精确到兜底)
+
+1. **动态前缀登记为命名空间** `DYNAMIC_PREFIXES = {col, fld, seg}`: 该前缀下的键只可能由拼接产生,
+   不逐条判死; 改由 `scan_dynamic_prefix_health()` 盯**产键函数本身**(文件删了 / 拼接没了 = 整片失效)。
+   —— 放过逐条, 但保留整体失效的探测, 否则等于不再管这三组。
+2. **通用键识别**: 键字段(`l:` / `label:` / `name_key:` …)、元组数组元素 `['x', 'p.lit']`、
+   对象简写 `lit: 'rf.vars.lit'`、后端 `"name_key": "task.win"` 都计入引用。
+3. **字面量兜底**: 只要该键以**完整字面量**出现在任何源文件里(含注释), 就不算死。
+   静态求值做不到全知 —— 与其逐条攻各种写法, 不如承认"字面量存在即未死"; 死键的用途是
+   **清理候选**, 漏报几条远好于误报一堆。
+
+顺带修一个因改动引入的真 bug: 缺键检查(`t() 引用但字典缺失`)原本复用 `used_keys()`,
+而 `used_keys()` 现在含词表键字段 —— 于是 `v: 'flow.date'`(后端字段名, 本就不在字典里)
+被报成 43 条"`t()` 引用了不存在的键"。缺键检查改回**只认 `t('字面量')`**。
+
+### 四、`--selftest`: 判定自身必须有正负例
+
+这次改动过程中连续踩了三个坑, 全是"改扫描规则把别的规则带坏":
+
+| 坑 | 症状 | 靠什么发现 |
+|---|---|---|
+| 新正则与既有 `BACKEND_KEY_RE`(中文字段豁免)同名覆盖 | 冒出 2 行不存在的中文硬编码 | 前后两次 preflight 结果不一致 |
+| 自检里 `chk()` 的 detail 参数叫 `p`, 又与列表推导的 `p` 撞名 | 泄漏判定恒真 | 自检自己红了 |
+| 元组正则前段 `{1,20}` 挡掉单字母前缀 | `p.lit` / `p.log` 被判死 | 与人工清单对差 |
+
+所以新增 `python3 scripts/i18n_audit.py --selftest`(18 条正负例), 并与 `audit_secrets.py --selftest`
+同样接进 **preflight [8/8] 与 CI**: 自检不过说明扫描规则本身坏了, 后面的 PASS 不可信。
+
+### 五、结果
+
+```
+死键        513 → 127（与人工逐条核对的集合完全相等, 双向差集均为空）
+中文硬编码  0 行 / 0 文件
+缺键        0（改前被自己的改动报成 43 条假缺失, 已修）
+动态前缀    3/3 产键函数就位
+自检        18/18 PASS
+preflight   八步全绿
+```
+
+反证: 把 `colLabels.ts` 改名 → 自检立刻红(`产键文件不存在: components/colLabels.ts`),
+说明"放过动态前缀"没有变成"再也不管"。
+
+### 六、127 条的构成(全部为旧前缀遗留, 可删)
+
+| 前缀 | 条数 | 为何死的 |
+|---|---|---|
+| `dash.*` | 58 | 看板卡片重构后弃用(现役是另一套 82 条 `dash.*`) |
+| `common.*` | 12 | 各处改用完整短语 |
+| `settings.*` | 11 | 设置页内容搬进 `DevModePage`, 改用 `dev.*`(41 条现役) |
+| `cleansing.* / cl.* / clean.*` | 8 | 清洗页改前缀 |
+| `inv.* / hi.* / insights.* / quality.*` | 19 | 页面重构后的旧标签 |
+| 其余(`export/rules/oms/hammer/tc/undo/recycle/error/app/task`) | 19 | 散落旧键 |
+
+`app.name` / `app.desc` 值得单说: 前端从未消费, 标题写死在 `index.html`
+(`<title>Supplykit</title>`) —— **切到 EN 时浏览器标题和 PWA 名不会变**, 这是一处现存的
+i18n 死角。删键之前应先补消费点(改 `document.title`), 否则删的是"唯一记录过正确文案的地方"。
+
+## §15.155 清理 125 条死键(2026-11-05)
+
+§15.154 核实出 127 条真死键后, 本步删掉其中 125 条, `app.name` / `app.desc` 暂留。
+
+### 一、为什么 `dash.*` 可以整批删
+
+我一开始担心"58 条 `dash.*` 是某张卡片临时下线, 删了要重写", 逐条比对后否掉了这个假设:
+
+| 类型 | 条数 | 证据 |
+|---|---|---|
+| 改名了, 功能还在(同文案) | 40 | `vs_yesterday→vs_prev_day` / `proc_buy→line_purchase` / `gross→view_total` / `store→dim_store` … |
+| 功能在但换了说法 | 3 | `dash.risk`("濒临断货TOP10")→ `risk_title`("濒临断货"); `can_cover`("可撑")→ `cover_for_days`; `recalc_hint` → `recalc_running` |
+| 功能真的没了 | 15 | `dup_rows`/`dup_detail`/`dup_rows_hint`(3 条同文案, 曾是临时修复文案, 现只剩 `ChartRows.tsx:240` 一句注释) / `dash.date`·`sku`(列头改走 `dim_*`) / `dash.title`(标题归 AppHeader) / `funnel_tip`(旧 HTML 拼接版) |
+
+结论: 整组是**重构留下的残骸**, 不是"待回收的卡片"。当前看板只有 5 张卡:
+`GmvCard` / `AlertSummaryCard` / `HealthCard`(StatCards.tsx) + `RiskCard` + `OwnHealthCard`。
+
+### 二、删法: 只删键行, zh/en 必须同步
+
+```python
+LINE_RE = re.compile(r"^\s*'([^']+)':")     # 只匹配「键: 值」整行
+# 保留 app.name / app.desc; 其余 125 条从两份字典各删 125 行
+```
+
+- 注释、文件头、命名空间说明一并保留(它们是文档, 不是键);
+- 删完立刻断言「两份删掉的键集合相等」—— 这一步不能省: 只删 zh 会让 `--gate` 报键集不等,
+  而**只删 en 更隐蔽**(zh 兜底, 界面照常, 切 EN 才露馅);
+- `i18n_audit --gate` 复核: `zh 1423 / en 1423`, 键集相等, 缺键 0, 死键只剩 `app.*` 2 条。
+
+### 三、验证
+
+```
+删前  zh 1548 / en 1548, 死键 127
+删后  zh 1423 / en 1423, 死键 2（app.name / app.desc，按计划保留）
+diff  两个文件各 -125 行，无其它改动（250 deletions, 0 insertions）
+门禁  八步全绿: 回归 497 / SQL 冒烟 263 ✓ / tsc / ESLint / Prettier / vitest 30 / i18n PASS
+```
+
+### 四、剩下的 2 条为什么不删
+
+`app.name` / `app.desc` 是全站标题与描述, 但**前端从未读过它们** —— 标题写死在
+`index.html`(`<title>Supplykit</title>`), 且 `document.title` 从不更新。也就是说:
+
+> 现在切到 EN, 浏览器标签页标题、PWA 名称、分享卡片标题**全是中文**。
+
+这两条字典是唯一记录过"这里本该有本地化文案"的地方, 删掉就等于把这处死角一起抹平。
+正确顺序是: 先在 App 里接 `document.title = t('app.name')` + `<html lang>` 切换, 再删键。
+另开条目处理, 不在本次范围。
+
+## §15.156 文档级语言同步: title / meta / html lang(2026-11-05)
+
+### 一、这是门禁查不出的死角
+
+红线 B 的可执行门禁扫的是 `frontend/src` 里的中文字面量, 但有几处字符串**不在 React 树里、也不经过 `t()`**:
+
+| 位置 | 改前 | 切 EN 后 |
+|---|---|---|
+| `<title>` | `index.html` 写死 `<title>Supplykit</title>` | 不变(仍是中文语境下的产品名) |
+| `<html lang>` | 写死 `lang="zh-CN"` | 不变 → 屏幕阅读器仍按中文发音 |
+| `meta[name=description]` | **根本不存在** | — |
+| `app.name` / `app.desc` | 字典里有, **全仓零引用**(§15.155 核实) | 白躺着 |
+
+所以 §15.155 里"`app.*` 两条先留着"的后续就是这一步: 先接消费点, 再让它们变成活键。
+
+### 二、实现(`frontend/src/locale.ts`)
+
+```ts
+function applyDocumentLang(locale: Locale) {
+  if (typeof document === 'undefined') return          // SSR / node 脚本无 document
+  const name = t('app.name')
+  if (name && name !== 'app.name') document.title = name  // 缺词条时 t() 回落键名, 宁可不动
+  const desc = t('app.desc')                              // 没有就建 <meta name=description>
+  ...
+  document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
+}
+```
+
+两处调用, 缺一不可:
+
+1. `setLocale()` 里 —— 用户切语言时立即生效;
+2. `main.tsx` 启动时 `syncDocumentLang()` —— **首访的语言是从 localStorage / navigator 探测的,
+   走不到 `setLocale`**, 而 `index.html` 的 title 与 lang 是静态中文。只在 setLocale 里做,
+   等于"第一次打开英文系统的人看到的仍是中文标题"。
+
+`lang` 取值: 中文用 `zh-CN`(简体标准写法), 英文用 `en` 而非 `en-US` —— 与字典
+"界面用语而非地区变体"的口径一致。
+
+### 三、为什么要加"缺词条不动"这个判断
+
+`t()` 在缺键时**回落到键名本身**(`return ... || key`)。如果不判, 哪天有人把 `app.name` 删了,
+浏览器标签页会直接显示 `app.name` —— 这比保留原标题糟得多, 且同类事故在
+`RiskSheet` / `renderNoteSegs` 上都真实发生过(界面上冒出英文键名)。
+测试里专门锁了这条: `expect(document.title).not.toMatch(/^[a-z]+\.[a-z_]+$/)`。
+
+### 四、验证
+
+```
+新增 src/tests/documentLang.test.ts   5 条: zh→title/lang / en→lang / 首访 sync / meta / 禁裸键名
+vitest                                30 → 35 通过
+i18n 死键                              2 → 0（app.name / app.desc 都成了活键）
+preflight                             八步全绿
+```
+
+### 五、没有一起做的事(残余)
+
+- **语言切换入口本身不存在**: 全仓只有 `setLocale()` 定义, **没有任何 UI 调它**;
+  `getLocale()` 也无调用方。也就是说 en 字典目前只能靠 `localStorage.c_locale` 手工设置生效。
+  这是比标题更深的一层缺口 —— 红线 B 守的"切到 EN 不能半中半英", 前提是**能切**。
+  要不要做切换入口(设置页 · 界面段), 单独定。
+- **`note_segs` 的键是后端下发的**: `t('seg.' + k)` 只能翻"键 → 文案", 但片段里的数值语义
+  (如 `b_sug`: "B仓建议补 {n}") 由后端 `core/note_segs.py` 生成。后端没有任何 `lang` 参数,
+  所以这条链路的英文版实际依赖前端字典覆盖全部片段键 —— 目前 `--gate` 的
+  `seg.*` 命名空间检查只能保证"键存在", 不保证"后端不会下发新键"。未知键已由
+  `renderNoteSegs` 整段回落兜住(不显示半个键名), 不会露馅, 但会退回旧的中文 note 字符串。
