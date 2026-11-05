@@ -344,17 +344,19 @@ def _write_month(period, channel, warehouse_type, rows):
 
 
 def _apply_to_inventory(rows):
-    """结账结果回写 inventory: 期末成为下期期初(beginning_stock), 月入/月出同步
+    """结账结果回写 inventory: 期末成为下期期初(beginning_stock)
 
-    **不写 available_qty** —— 可用永远由重算得出(用户定案"可用按计算来"),
-    这里落期初, 重算用 `beginning_stock + Σ流水(>= begin_date)` 得到可用,
-    避免出现"结账写的可用"和"重算的可用"两套数。
+    **只写 beginning_stock**:
+      · 不写 available_qty —— 可用永远由重算得出(用户定案"可用按计算来"), 这里落期初,
+        重算用 `beginning_stock + Σ流水(>= begin_date)` 得到可用, 避免两套数。
+      · 不写 month_inbound/month_outbound —— 它们是"**当月**滚动值", 而结账写的是
+        **结账月**的量。写了就让下个月页面显示上个月的入/出(2026-11-05 线上实证:
+        11 月页出现 10 月的 357,637/233,985), 周转随之全错。当月量由流水现算。
     """
-    args = [(int(x["end"]), int(x["in"]), int(x["out"]), x["id"]) for x in rows]
+    args = [(int(x["end"]), x["id"]) for x in rows]
     if not args:
         return 0
-    executemany("UPDATE inventory SET beginning_stock=%s, month_inbound=%s, "
-                "month_outbound=%s WHERE id=%s", args)
+    executemany("UPDATE inventory SET beginning_stock=%s WHERE id=%s", args)
     return len(args)
 
 

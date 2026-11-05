@@ -2738,6 +2738,17 @@ try:
           "core/ledger.py")
     check("账期: 建账基线独立成列 ledger_base(不被结账回写污染)",
           "ledger_base" in _src and "ledger_base IS NULL" in _src, "core/ledger.py")
+    # 结账只回写期初: 写 month_inbound 等于把"结账月"的量塞进"当月"字段,
+    #   下个月页面就会显示上个月的入/出(线上实证: 11 月页出现 10 月的 357,637/233,985)
+    _ap = _src.split("def _apply_to_inventory")[1].split("def freeze_batches")[0]
+    check("账期: 回写库存只写 beginning_stock, 不写 month_inbound/month_outbound",
+          "month_inbound" not in _ap.split('"""')[-1] and "beginning_stock=%s WHERE id=%s" in _ap,
+          "core/ledger.py")
+    _ins = open("routes/insights.py").read()
+    check("账期: 自有仓当月量缺流水按 0, 不回落静态列(防跨月串号)",
+          "month_inbound = mi if mi is not None else 0" in _ins, "routes/insights.py")
+    check("账期: 进销存汇总的自有仓月入出按流水现算(不 SUM 静态列)",
+          'inbound_records "' in _ins and '_ri.get("q")' in _ins, "routes/insights.py")
     check("账期: 体检缺口天数计算(日期解析失败按 9999 不齐)",
           _days_between("2026-10-28", "2026-10-31") == 3 and _days_between("", "2026-10-31") == 9999)
     # 右开区间: 流水列是 DATETIME, 写 `<= '2026-10-31'` 只会覆盖到当天 00:00:00,

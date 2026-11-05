@@ -291,8 +291,15 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         _k = (sku, _bc1, _wh1)   # 2026-11-01 月进出按 四维(sku+69码+仓) 取, 不再按 sku+仓 取合计
         mi = month_in.get(_k)
         mo = month_out.get(_k)
-        month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
-        month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
+        # 自有仓: 当月量只认流水, **缺 = 0**(该 SKU 本月没入库/没出库), 不回落静态列 ——
+        #   静态列在结账时会被写进"结账月"的量, 回落就等于把上月流水当本月用(跨月串号)。
+        # 平台仓/ B 仓: 仍然以后台导出为准, 静态列就是权威口径, 维持回落。
+        if str(r.get("warehouse_type") or "") == "own":
+            month_inbound = mi if mi is not None else 0
+            month_outbound = mo if mo is not None else 0
+        else:
+            month_inbound = mi if mi is not None else int(r.get("month_inbound") or 0)
+            month_outbound = mo if mo is not None else int(r.get("month_outbound") or 0)
         _bm = batch_map.get((sku, _bc1)) or batch_map.get(sku) or {}
         _wt3 = str(r.get("warehouse_type") or "")
         _per3 = _pur_period if _wt3 == "own" else (_bbcc_period if mode == "bbcc" else _trad_period)
@@ -351,15 +358,30 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             try:
                 from routes.analysis_cache import cache_get as _cg
                 def _build_sum():
+                    # 期初/可用/在途始终来自 inventory; 当月入出: 自有仓按**流水**现算
+                    #   (inventory.month_* 不可信 —— 结账会写入结账月的量, 下月就串号了),
+                    #   平台仓/ B 仓仍取静态列(后台导出即权威)。
                     _r0 = one("SELECT COUNT(*) AS c, SUM(beginning_stock) AS beg, "
-                              "SUM(month_inbound) AS mi, SUM(month_outbound) AS mo, "
+                              "COALESCE(SUM(month_inbound),0) AS mi, "
+                              "COALESCE(SUM(month_outbound),0) AS mo, "
                               "SUM(available_qty) AS av, SUM(in_transit_qty) AS tr "
                               "FROM inventory WHERE channel=%s AND warehouse_type=%s",
                               [channel, wh_type]) or {}
+                    _mi, _mo = int(_r0.get("mi") or 0), int(_r0.get("mo") or 0)
+                    if wh_type == "own":
+                        _ri = one("SELECT COALESCE(SUM(quantity),0) AS q FROM inbound_records "
+                                  "WHERE channel=%s AND inbound_date>=%s "
+                                  "AND COALESCE(warehouse_type,'')=%s",
+                                  [channel, month_start, wh_type]) or {}
+                        _ro = one("SELECT COALESCE(SUM(quantity),0) AS q FROM outbound_records "
+                                  "WHERE channel=%s AND outbound_date>=%s "
+                                  "AND COALESCE(warehouse_type,'')=%s",
+                                  [channel, month_start, wh_type]) or {}
+                        _mi, _mo = int(_ri.get("q") or 0), int(_ro.get("q") or 0)
                     # 2026-11-04 合计与行值同口径: 先把该维度所有 SKU 的期初/月入/月出分别求和,
                     #   再除一次(期间天数 × Σ(期初+月入) / Σ月出); 不是各行天数的算术平均
                     return {"cnt": int(_r0.get("c") or 0), "beg": int(_r0.get("beg") or 0),
-                            "mi": int(_r0.get("mi") or 0), "mo": int(_r0.get("mo") or 0),
+                            "mi": _mi, "mo": _mo,
                             "av": int(_r0.get("av") or 0), "tr": int(_r0.get("tr") or 0),
                             "pd": _period_days}
                 # 缓存键带 pd: 期间天数逐日变(当月未满用已过天数), 不带就会拿昨天的天数算今天
