@@ -110,6 +110,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
     _last_name0 = str((_last0[-1] or {}).get("name") or "")[:80] if _last0 else ""
     def _prog(extra=None):
         d = {"status": "running", "step": _step0, "total_step": _total0,
+             "offset": int(_pj0.get("offset") or 0),
              "stalled_s": max(0, int(row.get("stalled_s") or 0)),
              "now_ts": int(row.get("now_ts") or 0),
              "last_step": _last_name0,
@@ -169,23 +170,38 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
         import time as _tt
         params = _pj0
         step = _step0
-        from routes.seed_fill import prepare_skus, seed_step, SEED_DONE, SEED_STEP_BUDGET_S
+        from routes.seed_fill import (prepare_skus, seed_step, SEED_DONE,
+                                      SEED_WINDOW_BUDGET_S)
         _t0 = _tt.time()
         skus_data = prepare_skus()
         today = now_cn()
-        # 2026-11-05 带 run_id: 每步写入前登记 id 水位 → 可精确回滚本轮新增行 + 行数对账
-        nxt, part = seed_step(step, today, skus_data, run_id=task_id)
+        # 2026-11-05 窗口接力: 游标 / 上窗天数 / 上窗耗时从 params 透传。
+        #   seed_step 未跑完会返回同一个 step + part['_offset'], 前端看守看到 offset 前进
+        #   就立刻发下一个请求接着跑; 段号(业务阶段)恒定, 数据范围只由游标决定。
+        _off = int(_pj0.get('offset') or 0)
+        _span = int(_pj0.get('span') or 0)
+        _last_el = float(_pj0.get('last_elapsed') or 0)
+        nxt, part = seed_step(step, today, skus_data, run_id=task_id,
+                              offset=_off, span_hint=_span, last_elapsed=_last_el)
+        _nxt_off = int((part or {}).get('_offset') or 0)
+        _nxt_span = int((part or {}).get('_span') or 0)
         _sq = round(_tt.time() - _t0, 1)
-        # 超预算留痕: 分片协议的目标是每段 ≤90s, 一旦某段贴线就要看得见(而不是等网关先杀)
-        if _sq > SEED_STEP_BUDGET_S:
-            try_err('tasks', 'seed 段超预算 step=%d %.1fs > %ds' % (step, _sq, SEED_STEP_BUDGET_S), '')
-        # 2026-10-15 每步耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
-        _steps = (params.get("steps") or []) + [{"name": str(part) or ("步骤%d" % step), "elapsed": _sq}]
-        # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 原写死 10, 而段号重排后
-        #   完成值一路变到 27; 写死会让任务越过 10 后永不落 done, 空转烧 RU。
-        # total_step 一并下发: 前端进度条此前也写死 10 段, step>10 时顶在 99% 不动
-        _cur = {"name": ("步骤%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
-        new_params = _json.dumps({"step": nxt, "steps": _steps, "total_step": SEED_DONE,
+        # 超预算留痕: 目标每窗口 ≤75s(网关 120s 留 45s 余量), 贴线就要看得见
+        if _sq > SEED_WINDOW_BUDGET_S:
+            try_err('tasks', 'seed 窗口超预算 step=%d off=%d %.1fs > %ds'
+                    % (step, _off, _sq, SEED_WINDOW_BUDGET_S), '')
+        # 2026-10-15 每**窗口**耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
+        #   内部游标字段(_offset/_span)不进展示名
+        _part_show = {k: v for k, v in (part or {}).items() if not str(k).startswith('_')}
+        _steps = (params.get("steps") or []) + [
+            {"name": str(_part_show) or ("窗口%d" % step), "elapsed": _sq}]
+        # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 段号重排后完成值多次变化,
+        #   写死会让任务越过那个数后永不落 done, 空转烧 RU。
+        # total_step 一并下发: 前端进度条此前也写死段数, step 超过就顶在 99% 不动
+        _cur = {"name": ("阶段%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
+        new_params = _json.dumps({"step": nxt, "offset": _nxt_off, "span": _nxt_span,
+                                  "last_elapsed": _sq, "steps": _steps,
+                                  "total_step": SEED_DONE,
                                   "cur_step": None if nxt >= SEED_DONE else _cur,
                                   "step_started_ts": int(_tt.time())})
         if nxt >= SEED_DONE:
@@ -208,7 +224,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend"):
                 (new_params, task_id))
         from routes.analysis_cache import invalidate
         invalidate("all")  # 每步数据变化 → 缓存失效
-        return {"data": {"status": "running", "step": nxt, "part": part,
+        return {"data": {"status": "running", "step": nxt, "offset": _nxt_off, "part": part,
                          "total_step": SEED_DONE, "elapsed": _sq, "stalled_s": 0,
                          "now_ts": int(_tt.time()), "lease_held": False}}
     except Exception as e:

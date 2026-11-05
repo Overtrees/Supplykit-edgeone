@@ -2997,20 +2997,28 @@ try:
                        if _dtx.weekday() >= 5 else _sf.ORDER_BASE_PER_DAY))
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
-    # 段号自成体系: 订单 12 + 库存 4 + 流水 4 + 落账 4 + 月 1 + 尾 4 + 完成 1 = 30
-    # 2026-11-05 线上实测: 15 天/段 71~148s → 改 10 天/段 → 第 2 段仍 102.9s(整段压促销窗)
-    #   → 改 12 段 × 7 天, 末段吃 13 天余量(77..90 无促销窗, 日量最低)
-    check("seed 段号: 订单 12 段(90 天 = 11×7 + 末段 13), 首尾覆盖完整无空洞",
-          _sf._SEED_ORDER_SEGS == 12
-          and [(_sf._order_seg_days(i)) for i in range(1, 13)][0] == (0, 7)
-          and [_sf._order_seg_days(i) for i in range(1, 13)][-1] == (77, 90)
-          and all(_sf._order_seg_days(i)[1] == _sf._order_seg_days(i + 1)[0]
-                  for i in range(1, 12)),
-          _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 30(订单12+库存4+流水4+落账4+月1+尾4+1)",
+    # 2026-11-05 窗口接力: step 是业务阶段(恒定), 数据范围只由 offset 游标决定。
+    #   旧口径把订单切成 9/12 个段号, 中途部署换段数就让同一个 step 换含义 → 线上
+    #   重复写入 69,072 行。现在订单固定 1 个阶段, 窗口按实测耗时自适应, 段号永不再变。
+    check("seed 窗口接力: 订单只有 1 个业务阶段, 段号不再由切分粒度决定",
+          _sf._SEED_ORDER_SEGS == 1 and _sf.SEED_WINDOW_BUDGET_S == 75
+          and _sf.SEED_WINDOW_BUDGET_S < 120,
+          (_sf._SEED_ORDER_SEGS, _sf.SEED_WINDOW_BUDGET_S))
+    check("seed 窗口接力: 窗口天数按上一窗口实测耗时自适应(促销缩/常态扩)",
+          _sf._adaptive_span(0, 0) == _sf.SEED_ORDER_SPAN_INIT
+          and _sf._adaptive_span(8, 95) < 8
+          and _sf._adaptive_span(6, 30) > 6
+          and _sf._adaptive_span(20, 1) == _sf.SEED_ORDER_SPAN_MAX,
+          (_sf._adaptive_span(8, 95), _sf._adaptive_span(6, 30)))
+    check("seed 窗口接力: 库存段内 SKU 分片游标(治自有仓逐行 SQL 的 150s 超时)",
+          _sf.SEED_INV_SKU_PER_CHUNK > 0
+          and "sku_from" in _sf._seed_inventory.__code__.co_varnames
+          and "sku_to" in _sf._seed_inventory.__code__.co_varnames,
+          _sf.SEED_INV_SKU_PER_CHUNK)
+    check("seed 段号: 各阶段严格递增(订单1+库存4+流水4+落账4+月1+尾4+完成1 = 19)",
           _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW
           < _sf._SETTLE_SEGS[0][0] < _sf._SEED_MONTH < _sf._SEED_TAIL
-          < _sf.SEED_DONE == 30,
+          < _sf.SEED_DONE == 19,
           (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SETTLE_SEGS[0][0],
            _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
     # 事故根因: step14 一个请求发 4 份导入文件(2 渠道 × 2 类型) → >120s 被网关切断。
@@ -3065,6 +3073,18 @@ try:
     _ts_src = open("routes/task_seed.py", encoding="utf-8").read()
     check("seed: 任务完成判据取 SEED_DONE, 不写死 10",
           "nxt >= SEED_DONE" in _ts_src and "nxt >= 10" not in _ts_src, "routes/task_seed.py")
+    check("seed 窗口接力: task_seed 从 params 透传游标 / 写回 offset / 响应带 offset",
+          "_off = int(_pj0.get('offset') or 0)" in _ts_src
+          and "offset=_off" in _ts_src
+          and '"offset": _nxt_off' in _ts_src
+          and '"offset": int(_pj0.get("offset") or 0)' in _ts_src,
+          "routes/task_seed.py")
+    check("seed 窗口接力: 未跑完返回同一 step + 新游标(不再靠预切段号续跑)",
+          "return step, {'orders_window_" in _sf_src
+          and "'_offset': day_to" in _sf_src
+          and "'_offset': _to" in _sf_src
+          and "_order_seg_days" not in _sf_src,
+          "routes/seed_fill.py")
     _sc11 = open("schema_create.py", encoding="utf-8").read()
     check("seed 水位: seed_watermark 表已声明",
           "seed_watermark" in _sc11 and "uq_wm_run_step" in _sc11, "schema_create.py")
@@ -3234,9 +3254,10 @@ try:
           "_del_sql += _rng" not in _sf11 and "_del_args = list(_chs)" in _sf11
           and "_rng" not in _sf11,
           "routes/seed_fill.py")
-    check("单段预算: 声明 90s 且超预算留痕(贴线要看得见, 不等网关先杀)",
-          _sf.SEED_STEP_BUDGET_S == 90
-          and "seed 段超预算 step=%d %.1fs > %ds" in _ts_src,
+    check("窗口预算: 75s 单请求预算(网关 120s 留 45s 余量) + 超预算留痕",
+          _sf.SEED_WINDOW_BUDGET_S == 75
+          and _sf.SEED_WINDOW_BUDGET_S < 120
+          and "seed 窗口超预算 step=%d off=%d %.1fs > %ds" in _ts_src,
           "routes/seed_fill.py / task_seed.py")
     # 2026-11-05 线上事故(step22 单段 122s 被网关切断): 月汇总 UPDATE 用 COALESCE(barcode,'')
     #   做等值条件 → 唯一键 uq_inventory_biz 只能用 sku 前缀, Point_Get 退化
@@ -3374,8 +3395,9 @@ try:
           len(_si._SEED_INV_SEGS) == 4 if hasattr(_si, "_SEED_INV_SEGS") else True,
           "routes/seed_fill.py")
     _sf13 = open("routes/seed_fill.py", encoding="utf-8").read()
-    check("库存导入: _seed_inventory 支持 channel/wh_group(拆分入口在生成器上, 不是外面切列表)",
-          "def _seed_inventory(skus_data, channel='', wh_group='')" in _sf13, "routes/seed_fill.py")
+    check("库存导入: _seed_inventory 支持 channel/wh_group/sku 分片(拆分入口在生成器上)",
+          "def _seed_inventory(skus_data, channel='', wh_group='', sku_from=0, sku_to=None)" in _sf13
+          and "skus[int(sku_from):int(sku_to)]" in _sf13, "routes/seed_fill.py")
     check("库存导入: 拆段时只发该段要的仓型(否则等于把同一请求发四遍)",
           "if wh_group == 'platform':" in _sf13 and "elif wh_group == 'own':" in _sf13,
           "routes/seed_fill.py")

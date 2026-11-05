@@ -319,8 +319,13 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     return _seg_rows
 
 
-def _seed_inventory(skus_data, channel='', wh_group=''):
+def _seed_inventory(skus_data, channel='', wh_group='', sku_from=0, sku_to=None):
     """库存快照生成 + **按导入文件落库**
+
+    sku_from / sku_to (2026-11-05 窗口接力): 只处理 skus[sku_from:sku_to], 由 seed_step
+      用 offset 游标分窗口。不传 = 全量(一键 seed / 运维口老行为, 语义不变)。
+      安全性同「按渠道×仓型拆段」: 库存是快照, 同键全列覆盖, 分几片写结果都一样。
+      账期口径完全不动 —— 每片仍走同一条导入链路, detect_scene / Σ起点 / 期初换算不变。
 
     channel / wh_group (2026-11-05 线上实测逼出来的): 两渠道一次导入实测 **362s** —— 这是
       整链最重的一步, 90s(平台建议) 与 120s(网关硬上限) 两条线一起踩穿。拆成
@@ -335,6 +340,8 @@ def _seed_inventory(skus_data, channel='', wh_group=''):
     _chs = (channel,) if channel else tuple(skus_data.keys())
     for ch in _chs:
         skus = skus_data.get(ch) or []
+        if sku_to is not None:
+            skus = skus[int(sku_from):int(sku_to)]
         for sk in skus:
             low = random.random() < 0.18
             seen_own = False  # 每个 SKU 内重置: WH 中 own 仓只保留一个(集货仓/三方仓)
@@ -1138,31 +1145,38 @@ def _assert_barcode_aligned():
     return out
 
 
-# ── seed 分区计划(2026-11-05 与 seed_step 同步调整) ─────────────────────
-# 订单从 4 段 × 15 天扩到 6 段 × 15 天(90 天装满), 其余段号顺延。
-# 调用方(task_seed)只把它当"下一个 step 号"用, 不依赖具体含义, 所以新增段不需改协议。
-# 订单 6 → 9 段(2026-11-05 线上实测): 单段 15 天双渠道实测 71~148s, 第 4 段 148s 已越过平台
-#   建议的 90s 且贴着 120s 网关。拆到 10 天/段后单段订单量降 1/3, 单请求回到 ~50s 量级。
-# 订单 9 → 12 段(2026-11-05 二轮线上实测: `orders_part_2` 102.9s > 90s 预算)。
-#   根因不是"段太粗"而是**段不均匀**: 促销窗(618: day 5~19; 月末 day 45~54)横跨段边界,
-#   10 天/段时第 2 段(day 10~20)整段压在 618 里 —— 单渠道日量约常态的 2 倍,
-#   双渠道就是 ~6.2 万单/段, 而常态段只有 ~3 万单。均匀切分治不了这个偏斜。
-#   12 段时前 11 段各 7 天(77 天)、末段 13 天(day 77~90, 不落在任何促销窗, 日量即常态):
-#   吃促销的最重段从 ~6.2 万单降到 ~4.3 万单, 按 102.9s × 0.7 ≈ 72s 回到 90s 预算内。
-_SEED_ORDER_SEGS = 12                                  # step 1..12 = 订单 12 段(7 天/段 + 末段 13 天)
+# ── 窗口接力调度(2026-11-05 用户定案: 一个请求 = 一个窗口, 跑不完就接着跑) ──
+# 一个请求从 (step, offset) 开始干活, 到 SEED_WINDOW_BUDGET_S 就停下并把游标写回
+# params.offset, 返回**同一个 step**; 前端看守每 3s 发下一个请求从新游标接着跑,
+# 直到这一阶段全部完成才 step+1。前端进度指纹本来就带 offset, 无需改前端。
+#
+# 为什么不再"把订单切成 9 段/12 段": 段号一旦由切分粒度决定, 中途部署换段数就会让
+# 同一个 step 号换含义 —— 线上已发生过(旧 9 段跑完, 新 12 段又重写 day 63~90,
+# orders 多出 69,072 行)。现在 **step 是业务阶段, 恒定不变**; 数据范围只由持久化游标
+# offset 决定, 窗口大小按上一次实测耗时自适应, 以后调窗口/调分片都不再动段号。
+#
+# 写入不是瓶颈: 线上实测单条 INSERT 40 万行 2.948s(SQL 4.9MB / max_allowed_packet 64MB),
+# 瓶颈是 Python 生成(随机池)与自有仓逐行 SQL, 所以窗口按**时间预算**切, 不按行数切。
+SEED_WINDOW_BUDGET_S = 75          # 单请求预算(网关硬上限 120s, 留 45s 余量)
+SEED_ORDER_SPAN_INIT = 6           # 订单首窗天数(保守起步, 之后按实测自适应)
+SEED_ORDER_SPAN_MIN = 2
+SEED_ORDER_SPAN_MAX = 20
+SEED_INV_SKU_PER_CHUNK = 2500      # 库存分片: 单窗口 SKU 数(治自有仓逐行 SQL 的 150s 超时)
+
+_SEED_ORDER_SEGS = 1               # 订单 = 1 个业务阶段(内部按 offset 分窗口, 不再切段号)
 
 
-def _order_seg_days(step):
-    """订单第 step 段(1 基)覆盖的 [day_from, day_to) 偏移 —— 唯一定义处
+def _adaptive_span(span_hint, last_elapsed):
+    """按上一窗口实测耗时调下一窗口天数 —— 促销窗日量翻倍, 固定天数必然超预算。
 
-    90 天切成 12 段: 前 11 段各 7 天(0..77), 末段吃掉剩下的 13 天(77..90)。
-    末段故意多几天: 促销窗只到 day 54, 77 之后全是常态日, 日量最低, 13 天也不会超预算;
-    反过来如果让**前面**某段多吃几天, 就会把促销段重新撑厚, 又回到 102.9s 那个坑。
+    目标取预算的 85%: 留余量给 prepare_skus / 随机池 / 连接建立这些不随天数线性变化的
+    固定开销。同一窗口重跑时 offset 不变 → 随机种子不变 → 生成行完全一致(唯一键幂等)。
     """
-    span = ORDER_DAYS // _SEED_ORDER_SEGS              # 7 天/段
-    day_from = (step - 1) * span
-    day_to = ORDER_DAYS if step == _SEED_ORDER_SEGS else day_from + span
-    return day_from, day_to
+    if not span_hint or last_elapsed <= 0:
+        return SEED_ORDER_SPAN_INIT
+    _target = SEED_WINDOW_BUDGET_S * 0.85
+    _est = span_hint * _target / max(float(last_elapsed), 1.0)
+    return max(SEED_ORDER_SPAN_MIN, min(SEED_ORDER_SPAN_MAX, int(round(_est))))
 # 库存按渠道 × 仓型拆 4 段(2026-11-05 线上实测): 两渠道一次导入 **362s**, 是整链最重的一步,
 #   把 90s/120s 两条线一起踩穿。拆开后单段约 90s(自有仓)以内。
 _SEED_INV_JD_PF = _SEED_ORDER_SEGS + 1                 # 13 库存 jd 平台/B 仓
@@ -1368,50 +1382,67 @@ def wm_report(run_id):
     return {'run_id': run_id, 'steps': len(rows), 'short': len(_short), 'rows': rows}
 
 
-def seed_step(step, today, skus_data, run_id=''):
-    """执行单个步骤(Makers 异步分步: 每步 ≤90s, 任务表驱动续跑); 返回 (next_step, part_summary)
+def seed_step(step, today, skus_data, run_id='', offset=0, span_hint=0, last_elapsed=0):
+    """执行**一个窗口**; 返回 (next_step, part_summary), 保持 2 元组兼容运维口。
 
-    run_id: 本轮 seed 的标识(任务 id)。给了就登记水位(可回滚 + 行数对账); 不给则纯生成。
-      旧调用方(不带 run_id)行为完全不变 —— 水位是附加能力, 不是前置条件。
+    窗口接力(2026-11-05 用户定案): 一个请求只跑到 SEED_WINDOW_BUDGET_S 就停下, 把游标
+    写进 part['_offset'] 并**返回同一个 step**; 前端看守立刻发下一个请求从新游标接着跑,
+    直到这一阶段全部完成才 step+1。step 是业务阶段(恒定), 数据范围只由 offset 决定。
+
+    run_id: 本轮 seed 标识(任务 id)。给了就登记水位; 不给则纯生成(老调用方行为不变)。
+    offset / span_hint / last_elapsed: 由 task_seed 从 params 透传(游标 / 上窗天数 / 上窗耗时)。
     """
-    random.seed(42)  # 确定性: 各步/重复调用生成一致(防重跑数据漂移)
+    off = int(offset or 0)
+    # 种子带游标偏移: 分片后各片随机序列不再从头重放(否则每片前 N 个 SKU 的 low 分布
+    # 完全一样)。同一窗口重跑 offset 不变 → 种子不变 → 生成行完全一致 → 唯一键幂等。
+    random.seed(42 + off)
     if step == 0:
         n_prod, n_sup = _seed_products_suppliers(skus_data)
         return 1, {'products': len(n_prod), 'suppliers': len(n_sup)}
-    if 1 <= step <= _SEED_ORDER_SEGS:
-        day_from, day_to = _order_seg_days(step)
+    # 订单: 1 个业务阶段, 内部按「天游标 + 自适应窗口」接力, 不再预切 9/12 段。
+    #   促销窗日量翻倍, 固定天数必然超预算; 按上窗实测耗时调天数, 常态天多跑、促销天少跑。
+    if step == 1:
+        span = _adaptive_span(span_hint, last_elapsed)
+        day_to = min(off + span, ORDER_DAYS)
+        _wch = 'jd,other#w%d' % off
         if run_id:
-            wm_begin(run_id, step, ('orders',), channel='jd,other')
-        n = _seed_orders_range(today, skus_data, day_from, day_to)
+            wm_begin(run_id, step, ('orders',), channel=_wch)
+        n = _seed_orders_range(today, skus_data, off, day_to)
         if run_id:
-            wm_end(run_id, step, {'orders': n}, channel='jd,other')
-        return step + 1, {'orders_part_%d' % step: n}
-    # 库存四段: 渠道 × 仓型(顺序与 _SETTLE_SEGS 一致: 平台仓在前, 自有仓在后 ——
-    #   自有仓那次导入会触发可用重算 + 批次重建, 放在渠道末尾能少一次跨段等待)
+            wm_end(run_id, step, {'orders': n}, channel=_wch)
+        if day_to < ORDER_DAYS:
+            return step, {'orders_window_%d_%d' % (off, day_to): n,
+                          'day_cursor': day_to, '_offset': day_to, '_span': span}
+        return step + 1, {'orders': n}
+    # 库存四段: 渠道 × 仓型。段内再按 SKU 分片(offset = 已写到的 SKU 下标),
+    #   自有仓逐行 SQL 是历史 150s 超时的根因, 分片后每窗口只处理 2500 个 SKU。
     for _seg_no, _seg_ch, _seg_wg in _SEED_INV_SEGS:
         if step != _seg_no:
             continue
+        _n_sku = len(skus_data.get(_seg_ch) or [])
+        _to = min(off + SEED_INV_SKU_PER_CHUNK, _n_sku)
+        _wch = '%s#sku%d' % (_seg_ch, off)
         if run_id:
-            wm_begin(run_id, step, ('inventory',), channel=_seg_ch)
-        n = _seed_inventory(skus_data, channel=_seg_ch, wh_group=_seg_wg)
+            wm_begin(run_id, step, ('inventory',), channel=_wch)
+        n = _seed_inventory(skus_data, channel=_seg_ch, wh_group=_seg_wg,
+                            sku_from=off, sku_to=_to)
         if run_id:
-            wm_end(run_id, step, {'inventory': n}, channel=_seg_ch)
+            wm_end(run_id, step, {'inventory': n}, channel=_wch)
+        if _to < _n_sku:
+            return step, {'inventory_%s_%s_%d_%d' % (_seg_ch, _seg_wg, off, _to): n,
+                          'sku_cursor': _to, '_offset': _to}
         return _seg_no + 1, {'inventory_%s_%s' % (_seg_ch, _seg_wg): n}
     # 流水 4 段: 每段只发 1 份导入文件, 只删/只写自己的 (渠道, 表) 组合。
-    #   不登记水位: 水位语义是「插入型目标按 id 递增」, 而这里按 (渠道 × 表) DELETE 已经
-    #   幂等, 多段写同一张表时水位回滚会误删别的段的行(见 wm_rollback 注释)。
     for _no, _ch, _ft in _FLOW_SEGS:
         if step != _no:
             continue
-        # 一个请求 = 一份导入文件 = 一个步骤窗口(渠道 × 出/入类型)
         n = _seed_records(channel=_ch, flow_type=_ft)
         return _no + 1, {'flow_%s_%s' % (_ch, _ft): n}
-    # 落账 4 段: 渠道 × 仓型, 线上已实测各 ≤40s, 段内 DELETE 与重建范围严格一致。
+    # 落账 4 段: 渠道 × 仓型, 线上已实测各 ≤40s。
     for _no, _ch, _wg in _SETTLE_SEGS:
         if step != _no:
             continue
         _st = seed_settle(skus_data, channel=_ch, wh_group=_wg)
-        # 最后一段做完 → 才做跨段自检: 此时两渠道 × 两仓型才全部落完
         if _no == _SETTLE_SEGS[-1][0]:
             try:
                 _st = dict(_st or {})
@@ -1425,7 +1456,7 @@ def seed_step(step, today, skus_data, run_id=''):
         _ms = _sync_inv_month()
         _seed_config()
         return _SEED_MONTH + 1, {'config': 'ok', 'inv_month': _ms}
-    # 尾段 4 段: 一个请求只做一件事, 不再把 alerts + snapshot + 两渠道物化塞进同一段
+    # 尾段 4 段: 一个请求只做一件事。
     for _no, _kind in _TAIL_SEGS:
         if step != _no:
             continue
