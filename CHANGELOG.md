@@ -1,6 +1,7 @@
-## 2026-11-05 全天总览（29 次提交 / 六条主线）
+## 2026-11-05 全天总览（30 次提交 / 六条主线）
 
-> 按当天 git 记录归并。全天回归 **466 → 618 通过 / 0 失败**，preflight **7 → 8 步**，
+> 按当天 git 记录归并（30 次含本节文档提交; 下表六条主线覆盖 29 次代码/文档改动）。
+> 全天回归 **466 → 618 通过 / 0 失败**，preflight **7 → 8 步**，
 > `SCHEMA_VERSION` **6 → 12**，i18n 字典 **1548 → 1428 键**（zh/en 对齐）、死键 **513 → 0**。
 > 当天多次部署 Success 并上生产；末段切换到第二集群重建空库并做全链路验证。
 
@@ -20,7 +21,7 @@
 | 后端 `8fc907b` | `try_err` 是「静默吞异常」通道(固定 warning/quiet_error)，三处正常态误用：`continue-tasks` 每 60s 无条件写一条 `rows=0` 诊断(空库永不停止)；空库 `MAX(ordered_at)=''` 传进 `strptime` 必抛异常、每次 dashboard 一条告警；建表/迁移成功信息传空 exc 记成 warning 且带 `: str: ` 尾巴 | 新增 `log_info`(info/maint) 与异常通道**分离**；`continue-tasks` 空态零写入、有任务才记 info；`_track_data` / `_snapshot_step` 入口判空；成功信息改走 `log_info` / `_log_ok`；`sql_smoke.report` 兼容前置失败哨兵(连不上库时清楚报因、不崩 traceback)。`try_err` 本体一字未动 |
 | 前端 `d233345` | 401 未登录 / 403 访客只读是**预期鉴权结果**，却和网络错误、5xx 一起上报成 `api_http_error/warning`；匿名访问部署预览域名必然 401 → 每次部署刷噪音 | 新增 `isExpectedAuth(status)` 单一判定，axios / `apiJson` / `uploadRawBytes` 三处 HTTP 状态上报点统一排除；`throw` 保留(业务层仍感知失败)，5xx / 网络错误 / 400·422 照常上报。401 的认证态仍由 `auth:may-expired → /auth/check` 专门链路处理 |
 
-**验证（线上，部署 `92a9cc3` Success 后）**：清空日志基线 → 匿名 401 访问 + 12 个模块接口全 200 +
+**验证（线上，部署 `92a9cc3` = 本地 `d233345` 推送后远端生成的 commit，Success 后）**：清空日志基线 → 匿名 401 访问 + 12 个模块接口全 200 +
 跨 75s(覆盖 `continue-tasks` 60s 周期)持续请求 → **5 类非真异常全部归零**
 (`continue-tasks rows=0` / 快照续段降级 / 无效 perf_debug / 建表成功误记 / 前端 401·403 误报)。
 库内仅剩 1 条 `slow_request` warning(`GET /dashboard/summary 3.0s`) —— 这是 `>3s` 才触发的
