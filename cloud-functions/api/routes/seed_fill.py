@@ -319,9 +319,22 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     return _seg_rows
 
 
-def _seed_inventory(skus_data):
+def _seed_inventory(skus_data, channel='', wh_group=''):
+    """库存快照生成 + **按导入文件落库**
+
+    channel / wh_group (2026-11-05 线上实测逼出来的): 两渠道一次导入实测 **362s** —— 这是
+      整链最重的一步, 90s(平台建议) 与 120s(网关硬上限) 两条线一起踩穿。拆成
+      「渠道 × 仓型」4 段后, 单段最大的是自有仓(约 1 万行 + 触发重算)与平台仓(约 7~8 万行),
+      各自回到单请求能承受的量级。
+      不传 = 两渠道两仓型全做(一键 seed / 运维口的老行为, 语义不变)。
+
+    ⚠ 拆分的安全性来自**幂等**: 库存是快照, 同键全列覆盖(uq_inventory_biz), 分几段写、
+      写几遍, 结果都只取决于最后写入的那份值。所以这里不需要"先清再写"。
+    """
     inv = []
-    for ch, skus in skus_data.items():
+    _chs = (channel,) if channel else tuple(skus_data.keys())
+    for ch in _chs:
+        skus = skus_data.get(ch) or []
         for sk in skus:
             low = random.random() < 0.18
             seen_own = False  # 每个 SKU 内重置: WH 中 own 仓只保留一个(集货仓/三方仓)
@@ -390,9 +403,14 @@ def _seed_inventory(skus_data):
     #   走导入的直接收益: 69码归码规则、未归码拒写、期初实盘校准(core.ledger_adj)、
     #   自有仓可用重算与批次 FIFO 重建, 全部由链路自己完成 —— 不必在 seed 里各写一遍。
     from routes.seed_import import import_rows as _imp
-    for ch in ('jd', 'other'):
+    for ch in _chs:
         _own = [x for x in inv if x.get('channel') == ch and x.get('warehouse_type') == 'own']
         _pf = [x for x in inv if x.get('channel') == ch and x.get('warehouse_type') != 'own']
+        # 只做该段要的仓型: 否则"拆段"只是把同一个大请求发四遍
+        if wh_group == 'platform':
+            _own = []
+        elif wh_group == 'own':
+            _pf = []
         if _own:
             _r = _imp('inventory', ch, _own, label='自有仓库存')
             if _r.get('failed'):
@@ -1085,9 +1103,23 @@ def _assert_barcode_aligned():
 # ── seed 分区计划(2026-11-05 与 seed_step 同步调整) ─────────────────────
 # 订单从 4 段 × 15 天扩到 6 段 × 15 天(90 天装满), 其余段号顺延。
 # 调用方(task_seed)只把它当"下一个 step 号"用, 不依赖具体含义, 所以新增段不需改协议。
-_SEED_ORDER_SEGS = 6                                   # step 1..6 = 订单 6 段
-_SEED_INV = _SEED_ORDER_SEGS + 1                       # 7  库存
-_SEED_FLOW = _SEED_INV + 1                             # 8  流水
+# 订单 6 → 9 段(2026-11-05 线上实测): 单段 15 天双渠道实测 71~148s, 第 4 段 148s 已越过平台
+#   建议的 90s 且贴着 120s 网关。拆到 10 天/段后单段订单量降 1/3, 单请求回到 ~50s 量级。
+_SEED_ORDER_SEGS = 9                                   # step 1..9 = 订单 9 段(90 天 ÷ 10 天)
+# 库存按渠道 × 仓型拆 4 段(2026-11-05 线上实测): 两渠道一次导入 **362s**, 是整链最重的一步,
+#   把 90s/120s 两条线一起踩穿。拆开后单段约 90s(自有仓)以内。
+_SEED_INV_JD_PF = _SEED_ORDER_SEGS + 1                 # 10 库存 jd 平台/B 仓
+_SEED_INV_JD_OWN = _SEED_INV_JD_PF + 1                 # 11 库存 jd 自有仓
+_SEED_INV_OT_PF = _SEED_INV_JD_OWN + 1                 # 12 库存 other 平台/B 仓
+_SEED_INV_OT_OWN = _SEED_INV_OT_PF + 1                 # 13 库存 other 自有仓
+_SEED_INV = _SEED_INV_JD_PF                            # 兼容别名: 「库存起点」
+_SEED_INV_SEGS = (
+    (_SEED_INV_JD_PF,  'jd',    'platform'),
+    (_SEED_INV_JD_OWN, 'jd',    'own'),
+    (_SEED_INV_OT_PF,  'other', 'platform'),
+    (_SEED_INV_OT_OWN, 'other', 'own'),
+)
+_SEED_FLOW = _SEED_INV_OT_OWN + 1                      # 14 流水
 # 落账拆四段(2026-11-05, 两次拆分):
 #   ① 按渠道: 原一段做两渠道 = 21.6s×2(批次) + 重算 ≈ 50s
 #   ② 按仓型: 第一次只按渠道拆**线上仍 504(123s)** —— jd 有 68,322 平台仓行 + 9,637 B 仓行,
@@ -1256,7 +1288,7 @@ def seed_step(step, today, skus_data, run_id=''):
         n_prod, n_sup = _seed_products_suppliers(skus_data)
         return 1, {'products': len(n_prod), 'suppliers': len(n_sup)}
     if 1 <= step <= _SEED_ORDER_SEGS:
-        _span = ORDER_DAYS // _SEED_ORDER_SEGS          # 15 天/段
+        _span = ORDER_DAYS // _SEED_ORDER_SEGS          # 10 天/段(90 ÷ 9)
         day_from = (step - 1) * _span
         if run_id:
             wm_begin(run_id, step, ('orders',), channel='jd,other')
@@ -1264,13 +1296,17 @@ def seed_step(step, today, skus_data, run_id=''):
         if run_id:
             wm_end(run_id, step, {'orders': n}, channel='jd,other')
         return step + 1, {'orders_part_%d' % step: n}
-    if step == _SEED_INV:
+    # 库存四段: 渠道 × 仓型(顺序与 _SETTLE_SEGS 一致: 平台仓在前, 自有仓在后 ——
+    #   自有仓那次导入会触发可用重算 + 批次重建, 放在渠道末尾能少一次跨段等待)
+    for _seg_no, _seg_ch, _seg_wg in _SEED_INV_SEGS:
+        if step != _seg_no:
+            continue
         if run_id:
-            wm_begin(run_id, step, ('inventory',), channel='jd,other')
-        n = _seed_inventory(skus_data)
+            wm_begin(run_id, step, ('inventory',), channel=_seg_ch)
+        n = _seed_inventory(skus_data, channel=_seg_ch, wh_group=_seg_wg)
         if run_id:
-            wm_end(run_id, step, {'inventory': n}, channel='jd,other')
-        return _SEED_FLOW, {'inventory': n}
+            wm_end(run_id, step, {'inventory': n}, channel=_seg_ch)
+        return _seg_no + 1, {'inventory_%s_%s' % (_seg_ch, _seg_wg): n}
     if step == _SEED_FLOW:
         # 2026-10-29 顺序修正: 先流水(原 step6 生成批次 → 早于流水, 批次基于旧库存)
         if run_id:

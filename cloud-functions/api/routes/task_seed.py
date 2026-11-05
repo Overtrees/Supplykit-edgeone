@@ -317,13 +317,15 @@ async def seed_step_run(request: Request):
         d = await request.json()
     except Exception as _e:
         try_err('tasks', '静默降级', _e)
-    from routes.seed_fill import (_SEED_INV, _SEED_FLOW, _SEED_MONTH,
+    from routes.seed_fill import (_SEED_FLOW, _SEED_MONTH, _SEED_INV_SEGS,
                                   _SETTLE_SEGS)  # noqa: E402
     _LAST = _SEED_MONTH
     # 白名单 = 库存 / 流水 / 落账四段 / 月汇总。落账四段由 _SETTLE_SEGS 推导, 段数再变不用改这里。
     _SETTLE_NOS = tuple(x[0] for x in _SETTLE_SEGS)
     _SETTLE_FIRST = _SETTLE_NOS[0]
-    _ALLOWED = (_SEED_INV, _SEED_FLOW) + _SETTLE_NOS + (_SEED_MONTH,)
+    # 库存段也拆了(渠道 × 仓型四段), 白名单同样从常量推导 —— 写死单段会让 11~13 段全被拒
+    _INV_NOS = tuple(x[0] for x in _SEED_INV_SEGS)
+    _ALLOWED = _INV_NOS + (_SEED_FLOW,) + _SETTLE_NOS + (_SEED_MONTH,)
     try:
         # 默认 = 落账起点(第一段落账), 与旧行为一致: 不带参数就重算可用 + 重建全部批次
         from_step = int(d.get("from_step") or d.get("step") or _SETTLE_FIRST)
@@ -331,14 +333,14 @@ async def seed_step_run(request: Request):
         return fail("from_step 必须是整数", 400)
     if from_step not in _ALLOWED:
         return fail("from_step 只支持 %s, 且必须连续执行到 %d —— "
-                    "%d 生成库存行(含多码拆行) / %d 重建流水 / %s 落账四段(渠道×仓型) / %d 月汇总; "
+                    "%s 库存导入(渠道×仓型) / %d 重建流水 / %s 落账四段(渠道×仓型) / %d 月汇总; "
                     "更早的段会写商品与订单, 流水段单跑会让可用与流水脱节"
                     % ("/".join(str(x) for x in _ALLOWED), _LAST,
-                       _SEED_INV, _SEED_FLOW,
+                       "/".join(str(x) for x in _INV_NOS), _SEED_FLOW,
                        "/".join(str(x) for x in _SETTLE_NOS), _SEED_MONTH), 400)
     # 库存段会向 inventory **插入**演示库存行(含双码拆行) —— 只允许在 seed 库执行,
     #   否则等于往真实客户库里塞演示库存。orders.data_source='seed' 是"这是 seed 库"的可靠标记。
-    if from_step <= _SEED_INV:
+    if from_step <= _INV_NOS[-1]:
         _sd = one("SELECT COUNT(*) AS c FROM orders WHERE data_source='seed'") or {}
         if int(_sd.get("c") or 0) <= 0:
             return fail("库存段会写入演示库存行, 仅限 seed 库"
@@ -368,15 +370,24 @@ async def seed_step_run(request: Request):
         # ── 库存段: 生成库存行(新 SKU 才真正插入; 已存在行 INSERT IGNORE 跳过) ──
         #   这是"让 seed 生成器的新逻辑(多码拆行)真正落地"的唯一途径 —— 不跑它,
         #   inventory 里永远只有旧的单码行, 双码链路无从验证。
-        if from_step <= _SEED_INV:
+        if any(from_step <= x for x in _INV_NOS):
             import random as _rnd
             from routes.seed_fill import _seed_inventory, prepare_skus
-            _rnd.seed(42)
-            _t0 = _t.time()
-            _nin = _seed_inventory(prepare_skus())
-            _steps.append({"step": _SEED_INV, "name": "库存行生成",
-                           "elapsed_s": round(_t.time() - _t0, 1),
-                           "result": {"rows": _nin}})
+            # 每段独立 seed: 各段生成的是**不同渠道/仓型**的子集, 若共用全局随机流,
+            #   单跑第 11 段会和连跑 10→11 得到不同的库存量(重跑就漂移)。
+            _iseg = []
+            for _no, _ch, _wg in _SEED_INV_SEGS:
+                if from_step > _no:
+                    continue
+                _rnd.seed(42)
+                _t0 = _t.time()
+                _nin = _seed_inventory(prepare_skus(), channel=_ch, wh_group=_wg)
+                _iseg.append({"step": _no, "channel": _ch, "wh_group": _wg,
+                              "elapsed_s": round(_t.time() - _t0, 1),
+                              "result": {"rows": _nin}})
+            _steps.append({"step": _INV_NOS[0], "name": "库存导入(渠道×仓型)",
+                           "elapsed_s": round(sum(x["elapsed_s"] for x in _iseg), 1),
+                           "result": _iseg})
         # ── 流水段: 重建出入库流水(带 warehouse_type) ──────────────────────
         if from_step <= _SEED_FLOW:
             import random as _rnd

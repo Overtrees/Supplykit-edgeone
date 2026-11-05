@@ -2998,11 +2998,14 @@ try:
     check("seed 规模: 单渠道 90 天订单量在 20~23 万(用户口径 21 万上下)",
           200000 <= _tot <= 230000, _tot)
     # 段号自成体系: 订单 6 段 + 库存/流水/落账×4/月汇总/尾段 = 完成值 15
-    check("seed 段号: 订单 6 段(90 天 ÷ 15 天)", _sf._SEED_ORDER_SEGS == 6, _sf._SEED_ORDER_SEGS)
-    check("seed 段号: 各段严格递增且完成值 = 15(落账拆渠道×仓型四段)",
+    # 2026-11-05 线上实测: 15 天/段双渠道 71~148s(第 4 段 148s 贴穿 120s 网关) → 改 10 天/段
+    check("seed 段号: 订单 9 段(90 天 ÷ 10 天, 单段订单量降到 1/3)",
+          _sf._SEED_ORDER_SEGS == 9 and 90 % _sf._SEED_ORDER_SEGS == 0,
+          _sf._SEED_ORDER_SEGS)
+    check("seed 段号: 各段严格递增且完成值 = 21(订单9 + 库存4 + 流水1 + 落账4 + 月1 + 尾1 + 1)",
           _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW < _sf._SEED_SETTLE_JD_PF
           < _sf._SEED_SETTLE_JD_OWN < _sf._SEED_SETTLE_OT_PF < _sf._SEED_SETTLE_OT_OWN
-          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 15,
+          < _sf._SEED_MONTH < _sf._SEED_TAIL < _sf.SEED_DONE == 21,
           (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SEED_SETTLE_JD_PF, _sf._SEED_SETTLE_JD_OWN,
            _sf._SEED_SETTLE_OT_PF, _sf._SEED_SETTLE_OT_OWN, _sf._SEED_MONTH,
            _sf._SEED_TAIL, _sf.SEED_DONE))
@@ -3231,6 +3234,24 @@ try:
     check("导入链路: _write_rows 把 conflict_sql 透传给库存分支",
           "conflict_sql=_ksql" in _cw12, "routes/cleanse_write.py")
     # 库存导出模板补了本周口径(周一至今), 不能由 month_* 推导
+    # 2026-11-05 线上实测: platform 仓被整体改写成 platform_b —— 库存表凭空多出 7 万行 B 仓
+    _cw12_code = "\n".join(x for x in _cw12.splitlines()
+                            if x.strip() and not x.strip().startswith("#"))
+    check("库存导入: 文件自带的仓型不被 target 默认值覆盖(否则平台仓全变 B 仓)",
+          'it["warehouse_type"] = _wt0 or wt' in _cw12_code
+          and 'it["warehouse_type"] = wt' not in _cw12_code,
+          "routes/cleanse_write.py")
+    check("库存导入: 库存按渠道×仓型拆四段(两渠道一次实测 362s, 踩穿 120s)",
+          len(_si._SEED_INV_SEGS) == 4 if hasattr(_si, "_SEED_INV_SEGS") else True,
+          "routes/seed_fill.py")
+    _sf13 = open("routes/seed_fill.py", encoding="utf-8").read()
+    check("库存导入: _seed_inventory 支持 channel/wh_group(拆分入口在生成器上, 不是外面切列表)",
+          "def _seed_inventory(skus_data, channel='', wh_group='')" in _sf13, "routes/seed_fill.py")
+    check("库存导入: 拆段时只发该段要的仓型(否则等于把同一请求发四遍)",
+          "if wh_group == 'platform':" in _sf13 and "elif wh_group == 'own':" in _sf13,
+          "routes/seed_fill.py")
+    check("库存导入: /seed/step 白名单从 _SEED_INV_SEGS 推导(否则 11~13 段全被拒)",
+          "_INV_NOS = tuple(x[0] for x in _SEED_INV_SEGS)" in _ts_src, "routes/task_seed.py")
     check("inventory: 已声明 week_inbound/week_outbound(库存导出模板的本周口径)",
           "week_inbound INT DEFAULT 0" in _sc10 and "week_outbound INT DEFAULT 0" in _sc10,
           "schema_create.py")

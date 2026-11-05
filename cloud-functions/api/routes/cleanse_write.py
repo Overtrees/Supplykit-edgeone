@@ -1234,7 +1234,14 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
                 _keep.append(it)
         cleaned = _keep
         for it in cleaned:
-            it["warehouse_type"] = wt
+            # 2026-11-05 修: 原实现无条件 it["warehouse_type"] = wt, 把**文件里自己的仓型**抹掉。
+            #   后果(线上实测): seed 的"平台仓"文件走 inventory_b 入口 → 北京/上海/成都等 7 个
+            #   platform 仓全部被改写成 platform_b, 库存表里 platform_b 凭空 8 万行、platform 归零。
+            #   真实客户同样会中招: 一份含"京东B仓 + 平台仓"的库存导出, 传上去仓型全变。
+            #   正确语义: target 只决定**默认仓型**(文件没这一列/这一列为空时才用), 文件自己
+            #   写明的仓型要尊重 —— 否则"导入什么仓, 系统就认什么仓"这条定案就是假的。
+            _wt0 = str(it.get("warehouse_type") or "").strip()
+            it["warehouse_type"] = _wt0 or wt
             # 2026-11-04 账期改造(用户定案): 已建账(结过账)后, 导入的"当时可用"**不再写成期初** ——
             #   写成期初就等于每次导入都把基线抬高一次, 而流水又是全期/滚动窗口, 必然双算,
             #   这是"每月累加一次、偏差单调增长"的根因。改为存 snapshot_qty 只做对账。
