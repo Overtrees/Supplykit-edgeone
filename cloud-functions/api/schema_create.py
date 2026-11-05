@@ -522,7 +522,8 @@ _COLUMN_ADDS = {
 # v5(2026-11-04 S3-5): 建 schema_migrations; 存量数据类步骤迁入 migrations/(本版本号变化即触发一次
 #   全量路径 → run_pending 只执行未登记的步骤, 已应用的靠 legacy_log_sync 归并, 不会被重跑)
 # v6(2026-11-04 账期): 新增 inventory_month / batch_opening / ledger_state(月结三表)
-SCHEMA_VERSION = 6
+# v7(2026-11-05 账期): inventory 增 ledger_base(建账基线, 与会被回写的 beginning_stock 解耦)
+SCHEMA_VERSION = 7
 
 
 def table_ddl(name):
