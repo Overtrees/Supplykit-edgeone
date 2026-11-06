@@ -1003,10 +1003,13 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
             if _ids:
                 _ph8 = ",".join(["%s"] * len(_ids))
                 _claim_tok = _lk or ("t%d" % int(_t.time() * 1000))
+                # Python 级 % 格式化: token/task/IN 列表是 %s 占位, TTL 用 %d 内联(整数常量,
+                #   不进参数位 —— INTERVAL %s 占位在 TiDB 运行期必 1064)。四对四, 漏一个就是
+                #   "%d format: a real number is required"(本次实测)。
                 _claimed = execute("UPDATE eval_queue SET claimed_at=NOW(6), claimed_token=%s "
                                    "WHERE task_id=%s AND applied=0 "
                                    "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
-                                   "AND id IN (%s)" % ("%s", _ph8, _EVAL_CLAIM_TTL),
+                                   "AND id IN (%s)" % ("%s", "%s", _EVAL_CLAIM_TTL, _ph8),
                                    [_claim_tok, task_id] + _ids)
                 if _claimed != len(_ids):
                     # 被别的实例抢先认领(重试/并发), 本片跳过 —— 下一轮重选可认领的
