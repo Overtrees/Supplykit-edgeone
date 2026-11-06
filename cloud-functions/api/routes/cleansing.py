@@ -965,10 +965,15 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         # 2026-11-06 审计 P0-12: 原 `_batch[:500]` —— 本函数 page_size=1000, 每片后 500 个
         #   SKU 拿不到 total_qty, ctx 退化为"单行最大量", 累计超卖(1095 vs 库存 9)判定失效。
         #   改为 500/批循环拼接(与上方 inv_map 同一写法), 覆盖率 100%。
+        # 2026-11-06 口径收敛: 判定量 = **未发货订单量**(待确认/待发货 且 近 N 天),
+        #   与每日全量评估/删单联动同一个取数口径(定义只在 core.metrics 一处)。
+        from core import metrics as _M
+        _ow_c = _M.oversell_sql_cond(*_M.oversell_window(_M.rule_params_of(channel, "oversell")))
         for _i2 in range(0, len(_batch), 500):
             _seg = _batch[_i2:_i2 + 500]
             _ph2 = ",".join(["%s"] * len(_seg))
-            for _r in _q5("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+            for _r in _q5("SELECT sku, SUM(CASE WHEN " + _ow_c + " THEN quantity ELSE 0 END) AS q "
+                          "FROM orders WHERE channel=%s "
                           "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                           "GROUP BY sku" % ("%s", _ph2), [channel] + _seg):
                 _cum[_r.get("sku")] = int(_r.get("q") or 0)
@@ -1057,6 +1062,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                                      "max_quantity": _g["max"],
                                      "min_quantity": _g["min"],
                                      "line_count": _g["n"],
+                                     "open_qty": _cum.get(sku, _g["max"]),
                                      "total_qty": _cum.get(sku, _g["max"]),
                                      "total_amount": round(_g["amt"], 2),
                                      "unit_price": _g["price"]},

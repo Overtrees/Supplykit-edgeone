@@ -532,3 +532,62 @@ def include_transit_default():
         return str(v) not in ("0", "false", "False", "")
     except Exception:
         return True
+
+
+# ── 超卖口径 ────────────────────────────────────────────────────────────────
+# 超卖 = "卖出去还没发、而仓里不够发"。判定量**不是**历史累计销量:
+#   只要卖过一阵, 累计量必然大于当前可用 → 每个 SKU 都超卖。
+#   线上实测(other): 全历史 1,783 / 未发货 1,441 / 未发货且近 14 天 390 / 近 7 天 57。
+# 只算未发货状态(已发货的货在 ERP 里早扣过库存了, 再算一次就是双计),
+# 且只算近 N 天下单的 —— 挂三个月没发的单是异常单, 它的库存早被别的单吃掉或已补回,
+# 拿它判"现在发不出货"是错的。
+OPEN_ORDER_STATUSES = ("待确认", "待发货")
+OVERSELL_DAYS = 14
+
+
+def oversell_window(params=None):
+    """→ (天数, 未发货状态元组)。rules.params.oversell_days 优先, 默认 14
+
+    三个消费方共用这一份: 评估(ctx 构造) / 删单联动重评 / 关单联动重评 ——
+    原来三处各写一遍 `SUM(quantity)`, 于是"评估说超卖、关单说没超卖", 告警永远关不掉。
+    """
+    d = OVERSELL_DAYS
+    try:
+        v = (params or {}).get("oversell_days")
+        if v is not None:
+            d = max(1, min(int(float(v)), 365))
+    except Exception:
+        pass
+    return d, OPEN_ORDER_STATUSES
+
+
+def rule_params_of(channel, alert_type):
+    """某渠道某类规则的 params(JSON → dict)。读不到 → {} (调用方按默认口径走)
+
+    存在的意义: 口径的**参数**也必须有单一入口。原来 `_rule_params("stockout")` 不带渠道,
+    于是 any 渠道都读第一条 → other 的窗口/阈值跟 jd 一样。
+    """
+    try:
+        from routes.dashboard_stock_risk import _rule_params
+        return _rule_params(alert_type, channel) or {}
+    except Exception:
+        return {}
+
+
+def oversell_sql_cond(days, statuses=None, now=None):
+    """→ SQL 片段: 未发货 + 近 N 天。调用方直接 AND 进 WHERE
+
+    ⚠️ 时间基准用**北京时区**的 now(订单时间也是北京时间), 不能用 `NOW()`
+    —— TiDB 的 NOW() 是 UTC, 差 8 小时会把"刚下单 8 小时内"的单漏在窗外。
+    """
+    from datetime import timedelta
+    st = tuple(statuses or OPEN_ORDER_STATUSES)
+    _in = ",".join("'" + str(s).replace("'", "") + "'" for s in st)
+    if now is None:
+        try:
+            now = now_cn()          # 文件顶部已 import(core/clock)
+        except Exception:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)
+    cut = (now - timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M:%S")
+    return "order_status IN (%s) AND ordered_at >= '%s'" % (_in, cut)

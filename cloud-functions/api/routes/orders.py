@@ -45,31 +45,36 @@ def _evaluate_restored_ch(ids, channel):
                             "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph2),
                             [channel] + _b):
                 _inv_map[r2.get("sku")] = int(r2.get("avail") or 0)
-        # 2026-10-29 超卖口径: 用累计订单量(恢复后) —— 与 close_oversell 判定一致
+        # 超卖口径(2026-11-06 收敛到 core.metrics): 判定量 = **未发货订单量**
+        #   (待确认/待发货 且 近 N 天), 与每日全量评估、删单联动同一个数。
+        #   原来是全历史累计销量 —— 卖过一阵就恒大于当前可用, 每个 SKU 都"超卖";
+        #   而且恢复订单后按它重评, 一句"历史卖得多"就能把告警一直续上。
+        #   顺带把金额/批量字段并进同一条条件聚合(原先是另一次按 200 分批的全量扫描)。
+        from core import metrics as _M
+        _ow_cond = _M.oversell_sql_cond(*_M.oversell_window(_M.rule_params_of(channel, "oversell")))
         _cum3 = {}
+        _agg3 = {}
         for _i3 in range(0, len(_skus), 200):
             _b3 = _skus[_i3:_i3 + 200]
             _ph4 = ",".join(["%s"] * len(_b3))
-            for _r4 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
-                             "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
-                             "GROUP BY sku" % ("%s", _ph4), [channel] + _b3):
-                _cum3[_r4.get("sku")] = int(_r4.get("q") or 0)
-        # 2026-11-01 补齐 order ctx 金额/批量字段 —— 规则页一直列着 order.total_amount/unit_price/
-        #   max_quantity/min_quantity/line_count, 但 ctx 从未注入 → 条件选中即 None → 规则静默失效。
-        #   数据在 orders 表里都有, 这里按 SKU 汇总注入(与 total_qty 同一批查询口径)。
-        _agg3 = {}
-        for _i5 in range(0, len(_skus), 200):
-            _b5 = _skus[_i5:_i5 + 200]
-            _ph5 = ",".join(["%s"] * _b5.__len__())
-            for _r5 in query(
-                    "SELECT sku, IFNULL(SUM(quantity),0) AS q, IFNULL(SUM(total_amount),0) AS amt, "
-                    "IFNULL(MAX(quantity),0) AS mx, IFNULL(MIN(quantity),0) AS mn, COUNT(*) AS lc, "
-                    "IFNULL(MAX(unit_price),0) AS up "
-                    "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
-                    "AND sku IN (%s) GROUP BY sku" % ("%s", _ph5), [channel] + _b5):
-                _agg3[_r5.get("sku")] = _r5
+            _osql3 = (
+                "SELECT sku, "
+                "SUM(CASE WHEN {c} THEN quantity ELSE 0 END) AS q, "
+                "SUM(CASE WHEN {c} THEN total_amount ELSE 0 END) AS amt, "
+                "MAX(CASE WHEN {c} THEN quantity ELSE 0 END) AS mx, "
+                "MIN(CASE WHEN {c} THEN quantity END) AS mn, "
+                "SUM(CASE WHEN {c} THEN 1 ELSE 0 END) AS lc, "
+                "MAX(CASE WHEN {c} THEN unit_price ELSE 0 END) AS up "
+                "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                "AND sku IN (%s) GROUP BY sku"
+            ).replace("{c}", _ow_cond)
+            for _r4 in query(_osql3 % ("%s", _ph4), [channel] + _b3):
+                _sk4 = _r4.get("sku")
+                _cum3[_sk4] = int(_r4.get("q") or 0)
+                _agg3[_sk4] = _r4
         _o_ctxs = [{"sku": sk, "channel": channel,
-                    "order": {"quantity": _qty.get(sk, 0), "total_qty": _cum3.get(sk, 0),
+                    "order": {"quantity": _qty.get(sk, 0),
+                              "open_qty": _cum3.get(sk, 0), "total_qty": _cum3.get(sk, 0),
                               "total_amount": float((_agg3.get(sk) or {}).get("amt") or 0),
                               "max_quantity": int((_agg3.get(sk) or {}).get("mx") or 0),
                               "min_quantity": int((_agg3.get(sk) or {}).get("mn") or 0),

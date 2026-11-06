@@ -940,9 +940,12 @@ def _seed_config():
          '{"left":"inv.available_qty + inv.in_transit_qty","op":"<","right":"inv.safety_qty"}',
          "low_stock", "低库存预警: {product_name}", "可售 {sellable} < 动态安全线 {safety}", "warning",
          None),
+        # 2026-11-06 口径: 判定量是**未发货订单量**(待确认/待发货 且 近 N 天), 不是历史累计销量
+        #   —— 后者只要卖过一阵就恒大于当前可用, 每个 SKU 都"超卖"。
+        #   文案也跟着改: 原来写"累计订单量", 用户看到的数是"还未发货的量", 对不上。
         ("超卖保护", "order.created",
-         '{"left":"order.total_qty","op":">","right":"inv.available_qty"}',
-         "oversell", "超卖告警: {sku}", "累计订单量超过可用库存", "error",
+         '{"left":"order.open_qty","op":">","right":"inv.available_qty"}',
+         "oversell", "超卖告警: {sku}", "{open_qty} 件未发货, 可用仅 {sellable}", "error",
          None),
         # 濒临断货预警(参数载体): 断货卡计算参数(params 被 stock-risk 同源读取),
         # alert_enabled=0 不生成告警(断货卡已实时承载展示); 用户可在编辑页开启告警开关
@@ -1001,6 +1004,9 @@ def _seed_config():
                           "accel_ratio": 1.3, "accel_min_qty": 10, "buffer_orange": 1.2,
                           "buffer_yellow": 1.0, "orange_slack_days": 1, "include_avail_zero": 1,
                           "log": 0, "alert_enabled": 0}
+            elif at == "oversell":
+                # 判定窗口(天): 挂太久的单是异常单, 不是"现在发不出货"
+                params = {"oversell_days": 14, "log": 0}
             elif at == "health":
                 params = {"health_good": 85, "health_warning": 60, "log": 0, "alert_enabled": 0}
             elif at in _OWN_PARAMS:

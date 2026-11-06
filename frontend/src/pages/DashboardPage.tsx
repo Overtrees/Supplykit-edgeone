@@ -78,6 +78,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     alertCounts,
     ownHealth,
     bcOutOfStock,
+    _stockOverview,
     channel,
     hammerDashPeriod: periodTab,
     hammerReplenMode,
@@ -793,9 +794,13 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     }
   }, [dashboard, periodTab])
 
-  const lowStock = (inventory || []).filter(
-    x => Number(x.available_qty) < Number(x.safety_qty),
-  ).length
+  // 2026-11-06 口径统一: 原先是"前端拿库存明细行再比一遍静态 safety_qty" ——
+  //   ① 这是第 6 份口径(与后端 5 份都不同); ② seed 之后 safety_qty 恒 0 → 这个数恒 0,
+  //   侧边栏的"低库存"红点从来没亮过。改为直接读后端 `core.metrics` 的判定结果,
+  //   粒度跟随渠道补货模式(bbcc=BC 盘 / traditional=逐仓)。
+  const lowStock = Number(
+    (_stockOverview as { low_stock_count?: number } | null)?.low_stock_count ?? 0,
+  )
   const errCount = (qualityLogs || []).length
   // 2026-11-02 S0: 这两层派生原先每次渲染都重算(且返回新引用, 让下游 useMemo 全部失效)。
   const alertsList = useMemo(

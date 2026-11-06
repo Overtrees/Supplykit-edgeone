@@ -310,5 +310,83 @@ check("每日评估开始前先收尾挂起运行",
       _cr2.find("close_stale_runs") < _cr2.find("evaluate_stock_skus(_ch"),
       "顺序反了等于这轮还是被上一次的 running 误导")
 
+# ── H. 超卖口径 + 缺货粒度(2026-11-06 用户定案)──────────────────────────
+# 两件事:
+#   ① 超卖判定量 = **未发货订单量**(待确认/待发货 + 近 N 天), 不是全历史累计销量。
+#      后者只要卖过一阵就恒大于当前可用 → 每个 SKU 都超卖(other 实测 1,783 条)。
+#   ② 缺货数与低库存数必须是**同一批单元**、同一粒度(按渠道补货模式):
+#      bbcc → BC 盘 + 自有仓; traditional → 逐仓 + 自有仓; 且都只数销售仓。
+print("\nH. 超卖口径 / 缺货粒度")
+_met2 = open(os.path.join(_api_dir, "core", "metrics.py"), encoding="utf-8").read()
+check("超卖口径只在 core/metrics 定义一次(状态清单 + 窗口 + SQL 片段)",
+      "OPEN_ORDER_STATUSES" in _met2 and "def oversell_window" in _met2
+      and "def oversell_sql_cond" in _met2,
+      "散落定义必然出现'评估说超卖、关单说没超卖'")
+
+# H1: 全仓不得再有"SUM(quantity) 直接当超卖判定量"
+_bad = []
+for _root, _dirs, _files in os.walk(_api_dir):
+    if "__pycache__" in _root:
+        continue
+    for _f in _files:
+        if not _f.endswith(".py") or _f in ("local_test.py", "test_audit.py"):
+            continue
+        _fp = os.path.join(_root, _f)
+        _src = open(_fp, encoding="utf-8").read()
+        for _m in re.finditer(r"SUM\(quantity\)\s+AS\s+(q|total_qty|oq)", _src):
+            _seg = _src[max(0, _m.start() - 900):_m.end() + 900]
+            # 只管**订单域**(出入库流水/账期里的 SUM(quantity) 是另一回事, 与超卖无关)
+            if "FROM orders" not in _seg and "orders o" not in _seg:
+                continue
+            # 按订单 id 取"这一批订单的量"(恢复联动算单笔语义)不是历史累计, 跳过
+            if "WHERE id IN" in _seg:
+                continue
+            # 订单域里, 没有"未发货"条件聚合 = 又把历史累计量当判定量
+            if "order_status IN" not in _seg and "CASE WHEN" not in _seg:
+                _bad.append("%s: %s" % (os.path.relpath(_fp, _api_dir), _m.group(0)))
+check("没有'全历史累计销量'当超卖判定量的地方", not _bad, "; ".join(_bad[:4]))
+
+# H2: 三个消费方都走同一份口径
+_re4 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
+check("评估/删单/关单三处共用 _open_qty_map 或 metrics.oversell_*",
+      _re4.count("_open_qty_map(") >= 2 and "oversell_window" in _re4,
+      "_open_qty_map 调用次数=%d" % _re4.count("_open_qty_map("))
+_cw = open(os.path.join(_api_dir, "routes", "cleanse_write.py"), encoding="utf-8").read()
+_cl = open(os.path.join(_api_dir, "routes", "cleansing.py"), encoding="utf-8").read()
+check("导入即时评估也走 metrics 的口径(不再自己拼 SUM(quantity))",
+      "oversell_sql_cond" in _cw and "oversell_sql_cond" in _cl,
+      "导入时判出来的超卖与每日评估不一致 = 用户看到忽有忽无")
+
+# H3: SKU 级告警(空仓型)必须能被自动关闭
+check("关闭白名单允许空仓型(SKU 级告警), 否则 oversell 永远关不掉",
+      'not str(a.get("wt") or "")' in _re4,
+      "线上实证: jd 35 条 oversell 全 active, 其他类型都在正常流转")
+
+# H4: 缺货与低库存同一批单元
+_dsh2 = open(os.path.join(_api_dir, "routes", "dashboard.py"), encoding="utf-8").read()
+check("缺货/低库存计数用同一批单元(kinds=BC/WH), 且两处(summary+aux)一致",
+      _dsh2.count("_M.counts(_pr, (_M.DIM_BC, _M.DIM_WH))") == 1
+      and _dsh2.count("_M.counts(_pairs_ls, (_M.DIM_BC, _M.DIM_WH))") == 1,
+      "两个数不同粒度时, 相加得到的 total 没有任何含义")
+check("aux 不再单独 COUNT 库存行当缺货数",
+      "COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0" not in _dsh2,
+      "那数的是库存行(含自有仓、每个 69码), 与低库存的判定单元不同粒度")
+check("自有仓不进缺货/低库存计数(它的缺口由 ownHealth 承载)",
+      "自有仓(集货仓)的" in _dsh2 or "只数**销售仓**" in _dsh2,
+      "集货仓 available=0 是常态, 算进缺货就是纯噪音")
+
+# H5: 前端不再自己算低库存
+_fe = os.path.join(_api_dir, "..", "..", "frontend", "src")
+_hits = []
+for _f in ("App.tsx", os.path.join("pages", "DashboardPage.tsx")):
+    _fp = os.path.normpath(os.path.join(_fe, _f))
+    if not os.path.exists(_fp):
+        continue
+    _src = open(_fp, encoding="utf-8").read()
+    if "available_qty) < Number(x.safety_qty" in _src:
+        _hits.append(_f)
+check("前端不再用静态 safety_qty 自算低库存(第 6 份口径)",
+      not _hits, "残留: %s" % ",".join(_hits))
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

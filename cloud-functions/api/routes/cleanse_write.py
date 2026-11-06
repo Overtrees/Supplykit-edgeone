@@ -106,14 +106,19 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                                    "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                                    [channel] + _batch):
                         inv_map[r.get("sku")] = int(r.get("avail") or 0)
-            # 2026-10-29 超卖口径: 补 order.total_qty(累计未删订单量) —— 单笔口径会系统性漏报
+            # 超卖口径(2026-11-06 收敛): 判定量 = **未发货订单量**(待确认/待发货 且 近 N 天),
+            #   与 `core.rule_eval` 的每日全量评估、删单联动**同一个取数口径**
+            #   (原来是全历史累计销量, 卖过一阵就恒超卖)。口径定义只在 core.metrics 一处。
+            from core import metrics as _M
+            _ow_c = _M.oversell_sql_cond(*_M.oversell_window(_M.rule_params_of(channel, "oversell")))
             _cum2 = {}
             _sku_all = [str(c.get("sku")) for c in cleaned_all if c.get("sku")]
             if _sku_all:
                 for _i2 in range(0, len(_sku_all), 500):
                     _b2 = _sku_all[_i2:_i2 + 500]
                     _ph3 = ",".join(["%s"] * len(_b2))
-                    for _r2 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
+                    for _r2 in query("SELECT sku, SUM(CASE WHEN " + _ow_c + " THEN quantity ELSE 0 END) AS q "
+                                     "FROM orders WHERE channel=%s "
                                      "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                                      "GROUP BY sku" % ("%s", _ph3), [channel] + _b2):
                         _cum2[_r2.get("sku")] = int(_r2.get("q") or 0)
@@ -134,6 +139,7 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                 o_ctxs.append({"sku": sku, "channel": channel,
                                "order": {"quantity": oq, "max_quantity": _g2["max"],
                                          "min_quantity": _g2["min"], "line_count": _g2["n"],
+                                         "open_qty": _cum2.get(sku, oq),
                                          "total_qty": _cum2.get(sku, oq)},
                                "order_qty": _cum2.get(sku, oq),
                                "available_stock": inv_map.get(sku, 0),

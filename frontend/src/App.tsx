@@ -93,7 +93,6 @@ export default function App() {
   const [highlightSku, setHighlightSku] = useState('')
   const [highlightWarehouse, setHighlightWarehouse] = useState('')
   const {
-    inventory,
     qualityLogs,
     startPolling,
     stopAll,
@@ -103,6 +102,7 @@ export default function App() {
     setChannels,
     hammerData,
     setHammerPanel,
+    _stockOverview,
   } = useAppStore()
   const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
   const syncing = useAppStore(s => s.syncing)
@@ -916,9 +916,10 @@ export default function App() {
     navigateTo(newPage)
   }, [])
 
-  const lowStock = (inventory || []).filter(
-    x => Number(x.available_qty) < Number(x.safety_qty),
-  ).length
+  // 与看板卡同源(2026-11-06): 后端口径 low_stock_count, 不再前端自比静态 safety_qty
+  const lowStock = Number(
+    (_stockOverview as { low_stock_count?: number } | null)?.low_stock_count ?? 0,
+  )
   const errCount = (qualityLogs || []).length
 
   // 2026-10-14: 回前台立即续跑 running 导入/填充/导出任务(后端 continue-tasks 兜底 + 前端恢复接力)

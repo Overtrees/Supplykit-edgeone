@@ -15,6 +15,38 @@ from routes.common import try_err
 from core.alert_lifecycle import close as _close_alerts, close_by_ids as _close_ids
 
 
+def _open_qty_map(channel, skus):
+    """{sku: (未发货量, 未删订单量)} —— 超卖判定与孤儿判定的**唯一**取数口
+
+    2026-11-06 两处修:
+      ① 原 SQL 写成 `deleted_at IS NULL OR deleted_at='' AND channel=%s AND sku IN (...)`。
+         `AND` 优先级高于 `OR` → 等价于 `deleted_at IS NULL OR (…AND channel AND sku…)`,
+         于是 **只要这行没被删就命中, channel 与 sku 条件全被绕过** ——
+         别的渠道、别的 SKU 的订单量都会被算进这个渠道的 `_live`, 超卖判定随之失真。
+      ② 全历史累计销量改成**未发货量**(与 evaluate_stock_skus 同一口径)。原来三处各写
+         一遍 `SUM(quantity)`, 于是"评估说超卖、删单联动说没超卖" —— 告警永远关不掉。
+    """
+    out = {}
+    if not skus:
+        return out
+    from core import metrics as _M
+    _days, _st = _M.oversell_window(_M.rule_params_of(channel, "oversell"))
+    _cond = _M.oversell_sql_cond(_days, _st)
+    _sk = list(set(skus))
+    _ph = ",".join(["%s"] * len(_sk))
+    try:
+        for r in query(
+                "SELECT sku, SUM(quantity) AS q, "
+                "SUM(CASE WHEN {c} THEN quantity ELSE 0 END) AS oq "
+                "FROM orders WHERE (deleted_at IS NULL OR deleted_at='') "
+                "AND channel=%s AND sku IN ({ph}) GROUP BY sku".replace("{c}", _cond).replace("{ph}", _ph),
+                [channel] + _sk):
+            out[str(r.get("sku") or "")] = (int(r.get("oq") or 0), int(r.get("q") or 0))
+    except Exception as _e:
+        try_err("core_rules", "未发货订单量加载降级", _e)
+    return out
+
+
 def close_orphan_for_skus(skus, channel):
     """删单联动通用化(2026-10-15): 该 SKU active 告警 → 其规则 event → 重评估(基于现有未删订单)——命中保留/未命中关;
     + low_stock 无行特殊(无未删订单且无在档——关); 替代硬编码 oversell/low_stock(自定义 alert_type 覆盖)
@@ -28,10 +60,10 @@ def close_orphan_for_skus(skus, channel):
     try:
         _skus = list(set(skus))
         _ph = ",".join(["%s"] * len(_skus))
-        # 未删订单量 + 在档
-        _rows = _q("SELECT sku, SUM(quantity) AS q FROM orders WHERE deleted_at IS NULL OR deleted_at='' "
-                   "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + _skus)
-        _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
+        # 未发货量(超卖判定) + 未删订单量(孤儿判定) —— 一次取回, 见 _open_qty_map
+        _qm = _open_qty_map(channel, _skus)
+        _open = {k: v[0] for k, v in _qm.items()}
+        _live = {k: v[1] for k, v in _qm.items()}
         _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
                   "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)  -- no-barcode-ok: 存在性判定" % ("%s", _ph, "%s", _ph),
                   [channel] + _skus + [channel] + _skus)
@@ -68,8 +100,11 @@ def close_orphan_for_skus(skus, channel):
             _ctxs = []
             for _sk in _skus:
                 _av = float(_avail.get(_sk, 0) or 0)
+                _oq = _open.get(_sk, 0) or 0
                 _ctxs.append({"sku": _sk, "channel": channel,
-                              "order": {"quantity": _live.get(_sk, 0) or 0}, "order_qty": _live.get(_sk, 0) or 0,
+                              "order": {"quantity": _oq, "open_qty": _oq, "total_qty": _oq,
+                                        "lifetime_qty": _live.get(_sk, 0) or 0},
+                              "order_qty": _oq,
                               "available_stock": _av,
                               "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
             if not _ctxs:
@@ -86,23 +121,23 @@ def close_orphan_for_skus(skus, channel):
         _terr('core_rules', 'close_orphan 降级', _e2)
 
 
-def close_oversell_for_skus(skus, channel="jd"):
-    """删单联动(2026-10-15): 该 SKU 未删订单量 vs 可用库存重评估——不超卖 → 关 active oversell 告警
-    (曾只失效缓存——告警表不清——孤儿 oversell 残留看板)"""
+def close_oversell_for_skus(skus, channel):
+    """删单联动(2026-10-15): 该 SKU **未发货订单量** vs 可用库存重评估——不超卖 → 关 active oversell 告警
+    (曾只失效缓存——告警表不清——孤儿 oversell 残留看板)
+
+    2026-11-06: channel 去默认值(原 "jd")——与 P1-20 同类, 默认值会让 other 的删单
+    去关 jd 的告警。口径改用未发货量, 与 evaluate_stock_skus 同源(见 _open_qty_map)。"""
     if not skus:
         return
-    from db import query as _q, execute as _e
     from routes.common import try_err as _terr
     try:
         _ph = ",".join(["%s"] * len(skus))
-        # 未删订单量(待发货/已完成等有效状态——与规则引擎同口径)
-        _rows = _q("SELECT sku, SUM(quantity) AS q FROM orders WHERE deleted_at IS NULL OR deleted_at='' "
-                   "AND channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
-        _live = {r.get("sku"): r.get("q") or 0 for r in _rows}
-        _inv = _q("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "  # no-barcode-ok: SKU 汇总
-                  "GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
+        _qm = _open_qty_map(channel, list(skus))
+        _open = {k: v[0] for k, v in _qm.items()}
+        _inv = query("SELECT sku, SUM(available_qty) AS a FROM inventory WHERE channel=%s AND sku IN (%s) "  # no-barcode-ok: SKU 汇总
+                     "GROUP BY sku" % ("%s", _ph), [channel] + list(skus))
         _avail = {r.get("sku"): r.get("a") or 0 for r in _inv}
-        _close_sku = [s for s in set(skus) if float(_live.get(s, 0) or 0) <= float(_avail.get(s, 0) or 0)]
+        _close_sku = [s for s in set(skus) if float(_open.get(s, 0) or 0) <= float(_avail.get(s, 0) or 0)]
         if _close_sku:
             _ph2 = ",".join(["%s"] * len(_close_sku))
             _close_alerts("alert_type='oversell' AND channel=%s AND related_sku IN (%s)"
@@ -110,10 +145,12 @@ def close_oversell_for_skus(skus, channel="jd"):
         # low_stock 孤儿(2026-10-15 修正): 无未删订单 且 无在档(products/inventory 均无——只有订单页有——订单删了告警孤儿)才关;
         # 有在档(商品/进销存有该 SKU——即使 avail 0 真缺货)保留——不误伤
         _ph_in = ",".join(["%s"] * len(set(skus)))
-        _inf = _q("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
-                  "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)  -- no-barcode-ok: 存在性判定" % ("%s", _ph_in, "%s", _ph_in),
-                  [channel] + list(set(skus)) + [channel] + list(set(skus)))
+        _inf = query("SELECT sku FROM products WHERE channel=%s AND sku IN (%s) AND (deleted_at IS NULL OR deleted_at='') "
+                     "UNION SELECT sku FROM inventory WHERE channel=%s AND sku IN (%s)  -- no-barcode-ok: 存在性判定" % ("%s", _ph_in, "%s", _ph_in),
+                     [channel] + list(set(skus)) + [channel] + list(set(skus)))
         _infile = {r.get("sku") for r in _inf}
+        # 孤儿判定用的是"有没有未删订单"(全历史), 不是未发货量 —— 一个早就发完的 SKU 仍有档, 不该被当孤儿
+        _live = {k: v[1] for k, v in _qm.items()}
         _ls_orphan = [s for s in set(skus) if not _live.get(s) and s not in _infile]
         if _ls_orphan:
             _ph3 = ",".join(["%s"] * len(_ls_orphan))
@@ -532,40 +569,62 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     hits = hits1 | hits2
     _tick("evaluate_many")
     out = list(dict.fromkeys(r1 + r2))
-    # 2026-10-29 order.created 全量评估(超卖每日校正):
-    # ctx 用**累计未删订单量**(order.total_qty) vs 当前可用库存 —— 与 close_oversell 同口径
+    # order.created 全量评估(超卖每日校正)
+    #
+    # 2026-11-06 口径修正(用户定案: "全历史量肯定不行"):
+    #   原口径 `SUM(quantity)`(**全历史累计销量**, 含已完成/已发货/已退货) > 当前可用。
+    #   卖过一阵就必然成立 —— 线上实测 other 1,783 条, jd 414 条, 而绝大多数是"早就发完了"。
+    #   超卖的真实语义是"卖出去还没发、而仓里不够发", 所以:
+    #     · 只算未发货状态(`待确认`/`待发货`) —— 已发货的货 ERP 早扣过库存, 再算一次是双计;
+    #     · 只算近 N 天下单(`rules.params.oversell_days`, 默认 14) —— 挂三个月的单是异常单。
+    #   实测受影响量: other 1,783 → 390, jd 414 → 41。
     if _order_rules:
         try:
             # 2026-11-06 S4: 原实现按 500 个 SKU 分批查累计量、再按 200 个分批查金额/批量字段
             #   —— 8 万 SKU 要 ~560 次往返。线上实测 order_created 段独占 35.7s(整轮 55s 的 65%),
             #   这正是"评估跑不完 / 被平台掐掉 / pipeline_runs 停在 running"的直接原因。
-            #   改成一条 GROUP BY: 18 万行订单聚成 1 万行, 1 次往返换 560 次。
+            #   改成一条 GROUP BY: 全量订单聚成 1 万行, 1 次往返换 560 次。
+            #   口径收窄后仍然一条 SQL —— 用**条件聚合**在同一次扫描里同时算
+            #   "未发货量"(判定用)与"历史累计量"(排查用), 不额外扫一遍表。
+            from core.rules import _rule_params_loaded as _rpl
+            _ow_params = {}
+            for _r9 in _order_rules:
+                if str(_r9.get("alert_type") or "") == "oversell":
+                    _ow_params = _rpl(_r9) or {}
+                    break
+            _ow_days, _ow_st = _M.oversell_window(_ow_params)
+            _ow_cond = _M.oversell_sql_cond(_ow_days, _ow_st)
             _cum = {}
             _oagg = {}
             _skus_u = {str(r.get("sku") or "") for r in rows if r.get("sku")}
-            for _r6 in query(
-                    "SELECT sku, SUM(quantity) AS q, IFNULL(SUM(total_amount),0) AS amt, "
-                    "IFNULL(MAX(quantity),0) AS mx, IFNULL(MIN(quantity),0) AS mn, "
-                    "COUNT(*) AS lc, IFNULL(MAX(unit_price),0) AS up "
-                    "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
-                    "GROUP BY sku", [channel]):
+            _osql = (
+                "SELECT sku, SUM(quantity) AS lifetime, "
+                "SUM(CASE WHEN {c} THEN quantity ELSE 0 END) AS open_qty, "
+                "SUM(CASE WHEN {c} THEN total_amount ELSE 0 END) AS amt, "
+                "MAX(CASE WHEN {c} THEN quantity ELSE 0 END) AS mx, "
+                "MIN(CASE WHEN {c} THEN quantity END) AS mn, "
+                "SUM(CASE WHEN {c} THEN 1 ELSE 0 END) AS lc, "
+                "MAX(CASE WHEN {c} THEN unit_price ELSE 0 END) AS up "
+                "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                "GROUP BY sku"
+            ).replace("{c}", _ow_cond)
+            for _r6 in query(_osql, [channel]):
                 _sk6 = str(_r6.get("sku") or "")
                 # 只保留本轮评估范围内的 SKU —— 不在库存里的 SKU 拿去比"可用 0"会造出假超卖
                 if _sk6 not in _skus_u:
                     continue
-                _cum[_sk6] = int(_r6.get("q") or 0)
+                _op6 = int(_r6.get("open_qty") or 0)
+                if _op6 > 0:
+                    _cum[_sk6] = _op6
                 _oagg[_sk6] = _r6
             o_ctxs = []
-            _seen = set()
             for _sk, _v in _cum.items():
-                if _sk in _seen or not _v:
-                    continue  # 无订单的 SKU 不参与超卖(0 > 库存 恒假)
-                _seen.add(_sk)
                 _st = _agg.get(_sk, {}) if isinstance(_agg, dict) else {}
                 _av = int(_st.get("avail") or 0)
                 _oa = _oagg.get(_sk) or {}
                 o_ctxs.append({"sku": _sk, "channel": channel,
-                               "order": {"quantity": _v, "total_qty": _v,
+                               "order": {"quantity": _v, "open_qty": _v, "total_qty": _v,
+                                         "lifetime_qty": int(_oa.get("lifetime") or 0),
                                          "total_amount": float(_oa.get("amt") or 0),
                                          "max_quantity": int(_oa.get("mx") or 0),
                                          "min_quantity": int(_oa.get("mn") or 0),
@@ -574,8 +633,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                                "order_qty": _v,
                                "available_stock": _av,
                                "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
+            _o_ctx_n = len(o_ctxs)
             if o_ctxs:
-                _o_ctx_n = len(o_ctxs)
                 r3, hits3 = evaluate_many("order.created", o_ctxs, channel, _order_rules, return_hits=True)
                 hits = hits | hits3
                 out = list(dict.fromkeys(out + r3))
@@ -609,9 +668,15 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                 #   否则跑一次 traditional 评估会把 bbcc 的 bc 告警全部关掉(反之亦然)
                 _close_wt = (("own", "bc") if str(_mode_e) == "bbcc"
                              else ("own", "platform", "platform_b"))
+                # 2026-11-06 修: **SKU 级告警没有"仓型"**, 原来一律要求 wt ∈ _close_wt
+                #   → oversell(warehouse_type='')永远不满足条件 → 永远不会被自动关闭。
+                #   线上实证: jd 35 条 oversell 全是 active, 而其他类型都在正常流转;
+                #   再叠加"全历史销量"口径, 就是"只增不减"。空仓型不受跨模式保护约束
+                #   (它本来就不属于任何仓型, 不存在"跑另一个模式会误关"的问题)。
                 _close = [a["id"] for a in _act
                           if (_only is None or str(a.get("related_sku")) in _only)
-                          and str(a.get("wt") or "") in _close_wt
+                          and (not str(a.get("wt") or "")
+                               or str(a.get("wt") or "") in _close_wt)
                           and (_at, a.get("related_sku"), a.get("warehouse") or "", channel,
                                str(a.get("bc") or "")) not in hits]
                 # 2026-11-02 批量误关护栏(S1-4): 评估口径是"未命中即关闭", 一旦本轮数据不全

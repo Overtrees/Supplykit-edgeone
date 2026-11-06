@@ -90,6 +90,12 @@ FIELD_SPEC = {
     "own.cover_days": (CALC, _INV),
     # ── 订单上下文(order.created) ──
     "order.quantity": (EVENT, _ORD),
+    # 2026-11-06 超卖口径: 判定量是**未发货订单量**(待确认/待发货 且 近 N 天),
+    #   不是历史累计销量 —— 后者只要卖过一阵就恒大于当前可用, 每个 SKU 都"超卖"。
+    #   `open_qty` 是判定用的那个数; `total_qty` 保留为同一值(老规则条件不改也能用);
+    #   `lifetime_qty` 给全历史量, 供规则页排查"到底卖了多少"。
+    "order.open_qty": (EVENT, _ORD),
+    "order.lifetime_qty": (EVENT, _ORD),
     "order.total_qty": (EVENT, _ORD),
     "order.total_amount": (EVENT, _ORD),
     "order.max_quantity": (EVENT, _ORD),

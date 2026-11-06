@@ -791,7 +791,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                           drop_platform_b=(mode != "bbcc"))
         _pairs_ls = _M.judge_units(_us_ls, _s_ls, channel, mode, metric="ds28",
                                    include_transit=_M.include_transit_default(), p=_p_ls)
-        _c_ls = _M.counts(_pairs_ls)
+        # 与 aux 卡同口径: 只数销售仓(自有仓的缺口归「自有仓健康」, 不在这里重复计)
+        _c_ls = _M.counts(_pairs_ls, (_M.DIM_BC, _M.DIM_WH))
         low_stock = {"c": int(_c_ls.get("low") or 0), "out": int(_c_ls.get("out") or 0),
                      "total": int(_c_ls.get("total") or 0)}
     except Exception as _e:
@@ -807,7 +808,11 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
         "refund_amount": round(refund_amt, 2), "subsidy_amount": round(subsidy, 2),
         "payout": round(gmv - refund_amt - subsidy, 2),
         "total_orders": total_orders, "pending_count": pending, "refund_count": refund,
-        "low_stock_count": int(low_stock.get("c") or 0), "active_alerts": int(alert_count.get("c") or 0),
+        # 两个数同一批单元(销售仓 SKU 粒度), 互斥可加 —— 2026-11-06 前 low 含自有仓、
+        #   out 数库存行, 单看都对、放一起没有任何关系
+        "low_stock_count": int(low_stock.get("c") or 0),
+        "out_of_stock_count": int(low_stock.get("out") or 0),
+        "active_alerts": int(alert_count.get("c") or 0),
         "total_products": int(product_count.get("c") or 0), "total_suppliers": int(supplier_count.get("c") or 0),
     }
     # 周期趋势(前端 gmv 小卡图表按今日/本周/本月联动)
@@ -1092,46 +1097,42 @@ def _build_aux(channel, mode):
                 "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)}
         return alerts, full
 
-    def _block_stock():
-        """缺货计数 / 缺货清单 / BC 合计缺货(三条彼此独立)"""
-        out = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0",
-                  [channel]) or {}
+    def _block_stock_low():
+        """缺货 / 低库存 / 缺货清单 / BC 合计缺货 —— **同一批判定单元**上的四种呈现
+
+        2026-11-06 合并(原来 `_block_stock` 与 `_block_low` 是两个线程、两份查询):
+          · 各查一遍 inventory(170k 行)、各加载一次日销
+          · 断货数是 `COUNT(*) FROM inventory WHERE available_qty=0` —— **库存行**粒度
+            (含自有仓、含每个 69码、含空仓); 低库存数却是**判定单元**粒度(SKU × 渠道模式)
+          · 卡上再把两者相加 `total = out + low` —— 两个不同粒度相加, 得出来的数没有含义
+        现在一次取数、一次归并、一次判定, out/low 是同一批单元的互斥两档, 相加才有意义。
+        粒度跟随渠道补货模式: bbcc → BC 盘 + 自有仓; traditional → 逐仓 + 自有仓。
+        """
+        from core import metrics as _M
+        _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                      "available_qty, in_transit_qty, safety_qty, product_name FROM inventory "
+                      "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+        _pp = _M.periods(_q_cfg(channel))
+        _ser = _M.load(channel, dims=_M.dims_needed(_rows, channel, mode), fields=("ds28",))
+        _us = _M.units(_rows, merge_bc=(mode == "bbcc"), by_barcode=False,
+                       drop_platform_b=(mode != "bbcc"))
+        _pr = _M.judge_units(_us, _ser, channel, mode, metric="ds28",
+                             include_transit=_M.include_transit_default(), p=_pp)
+        # 只数**销售仓**(bbcc=BC 盘 / traditional=逐仓)。自有仓(集货仓)的"可用=0"是常态
+        #   —— 货本来就在平台仓; 把它算成"缺货"就是纯噪音(线上实测 jd 201 个单元全来自集货仓,
+        #   而 BC 盘整盘断货 0 个)。自有仓的库存问题由「自有仓健康」卡承载(2026-11-01 用户定案),
+        #   这里混进来等于同一件事计两次。
+        #   限定后 jd: out=0(BC 盘没有整盘断货的 SKU) / low=509 —— 与告警表 507 条 low_stock 同源。
+        _c = _M.counts(_pr, (_M.DIM_BC, _M.DIM_WH))
         so_items = query("SELECT " + _INV_COLS + " FROM inventory "
                          "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
-        # bc 合计缺货 SKU
-        bc_rows = query(
-            "SELECT sku, MAX(product_name) AS product_name FROM inventory "
-            "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
-            "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku LIMIT 100", [channel])
-        bc_out = [{"sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
-                   "warehouse_type": "bc"} for r in bc_rows]
-        return int(out.get("c") or 0), so_items, bc_out
-
-    def _block_low():
-        """低库存(动态安全线判定, 替代静态 safety_qty): 与健康卡/告警列表**同源**
-
-        2026-11-06 S3: 原实现是第四份口径 —— 拿 SKU 级 `__C__` 日销逐个仓比"整盘需求×周期"。
-        同一批货在告警列表里是低库存、在健康卡里是健康、在这张卡上又是第三个数。
-        现在三处都调 `core.metrics`: 桶归并(BC 只含 platform+platform_b)、
-        ds 按桶维度取、安全线手工优先、停用不进缺口 —— 一处定义, 三处可见。
-        """
-        try:
-            from core import metrics as _M
-            _cfg2 = {r.get("key"): r.get("value") for r in
-                     query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-            _p2 = _M.periods(_cfg2)
-            _rows2 = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                           "available_qty, in_transit_qty, safety_qty FROM inventory "
-                           "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
-            _s2 = _M.load(channel, dims=_M.dims_needed(_rows2, channel, mode), fields=("ds28",))
-            _us2 = _M.units(_rows2, merge_bc=(mode == "bbcc"), by_barcode=False,
-                            drop_platform_b=(mode != "bbcc"))
-            _pr2 = _M.judge_units(_us2, _s2, channel, mode, metric="ds28",
-                                  include_transit=_M.include_transit_default(), p=_p2)
-            return int(_M.counts(_pr2).get("low") or 0)
-        except Exception as _e:
-            try_err('dash', '低库存动态判定降级', _e)
-            return 0
+        # BC 合计缺货直接从判定结果里取 —— 不再单独扫一遍库存表算 `SUM(available_qty)<=0`
+        #   (那份 SQL 把不同 69码 的可用量相加了, 与"SKU 级缺货"本来就不是一回事)
+        bc_out = [{"sku": u["sku"], "product_name": u.get("name") or u["sku"], "warehouse_type": "bc"}
+                  for (u, v) in _pr if u["kind"] == _M.DIM_BC and v["state"] == _M.ST_OUT][:100]
+        return {"out": int(_c.get("out") or 0), "low": int(_c.get("low") or 0),
+                "total": int(_c.get("total") or 0), "items": so_items, "bc_out": bc_out,
+                "ok": int(_c.get("ok") or 0), "idle": int(_c.get("idle") or 0)}
 
     def _block_own():
         """自有仓健康(2026-11-01 新增): 自有仓不产生销售, 低库存/断货口径结构性不适用,
@@ -1152,11 +1153,10 @@ def _build_aux(channel, mode):
             return _EMPTY_OWN
 
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=4) as _ex:
+    with ThreadPoolExecutor(max_workers=3) as _ex:
         _f1 = _ex.submit(_block_alerts)
-        _f2 = _ex.submit(_block_stock)
-        _f3 = _ex.submit(_block_low)
-        _f4 = _ex.submit(_block_own)
+        _f2 = _ex.submit(_block_stock_low)
+        _f3 = _ex.submit(_block_own)
         try:
             alerts, alert_counts_full = _f1.result()
         except Exception as _e:
@@ -1166,27 +1166,27 @@ def _build_aux(channel, mode):
                                  "non_replenish": 0, "by_warehouse": {}, "ls_warehouse": {},
                                  "slow_warehouse": {}, "rp_warehouse": {}}
         try:
-            _out_c, so_items, bc_out = _f2.result()
+            _sl = _f2.result()
         except Exception as _e:
             try_err('dash', '库存概览降级', _e)
-            _out_c, so_items, bc_out = 0, [], []
+            _sl = {"out": 0, "low": 0, "total": 0, "items": [], "bc_out": []}
         try:
-            _low_c = _f3.result()
-        except Exception:
-            _low_c = 0
-        try:
-            _own = _f4.result()
+            _own = _f3.result()
         except Exception:
             _own = _EMPTY_OWN
 
     return {
         "alerts": alerts,
         "alertCounts": alert_counts_full,
-        "stockOverview": {"items": so_items,
-                          "out_of_stock_count": _out_c,
-                          "low_stock_count": _low_c,
-                          "total": _out_c + _low_c},
-        "bcOutOfStock": bc_out,
+        # 三个数**同一批判定单元**(out 与 low 互斥, 相加才有意义); 粒度跟随渠道补货模式。
+        #   2026-11-06 前: out 数"库存行"、low 数"判定单元", 两者相加后既不是行数也不是 SKU 数。
+        "stockOverview": {"items": _sl["items"],
+                          "out_of_stock_count": _sl["out"],
+                          "low_stock_count": _sl["low"],
+                          "unit_total": _sl.get("total", 0),
+                          "unit_ok": _sl.get("ok", 0),
+                          "total": _sl["out"] + _sl["low"]},
+        "bcOutOfStock": _sl.get("bc_out") or [],
         "ownHealth": _own,
     }
 
