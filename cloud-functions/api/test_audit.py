@@ -445,5 +445,17 @@ check("daily-rules force 鉴权先于窗口检查, 且支持 channels/alert_type
       0 < _i_auth < _i_win and "run_daily_rules(channels=_chs" in _cr,
       "原顺序: 窗口检查在前 → 窗口外 force 永远被 skip, 数据重建后无法补跑")
 
+# I4: 合并不静默(2026-11-06 用户追问) —— grain=sku 吞的是行, 不能吞掉"哪个码没货"
+_mm2 = open(os.path.join(_api_dir, "core", "metrics.py"), encoding="utf-8").read()
+check("units 合并时记录码级明细(_merge_code), code_risk 复核存在",
+      "_merge_code" in _mm2 and "def code_risk(" in _mm2 and "def code_detail_str(" in _mm2,
+      "B1=0/B2=100 被 SKU 合计判 ok, 码级断货无声消失 = '多码被吞'")
+check("看板对码级断货单列计数(code_out_count), 不混进互斥的 out/low",
+      "code_risk(u)" in _dsh2 and "code_out_count" in _dsh2,
+      "补充可见性; 判定口径不动, 否则又回到同渠道两种粒度")
+check("规则 ctx 注入码级明细(inv.code_detail / 顶层 code_detail), 文案可定位到码",
+      '"inv.code_detail"' in _rf and _re4.count("code_detail") >= 2,
+      "多码 SKU 触发告警时用户要能看到各码可用量")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

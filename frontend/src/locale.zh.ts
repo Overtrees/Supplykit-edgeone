@@ -369,6 +369,7 @@ export const zh: Record<string, string> = {
   'dash.funnel': '订单阶段分布',
   'dash.funnel_total': '总订单',
   'dash.store_gmv': '店铺GMV',
+  'dash.code_out_n': '另有 {n} 个多码 SKU 部分码断货(可用合计掩盖了它, 按码排查)',
   'dash.low_stock': '低库存告警',
   'dash.period_label': '聚合时间维度',
   'settings.actions': '操作',

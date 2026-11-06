@@ -53,6 +53,8 @@ interface ChartRow3Props {
   ownHealth?: unknown
   lowStockShown?: LowStockRow[]
   lowStockTotal?: number
+  /** 码级断货数(2026-11-06): 多码 SKU 部分 69码 可用=0, 被 SKU 合计掩盖, 单列可见 */
+  codeOutCount?: number
   procList?: ProcRow[]
   procLoading?: boolean
   procTotal?: number
@@ -161,6 +163,7 @@ export function ChartRow3({
   ownHealth,
   lowStockShown,
   lowStockTotal,
+  codeOutCount,
   procList,
   procLoading,
   procTotal,
@@ -178,6 +181,11 @@ export function ChartRow3({
           {t('dash.low_stock')}
           {lowStockTotal > 0 ? ` (${fmtInt(lowStockTotal)})` : ''}
         </div>
+        {Number(codeOutCount || 0) > 0 && (
+          <div className="small muted" style={{ fontSize: 'var(--font-xs)', paddingBottom: 4 }}>
+            {t('dash.code_out_n', { n: fmtInt(Number(codeOutCount)) })}
+          </div>
+        )}
         {/* 2026-11-01 去掉"共 N 条，点击查看全部"降级分支 —— 用户反馈"明细呢?"。
               实测接口按分组各 LIMIT 200 返回, low_stock 能拿到满 200 条, 明细一直都在,
               之前看到空白是瞬时态(登录后 alerts 未到时)被误判成"列表里没有", 不该用提示顶替明细。

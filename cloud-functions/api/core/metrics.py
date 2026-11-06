@@ -404,6 +404,26 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
 
     _idx = {}
 
+    def _merge_code(u, barcode, qty):
+        """码级明细随合并记录 —— **合并不静默**(2026-11-06)
+
+        grain=sku 把同 SKU 多码行并成一个单元, 合计是对的(SKU 级判定口径),
+        但"哪个码没货"不能无声消失: B1=0/B2=100 → 合计 100 判 ok, 而卖 B1 的
+        链接实际断货 —— 这就是"多码被吞"的实质危害。明细记录在单元上,
+        由 `code_risk()` 复核、`code_detail_str()` 呈现; 业务真要按码判, 走配置
+        `grain=barcode`(不必改代码)。
+        """
+        if by_barcode:
+            u["barcodes"] = [barcode]
+            u["code_avail"] = {barcode: int(qty or 0)}
+            return
+        bs = u.setdefault("barcodes", [])
+        if barcode and barcode not in bs:
+            bs.append(barcode)
+        ca = u.setdefault("code_avail", {})
+        ca[barcode] = ca.get(barcode, 0) + int(qty or 0)
+        u["multi_barcode"] = len(bs) > 1
+
     def _emit(sku, barcode, kind, wh, wt, name, qty, tr, manual):
         k = _key(sku, barcode, kind, wh)
         u = _idx.get(k)
@@ -414,6 +434,7 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
             out.append(u)
         u["avail"] += qty
         u["transit"] += tr
+        _merge_code(u, barcode, qty)
         # 手工安全线取 max: 同 SKU 多行(不同仓/不同码)合并时, 任一行设了线就按最高的来,
         # 不能相加(那是把"每个仓都该备 N"错算成"总共备 N×仓数")
         if manual and manual > u["manual_safety"]:
@@ -450,6 +471,7 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
                     u["manual_safety"] = _m
                 if not u["name"]:
                     u["name"] = _n
+                _merge_code(u, _bc, _q)
             if merge_bc:
                 continue          # 平台行由 BC 行代表
         _emit(sku, _bc, DIM_OWN if wt == "own" else DIM_WH, _w, wt, _n, _q, _t, _m)
@@ -533,6 +555,35 @@ def judge_units(us, series, channel, mode=None, metric="ds28", include_transit=T
         ds = series.value(metric, u["sku"], u.get("barcode"), dim) if series is not None else 0.0
         out.append((u, judge(u, ds, p, channel, mode, include_transit=include_transit, z=z)))
     return out
+
+
+def code_risk(u):
+    """码级复核 —— SKU(或 BC)合计判定**看不到**的那部分, 显式带出来
+
+    grain=sku 时同 SKU 多码合并: B1=0 / B2=100 → 合计 100 判 ok, 而卖 B1 的链接
+    实际断货。合并没错(口径必须一致), 静默才错。返回:
+      multi_barcode  该单元含多个 69码(单码单元没有合并, 也就没有"吞")
+      code_out       可用<=0 的码(发不出货的链接, 却被 SKU 合计掩盖)
+      code_avail     {码: 可用} 明细
+    呈现层用它单列"码级断货"计数; 判定口径不动 —— 否则又回到"同渠道两种粒度"。
+    """
+    ca = u.get("code_avail") or {}
+    if not u.get("multi_barcode") or not ca:
+        return {"multi_barcode": False, "code_out": [], "code_avail": {}}
+    return {"multi_barcode": True,
+            "code_out": sorted(b for b, v in ca.items() if int(v or 0) <= 0),
+            "code_avail": ca}
+
+
+def code_detail_str(u, max_codes=6):
+    """码级明细串(告警文案用): "690..01:0 / 690..02:100"。单码/无明细 → ''"""
+    ca = (code_risk(u).get("code_avail") or {})
+    if not ca:
+        return ""
+    parts = ["%s:%d" % (b, int(v or 0)) for b, v in sorted(ca.items())[:max_codes]]
+    if len(ca) > max_codes:
+        parts.append("…共%d码" % len(ca))
+    return " / ".join(parts)
 
 
 def counts(pairs, kinds=None, wt=None):

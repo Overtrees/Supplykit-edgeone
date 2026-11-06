@@ -478,7 +478,11 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
              "product_name": _u.get("name") or _u["sku"],
              "available_qty": _u["avail"], "in_transit_qty": _u["transit"],
              "safety_qty": _u.get("manual_safety") or 0,
-             "locked_qty": 0} for _u in _units]
+             "locked_qty": 0,
+             # 2026-11-06 合并不静默: grain=sku 合并多码时把"各码可用"带进 ctx,
+             #   规则文案 {code_detail} 可引用(如 "690..01:0 / 690..02:100")
+             "code_detail": _M.code_detail_str(_u),
+             "multi_barcode": bool(_u.get("multi_barcode"))} for _u in _units]
 
     _tick("calc_load")
     inv_ctxs, daily_ctxs = [], []
@@ -502,7 +506,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                     "locked_qty": int(r.get("locked_qty") or 0),
                     "warehouse_type": r.get("warehouse_type", ""),
                     "warehouse": r.get("warehouse", ""),
-                    "product_name": r.get("product_name") or sku},
+                    "product_name": r.get("product_name") or sku,
+                    # 多码明细(grain=sku 合并时非空): 规则可引用 inv.code_detail 判"部分码断货"
+                    "code_detail": str(r.get("code_detail") or ""),
+                    "multi_barcode": bool(r.get("multi_barcode"))},
             "stock": int(r.get("available_qty") or 0),
             "days_since_last": days,
             # 2026-10-29 规则页字段对齐: 前端"日销(定时任务提供)"一直为空 → 补 SKU 级日销(逐仓优先)
@@ -511,6 +518,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                 "__C__" if str(r.get("warehouse_type") or "") == "bc"
                 else str(r.get("warehouse") or "")) or 0), 2),
             "product_name": r.get("product_name") or sku,
+            # 顶层别名(告警文案 {code_detail} 可直接引用; 单码/码级判定时为空)
+            "code_detail": str(r.get("code_detail") or ""),
         }
         # 有数据才注入(缺失=键不存在 → 条件跳过, 不误报)
         if sku in _exp_map:

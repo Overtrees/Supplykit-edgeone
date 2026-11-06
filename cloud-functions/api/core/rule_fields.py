@@ -60,6 +60,10 @@ FIELD_SPEC = {
     "inv.product_name": (BASE, _INV),
     # ── inv.* : 计算注入(_need_calc 分支) ──
     #   safety_qty 在快速路径里是常量 0 → 必须走注入, 否则"低于安全线"恒不成立
+    # 2026-11-06 合并不静默: grain=sku 合并多码时注入"各码可用"明细串(非多码为空),
+    #   规则可用 `inv.multi_barcode == true AND inv.code_detail != ''` 圈"部分码断货"的 SKU
+    "inv.code_detail": (BASE, _INV),
+    "inv.multi_barcode": (BASE, _INV),
     "inv.safety_qty": (CALC, _INV),
     "inv.adj_dos": (CALC, _INV),
     "inv.buffer": (CALC, _INV),

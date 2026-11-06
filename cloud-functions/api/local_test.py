@@ -3914,6 +3914,28 @@ try:
           and len(_SM.units(_inv[:1] + [dict(_inv[0], barcode="B2", available_qty=1)],
                             merge_bc=False, grain=_SM.GRAIN_SKU)) == 1)
 
+    # ── 合并不静默(2026-11-06): grain=sku 吞的是"行", 不能吞掉"哪个码没货"的信息 ──
+    _mc = _SM.units([dict(_inv[0], barcode="B1", available_qty=0),
+                     dict(_inv[0], barcode="B2", available_qty=100)],
+                    merge_bc=False, grain=_SM.GRAIN_SKU)[0]
+    check("S3 归桶: grain=sku 合并时记录码级明细(barcodes/code_avail/multi_barcode)",
+          _mc.get("multi_barcode") is True
+          and sorted(_mc.get("barcodes") or []) == ["B1", "B2"]
+          and (_mc.get("code_avail") or {}).get("B1") == 0
+          and (_mc.get("code_avail") or {}).get("B2") == 100, str(_mc))
+    _rk = _SM.code_risk(_mc)
+    check("S3 码级复核: 部分 69码 断货被显式带出(B1=0 → code_out 含 B1)",
+          _rk["multi_barcode"] and _rk["code_out"] == ["B1"], str(_rk))
+    check("S3 码级复核: B1=0/B2=100 被 SKU 合计判 ok, 但 code_out 不为空 —— 吞不了",
+          _mc["avail"] == 100 and _mc["code_out"] if False else
+          (_SM.code_risk(_mc)["code_out"] == ["B1"] and _mc["avail"] == 100))
+    _one = _SM.units(_inv[:1], merge_bc=False, grain=_SM.GRAIN_SKU)[0]
+    check("S3 码级复核: 单码单元无合并也就无风险(不制造噪音)",
+          _SM.code_risk(_one)["code_out"] == [], str(_SM.code_risk(_one)))
+    check("S3 码级明细串: 告警文案可直接引用",
+          _SM.code_detail_str(_mc) == "B1:0 / B2:100"
+          and _SM.code_detail_str(_one) == "", repr(_SM.code_detail_str(_mc)))
+
     _pairs = [({"kind": _SM.DIM_WH, "sku": "S1"}, {"state": _SM.ST_LOW}),
               ({"kind": _SM.DIM_WH, "sku": "S2"}, {"state": _SM.ST_OK}),
               ({"kind": _SM.DIM_WH, "sku": "S3"}, {"state": _SM.ST_PAUSED}),

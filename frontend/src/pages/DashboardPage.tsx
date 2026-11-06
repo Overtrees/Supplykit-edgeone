@@ -801,6 +801,11 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const lowStock = Number(
     (_stockOverview as { low_stock_count?: number } | null)?.low_stock_count ?? 0,
   )
+  // 码级断货(2026-11-06): 后端 code_risk 复核 —— 多码 SKU 部分 69码 可用=0 却被
+  //   SKU 合计判 ok/low, 单列计数作为可见性补充, 不混进互斥的 out/low 两档
+  const codeOutCount = Number(
+    (_stockOverview as { code_out_count?: number } | null)?.code_out_count ?? 0,
+  )
   const errCount = (qualityLogs || []).length
   // 2026-11-02 S0: 这两层派生原先每次渲染都重算(且返回新引用, 让下游 useMemo 全部失效)。
   const alertsList = useMemo(
@@ -1180,6 +1185,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         ownHealth={ownHealth}
         lowStockShown={lowStockShown}
         lowStockTotal={lowStockTotal}
+        codeOutCount={codeOutCount}
         procList={procList}
         procLoading={procLoading}
         procTotal={procTotal}

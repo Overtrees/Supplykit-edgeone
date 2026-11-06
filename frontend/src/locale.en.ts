@@ -366,6 +366,7 @@ export const en: Record<string, string> = {
   'dash.funnel': 'Order Distribution',
   'dash.funnel_total': 'Total orders',
   'dash.store_gmv': 'Store GMV',
+  'dash.code_out_n': 'Plus {n} multi-code SKUs with out-of-stock codes (masked by SKU sum)',
   'dash.low_stock': 'Low Stock Alerts',
   'dash.period_label': 'Period',
   'settings.actions': 'Actions',

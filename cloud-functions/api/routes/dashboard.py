@@ -1127,6 +1127,15 @@ def _build_aux(channel, mode):
         #   这里混进来等于同一件事计两次。
         #   限定后 jd: out=0(BC 盘没有整盘断货的 SKU) / low=509 —— 与告警表 507 条 low_stock 同源。
         _c = _M.counts(_pr, (_M.DIM_BC, _M.DIM_WH))
+        # 码级复核(2026-11-06): grain=sku 合并多码后, "部分码断货"被 SKU 合计掩盖
+        #   (B1=0/B2=100 → 合计 100 判 ok, 卖 B1 的链接实际发不出)。合并不静默 ——
+        #   这里单列计数, 判定口径不动(否则又回到同渠道两种粒度)。
+        _code_out = 0
+        for (u, v) in _pr:
+            if u.get("kind") not in (_M.DIM_BC, _M.DIM_WH):
+                continue
+            if _M.code_risk(u)["code_out"] and v["state"] in (_M.ST_OK, _M.ST_LOW):
+                _code_out += 1
         so_items = query("SELECT " + _INV_COLS + " FROM inventory "
                          "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
         # BC 合计缺货直接从判定结果里取 —— 不再单独扫一遍库存表算 `SUM(available_qty)<=0`
@@ -1135,7 +1144,8 @@ def _build_aux(channel, mode):
                   for (u, v) in _pr if u["kind"] == _M.DIM_BC and v["state"] == _M.ST_OUT][:100]
         return {"out": int(_c.get("out") or 0), "low": int(_c.get("low") or 0),
                 "total": int(_c.get("total") or 0), "items": so_items, "bc_out": bc_out,
-                "ok": int(_c.get("ok") or 0), "idle": int(_c.get("idle") or 0)}
+                "ok": int(_c.get("ok") or 0), "idle": int(_c.get("idle") or 0),
+                "code_out": _code_out}
 
     def _block_own():
         """自有仓健康(2026-11-01 新增): 自有仓不产生销售, 低库存/断货口径结构性不适用,
@@ -1172,7 +1182,7 @@ def _build_aux(channel, mode):
             _sl = _f2.result()
         except Exception as _e:
             try_err('dash', '库存概览降级', _e)
-            _sl = {"out": 0, "low": 0, "total": 0, "items": [], "bc_out": []}
+            _sl = {"out": 0, "low": 0, "total": 0, "items": [], "bc_out": [], "code_out": 0}
         try:
             _own = _f3.result()
         except Exception:
@@ -1186,6 +1196,9 @@ def _build_aux(channel, mode):
         "stockOverview": {"items": _sl["items"],
                           "out_of_stock_count": _sl["out"],
                           "low_stock_count": _sl["low"],
+                          # 码级断货(部分码=0 但 SKU 合计掩盖): 只在多码单元出现,
+                          #   是 out/low 之外的**补充可见性**, 不混进互斥两档
+                          "code_out_count": _sl.get("code_out", 0),
                           "unit_total": _sl.get("total", 0),
                           "unit_ok": _sl.get("ok", 0),
                           "total": _sl["out"] + _sl["low"]},
