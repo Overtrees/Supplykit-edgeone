@@ -61,6 +61,49 @@ def _lock_for(channel):
         return lk
 
 
+_STALE_MIN = 10
+
+
+def close_stale_runs(minutes=_STALE_MIN):
+    """把挂住的 `running` 收尾成 `timeout` —— 否则"正在跑"会永远成立
+
+    为什么必须有(2026-11-06 S4): `pipeline_runs` 的 running 是"开始时 INSERT 一行、
+    结束时 UPDATE 那一行"表示的。实例被平台冻结/掐断时那条 UPDATE 永远不会执行 ——
+    线上实证: `rule_eval(jd)` 11:37 那条至今仍是 running(5 小时), 于是:
+      · /health 看着"有任务在跑", 而告警表已经几小时没更新(排障时会往错的方向查);
+      · 任何"以 running 为单飞判据"的检查会永远成立 → 之后每次评估都被自己挡住。
+
+    只做一件事: 超时留痕(status=timeout + error 说明)**不重跑、不动业务数据**。
+    要不要重跑由调度决定 —— 收尾语句失败不能被当成"任务还在跑", 也不能顺手替它重跑。
+
+    只动 `pipeline_runs`(纯观测表)。`sync_tasks` 有状态机与前端的进度轮询, 把它改 timeout
+    会让前端把"失败"当"进行中"继续转圈, 那是另一个问题(S5 导入链路一起处理)。
+    """
+    out = {"runs": 0}
+    try:
+        from db import execute as _ex
+        # INTERVAL 的量**不能**用占位符(MySQL/TiDB 只认字面量) —— 这里是自己算出来的整数,
+        # 直接内联(不是拼接外部输入)。2026-11-06 被 SQL 冒烟抓到: 占位符写法运行期必 1064。
+        _m = int(minutes)
+        out["runs"] = int(_ex(
+            "UPDATE pipeline_runs SET status='timeout', finished_at=NOW(), "
+            "error=CONCAT('挂起超时: running 超过 %d 分钟(实例被冻结/掐断, 收尾语句未执行)') "
+            "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % (_m, _m)
+        ) or 0)
+        if out["runs"]:
+            try:
+                _ex("INSERT INTO quality_logs(log_type, level, message, source) "
+                    "VALUES('pipeline_stale','warning',%s,'maintenance')",
+                    ("收尾 %d 条挂起运行(>%s 分钟): 实例被冻结/掐断时收尾语句不会执行"
+                     % (out["runs"], minutes),))
+            except Exception:
+                pass
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('maintenance', '挂起运行收尾降级', _e)
+    return out
+
+
 def kick(channel="jd"):
     """请求路径调用: 只判断"要不要起后台线程", 立即返回(不阻塞、不抛)
 
@@ -96,6 +139,11 @@ def run(channel="jd"):
     每一步独立 try: 前一步失败不许连坐后一步(维护是尽力而为)。
     """
     from routes.common import try_err
+    # ⓿ 先把挂住的 running 收尾 —— 它是纯观测表, 但"永远 running"会让排障与单飞判断走错方向
+    try:
+        close_stale_runs()
+    except Exception as _e:
+        try_err('maintenance', '挂起运行收尾降级', _e)
     # ① 数据追平(orders → 快照 → 日聚合; 含 60 天窗口完整性自愈)
     #    ⚠️ 导入路径必须是 dashboard_maintain —— 2026-11-06 拆分时 _track_data 从
     #    dashboard.py 迁到了 dashboard_maintain.py, 这里原本还指向旧模块, 结果是

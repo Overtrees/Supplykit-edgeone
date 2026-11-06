@@ -476,6 +476,13 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
     证据: 规则保存原来无条件调本函数, 一次文案修改 = 3 条全表 UPDATE(孤儿清理)
             + 10 万行 × N 渠道评估 + 全表 HAVING 对账 + 健康快照。
     """
+    # 2026-11-06 S4: 评估开始前先把挂住的 running 收尾 —— 上一次被平台掐断时收尾语句不会执行,
+    #   留着"running"会让 /health 与排障永远看到"有任务在跑"(线上实证停了 5 小时)。
+    try:
+        from core.maintenance import close_stale_runs as _csr
+        _csr()
+    except Exception as _e_csr:
+        try_err('cron', '挂起运行收尾降级', _e_csr)
     _chs = [c for c in (channels or _CHANNELS()) if c] or list(_CHANNELS())
     _ats = [str(a) for a in (alert_types or []) if a]
     _in_ch = "(" + ",".join(["%s"] * len(_chs)) + ")"

@@ -391,6 +391,20 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     #   原来这段"platform+platform_b 合并成 BC"在这里、在 dashboard_health 里各写一遍
     #   (后者还按 SKU 合并、dyn 取 max), 两处结果永远对不上。现在只有一处。
     from core import metrics as _M
+    # 超卖(order.created)判的是 SKU 级可用量, 与仓/码无关 → 用**原始库存行**汇总(含自有仓,
+    #   那是真能发的货)。2026-11-06 S4: 原来这段只在 `_need_calc` 为真时才算, 于是"没有规则
+    #   引用计算变量"的那条路径里 `_agg` 是 None → available_stock 恒 0 → 每个有订单的 SKU
+    #   都被判超卖(假告警)。判定用的量不该取决于"别的规则要不要算变量"。
+    if _order_rules and not isinstance(_agg, dict):
+        _agg = {}
+        for _r in rows:
+            _sku0 = str(_r.get("sku") or "")
+            if not _sku0:
+                continue
+            _st0 = _agg.setdefault(_sku0, {"avail": 0, "transit": 0, "safety": 0})
+            _st0["avail"] += int(_r.get("available_qty") or 0)
+            _st0["transit"] += int(_r.get("in_transit_qty") or 0)
+            _st0["safety"] += int(_r.get("safety_qty") or 0)
     _mode_e = str(mode or _M.mode_of(channel))
     _units = _M.units(rows, merge_bc=(_mode_e == "bbcc"), drop_platform_b=(_mode_e != "bbcc"),
                       by_barcode=True)
@@ -522,34 +536,27 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     # ctx 用**累计未删订单量**(order.total_qty) vs 当前可用库存 —— 与 close_oversell 同口径
     if _order_rules:
         try:
+            # 2026-11-06 S4: 原实现按 500 个 SKU 分批查累计量、再按 200 个分批查金额/批量字段
+            #   —— 8 万 SKU 要 ~560 次往返。线上实测 order_created 段独占 35.7s(整轮 55s 的 65%),
+            #   这正是"评估跑不完 / 被平台掐掉 / pipeline_runs 停在 running"的直接原因。
+            #   改成一条 GROUP BY: 18 万行订单聚成 1 万行, 1 次往返换 560 次。
             _cum = {}
-            _skus_all = [str(r.get("sku") or "") for r in rows if r.get("sku")]
-            _skus_u = list(dict.fromkeys(_skus_all))
-            for _i5 in range(0, len(_skus_u), 500):
-                _b5 = _skus_u[_i5:_i5 + 500]
-                _ph5 = ",".join(["%s"] * len(_b5))
-                for _r5 in query("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
-                                 "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
-                                 "GROUP BY sku" % ("%s", _ph5), [channel] + _b5):
-                    _cum[str(_r5.get("sku"))] = int(_r5.get("q") or 0)
+            _oagg = {}
+            _skus_u = {str(r.get("sku") or "") for r in rows if r.get("sku")}
+            for _r6 in query(
+                    "SELECT sku, SUM(quantity) AS q, IFNULL(SUM(total_amount),0) AS amt, "
+                    "IFNULL(MAX(quantity),0) AS mx, IFNULL(MIN(quantity),0) AS mn, "
+                    "COUNT(*) AS lc, IFNULL(MAX(unit_price),0) AS up "
+                    "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
+                    "GROUP BY sku", [channel]):
+                _sk6 = str(_r6.get("sku") or "")
+                # 只保留本轮评估范围内的 SKU —— 不在库存里的 SKU 拿去比"可用 0"会造出假超卖
+                if _sk6 not in _skus_u:
+                    continue
+                _cum[_sk6] = int(_r6.get("q") or 0)
+                _oagg[_sk6] = _r6
             o_ctxs = []
             _seen = set()
-            # 2026-11-01 补齐 order ctx 金额/批量字段(原只给 quantity/total_qty →
-            #   规则页可选的 total_amount/unit_price/max_quantity/min_quantity/line_count 恒缺失)
-            _oagg = {}
-            try:
-                _oskus = [s for s, v in _cum.items() if v]
-                for _i6 in range(0, len(_oskus), 200):
-                    _b6 = _oskus[_i6:_i6 + 200]
-                    _ph6 = ",".join(["%s"] * len(_b6))
-                    for _r6 in query(
-                            "SELECT sku, IFNULL(SUM(total_amount),0) AS amt, IFNULL(MAX(quantity),0) AS mx, "
-                            "IFNULL(MIN(quantity),0) AS mn, COUNT(*) AS lc, IFNULL(MAX(unit_price),0) AS up "
-                            "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') "
-                            "AND sku IN (" + _ph6 + ") GROUP BY sku", [channel] + _b6):
-                        _oagg[str(_r6.get("sku"))] = _r6
-            except Exception as _eoa:
-                try_err('core_rules', '订单金额聚合降级(金额类规则不出数)', _eoa)
             for _sk, _v in _cum.items():
                 if _sk in _seen or not _v:
                     continue  # 无订单的 SKU 不参与超卖(0 > 库存 恒假)

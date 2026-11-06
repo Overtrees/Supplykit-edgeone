@@ -285,5 +285,30 @@ check("规则引擎按单元取量(BC=平台+B, 不再用 _agg 的 SKU 全仓合
       "_M.judge(" in _re2 and '_st["avail"] + _st["transit"]' not in _re2,
       "P0-13: BC 盘可售里混着集货仓的货")
 
+# ── G. 评估跑得完 + 挂起有痕(2026-11-06 S4)──────────────────────────────
+# 判据来自线上实证: rule_eval(jd) 一条 running 停了 5 小时, other 每轮 140ms 却 0 命中。
+# 根因是"一轮评估 55s、其中 35.7s 花在 560 次分批往返上" → 实例被掐断 → 收尾语句没执行。
+print("\nG. 评估作业化(跑得完 / 挂起有痕)")
+_re3 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
+check("超卖评估用一条 GROUP BY, 不再按 500/200 个 SKU 分批往返",
+      'range(0, len(_skus_u), 500)' not in _re3 and 'range(0, len(_oskus), 200)' not in _re3
+      and 'GROUP BY sku", [channel]' in _re3,
+      "分批往返是 35.7s/55s 的来源")
+check("超卖可用量口径不依赖别的规则要不要算变量(_agg 缺省时自己汇总)",
+      'if _order_rules and not isinstance(_agg, dict):' in _re3,
+      "否则 available_stock 恒 0 → 每个有订单的 SKU 都判超卖")
+_mt = open(os.path.join(_api_dir, "core", "maintenance.py"), encoding="utf-8").read()
+check("挂起运行会被收尾成 timeout(不是永远 running)",
+      "def close_stale_runs(" in _mt and "status='timeout'" in _mt,
+      "收尾语句执行不到 = running 永久成立")
+_csr_body = _mt.split("def close_stale_runs")[1][:1200]
+check("收尾只动 pipeline_runs(观测表), 不 UPDATE sync_tasks 状态机",
+      "UPDATE pipeline_runs" in _csr_body and "UPDATE sync_tasks" not in _csr_body,
+      "改 sync_tasks 会让前端把失败当进行中")
+_cr2 = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
+check("每日评估开始前先收尾挂起运行",
+      _cr2.find("close_stale_runs") < _cr2.find("evaluate_stock_skus(_ch"),
+      "顺序反了等于这轮还是被上一次的 running 误导")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

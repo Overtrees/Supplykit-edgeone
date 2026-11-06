@@ -28,7 +28,7 @@ _LOG_SCOPE_TYPES = {
     "user": ("risk_summary", "cron", "maint", "cleansing", "cleansing_eval", "task",
              "duplicate_order", "duplicate_sku", "format_error", "field_warning",
              "field_error", "mapping_info", "config_history", "rule_action", "mat_rebuild",
-             "rule_guard", "ledger_override"),
+             "rule_guard", "ledger_override", "pipeline_stale"),
     "dev": ("api_error", "api_unhandled", "slow_request", "cache_error", "cache_invalidate",
             "quiet_error", "perf_debug", "detect_debug", "slow_alert", "frontend_error",
             "window_error", "unhandled_rejection", "component_error", "api_http_error",
