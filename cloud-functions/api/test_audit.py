@@ -470,13 +470,20 @@ check("租约心跳绑定退出路径(finally stop+release), 僵尸心跳不会�
       and "_lease.release(task_id" in _j_cl, "start_beat 后必须保证 stop")
 check("同步分支 sleep(4) 已删(新建任务 lease_until=NULL 即可抢)",
       "_ts.sleep(4)" not in _j_cl, "那 4 秒是所有小导入的固定延迟")
-check("评估清单落 eval_queue(applied 即幂等键), params 不再塞 sku_list",
+check("评估清单落 eval_queue(applied=完成标记+认领租约), params 不再塞 sku_list",
       '"eval_queue"' in _j_sc and "INSERT IGNORE INTO eval_queue(task_id, sku) " in _j_cl
       and '"sku_list": _ev_skus' not in _j_cl,
       "2 万 SKU ≈ 数百 KB params, 每次推进整份读改写(64KB 上限风险)")
-check("领取即置位(applied=1 原子 UPDATE), 重试不重放同一批 SKU",
-      "SET applied=1 WHERE task_id=%s " in _j_cl and "_claimed != len(_ids)" in _j_cl,
-      "置位与 delta 同请求; affected 行数校验防并发/重试双算")
+check("认领=租约(claimed_at+TTL 可重认领), applied=完成标记(成功才置 1+token 归属)",
+      "claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)" in _j_cl
+      and "SET applied=1, applied_at=NOW(6) " in _j_cl
+      and "AND claimed_token=%s AND id IN" in _j_cl.replace("`", "")
+      and "_claimed != len(_ids)" in _j_cl,
+      "2026-11-06 线上验证实证: 领取即置位后实例冻结 → 兜底见未领行已空直接 done, "
+      "冻结丢失的评估永久无法重放(兜底安全网被静默打穿)")
+check("applied=0 但租约未到期时不得提前 done(别的驱动处理中)",
+      "waiting_claim" in _j_cl and "_left" in _j_cl,
+      "提前 done = 重演冻结丢评估")
 check("导入分片真源 import_stage(一次解析+清洗落库), 分窗/eval 按 stage 直读",
       '"import_stage"' in _j_sc
       and "INSERT IGNORE INTO import_stage(task_id, row_no, sku, payload)" in _j_cl

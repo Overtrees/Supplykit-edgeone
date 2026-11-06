@@ -330,6 +330,8 @@ _TABLES = {
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(80) NOT NULL, "
         "sku VARCHAR(80) NOT NULL, applied TINYINT DEFAULT 0, "
         "applied_at DATETIME(6) NULL, "
+        # 租约式认领(2026-11-06): claimed_at 超过 _CLAIM_TTL 未完成 → 可被重认领(评估幂等)
+        "claimed_at DATETIME(6) NULL, claimed_token VARCHAR(96) NOT NULL DEFAULT '', "
         "UNIQUE KEY uq_eval_queue (task_id, sku))"
     ),
     # 2026-11-06 S5/P0-4: 导入分片真源 —— 源文件在第一次续跑时**一次**解析+清洗落行级
@@ -595,6 +597,11 @@ _COLUMN_ADDS = {
                    #   没有它, 上一任的心跳会替下一任续期: 两个实例同时在跑却永远不冲突,
                    #   比没有锁更危险(无锁并发 + 看起来"锁工作正常")。
                    ("lease_token", "VARCHAR(96) NOT NULL DEFAULT ''")],
+    # 2026-11-06 S5 线上验证实证: eval_queue "领取即置位" 后实例被冻结 → 兜底接手时未领行
+    #   已空 → 直接 done, 冻结丢失的评估永久无法重放。认领改**租约**(claimed_at+token,
+    #   超 TTL 可重认领), applied 退回"完成"语义(处理成功才置 1)。
+    "eval_queue": [("claimed_at", "DATETIME(6) NULL"),
+                   ("claimed_token", "VARCHAR(96) NOT NULL DEFAULT ''")],
 }
 
 # schema 版本(2026-11-02 S2-8): **改任何表/索引/迁移声明 → bump 此号**, 否则存量实例不会执行新声明
@@ -613,9 +620,11 @@ _COLUMN_ADDS = {
 #   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
 # v12(2026-11-05 租约心跳): sync_tasks 增 lease_token —— 租约改由执行方心跳续期(TTL 30s),
 #   令牌保证只有当前持有者能续约; 没有它, 被网关切断的上一任会替下一任续期。
+# v16(2026-11-06 S5 线上验证): eval_queue 认领改租约(claimed_at/claimed_token) —— 领取即置位
+#   被冻结后兜底无法重放(实证 result/库存重算全落空); applied 退回完成语义。
 # v13(2026-11-06 S5): eval_queue(评估清单行级+applied 幂等键) + import_stage(导入分片真源,
 #   一次解析落库, 消 O(n²) 重读重解析)
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def table_ddl(name):

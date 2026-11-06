@@ -960,6 +960,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
     #   原 sku_list 全量塞 params JSON: 2 万 SKU ≈ 数百 KB, 每次 offset 推进都要整份
     #   读改写(64KB 上限风险 + params 变成"既当配置又当游标")。清单只写一次进表,
     #   params 里只剩 src_task/target/channel 这些**真配置**。
+    _EVAL_CLAIM_TTL = 120   # 认领租约秒数: 冻结的认领者 2 分钟后可被重认领(评估幂等, 重放安全)
     _ev_skus = params.get("sku_list") or []      # 兼容旧任务(迁移期可能有 running 行)
     _ev_total = len(_ev_skus)
     _offset = int(params.get("offset") or 0)     # 进度游标(展示/旧路径取片; 新路径取片按 applied=0)
@@ -985,23 +986,39 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         else:
             # 新路径: 从 eval_queue 取未应用分片(applied=0)。applied 标记即幂等键 ——
             #   处理成功才置 1, 重试不会重放同一批 SKU。
+            # 认领是**租约**不是完成标记(2026-11-06 线上验证实证): 原来"领取即置位
+            #   applied=1"后实例被冻结 → 兜底接手时未领行已空 → 直接 done, 冻结丢失的
+            #   评估**永久无法重放**(兜底安全网被静默打穿, 本次实测 result/steps/库存
+            #   重算全部落空)。现在 applied=完成标记(处理成功才置 1, 见分片写尾),
+            #   claimed_at+token=认领租约(超 _CLAIM_TTL 可被重认领; 评估本身幂等,
+            #   重放不双算: 告警 upsert / 库存重算制)。
             _ids = []
             _batch = []
+            _claim_tok = ""
             for _qr in query("SELECT id, sku FROM eval_queue WHERE task_id=%s AND applied=0 "
-                             "ORDER BY id LIMIT %s", [task_id, page_size]):
+                             "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
+                             "ORDER BY id LIMIT %s", [task_id, _EVAL_CLAIM_TTL, page_size]):
                 _ids.append(int(_qr.get("id") or 0))
                 _batch.append(str(_qr.get("sku") or ""))
             if _ids:
-                # 领取即置位(原子): affected 行数 = 本片行数才继续; 否则说明已被别的实例
-                # 领走(重试/并发), 本片跳过 —— 这是"重试不双算"的幂等键。
                 _ph8 = ",".join(["%s"] * len(_ids))
-                _claimed = execute("UPDATE eval_queue SET applied=1 WHERE task_id=%s "
-                                   "AND applied=0 AND id IN (%s)" % ("%s", _ph8),
-                                   [task_id] + _ids)
+                _claim_tok = _lk or ("t%d" % int(_t.time() * 1000))
+                _claimed = execute("UPDATE eval_queue SET claimed_at=NOW(6), claimed_token=%s "
+                                   "WHERE task_id=%s AND applied=0 "
+                                   "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
+                                   "AND id IN (%s)" % ("%s", _ph8, _EVAL_CLAIM_TTL),
+                                   [_claim_tok, task_id] + _ids)
                 if _claimed != len(_ids):
-                    _batch, _ids = [], []
+                    # 被别的实例抢先认领(重试/并发), 本片跳过 —— 下一轮重选可认领的
+                    _batch, _ids, _claim_tok = [], [], ""
         if not _batch:
-            # 全部分片完成 → done(累计 result)
+            # applied=0 但认领租约未到期 = **别的驱动处理中**, 不是完成 —— 提前 done
+            # 会重演"冻结丢评估"(_total 未清空时 result 还是空壳)。只有 applied 全 1 才算完。
+            _left = int((one("SELECT COUNT(*) AS c FROM eval_queue WHERE task_id=%s AND applied=0",
+                             [task_id]) or {}).get("c") or 0)
+            if _left:
+                return {"ok": True, "task_id": task_id, "status": "running", "waiting_claim": True}
+            # 真完成 → done(累计 result)
             _rj = json.loads(row.get("result") or "{}") or {}
             _rri = _rj.get("result") or {}
             execute("UPDATE sync_tasks SET status='done', params=%s, updated_at=NOW(), "
@@ -1179,6 +1196,13 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         # 2026-10-29: 重算已前移到评估之前(见上方 adjusted) —— 此处不再重复执行
         #   (原顺序导致 ctx.available_qty 用旧值, 且重算两次虽幂等但浪费)
         # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
+        # 本片处理**成功后才置完成标记**(applied=1 + 时间戳)。带 claimed_token:
+        #   只有认领者能置位, 防止并发下别人替我"宣布完成"。
+        if _ids:
+            _ph9 = ",".join(["%s"] * len(_ids))
+            execute("UPDATE eval_queue SET applied=1, applied_at=NOW(6) "
+                    "WHERE task_id=%s AND claimed_token=%s AND id IN (%s)",
+                    [task_id, _claim_tok] + _ids)
         # 推进 offset + 累积 result
         _new_off = _offset + len(_batch)
         _rj = json.loads(row.get("result") or "{}") or {}
