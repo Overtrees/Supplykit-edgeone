@@ -95,6 +95,38 @@ const fn = (x: OwnHealthItem) =>
     : ''
 
 /**
+ * 明细行第二段的文案截断(2026-11-06 修复"乱码")
+ *
+ * 原实现是 `String(x.description).slice(0, 40)` —— 硬切 40 个**字符**。后端 description 是
+ * 中文自由文本(如「批次 #125008 已过期 15 天(到期 2026-10-22), 自有可用 208 件待报损/急调」,
+ * 共 52 字), 切在 40 正好落在一句话中间:
+ *
+ *   批次 #125008 已过期 15 天(到期 2026-10-22), 自有可用
+ *                                                  ↑ 从这里断
+ *
+ * 视觉上就是"半截字 + 无标点收尾", 用户读起来像乱码。而且这段还有 `text-overflow:
+ * ellipsis`, 也就是说**真正的省略号由 CSS 负责** —— JS 再切一刀纯属多余且有害:
+ * ① 断句位置不知道; ② 和弹窗(OwnHealthSheet 显示全文)口径不一致。
+ *
+ * 现在: 只在**标点/空格处**断, 且断点后补省略号, 保证半句可读。
+ *   拿不到合适断点时宁可不截 —— 交给 CSS ellipsis, 它按渲染宽度决定, 不会破坏字形。
+ */
+const _BREAK = /[,,;;、。！？ ]/g
+const clipDesc = (s: string, max = 40): string => {
+  const v = String(s || '')
+  if (v.length <= max) return v
+  // 在 [max*0.6, max] 区间内找**最后一个**标点作为断点; 找不到就原样返回给 CSS 处理
+  let cut = -1
+  _BREAK.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = _BREAK.exec(v))) {
+    if (m.index > max) break
+    if (m.index >= Math.floor(max * 0.6)) cut = m.index
+  }
+  return cut > 0 ? v.slice(0, cut) + '…' : v
+}
+
+/**
  * 自有仓健康大卡(2026-11-01 由小卡改大卡)
  *
  * 为什么从 `stat-card` 小卡改成 `chart-row-3` 大卡:
@@ -248,7 +280,7 @@ export default function OwnHealthCard({ data, onAlert, onShowAll }: OwnHealthCar
                   {x.sku}
                   {x.warehouse ? ' · ' + x.warehouse : ''}
                   {mt.hint ? ' · ' + mt.hint : ''}
-                  {x.description ? ' · ' + String(x.description).slice(0, 40) : ''}
+                  {x.description ? ' · ' + clipDesc(x.description) : ''}
                 </div>
               </div>
             )

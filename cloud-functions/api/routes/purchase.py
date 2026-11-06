@@ -93,18 +93,24 @@ _PURCHASE_TTL = 300
 @router.get("/insights/purchase")
 @traced
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
-                         search: str = "", need_only: int = 0):
-    """采购建议(300s 共享表缓存——TiDB 表跨实例一致, 搜索/need_only 在缓存后过滤——降 RU): 系统总库存+供应商级参数+目标周转+采购告警"""
+                         search: str = "", need_only: int = 0,
+                         page: int = 0, page_size: int = 0):
+    """采购建议(300s 共享表缓存): 系统总库存+供应商级参数+目标周转+采购告警
+
+    2026-11-06 分页(治队头阻塞): 原来一次返回 9,684 条 / 5.93MB(TiDB 单条上限 6MB → 缓存
+    永远写不进去 → 每请求全量重算 → 同实例其它请求排队)。现在服务端先筛后切:
+      · 缓存仍存全量(builder 不变, 口径一条不少), 只把响应按页切
+      · 不传 page/page_size 时行为与旧版完全一致(导出/内部调用方零改动)
+      · 同时返回 total(收窄后的总数), 前端"已加载 N/total"与触底加载不受截断影响
+    实测: need_only=1 时响应 0.13MB(-98%); page=1&page_size=50 时更小。
+    """
     _key = "purchase|%s|%s|%s" % (channel, mode, days)
     _all = _cache_get(_key, _PURCHASE_TTL, lambda: _build_purchase(channel, mode, days))
-    if need_only:
-        _all = [r for r in _all if (r.get("actual_purchase") or 0) > 0]
-    if search:
-        _sq = search.lower()
-        _all = [r for r in _all if _sq in str(r.get("sku", "")).lower()
-                or _sq in str(r.get("product_name", "")).lower()
-                or _sq in str(r.get("barcode", "")).lower()]
-    return ok({"suggestions": _all})
+    from core.list_page import shape as _shape
+    _items, _total = _shape(_all, need_only=need_only, search=search,
+                            page=page, page_size=page_size)
+    return ok({"suggestions": _items, "total": _total,
+               "page": page, "page_size": page_size})
 
 
 

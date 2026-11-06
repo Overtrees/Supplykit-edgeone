@@ -27,6 +27,10 @@ const TRAD_COLS = INS_TRAD_COLS
 const PURCHASE_COLS = INS_PURCHASE_COLS
 const SLOW_COLS = INS_SLOW_COLS
 
+/** 采购建议每页条数(2026-11-06 服务端分页)。与后端 page_size 同值 —— 首屏 50 条,
+ *  触底追加 50。取 50 是因为表格一屏约 12 行, 50 条足够滚几屏, 且单页响应 <50KB。 */
+const PAGE = 50
+
 // 2026-10-27 页面快照(切回秒显旧值/后台静默更新; 写事件清——不看旧): 建议页三态
 let _snapIns: { replen?: ReplenRow[]; purchase?: PurchaseRow[]; disposals?: DisposalRow[] } = {}
 
@@ -74,6 +78,10 @@ export default function InsightsPage() {
   const orderedOkRef = useRef(false) // 本会话已下单是否成功加载过(失败收敛用)
   const [replenLoadingMore, setReplenLoadingMore] = useState(false)
   const [purchaseLimit, setPurchaseLimit] = useState(50)
+  /** 服务端分页游标: 已取到的条数 / 后端给的真实总数(2026-11-06 治队头阻塞) */
+  const [purchaseTotal, setPurchaseTotal] = useState(0)
+  const [purchaseLoadingMore, setPurchaseLoadingMore] = useState(false)
+  const purchaseLoadingRef = useRef(false)
   const [, setSlowLimit] = useState(50)
 
   const {
@@ -148,19 +156,18 @@ export default function InsightsPage() {
     },
     [insightSearch, replenMode],
   )
-  const filterBySearch = items => {
-    if (!insightSearch) return items
-    const q = insightSearch.toLowerCase()
-    return items.filter(
-      x =>
-        (x.sku || '').toLowerCase().includes(q) ||
-        (x.product_name || '').toLowerCase().includes(q) ||
-        (x.barcode || '').toLowerCase().includes(q),
-    )
-  }
-  const filteredReplen = filterBySearch(Array.isArray(replen) ? replen : [])
-  const filteredPurchase = filterBySearch(Array.isArray(purchase) ? purchase : [])
-  const filteredSlow = filterBySearch(Array.isArray(slowMoving) ? slowMoving : [])
+  // 2026-11-06 去冗余(用户口径: 服务端已实现就不许再留本地过滤, 不能按"保留无害"想):
+  //   补货/采购/滞销三张表的 search 与分页**都由后端做**(见下方 fetchReplen 的
+  //   `&search=` 与 purchase 的 `&page=&page_size=&search=`)。
+  //   本地再 filter 一遍的实际危害不是"多算一次", 而是:
+  //     · 页码错位 —— 后端按"已筛结果"切页, 本地二次过滤会把第 2 页筛成几条,
+  //       用户滚动到底看到的是"总数 300 / 实际只出来 12 条";
+  //     · 口径漂移 —— 后端按 sku/product_name/barcode 三列匹配, 前端各表各写一份
+  //       (滞销还漏了 barcode), 同一关键字在不同卡里结果不一致。
+  //   所以这里一律直接用后端结果。
+  const filteredReplen = Array.isArray(replen) ? replen : []
+  const filteredPurchase = Array.isArray(purchase) ? purchase : []
+  const filteredSlow = Array.isArray(slowMoving) ? slowMoving : []
   // 滞销处置数据（SKU×仓库）融合进表格: 过滤已处理(除非查看已处置)
   const filteredDisp = (Array.isArray(disposals) ? disposals : [])
     .filter(x => showDisposed || !x.disposed)
@@ -485,7 +492,10 @@ export default function InsightsPage() {
     if (globalChannel !== 'jd' && replenMode === 'bbcc') setHammerReplenMode('traditional')
     if (tab === 'purchase') {
       // 仅拉采购建议
+      // 2026-11-06 服务端分页(治队头阻塞): 原一次拉 9,684 条 / 5.93MB, 首屏只渲染 50 行。
+      //   现在只拉第 1 页 PAGE 条, 触底再追加; total 由后端给(收窄后的真实总数)。
       setPurchaseLoading(true)
+      setPurchaseLimit(PAGE)
       api
         .get<Record<string, unknown>>(
           '/api/insights/purchase?days=28&mode=' +
@@ -493,7 +503,9 @@ export default function InsightsPage() {
             '&channel=' +
             globalChannel +
             '&search=' +
-            encodeURIComponent(insightSearch),
+            encodeURIComponent(insightSearch) +
+            '&page=1&page_size=' +
+            PAGE,
         )
         .then(r => {
           if (seq !== reqSeq.current) {
@@ -501,6 +513,7 @@ export default function InsightsPage() {
             return
           }
           setPurchase((r.data?.suggestions || r.data || []) as PurchaseRow[])
+          setPurchaseTotal(Number(r.data?.total) || 0)
           setPurchaseLoading(false)
         })
         .catch(() => setPurchaseLoading(false))
@@ -534,6 +547,41 @@ export default function InsightsPage() {
       loadReplen(mode, globalChannel)
     }
   }, [globalChannel, replenMode, dataVersion, tab, insightSearch])
+
+  /** 采购建议触底加载下一页(2026-11-06 服务端分页 —— 首屏只拉 50 条, 追加时 page+1)
+   *  门闩用 ref(同步最新): IntersectionObserver 回调持有旧闭包, 用 state 判会并发/循环。 */
+  const loadPurchaseMore = () => {
+    if (purchaseLoadingRef.current || (purchaseTotal > 0 && purchase.length >= purchaseTotal))
+      return
+    purchaseLoadingRef.current = true
+    setPurchaseLoadingMore(true)
+    const nextPage = Math.floor(purchase.length / PAGE) + 1
+    api
+      .get<Record<string, unknown>>(
+        '/api/insights/purchase?days=28&mode=' +
+          replenMode +
+          '&channel=' +
+          globalChannel +
+          '&search=' +
+          encodeURIComponent(insightSearch) +
+          '&page=' +
+          nextPage +
+          '&page_size=' +
+          PAGE,
+      )
+      .then(r => {
+        const items = (r.data?.suggestions || []) as PurchaseRow[]
+        setPurchase(prev => [...prev, ...items])
+        setPurchaseTotal(Number(r.data?.total) || purchaseTotal)
+        setPurchaseLimit(prev => prev + PAGE)
+        purchaseLoadingRef.current = false
+        setPurchaseLoadingMore(false)
+      })
+      .catch(() => {
+        purchaseLoadingRef.current = false
+        setPurchaseLoadingMore(false)
+      })
+  }
 
   const loadSlowMore = () => {
     // ref 门闩(同步最新)——避免 IntersectionObserver 闭包旧 state 导致并发/循环
@@ -600,6 +648,9 @@ export default function InsightsPage() {
           purchaseLoading={purchaseLoading}
           purchaseLimit={purchaseLimit}
           setPurchaseLimit={setPurchaseLimit}
+          purchaseTotal={purchaseTotal}
+          onLoadMore={loadPurchaseMore}
+          purchaseLoadingMore={purchaseLoadingMore}
           purchaseVisCols={purchaseVisCols}
           insightSearch={insightSearch}
           replenMode={replenMode}

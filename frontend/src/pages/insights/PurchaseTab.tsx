@@ -41,6 +41,11 @@ interface Props {
   purchaseLoading: boolean
   purchaseLimit: number
   setPurchaseLimit: (fn: (p: number) => number) => void
+  /** 服务端分页: 后端给的真实总数(收窄后)。为 0 时退回"本地全量"判定 */
+  purchaseTotal?: number
+  /** 触底加载下一页(2026-11-06 服务端分页) */
+  onLoadMore: () => void
+  purchaseLoadingMore?: boolean
   purchaseVisCols: string[]
   insightSearch: string
   replenMode: string
@@ -49,15 +54,22 @@ interface Props {
 }
 
 /** 采购建议 tab。从 InsightsPage 外提(第二刀, 见 15.136): 全受控, 唯一写操作是
- *  触底加载 setPurchaseLimit(+50)。口径: 采购闭环 = 导出建议 → 下单 → 清洗导入
- *  更新在途 → 建议自动抵扣; timing 三态「充足/建议」由 purchase_qty 与周转对比推出。 */
+ *  触底加载 onLoadMore(→ 后端 page+1)。
+ *  2026-11-06: 原先是"先把 6MB 全量拉进浏览器, 再 slice(0, purchaseLimit)" ——
+ *  首屏只渲染 50 行却传了 9,684 条, 既顶穿 TiDB 缓存单条上限, 又把实例执行槽占满
+ *  (队头阻塞)。现在改为服务端分页 + 触底追加。
+ *  口径: 采购闭环 = 导出建议 → 下单 → 清洗导入更新在途 → 建议自动抵扣;
+ *  timing 三态「充足/建议」由 purchase_qty 与周转对比推出。 */
 export default function PurchaseTab(props: Props) {
   const {
     purchase,
     filteredPurchase,
     purchaseLoading,
     purchaseLimit,
-    setPurchaseLimit,
+    setPurchaseLimit: _setPurchaseLimit,
+    purchaseTotal = 0,
+    onLoadMore,
+    purchaseLoadingMore = false,
     purchaseVisCols,
     insightSearch,
     replenMode,
@@ -109,8 +121,8 @@ export default function PurchaseTab(props: Props) {
           })}{' '}
           ·{' '}
           {t('ins.loaded_n_of_m', {
-            n: Math.min(purchaseLimit, filteredPurchase.length),
-            m: filteredPurchase.length,
+            n: Math.min(purchaseLimit, purchaseTotal || filteredPurchase.length),
+            m: purchaseTotal || filteredPurchase.length,
           })}
           {insightSearch ? ` · "${insightSearch}"` : ''}
         </span>
@@ -402,17 +414,14 @@ export default function PurchaseTab(props: Props) {
               </tr>
             </tfoot>
           </table>
-          {filteredPurchase.length > purchaseLimit && (
+          {purchaseTotal > purchase.length && (
             <div
               className="text-center mt-8"
               ref={function (el) {
                 if (el && !el._observer) {
                   el._observer = new IntersectionObserver(
                     function (entries) {
-                      if (entries[0].isIntersecting)
-                        setPurchaseLimit(function (prev) {
-                          return prev + 50
-                        })
+                      if (entries[0].isIntersecting) onLoadMore()
                     },
                     { rootMargin: '200px' },
                   )
@@ -424,7 +433,7 @@ export default function PurchaseTab(props: Props) {
                 className="btn btn-ghost"
                 style={{ fontSize: 'var(--font-sm)', padding: '6px 16px', cursor: 'pointer' }}
               >
-                {t('ins.loading')}
+                {purchaseLoadingMore ? t('ins.loading') : t('ins.load_more')}
               </span>
             </div>
           )}

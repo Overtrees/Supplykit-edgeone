@@ -739,6 +739,18 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                                   "cur_step": {"name": "评估联动准备", "name_key": "task.eval_prep", "started": int(_t.time())}}, ensure_ascii=False), channel])
             except Exception as _e4:
                 try_err('cleansing', '创建评估任务降级', _e4)
+            # 2026-11-06 事件驱动(用户口径: 清洗页导入数据就该自动联动评估):
+            #   原来 `_eval` 任务建完就撒手 —— 只有前端看守(且看守把 cleansing_eval 当成
+            #   cleansing 打错端点, 永远推不动) 和 60s 兜底会碰它。线上实证: 低库存告警的
+            #   created_at 散落在 12:58/13:06/13:13 几个不相邻批次, 全是"有人碰兜底"才补的。
+            #   现在建完立刻在后台线程把分片跑完(与看守/兜底**同一条代码路径**), 导入即联动。
+            #   线程被冻结也不影响正确性: 任务仍 running, 兜底/看守/手工照旧能接上。
+            if _ev_skus:
+                try:
+                    from core.eval_kick import kick_eval_task as _kick_ev
+                    _kick_ev(task_id, target, channel)
+                except Exception as _ek:
+                    try_err('cleansing', '评估联动事件推进启动降级', _ek)
             from routes.analysis_cache import invalidate
             invalidate(_TARGET_DOMAIN.get(target, "all"))
             return {"ok": True, "task_id": task_id, "status": "done",

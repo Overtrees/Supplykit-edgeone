@@ -267,7 +267,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             _replMode +
             '&channel=' +
             channel +
-            '&need_only=1',
+            '&need_only=1&page=1&page_size=100', // 2026-11-06 服务端筛+分页(原拉 6MB 全量再前端过滤)
           { timeout: 90000 },
         ),
       ])

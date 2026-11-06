@@ -34,7 +34,7 @@ const BEAT_MS = 3000
 
 type Watch = {
   taskId: string
-  kind: 'seed' | 'cleansing'
+  kind: WatchKind
   /** 最近一次续跑返回的时间戳(本地) */
   lastDrive: number
   /** 连续多少次"没推进" */
@@ -75,14 +75,37 @@ export function watchCount(): number {
   return _watches.size
 }
 
-function _url(kind: 'seed' | 'cleansing', id: string): string {
+/**
+ * 看守类型: 三种任务各有自己的续跑端点, 打错端点 = 每轮 `{ok:false,"任务不存在"}`,
+ * 看守看得见任务却永远推不动它。
+ *
+ * 2026-11-06 修: 原实现是 `task_type === 'seed' ? 'seed' : 'cleansing'` ——
+ * `cleansing_eval` 被归进 `'cleansing'`, 于是去打 `/cleansing/status?task_id=<x>_eval`,
+ * 而该端点只认 `task_type='cleansing'` 的行, 查 `_eval` 必然 not_found。
+ * 结果: 导入完成后那个评估联动任务**从来没有人推进过**(except 分支还把它当成
+ * 网络抖动, 只累加 stalls 不报错), 低库存/效期告警只能等 60s 兜底或每日 cron 才补。
+ */
+export type WatchKind = 'seed' | 'cleansing' | 'cleansing_eval'
+
+function _kindOf(taskType: string): WatchKind {
+  const tt = String(taskType || '')
+  if (tt === 'seed') return 'seed'
+  if (tt === 'cleansing_eval') return 'cleansing_eval'
+  return 'cleansing'
+}
+
+function _url(kind: WatchKind, id: string): string {
+  if (kind === 'seed') {
+    // driver=frontend 是**写**进来的: 本端点是驱动端点(查一次推进一窗),
+    //   绝不能加 probe —— probe 是给"只看进度"的调用方用的纯读分支。
+    return API + '/api/seed/fill/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
+  }
+  if (kind === 'cleansing_eval') {
+    // 与 /cleansing/status 同口径: 驱动端点, 不带 probe
+    return API + '/api/cleansing/eval-status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
+  }
   return (
-    API +
-    (kind === 'seed'
-      ? // driver=frontend 是**写**进来的: 本端点是驱动端点(查一次推进一窗),
-        //   绝不能加 probe —— probe 是给"只看进度"的调用方用的纯读分支。
-        '/api/seed/fill/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
-      : '/api/cleansing/status?task_id=' + encodeURIComponent(id) + '&driver=frontend&probe=0')
+    API + '/api/cleansing/status?task_id=' + encodeURIComponent(id) + '&driver=frontend&probe=0'
   )
 }
 
@@ -174,7 +197,7 @@ function _dropTimer() {
 /** 开始看守(幂等: 同一个 taskId 重复调用只更新回调) */
 export function watch(
   taskId: string,
-  kind: 'seed' | 'cleansing',
+  kind: WatchKind,
   cb: { onDone?: Watch['onDone']; onFail?: Watch['onFail']; onTick?: Watch['onTick'] } = {},
 ) {
   if (!taskId) return
@@ -254,7 +277,8 @@ export function adoptRunning(
       if (_watches.has(id)) unwatch(id)
       return
     }
-    const kind: 'seed' | 'cleansing' = String(t.task_type || '') === 'seed' ? 'seed' : 'cleansing'
+    // 2026-11-06: 原为 seed/cleansing 二元 —— cleansing_eval 被误归 cleansing, 打错端点(见 _kindOf)
+    const kind: WatchKind = _kindOf(String(t.task_type || ''))
     watch(id, kind, cb)
   })
 }

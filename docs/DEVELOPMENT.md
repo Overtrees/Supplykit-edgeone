@@ -7513,3 +7513,127 @@ preflight       八步全绿；i18n 1428 键 zh/en 相等、中文硬编码 0 �
                /dashboard/own-health 分页 2.39~2.86s（每次全量重算, 弹窗主动打开）
 日志            12:24 之后无 error/warning/slow_request
 ```
+
+### 15.148 规则评估被踢出事件链路 + 三处「显示层」缺陷(2026-11-06)
+
+用户原话锚点:
+> 「规则评估需要改为按事件触发（也就是清洗页导入数据就会自动联动，而且我没记错一直都按这个口径，
+> 现在是否被动过/失效？）不要等每日兜底或者手工，另外这个手工只服务于运维。」
+
+结论: **用户的记忆是对的, 是被动过 —— 而且是两处独立断点叠加。**
+
+#### 一、断点 1: 看守把 `cleansing_eval` 当成 `cleansing`, 打错端点
+
+`frontend/src/api/taskWatch.ts` 原来只有二元归类:
+
+```ts
+const kind: 'seed' | 'cleansing' = task_type === 'seed' ? 'seed' : 'cleansing'
+```
+
+于是 `cleansing_eval` 落进 `'cleansing'` 分支, 请求
+`/api/cleansing/status?task_id=<导入id>_eval`, 而该端点开头就是
+`SELECT ... FROM sync_tasks WHERE task_id=%s` 并只认 `task_type='cleansing'` 的语义 ——
+`_eval` 行虽然存在, 但走的是导入分支的解析流程, 立刻 `{ok:false, error:"任务不存在"}`。
+更糟的是 `_drive()` 的 `catch` 把它当成**网络抖动**处理: 不报错、不 unwatch,
+只累加 `stalls` 触发退避 —— 所以这个失败**永远不会出现在任何日志或 UI 上**,
+表面上"看守正在推", 实际一次都没推进。
+
+修复: 三值 `WatchKind = 'seed' | 'cleansing' | 'cleansing_eval'` +
+`_kindOf()` 单一判定点 + `_url()` 三路分流(评估走 `/cleansing/eval-status`)。
+
+#### 二、断点 2: 建了任务就撒手, 没有任何"导入完即触发"的驱动
+
+导入 done 分支(`cleansing.py`)建好 `_eval` 任务、写好 `sku_list` 后直接 `return`。
+此时只有三条路径可能推进它, **没有一条是"导入完立刻跑"**:
+
+| 路径 | 真实行为 |
+|---|---|
+| 前端看守 | 只在任务页/App 首次挂载 `adoptRunning(/tasks?limit=8)` 才接管; 用户导完切走或关页 → 无人推 |
+| `continue_tasks` 兜底 | 中间件 60s / `/health` 保活 / 平台 05:05 cron 才跑, 且只处理 `status='running' LIMIT 20` |
+| 手工「立即运行」 | `POST /rules/evaluate` 全量重算 —— 用户明确: **这只服务于运维** |
+
+线上实证(2026-11-06 13:1x 采样 `alerts?type=low_stock&limit=400`): 低库存告警的
+`created_at` 不是导入时刻, 而是散落在 `12:58` / `13:06` / `13:13` 几个**互不相邻**的批次
+(109 / 290 / 400 条), 每批都对应"有人碰了一次兜底"。这就是"只能等兜底"的物证。
+
+修复: 新增 `core/eval_kick.py`(红线 A: 122 行文件 / 单函数 24 与 48 行),
+导入 done 后 `kick_eval_task(task_id)` 起一个 daemon 线程**本地把分片跑完**。
+线程内直接调 `cleansing_eval_status(...)` —— 与看守/兜底**同一条代码路径**,
+所以幂等/租约/分片/降级行为完全一致, 不存在"两套评估逻辑漂移"。
+
+降级设计(线程可能被 Makers 冻结, 不能把它当唯一保证):
+- 线程跑完 → 任务 `done`, 前端下次进场直接看到结果, 不需要它参与;
+- 线程被冻 → 任务仍 `running`, 兜底/看守/手工照旧接上(**零回归**)。
+
+即: 事件驱动是**主路径**, 兜底退化为真正的"保底"而不是"唯一路径"。
+`_MAX_SEGMENTS=60` 片上限: 超出部分不丢(任务仍 running), 只保证一个超大导入
+不会把实例钉在这条线程上。
+
+#### 三、`inv.exp.*_icon` 缺词条: 中文界面的效期状态列显示英文
+
+`statusLabels.expiryStatusLabel(code, withIcon=true)` 取的是 `t(key + '_icon')`:
+
+```ts
+return withIcon ? t(key + '_icon') : t(key)
+```
+
+而字典里当时**只有 `inv.exp.warn_icon`**, `ok` / `no` / `expired` 三个都没有。
+`t()` 缺词条时回落到**键名本身**(`locale.ts:21`), 于是中文界面「效期状态」列
+直接把 `inv.exp.ok` / `inv.exp.expired` 印出来 —— 看起来像"i18n 键值没处理好",
+实际是**词条缺了 3 个**, 不是映射写错。
+
+修复: zh/en 各补 `inv.exp.ok_icon` / `inv.exp.no_icon` / `inv.exp.expired_icon`。
+门禁里它们显示为"死键不算死"是因为引用是动态拼接(`key + '_icon'`) ——
+`i18n_audit.py` 的"动态前缀产键函数 3/3 就位"已覆盖这一类。
+
+#### 四、自有仓健康卡效期明细「乱码」= JS 硬切 40 字断了句
+
+`OwnHealthCard.tsx` 原为:
+
+```tsx
+{x.description ? ' · ' + String(x.description).slice(0, 40) : ''}
+```
+
+后端 `description` 是中文自由文本:
+
+```
+批次 #125008 已过期 15 天(到期 2026-10-22), 自有可用 208 件待报损/急调   ← 52 字
+```
+
+切在 40 正好断在 `(到期 2026-10-22), 自有可用` 之后 —— 半句、无标点收尾,
+用户读起来就是乱码。而且这一格本身已经有 `text-overflow: ellipsis`,
+**真正的省略号由 CSS 负责**, JS 再切一刀纯属多余且有害:
+① 断句位置不可知; ② 与弹窗(`OwnHealthSheet` 显示全文)口径不一致。
+
+修复: `clipDesc()` 只在**标点/空格处**断(`[,,;;、。！？ ]`), 断点后补 `…`;
+找不到合适断点时**不截**, 交回 CSS ellipsis(按渲染宽度算, 不破坏字形)。
+
+#### 五、前端本地过滤冗余: 不是"多算一次", 是页码错位
+
+用户明确要求不接受"保留无害"。`InsightsPage` 的 `filterBySearch` 对
+补货/采购/滞销三张表**都又过滤了一遍**, 而后端早已支持 `&search=` 与
+`page/page_size`。实际危害:
+
+- **页码错位**: 后端按"已筛结果"切页, 本地二次过滤把第 2 页筛成几条 →
+  用户看到"总数 300 / 实际只出来 12 条";
+- **口径漂移**: 前端各表各写一份匹配字段(滞销漏了 `barcode`), 同一关键字
+  在不同卡里结果不一致。
+
+修复: 删掉 `filterBySearch`, 三张表一律直接用后端结果。
+
+#### 六、验证
+
+```
+preflight       8/8 通过(含 267 条真实 SQL EXPLAIN / 632 条回归 / i18n 1431=1431)
+新增文件        cloud-functions/api/core/eval_kick.py（122 行, 单函数 24 / 48）
+改动文件        routes/cleansing.py（done 分支 +6 行）
+                frontend/src/api/taskWatch.ts（WatchKind 三值）
+                frontend/src/pages/InsightsPage.tsx（删本地过滤）
+                frontend/src/components/dash/OwnHealthCard.tsx（clipDesc）
+                frontend/src/locale.{zh,en}.ts（各 +3 词条）
+```
+
+> **未修/待定**: 低库存卡的计数口径 —— `summary.low_stock_count=10492` 与
+> `alerts(low_stock, active)` 的 506/800 条不是一个口径(前者按 `inventory` 行逐仓算,
+> 后者按 `SKU×仓` 五维告警落库, 且 bbcc 下平台仓合并成 `__BC__` 单行)。
+> 这属于**业务口径**, 需先与用户确认真值再动, 不在本次擅自改。
