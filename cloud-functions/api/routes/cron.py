@@ -584,9 +584,13 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
     # D4: 健康快照按天唯一(ON DUPLICATE), 每日写一次即可 —— 规则变更档不重复写
     try:
         from routes.dashboard import _stock_risk, _health_index
+        from routes.common import ch_default_mode as _cdm
         for _ch in (_chs if deep else []):
             _rk = _stock_risk(_ch)
-            _hi = _health_index(_ch)
+            # 2026-11-06 S3: 原 `_health_index(_ch)` 用签名默认 mode="bbcc" → other 渠道按
+            #   jd 的 12 天周期算安全线(判出来的"健康"是假的); 且下面又调了第二次
+            #   (`_hix`) 只为拿同一个对象 —— 同一个渠道同一次评估算两遍健康分。
+            _hi = _health_index(_ch, _cdm(_ch))
             _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
             _r = (_rk.get("bcCritical", 0) or 0) + (_rk.get("cCritical", 0) or 0) + (_rk.get("ownCritical", 0) or 0)
             _o = (_rk.get("bcWarning", 0) or 0) + (_rk.get("cWarning", 0) or 0) + (_rk.get("ownWarning", 0) or 0)
@@ -595,19 +599,16 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
             _hp = str((_hi or {}).get("platform", {}).get("score") if _hi else "-")
             _hb = str((_hi or {}).get("bc", {}).get("score") if _hi else "-")
             try:
-                from routes.dashboard import _health_index as _hix
-                _hs2 = _hix(_ch)
-                _sc2 = _hs2.get("score")
+                _sc2 = _hi.get("score") if _hi else None
                 from db import execute as _exH
-                from datetime import datetime as _dth, timezone as _tzh
                 _d0 = now_cn().strftime("%Y-%m-%d")
                 _exH("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
                      "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
                      "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
                      [_d0, _ch, int(_sc2) if _sc2 is not None else -1,
-                      int((_hs2.get("own") or {}).get("score") or -1),
-                      int((_hs2.get("platform") or {}).get("score") or -1),
-                      int((_hs2.get("bc") or {}).get("score") or -1)])
+                      int((_hi.get("own") or {}).get("score") or -1),
+                      int((_hi.get("platform") or {}).get("score") or -1),
+                      int((_hi.get("bc") or {}).get("score") or -1)])
             except Exception as _e:
                     try_err('cron', '静默降级', _e)
             _msg = "[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d | 健康: %s分(own%s/platform%s/bc%s)" % (

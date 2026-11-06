@@ -1009,8 +1009,14 @@ try:
     check("版本: health 读计数版(覆盖 UPDATE 类变更)",
           "data_version" in _ix and "_dvz" in _ix, "index.py")
     _re = _rf("core/rule_eval.py")
-    check("低库存: bbcc 按 BC 合计(SKU×码 一条)",
-          "warehouse_type: \"bc\"" in _re or '"warehouse_type": "bc"' in _re, "rule_eval.py")
+    # 2026-11-06 S3: BC 归并规则搬到 core/metrics.py(唯一真源), rule_eval 只调用它。
+    #   原来这条断言守的是"rule_eval 里出现 BC 行构造" —— 那就等于**允许**别的文件再写一份。
+    _met = _rf("core/metrics.py")
+    check("低库存: bbcc 按 BC 合计(SKU×码 一条), 归并规则只在 core/metrics.py 一处",
+          '"warehouse_type": "bc"' in _met
+          and 'wt in ("platform", "platform_b")' in _met
+          and "merge_bc=True" not in _re and "_bc_agg" not in _re
+          and "_M.units(rows, merge_bc=" in _re, "core/metrics.py")
     check("低库存: 关闭判定与 hits 同为含码 5 元组",
           'str(a.get("bc") or "")) not in hits' in _re, "rule_eval.py")
     _ru = _rf("core/rules.py")
@@ -3812,6 +3818,98 @@ try:
           and "status >= 500 ? 'error' : 'warning'" in _cl29, "api/client.ts")
 except Exception as _e29:
     check("日志噪音用例无异常", False, str(_e29)[:200])
+
+# ── S3: 判定口径单一真源(core/metrics)行为断言 ─────────────────────────────
+# 这组用例只喂内存数据, 不打库 —— 要验的是"同一条规则在四个视图里给出同一个结论",
+# 而不是某个字符串有没有出现在某个文件里(那种断言换个写法就绕过)。
+try:
+    from core import metrics as _SM
+
+    _ser = _SM.Series("jd", {
+        ("S1", "B1", "__C__"): {"ds28": 2.0},        # 该码有记录
+        ("S1", "", "__C__"): {"ds28": 5.0},          # SKU 合计
+        ("S2", "", "__C__"): {"ds28": 0.0},          # 有记录但零销量
+        ("S3", "", "北京仓"): {"ds28": 4.0},          # 只在这个仓有
+    }, ("ds28",))
+    check("S3 日销取值: 该维该码优先", _ser.value("ds28", "S1", "B1", "__C__") == 2.0, "拿到合计说明降级顺序反了")
+    check("S3 日销取值: 少数码缺失才回落到该维合计",
+          _ser.value("ds28", "S1", "B9", "__C__") == 5.0, "没回落到合计")
+    check("S3 日销取值: 该码有记录且为 0 就是 0(不被合计顶上来)",
+          _ser.value("ds28", "S2", "B1", "__C__") == 0.0, "0 被当成缺失了")
+    check("S3 日销取值: 该维无数据 → 0, 绝不拿 __C__ 兜底",
+          _ser.value("ds28", "S3", "", "上海仓") == 0.0, "跨维兜底会让本仓判断失真")
+
+    _p = _SM.periods({"b_to_c_days": "3", "c_safety_days": "0", "ship_to_b_days": "9",
+                      "safety_multiplier": "0", "lead_time_days": "10",
+                      "purchase_lead_days": "14", "purchase_safety_days": "3",
+                      "mode_bbcc_c_safety_days": "3"})
+    check("S3 周期: mode 前缀键优先(平铺 c_safety_days=0 被覆盖成 3)",
+          _p["bbcc"] == 3 + 3 + 9 + 0 and _p["b2c"] == 6, str(_p))
+    check("S3 周期: 自有仓用采购周期, 平台仓跟随模式",
+          _SM.period_of(_SM.DIM_OWN, "jd", "bbcc", _p) == 17
+          and _SM.period_of(_SM.DIM_WH, "jd", "bbcc", _p) == 15
+          and _SM.period_of(_SM.DIM_WH, "other", "traditional", _p) == 10, str(_p))
+
+    _u = {"sku": "S1", "barcode": "", "kind": _SM.DIM_WH, "warehouse": "北京仓",
+          "warehouse_type": "platform", "avail": 10, "transit": 0, "manual_safety": 0}
+    check("S3 安全线: 手工 safety_qty>0 优先于 ds×周期",
+          _SM.safety_line(100.0, 12, 50)[0] == 50
+          and _SM.safety_line(100.0, 12, 50)[1] == "manual", "手工线没生效")
+    check("S3 安全线: 手工为 0 表示没设过, 走动态线",
+          _SM.safety_line(2.0, 12, 0) == (24.0, "dynamic"), "把 0 当成设了 0 天")
+    check("S3 判定: 可用=0 → 断货(不混进低库存)",
+          _SM.judge(dict(_u, avail=0), 100.0, _p, "jd")["state"] == _SM.ST_OUT)
+    check("S3 判定: 无日销 → idle(有库存也不判不健康)",
+          _SM.judge(_u, 0.0, _p, "jd")["state"] == _SM.ST_IDLE)
+    check("S3 判定: 覆盖量(可用+在途)够线 → ok, 缺口 0",
+          _SM.judge(dict(_u, avail=10, transit=20), 2.0, _p, "jd")["state"] == _SM.ST_OK
+          and _SM.judge(dict(_u, avail=10, transit=20), 2.0, _p, "jd")["gap"] == 0)
+    check("S3 判定: 覆盖不足 → low, 缺口=线-覆盖",
+          _SM.judge(dict(_u, avail=10, transit=0), 2.0, _p, "jd")["gap"] == 20.0,
+          "15 天周期 × ds2 = 30, 覆盖 10 → 缺口 20")
+    check("S3 判定: 关闭在途计入后可用量不足即算低库存",
+          _SM.judge(dict(_u, avail=10, transit=20), 2.0, _p, "jd",
+                    include_transit=False)["state"] == _SM.ST_LOW)
+
+    _inv = [
+        {"sku": "S1", "barcode": "B1", "warehouse": "北京仓", "warehouse_type": "platform",
+         "available_qty": 100, "in_transit_qty": 5, "safety_qty": 0},
+        {"sku": "S1", "barcode": "B1", "warehouse": "B仓", "warehouse_type": "platform_b",
+         "available_qty": 50, "in_transit_qty": 1, "safety_qty": 0},
+        {"sku": "S1", "barcode": "B1", "warehouse": "集货仓", "warehouse_type": "own",
+         "available_qty": 999, "in_transit_qty": 0, "safety_qty": 0},
+    ]
+    _bc = [x for x in _SM.units(_inv, merge_bc=True) if x["kind"] == _SM.DIM_BC]
+    _own = [x for x in _SM.units(_inv, merge_bc=True) if x["kind"] == _SM.DIM_OWN]
+    check("S3 归桶: BC 单元=平台+B 合计, 且**不含**自有仓库存(P0-13)",
+          len(_bc) == 1 and _bc[0]["avail"] == 150 and _bc[0]["transit"] == 6,
+          str(_bc))
+    check("S3 归桶: 自有仓逐仓独立(不并进 BC)",
+          len(_own) == 1 and _own[0]["avail"] == 999, str(_own))
+    _all = _SM.units(_inv, merge_bc=False, with_bc=True)
+    check("S3 归桶: 健康卡要四档并存时保留平台行并追加 BC",
+          len([x for x in _all if x["kind"] == _SM.DIM_WH]) == 2
+          and len([x for x in _all if x["kind"] == _SM.DIM_BC]) == 1, str(len(_all)))
+    _trad = _SM.units(_inv, merge_bc=False, drop_platform_b=True)
+    check("S3 归桶: 传统模式 B 仓不参与判定",
+          not [x for x in _trad if x["warehouse_type"] == "platform_b"], "B 仓混进来了")
+    _sku_level = _SM.units(_inv[:1] + [dict(_inv[0], barcode="B2", available_qty=1)],
+                           merge_bc=False, by_barcode=False)
+    check("S3 归桶: 按 SKU 粒度时多码合并成一个单元",
+          len(_sku_level) == 1 and _sku_level[0]["avail"] == 101, str(_sku_level))
+
+    _pairs = [({"kind": _SM.DIM_WH, "sku": "S1"}, {"state": _SM.ST_LOW}),
+              ({"kind": _SM.DIM_WH, "sku": "S2"}, {"state": _SM.ST_OK}),
+              ({"kind": _SM.DIM_WH, "sku": "S3"}, {"state": _SM.ST_PAUSED}),
+              ({"kind": _SM.DIM_WH, "sku": "S4"}, {"state": _SM.ST_OUT})]
+    _sc = _SM.score(_SM.counts(_pairs))
+    check("S3 计分: 停用不进分母(分母=4-1=3, 健康=1)",
+          _sc["total"] == 3 and _sc["healthy"] == 1, str(_sc))
+    check("S3 计分: 空维度给 None/empty(前端显示—, 不给 100 分假象)",
+          _SM.score(_SM.counts([]))["score"] is None
+          and _SM.score(_SM.counts([]))["level"] == "empty")
+except Exception as _e30:
+    check("S3 口径用例无异常", False, str(_e30)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

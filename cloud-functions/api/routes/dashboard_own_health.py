@@ -81,15 +81,9 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     #   (2026-11-01 对齐: 原只取 b_to_c_days=3, 而引擎用 b_to_c+c_safety=6,
     #    同一缺口会算出两个数 → 看板卡与规则告警对不上。这里改为同一公式。)
     #   mode_ 前缀键优先(补货配置的模式双线), 平铺键兜底
-    def _mc(key, mode, default):
-        v = cfg.get("mode_%s_%s" % (mode, key))
-        if v is None:
-            v = cfg.get(key)
-        try:
-            return float(v or default)
-        except Exception:
-            return float(default)
-    b2c_days = _mc("b_to_c_days", "bbcc", 3) + _mc("c_safety_days", "bbcc", 0)
+    #   2026-11-06 S3: 公式收敛到 core.metrics.periods(唯一真源) —— 与规则引擎/补货建议同源
+    from core import metrics as _M
+    b2c_days = float(_M.periods(cfg)["b2c"])
     if b2c_days <= 0:
         b2c_days = 3.0
 

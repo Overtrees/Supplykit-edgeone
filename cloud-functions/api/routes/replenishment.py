@@ -240,8 +240,12 @@ def _build_repl(channel, mode):
         products = _fp.result()
         inv = _fi.result()
         season = _fs.result()
-    lead = (int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))) if mode == "bbcc" \
-        else int(cfg.get("lead_time_days", "0"))
+    # 2026-11-06 S3: 原直读平铺键(b_to_c_days + c_safety_days), 而补货配置里真正的覆盖值是
+    #   `mode_bbcc_c_safety_days`(=3) —— 于是补货建议按 3 天备货、规则引擎按 6 天判缺口,
+    #   同一件事差一倍。改走 core.metrics.periods(mode 前缀优先, 平铺兜底)。
+    from core import metrics as _M
+    _pp = _M.periods(cfg)
+    lead = int(_pp["b2c"] if mode == "bbcc" else _pp["traditional"])
 
     suggestions = []
     if mode == "bbcc":
@@ -269,10 +273,11 @@ def _build_repl(channel, mode):
                 a["safety"] += saf
         for (sku, _bc), st in agg.items():
             avail, c_transit, transit, safety = st["avail"], st["c_transit"], st["transit"], st["safety"]
-            # 动态安全线周期(一盘货): C周期=b_to_c_days+c_safety_days, B周期=ship_to_b_days+safety_multiplier, 全周期=C+B
-            _c_period = int(cfg.get("b_to_c_days", "0")) + int(cfg.get("c_safety_days", "0"))
-            _b_period = int(cfg.get("ship_to_b_days", "0")) + int(float(cfg.get("safety_multiplier") or 0))
-            _full_period = _c_period + _b_period
+            # 动态安全线周期(一盘货): C周期=b_to_c+c_safety, B周期=ship_to_b+safety_multiplier, 全周期=C+B
+            # 2026-11-06 S3: 同样收敛到 core.metrics.periods —— 与规则引擎/断货卡/补货需求同一份
+            _c_period = int(_pp["b2c"])
+            _b_period = int(_pp["bbcc"]) - int(_pp["b2c"])
+            _full_period = int(_pp["bbcc"])
             _st8 = _rd(sku, "__C__", _bc)
             ds7 = round(float(_st8.get("ds7_cut") or 0), 1)
             ds14 = round(float(_st8.get("ds14_cut") or 0), 1)

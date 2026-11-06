@@ -333,8 +333,12 @@ def _q_inventory(channel):
     #   12 列 1.44s / 6 列 0.45s / 仅 COUNT 0.41s —— 差的是**传输量**, 不是扫描。
     #   而这里的两处消费方(_health_index 分档、低库存计数)只用 sku/仓型/可用量,
     #   barcode/warehouse 供 _check_cols 断言保留。缺货列表(dashboard.py 另一处)仍用全列。
+    # 2026-11-06 S3: 补 in_transit_qty / safety_qty —— 判定口径是"覆盖量(可用+在途) vs
+    #   安全线(手工优先, 否则 ds×周期)", 没有这两列就只能拿 avail 单打独斗(旧的错口径)。
+    #   两列 int 在 9 万行上约 +1MB, 换来与告警规则同源 —— 值得。
     _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                  "available_qty FROM inventory WHERE channel=%s", [channel])
+                  "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
+                  [channel])
     try:
         from routes.common import check_cols as _cc
         _cc(_rows, ("barcode", "warehouse"), "dash", "看板物料")
@@ -343,13 +347,18 @@ def _q_inventory(channel):
     return _rows
 
 
-def _q_digest(channel):
+def _q_digest(channel, mode=None):
+    """日销切片(`core.metrics.load`) —— 判定类口径的唯一取数入口
+
+    原返回 `{sku: fused}`(`get_sales_digest`): 只有 `__C__` 一个维度的 SKU 级一个数。
+    那一个数被拿去判 7 个仓 × 每个 69码 —— 逐仓分虚低、单元不一致都是从这里来的。
+    现在按**实际出现的仓型**取对应维度(见 `metrics.dims_needed`), 且只取 ds28 一列。
+    """
     try:
-        from biz.sales import get_sales_digest
-        _, _ds_map, _ = get_sales_digest(channel)
-        return _ds_map
+        from core import metrics as _M
+        return _M.load(channel, dims=_M.dims_needed(None, channel, mode), fields=("ds28",))
     except Exception:
-        return {}
+        return None
 
 
 # ── 2026-11-02 冷算收口: 把"同源重复往返"合成一条 ──────────────────────────
@@ -465,7 +474,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
         _f1 = _ex.submit(_q_agg, channel, days60, d1)
         _f2 = _ex.submit(_q_recent, channel, d1)
         _f3 = _ex.submit(_q_inventory, channel)
-        _f4 = _ex.submit(_q_digest, channel)
+        _f4 = _ex.submit(_q_digest, channel, mode)
         _f5 = _ex.submit(_q_counts, channel)
         _f6 = _ex.submit(_q_flows_month, channel, _st30, today)
         _f7 = _ex.submit(_q_brands, channel, min(days60, _st30), today)
@@ -499,7 +508,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
             _cfg = None
     _t1 = _t.time()
     _ass = _assemble(list(agg) + list(recent), channel, _st30, today, mode,
-                     _inv_rows=_inv_rows, _ds_map=_ds_map,
+                     _inv_rows=_inv_rows, _series=_ds_map,
                      _counts=_counts, _flows=_flows, _brands_raw=_brands_raw, _cfg=_cfg)
     _t2 = _t.time()
     # 冷算计时(2026-11-02 S2-6 收口后保留): perf_debug 是线上冷算观测的唯一手段
@@ -593,12 +602,21 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
 
 
 def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None,
-              _counts=None, _flows=None, _brands_raw=None, _cfg=None):
+              _counts=None, _flows=None, _brands_raw=None, _cfg=None, _series=None):
     """把聚合行组装成看板结构
 
     2026-11-02 冷算收口: `_counts` / `_flows` / `_brands_raw` / `_cfg` 由调用方预取并注入
     (agg 路径已在并行池里取好), 组装阶段不再发 SQL。为 None 时自己查(自定义区间直查路径)。
+
+    2026-11-06 S3: `_series` 是 `core.metrics.Series`(按维度切片); `_ds_map` 只为兼容旧调用方
+    保留 —— 它只有 SKU 级一个数, 会退化成"全挂 `__C__` 维"(见 Series.from_sku_map)。
     """
+    if _series is None and _ds_map:
+        try:
+            from core import metrics as _M
+            _series = _M.Series.from_sku_map(channel, _ds_map)
+        except Exception:
+            _series = None
     # 行形态归一(兼容 DictCursor list[dict] 与非 DictCursor tuple rows——列序=SELECT 顺序)
     _cols = ("d", "order_status", "store", "g", "sub", "cnt")
     _norm = []
@@ -747,55 +765,37 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                   "payout": round(mg - _refund(d30, d31) - _sub(d30, d31), 2)},
     }
 
-    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg)
-    # 低库存计数(动态安全线, 替代静态 SQL——seed safety_qty=0 后静态判定恒 0)
-    low_stock = {"c": 0}
+    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg, _series=_series)
+    # 低库存计数 —— 与健康卡/告警规则同一套判定(core.metrics), 不再自己拼安全线
+    #
+    # 2026-11-06 S3: 原实现有四处各写一遍, 且都拿 **SKU 级 `__C__` 日销** 去比每个仓的可用量:
+    #   7 个仓各比"整盘需求×12 天" → 越小的仓越"缺货"; own 仓还要乘采购周期(更严)。
+    #   这里的数字和健康卡、告警列表本来就是三份不同的答案 —— 用户看到的是三张脸。
+    #   现在只有一个来源: 桶由 metrics.units 归并, ds 按桶维度取, 安全线由 metrics 算。
+    #   `out` 单列(可用<=0), 不混进低库存 —— 断货和"快没了"是两件事, 卡上要分开。
+    low_stock = {"c": 0, "out": 0, "total": 0}
     try:
-        _ls_rows = ([x for x in _inv_rows if int(x.get("available_qty") or 0) > 0]
-                    if _inv_rows is not None else
-                    query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                          "WHERE channel=%s AND available_qty>0", [channel]))
-        _ls_ds = _ds_map if _ds_map is not None else {}
-        if not _ls_ds:
-            try:
-                from biz.sales import load_daily_sales_grouped as _ldsg, calc_sales_multi as _csm, rolling_predict as _rp2
-                _by2, _ = _ldsg(28, channel)
-                _m2 = _csm(_by2, windows=[7, 14, 28])
-                _ls_ds = {s: _rp2(_m2[7].get(s, 0), _m2[14].get(s, 0), _m2[28].get(s, 0)) for s in _by2}
-            except Exception:
-                pass
-        if _cfg is not None:
-            _cfg_ls = _cfg
-        else:
-            _cfg_ls = {}
-            try:
-                _cfg_ls = _q_cfg(channel)
-            except Exception:
-                pass
-        def _mcl(key, m2, default):
-            v = _cfg_ls.get("mode_%s_%s" % (m2, key))
-            if v is None:
-                v = _cfg_ls.get(key)
-            try:
-                return int(float(v or default))
-            except Exception:
-                return default
-        _pbbcc = (_mcl("b_to_c_days", "bbcc", 3) + _mcl("c_safety_days", "bbcc", 0)
-                  + _mcl("ship_to_b_days", "bbcc", 0) + _mcl("safety_multiplier", "bbcc", 0))
-        _ptrad = _mcl("lead_time_days", "traditional", 10) + _mcl("safety_multiplier", "traditional", 0)
-        _ppur = _mcl("purchase_lead_days", "bbcc", 14) + _mcl("purchase_safety_days", "bbcc", 3)
-        _per_ls = _pbbcc if mode == "bbcc" else _ptrad
-        _ls_cnt = 0
-        for _r5 in _ls_rows:
-            _wt5 = str(_r5.get("warehouse_type") or "")
-            _per5 = _ppur if _wt5 == "own" else _per_ls
-            _d5 = _ls_ds.get(str(_r5.get("sku") or ""), 0)
-            _dyn5 = round(_d5 * _per5, 1) if _d5 > 0 and _per5 > 0 else 0.0
-            if _dyn5 > 0 and int(_r5.get("available_qty") or 0) < _dyn5:
-                _ls_cnt += 1
-        low_stock = {"c": _ls_cnt}
+        from core import metrics as _M
+        _cfg_ls = _cfg if _cfg is not None else _q_cfg(channel)
+        _p_ls = _M.periods(_cfg_ls)
+        _rows_ls = (_inv_rows if _inv_rows is not None else
+                    query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                          "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
+                          [channel]))
+        _s_ls = _series
+        if _s_ls is None:
+            _s_ls = _M.load(channel, dims=_M.dims_needed(_rows_ls, channel, mode), fields=("ds28",))
+        # 桶集合必须与**规则引擎实际评估的那一套**一致(bbcc=BC 合计+自有仓 / 传统=逐仓+自有仓),
+        #   否则卡片说 3823、点开列表只有 507 —— 又是"同一件事两个数"。
+        _us_ls = _M.units(_rows_ls, merge_bc=(mode == "bbcc"), by_barcode=False,
+                          drop_platform_b=(mode != "bbcc"))
+        _pairs_ls = _M.judge_units(_us_ls, _s_ls, channel, mode, metric="ds28",
+                                   include_transit=_M.include_transit_default(), p=_p_ls)
+        _c_ls = _M.counts(_pairs_ls)
+        low_stock = {"c": int(_c_ls.get("low") or 0), "out": int(_c_ls.get("out") or 0),
+                     "total": int(_c_ls.get("total") or 0)}
     except Exception as _e:
-            try_err('dashboard', '低库存计数动态降级', _e)
+            try_err('dashboard', '低库存计数降级', _e)
     # 三个概览计数: 原 3 次往返 → 一条(标量子查询, 同快照同口径); 调用方已预取则直接用
     _cnts = _counts if _counts is not None else _q_counts(channel)
     alert_count = {"c": _cnts.get("alerts", 0)}
@@ -1108,38 +1108,27 @@ def _build_aux(channel, mode):
         return int(out.get("c") or 0), so_items, bc_out
 
     def _block_low():
-        """低库存(动态安全线判定, 替代静态 safety_qty): avail < ds×周期; 维度过滤跟随模式"""
+        """低库存(动态安全线判定, 替代静态 safety_qty): 与健康卡/告警列表**同源**
+
+        2026-11-06 S3: 原实现是第四份口径 —— 拿 SKU 级 `__C__` 日销逐个仓比"整盘需求×周期"。
+        同一批货在告警列表里是低库存、在健康卡里是健康、在这张卡上又是第三个数。
+        现在三处都调 `core.metrics`: 桶归并(BC 只含 platform+platform_b)、
+        ds 按桶维度取、安全线手工优先、停用不进缺口 —— 一处定义, 三处可见。
+        """
         try:
-            from biz.sales import get_sales_digest
-            _, _dsm, _ = get_sales_digest(channel)
+            from core import metrics as _M
             _cfg2 = {r.get("key"): r.get("value") for r in
                      query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-
-            def _mc2(key, m2, default):
-                v = _cfg2.get("mode_%s_%s" % (m2, key))
-                if v is None:
-                    v = _cfg2.get(key)
-                try:
-                    return int(float(v or default))
-                except Exception:
-                    return default
-
-            _per_bbcc = (_mc2("b_to_c_days", "bbcc", 3) + _mc2("c_safety_days", "bbcc", 0)
-                         + _mc2("ship_to_b_days", "bbcc", 0) + _mc2("safety_multiplier", "bbcc", 0))
-            _per_trad = _mc2("lead_time_days", "traditional", 10) + _mc2("safety_multiplier", "traditional", 0)
-            _per_pur = _mc2("purchase_lead_days", "bbcc", 14) + _mc2("purchase_safety_days", "bbcc", 3)
-            _period = _per_bbcc if mode == "bbcc" else _per_trad
-            _rows2 = query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                           "WHERE channel=%s AND available_qty>0 AND warehouse_type IN " + _wh_in, [channel])
-            _cnt = 0
-            for _r2 in _rows2:
-                _wt2 = str(_r2.get("warehouse_type") or "")
-                _p2 = _per_pur if _wt2 == "own" else _period
-                _d2 = _dsm.get(str(_r2.get("sku") or ""), 0)
-                _dyn2 = round(_d2 * _p2, 1) if _d2 > 0 and _p2 > 0 else 0.0
-                if _dyn2 > 0 and int(_r2.get("available_qty") or 0) < _dyn2:
-                    _cnt += 1
-            return _cnt
+            _p2 = _M.periods(_cfg2)
+            _rows2 = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                           "available_qty, in_transit_qty, safety_qty FROM inventory "
+                           "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+            _s2 = _M.load(channel, dims=_M.dims_needed(_rows2, channel, mode), fields=("ds28",))
+            _us2 = _M.units(_rows2, merge_bc=(mode == "bbcc"), by_barcode=False,
+                            drop_platform_b=(mode != "bbcc"))
+            _pr2 = _M.judge_units(_us2, _s2, channel, mode, metric="ds28",
+                                  include_transit=_M.include_transit_default(), p=_p2)
+            return int(_M.counts(_pr2).get("low") or 0)
         except Exception as _e:
             try_err('dash', '低库存动态判定降级', _e)
             return 0

@@ -48,17 +48,12 @@ def _stock_risk(channel, full: int = 0):
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
     # 有效补货周期 L/T_eff(模式双线, 复用补货配置): bc 维度= B→C 调拨+安全缓冲; 传统维度=采购到货
-    # L/T 与补货建议同源(mode 前缀键优先, 平铺兜底)——断货红线=补货周期, 跟随 bbcc/传统模式
-    def _mc(key, mode, default):
-        v = cfg.get("mode_%s_%s" % (mode, key))
-        if v is None:
-            v = cfg.get(key)
-        try:
-            return int(float(v or default))
-        except Exception:
-            return default
-    lit_bbcc = _mc("b_to_c_days", "bbcc", 3) + _mc("c_safety_days", "bbcc", 0)
-    lit_trad = _mc("lead_time_days", "traditional", 10)
+    # L/T 与补货建议同源 —— 2026-11-06 S3: 公式收敛到 core.metrics.periods(唯一真源),
+    #   这里只做取值。原来 5 个文件各写一遍同样五行, mode 前缀兜底还互不相同。
+    from core import metrics as _M
+    _p = _M.periods(cfg)
+    lit_bbcc = float(_p["b2c"])
+    lit_trad = float(_p["lead"])
 
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 下方 r.get("barcode") 恒 '' →
     #   bc_total/c_items 按 (sku,'') 合并, 断货卡按码从未生效

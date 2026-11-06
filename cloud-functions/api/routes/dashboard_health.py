@@ -78,25 +78,33 @@ def _sync_health_snapshot_async(channel, health):
     _sync_health_snapshot(channel, health)
 
 
-def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None):
-    """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
-    ds×周期 = 动态安全线; ds≤0 → 安全线 0 → 有库存即 healthy(无销量不判不健康); avail=0 → out
+def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _series=None):
+    """健康指数四档 —— 判定全部走 `core.metrics`(口径单一真源)
 
-    2026-11-02 冷算: `_cfg` 可由调用方注入 —— 同一次看板组装里 `_assemble` 也要这份配置,
-    原来两边各查一次(同一段 `SELECT key,value FROM replenishment_config`), 纯重复往返。
+    ## 2026-11-06 S3 改了什么(以及为什么)
+
+    原实现逐行做 `ds_map.get(sku, 0)`: **日销只有 SKU 一个数**(`__C__` 维的融合值),
+    却被拿去判每一个仓、每一个 69码 的可用量。后果有三个, 都不是"显示不准"级别:
+
+    1. **逐仓分虚低**。一个 SKU 在 7 个仓各有一份库存, 每个仓都去比"整盘需求 × 周期"
+       → 只有一个仓能过线。而 bc 卡把这些仓加起来比同一条线 → 同一批货两个结论。
+    2. **单元不一致**。own/platform 的 `total` 是**库存行数**, bc 的 `total` 是**SKU 数**,
+       而卡片上两个都写作 "SKU" —— 两个数字放在一起比较本身没有意义(P0-14(2))。
+    3. **周期用错**。签名默认 `mode="bbcc"`, cron 对每个渠道都 `_health_index(ch)`,
+       other 渠道于是按 jd 的 12 天周期算安全线。
+
+    现在: 桶由 `metrics.units()` 归并(BC 只含 platform+platform_b, 不再混入 own),
+    日销由 `metrics.judge()` 按桶的维度取, 周期由 `metrics.period_of()` 按渠道模式定。
+    四个 tab 的 `total` 都是 **SKU 粒度**, 可横向比较。
+
+    参数 `_ds_map` 保留但不再使用(旧调用方还在传) —— 它只有 SKU 级 `__C__` 一个数,
+    正是上面那个 bug 的来源。
     """
+    from core import metrics as _M
+    _mode = _M.mode_of(channel, mode)
     rows = _inv_rows if _inv_rows is not None else query(
         "SELECT " + _INV_COLS + " FROM inventory "
         "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
-    # 日销(共享 get_sales_digest, 与规则引擎/低库存卡同源)
-    ds_map = _ds_map if _ds_map is not None else {}
-    if not ds_map:
-        try:
-            from biz.sales import get_sales_digest
-            _, ds_map, _ = get_sales_digest(channel)
-        except Exception as _e:
-                try_err('dash', '健康指数日销降级', _e)
-    # 动态安全线周期(与补货/采购备注同口径)
     if _cfg is not None:
         _cfg = dict(_cfg) if not isinstance(_cfg, dict) else _cfg
     else:
@@ -106,55 +114,21 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None)
                     query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
         except Exception as _e:
                 try_err('dash', '健康指数配置加载降级', _e)
-
-    def _mc(key, mode2, default):
-        v = _cfg.get("mode_%s_%s" % (mode2, key))
-        if v is None:
-            v = _cfg.get(key)
-        try:
-            return int(float(v or default))
-        except Exception:
-            return default
-    _hp_bbcc = (_mc("b_to_c_days", mode, 3) + _mc("c_safety_days", mode, 0)
-                + _mc("ship_to_b_days", mode, 0) + _mc("safety_multiplier", mode, 0))
-    _hp_trad = _mc("lead_time_days", mode, 10) + _mc("safety_multiplier", mode, 0)
-    _hp_pur = _mc("purchase_lead_days", mode, 14) + _mc("purchase_safety_days", mode, 3)
-    _period = _hp_bbcc if mode == "bbcc" else _hp_trad
-
-    _z = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0}
-    hw = {"own": dict(_z), "platform": dict(_z), "platform_b": dict(_z)}
-    bc_agg = {}
-    # 2026-10-29 按 69码(用户定案 A): 库存行按码拆分 → **逐行独立判定与计数**
-    #   同 SKU 不同 69码 各自算一个健康单元(粒度更细, 用户可见数字随之变为"库存行数")
-    for r in rows:
-        wt = str(r.get("warehouse_type") or "")
-        avail = int(r.get("available_qty") or 0)
-        sku = str(r.get("sku") or "")
-        _ds = ds_map.get(sku, 0)
-        _per = _hp_pur if wt == "own" else _period
-        _dyn = round(_ds * _per, 1) if _ds > 0 and _per > 0 else 0.0
-        st = hw.get(wt)
-        if st is None:
-            continue
-        st["total"] += 1
-        if avail <= 0:
-            st["out_of_stock"] += 1
-        elif _dyn <= 0 or avail >= _dyn:
-            st["healthy"] += 1
-        else:
-            st["warning"] += 1
-        if wt in ("platform", "platform_b"):
-            b = bc_agg.setdefault(sku, {"avail": 0, "dyn": 0.0})
-            b["avail"] += avail
-            b["dyn"] = max(b["dyn"], _dyn)
-    bc = {"healthy": 0, "warning": 0, "out_of_stock": 0, "total": len(bc_agg)}
-    for b in bc_agg.values():
-        if b["avail"] <= 0:
-            bc["out_of_stock"] += 1
-        elif b["dyn"] <= 0 or b["avail"] >= b["dyn"]:
-            bc["healthy"] += 1
-        else:
-            bc["warning"] += 1
+    _p = _M.periods(_cfg)
+    if _series is None:
+        _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
+    # 判定单元: 保留逐仓行(own/platform/platform_b 三个 tab 各看各的), **另外**追加 BC 单元
+    #   传统模式下 B 仓不参与(它只是 jd 的中转仓) —— 与告警规则的 `_close_wt` 白名单同口径
+    _us = _M.units(rows, merge_bc=False, with_bc=True, by_barcode=False,
+                   drop_platform_b=(_mode != "bbcc"))
+    _pairs = _M.judge_units(_us, _series, channel, _mode, metric="ds28",
+                            include_transit=_M.include_transit_default(), p=_p)
+    _c_own = _M.counts(_pairs, ("own",))
+    _c_plat = _M.counts(_pairs, wt="platform")
+    _c_pb = _M.counts(_pairs, wt="platform_b")
+    _c_bc = _M.counts(_pairs, ("bc",))
+    # 总分不含 bc: bc 是 platform+platform_b 的合并, 与它们同时计入就是把同一批货数两遍
+    _c_all = _M.counts(_pairs, ("own", "wh"))
 
     # 健康分档参数: 内置'库存健康监控'规则 params 配置(默认 85/60 与硬编码一致)
     _hrp = _rule_params("health", channel)
@@ -164,22 +138,7 @@ def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None)
     except Exception:
         _hg, _hw = 85.0, 60.0
 
-    def _score(r):
-        total = int(r.get("total") or 0)
-        healthy = int(r.get("healthy") or 0)
-        # 空维度(total=0, 如 other 渠道无 B 仓) → score=None/level=empty, 前端显示"—"而非 100 分误导
-        if total == 0:
-            return {"score": None, "healthy": 0, "warning": 0, "out_of_stock": 0, "total": 0,
-                    "level": "empty"}
-        score = round(healthy / total * 100, 0)
-        return {"score": score, "healthy": healthy, "warning": int(r.get("warning") or 0),
-                "out_of_stock": int(r.get("out_of_stock") or 0), "total": total,
-                "level": "good" if score >= _hg else ("warning" if score >= _hw else "danger")}
-
-    all_rows = {"healthy": sum(int(hw.get(k, _z).get("healthy") or 0) for k in hw),
-                "warning": sum(int(hw.get(k, _z).get("warning") or 0) for k in hw),
-                "out_of_stock": sum(int(hw.get(k, _z).get("out_of_stock") or 0) for k in hw),
-                "total": sum(int(hw.get(k, _z).get("total") or 0) for k in hw)}
-    return {"own": _score(hw.get("own", _z)), "platform": _score(hw.get("platform", _z)),
-            "platform_b": _score(hw.get("platform_b", _z)), "bc": _score(bc),
-            "score": _score(all_rows)["score"], "level": _score(all_rows)["level"]}
+    _sc_all = _M.score(_c_all, _hg, _hw)
+    return {"own": _M.score(_c_own, _hg, _hw), "platform": _M.score(_c_plat, _hg, _hw),
+            "platform_b": _M.score(_c_pb, _hg, _hw), "bc": _M.score(_c_bc, _hg, _hw),
+            "score": _sc_all["score"], "level": _sc_all["level"]}

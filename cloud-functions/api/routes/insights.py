@@ -260,22 +260,16 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     except Exception as _e:
             try_err('insights', '进销存周期配置降级', _e)
 
-    def _mc3(key, m2, default):
-        v = _cfg3.get("mode_%s_%s" % (m2, key))
-        if v is None:
-            v = _cfg3.get(key)
-        try:
-            return int(float(v or default))
-        except Exception:
-            return default
-    _bbcc_period = (_mc3("b_to_c_days", "bbcc", 3) + _mc3("c_safety_days", "bbcc", 0)
-                    + _mc3("ship_to_b_days", "bbcc", 0) + _mc3("safety_multiplier", "bbcc", 0))
-    _trad_period = _mc3("lead_time_days", "traditional", 10) + _mc3("safety_multiplier", "traditional", 0)
+    # 2026-11-06 S3: 周期公式收敛到 core.metrics.periods(唯一真源)
+    from core import metrics as _M
+    _pp = _M.periods(_cfg3)
+    _bbcc_period = float(_pp["bbcc"])
+    _trad_period = float(_pp["traditional"])
     # platform 维度周期跟随补货模式(mode 参数; 空=渠道默认 jd→bbcc/other→traditional)
     if not mode:
         from routes.common import ch_default_mode as _cdm
         mode = _cdm(channel)   # 2026-10-30: 渠道默认模式由 channels 表驱动(原硬编码 jd→bbcc)
-    _pur_period = _mc3("purchase_lead_days", "bbcc", 14) + _mc3("purchase_safety_days", "bbcc", 3)
+    _pur_period = float(_pp["purchase"])
     # 2026-11-04 周转天数口径(用户定案):
     #   当月自然天数 × (期初 + 当月入库) / 当月出库
     #   期初取 inventory.beginning_stock 导入原值, 不做"可用-月入+月出"反推

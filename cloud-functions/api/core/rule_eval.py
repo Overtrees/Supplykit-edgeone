@@ -9,7 +9,8 @@ import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
 from db import query, one, execute
 from routes.common import try_err
-from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛)
+# 2026-11-06 S3: 日销取值从 `biz.sales.pick_ds`(需要调用方手拼两套映射)改为
+#   `core.metrics.Series.value` —— 映射由模块统一持有, 调用方只给 (sku, 码, 维)。
 # 2026-11-03 D8: 关闭一律走生命周期入口(写 closed_reason/closed_at, 状态机单一真源)
 from core.alert_lifecycle import close as _close_alerts, close_by_ids as _close_ids
 
@@ -206,10 +207,8 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
 
     # 计算变量注入(与看板断货判定同源): SKU 聚合近似 + 规则参数(看板计算 params)
     _agg = None
-    _fused = {}
-    # 2026-10-29 按 69码: 两套映射 —— ①按码行 ②合计行(空码); 取值按码优先, 再合计, 最后全国兜底
-    _ds_bc = {}    # (sku, barcode, warehouse) → ds28(含 __ALL__/__C__/__BC__ 哨兵)
-    _ds_agg = {}   # (sku, warehouse)       → ds28(合计行)
+    # 2026-11-06 S3: 原 `_ds_bc` / `_ds_agg` 两套手拼映射已删除 —— 日销取值统一走
+    #   `core.metrics.Series.value`(按码优先、只降码不降维、绝不全国兜底)。
     # 2026-11-03 D4: 下面"计算变量注入"整块可能被跳过(only_ats 过滤后没有规则引用计算变量),
     #   但这三个映射在 ctx 构造时被**无条件**引用。必须在块外先初始化 ——
     #   否则浅档评估第一次就 `local variable '_exp_map' referenced before assignment`
@@ -220,13 +219,16 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     _prod_sup = {}     # sku → supplier_code(ctx 构造处无条件 get, 500 行外)
 
     def _ds_of(_sku, _bc, _wh):
-        """日销取值: 该维该 69码 → 该维 SKU 合计 → 0(2026-11-01 收敛到 biz.sales.pick_ds)
+        """日销取值: 该维该 69码 → 该维 SKU 合计 → 0
 
         维度(_wh)是既定业务对象, 不是可降级层级: bbcc→__BC__(一盘) / traditional+own→该仓。
         只做两级: ①该对象内该 69码 ②该对象内 SKU 合计(少码)—— 降级只降码, 不换维度。
         该维度无数据时返回 0(不触发): **绝不拿全国/全国C合计兜底**(会干扰本仓判断)。
+        2026-11-06 S3: 实现已收敛到 `core.metrics.Series.value`, 这里只留签名。
         """
-        return pick_ds(_ds_bc, _ds_agg, _sku, _bc, _wh)
+        if _SER is None:
+            return 0.0
+        return _SER.value("ds28", _sku, _bc, _wh)
 
     _sigma = {}
     _otif_map = {}
@@ -235,26 +237,21 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     _lit_trad = 10.0
     _lit_bbcc = 3.0
     _rp = {}
+    _p = {}          # 周期(天) —— 由 core.metrics.periods 统一算, 见下方 _need_calc 分支
+    _SER = None      # 日销切片(core.metrics.Series) —— 全渠道按码一次取回
     if _need_calc:
         try:
+            from core import metrics as _M
             _cfg = {r2.get("key"): r2.get("value") for r2 in
                     query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])}
-            def _mcv(key, mode, default):
-                v = _cfg.get("mode_%s_%s" % (mode, key))
-                if v is None:
-                    v = _cfg.get(key)
-                try:
-                    return float(v or default)
-                except Exception:
-                    return default
-            _lit_trad = _mcv("lead_time_days", "traditional", 10)
-            _lit_bbcc = _mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
-            # 动态安全线周期(与补货/采购备注同口径): bbcc 全周期=C+B / 传统=lead+安全 / 采购=前置+安全
-            _bbcc_period = (_mcv("b_to_c_days", "bbcc", 3) + _mcv("c_safety_days", "bbcc", 0)
-                            + _mcv("ship_to_b_days", "bbcc", 0) + _mcv("safety_multiplier", "bbcc", 0))
-            _trad_period = _mcv("lead_time_days", "traditional", 10) + _mcv("safety_multiplier", "traditional", 0)
-            _purchase_period = _mcv("purchase_lead_days", "bbcc", 14) + _mcv("purchase_safety_days", "bbcc", 3)
+            # 2026-11-06 S3: 周期口径收敛到 core.metrics.periods —— 看板/规则/采购
+            #   原来各写一遍同样的五行, 连"mode 传哪个"都不同(other 用 jd 的周期算安全线)。
+            _p = _M.periods(_cfg)
+            _lit_trad = float(_p["lead"])          # σ 安全库存的地平线: 供应商→仓
+            _lit_bbcc = float(_p["b2c"])           # 自有仓给下游备货的周期: C→B
         except Exception as _e:
+            from core import metrics as _M
+            _p = _M.periods({})
             try_err("rules", "评估加载补货周期配置降级", _e)
         try:
             # 看板计算参数(规则 params 优先, 兼容 config)
@@ -273,24 +270,12 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         except Exception as _e:
             try_err("rules", "评估加载 OTIF 降级", _e)
         try:
-            from biz.sales import get_sales_digest
-            _by_sku, _fused, _sigma = get_sales_digest(channel)  # 共享日销(进程内缓存, 与看板同源)
-            # 2026-10-29 粒度修正: 原 _ds 一律取**全国 SKU 日销**, 却与**单仓可用**比较
-            #   → 每个仓都远低于全国安全线 → 低库存全量误报(实测 jd 711→3157, other 2980)
-            #   逐仓行取该仓日销(物化逐仓行), 无逐仓数据回退全国(兼容)
-            try:
-                from biz.sales import get_sku_sales_stats as _gwds
-                # 按码行(barcode='*') + 合计行(默认) 各取一次, 供 _ds_of 分级命中
-                for _vwh in (_gwds(channel, days=28, barcode="*") or {}).values():
-                    _b2 = str(_vwh.get("barcode") or "")
-                    if _b2:
-                        _ds_bc[(str(_vwh.get("sku") or ""), _b2,
-                                str(_vwh.get("warehouse") or ""))] = float(_vwh.get("ds28") or 0)
-                for _vwh in (_gwds(channel, days=28) or {}).values():
-                    _ds_agg[(str(_vwh.get("sku") or ""),
-                             str(_vwh.get("warehouse") or ""))] = float(_vwh.get("ds28") or 0)
-            except Exception as _ewh:
-                try_err('core_rules', '日销(按码+逐仓)加载降级', _ewh)
+            from core import metrics as _M
+            # 2026-11-06 S3: 一次取回(按码 + 逐仓 + 全维), 取代原来"按码一次 + 合计一次"
+            #   两趟 12 万行 —— 只取 ds28/sigma 两列, 传输量降到原来的 1/5。
+            #   同时取代 get_sales_digest: 它给的是 SKU 级 `__C__` 一个数, 正是本模块要消灭的东西。
+            _SER = _M.load(channel, dims=None, with_barcode=True, fields=("ds28", "sigma"))
+            _sigma = _SER.sigma_by_sku() if _SER is not None else {}
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)
         try:
@@ -396,38 +381,29 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
             _st["transit"] += int(_r.get("in_transit_qty") or 0)
             _st["safety"] += int(_r.get("safety_qty") or 0)
 
-    # 2026-10-29 模式分流(与补货建议"安全线提示"完全同源):
+    # 2026-10-29 模式分流(与补货建议的安全线提示完全同源):
     #   bbcc        → BC 合计(C可用+C在途+B可用+B在途) 对 ds×全周期, 粒度 SKU×69码 一条
     #   traditional → 逐仓(可用+在途) 对 该仓 ds×(lead+safety)
     #   own(两模式) → 逐仓(可用+在途) 对 该仓 ds×(采购前置+安全)
     #   原实现: 单仓 avail 对 全国 ds×周期 → 每仓必报(实测 jd 711→3157)
-    _mode_e = str(mode or ("bbcc" if str(channel) == "jd" else "traditional"))
-    if _mode_e != "bbcc":
-        # 2026-10-29 与采购/补货同口径: B 仓(platform_b)只在 jd+bbcc 链路参与,
-        #   传统模式/other 渠道不产生 B 仓维度告警(否则会出现"B 仓单独一条"的伪维度)
-        rows = [r for r in rows if str(r.get("warehouse_type") or "") != "platform_b"]
-    if _mode_e == "bbcc":
-        _bc_agg = {}
-        for _r0 in rows:
-            if str(_r0.get("warehouse_type") or "") in ("platform", "platform_b"):
-                _k0 = (str(_r0.get("sku") or ""), str(_r0.get("barcode") or ""))
-                _a0 = _bc_agg.setdefault(_k0, {"avail": 0, "transit": 0, "name": ""})
-                _a0["avail"] += int(_r0.get("available_qty") or 0)
-                _a0["transit"] += int(_r0.get("in_transit_qty") or 0)
-                if not _a0["name"]:
-                    _a0["name"] = str(_r0.get("product_name") or "")
-        # 平台/B 行不再逐行评估(由 BC 合计行代表), own 行保留逐仓
-        rows = [r for r in rows
-                if str(r.get("warehouse_type") or "") not in ("platform", "platform_b")]
-        # bbcc 下 platform_b 已并入 BC 合计, 不再逐行
-        # 2026-10-30 语义对齐: BC 行与逐仓行同构 —— available_qty 只放"已到仓可用",
-        #   in_transit_qty 放"C在途+B在途"; 规则要含在途就显式相加(available+in_transit),
-        #   避免同一文案在 bbcc/traditional 下含义不同
-        rows += [{"sku": _k0[0], "barcode": _k0[1], "warehouse": "__BC__",
-                  "warehouse_type": "bc", "product_name": _a0["name"],
-                  "available_qty": _a0["avail"],
-                  "safety_qty": 0, "in_transit_qty": _a0["transit"]}
-                 for _k0, _a0 in _bc_agg.items()]
+    #
+    # 2026-11-06 S3: 归并规则搬到 `core.metrics.units` —— 看板健康卡/低库存用的是同一份。
+    #   原来这段"platform+platform_b 合并成 BC"在这里、在 dashboard_health 里各写一遍
+    #   (后者还按 SKU 合并、dyn 取 max), 两处结果永远对不上。现在只有一处。
+    from core import metrics as _M
+    _mode_e = str(mode or _M.mode_of(channel))
+    _units = _M.units(rows, merge_bc=(_mode_e == "bbcc"), drop_platform_b=(_mode_e != "bbcc"),
+                      by_barcode=True)
+    # 规则求值仍然吃"行"形态(condition_json 里写的是 inv.* / own.*), 这里把单元映射回行:
+    #   BC 单元 → warehouse='__BC__' / warehouse_type='bc'; 其余单元 → 各自的仓与仓型。
+    #   available_qty 只放"已到仓可用", in_transit_qty 单独放 —— 规则要含在途就显式相加,
+    #   避免同一个字段在 bbcc/traditional 下含义不同(2026-10-30 定案)。
+    rows = [{"sku": _u["sku"], "barcode": _u["barcode"], "warehouse": _u["warehouse"],
+             "warehouse_type": _u["warehouse_type"],
+             "product_name": _u.get("name") or _u["sku"],
+             "available_qty": _u["avail"], "in_transit_qty": _u["transit"],
+             "safety_qty": _u.get("manual_safety") or 0,
+             "locked_qty": 0} for _u in _units]
 
     _tick("calc_load")
     inv_ctxs, daily_ctxs = [], []
@@ -491,51 +467,49 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
         _supc = _prod_sup.get(sku, "")
         if _supc and _supc in _sup_score:
             base["supplier"] = {"score": _sup_score[_supc], "code": _supc}
-        if _need_calc and _agg is not None:
+        if _need_calc:
             try:
-                _st = _agg.get(sku, {"avail": 0, "transit": 0, "safety": 0})
-                # BC 盘的日销读 __C__(B 仓不产生销售); 其余行按自身维度
+                _wt = str(r.get("warehouse_type") or "")
+                # BC 盘的日销读 __C__(B 仓不产生销售); 自有仓读 __C__(要的是下游需求); 其余按自身仓
+                _kind = (_M.DIM_BC if _wt == "bc"
+                         else (_M.DIM_OWN if _wt == "own" else _M.DIM_WH))
                 _ds = _ds_of(sku, str(r.get("barcode") or ""),
-                             "__C__" if str(r.get("warehouse_type") or "") == "bc"
-                             else str(r.get("warehouse") or ""))
+                             _M.dim_of(_kind, str(r.get("warehouse") or ""), _wt))
                 _otif = _otif_map.get(_prod_sup.get(sku, ""), 1.0)
-                _ss_z = float(_rp.get("ss_z", 1.65))
-                _ss = _ss_z * _sigma.get(sku, 0) * (_lit_trad ** 0.5)
-                _adj = (_st["avail"] + _st["transit"] * _otif) / _ds if _ds > 0 else 999.0
+                # 2026-11-06 S3(P0-13): 量取**本单元**的 —— BC 单元=平台+B 合计, 逐仓单元=该仓。
+                #   原实现用 `_agg[sku]`(该 SKU 所有仓型求和, 含集货仓)去除以单仓/BC 的日销,
+                #   于是"BC 盘可撑天数"里混着自有仓的货, buffer 虚高 → 该报的没报。
+                _u = {"sku": sku, "barcode": str(r.get("barcode") or ""), "kind": _kind,
+                      "warehouse": str(r.get("warehouse") or ""),
+                      "avail": int(r.get("available_qty") or 0),
+                      "transit": int(r.get("in_transit_qty") or 0),
+                      "manual_safety": int(r.get("safety_qty") or 0)}
+                _v = _M.judge(_u, _ds, _p, channel, _mode_e, include_transit=False,
+                              sigma=_sigma.get(sku, 0), z=float(_rp.get("ss_z", 1.65)),
+                              otif=_otif, accel=_accel.get(sku, 1.0))
                 # 2026-10-29 ctx 扩展: 周转天数(可撑天数, 无日销时不给键——避免 999 误判)
                 if _ds > 0:
-                    base.setdefault("inv", {})["turnover_days"] = round(_adj, 2)
-                elif str(r.get("warehouse_type") or "") == "own" and base.get("own", {}).get("cover_days"):
+                    base.setdefault("inv", {})["turnover_days"] = _v["adj_dos"]
+                elif _wt == "own" and base.get("own", {}).get("cover_days"):
                     # 2026-11-01 own 行补 turnover_days: 自有仓结构性无本仓日销(daily_sales_snapshot
                     #   只记平台仓) → 上面 _ds>0 永远不成立 → 规则页"周转天数"字段在 own 维度恒缺失,
-                    #   用户选中即静默失效。own 的语义等价量 = 自有可用 ÷ 下游日销(= own.cover_days),
-                    #   这里回填到 inv.turnover_days, 让该字段在自有仓维度也可用且口径一致。
+                    #   用户选中即静默失效。own 的语义等价量 = 自有可用 ÷ 下游日销(= own.cover_days)。
                     base.setdefault("inv", {})["turnover_days"] = float(base["own"]["cover_days"])
-                # 动态安全线(替代静态 safety_qty): 按行维度周期——platform=补货周期(jd→bbcc全周期/other→传统),
-                # own=采购周期; ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
-                _wt = str(r.get("warehouse_type") or "")
-                if _wt == "bc":
-                    _period = _bbcc_period        # 全周期 C+B(12 天)
-                elif _wt == "own":
-                    _period = _purchase_period
-                elif str(channel) == "jd":
-                    _period = _bbcc_period
-                else:
-                    _period = _trad_period
-                _dyn_safety = round(_ds * _period, 1) if _ds > 0 and _period > 0 else 0.0
-                _buf = _st["avail"] / max(max(_dyn_safety, _ss), 1)
-                base["inv"]["safety_qty"] = _dyn_safety
-                base["inv"]["adj_dos"] = round(_adj, 2)
-                base["inv"]["buffer"] = round(_buf, 2)
+                # 安全线: 手工 safety_qty>0 优先, 否则 ds×周期(周期按桶类型: BC/平台=补货周期,
+                #   自有仓=采购周期)。ds≤0 → 0(无销量不触发低库存告警, 去静态噪音)
+                base["inv"]["safety_qty"] = _v["line"]
+                base["inv"]["adj_dos"] = _v["adj_dos"]
+                base["inv"]["buffer"] = _v["buffer"]
                 base["inv"]["otif"] = _otif
-                base["inv"]["ss_dyn"] = round(_ss, 1)
-                base["inv"]["accel_rate"] = round(_accel.get(sku, 1.0), 2)
+                base["inv"]["ss_dyn"] = _v["ss_dyn"]
+                base["inv"]["accel_rate"] = _v["accel_rate"]
                 base["health"] = {"score": _health if _health is not None else 999.0}
                 base["health_score"] = _health if _health is not None else 999.0
                 base["lit_trad"] = _lit_trad
                 base["lit_bbcc"] = _lit_bbcc
             except Exception as _e:
                     try_err('core_rules', '静默降级', _e)
+
         inv_ctxs.append(base)
         daily_ctxs.append(base)
     _tick("ctx_build")

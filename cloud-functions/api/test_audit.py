@@ -222,5 +222,68 @@ for _rel in ("routes/cleansing.py", "routes/cron.py", "routes/suppliers.py"):
 check("采购告警的三个写侧触发源都在(导入完成/评估完成/参数保存)",
       _trig == 3, "只在 %d 个文件里找到" % _trig)
 
+# ── F. 判定口径单一真源(2026-11-06 S3)────────────────────────────────────
+# 这一组守的不是"某行代码写成什么样", 而是**同一件事只允许有一个定义**。
+# 判据刻意选"副本数"(grep 计数), 因为口径漂移的形态永远是"又多了一份看起来对的实现"。
+print("\nF. 判定口径单一真源(core/metrics.py)")
+_met_p = os.path.join(_api_dir, "core", "metrics.py")
+_met_src = open(_met_p, encoding="utf-8").read() if os.path.exists(_met_p) else ""
+check("core/metrics.py 存在且导出完整 API(dim/safety/judge/units/counts/score)",
+      all(("def %s(" % _fn) in _met_src for _fn in
+          ("mode_of", "periods", "period_of", "dim_of", "safety_line", "judge",
+           "judge_units", "units", "counts", "score", "load")),
+      "缺函数会导致消费方自己补一份")
+
+# F1: 周期公式只许有一份 —— 其余文件不得再从 cfg 里拼 b_to_c_days + ...
+_dup = []
+for _root, _dirs, _files in os.walk(_api_dir):
+    if "__pycache__" in _root or "/.git" in _root:
+        continue
+    for _f in _files:
+        if not _f.endswith(".py") or _f in ("local_test.py", "test_audit.py", "metrics.py"):
+            continue
+        _fp = os.path.join(_root, _f)
+        _src = open(_fp, encoding="utf-8").read()
+        # 只看"活的表达式": 去掉注释行与 seed 的参数清单(那是数据, 不是公式)
+        if _f == "seed_fill.py":
+            continue
+        _live = "\n".join(_l for _l in _src.split("\n") if not _l.strip().startswith("#"))
+        # "b_to_c_days" 与 "c_safety_days" 挨着出现 = 又拼了一遍 C 周期
+        # 键名带引号才算"真的在读配置"(注释/文档串里不会带引号)
+        if re.search(r"""['"]b_to_c_days['"][^\n]{0,150}['"]c_safety_days['"]""", _live):
+            _dup.append(os.path.relpath(_fp, _api_dir))
+check("周期公式只有 core/metrics.periods 一份(其余文件不再拼 b_to_c+c_safety)",
+      not _dup, "重复实现: %s" % ",".join(_dup))
+
+# F2: 健康分不得再读 SKU 级单维日销(get_sales_digest 的 {sku: fused})
+_hh = open(os.path.join(_api_dir, "routes", "dashboard_health.py"), encoding="utf-8").read()
+check("健康分不再用 get_sales_digest 的 SKU 级单维日销",
+      "get_sales_digest" not in _hh and "metrics" in _hh,
+      "那个 map 只有 __C__ 一个维度, 拿去判每个仓就是逐仓分虚低的根因")
+check("健康分 mode 不再默认 bbcc(默认值由渠道配置回答)",
+      'mode="bbcc"' not in _hh.split("def _health_index")[1][:300],
+      "cron 每渠道调一次 → other 用 jd 的周期")
+check("健康分四个 tab 同一粒度(by_barcode=False, 单元=SKU)",
+      "by_barcode=False" in _hh, "unit 不一致时 total 不可横向比较")
+
+# F3: 低库存计数不再自拼安全线
+_dsh = open(os.path.join(_api_dir, "routes", "dashboard.py"), encoding="utf-8").read()
+check("看板低库存两处计数都走 metrics(不再出现 _mcl/_mc2 自拼周期)",
+      "_mcl(" not in _dsh and "_mc2(" not in _dsh and "_M.judge_units(" in _dsh,
+      "自拼周期 = 第四份口径")
+
+# F4: cron 不得重复计算健康分, 且必须传渠道模式
+_cr = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
+_hi_calls = len(re.findall(r"_h?i?x?\w*\(_ch\)", _cr.split("from routes.dashboard import _stock_risk, _health_index")[-1][:2500]))
+check("cron 每渠道只算一次健康分, 且按渠道默认模式传入",
+      "_health_index(_ch, _cdm(_ch))" in _cr and "_hix(" not in _cr,
+      "重复调用=%d" % _hi_calls)
+
+# F5: 规则引擎的量取"本单元", 不是 SKU 全仓汇总(否则 BC 可撑天数混入自有仓库存)
+_re2 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
+check("规则引擎按单元取量(BC=平台+B, 不再用 _agg 的 SKU 全仓合计)",
+      "_M.judge(" in _re2 and '_st["avail"] + _st["transit"]' not in _re2,
+      "P0-13: BC 盘可售里混着集货仓的货")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
