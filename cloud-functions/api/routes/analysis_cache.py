@@ -168,21 +168,6 @@ def cache_get(key, ttl, builder, max_bytes=None):
         except Exception as _e:
                 try_err('analysis_cache', '静默降级', _e)
         return builder()
-    except Exception as e:
-        # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;
-        # 自愈本身也失败才降级直算(保底不阻塞业务)
-        try:
-            from db import execute as _e3
-            _e3("DELETE FROM analysis_cache WHERE `key`=%s", [key])
-            _e3("CREATE TABLE IF NOT EXISTS analysis_cache ("
-                "`key` VARCHAR(160) PRIMARY KEY, value MEDIUMTEXT, "
-                "created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))")
-            _e3("INSERT INTO quality_logs(log_type, level, message, source) "
-                "VALUES('cache_error','error',%s,'api')",
-                ("cache_get 降级直算[%s]: %s" % (str(key)[:80], str(e)[:150]),))
-        except Exception as _e:
-                try_err('analysis_cache', '静默降级', _e)
-        return builder()
 
 
 def _drain_agg_dirty(batch=40, max_rounds=6):

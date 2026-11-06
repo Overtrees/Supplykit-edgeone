@@ -10,9 +10,11 @@ from routes.common import track_run  # 2026-11-02 S1-2: 链路运行流水
 
 router = APIRouter(tags=["dashboard"])
 
-from routes.dashboard_maintain import _track_data, _snapshot_step, _rebuild_day_agg
-from routes.dashboard_stock_risk import _stock_risk, _grade_risk, _rule_params
-from routes.dashboard_health import _health_index, _sync_health_snapshot
+# 2026-11-06: 维护类函数(_track_data/_snapshot_step/_rebuild_day_agg)已由
+#   core/maintenance.py 在后台线程调用, 读路径不再直接使用 —— 不留无用导入。
+# _grade_risk 虽然本文件已不直接用, 但 local_test 从这里 import 它 —— 模块再导出, 不许删
+from routes.dashboard_stock_risk import _stock_risk, _grade_risk
+from routes.dashboard_health import _health_index, _sync_health_snapshot_async
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 from core.clock import now_cn
 _register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear(), _accel_cache.clear()))
@@ -229,35 +231,58 @@ def health_trend(channel: str = "jd", days: int = 14):
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc",
                       part: str = ""):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作按域失效(2026-11-02 S2-1), 数据变化最多 30s 可见)
-    附带: 应用层每日维护(快照新鲜度自愈 + 每日规则兜底, 不依赖 schedules) + 健康分快照幂等写入(趋势数据源)"""
+
+    2026-11-06 **冷算根治**: 把"维护"从**用户请求路径**里搬出去
+
+    ## 原来的问题(为什么反复退化)
+
+    这个缓存的 miss 分支里塞了四件与"回答用户问题"无关的事:
+
+    | 副作用 | 每次 miss 都跑 | 性质 |
+    |---|---|---|
+    | `_track_data` 数据追平(含 60 天窗口完整性自愈、必要时 `_rebuild_day_agg(90)`) | 是 | 维护 |
+    | `_daily_maintenance` digest 预填 / 日志治理 / 导出文件清理 / 日志归档 | 每天 1 次 | 维护 |
+    | `_daily_rules_guard` 库存指纹 → 可能触发全量规则评估 | 指纹变化时 | 维护 |
+    | `_sync_health_snapshot` 健康分快照写入 | 每次 miss | 写入 |
+
+    它们被记进"summary 这个请求"的耗时里 —— 线上实测: **查询 1.21s + 组装 0.21s = 1.42s,
+    而接口 5.17s**。也就是说 **73% 的响应时间不在业务计算里**。
+    更糟的是 `_rebuild_day_agg(90)` 这类重活会在**用户点开看板的那一刻**同步跑。
+
+    这就是"每一轮性能优化都做过、又反复退化"的机制: 优化的是**计算**(往返次数/投影列数,
+    见 §15.120), 而**维护量**会随功能增加而重新长回请求路径里 —— 计算优化得再好,
+    也抵不住一条 `_rebuild_day_agg(90)` 随机插在冷算上。
+    **计算的账和维护的账必须分开放, 否则永远在追一个移动靶。**
+
+    ## 现在的口径
+
+    · 请求路径只做两件事: 取数(命中缓存就直接返回) + 组装。**零维护、零写入**。
+    · 维护挪到 `core.maintenance.kick()` —— 后台线程 + 全局限频 + 已有原子抢占
+      (`maintenance_log` 主键 / 库存指纹), 多实例安全, 失败不影响本次响应。
+    · 健康分快照改为**跟随评估完成**写入(它本来就只依赖 health_index), 不再挂在读路径上。
+
+    `part=main/charts` 拆视野、缓存键、TTL、失效口径**一律不变** —— 这是纯粹的
+    "把不该在这里的东西挪走", 不改任何业务数值。
+    """
     _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
-    # 维护/守卫/快照仅在缓存 miss 时执行(命中直接返回——省 ~1s; 维护每天多次 miss 仍覆盖)
 
     def _b():
-        # 数据追平(每 miss 即时——一次 SQL 三 MAX 合并, 物化跟数据不延迟)
-        try:
-            _track_data(channel, None)
-        except Exception as _e:
-                try_err('dashboard', '数据追平降级', _e)
-        # 维护/守卫合并判断: 一次查询今天已跑状态(未跑则 INSERT IGNORE 抢占——原子防并发双跑)
-        try:
-            from db import query as _qm
-            _today = now_cn().strftime("%Y-%m-%d")
-            _done = {str(r.get("task") or "") for r in
-                     _qm("SELECT task FROM maintenance_log WHERE `date`=%s AND task IN ('daily','daily_rules')",
-                         [_today])}
-            if "daily" not in _done:
-                _daily_maintenance(channel)
-            # 2026-11-01: 不再用 _done 短路 daily_rules —— 是否重跑由 _daily_rules_guard 内部
-            # 按库存指纹判定(当天已评估但库存已变化 → 需重跑, 否则看板停留在旧快照)
-            _daily_rules_guard()
-        except Exception as _e:
-            try_err('dashboard', '维护守卫降级(仍计算看板)', _e)
+        # 只算业务值。维护/守卫/快照写入全部移出(见 docstring)。
         _r = _build_summary(channel, start_date, end_date, mode)
-        _sync_health_snapshot(channel, (_r or {}).get("health_index") if isinstance(_r, dict) else None)
+        # 健康快照: 写库动作, 但**依赖本次刚算出的值**且极轻(UPDATE/INSERT 一行)。
+        #   仍在这里会污染耗时(且每次 miss 一次), 所以挪到后台线程异步补。
+        _sync_health_snapshot_async(channel, (_r or {}).get("health_index")
+                                    if isinstance(_r, dict) else None)
         return _r
 
     _result = _cache_get(_key, _SUMMARY_TTL, _b)
+    # 维护触发: **无论命中与否**都只做一次"要不要起后台线程"的轻判断(限频在 kick 内部),
+    #   不再阻塞本次响应。放在缓存之后 → 命中路径也不会因为维护而变慢。
+    try:
+        from core.maintenance import kick as _kick_maint
+        _kick_maint(channel)
+    except Exception as _e:
+        try_err('dashboard', '后台维护触发降级(不影响本次响应)', _e)
     # 2026-10-28 首屏提速: 同一缓存键派生两份视野(同源同快照——四维一致性天然保证, 不跨时刻)
     # part=main → 主项(卡片数字, 组装轻, 首屏快); part=charts → 图表项(趋势/店铺/品牌/漏斗, 组装重);
     # 不带 part → 全量(向后兼容, 老客户端/其他调用方不受影响)

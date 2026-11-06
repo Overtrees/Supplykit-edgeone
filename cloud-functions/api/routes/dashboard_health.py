@@ -12,7 +12,14 @@ from core.clock import now_cn
 
 def _sync_health_snapshot(channel, health):
     """健康分快照幂等写入(每次 summary 请求, ON DUPLICATE 键 date+channel, 多实例安全)——
-    健康趋势数据源: 不依赖 schedules, 看板每次访问刷新当天分"""
+    健康趋势数据源: 不依赖 schedules, 看板每次访问刷新当天分
+
+    ⚠️ 2026-11-06 起读路径**不再直接调用本函数**, 改用 `_sync_health_snapshot_async`
+    (它把这个写入丢到后台线程)。原因: 这是写库动作, 每次缓存 miss 都要付一次往返,
+    却被算进"用户打开看板"的耗时里(见 core/maintenance.py 的隔离原则)。
+    本函数保持原样不动 —— 它的幂等性(ON DUPLICATE KEY)与失败吞掉语义都是对的,
+    只是**不该在响应路径上等它**。
+    """
     try:
         if not isinstance(health, dict):
             try:
@@ -34,6 +41,38 @@ def _sync_health_snapshot(channel, health):
                  int((health.get("bc") or {}).get("score") or -1)])
     except Exception as _e:
             try_err('dashboard', '静默降级', _e)
+
+
+def _sync_health_snapshot_async(channel, health):
+    """健康快照的**异步**写入(2026-11-06 读路径隔离)
+
+    为什么要异步: 这是**一次写库往返**, 而它服务的是"健康趋势图"(天粒度, 一天一行,
+    ON DUPLICATE 覆盖)。让用户为了画一张日粒度的趋势图, 每次打开看板都同步等一次写库,
+    是把维护成本算进了交互延迟 —— 正是"反复退化"的那类账。
+
+    做法: 丢到 daemon 线程, 失败只落 quality_logs。
+    代价: 若实例立刻冻结, 这一次快照可能没写 —— 可接受, 因为:
+      · 幂等且**同一天只留一行**, 下次访问会补上;
+      · 趋势图读的是历史多月, 少写一天不影响主数据。
+    反过来说, 若把这里写成"必须写成功", 就只能退回同步等待, 那 3.7s 又回来了。
+    """
+    if not channel:
+        return
+    if not isinstance(health, dict) and not health:
+        return
+    try:
+        import threading as _th
+
+        def _run():
+            try:
+                _sync_health_snapshot(channel, health)
+            except Exception:
+                pass
+
+        _th.Thread(target=_run, daemon=True).start()
+    except Exception as _e:
+        try_err('dashboard', '健康快照异步写入启动降级', _e)
+
 
 def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None):
     """健康指数四档(动态安全线判定): platform/platform_b 用补货周期(按 mode), own 用采购周期
