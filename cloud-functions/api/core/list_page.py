@@ -1,4 +1,4 @@
-"""采购建议的"取数后再分页"层(2026-11-06 引入, 治队头阻塞)
+"""采购建议的"分页 + 分片缓存"层(2026-11-06 引入, 治队头阻塞)
 
 背景(实测, 线上 2026-11-06):
   `/insights/purchase?channel=jd` 一次返回 9,684 条 / **5.93MB**, 耗时 10s。
@@ -13,10 +13,20 @@
      `Too many connections` 均为 0 —— 不是连接池问题)。
   3. 前端还要 `JSON.parse` 6MB 再 `slice(0, 50)`。
 
-改法: 缓存里仍存**全量**(保证"接着翻页"和导出口径一条不少), 只把**响应**按页切。
-  · 切在服务端 = 出网字节降 45 倍(need_only) / 按页 50 条时降约 190 倍;
-  · 缓存键一仍其旧 → 不改变任何业务口径, 不碰 `_build_purchase` 的算法;
-  · `total` 用全量长度(计数与列表分离, 见六条口径第 4 条), 前端不受截断影响。
+## 两版演进(第一版漏了什么, 必须记下来)
+
+**v1(当日第一版, 错)**: 缓存里仍存**全量**, 只在**响应**按页切。
+  → 出网字节确实降到 43KB(实测), 但 `cache_put` 存的仍是那 5.93MB 全量 →
+  **依然抛 8025, 依然永远进不了缓存** → 每个请求还是完整重算, 耗时纹丝不动(实测 5~6s)。
+  线上日志实证(13:29~13:30): `8025 entry too large` 与 `slow_request GET /insights/purchase`
+  成对反复出现 —— 说明"只切响应"是治了症状没治因。
+  教训: **要卡的是写进缓存的那一份, 不是发给前端的那一份。**
+
+**v2(当前)**: 缓存键带上"签名 + 页号", **每页各自一条缓存**。
+  · 单条 entry = 一页(page_size 条) → 天然远小于 6MB, 8025 消失, 缓存真正生效;
+  · 全量"一次算完再切"的算法**完全不变** —— `_build_purchase` 一个字没动, 口径零漂移;
+  · 翻页仍在同一份计算结果上切(同一次 builder 调用), 不重复建库查询;
+  · `total` 永远是**收窄后**的总数(计数与列表分离, 见六条口径第 4 条)。
 
 顺序铁律: **先筛后切**。先按 need_only / search 收窄, 再切片; 反过来会导致
 "第 2 页只有 3 条"这类页码与总数对不上的错位。
@@ -65,3 +75,39 @@ def shape(rows, need_only=0, search="", page=0, page_size=0):
     """一步到位: 筛选 → 分页 → 返回 (items, total)"""
     return paginate(filter_rows(rows, need_only=need_only, search=search),
                     page=page, page_size=page_size)
+
+
+def slice_key(base, need_only=0, search="", page=0, page_size=0):
+    """分片缓存键: `<base>|<need_only>|<search>|<page>|<page_size>`
+
+    search 参与键 → 换了关键字就是另一份缓存(不会串结果)。
+    search 做长度上限, 防止超长串把键撑爆(cache 表 key 列有长度限制)。
+    """
+    return "%s|%d|%s|%d|%d" % (base, 1 if need_only else 0, str(search or "")[:64],
+                               int(page or 0), int(page_size or 0))
+
+
+def shape_cached(base, full_builder, cache_get, ttl, need_only=0, search="",
+                 page=0, page_size=0, max_bytes=1024 * 1024):
+    """**分片缓存**版: 每页各自一条缓存(单条远小于 6MB, 8025 不再发生)
+
+    :param base        : 基础缓存键(渠道/模式/天数)
+    :param full_builder: 产出**全量**行的 builder(算法与旧版一致, 不动)
+    :param cache_get   : `routes.analysis_cache.cache_get`
+    :param max_bytes   : 单条 entry 上限。一页 50 条约 40KB, 给 1MB 足够;
+                         超了宁可这条不落缓存, 也不去撞 TiDB 的 6MB。
+
+    设计取舍: builder 仍是"全量一次算完再切"(不是 SQL 分页)。
+    理由: `_build_purchase` 的算子里有跨 SKU 的聚合/排序/关联, 改成 SQL 分页要重写整条
+    计算链, 口径极易漂移; 而现在这条链**已经在 3~6s 内算完**, 真正的浪费是"每次重算"
+    —— 分片缓存正好消掉它。等后续有需要再谈下推。
+    """
+    key = slice_key(base, need_only=need_only, search=search,
+                    page=page, page_size=page_size)
+
+    def _build():
+        items, total = shape(full_builder(), need_only=need_only, search=search,
+                             page=page, page_size=page_size)
+        return {"suggestions": items, "total": total, "page": page, "page_size": page_size}
+
+    return cache_get(key, ttl, _build, max_bytes=max_bytes)
