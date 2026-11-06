@@ -2343,10 +2343,14 @@ try:
     #   MySQL/TiDB 的唯一键里互不冲突, 不归一就等于键没建成。它属于"约束前置整形",
     #   不是存量业务数据迁移(后者仍必须走 migrations/steps/)。
     _alerts_upd5 = [ln for ln in _cat5.splitlines() if "UPDATE alerts SET" in ln]
+    # 2026-11-06 S8: products 建 (channel, sku) 唯一键前也必须把 channel 的 NULL/空归一
+    #   —— 多行 NULL 在唯一键里互不冲突, 不归一等于键没建成。同属"约束前置整形"。
+    _prod_upd5 = [ln for ln in _cat5.splitlines() if "UPDATE products SET" in ln]
     check("S3-5 建表函数里不再内联存量数据 UPDATE(只允许建键前的 NULL 归一)",
-          "UPDATE rules SET" not in _cat5 and "UPDATE products SET" not in _cat5
+          "UPDATE rules SET" not in _cat5
           and "UPDATE channels SET" not in _cat5
-          and all("IS NULL" in ln for ln in _alerts_upd5),
+          and all("IS NULL" in ln for ln in _alerts_upd5)
+          and all("IS NULL" in ln and "channel" in ln for ln in _prod_upd5),
           "schema_create.py")
     check("S3-5 ensure_schema 接入迁移框架(失败计入 _errors → 不写版本)",
           "from migrations.runner import run_pending" in _sc5

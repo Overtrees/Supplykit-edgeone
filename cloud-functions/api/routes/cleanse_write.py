@@ -392,11 +392,14 @@ def _rebuild_own_batches(channel, skus, begin_date=None):
                       [channel] + batch_skus + list(SELF_WAREHOUSE_TYPES)):
             _wt_map[(str(_r1.get("sku") or ""), str(_r1.get("warehouse") or ""))] = str(
                 _r1.get("warehouse_type") or SELF_WAREHOUSE_TYPES[0])
-        # 2026-11-01 是否做效期管理(按 SKU 取, products.sku 全局唯一)
-        #   'no' → 批次不参与效期排序, 出库按到货顺序 FIFO 扣; 'yes'/'空' → 精确+FEFO
+        # 是否做效期管理(按 SKU 取)。2026-11-06 S8/P1-21: products 唯一键改为
+        #   (channel, sku) 后, 同 SKU 在两个渠道可以各有一行 —— 只按 sku 查会拿到两行,
+        #   `_em_map[sku]` 被后写覆盖(顺序不定) → 出库效期策略随机。必须按渠道取。
+        #   `channel=''` 的行是历史遗留(建键时已归一为 jd), 这里保留 OR 兼容读到旧行。
         _em_map = {}
         for _r2 in _q("SELECT sku, COALESCE(expiry_managed,'') AS em FROM products "
-                      "WHERE sku IN (%s)" % ph, batch_skus):
+                      "WHERE sku IN (%s) AND (channel=%%s OR COALESCE(channel,'')='')" % ph,
+                      list(batch_skus) + [channel]):
             _em_map[str(_r2.get("sku") or "")] = str(_r2.get("em") or "")
         # 按 (sku, barcode, warehouse) 分组入库明细
         # 69码规则: 有值则精准归组; 无值则保持无码(不反推/不猜测归属)

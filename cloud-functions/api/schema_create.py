@@ -94,7 +94,11 @@ _TABLES = {
         "expiry_managed VARCHAR(8) DEFAULT '', "
         "supplier_code VARCHAR(64) DEFAULT '', channel VARCHAR(20) DEFAULT 'jd', "
         "deleted_at VARCHAR(32) DEFAULT '', ext_json TEXT, "
-        "UNIQUE KEY uq_products_sku (sku), KEY idx_products_ch (channel))"
+        # 2026-11-06 S8/P1-21: 唯一键 (sku) → (channel, sku)。原键让"两渠道同名 SKU"
+        #   根本无法并存: 第二个渠道导入直接 1062 → 单行降级 → 用户看到"成功 0 条"。
+        #   线上实测两渠道 SKU 零重叠(各 1 万), 所以迁移无损; 但一旦运营把同一个 SKU
+        #   铺到两个渠道, 旧键就会静默丢数据。idx_products_ch 被新键前缀覆盖, 一并去掉。
+        "UNIQUE KEY uq_products_biz (channel, sku))"
     ),
     "suppliers": (
         "CREATE TABLE IF NOT EXISTS suppliers ("
@@ -624,7 +628,9 @@ _COLUMN_ADDS = {
 #   被冻结后兜底无法重放(实证 result/库存重算全落空); applied 退回完成语义。
 # v13(2026-11-06 S5): eval_queue(评估清单行级+applied 幂等键) + import_stage(导入分片真源,
 #   一次解析落库, 消 O(n²) 重读重解析)
-SCHEMA_VERSION = 16
+# v17(2026-11-06 S8): products 唯一键 (sku) → (channel, sku) —— 原键让两渠道同名 SKU
+#   无法并存(第二个渠道导入 1062 静默丢行); idx_products_ch 被新键前缀覆盖一并去掉
+SCHEMA_VERSION = 17
 
 
 def table_ddl(name):
@@ -686,6 +692,32 @@ def create_all_tables():
             execute("ALTER TABLE orders DROP INDEX uq_orders_no_sku")
     except Exception as e:
         try_err('schema', 'orders 四维业务键迁移降级(旧键仍在, 行为与迁移前一致)', e)
+    # 2026-11-06 S8/P1-21: products 唯一键 (sku) → (channel, sku)
+    #   先建新键再删旧键(中间任何一步失败都还有一把约束在, 不会裸奔)。
+    #   channel 为 NULL/空 会让唯一键形同虚设(NULL 之间不算重复) —— 建键前先归一。
+    try:
+        from db import query as _qp, one as _qp1, execute as _ep
+        _pidx = {str(r.get("Key_name") or "") for r in _qp("SHOW INDEX FROM products")}
+        if "uq_products_biz" not in _pidx:
+            _ep("UPDATE products SET channel='jd' WHERE channel IS NULL OR channel=''")
+            _dup = _qp1("SELECT COUNT(*) c FROM (SELECT 1 FROM products "
+                        "GROUP BY channel, sku HAVING COUNT(*)>1) t")
+            _dn = int((_dup or {}).get("c") or 0)
+            if _dn > 500:
+                raise RuntimeError("同渠道重复 SKU %d 组 > 500, 需人工清理后再建键" % _dn)
+            if _dn:
+                _ep("DELETE FROM products WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
+                    "(PARTITION BY channel, sku ORDER BY id DESC) rn FROM products) t WHERE t.rn > 1)")
+                log_info('schema', '商品同渠道重复 SKU 已合并(每组保留最新一行) %d 组' % _dn)
+            _ep("ALTER TABLE products ADD UNIQUE KEY uq_products_biz (channel, sku)")
+        _pidx2 = {str(r.get("Key_name") or "") for r in _qp("SHOW INDEX FROM products")}
+        if "uq_products_sku" in _pidx2:
+            _ep("ALTER TABLE products DROP INDEX uq_products_sku")
+        if "idx_products_ch" in _pidx2:
+            _ep("ALTER TABLE products DROP INDEX idx_products_ch")
+    except Exception as e:
+        try_err('schema', 'products 渠道唯一键迁移降级(旧键仍在, 行为与迁移前一致)', e)
+
     # 2026-10-27 模板表迁移(幂等): 旧 uk_tpl_name(name 唯一) → uk_tpl_name_type(name, doc_type)
     # ——曾订单/库存同名模板互相覆盖; 改双键后旧唯一键必须移除(否则同名跨类型保存撞键报错)
     try:

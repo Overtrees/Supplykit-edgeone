@@ -579,5 +579,20 @@ check("cron 窗口对带密钥的 force 放行(数据重建后能立刻补跑)",
       "def _force_ok(request)" in _cr and _cr.count("force_ok=_force_ok(request)") >= 8,
       "只有窗口内能跑 = 修完 bug 还得等到凌晨")
 
+# ── M. S8 换键(2026-11-06, P1-21)────────────────────────────────────
+_sc8 = open(os.path.join(_api_dir, "schema_create.py"), encoding="utf-8").read()
+_cw8 = open(os.path.join(_api_dir, "routes", "cleanse_write.py"), encoding="utf-8").read()
+check("products 唯一键是 (channel, sku), 不再是 sku",
+      "UNIQUE KEY uq_products_biz (channel, sku)" in _sc8
+      and "UNIQUE KEY uq_products_sku (sku)" not in _sc8,
+      "旧键让两渠道同名 SKU 无法并存: 第二个渠道导入 1062 → 单行降级 → 用户看到'成功 0 条'")
+check("换键迁移先建新键再删旧键, 且建键前把 channel 的 NULL/空归一",
+      _sc8.index("ADD UNIQUE KEY uq_products_biz") < _sc8.index("DROP INDEX uq_products_sku")
+      and "UPDATE products SET channel='jd' WHERE channel IS NULL OR channel=''" in _sc8,
+      "先删后建有裸奔窗口(并发导入可写重); 多行 NULL 在唯一键里互不冲突 = 键没建成")
+check("读 products 的效期查询按渠道(换键后同 SKU 两行会互相覆盖)",
+      "WHERE sku IN (%s) AND (channel=%%s OR COALESCE(channel,'')='')" in _cw8,
+      "只按 sku 查会拿到两渠道两行, _em_map[sku] 被后写覆盖 → 出库效期策略随机")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
