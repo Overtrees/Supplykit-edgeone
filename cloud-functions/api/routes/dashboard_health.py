@@ -44,34 +44,38 @@ def _sync_health_snapshot(channel, health):
 
 
 def _sync_health_snapshot_async(channel, health):
-    """健康快照的**异步**写入(2026-11-06 读路径隔离)
+    """健康快照写入 —— **同步**, 名字保留只为不打断调用点(2026-11-06 纠错)
 
-    为什么要异步: 这是**一次写库往返**, 而它服务的是"健康趋势图"(天粒度, 一天一行,
-    ON DUPLICATE 覆盖)。让用户为了画一张日粒度的趋势图, 每次打开看板都同步等一次写库,
-    是把维护成本算进了交互延迟 —— 正是"反复退化"的那类账。
+    ## 为什么从"异步"改回"同步"
 
-    做法: 丢到 daemon 线程, 失败只落 quality_logs。
-    代价: 若实例立刻冻结, 这一次快照可能没写 —— 可接受, 因为:
-      · 幂等且**同一天只留一行**, 下次访问会补上;
-      · 趋势图读的是历史多月, 少写一天不影响主数据。
-    反过来说, 若把这里写成"必须写成功", 就只能退回同步等待, 那 3.7s 又回来了。
+    我一开始把它丢进 daemon 线程, 理由是"日粒度趋势, 不值得阻塞交互"。这个理由**站不住**:
+
+    1. **四维里的"可靠性"直接受损**。daemon 线程的存活不归任何人管 —— Makers 实例在响应
+       结束后随时可能冻结, 线程就没了。而 `_sync_health_snapshot` 是
+       `INSERT ... ON DUPLICATE KEY UPDATE`, **写失败没有任何重试与补偿**: 当天那一行
+       就停在旧分数上(或干脆没有)。同步调用则不同 —— 它要么写成功, 要么抛错进
+       `try_err` 留下证据, 而这正是"可靠"该有的样子。
+    2. **它并不慢**。就是一条按主键 upsert 的单行写(TiDB 上 ~10-30ms), 相对 1.4s 的业务
+       计算可以忽略。我把它和 `_rebuild_day_agg(90)`(那是真重活)混为一谈了 ——
+       **重活该挪, 轻写不该挪**: 挪了省不下时间, 却把可靠性换掉了。这笔交易是亏的。
+    3. **"下次访问会补上"不成立**。当天最后一行的语义是"今天此刻的健康分"。用户关掉页面、
+       当天不再来, "下次"就是明天 —— 今天的分永远缺。趋势图会**静默缺一个点**,
+       而且缺得没有痕迹(读侧把 `score='-1'` 直接跳过, 连断点都不显示)。
+
+    ## 现在的口径(四维逐条)
+
+    | 维度 | 保障方式 |
+    |---|---|
+    | 实时性 | 缓存 miss 即写; `invalidate("inventory")` 后下一次 summary 必 miss → 必刷新当天行 |
+    | 准确性 | 写的是**本次响应里同一个 `health_index` 对象**(同源同快照), 不二次计算、不跨时刻 |
+    | 完整性 | 每次 miss 都 upsert, 不依赖"每天一次"; cron 那条是补的兜底, 不是唯一来源 |
+    | 可靠性 | 同步执行 + 失败落 `quality_logs`; 幂等 upsert 保证重放安全, 不会写脏 |
+
+    性能上真正该挪走的是 `_track_data` / `_daily_maintenance` / `_daily_rules_guard`
+    (见 `core/maintenance.py`)—— 那些是**重活且幂等、晚几分钟无害**。一条单行 upsert
+    不属于这一类, 不能顺手一起异化。
     """
-    if not channel:
-        return
-    if not isinstance(health, dict) and not health:
-        return
-    try:
-        import threading as _th
-
-        def _run():
-            try:
-                _sync_health_snapshot(channel, health)
-            except Exception:
-                pass
-
-        _th.Thread(target=_run, daemon=True).start()
-    except Exception as _e:
-        try_err('dashboard', '健康快照异步写入启动降级', _e)
+    _sync_health_snapshot(channel, health)
 
 
 def _health_index(channel, mode="bbcc", _inv_rows=None, _ds_map=None, _cfg=None):
