@@ -25,26 +25,40 @@ _MIN_DS = 0.1
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
                                   search: str = "", need_only: int = 0):
-    """补货建议(300s 共享表缓存全量——TiDB 表跨实例一致, 分页/搜索/need_only 在缓存后处理——降 RU): mode=bbcc/traditional
-    2026-10-16: 无分页裸调(全量 5 万+ 行) → EdgeOne 网关 413 拦截——默认截断 2000(前端全部分页/need_only, 不受影响)"""
-    _key = "repl|%s|%s|%s|%s" % (channel, mode, days, source)
-    _all = _cache_get(_key, _REPL_TTL, lambda: _build_repl(channel, mode))
+    """补货建议(300s 共享表缓存分页——TiDB 表跨实例一致——降 RU): mode=bbcc/traditional
+
+    2026-11-06 缓存粒度改为一页一条(与 purchase 同因同治, 见 core/list_page.py):
+      原来缓存里存**全量**(实测 5 万+ 行 / 6,835,645 B)→ 超 TiDB 单条 6,291,456 B 上限 →
+      `cache_put` 抛 8025 → **这份结果从来没进过缓存** → 每个请求都全量重算。
+      线上日志可证: 13:30 / 13:36 的 8025 size 恒为 6835645(与 purchase 的 5.93MB 不是同一条),
+      而 purchase 修好后 8025 仍在, 说明漏了这一处。
+    现在缓存键带 `need_only|search|page|page_size`, 每条只是当前页, 天然不会撞上限。
+    `_build_repl` 算法一个字没动; 不传 page/page_size 与旧版行为一致(无分页裸调仍截断 2000)。
+    """
+    from core.list_page import shape_cached as _shape_cached
+    _base = "repl|%s|%s|%s|%s" % (channel, mode, days, source)
     _no_page = page <= 0 or page_size <= 0
-    if need_only:
-        _all = [s for s in _all if (s.get("suggested_qty") or 0) > 0 or (s.get("b_suggested") or 0) > 0]
-    if search:
-        _sq = search.lower()
-        _all = [s for s in _all if _sq in str(s.get("sku", "")).lower()
-                or _sq in str(s.get("product_name", "")).lower()
-                or _sq in str(s.get("barcode", "")).lower()]
-    # 2026-10-16: 无分页裸调全量(5万+行) → EdgeOne 网关 413 拦截——过滤后再截断兜底
-    # (need_only/search 结果通常 <2000 不受影响; 纯全量裸调截断, 语义: 完整数据请带 page)
     if _no_page:
-        _all = _all[:2000]
-    if page > 0 and page_size > 0:
-        return ok({"items": _all[(page - 1) * page_size: page * page_size],
-                   "total": len(_all), "page": page, "page_size": page_size})
-    return ok(_all)
+        # 无分页裸调: **保持旧契约 —— data 直接是列表**(导出/内部调用方/回归用例都按列表读)。
+        #   2026-11-06 提醒: 第一版改动把这里也换成了 {items,total}, 直接把 local_test
+        #   「replenish 返回列表」打红 —— 形状是契约, 不是实现细节。
+        #   截断 2000 仍保留(全量 5 万+ 行会被 EdgeOne 网关 413 拦)。
+        #   分片缓存照用: 裸调就是 page=0/page_size=0 那一片, 自身也只有 ≤2000 行。
+        _d = _shape_cached(_base, lambda: _build_repl(channel, mode), _cache_get, _REPL_TTL,
+                           need_only=need_only, search=search,
+                           page=0, page_size=0,
+                           max_bytes=2 * 1024 * 1024,
+                           need_keys=("suggested_qty", "b_suggested"),
+                           out_key="items")
+        _items = (_d.get("items") if isinstance(_d, dict) else None) or []
+        return ok(_items[:2000])
+    _d = _shape_cached(_base, lambda: _build_repl(channel, mode), _cache_get, _REPL_TTL,
+                       need_only=need_only, search=search,
+                       page=page, page_size=page_size,
+                       max_bytes=2 * 1024 * 1024,
+                       need_keys=("suggested_qty", "b_suggested"),
+                       out_key="items")
+    return ok(_d)
 
 
 def safety_line(ds, lead):

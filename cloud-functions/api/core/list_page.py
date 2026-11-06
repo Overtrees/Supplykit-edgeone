@@ -44,11 +44,16 @@ def _num(row, key):
         return 0
 
 
-def filter_rows(rows, need_only=0, search=""):
-    """按 need_only / search 收窄(与原路由内联实现逐字等价)"""
+def filter_rows(rows, need_only=0, search="", need_keys=None):
+    """按 need_only / search 收窄(与原路由内联实现逐字等价)
+
+    need_keys 默认 `("actual_purchase",)`(采购口径); 补货传
+    `("suggested_qty", "b_suggested")` —— 任一 >0 即"确实需要补"。
+    """
     out = rows
     if need_only:
-        out = [r for r in out if _num(r, "actual_purchase") > 0]
+        keys = need_keys or ("actual_purchase",)
+        out = [r for r in out if any(_num(r, k) > 0 for k in keys)]
     if search:
         sq = str(search).lower()
         out = [r for r in out
@@ -71,9 +76,14 @@ def paginate(rows, page=0, page_size=0):
     return rows, total
 
 
-def shape(rows, need_only=0, search="", page=0, page_size=0):
-    """一步到位: 筛选 → 分页 → 返回 (items, total)"""
-    return paginate(filter_rows(rows, need_only=need_only, search=search),
+def shape(rows, need_only=0, search="", page=0, page_size=0, need_keys=None):
+    """一步到位: 筛选 → 分页 → 返回 (items, total)
+
+    :param need_keys: `need_only` 的判定字段名元组, 任一字段 >0 即保留。
+        默认 `actual_purchase`(采购口径); 补货传 `("suggested_qty","b_suggested")`。
+        显式传参而不是在各路由里各写一份 filter —— 免得两份筛选逻辑慢慢漂开。
+    """
+    return paginate(filter_rows(rows, need_only=need_only, search=search, need_keys=need_keys),
                     page=page, page_size=page_size)
 
 
@@ -88,7 +98,8 @@ def slice_key(base, need_only=0, search="", page=0, page_size=0):
 
 
 def shape_cached(base, full_builder, cache_get, ttl, need_only=0, search="",
-                 page=0, page_size=0, max_bytes=1024 * 1024):
+                 page=0, page_size=0, max_bytes=1024 * 1024,
+                 need_keys=None, out_key="suggestions"):
     """**分片缓存**版: 每页各自一条缓存(单条远小于 6MB, 8025 不再发生)
 
     :param base        : 基础缓存键(渠道/模式/天数)
@@ -96,9 +107,12 @@ def shape_cached(base, full_builder, cache_get, ttl, need_only=0, search="",
     :param cache_get   : `routes.analysis_cache.cache_get`
     :param max_bytes   : 单条 entry 上限。一页 50 条约 40KB, 给 1MB 足够;
                          超了宁可这条不落缓存, 也不去撞 TiDB 的 6MB。
+    :param need_keys   : `need_only` 判定字段(采购 `actual_purchase` / 补货两个字段)
+    :param out_key     : 列表字段名 —— 采购用 `suggestions`, 补货用 `items`。
+                         不改调用方契约(前端各页各读各的键), 只换外壳名。
 
     设计取舍: builder 仍是"全量一次算完再切"(不是 SQL 分页)。
-    理由: `_build_purchase` 的算子里有跨 SKU 的聚合/排序/关联, 改成 SQL 分页要重写整条
+    理由: 这两个算子里都有跨 SKU 的聚合/排序/关联, 改成 SQL 分页要重写整条
     计算链, 口径极易漂移; 而现在这条链**已经在 3~6s 内算完**, 真正的浪费是"每次重算"
     —— 分片缓存正好消掉它。等后续有需要再谈下推。
     """
@@ -107,7 +121,7 @@ def shape_cached(base, full_builder, cache_get, ttl, need_only=0, search="",
 
     def _build():
         items, total = shape(full_builder(), need_only=need_only, search=search,
-                             page=page, page_size=page_size)
-        return {"suggestions": items, "total": total, "page": page, "page_size": page_size}
+                             page=page, page_size=page_size, need_keys=need_keys)
+        return {out_key: items, "total": total, "page": page, "page_size": page_size}
 
     return cache_get(key, ttl, _build, max_bytes=max_bytes)
