@@ -208,7 +208,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0
         params = _pj0
         step = _step0
         from routes.seed_fill import (prepare_skus, seed_step, SEED_DONE,
-                                      SEED_WINDOW_BUDGET_S)
+                                      SEED_WINDOW_BUDGET_S, stage_label)
         _t0 = _tt.time()
         skus_data = prepare_skus()
         today = now_cn()
@@ -227,18 +227,34 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0
         if _sq > SEED_WINDOW_BUDGET_S:
             try_err('tasks', 'seed 窗口超预算 step=%d off=%d %.1fs > %ds'
                     % (step, _off, _sq, SEED_WINDOW_BUDGET_S), '')
-        # 2026-10-15 每**窗口**耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
+        # 2026-10-15 阶段耗时 steps + 进度中 cur_step(前端 TaskCard 可视化)
         #   内部游标字段(_offset/_span)不进展示名
-        _part_show = {k: v for k, v in (part or {}).items() if not str(k).startswith('_')}
-        _steps = (params.get("steps") or []) + [
-            {"name": str(_part_show) or ("窗口%d" % step), "elapsed": _sq}]
+        # 2026-11-06 结构改造: steps 的粒度 = **业务阶段**, 不是窗口。
+        #   同一 step 的多个窗口合并成一条(elapsed/rows 累加, wins 记窗口数) ——
+        #   seed 跑几十个窗口, 卡片也只会出现"阶段数"这么多行, 不随窗口膨胀。
+        #   这比"只留最近 N 条 + 前端折叠"更彻底: 数据本身就没有冗余明细,
+        #   params 大小也不再随窗口数线性增长。
+        _win_total = int(params.get("win_total") or 0) + 1
+        _rows_now = sum(v for v in (part or {}).values()
+                        if isinstance(v, int) and not isinstance(v, bool))
+        _steps = list(params.get("steps") or [])
+        if _steps and int(_steps[-1].get("step", -1)) == step:
+            _agg = dict(_steps[-1])
+            _agg["elapsed"] = round(float(_agg.get("elapsed") or 0) + _sq, 1)
+            _agg["wins"] = int(_agg.get("wins") or 1) + 1
+            _agg["rows"] = int(_agg.get("rows") or 0) + _rows_now
+            _steps[-1] = _agg
+        else:
+            _steps.append({"step": step, "name": stage_label(step),
+                           "elapsed": _sq, "wins": 1, "rows": _rows_now})
         # 2026-11-05 完成判据改从 seed_fill.SEED_DONE 取 —— 段号重排后完成值多次变化,
         #   写死会让任务越过那个数后永不落 done, 空转烧 RU。
         # total_step 一并下发: 前端进度条此前也写死段数, step 超过就顶在 99% 不动
-        _cur = {"name": ("阶段%d" % nxt) if nxt < SEED_DONE else "完成", "started": int(_tt.time())}
+        _cur = {"name": stage_label(nxt) if nxt < SEED_DONE else "完成",
+                "started": int(_tt.time())}
         new_params = _json.dumps({"step": nxt, "offset": _nxt_off, "span": _nxt_span,
                                   "last_elapsed": _sq, "steps": _steps,
-                                  "total_step": SEED_DONE,
+                                  "win_total": _win_total, "total_step": SEED_DONE,
                                   "cur_step": None if nxt >= SEED_DONE else _cur,
                                   "step_started_ts": int(_tt.time())})
         if nxt >= SEED_DONE:

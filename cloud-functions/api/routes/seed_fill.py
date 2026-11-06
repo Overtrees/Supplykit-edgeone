@@ -177,10 +177,18 @@ def _seed_products_suppliers(skus_data):
             sup_rows.append({'supplier_code': '%s-%s' % (code, 'JD' if ch == 'jd' else 'OTHER'),
                              'supplier_name': name, 'contact_person': contact, 'contact_phone': phone,
                              'score': score, 'channel': ch, 'brand': '，'.join(_blist)})
-    cols = list(sup_rows[0].keys())
-    executemany("INSERT INTO suppliers(%s) VALUES(%s)" % (", ".join("`%s`" % c for c in cols),
-                                                          ", ".join(["%s"] * len(cols))),
-                [tuple(s[c] for c in cols) for s in sup_rows])
+    # 2026-11-06 与商品同构: 供应商也按渠道各发一份导入文件(§15.160 定案)。
+    #   原来是 20 行 executemany 直写, 绕过了列映射/写入白名单/channel 注入 ——
+    #   演示库「看着按渠道分好了」, 真实导入的供应商档案却可能丢 channel 列。
+    #   channel 由导入参数注入, 两渠道各自一份, 互不覆盖; supplier_code 仍带 -JD/-OTHER。
+    for ch in ('jd', 'other'):
+        _srow = [s for s in sup_rows if s.get('channel') == ch]
+        if _srow:
+            _r = _imp('supplier', ch, _srow, label='供应商档案')
+            if _r.get('failed'):
+                try_err('seed_fill', '供应商档案导入 %s 有 %d 行未落库(首因=%s)'
+                        % (ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:120]), None)
     return prod_rows, sup_rows
 
 
@@ -208,6 +216,10 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
     #   只是没人核对过。这里显式累加本段实际 flush 的行数。
     _seg_rows = 0
     batch = []
+    # 2026-11-06 快速通道: 每渠道一个**文件级上下文**, 同一窗口的所有批次复用它。
+    #   省掉的是"每批重查一次档案/多码证据 + 每批登记一次脏日"这类文件级动作;
+    #   行级规则(归码判定、四维键对齐、批内聚合)逐行照跑, 结果与逐批导入一致。
+    _ctx_map = {'jd': {}, 'other': {}}
 
     def _amt(q, price, disc_r, freight_r, sub_r):
         base = round(q * price, 2)
@@ -225,9 +237,11 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
         #   不补 69码(档案有码/本行缺码的规则)、不做四维业务键对齐、不走批内聚合、
         #   不登记脏日重建、不失效分析缓存。演示库"看着对", 真实导入却可能错, 没人能提前发现。
         #   现在: 内存行 → 中文表头 CSV → _parse_table → _clean_rows → _write_rows(同一分派器)。
-        #   batch 仍是 500 行一组(控制单条 INSERT 体积, 与导入侧 500/批同源)。
+        # 2026-11-06 批次 500 → 2000: 与 _write_batch 的写批(2000)对齐, 一批一次 executemany;
+        #   调用次数(CSV 序列化/解析/归码/对齐/脏日)随之降到 1/4。行内容与顺序完全不变,
+        #   唯一键仍是四维 —— 分批大小不影响落库结果, 只影响往返次数。
         from routes.seed_import import import_rows as _imp
-        _r = _imp('order', ch_cur[0], batch, label='订单')
+        _r = _imp('order', ch_cur[0], batch, label='订单', ctx=_ctx_map[ch_cur[0]])
         _seg_rows += int(_r.get('rows') or 0)
         if _r.get('failed'):
             try_err('seed_fill', '订单导入链路 %s 段有 %d 行未落库(已留痕, 不中断): 首因=%s'
@@ -312,9 +326,16 @@ def _seed_orders_range(today, skus_data, day_from, day_to):
                               'data_source': 'seed'})
                 _pi += 1
                 total += 1
-                if len(batch) >= 500:
+                if len(batch) >= 2000:
                     flush()
     flush()
+    # 快速通道收尾: 脏日标记必须在这里登记掉(不登记 → 订单落了库但物化不重建, 看板旧值)
+    from routes.cleanse_write import flush_import_ctx as _fic
+    for _ch_done in ('jd', 'other'):
+        try:
+            _fic(_ch_done, _ctx_map[_ch_done])
+        except Exception as _ef:
+            try_err('seed_fill', '订单快速通道收尾降级 %s(脏日改由 sweep 兜底)' % _ch_done, _ef)
     # 返回**本段实际写入行数**(非全局序号; 历史调用方拿它当"生成了多少单"展示, 见上方注释)
     return _seg_rows
 
@@ -1040,10 +1061,13 @@ def _seed_alerts():
                 existing.add(('low_stock', ch, sku, wh, 'rules_engine'))
                 inserts.append(("low_stock", "低库存预警: %s" % name, "可售 %d < 动态安全线 %d" % (avail, safety),
                                 "warning", ch, sku, r.get('warehouse_type') or '', wh))
+    # 2026-11-06 修数据正确性缺陷: 步长 500 但切片只有 200 → 每 500 行静默漏 300 行,
+    #   返回值却是 len(inserts)(看起来全写了), 对账也发现不了。两处必须同值。
+    #   500 行/批是 TiDB serverless 单条多值 INSERT 的实测上限, 不要改步长, 改切片。
     for i in range(0, len(inserts), 500):
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
                     "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s)",
-                    inserts[i:i + 200])
+                    inserts[i:i + 500])
     return len(inserts)
 
 
@@ -1060,6 +1084,100 @@ def _build_snapshot():
         "ON DUPLICATE KEY UPDATE order_count=VALUES(order_count)", [start])
     r = one("SELECT COUNT(*) AS c FROM daily_sales_snapshot") or {}
     return int(r.get('c') or 0)
+
+
+def _seed_gmv_flows():
+    """GMV 回款(资金流水): 按渠道生成 gmv_flows, 走导入链路(2026-11-06)
+
+    为什么需要它: 看板 month.payout 优先读 gmv_flows 的真实资金流水, 无流水时回落
+      `payout=null`(前端不显示推算值)。seed 全链此前一行 gmv_flows 都没生成, 于是演示
+      环境的「回款」永远是空 —— 不是功能缺陷, 是底数缺失(同 §15.113 归档数据长度问题)。
+
+    口径与现有 seed 结构对齐, 不另造一套:
+      · 金额基准 = `orders_day_agg.gmv`(落账段按 `status_cond()` 物化的 GMV, 与看板同源),
+        按渠道 + 按日一次 SUM 取回, 不逐单扫 43 万行;
+      · 正向流水用 `_FLOW_NET` 的 3 类到账(货款到账/交易收入/结算入账), 另加 2 类负向
+        扣减(退款扣回/扣点扣款), 净额 ≈ 日 GMV × 0.93, 与
+        `summary.payout = gmv − refund − subsidy` 同量级;
+      · arrived_time 覆盖 ORDER_DAYS 窗口 —— 同时覆盖看板近 30 天预取
+        (`dashboard.py` `_st30~today`) 与上月完整月(d30~d31), 两端都不会空;
+      · flow_no 按渠道独立编号。唯一键 `uq_platform_flow_ch(channel,platform,flow_no)`
+        含 channel, 两渠道各一份文件、由导入参数注入 channel, 不会互撞 1062。
+    """
+    from routes.seed_import import import_rows as _imp
+    _POS = ('货款到账', '交易收入', '结算入账')
+    _NEG = (('退款扣回', 0.03), ('扣点扣款', 0.02))
+    _SHOPS = ('自营旗舰店', '直营店', '调味品专营店', '食品旗舰店', '综合食品店')
+    _PLAT = {'jd': '京东', 'other': '其他平台'}
+    _end = datetime.strptime(now_cn().strftime('%Y-%m-%d'), '%Y-%m-%d').date()
+    _start = _end - timedelta(days=ORDER_DAYS - 1)
+    _total = 0
+    for ch in ('jd', 'other'):
+        try:
+            _agg = query(
+                "SELECT `date`, SUM(gmv) AS g FROM orders_day_agg "
+                "WHERE channel=%s AND `date`>=%s AND `date`<=%s GROUP BY `date`",
+                [ch, _start.strftime('%Y-%m-%d'), _end.strftime('%Y-%m-%d')]) or []
+        except Exception as _e:
+            try_err('seed_fill', 'GMV 回款: orders_day_agg 读取降级(改走订单聚合)', _e)
+            _agg = []
+        _by_day = {str(r.get('date'))[:10]: float(r.get('g') or 0) for r in _agg}
+        if not _by_day:
+            # 兜底: 物化表还没就绪时直接从订单按日聚合(同 GMV 表达式 / 同已支付口径)。
+            #   只读一次, 不逐日查; 仍按渠道过滤, 绝不拿全国合计兜底。
+            from routes.common import status_cond as _sc
+            try:
+                _orders = query(
+                    "SELECT DATE(ordered_at) AS d, "
+                    "SUM(COALESCE(total_amount,0)-COALESCE(discount_amount,0)"
+                    "+COALESCE(freight_amount,0)+COALESCE(tax_amount,0)) AS g "
+                    "FROM orders WHERE channel=%s AND " + _sc() +
+                    " AND (deleted_at IS NULL OR deleted_at='') "
+                    "AND ordered_at>=%s GROUP BY DATE(ordered_at)",
+                    [ch, _start.strftime('%Y-%m-%d')]) or []
+                _by_day = {str(r.get('d'))[:10]: float(r.get('g') or 0) for r in _orders}
+            except Exception as _e2:
+                try_err('seed_fill', 'GMV 回款: 订单聚合兜底也失败', _e2)
+                _by_day = {}
+        rows, seq = [], 0
+        for _i in range(ORDER_DAYS):
+            _day = _start + timedelta(days=_i)
+            _g = _by_day.get(_day.strftime('%Y-%m-%d'), 0.0)
+            if _g <= 0:
+                continue
+            _ds = _day.strftime('%Y%m%d')
+            _ymd = _day.strftime('%Y-%m-%d')
+            _target = _g * 0.93
+            for _j, _w in enumerate((0.55, 0.30, 0.15)):
+                seq += 1
+                rows.append({'platform': _PLAT[ch],
+                             'shop': _SHOPS[(_i + _j) % len(_SHOPS)],
+                             'flow_no': 'FLOW-%s-%s-%04d' % (ch.upper(), _ds, seq),
+                             'related_no': 'SETTLE-%s-%s' % (ch.upper(), _ds),
+                             'arrived_time': '%s %s' % (_ymd, _rand_hm()),
+                             'amount': round(_target * _w, 2),
+                             'flow_type': _POS[_j % len(_POS)],
+                             'settled_amount': round(_target * _w, 2),
+                             'data_source': 'seed'})
+            for _ft, _rate in _NEG:
+                seq += 1
+                rows.append({'platform': _PLAT[ch],
+                             'shop': _SHOPS[_i % len(_SHOPS)],
+                             'flow_no': 'FLOW-%s-%s-%04d' % (ch.upper(), _ds, seq),
+                             'related_no': '',
+                             'arrived_time': '%s %s' % (_ymd, _rand_hm()),
+                             'amount': round(_g * _rate, 2),
+                             'flow_type': _ft,
+                             'settled_amount': 0.0,
+                             'data_source': 'seed'})
+        if rows:
+            _r = _imp('gmv_flow', ch, rows, label='GMV 回款')
+            if _r.get('failed'):
+                try_err('seed_fill', 'GMV 回款导入 %s 有 %d 行未落库(首因=%s)'
+                        % (ch, _r['failed'],
+                           str((_r.get('errors') or [{}])[0].get('reason') or '')[:120]), None)
+            _total += int(_r.get('success') or 0)
+    return _total
 
 
 def prepare_skus():
@@ -1237,16 +1355,47 @@ _SEED_SETTLE = _SETTLE_SEGS[0][0]                      # 兼容别名: 落账起
 _SEED_SETTLE_OT_OWN = _SETTLE_SEGS[-1][0]              # 兼容别名: 最后一段(自检点)
 
 _SEED_MONTH = _SETTLE_SEGS[-1][0] + 1                  # 22 月汇总 + 配置
-# 尾段 4 段: 原一段同时跑 alerts + snapshot + 两渠道物化(历史实测 456s, 必然踩穿),
-#   拆成 4 个独立单请求, 每个只做一件事。
+# 尾段 5 段: 原一段同时跑 alerts + snapshot + 两渠道物化(历史实测 456s, 必然踩穿),
+#   拆成独立单请求, 每个只做一件事。2026-11-06 追加 gmv_flows(GMV 回款, 按渠道各发一份
+#   导入文件, 数据量小、不依赖物化结果但依赖 orders_day_agg, 故排在两渠道物化之后)。
 _TAIL_SEGS = (
     (_SEED_MONTH + 1, 'alerts'),
     (_SEED_MONTH + 2, 'snapshot'),
     (_SEED_MONTH + 3, 'stats_jd'),
     (_SEED_MONTH + 4, 'stats_other'),
+    (_SEED_MONTH + 5, 'gmv_flows'),
 )
 _SEED_TAIL = _TAIL_SEGS[0][0]                          # 兼容别名: 尾段起点
-SEED_DONE = _TAIL_SEGS[-1][0] + 1                      # 30 = 完成(段数会变, 别再写死数字)
+SEED_DONE = _TAIL_SEGS[-1][0] + 1                      # 完成(段数会变, 别再写死数字)
+
+# ── 阶段名(任务卡展示) ───────────────────────────────────────────────────
+# 为什么要有这一层: **窗口是执行分片, 不是业务阶段**。订单 90 天在同一个 step 里跑
+#   二十多个窗口, 库存每段按 2500 SKU 切片 —— 这些切片对用户没有信息量, 却原来每个
+#   都往 params.steps 里 append 一条, 卡片被撑成几十行、params 也随窗口线性膨胀。
+#   steps 的粒度改成**一个业务阶段一条**(elapsed/rows 在阶段内累加, wins 记窗口数),
+#   结构上就不存在"多条冗余", 不需要任何折叠/截断来掩盖。
+_STAGE_OF_STEP = {
+    0: '商品与供应商',
+    1: '订单',
+    **{no: '库存·%s·%s' % ('JD' if ch == 'jd' else 'OTHER',
+                           '平台仓' if wg == 'platform' else '自有仓')
+       for no, ch, wg in _SEED_INV_SEGS},
+    **{no: '流水·%s·%s' % ('JD' if ch == 'jd' else 'OTHER',
+                           '入库' if ft == 'inbound' else '出库')
+       for no, ch, ft in _FLOW_SEGS},
+    **{no: '落账·%s·%s' % ('JD' if ch == 'jd' else 'OTHER',
+                           '平台仓' if wg == 'platform' else '自有仓')
+       for no, ch, wg in _SETTLE_SEGS},
+    _SEED_MONTH: '月度汇总',
+    **{no: {'alerts': '告警', 'snapshot': '销售快照',
+            'stats_jd': '物化·JD', 'stats_other': '物化·OTHER',
+            'gmv_flows': 'GMV 回款'}.get(kind, kind) for no, kind in _TAIL_SEGS},
+}
+
+
+def stage_label(step):
+    """step → 业务阶段名(未知段号给可读兜底, 不抛 —— 展示层不该因段号变化崩)"""
+    return _STAGE_OF_STEP.get(int(step or 0), '阶段 %s' % step)
 
 
 # ── 水位 / 回滚 / 行数对账(2026-11-05) ──────────────────────────────────
@@ -1457,7 +1606,7 @@ def seed_step(step, today, skus_data, run_id='', offset=0, span_hint=0, last_ela
         _ms = _sync_inv_month()
         _seed_config()
         return _SEED_MONTH + 1, {'config': 'ok', 'inv_month': _ms}
-    # 尾段 4 段: 一个请求只做一件事。
+    # 尾段 5 段(含 GMV 回款): 一个请求只做一件事。
     for _no, _kind in _TAIL_SEGS:
         if step != _no:
             continue
@@ -1475,6 +1624,8 @@ def _seed_tail_piece(kind):
         return _seed_alerts()
     if kind == 'snapshot':
         return _build_snapshot()
+    if kind == 'gmv_flows':
+        return _seed_gmv_flows()
     try:
         from biz.sales import _rebuild_sku_sales_stats as _rss
         return _rss('jd' if kind == 'stats_jd' else 'other', days=ORDER_DAYS)

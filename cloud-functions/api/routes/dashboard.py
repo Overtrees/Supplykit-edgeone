@@ -335,11 +335,14 @@ def _q_counts(channel):
 
     标量子查询在同一条语句、同一快照内取值 —— 与原逐条 COUNT 的口径逐字一致。
     """
+    # 2026-11-06 供应商计数补 channel: alerts/products 都按渠道过滤, 唯独 suppliers 漏了,
+    #   于是切到任一渠道都显示 20(=10 供应商 ×2 渠道), 与商品/告警的渠道口径不一致。
+    #   seed 的 supplier_code 带 -JD/-OTHER 且写入侧注入 channel, 这里按行过滤即可。
     r = one("SELECT "
             "(SELECT COUNT(*) FROM alerts WHERE channel=%s AND status='active') AS alerts_c, "
             "(SELECT COUNT(*) FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')) AS products_c, "
-            "(SELECT COUNT(*) FROM suppliers) AS suppliers_c",
-            [channel, channel]) or {}
+            "(SELECT COUNT(*) FROM suppliers WHERE channel=%s) AS suppliers_c",
+            [channel, channel, channel]) or {}
     return {"alerts": int(r.get("alerts_c") or 0),
             "products": int(r.get("products_c") or 0),
             "suppliers": int(r.get("suppliers_c") or 0)}

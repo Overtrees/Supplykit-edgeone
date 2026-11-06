@@ -20,13 +20,18 @@ seed 原来是"直接 INSERT 进表"。问题是**演示数据不经过任何真
 
 ## 只覆盖能走导入的 target
 
-平台的导入 target 有 7 个: order / inventory / platform_inv / inventory_b /
-inbound / outbound / product。seed 用到其中 6 个(platform_inv 与 inventory_b 是
-同一张表的不同仓型入口, 本文件用 inventory_b 承载 B 仓快照)。
+清洗页的导入类型有 9 种: order / inventory / platform_inv / inventory_b / product /
+supplier / inbound / outbound / gmv_flow。seed 用到其中 8 种(platform_inv 与
+inventory_b 是同一张表的不同仓型入口, 本文件用 inventory_b 承载 B 仓快照)。
+
+2026-11-06 补齐两处: `supplier`(供应商档案, 原来 executemany 直写, 完全绕过了
+列映射/白名单/channel 注入)与 `gmv_flow`(GMV 回款资金流水, seed 此前一行都没生成,
+导致看板 month.payout 永远为 null)。两者都与 `product` 同构, 按渠道各发一份文件,
+channel 由导入参数注入(规格里不列渠道列, 避免"CSV 渠道 vs 导入参数"双真源)。
 
 **不在导入链路上的**是纯计算产物, 由 seed 照旧直接写(它们本来就不是"导入"能产生的):
-suppliers(供应商档案, 真实客户另行维护)、replenishment_config、rules、alerts、
-daily_sales_snapshot、sku_sales_stats、orders_day_agg、inventory_month、ledger_state。
+replenishment_config、rules、alerts、daily_sales_snapshot、sku_sales_stats、
+orders_day_agg、inventory_month、ledger_state。
 """
 from db import query
 
@@ -188,6 +193,41 @@ _SPEC = {
         "keys": ("sku", "outbound_date"), "dup": True, "agg": "sum", "key3": "barcode",
         "conflict_mode": "sum",
     },
+    # 2026-11-06 供应商档案: 与商品同构, 按渠道各发一份导入文件。
+    #   原来 seed 用 executemany 直写 suppliers —— "channel 列没进白名单 / supplier_code
+    #   撞键"这类问题在演示库里永远暴露不出来。channel 由导入参数注入, 规格不列渠道列。
+    "supplier": {
+        "table": "suppliers",
+        "cols": ["供应商编码", "供应商名称", "联系人", "联系电话", "评分", "品牌"],
+        "mp": {"供应商编码": {"target": "supplier_code", "type": "string"},
+               "供应商名称": {"target": "supplier_name", "type": "string"},
+               "联系人": {"target": "contact_person", "type": "string"},
+               "联系电话": {"target": "contact_phone", "type": "string"},
+               "评分": {"target": "score", "type": "number"},
+               "品牌": {"target": "brand", "type": "string"}},
+        "keys": ("supplier_code",), "dup": True, "agg": "overwrite",
+        "conflict_mode": "overwrite",
+    },
+    # 2026-11-06 GMV 回款(资金流水): 与清洗页 gmv_flow 同一张表、同一写入分支。
+    #   amount/settled_amount 走 number 清洗(写入侧另有 ¥/逗号 兜底); arrived_time 是
+    #   字符串, 由写入侧多格式归一。channel 由导入参数注入, 两渠道 flow_no 各自独立编号。
+    #   conflict_mode=overwrite 保证重灌幂等(同流水号不会把金额累加翻倍)。
+    "gmv_flow": {
+        "table": "gmv_flows",
+        "cols": ["平台", "店铺", "流水号", "关联单号", "到账时间", "金额",
+                 "流水类型", "结算金额", "数据来源"],
+        "mp": {"平台": {"target": "platform", "type": "string"},
+               "店铺": {"target": "shop", "type": "string"},
+               "流水号": {"target": "flow_no", "type": "string"},
+               "关联单号": {"target": "related_no", "type": "string"},
+               "到账时间": {"target": "arrived_time", "type": "string"},
+               "金额": {"target": "amount", "type": "number"},
+               "流水类型": {"target": "flow_type", "type": "string"},
+               "结算金额": {"target": "settled_amount", "type": "number"},
+               "数据来源": {"target": "data_source", "type": "string"}},
+        "keys": ("platform", "flow_no"), "dup": True, "agg": "sum",
+        "conflict_mode": "overwrite",
+    },
 }
 
 # 落账层按 (渠道, 仓型) 切段时, 每段要发的文件
@@ -250,7 +290,7 @@ def to_csv(target, rows):
 
 
 # ── 实际走导入链路 ────────────────────────────────────────────────────────
-def import_rows(target, channel, rows, conflict_sql="", label=""):
+def import_rows(target, channel, rows, conflict_sql="", label="", ctx=None):
     """把内存行**当作导入文件**灌进正式链路, 返回导入侧的回执
 
     链路(每一段都是线上真实实现, 不是影子):
@@ -261,6 +301,10 @@ def import_rows(target, channel, rows, conflict_sql="", label=""):
          补 69码(按档案)、订单四维键对齐、库存期初实盘校准、自有仓可用重算、
          批次 FIFO 重建、脏日标记、analysis_cache.invalidate(domain)
     返回: {"rows", "success", "failed", "errors"}
+
+    ctx(2026-11-06 快速通道): 同一份文件的多个批次传入**同一个 dict**, 把"文件级一次就够"
+      的动作(归码档案索引、脏日标记)跨批复用 —— 链路四层不变、行级规则不变,
+      只是不再每批重复查库。调用方在最后一批之后必须调 cleanse_write.flush_import_ctx()。
     """
     from routes.cleansing import _parse_table, _clean_rows
     from routes.cleanse_write import _write_rows
@@ -273,7 +317,7 @@ def import_rows(target, channel, rows, conflict_sql="", label=""):
     sp = spec(target)
     cleaned = _clean_rows(parsed, sp["mp"])
     res = _write_rows(target, channel, spec(target)["conflict_mode"], cleaned,
-                      conflict_sql=conflict_sql)
+                      conflict_sql=conflict_sql, ctx=ctx)
     # _write_rows 各分支返回形状不同: 出入库/库存返回 (s, f, ed), 其余 (s, f)
     if isinstance(res, tuple) and len(res) == 3:
         s, f, ed = res

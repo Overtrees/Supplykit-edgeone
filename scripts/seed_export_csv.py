@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""把 seed 成品数据按「导入的 7 种 target」原样拆成 7 个 CSV 文件。
+"""把 seed 成品数据按「导入的 8 种 target」原样拆成 8 个 CSV 文件。
 
 2026-11-05 用户定案: **仅做拆文件这一步**, 数量 / 场景 / 字段一律不变。
   · 数据源 = 刚跑完 seed 的成品库(只读); 不做任何重新生成, 不改一行数据;
   · 表头 = routes/seed_import.py 的中文导出列名(与用户上传的导入文件同构);
-  · 7 个 target 见 seed_import.py docstring:
-      order / inventory / platform_inv / inventory_b / inbound / outbound / product
+  · 8 个 target 见 seed_import.py docstring:
+      order / inventory / platform_inv / inventory_b / inbound / outbound / product / gmv_flow
     其中 inventory / platform_inv / inventory_b 是同一张 inventory 表按仓型的三个
     不同上传入口 —— 这里按 warehouse_type 分流, 三份行数之和 = 库存表总行数。
+2026-11-06 补 gmv_flow: seed 新增了 GMV 回款资金流水(按渠道), 成品库多了一张表,
+  不跟着拆就会漏掉这一份数据。supplier 与「按渠道 × 导入类型细拆」留待后续指令。
 
 输出: /workspace/supplykit_seed_csv/*.csv + _manifest.json
 用法: python3 scripts/seed_export_csv.py
@@ -30,7 +32,7 @@ BATCH = 5000
 sys.path.insert(0, os.path.join(ROOT, "cloud-functions", "api"))
 from routes.seed_import import spec  # noqa: E402
 
-# 7 个 target → (源表, 额外 where, 表头规格 target)
+# 8 个 target → (源表, 额外 where, 表头规格 target)
 #   platform_inv 在 _SPEC 里没有独立条目: 导入页 TARGET_FIELDS 里它与 inventory 共用
 #   INV_FIELDS, 写入层 cleanse_write.py 也走同一分支 → 表头沿用 inventory 规格。
 SPECS = [
@@ -41,6 +43,7 @@ SPECS = [
     ("inventory_b", "inventory", "warehouse_type='platform_b'", "inventory_b"),
     ("inbound", "inbound_records", "", "inbound"),
     ("outbound", "outbound_records", "", "outbound"),
+    ("gmv_flow", "gmv_flows", "", "gmv_flow"),
 ]
 
 
@@ -124,7 +127,7 @@ def main():
     total = sum(m["rows"] for m in manifest)
     with open(os.path.join(OUT, "_manifest.json"), "w", encoding="utf-8") as f:
         json.dump({"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                   "note": "仅按 7 种导入 target 拆分, 数量/场景/字段与 seed 成品库一致",
+                   "note": "仅按 8 种导入 target 拆分, 数量/场景/字段与 seed 成品库一致",
                    "total_rows": total, "files": manifest}, f,
                   ensure_ascii=False, indent=2)
     bad = [m["target"] for m in manifest if not m["match"]]

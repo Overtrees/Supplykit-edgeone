@@ -287,11 +287,16 @@ export default function ProductPage() {
                         </td>
                       )
                     if (col.id === 'channel')
+                      // 2026-11-06 取**行值**而非全局选中的渠道: 原来整列都渲染成当前渠道,
+                      //   切一次渠道全表跟着变, 看起来就是「商品没有按渠道分」。
+                      //   channel 是世界的名字(渠道码), 显示走已有双语词条, 不硬编码中文。
                       return (
                         <td key={col.id} style={{ fontSize: 'var(--font-xs)' }}>
-                          {useAppStore.getState().channel === 'other'
+                          {String(x.channel || '') === 'other'
                             ? t('inv.channel_other_short')
-                            : t('inv.channel_jd_short')}
+                            : String(x.channel || '') === 'jd'
+                              ? t('inv.channel_jd_short')
+                              : String(x.channel || '-')}
                         </td>
                       )
                     if (col.id === 'brand')

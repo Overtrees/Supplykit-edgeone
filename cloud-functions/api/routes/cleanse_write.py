@@ -829,7 +829,7 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
             try_err('cleansing', '静默降级', _e)
     return n, skus
 
-def _fill_barcode_from_products(channel, cleaned):
+def _fill_barcode_from_products(channel, cleaned, cache=None):
     """69码入口对齐(2026-11-01 二次收紧): products.barcode 是档案, 流水/订单里的码是一手实况
 
     业务前提: 客户首月导入的订单表/出入库表往往**只有 SKU 和仓**, 没有 69码 列。
@@ -855,6 +855,12 @@ def _fill_barcode_from_products(channel, cleaned):
       多出一个码分组, 可事后修正。**两害取轻 → 保留 + 告警。**
 
     返回 (补码行数, 回写档案数, 不符行数); cleaned 原地修改。
+
+    cache(2026-11-06 「快速通道」): 传入一个 dict 时, 档案码/效期/多码证据按 SKU 缓存,
+      由调用方**跨批复用**。seed 把一份大文件切成几百个 500 行批次时, 原来每批都要
+      重新查一次 products 与 inventory/orders/batches 的多码证据(约 4 次往返/批);
+      缓存后同一个 SKU 只查一次, 判码规则、判定结果与原实现**逐行一致**
+      (仍按本渠道优先、先到先得; 新出现的 SKU 仍会实查, 不是"拿旧结果糊弄")。
     """
     if not cleaned:
         return 0, 0, 0
@@ -866,9 +872,16 @@ def _fill_barcode_from_products(channel, cleaned):
     #   products 按 (sku, channel) 建档: 同 SKU 跨渠道可能各自一码, 必须优先取本渠道档案,
     #   否则 B 渠道导入会拿到 A 渠道的码 —— 这是比"缺码"更隐蔽的串码。ORDER BY 让本渠道排前,
     #   下面用 setdefault(先到先得) 取值。
-    _amap, _expmap, _seen = {}, {}, set()
-    for _i in range(0, len(_skus), 500):
-        _part = _skus[_i:_i + 500]
+    if cache is not None:
+        _amap = cache.setdefault("amap", {})
+        _expmap = cache.setdefault("expmap", {})
+        _resolved = cache.setdefault("resolved", set())   # 查过 products 的 SKU(含查无档案)
+        _seen = set()                                      # 本次查询内的去重(多行取第一条)
+    else:
+        _amap, _expmap, _seen, _resolved = {}, {}, set(), None
+    _todo = [s for s in _skus if _resolved is None or s not in _resolved]
+    for _i in range(0, len(_todo), 500):
+        _part = _todo[_i:_i + 500]
         for _b in query("SELECT sku, barcode, expiry_managed, channel FROM products WHERE sku IN (%s) "
                         "ORDER BY (channel=%%s) DESC, id DESC"
                         % ",".join(["%s"] * len(_part)), list(_part) + [channel]):
@@ -883,9 +896,14 @@ def _fill_barcode_from_products(channel, cleaned):
             if _bc:
                 _amap[_k] = _bc
             _expmap[_k] = _norm_expiry(_b.get("expiry_managed"))
+        if _resolved is not None:
+            # 查无档案的 SKU 也要标记"查过", 否则每批都会为它再发一次 IN 查询
+            _resolved.update(_part)
 
     # 多码证据(两级): ①本批同一 SKU 出现 ≥2 个码 ②历史库存/订单/批次里出现过 ≥2 个码
     #   档案 barcode 是单值列, 它只能证明"有这个码", 不能证明"只有这个码" —— 所以要另找证据
+    #   注意: ①是**批内**事实, 不跨批缓存(否则后续批次会"继承"别批的多码判定, 补码结果改变);
+    #        ②是历史事实, 同一 SKU 只查一次即可 —— 这也是快速通道省下的那 3 次往返/批。
     _codes = {}
     for r in cleaned:
         _k = str(r.get("sku") or "").strip()
@@ -896,8 +914,15 @@ def _fill_barcode_from_products(channel, cleaned):
         if _bc:
             _codes[_k].add(_bc)
     _multi = {k for k, s in _codes.items() if len(s) > 1}
-    for _i in range(0, len(_skus), 500):
-        _part = _skus[_i:_i + 500]
+    _hist = cache.setdefault("multi", set()) if cache is not None else set()
+    _multi |= _hist
+    if cache is not None:
+        _probed = cache.setdefault("probed", set())
+        _probe = [s for s in _skus if s not in _probed]
+    else:
+        _probe = _skus
+    for _i in range(0, len(_probe), 500):
+        _part = _probe[_i:_i + 500]
         _ph = ",".join(["%s"] * len(_part))
         for _t in ("inventory", "orders", "batches"):
             try:
@@ -905,8 +930,11 @@ def _fill_barcode_from_products(channel, cleaned):
                                 "AND barcode IS NOT NULL AND barcode<>'' GROUP BY sku" % (_t, _ph), _part):
                     if int(_b.get("c") or 0) > 1:
                         _multi.add(str(_b.get("sku")))
+                        _hist.add(str(_b.get("sku")))
             except Exception:
                 pass   # 证据查不到 → 按"无多码"处理(不因基础设施异常阻断导入), 但只影响 no 商品
+    if cache is not None:
+        _probed.update(_probe)   # 查过的 SKU(无论是否多码)不再重复查
 
     _filled, _mismatch, _writeback, _held = 0, [], {}, []
     for r in cleaned:
@@ -1121,15 +1149,22 @@ def _promote_empty_barcode(channel, pairs, chunk=500):
     return done
 
 
-def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
+def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=None):
     """按 target 分派写入; 返回 (success, failed)
     渠道归属: 导入数据归属导入渠道(除非 mapping 显式映射了 channel 列)——否则未映射时落默认 jd 污染跨渠道
 
     conflict_sql: 透传给库存分支的 _write_batch, 覆盖默认的"同键全列覆盖"。
       seed 重灌演示库时用「不覆盖已有行」——那样才能看出"重复导入被幂等挡下"这件事,
       而不是把旧行改一遍还报成功。传空 = 现有导入行为完全不变。
+
+    ctx(2026-11-06 「快速通道」): 文件级上下文, 由调用方在同一份文件的多个批次间复用。
+      · 只合并**文件级动作**(归码档案索引、脏日标记), 行级规则(69码判定、四维键对齐、
+        期初校准、可用重算、批次 FIFO)一条不少、逐行照跑 —— 所以结果与逐批导入一致;
+      · 默认 None = 完全走原路径(真实上传导入不受影响, 不存在"两条口径");
+      · 批次跑完必须调 flush_import_ctx() 把延后的脏日标记登记掉, 否则物化不会重建。
     """
     _ksql = conflict_sql
+    _ctx = ctx if isinstance(ctx, dict) else None
     for it in cleaned:
         if "channel" not in it:
             it["channel"] = channel
@@ -1137,7 +1172,8 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
         # 69 码入口对齐(2026-11-01 统一): 与 inbound/outbound/inventory 同一套四象限规则,
         #   见 _fill_barcode_from_products —— 原实现只补"空码"、不回写档案、不告警码不符
         try:
-            _fill_barcode_from_products(channel, cleaned)
+            _fill_barcode_from_products(channel, cleaned,
+                                        cache=(_ctx.setdefault("bc", {}) if _ctx is not None else None))
         except Exception as _e:
             try_err('cleansing', '69码入口对齐降级(order)', _e)
         # 2026-11-02 S2-5 四维业务键对齐(必须放在补码之后 —— 补码会改变键)
@@ -1168,7 +1204,12 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
         try:
             if int(_res[0] or 0) > 0:
                 _nd = {_d for _d in (_days | _old_days) if _d}
-                mark_agg_days(channel, _nd, reason="order_import")
+                if _ctx is not None:
+                    # 快速通道: 同一份文件几十个批次只登记一次(merge 进 ctx, 文件末 flush)。
+                    #   mark_agg_days 本身是幂等 upsert, 合并只是省往返, 不改变最终标记集合。
+                    _ctx.setdefault("days", set()).update(_nd)
+                else:
+                    mark_agg_days(channel, _nd, reason="order_import")
         except Exception as _em:
             # 标记失败不影响导入结果(数据已落库), 由每日 sweep 用 synced_at 反查补标记
             try_err('cleanse_write', '订单导入后登记重建降级', _em)
@@ -1180,22 +1221,24 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
             execute("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))")
         except Exception as _etb:
             try_err('cleanse_write', 'gmv_flows 建表降级', _etb)
+        # 2026-11-06 老表唯一键迁移移出逐行循环: 原来每处理一行就 SHOW INDEX 一次
+        #   (900 行 = 900 次往返, ALTER 还可能重复执行), 是导入链路的纯浪费。
+        #   这是**一次性 DDL**, 整批只需查一次; 新表由 schema_create.py 的版本门禁建好,
+        #   这里只兼容历史库里仍是 uq_platform_flow(platform,flow_no) 的情况 ——
+        #   跨渠道 platform+flow_no 撞键会让第二渠道整批 1062。
+        try:
+            from db import query as _qix
+            _ix = _qix("SHOW INDEX FROM gmv_flows")
+            _uq_cols = [str(r.get("Column_name") or "") for r in (_ix or [])
+                        if r.get("Key_name") == "uq_platform_flow" and r.get("Column_name")]
+            if _uq_cols and "channel" not in _uq_cols:
+                execute("ALTER TABLE gmv_flows DROP INDEX uq_platform_flow")
+                execute("ALTER TABLE gmv_flows ADD UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no)")
+                try_err('cleanse_write', 'gmv_flows 唯一键迁移完成(channel 补入)', '')
+        except Exception as _eix:
+            try_err('cleanse_write', 'gmv_flows 唯一键迁移降级', _eix)
         for it in cleaned:
             it["channel"] = channel
-            # 2026-10-16 唯一键补 channel 幂等迁移(跨渠道 platform+flow_no 撞键互阻——jd 与 other
-            # 各自平台流水号独立编号, 无 channel 维度第二条渠道 1062 整批失败):
-            # 老表 uq_platform_flow(platform,flow_no) → 新 uq_platform_flow_ch(channel,platform,flow_no)
-            try:
-                from db import query as _qix
-                _ix = _qix("SHOW INDEX FROM gmv_flows")
-                _uq_cols = [str(r.get("Column_name") or "") for r in (_ix or [])
-                            if r.get("Key_name") == "uq_platform_flow" and r.get("Column_name")]
-                if _uq_cols and "channel" not in _uq_cols:
-                    execute("ALTER TABLE gmv_flows DROP INDEX uq_platform_flow")
-                    execute("ALTER TABLE gmv_flows ADD UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no)")
-                    try_err('cleanse_write', 'gmv_flows 唯一键迁移完成(channel 补入)', '')
-            except Exception as _eix:
-                try_err('cleanse_write', 'gmv_flows 唯一键迁移降级', _eix)
             # 2026-10-16 钉死 1366 根因: amount/settled_amount 为 DECIMAL, 映射类型 string 时
             # 原样直写(如 ¥1,200.50/文本/空态) → TiDB 1366 整批失败。写入前强制 number 清洗
             # (与 _v 同规: 去 ¥,元/逗号/空格 → float; 无法解析归 0, 不炸批)
@@ -1389,6 +1432,26 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql=""):
                             cleaned, conflict_mode, "sku", "outbound_date", channel=channel,
                             agg_key3="barcode", agg_sum=["quantity", "price"])
     return 0, len(cleaned), []
+
+
+def flush_import_ctx(channel, ctx):
+    """快速通道收尾: 把延后的**文件级动作**一次性落地(当前只有脏日标记)。
+
+    必须在同一份文件的最后一个批次之后调用。不调不会写错数据, 但物化不会重建 ——
+    表现为"订单已落库, 看板还是旧值", 比报错更难查, 所以调用方要像 close() 一样必调。
+    返回本次登记的日期数(便于 seed 在窗口摘要里显示)。
+    """
+    if not isinstance(ctx, dict):
+        return 0
+    _days = ctx.pop("days", None)
+    if not _days:
+        return 0
+    try:
+        return mark_agg_days(channel, _days, reason="order_import")
+    except Exception as _e:
+        try_err('cleanse_write', '快速通道脏日登记降级(改逐批兜底)', _e)
+        return 0
+
 
 # 2026-10-29 自有类仓型白名单(可扩展): 出入库只允许这些仓型
 # 未来新增自有仓类型(如区域仓/前置仓)只需在此追加, 其余逻辑自动跟随

@@ -1556,7 +1556,8 @@ try:
           and _cw3.index("_align_order_keys(channel, cleaned)") < _cw3.index('_res = _write_batch("orders"'),
           "cleanse_write.py")
     check("S2-5 对齐在补码之后(补码会改变键)",
-          _cw3.index("_fill_barcode_from_products(channel, cleaned)") < _cw3.index("_align_order_keys(channel, cleaned)"),
+          # 2026-11-06 补码调用多了 cache 参数(可能换行), 匹配到括号前缀即可, 语义不变
+          _cw3.index("_fill_barcode_from_products(channel, cleaned") < _cw3.index("_align_order_keys(channel, cleaned)"),
           "cleanse_write.py")
     check("S2-5 多码 SKU 不参与对齐(那本来就是多行)",
           'len(_nonempty) == 1 and "" not in _codes' in _cw3, "cleanse_write.py")
@@ -1565,6 +1566,16 @@ try:
           "def _promote_empty_barcode" in _cw3 and "CASE CONCAT(order_no,'|',sku)" in _cw3
           and "UPDATE orders SET barcode=%s WHERE channel=%s AND order_no=%s" not in _cw3,
           "cleanse_write.py")
+    # 2026-11-06 快速通道(seed): 只合并**文件级动作**(归码档案索引/多码证据、脏日标记),
+    #   行级规则(69码判定/四维键对齐/期初校准/可用重算/批次FIFO)一条不少。
+    #   默认 ctx=None → 逐批行为与原来完全一致, 真实上传导入不存在"第二条口径"。
+    _si3 = open('routes/seed_import.py', encoding='utf-8').read()
+    _sf3 = open('routes/seed_fill.py', encoding='utf-8').read()
+    check("快速通道: 默认 ctx=None 行为不变, 且文件末必须收尾(否则物化不重建)",
+          "def flush_import_ctx" in _cw3 and "ctx=None" in _cw3
+          and "ctx=ctx" in _si3 and "flush_import_ctx" in _sf3
+          and "cache=(_ctx.setdefault(\"bc\", {})" in _cw3,
+          "cleanse_write.py / seed_import.py / seed_fill.py")
 
     _cl3 = open('routes/cleansing.py', encoding='utf-8').read()
     check("S2-5 订单不再被入口查重拦死(否则覆盖逻辑成死代码)",
@@ -3015,12 +3026,21 @@ try:
           and "sku_from" in _sf._seed_inventory.__code__.co_varnames
           and "sku_to" in _sf._seed_inventory.__code__.co_varnames,
           _sf.SEED_INV_SKU_PER_CHUNK)
-    check("seed 段号: 各阶段严格递增(订单1+库存4+流水4+落账4+月1+尾4+完成1 = 19)",
+    check("seed 段号: 各阶段严格递增(订单1+库存4+流水4+落账4+月1+尾5+完成1 = 20)",
           _sf._SEED_ORDER_SEGS < _sf._SEED_INV < _sf._SEED_FLOW
           < _sf._SETTLE_SEGS[0][0] < _sf._SEED_MONTH < _sf._SEED_TAIL
-          < _sf.SEED_DONE == 19,
+          # 完成值不写死: 段号重排过多次, 写死会让断言变成假绿/假红
+          < _sf.SEED_DONE == _sf._TAIL_SEGS[-1][0] + 1,
           (_sf._SEED_INV, _sf._SEED_FLOW, _sf._SETTLE_SEGS[0][0],
            _sf._SEED_MONTH, _sf._SEED_TAIL, _sf.SEED_DONE))
+    # 2026-11-06 任务卡明细膨胀的结构性修复: steps 的粒度必须是**业务阶段**。
+    #   窗口(订单按天游标、库存按 2500 SKU 切片)是执行分片, 不参与展示; 一个阶段无论
+    #   跑几个窗口都只占一条(elapsed/rows 累加)。阶段名必须全覆盖且互不重名 ——
+    #   否则前端会退化成"阶段x"这种不可读文案。
+    check("seed 任务卡: steps 粒度=业务阶段(窗口不单独成行, 阶段名全覆盖且唯一)",
+          all(i in _sf._STAGE_OF_STEP for i in range(_sf.SEED_DONE))
+          and len({_sf.stage_label(i) for i in range(_sf.SEED_DONE)}) == _sf.SEED_DONE,
+          [_sf.stage_label(i) for i in range(_sf.SEED_DONE)][:5])
     # 事故根因: step14 一个请求发 4 份导入文件(2 渠道 × 2 类型) → >120s 被网关切断。
     #   收敛口径: 一个请求 = 一份导入文件 = 一个步骤窗口, 4 段, 不按 SKU 半区预拆。
     check("流水 4 段: 渠道×出/入类型, 一段一文件, 段号连续且恰为 2×2",
@@ -3036,9 +3056,10 @@ try:
                                                              _sf._SETTLE_SEGS[-1][0] + 1))
           and all(len(x) == 3 for x in _sf._SETTLE_SEGS),
           [x[0] for x in _sf._SETTLE_SEGS])
-    check("尾段 4 段: 告警/快照/物化双渠道各自独立(原一段实测 456s 必踩穿)",
-          len(_sf._TAIL_SEGS) == 4
-          and {x[1] for x in _sf._TAIL_SEGS} == {'alerts', 'snapshot', 'stats_jd', 'stats_other'},
+    check("尾段 5 段: 告警/快照/物化双渠道各自独立 + GMV 回款(原一段实测 456s 必踩穿)",
+          len(_sf._TAIL_SEGS) == 5
+          and {x[1] for x in _sf._TAIL_SEGS} ==
+              {'alerts', 'snapshot', 'stats_jd', 'stats_other', 'gmv_flows'},
           [x[1] for x in _sf._TAIL_SEGS])
     _all_nos = ([x[0] for x in _sf._SEED_INV_SEGS] + [x[0] for x in _sf._FLOW_SEGS]
                 + [x[0] for x in _sf._SETTLE_SEGS] + [_sf._SEED_MONTH]
@@ -3352,9 +3373,41 @@ try:
     # ── 2026-11-05 seed 走导入链路(用户定案: 演示数据必须由导入代码路径自己产出) ──
     import routes.seed_import as _si
     # 规格必须与导入页的 target 一一对上, 否则会出现"导入了但没走链路"的假象
-    check("导入链路: 6 个 target 都有文件规格(product/order/inventory/inventory_b/inbound/outbound)",
-          set(_si._SPEC) == {"product", "order", "inventory", "inventory_b",
-                             "inbound", "outbound"}, sorted(_si._SPEC))
+    check("导入链路: 8 个 target 都有文件规格(含 supplier/gmv_flow)",
+          set(_si._SPEC) == {"product", "supplier", "order", "inventory", "inventory_b",
+                             "inbound", "outbound", "gmv_flow"}, sorted(_si._SPEC))
+    # ── 2026-11-06 seed 渠道拆分 / GMV 回款 / 数据正确性 静态自检 ──
+    _sf12 = open("routes/seed_fill.py", encoding="utf-8").read()
+    _cw12 = open("routes/cleanse_write.py", encoding="utf-8").read()
+    _dsh12 = open("routes/dashboard.py", encoding="utf-8").read()
+    # local_test.py 的 cwd 固定是 cloud-functions/api/, 根目录脚本要回退两级
+    _ec12 = open("../../scripts/seed_export_csv.py", encoding="utf-8").read()
+    check("GMV 回款: seed 按渠道生成且走导入链路, flow_type 落在 _FLOW_NET 7 类内",
+          "def _seed_gmv_flows" in _sf12
+          and "_imp('gmv_flow', ch, rows" in _sf12
+          and all(k in _sf12 for k in ("货款到账", "交易收入", "结算入账",
+                                       "退款扣回", "扣点扣款"))
+          and "'gmv_flows'" in _sf12, "routes/seed_fill.py")
+    check("GMV 回款: 尾段含 gmv_flows 且成品库导出跟着加第 8 份",
+          "_SEED_MONTH + 5, 'gmv_flows'" in _sf12
+          and '("gmv_flow", "gmv_flows", "", "gmv_flow")' in _ec12,
+          "routes/seed_fill.py / scripts/seed_export_csv.py")
+    check("供应商: seed 按渠道各发一份导入文件(不再 executemany 直写)",
+          "_imp('supplier', ch, _srow" in _sf12
+          and 'executemany("INSERT INTO suppliers' not in _sf12,
+          "routes/seed_fill.py")
+    check("告警: 批量步长与切片同值(原 500/200 每批静默漏 300 行)",
+          "range(0, len(inserts), 500)" in _sf12
+          and "inserts[i:i + 500]" in _sf12
+          and "inserts[i:i + 200]" not in _sf12, "routes/seed_fill.py")
+    check("概览计数: suppliers 补 channel 过滤(与 alerts/products 同口径)",
+          "FROM suppliers WHERE channel=%s) AS suppliers_c" in _dsh12,
+          "routes/dashboard.py")
+    # 迁移在循环外: 两个标记在 gmv_flow 分支内的先后位置, 反过来就是每行一次 SHOW INDEX
+    _gw = _cw12.split('if target == "gmv_flow":')[1].split('if target in ("inventory"')[0]
+    check("gmv_flow 导入: 老表唯一键迁移在逐行循环外(原来每行一次 SHOW INDEX)",
+          0 < _gw.find("SHOW INDEX FROM gmv_flows") < _gw.find("for it in cleaned:"),
+          "routes/cleanse_write.py")
     check("导入链路: 每个 target 的列数与映射数一致(列没映射=那一列永远不进库)",
           all(len(sp["cols"]) == len(sp["mp"]) for sp in _si._SPEC.values()),
           {k: (len(v["cols"]), len(v["mp"])) for k, v in _si._SPEC.items()})

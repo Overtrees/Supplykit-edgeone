@@ -40,6 +40,10 @@ export const getProdVis = ch => {
 }
 
 export const SUPPLIER_COLS = [
+  // 2026-11-06 补渠道列: 商品页早有 channel 列, 供应商页漏了 —— 同一份 seed 数据
+  //   按渠道分成 -JD/-OTHER 两套, 展示上却看不出归属。列标签走 colLabel('channel'),
+  //   复用商品页已有词条, 不新增 i18n key。
+  { id: 'channel', label: 'channel' },
   { id: 'brand', label: 'brand' },
   { id: 'code', label: 'code' },
   { id: 'name', label: 'name' },

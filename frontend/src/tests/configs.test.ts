@@ -20,8 +20,10 @@ describe('列配置', () => {
   })
 
   it('供应商页列定义完整', () => {
-    expect(SUPPLIER_COLS.length).toBe(6)
+    // 2026-11-06 补 channel 列: seed 的供应商按 jd/other 拆成两套, 展示层要能看出归属
+    expect(SUPPLIER_COLS.length).toBe(7)
     expect(SUPPLIER_COLS.map(c => c.id)).toEqual([
+      'channel',
       'brand',
       'code',
       'name',

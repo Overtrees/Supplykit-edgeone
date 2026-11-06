@@ -177,6 +177,17 @@ export default function SupplierPage() {
                           -
                         </td>
                       )
+                    if (col.id === 'channel')
+                      // 2026-11-06 供应商按渠道拆分后, 展示层补上归属列(取行值)。
+                      return (
+                        <td key={col.id} style={{ fontSize: 'var(--font-xs)' }}>
+                          {String(x.channel || '') === 'other'
+                            ? t('inv.channel_other_short')
+                            : String(x.channel || '') === 'jd'
+                              ? t('inv.channel_jd_short')
+                              : String(x.channel || '-')}
+                        </td>
+                      )
                     if (col.id === 'brand')
                       return (
                         <td key={col.id} style={{ fontSize: 'var(--font-sm)' }}>
