@@ -625,9 +625,16 @@ export default function CleansingPage() {
     if (!overlapAsk) return
     setOverlapAsk(null)
     setBs(t('cl.executing'))
-    execLock.current = false
+    // 2026-11-06 P2-14 两处修正:
+    //   ① 原来这里第一行就是 `execLock.current = false` —— 请求还在飞就把"正在执行"的锁
+    //      放开了。用户在等待(大批量可能 90s)期间再点一次导入, 就会并发提交两份文件写同一批
+    //      SKU。改为 try/finally: 只有真正结束(成功或失败)才解锁。
+    //   ② 原来用 `api.post`(axios)发 Blob: 默认 30s 超时, 对大批量导入偏短; Content-Type
+    //      靠 axios 推断, 存在被判 422 的风险。本文件其余上传路径一律走 `uploadRawBytes`
+    //      (90s + 显式 application/octet-stream + 显式拼 BASE)。这里对齐, 免得同一个接口
+    //      有两条互不相同的上传通道。
     try {
-      const r = await api.post(
+      const r = await uploadRawBytes<CleanseData>(
         '/api/cleansing/execute-async?force_new=1&q_target=' +
           tt +
           '&q_channel=' +
@@ -648,7 +655,6 @@ export default function CleansingPage() {
         setRes(d)
         goStep(3)
         setBs('')
-        execLock.current = false
         toast.success(t('cl.done_into', { ch: channelName({ code: ch }) }))
         return
       }
@@ -660,11 +666,12 @@ export default function CleansingPage() {
       })
       goStep(3)
       setBs('')
-      execLock.current = false
       toast.success(t('cl.submitted_bg'))
     } catch (e) {
       toast.error(t('cl.req_error', { msg: e.message || '' }))
       setBs('')
+    } finally {
+      execLock.current = false
     }
   }
   const quickExecute = async () => {

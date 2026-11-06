@@ -124,14 +124,17 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0
     # ② 驱动模式(仅 taskWatch 看守调用): 保持原有 抢锁 → 续跑 语义, 一字未改
     from routes.tasks import _new_task_id, _log_task  # 延迟(防循环)
     from routes.tasks import _TABLES_RESET  # 延迟(表清单)
-    from routes.common import mark_driver as _mkdrv
-    _mkdrv(task_id, driver)
+    from routes.common import mark_driver as _mkdrv, type_ok as _type_ok
     if not task_id:
         return {"data": {"status": "not_found"}}
-    row = one("SELECT status, params, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS stalled_s, "
+    row = one("SELECT status, params, task_type, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS stalled_s, "
               "UNIX_TIMESTAMP(NOW()) AS now_ts FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"data": {"status": "not_found"}}
+    # 2026-11-06 P0-1: 先判类型再写 driver(原 mark_driver 在校验之前, 打错类型也会改别人的 params)
+    if not _type_ok(row, "seed"):
+        return {"data": {"status": "not_found"}}
+    _mkdrv(task_id, driver)
     status = row.get("status") or "not_found"
     if status in ("done", "error"):
         return {"data": {"status": status}}

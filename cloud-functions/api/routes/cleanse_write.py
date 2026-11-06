@@ -1612,6 +1612,14 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
     #   实测(TiDB, 2000 行/1000 一批): 纯 INSERT 2.14s vs upsert 1.03s —— 没有注释里说的
     #   "ON DUP 慢 10 倍", 那条结论来自旧表结构, 不适用于有四维唯一键的现在。
     ord_upsert = table == "orders"
+    # 2026-11-06 P1-3: 档案类(products / suppliers / purchase_orders)补 upsert。
+    #   它们原来落进最后的 `else: pass`(纯 INSERT), 重导同一份商品/供应商文件会撞
+    #   uq_products_sku(sku) / uk_suppliers_code(supplier_code) → 整批 1062 →
+    #   逐行降级 → 每一行都失败 → 用户看到"成功 0 条"。而实际运营节奏是每周改价/改箱规
+    #   都要重导, 结果只能"重置后重来"。
+    #   channel **不进覆盖列**: 否则同一 SKU 换个渠道导入, 会把已有行整行"搬"到新渠道,
+    #   原渠道的数据凭空消失。deleted_at 也不动 —— 重导旧文件不该把用户删掉的商品复活。
+    arch_upsert = table in ("products", "suppliers", "purchase_orders")
     # 写批 500 → 2000(2026-11-05 TiDB 实测: 单条 INSERT 40 万行 2.948s / 4.9MB,
     #   64MB max_allowed_packet 的 7.6%, 写入行数不是瓶颈; RU 按**写请求次数**计)。
     #   500/片时内层 1000/批永远只跑一次, 实际写批 = 500 行 —— 两个值必须一起抬。
@@ -1680,6 +1688,12 @@ def _write_batch(table, allowed_cols, cleaned, conflict_mode, *key_cols, channel
                      if c not in ("id", "deleted_at")]
             _oupd.append("`deleted_at` = ''")
             sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_oupd)
+        elif arch_upsert:
+            # 档案类: 同键覆盖业务列, 排除代理键 / 软删标记 / 渠道(见上方 arch_upsert 注释)
+            _aupd = ["`%s` = VALUES(`%s`)" % (c, c) for c in cols
+                     if c not in ("id", "deleted_at", "channel")]
+            if _aupd:
+                sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_aupd)
         else:
             # 2026-10-15 性能: 非 sum 模式已做已存在跳过(rows 全新键)——纯 INSERT 无 ON DUPLICATE(executemany+ON DUP 对 TiDB 慢 10 倍——seed 5000/批 36s vs 此处 5.5 分钟)
             pass

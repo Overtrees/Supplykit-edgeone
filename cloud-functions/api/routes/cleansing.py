@@ -22,7 +22,7 @@ from fastapi import Form
 
 from db import query, one, execute, executemany
 from routes.cleanse_write import _adjust_inventory, _write_rows, _write_batch, _sync_batches
-from routes.common import ok, fail, traced, try_err
+from routes.common import ok, fail, traced, try_err, type_ok as _type_ok
 
 router = APIRouter(tags=["cleansing"])
 
@@ -511,11 +511,18 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                        "failed_details": _ri.get("failed_details") or []})
         return _d
     # ② 驱动模式(taskWatch 看守): 保持原有语义
-    from routes.common import mark_driver as _mkdrv
-    _mkdrv(task_id, driver)
-    row = one("SELECT status, params, result, updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
+    # 2026-11-06 P0-1 防御纵深: **先校验类型再写任何东西**。
+    #   原来 mark_driver 在 SELECT 之前、且不校验 task_type —— export/cleansing_eval 的 id
+    #   打进来会被当清洗任务推进: 读不到 clean_<id> → 抛"源文件不存在" → 下面的 except
+    #   执行 UPDATE status='error', 导出 3 秒内被判死。详见 common.type_ok 的 docstring。
+    row = one("SELECT status, params, result, updated_at, task_type FROM sync_tasks "
+              "WHERE task_id=%s", [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
+    if not _type_ok(row, "cleansing"):
+        return {"ok": True, "task_id": task_id, "status": "not_found"}
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     status = row.get("status") or ""
     if status == "running":
         # 2026-10-14 超时自愈: running 超过 30 分钟无更新(前端轮询停/实例冻结)——标记 error 防永久卡(释放防重拦截)
@@ -751,6 +758,33 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                     _kick_ev(task_id, target, channel)
                 except Exception as _ek:
                     try_err('cleansing', '评估联动事件推进启动降级', _ek)
+            # 2026-11-06 P1-6: 数据新鲜度写入。
+            #   原来唯一的写入点在 `cleanse_write._finalize_import()` 里, 而那个函数自
+            #   2026-10-16 拆分成 cleansing_status + cleansing_eval_status 之后**再无调用点**
+            #   (函数头自己写着"已废弃/勿调用") —— 于是 data_freshness 永远是空表,
+            #   `/data-freshness` 只能靠 misc.py 的兜底 SQL 反推, 而那三条兜底只覆盖
+            #   order / inbound / outbound。inventory(补货与断货的直接依据)、platform_inv、
+            #   inventory_b、product、supplier、gmv_flow 六类**从不出现**,"数据截至"对它们
+            #   完全失明: 库存停更三周, 界面照样显示一切正常。
+            #   放在 done 分支 = 只有真正写完才记账(中途失败不写, 免得谎报"刚导过")。
+            #   rows_imported 用覆盖不用累加 —— 它的语义是"上一批导了多少行",
+            #   累加会让重跑一次导入(幂等重导)变成双倍计数。
+            try:
+                from db import execute as _efr
+                _bizd = ""
+                for _c in (cleaned_all or []):
+                    for _k in ("ordered_at", "inbound_date", "outbound_date", "date",
+                               "arrived_time", "paid_at", "arrival_date"):
+                        _v = str(_c.get(_k) or "")[:10]
+                        if _v and _v > _bizd:
+                            _bizd = _v
+                _efr("INSERT INTO data_freshness(doc_type, channel, last_import_at, "
+                     "last_biz_date, rows_imported) VALUES(%s,%s,NOW(),%s,%s) "
+                     "ON DUPLICATE KEY UPDATE last_import_at=NOW(), "
+                     "last_biz_date=VALUES(last_biz_date), rows_imported=VALUES(rows_imported)",
+                     [target, channel, _bizd, success + failed])
+            except Exception as _frx:
+                try_err('cleansing', '新鲜度记录降级', _frx)
             from routes.analysis_cache import invalidate
             invalidate(_TARGET_DOMAIN.get(target, "all"))
             return {"ok": True, "task_id": task_id, "status": "done",
@@ -847,11 +881,18 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                        "rules_evaluated": _ri.get("rules_evaluated"),
                        "inventory_adjusted": _ri.get("inventory_adjusted")})
         return _d
-    from routes.common import mark_driver as _mkdrv
-    _mkdrv(task_id, driver)
-    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    # 2026-11-06 P0-1 防御纵深: 先判类型再写。
+    #   反方向误杀更隐蔽也更危险: 若把 cleansing(导入)任务的 id 打到这里, params 里没有
+    #   sku_list → `_batch = []` → 下面的"全部分片完成"分支直接 UPDATE status='done' ——
+    #   一个只写了一半的导入会被标成"成功完成", 数据静默残缺。详见 common.type_ok。
+    row = one("SELECT status, params, result, task_type FROM sync_tasks WHERE task_id=%s",
+              [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
+    if not _type_ok(row, "cleansing_eval"):
+        return {"ok": True, "task_id": task_id, "status": "not_found"}
+    from routes.common import mark_driver as _mkdrv
+    _mkdrv(task_id, driver)
     status = row.get("status") or ""
     if status in ("done", "error"):
         _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}

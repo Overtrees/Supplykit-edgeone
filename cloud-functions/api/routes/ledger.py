@@ -103,6 +103,15 @@ def ledger_close(params: dict = None):
         return fail("结账失败: %s" % e)
     if not r.get("ok"):
         return fail(r.get("reason") or "结账被拒绝")
+    # 2026-11-06 P2-7: 结账会回写 inventory.beginning_stock(见 core.ledger._apply_to_inventory),
+    #   batch_opening 也随之变化 —— 但原来这里不失效, 进销存/周转/期初要等缓存自然过期才更新
+    #   (inv_sum 60s, purchase/repl 300s)。用户结完账回头看看板还是旧期初, 会以为没结成功。
+    #   "inventory" 域覆盖 dash_summary / dash_aux / stock_risk / purchase / repl 五个族。
+    try:
+        from routes.analysis_cache import invalidate as _inv
+        _inv("inventory")
+    except Exception as _ie:
+        try_err('ledger', '结账后缓存失效降级', _ie)
     return ok(r)
 
 
@@ -120,4 +129,11 @@ def ledger_reclose(params: dict = None):
     except Exception as e:
         try_err('ledger', '补结失败', e)
         return fail("补结失败: %s" % e)
+    # 2026-11-06 P2-7: 同结账 —— 补结会连续改写多个期的期初, 不失效的话看板/进销存
+    #   最长会陈旧 300s。逐期失效没必要(同一个域), 末尾一次即可。
+    try:
+        from routes.analysis_cache import invalidate as _inv
+        _inv("inventory")
+    except Exception as _ie:
+        try_err('ledger', '补结后缓存失效降级', _ie)
     return ok({"items": out, "ok_count": len([x for x in out if x.get("ok")])})

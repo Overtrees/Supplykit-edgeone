@@ -221,15 +221,41 @@ async def create_export(request: Request):
                                  ensure_ascii=False), channel))
     return {"ok": True, "task_id": task_id}
 
-def export_status(task_id: str = "", page_size: int = 10000, driver: str = "frontend"):
-    from routes.common import mark_driver as _mkdrv
-    _mkdrv(task_id, driver)
+def export_status(task_id: str = "", page_size: int = 10000, driver: str = "frontend",
+                  probe: int = 0):
     """导出续跑(前端轮询触发, 每步查 page_size 行生成 CSV 分片存 export_files; 完成合并→done)
-    返回 {ok, task_id, status, filename?, total?, error?}"""
-    row = one("SELECT status, params, result FROM sync_tasks WHERE task_id=%s", [task_id])
+    返回 {ok, task_id, status, filename?, total?, error?}
+
+    probe=1 → 纯读(2026-11-06 补齐): 只 SELECT 返回状态, 不写 driver / 不抢锁 / 不推进。
+      其余三个驱动端点(seed / cleansing / cleansing_eval)早就是这个口径, 只有这里漏了 ——
+      结果 App 层为了"只看进度"只能去借 `/seed/fill/status?probe=1` 读导出任务, 而那个
+      端点返回的是 seed 结构的 `{data:{status}}`, 导出进度因此读不准。
+
+    2026-11-06 P0-1: 入口加 task_type 校验。原实现不校验, 一个 export 任务的 id 若被
+      打到这里(或反之)会按导出逻辑重写别人的任务; 而 export 的 id 打到 /cleansing/status
+      则会被判 error —— 见 common.type_ok 的 docstring。
+    """
+    from routes.common import mark_driver as _mkdrv, type_ok as _type_ok
+    row = one("SELECT status, params, result, task_type FROM sync_tasks WHERE task_id=%s",
+              [task_id])
     if not row:
-        return {"ok": False, "error": "任务不存在"}
+        # not_found 而非 {ok:False}: 前端看守只认 not_found 才会摘下看守, 否则永久空转。
+        # 仍带 error 文案: 老调用方/回归断言按 "error 非空" 判失败, 两套口径都满足。
+        return {"ok": True, "task_id": task_id, "status": "not_found", "error": "任务不存在"}
     status = row.get("status") or ""
+    if probe:
+        # 纯读不校验类型: 无副作用, 校验只会让"读别人的任务"变成误伤
+        #   (App 层用 seed 的 probe 读 reset 任务就是这种合法跨类型读, 加校验会永久 not_found)
+        _pd = {"ok": True, "task_id": task_id, "status": status, "probe": True}
+        if status in ("done", "error"):
+            _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}
+            _pd.update({"filename": _ri.get("filename"), "name": _ri.get("name"),
+                        "parts": _ri.get("parts") or [], "error": _ri.get("error")})
+        return _pd
+    if not _type_ok(row, "export"):
+        return {"ok": True, "task_id": task_id, "status": "not_found",
+                "error": "任务类型不符(非导出任务)"}
+    _mkdrv(task_id, driver)
     if status in ("done", "error"):
         # result 结构 {"result": {...}} 双层——filename/error 在内层
         _ri = (json.loads(row.get("result") or "{}") or {}).get("result") or {}

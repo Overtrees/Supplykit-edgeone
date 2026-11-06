@@ -7637,3 +7637,109 @@ preflight       8/8 通过(含 267 条真实 SQL EXPLAIN / 632 条回归 / i18n 
 > `alerts(low_stock, active)` 的 506/800 条不是一个口径(前者按 `inventory` 行逐仓算,
 > 后者按 `SKU×仓` 五维告警落库, 且 bbcc 下平台仓合并成 `__BC__` 单行)。
 > 这属于**业务口径**, 需先与用户确认真值再动, 不在本次擅自改。
+
+### 15.149 全维度审计报告落地: 逐条核对后修 11 项(2026-11-06 下午)
+
+用户要求: **「读完这份审计报告结合提出的优先级, 去读取相关完整代码, 是否存在该问题再动, 不要误伤」**。
+所以下面每条都标了"核验结论" —— 有两条审计的判断**不成立/做不到**, 按实际改法落地。
+
+#### P0-1 任务看守误杀 —— 存在, 且比审计写的更严重(双向)
+
+核验: `cleansing_status` 的 `except` 分支确实是
+`execute("UPDATE sync_tasks SET status='error' ...")`(cleansing.py:771)。
+`adoptRunning` 不过滤 task_type, 把 `/api/tasks` 全量 running 任务交给看守,
+而 `_kindOf` 当时把 `export` 也归进 `'cleansing'` → 打 `/cleansing/status?task_id=<export_id>`
+→ params 无 fname → 读不到 `clean_<id>` → 抛"源文件不存在" → **标 error**。
+
+**审计没看到的一面**: 反方向更危险。`cleansing_eval_status` 收到一个导入任务的 id 时,
+params 里没有 `sku_list` → `_batch = []` → 命中"全部分片完成"分支 →
+**直接 `status='done'`**。一个只写了一半的导入会被标成"成功完成", 数据静默残缺。
+
+修复(两层):
+| 层 | 做法 |
+|---|---|
+| 前端 | `WatchKind` 四值(seed/cleansing/cleansing_eval/export), `_kindOf` 认不出的类型返回 `null` → **不接管**。宁可不推进, 不拿错端点推别人的任务 |
+| 后端 | `common.type_ok(row, expect)` + 四个驱动端点入口校验, 不匹配返回 `status='not_found'` 且**不写任何东西**(`mark_driver` 从"SELECT 之前"挪到"校验之后") |
+
+**关键取舍: probe 分支不校验。** 审计原话是"四个端点入口都校验", 但 App 层存在合法的
+跨类型纯读 —— 例如用 `/seed/fill/status?probe=1` 读 `reset` 任务。若 probe 也校验,
+这些读会永久 `not_found`, 前端轮询永不结束。纯读没有副作用, 不需要防误杀。
+
+历史兼容: `task_type` 为空的行(2026-10 之前)一律放行, 不能因为加校验把在跑的老任务卡死。
+
+#### P0-2 summary 漏传 mode —— 存在, 但"漏 channel"不成立
+
+审计说三处 URL"没有 mode 也没有 channel", 结论是"非京东渠道按 BBCC 算"。
+**核验**: `api/client.ts:144` 的请求拦截器会从 `localStorage.c_channel` **自动注入 channel** ——
+所以 channel 没漏, 只有 mode 漏(拦截器不注入 mode)。真实影响范围是
+"非 jd 渠道 / 切到传统模式时 summary 仍按 bbcc 算"。
+
+修复:
+1. `DashboardPage` 抽 `dashUrl()` 唯一构造点(首屏 load / 失败重试 / 30s 静默三处统一),
+   并把 `_replMode` 加进两个 effect 的依赖(否则切模式后卡片停在旧口径);
+2. 后端 `dashboard_summary/aux` 的 `mode` 缺省由硬编码 `"bbcc"` 改为 `ch_default_mode(channel)`。
+
+#### P1-4 采购空库契约 —— 存在
+
+`purchase_calc.py` 空商品库分支 `return ok({"suggestions": []})` 返回**已包装 dict**,
+而其余路径 `return result`(list)。经 `cache_get` 后: `need_only=1` 迭代 dict 得到 key 字符串
+→ `.get` 不存在 → AttributeError → 500; 坏值还被缓存 300s 反复复现。
+修: 改回 `return []`, 并在 `list_page.shape()` 加契约护栏(非 list 按空列表 + 留痕)。
+
+#### P1-6 新鲜度写入点已死 —— 存在, 但"兜底补 6 类"做不到
+
+核验: `cleanse_write._finalize_import()` 全仓**零调用点**(2026-10-16 拆分后废弃),
+其内的 `data_freshness` 写入是唯一写入点 → 表永远是空的。
+
+**审计建议"兜底 SQL 补齐 6 类"在真实表结构上不成立**:
+`inventory` / `inventory_archive` / `products` / `suppliers` **都没有 created_at / updated_at 列**,
+inventory 更没有业务日期列 —— 硬写 `MAX(updated_at)` 就是每次请求一个 500。
+实际可补的只有 `gmv_flow`(有 `arrived_time` + `created_at`)。
+
+所以主路径修复放在**写入端**: `cleansing_status()` 的 done 分支补 `data_freshness` UPSERT,
+覆盖全部 7 种 target; `rows_imported` 用**覆盖**不用累加(累加会让幂等重导变成双倍计数)。
+兜底侧只加 `gmv_flow` 一类, 其余明确注释"无时间列, 依赖写入端"。
+
+#### P1-3 档案类不幂等 —— 存在; 唯一键迁移暂不做
+
+核验: `_write_batch` 只有 sum_mode / inv_upsert / ord_upsert 三个分支,
+`products / suppliers / purchase_orders` 落进 `else: pass`(纯 INSERT) →
+重导撞 `uq_products_sku` → 整批 1062 → 逐行降级 → 全失败 → "成功 0 条"。
+
+已修: 加 `arch_upsert` 分支, `ON DUPLICATE KEY UPDATE` 覆盖业务列,
+**排除 `id` / `deleted_at` / `channel`** —— channel 进覆盖列会把行"搬"到别的渠道,
+deleted_at 进覆盖列会让重导旧文件复活用户删掉的商品。
+
+**未做: 唯一键加 channel。** 线上实测两渠道各 1 万商品, SKU 靠 `-J`/`-O` 后缀刻意避开冲突,
+说明业务侧尚未真正遇到"同 SKU 跨渠道"。DROP/ADD UNIQUE 是不可逆的破坏性 DDL,
+且审计自己声明"未连真实 TiDB 验证" —— 这条需要先确认真实数据无重复再单独发布。
+
+#### 其余(按 P2/P3 落地)
+
+| 项 | 核验 | 修法 |
+|---|---|---|
+| P2-7 结账不失效 | 存在(`ledger_close/reclose` 都无 invalidate) | 成功后 `invalidate("inventory")`(该域覆盖 dash_summary/aux/stock_risk/purchase/repl 五族); cron 自动结账同补 |
+| P2-8 单条软删不登记物化 | 存在(批量有 `_days_of/_mark_days`, 单条没有) | 对齐批量, 日期必须在 UPDATE **之前**取 |
+| P2-9 切渠道不重置 fullAlerts | 存在(ref 是 boolean, 组件不卸载) | 改成记"已预拉过的渠道名" |
+| P2-10 渲染期改写 store | 存在(`_sr0 = stockRisk` 同引用后就地赋值) | 改为展开构造新对象, store 那份一个字段不碰 |
+| P2-11 回收站逐条打接口 | 存在(每条都 `_days_of+_mark_days+invalidate+规则重评估`) | 改调 `/orders/batch` |
+| P2-13 continue-tasks 无鉴权 | 存在 | 加 `_authed_sync`(只读 header 的同步版); `request is None` 放行 → index.py 内部直调零影响 |
+| P2-14 confirmOverlap 提前解锁 | 存在 | `api.post` → `uploadRawBytes`(90s/显式 octet-stream), 锁移到 finally |
+| P3-4 死表达式 | 存在(`if False else None` 下一行就被覆盖) | 删除 |
+| P3-5 异常后原样重试 | 存在(确定性错误跑两遍、双份日志、第二次冒成 500) | 明确"一次重试 + 仍失败返回空结构" |
+
+P3-2(死变量 safety)/P3-3(tw90 重复): 核验后 P3-3 在现版本只有一处, 判断为审计基于旧版;
+P3-2 的 `safety` 确为死变量但不影响行为, 未动(避免无谓 diff)。
+
+P2-12(商品停用是否该停链)属业务口径, 需产品定案, 不擅自改。
+
+#### 验证
+
+```
+preflight       8/8 通过(1545 条回归 / i18n 1431=1431 / tsc / eslint / vitest 35)
+新增断言        P0-1 类型守卫 5 条 + P0-1 返回值形状 1 条
+                P1-4 空库契约 3 条 + P1-3 档案 upsert 3 条
+```
+
+> 未做: P1-3 唯一键迁移(需真实库确认无重复后单独发布)、P1-5 单一刷新调度器(重构面大,
+> 与本轮 P0 无依赖)、P2-12(业务口径待定)、P3-6(_CACHE_V 与 CI 联动, 属流程改造)。

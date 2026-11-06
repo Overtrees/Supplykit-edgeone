@@ -745,12 +745,22 @@ def data_freshness(channel: str = "jd"):
 
     # 2026-10-29 兜底: data_freshness 无记录(新表/历史数据) → 从业务表 MAX(业务日期) 反推
     # 用**预置完整 SQL 字符串**(不做 % 格式化, 避免与 WHERE 内 %s 冲突)
+    #
+    # 2026-11-06 P1-6 说明: 这里**只补得动 gmv_flow**。审计建议"六类全补"在真实表结构上做不到 ——
+    #   `inventory` / `inventory_archive` / `products` / `suppliers` **都没有 created_at /
+    #   updated_at 列**(见 schema_create.py), inventory 更没有业务日期列, 硬写 MAX(updated_at)
+    #   就是每次请求一个 500。所以那五类必须靠**写入端**记账:
+    #   已在 `cleansing_status()` 的 done 分支补了 data_freshness 写入(覆盖全部 7 种 target)。
+    #   换句话说: 兜底是给"新代码上线前的历史数据"看的, 不是主路径。
     _seen = {str(r.get("doc_type") or "") for r in rows}
     _FB_SQL = {
         "order": ("SELECT MAX(ordered_at) AS m FROM orders "
                   "WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s"),
         "inbound": "SELECT MAX(inbound_date) AS m FROM inbound_records WHERE channel=%s",
         "outbound": "SELECT MAX(outbound_date) AS m FROM outbound_records WHERE channel=%s",
+        # 回款流水有 arrived_time(到账时间) + created_at 兜底, 是唯一能反推的第四类
+        "gmv_flow": ("SELECT MAX(COALESCE(arrived_time, created_at)) AS m "
+                     "FROM gmv_flows WHERE channel=%s"),
     }
     for _dtp, _sql in _FB_SQL.items():
         if _dtp in _seen:

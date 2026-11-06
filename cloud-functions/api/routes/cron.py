@@ -32,12 +32,20 @@ from core.clock import now_cn
 router = APIRouter(tags=["cron"])
 @router.get("/cron/continue-tasks")
 @traced
-def continue_tasks():
+def continue_tasks(request: Request = None):
     """2026-10-14: 续跑所有 running 的 cleansing/seed/export 任务(后端跟进——app 后台/页面不驻留任务也推进)
     由平台调度(每 5 分钟)或手动调用; 每任务触发一次对应 status 续跑(窗口推进)
 
     2026-11-02 S0: 本端点此前**既无鉴权也无护栏**(唯一一个裸的) —— 匿名 GET 即可反复触发。
-    加进程内 30s 限频(正常调用方是中间件 60s 一次 + 平台每天一次, 不会被影响)。"""
+    加进程内 30s 限频(正常调用方是中间件 60s 一次 + 平台每天一次, 不会被影响)。
+
+    2026-11-06 P2-13(审计): 补上鉴权。限频只是"别太频繁", 不解决"谁能打" ——
+      匿名请求照样能让实例去遍历 running 任务逐个推进(每条都是一个重活), 是可被外部
+      消耗 RU 的入口。这里套与其它 cron 端点同一套判据。
+      ⚠️ 内部调用是 index.py 的**直接函数调用**(continue_tasks()), 没有 Request 对象 ——
+      所以 request is None 一律放行, 中间件那条保活链路零影响。"""
+    if not _authed_sync(request):
+        return fail("unauthorized", 401)
     if not _throttle("continue-tasks", 30):
         return ok({"skipped": True, "reason": "30 秒内已推进过"})
     from db import query as _qc, execute as _ec, one as _oc
@@ -246,6 +254,37 @@ async def _authed(request: Request) -> bool:
         if _throttle("audit:" + request.url.path, 300):
             _log("info", "cron 无密钥调用(平台调度/外部扫描无法区分): %s %s"
                  % (request.method, request.url.path))
+    except Exception:
+        pass
+    return True
+
+
+def _authed_sync(request):
+    """`_authed` 的同步版(只读 header, 不读 body) —— 供同步端点(continue_tasks)使用
+
+    语义与 `_authed` 保持一致:
+      · 未配 CRON_SECRET → 放行(旧行为);
+      · 带了正确的 X-Cron-Secret → 放行;
+      · CRON_STRICT=1 且没带 → 拒绝;
+      · 其余(平台 schedules 无法注入 header)→ 放行, 但限频记一条审计日志。
+        "记而不拒"是既定口径: 平台调度和外部扫描无法区分, 强拒会把正常调度一起打死。
+
+    `request is None` → 内部直接函数调用(index.py 中间件), 不走 HTTP, 一律放行。
+    """
+    if request is None:
+        return True
+    secret = os.environ.get("CRON_SECRET", "")
+    if not secret:
+        return True
+    import hmac as _hm
+    h = request.headers.get("X-Cron-Secret", "")
+    if h and _hm.compare_digest(h.encode(), secret.encode()):
+        return True
+    if str(os.environ.get("CRON_STRICT", "")) == "1":
+        return False
+    try:
+        if _throttle("audit:" + request.url.path, 300):
+            _log("info", "cron 无密钥调用: GET %s" % request.url.path)
     except Exception:
         pass
     return True
@@ -1021,6 +1060,14 @@ def run_ledger_close(channels=None):
                 try_err('ledger', '结账后重算降级', _e)
         r["channel"] = ch
         out.append(r)
+    # 2026-11-06 P2-7: 自动结账同样要失效(cron 是凌晨跑, 影响小但口径必须一致:
+    #   结账改了期初, 缓存里的进销存/周转还是结账前的数)
+    if any(x.get("ok") for x in out):
+        try:
+            from routes.analysis_cache import invalidate as _invl
+            _invl("inventory")
+        except Exception as _e:
+            try_err('ledger', '自动结账后缓存失效降级', _e)
     return {"period": target,
             "ok_count": len([x for x in out if x.get("ok")]),
             "blocked": [x for x in out if not x.get("ok")],

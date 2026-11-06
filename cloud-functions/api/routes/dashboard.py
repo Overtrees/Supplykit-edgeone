@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from db import query, one, execute
 from routes.common import ok, PAID_STATUSES, SALES_STATUSES, FUNNEL_STAGES, traced, try_err, INVENTORY_COLS as _INV_COLS
+from routes.common import ch_default_mode  # 2026-11-06 P0-2: mode 缺省按渠道默认(不再硬编码 bbcc)
 from routes.common import track_run  # 2026-11-02 S1-2: 链路运行流水
 
 router = APIRouter(tags=["dashboard"])
@@ -228,7 +229,7 @@ def health_trend(channel: str = "jd", days: int = 14):
 
 @router.get("/dashboard/summary")
 @traced
-def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "bbcc",
+def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "",
                       part: str = ""):
     """看板汇总(30s 共享表缓存——TiDB 表跨实例一致; 写操作按域失效(2026-11-02 S2-1), 数据变化最多 30s 可见)
 
@@ -264,6 +265,13 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     `part=main/charts` 拆视野、缓存键、TTL、失效口径**一律不变** —— 这是纯粹的
     "把不该在这里的东西挪走", 不改任何业务数值。
     """
+    # 2026-11-06 P0-2: mode 缺省**按渠道默认**走, 不再硬编码 bbcc。
+    #   前端 DashboardPage 曾有三处手拼 summary URL 漏传 mode, 而后端缺省是 "bbcc" ——
+    #   非京东渠道(other/tb/pdd)的 summary 于是一直按 BBCC 周期算: 健康分、低库存口径
+    #   全错, 而且同一屏 store.loadAll 那份带了正确 mode, 两者交替覆盖 dashboard 与
+    #   health_snapshot(同日同渠道两个口径来回写), 趋势图出现锯齿。
+    #   前端已收敛为 dashUrl() 单一构造点; 这里是后端兜底, 防其它调用方(脚本/第三方)再漏。
+    mode = mode or ch_default_mode(channel)
     _key = "dash_summary|%s|%s|%s|%s" % (channel, start_date, end_date, mode)
 
     def _b():
@@ -661,11 +669,11 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     _this_m1 = now.replace(day=1).strftime("%Y-%m-%d")  # 本月1号
     _last_m1 = (now.replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")        # 上月1号
     _last_m_end = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d")                     # 上月最后一天
-    _prev_m1 = (_last_m1 and (now.replace(day=1) - timedelta(days=1)).replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d") if False else None
+    # 2026-11-06 P3-4: 删除 `_prev_m1 = (...) if False else None` —— 死表达式, 下一行就被
+    #   重新赋值。留着只会让读代码的人以为这里有个开关。
     _tmp = now.replace(day=1) - timedelta(days=1)  # 上月最后一天
     _prev_m1 = _tmp.replace(day=1) - timedelta(days=1)
     _prev_m1 = _prev_m1.replace(day=1).strftime("%Y-%m-%d")           # 上上月1号
-    _prev_m_end = (_tmp - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")  # 占位(实际用上月结束-一个月)
     _prev_m_end = (_tmp.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d")  # 上上月最后一天
     d7, d8 = _last_mon, _last_sun
     d14 = _prev_mon
@@ -954,7 +962,7 @@ _RISK_TTL = 30
 
 @router.get("/dashboard/aux")
 @traced
-def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
+def dashboard_aux(channel: str = "jd", mode: str = ""):
     """看板辅助聚合(60s 共享表缓存——TiDB 表跨实例一致): alerts(分组配额, 低库存组按补货模式过滤维度) + alertCounts
     + stockOverview + bcOutOfStock + stockRisk
 
@@ -962,6 +970,8 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
     traditional → own + platform 逐仓(不含 B 仓: B 属 BBCC 调拨体系);
     traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
     """
+    # 2026-11-06 P0-2: 同 summary —— 缺省按渠道默认, 不再硬编码 bbcc(见 dashboard_summary)
+    mode = mode or ch_default_mode(channel)
     _key = "dash_aux|%s|%s" % (channel, mode)
     # 1MB 上限: aux 是"卡片聚合", 正常 30~80KB。超 1MB 说明又有明细列表被误塞进聚合响应,
     #   宁可这次不落缓存(也不至于把 TiDB 单条 6MB 事务打爆 / 让每个请求算两遍)。
@@ -1211,8 +1221,20 @@ def stock_risk(channel: str = "jd", full: int = 0):
         try:
             return _stock_risk(channel, full=full)
         except Exception as _e:
-            try_err('dash', 'stock_risk 计算降级', _e)
-            return _stock_risk(channel, full=full)
+            try_err('dash', 'stock_risk 计算失败(重试一次)', _e)
+            # 2026-11-06 P3-5: 原来这里 `return _stock_risk(...)` —— 原样再调一次就算"降级",
+            #   第二次异常会直接冒到 cache_get 的 except, 整个接口 500; 而确定性错误
+            #   (列名/口径写错)会稳定跑两遍、留双份日志, 排障时看到两条一样的异常像两起故障。
+            #   现在明确两段: ① 一次重试 → 治 TiDB 瞬时抖动; ② 仍失败就返回**空结构** →
+            #   断货卡数字归零(而不是整页报错), 且 try_err 明确留痕, 不会被当成"真的没有断货"。
+            try:
+                return _stock_risk(channel, full=full)
+            except Exception as _e2:
+                try_err('dash', 'stock_risk 二次失败(返回空结构, 30s 后重算)', _e2)
+                return {"items": [], "total": 0, "critical": 0, "warning": 0,
+                        "bcItems": [], "bcTotal": 0, "bcCritical": 0, "bcWarning": 0,
+                        "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
+                        "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
 
     return ok(_cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024))
 

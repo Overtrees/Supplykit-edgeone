@@ -80,18 +80,24 @@ export function watchCount(): number {
  * 看守看得见任务却永远推不动它。
  *
  * 2026-11-06 修: 原实现是 `task_type === 'seed' ? 'seed' : 'cleansing'` ——
- * `cleansing_eval` 被归进 `'cleansing'`, 于是去打 `/cleansing/status?task_id=<x>_eval`,
- * 而该端点只认 `task_type='cleansing'` 的行, 查 `_eval` 必然 not_found。
- * 结果: 导入完成后那个评估联动任务**从来没有人推进过**(except 分支还把它当成
- * 网络抖动, 只累加 stalls 不报错), 低库存/效期告警只能等 60s 兜底或每日 cron 才补。
+ * `cleansing_eval` / `export` 全被归进 `'cleansing'`, 于是去打 `/cleansing/status?task_id=<id>`,
+ * 而那个端点按"清洗任务"解析任意 id: 读 `clean_<id>` 找不到 → 抛"源文件不存在" →
+ * 它的 except 分支执行 `UPDATE status='error'`。**导出任务 3 秒内就被判死**,
+ * 用户看到假的「导出失败」; 评估任务被中断则告警不更新。
+ *
+ * 现在改为按 task_type 精确路由, **认不出的类型一律不接管**(绝不用猜的端点去推别人的任务)。
  */
-export type WatchKind = 'seed' | 'cleansing' | 'cleansing_eval'
+export type WatchKind = 'seed' | 'cleansing' | 'cleansing_eval' | 'export'
 
-function _kindOf(taskType: string): WatchKind {
+function _kindOf(taskType: string): WatchKind | null {
   const tt = String(taskType || '')
   if (tt === 'seed') return 'seed'
+  if (tt === 'cleansing') return 'cleansing'
   if (tt === 'cleansing_eval') return 'cleansing_eval'
-  return 'cleansing'
+  if (tt === 'export') return 'export'
+  // 未登记的类型(reset 等一次性任务 / 未来新增): 不接管。
+  //   宁可不推进(它有自己的驱动方), 也不能拿错端点把别人的任务写成 error。
+  return null
 }
 
 function _url(kind: WatchKind, id: string): string {
@@ -101,8 +107,10 @@ function _url(kind: WatchKind, id: string): string {
     return API + '/api/seed/fill/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
   }
   if (kind === 'cleansing_eval') {
-    // 与 /cleansing/status 同口径: 驱动端点, 不带 probe
     return API + '/api/cleansing/eval-status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
+  }
+  if (kind === 'export') {
+    return API + '/api/exports/status?task_id=' + encodeURIComponent(id) + '&driver=frontend'
   }
   return (
     API + '/api/cleansing/status?task_id=' + encodeURIComponent(id) + '&driver=frontend&probe=0'
@@ -277,8 +285,10 @@ export function adoptRunning(
       if (_watches.has(id)) unwatch(id)
       return
     }
-    // 2026-11-06: 原为 seed/cleansing 二元 —— cleansing_eval 被误归 cleansing, 打错端点(见 _kindOf)
-    const kind: WatchKind = _kindOf(String(t.task_type || ''))
+    // 2026-11-06: 原为 seed/cleansing 二元 —— cleansing_eval 与 export 被误归 cleansing,
+    //   打错端点会把任务写成 error(见 _kindOf 注释)。认不出的类型直接跳过, 不当 cleansing。
+    const kind = _kindOf(String(t.task_type || ''))
+    if (!kind) return
     watch(id, kind, cb)
   })
 }

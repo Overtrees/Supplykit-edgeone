@@ -83,6 +83,19 @@ def shape(rows, need_only=0, search="", page=0, page_size=0, need_keys=None):
         默认 `actual_purchase`(采购口径); 补货传 `("suggested_qty","b_suggested")`。
         显式传参而不是在各路由里各写一份 filter —— 免得两份筛选逻辑慢慢漂开。
     """
+    # 2026-11-06 P1-4: builder 契约护栏 —— 只有 list 能进筛。
+    #   采购曾在"商品库为空"分支 `return ok({...})`(dict), 于是这里迭代出的是 key 字符串,
+    #   need_only 时对 str 调 `.get` → AttributeError → 500, 而且这个坏值会被写进
+    #   analysis_cache, 300s 内所有请求反复复现。根因已在 purchase_calc 修掉(改回 `return []`),
+    #   这里再挡一层: 契约违约时按空列表处理(前端语义就是"暂无需采购", 准确且不炸)。
+    if not isinstance(rows, list):
+        try:
+            from routes.common import try_err
+            try_err('list_page', 'builder 返回非 list(契约违约)——已按空列表处理',
+                    TypeError(type(rows).__name__))
+        except Exception:
+            pass
+        rows = []
     return paginate(filter_rows(rows, need_only=need_only, search=search, need_keys=need_keys),
                     page=page, page_size=page_size)
 

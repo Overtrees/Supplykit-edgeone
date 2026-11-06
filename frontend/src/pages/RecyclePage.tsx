@@ -148,11 +148,23 @@ export default function RecyclePage() {
           )
         }
       }
-      // 订单: 单条(restore/permanent-delete)
+      // 订单: 走批量接口(2026-11-06 P2-11)
+      //   原为 orderIds.map 逐条打 /orders/{id}/{action} —— 而每个单条端点内部都要做
+      //   `_days_of + _mark_days + invalidate("orders") + 规则重评估`(restore 还调
+      //   `_evaluate_restored` 触发全量告警重算)。100 条 = 100 次这套重活并发,
+      //   而连接池上限只有 10(db.py), 结果是排队/超时/触发网关限流, 用户看到"恢复失败"。
+      //   /orders/batch 本来就支持 delete|restore|permanent-delete 且分批 5000,
+      //   一次请求内聚合做同样的重建登记与一次失效。
       if (orderIds.length) {
-        await Promise.all(
-          orderIds.map(id => apiJson('POST', API + '/api/orders/' + id + '/' + action)),
+        const d = await apiJson<{ ok?: boolean; error?: string }>(
+          'POST',
+          API + '/api/orders/batch',
+          {
+            timeout: 90000,
+            data: { action, ids: orderIds },
+          },
         )
+        if (!d.ok) throw new Error(d.error || t('recycle.err_restore_failed'))
       }
       // 库存: 只有"恢复"一种动作(归档行没有永久删除入口), 走批量接口拿逐条结果
       if (invIds.length) {

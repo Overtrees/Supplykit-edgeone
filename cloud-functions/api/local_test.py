@@ -845,6 +845,67 @@ check("export status: 任务不存在返回", _r2.get("ok") is False or _r2.get(
 _r3 = export_status(task_id="t")
 check("export status: done 双层解析 filename", _r3.get("status") == "done" and _r3.get("filename"), str(_r3))
 
+# ── 2026-11-06 审计 P0-1: 任务类型守卫(驱动端点只推自己那类任务) ────────────
+# 背景: 四个驱动端点原来都不校验 task_type。前端 taskWatch 把 export/cleansing_eval
+#   一律当 cleansing 打 /cleansing/status → 读不到 clean_<id> → 抛"源文件不存在" →
+#   except 分支 UPDATE status='error'(导出 3 秒内被判死)。
+#   反方向更危险: cleansing 的 id 打到 eval-status, sku_list 为空 → 直接标 done,
+#   写了一半的导入被标"成功完成"。
+try:
+    _api30 = _os.path.dirname(_os.path.abspath(__file__))
+
+    def _rf30(n):
+        return open(_os.path.join(_api30, "routes", n), encoding="utf-8").read()
+
+    check("P0-1: common 提供 type_ok 类型守卫",
+          "def type_ok(row, expect)" in _rf30("common.py"), "routes/common.py")
+    _guard_cases = (("cleansing.py", '"cleansing"'), ("cleansing.py", '"cleansing_eval"'),
+                    ("task_export.py", '"export"'), ("task_seed.py", '"seed"'))
+    for _gn, _ge in _guard_cases:
+        _gs = _rf30(_gn)
+        check("P0-1: %s 驱动分支校验 %s(打错端点返回 not_found, 绝不改状态)" % (_gn, _ge),
+              ('if not _type_ok(row, %s):' % _ge in _gs)
+              or ('if not _type_ok(_pr, %s):' % _ge in _gs), "routes/" + _gn)
+    # 三个"不是 not_found"的返回值都要带 status 让前端看守能摘下, 否则永久空转
+    _cc30 = _rf30("cleansing.py")
+    check("P0-1: cleansing 类型不符返回 not_found(带 status 而非只有 ok:False)",
+          'if not _type_ok(row, "cleansing"):' in _cc30
+          and '"status": "not_found"' in _cc30, "routes/cleansing.py")
+except Exception as _e30:
+    check("P0-1 类型守卫用例无异常", False, str(_e30)[:200])
+
+# ── 2026-11-06 审计 P1-4: 采购建议空商品库必须返回 list(与其余路径同契约) ───
+try:
+    _api31 = _os.path.dirname(_os.path.abspath(__file__))
+    _pc31 = open(_os.path.join(_api31, "routes", "purchase_calc.py"), encoding="utf-8").read()
+    _pcz = _pc31.find("if not products:")
+    check("P1-4: 采购空商品库返回 [] 而非已包装 dict(否则 need_only 迭代 dict 键 → 500)",
+          _pcz >= 0 and "\n        return []" in _pc31[_pcz:_pcz + 900], "routes/purchase_calc.py")
+    _lp31 = open(_os.path.join(_api31, "core", "list_page.py"), encoding="utf-8").read()
+    check("P1-4: shape() 对非 list 有契约护栏(坏 builder 不炸成 500)",
+          "if not isinstance(rows, list):" in _lp31, "core/list_page.py")
+    from core.list_page import shape as _shape31
+    _it31, _t31 = _shape31({"ok": True, "data": {"suggestions": []}}, need_only=1)
+    check("P1-4: shape(dict) 返回空列表而不是抛 AttributeError",
+          _it31 == [] and _t31 == 0, str(_it31)[:80])
+except Exception as _e31:
+    check("P1-4 空库契约用例无异常", False, str(_e31)[:200])
+
+# ── 2026-11-06 审计 P1-3: 档案类必须幂等 upsert(重导不再整批 1062) ─────────
+try:
+    _api32 = _os.path.dirname(_os.path.abspath(__file__))
+    _cw32 = open(_os.path.join(_api32, "routes", "cleanse_write.py"), encoding="utf-8").read()
+    check("P1-3: products/suppliers/purchase_orders 有 upsert 分支(原落 else: pass 纯 INSERT)",
+          'arch_upsert = table in ("products", "suppliers", "purchase_orders")' in _cw32,
+          "routes/cleanse_write.py")
+    check("P1-3: 档案 upsert 覆盖列排除 channel(否则同 SKU 换渠道导入会把行搬走)",
+          '"id", "deleted_at", "channel"' in _cw32, "routes/cleanse_write.py")
+    check("P1-3: 档案 upsert 分支真的拼了 ON DUPLICATE(不是只声明不落地)",
+          "elif arch_upsert:" in _cw32 and 'sql += " ON DUPLICATE KEY UPDATE %s" % ", ".join(_aupd)' in _cw32,
+          "routes/cleanse_write.py")
+except Exception as _e32:
+    check("P1-3 档案 upsert 用例无异常", False, str(_e32)[:200])
+
 # ── stock-risk 回归(2026-10-11 P2-1: 无锁缓存/冷算稳定性——mock 下结构正确) ──
 try:
     from routes.dashboard import _stock_risk, stock_risk
@@ -3640,9 +3701,14 @@ try:
     check("probe 纯读: seed 的 probe 分支早于 mark_driver(否则仍是写端点)",
           -1 < _p1 < _p2, "routes/task_seed.py")
     _q1 = _cc.find("if probe:\n        if not task_id:")
-    _q2 = _cc.find("_mkdrv(task_id, driver)\n    row = one(")
-    check("probe 纯读: cleansing 的 probe 分支早于 mark_driver 与超时自愈(否则仍会抢锁/自愈写库)",
+    # 2026-11-06 P0-1: 驱动分支改成"先 SELECT 验类型 → 再 mark_driver",
+    #   所以匹配串不能再带 `\n    row = one(`(那正是被移走的顺序)。
+    _q2 = _cc.find("_mkdrv(task_id, driver)")
+    _q3 = _cc.find('if not _type_ok(row, "cleansing"):')
+    check("probe 纯读: cleansing 的 probe 分支早于 mark_driver(否则仍会抢锁/自愈写库)",
           -1 < _q1 < _q2, "routes/cleansing.py")
+    check("P0-1 类型守卫: cleansing 的类型校验早于 mark_driver(打错端点不许写别人的库)",
+          -1 < _q3 < _q2, "routes/cleansing.py")
 except Exception as _e28:
     check("seed 规模/水位用例无异常", False, str(_e28)[:200])
 

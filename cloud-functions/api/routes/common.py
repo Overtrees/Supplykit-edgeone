@@ -136,6 +136,45 @@ def ch_default_mode(code):
     return str(ch_conf(code).get("default_mode") or "traditional")
 
 
+def type_ok(row, expect):
+    """任务类型守卫: 本行是否由 `expect` 这个驱动端点负责(2026-11-06 P0-1)
+
+    ## 为什么必须有
+
+    `sync_tasks` 一张表装了 5 类任务(cleansing / cleansing_eval / export / seed / reset),
+    而四个驱动端点(cleansing_status / cleansing_eval_status / export_status /
+    seed_fill_status)原来**都不校验 task_type** —— 谁把 id 打过来就按谁的逻辑处理这个 id。
+    前端 `taskWatch` 曾把 export 与 cleansing_eval 一律当 `cleansing` 打过来, 后果:
+
+    | 打错的组合 | 实际后果 |
+    |---|---|
+    | export → cleansing_status | params 无 fname → 读 `clean_<id>` 不存在 → 抛异常 → **status='error'**(导出 3 秒内被判死, 用户看到假的"导出失败") |
+    | cleansing → cleansing_eval_status | params 无 sku_list → `_batch=[]` → **直接 status='done'**(写了一半的导入被标完成, 数据静默残缺) |
+    | cleansing_eval → cleansing_status | 同上, 抛"源文件不存在" → **status='error'**(告警不更新) |
+
+    所以这不只是"显示错", 是**会写坏任务状态**的。前端已按类型精确路由(taskWatch._kindOf),
+    这里是防御纵深: 任何调用方(含第三方脚本/未来新增)打错端点都改不动别人的状态。
+
+    ## 用法(零额外查询)
+
+    各端点本来就要 `SELECT` 出任务行, 把 `task_type` 加进列、调本函数判断即可:
+
+        row = one("SELECT status, params, result, task_type FROM sync_tasks WHERE task_id=%s", [id])
+        if not type_ok(row, "cleansing"):
+            return {"ok": True, "task_id": id, "status": "not_found"}
+
+    返回 `status='not_found'` 而不是 `{ok:false}` —— 前端看守只认 `not_found` 才会摘下
+    看守(`taskWatch._drive`), 别的形状会让它一直空转打请求。
+
+    ## 为什么空类型放行
+
+    2026-10 之前建的行没有 task_type 值。加校验是为了**防误杀**, 不能反过来把这些
+    可能还在跑的老任务卡死 —— 空类型一律放行, 维持旧行为。
+    """
+    tt = str((row or {}).get("task_type") or "")
+    return (not tt) or tt == expect
+
+
 def mark_driver(task_id, driver):
     """标记任务推进来源(前端轮询 / 后端保活) —— 2026-10-29 统一
 

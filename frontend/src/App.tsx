@@ -36,7 +36,8 @@ import { t } from './locale'
 import { channelName } from './components/channels'
 
 // 轮询/健康检查等接口响应的最小形状(纯类型层; API 动态数据不造假严格)
-type JobStatusResp = { data?: { status?: string } }
+// 两种包裹口径并存: seed 系返回 {data:{status}}; cleansing/export 系返回顶层 {ok,status}
+type JobStatusResp = { data?: { status?: string }; status?: string }
 
 export const NAV = [
   { id: 'dash', label: t('nav.dash') },
@@ -554,20 +555,23 @@ export default function App() {
       })
       const poll = setInterval(async () => {
         try {
-          // 2026-11-05: 只读进度(probe=1), 推进交给 taskWatch —— 见上方 seed 轮询的说明
+          // 2026-11-06 P0-1: 原为 /seed/fill/status?probe=1 —— 那是 seed 的结构
+          //   ({data:{step,total_step}}), 拿它读导出任务只能读到 status, 进度字段全是 0,
+          //   而且一旦 seed 端点按 task_type 收紧就会直接 not_found。导出有自己的端点。
           const d = await apiJson<JobStatusResp>(
             'GET',
-            API + '/api/seed/fill/status?task_id=' + exportTask.task_id + '&probe=1',
+            API + '/api/exports/status?task_id=' + exportTask.task_id + '&probe=1',
           )
           if (document.visibilityState === 'hidden') return
-          if (d.data?.status === 'done') {
+          const _st = d?.data?.status || d?.status
+          if (_st === 'done') {
             clearInterval(poll)
             try {
               localStorage.removeItem('c_export_task')
             } catch {}
             useAppStore.getState().opDone(_opId)
             notify.success(t('op.export_done'))
-          } else if (d.data?.status === 'error') {
+          } else if (_st === 'error' || _st === 'not_found') {
             clearInterval(poll)
             try {
               localStorage.removeItem('c_export_task')

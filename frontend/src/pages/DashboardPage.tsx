@@ -249,6 +249,27 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     channel !== 'jd' && (hammerReplenMode || '') !== 'traditional'
       ? 'traditional'
       : hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional')
+  /**
+   * summary URL 的**唯一构造点**(2026-11-06 P0-2)
+   *
+   * 原来三处(首屏 load / 失败重试 / 30s 静默)各自手拼 URL, 全都只拼了日期没拼 mode。
+   * `channel` 有 axios 拦截器统一注入(`api/client.ts:144` 从 `c_channel` 取), 但 **mode 没有**;
+   * 而后端 `dashboard_summary` 的缺省是硬编码 `"bbcc"` —— 于是:
+   *   · `other` 等非京东渠道的 summary 一直按 BBCC 周期算(健康分/低库存口径错);
+   *   · 同一屏还有 `store.loadAll()` 那份**带了**正确 mode 的 summary, 谁后返回谁覆盖
+   *     `dashboard`, 用户看到的就是数字偶发跳变;
+   *   · 更隐蔽的是 `_sync_health_snapshot` 在 builder 内跑, 同一个 (date, channel)
+   *     被两种口径交替写, 健康趋势图出现无规律锯齿。
+   *
+   * 所以收敛成一个函数, 禁止再手拼。
+   */
+  const dashUrl = (t: string) => {
+    const _st = useAppStore.getState()
+    let u = '/api/dashboard/summary?' + t
+    if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
+      u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
+    return u + '&channel=' + channel + '&mode=' + _replMode
+  }
   // —— 采购&补货告警数据(与补货/采购建议页同源, 模式跟随; 补货=建议需补, 采购=建议需采) ——
   const loadProc = async () => {
     setProcLoading(true)
@@ -316,10 +337,14 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   卡面在此之前吃的是 alertsList —— 那是 `/api/alerts` 每组 200 条的**首屏截断快照**,
   //   与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200), 且 id DESC 的前 N 条
   //   可能被同仓同 SKU 占满 → 卡上明细缺失/重复。预拉后卡面与弹窗同源同口径, 不再依赖用户点「更多」。
-  const fullAlertsLoaded = useRef(false)
+  // 2026-11-06 P2-9: 记"已预拉过的渠道"而不是布尔量。
+  //   原来是个 boolean ref, 只在首次挂载跑一次 —— 而切渠道时本组件**不卸载**,
+  //   于是新渠道不再预拉全量告警, 卡面回落到 `/api/alerts` 的 200 条/组截断快照,
+  //   表现为"标题 160、卡面只有 5 行"且明细重复。按渠道记 + 用完即弃, 既不会漏也不会重。
+  const fullAlertsChannel = useRef('')
   useEffect(() => {
-    if (fullAlertsLoaded.current) return
-    fullAlertsLoaded.current = true
+    if (fullAlertsChannel.current === channel) return
+    fullAlertsChannel.current = channel
     loadFullAlerts()
   }, [channel])
   // 规则/参数保存、任务完成 → 重拉(与 insights-refresh/rules-changed 联动)
@@ -354,10 +379,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       // (stock-risk 含 OTIF/逐仓日销/动态SS/加速判定较重, 首屏先看 GMV/告警/健康, 断货 1-2s 补齐)
       Promise.allSettled([
         (() => {
-          const _st = useAppStore.getState()
-          let _u = '/api/dashboard/summary?t=' + freshStamp()
-          if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
-            _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
+          const _u = dashUrl('t=' + freshStamp())
           return api.get<SummaryResponse>(_u, { timeout: 60000 })
         })(),
         api.get<AuxResponse>(
@@ -420,10 +442,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
               const _rt = 't=' + Date.now()
               Promise.allSettled([
                 (() => {
-                  const _st = useAppStore.getState()
-                  let _u = '/api/dashboard/summary?' + _rt
-                  if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
-                    _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
+                  const _u = dashUrl('t=' + Date.now())
                   return api.get<SummaryResponse>(_u)
                 })(),
                 api.get<StockRiskShim | InventoryRow[]>('/api/dashboard/stock-risk?' + _rt),
@@ -469,7 +488,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         .finally(() => useAppStore.getState().setSyncing(-1))
     }
     load()
-  }, [channel, pageVersion])
+    // 2026-11-06: 加 _replMode —— 切 bbcc/traditional 后 summary 必须按新口径重算,
+    //   否则卡片停在旧模式的健康分/低库存(只有下次换渠道或刷新才会变)。
+  }, [channel, pageVersion, _replMode])
   // 30s 静默自动刷新（不显示 loading 骨架屏，避免闪烁）
   // 规则保存/删除/批量启用停用完成 → 'rules-changed' 事件 → 立即重拉看板。
   // 覆盖场景: 操作进行中先回到看板(拿到旧值), 操作完成后事件触发即时刷新——无需手动 F5。
@@ -505,10 +526,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         const _t = 't=' + freshStamp()
         const [s, ax, sr] = await Promise.all([
           (() => {
-            const _st = useAppStore.getState()
-            let _u = '/api/dashboard/summary?' + _t
-            if (_st.hammerDashPeriod === 'custom' && _st.customDateStart && _st.customDateEnd)
-              _u += '&start_date=' + _st.customDateStart + '&end_date=' + _st.customDateEnd
+            const _u = dashUrl(_t)
             return api.get<SummaryResponse>(_u, { timeout: 60000 })
           })(),
           api.get<AuxResponse>(
@@ -546,7 +564,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
       }
     }, 30000)
     return () => clearInterval(timer)
-  }, [channel])
+    // 2026-11-06: 加 _replMode(同首屏 load) —— 否则切模式后 30s 静默刷新仍按旧 mode 请求
+  }, [channel, _replMode])
   // 2026-11-03 D5: 规则重算中 → 每 4s 重拉(最多 6 次), 评估完成后告警自动出现。
   //   没有这个, 用户保存规则后看到的是"评估前"的告警, 会重复保存(越改越乱)。
   useEffect(() => {
@@ -876,7 +895,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // 补货模式联动: bbcc→BC 合计维度(对齐库存卡 bc tab: B+C 按 SKU 合计); traditional→C 仓维度
   // stockRisk 归一化兼容层: 后端可能返回 数组(旧, 仅 items/total) / 对象(新, bc/c/own 维度)
   // 数组形态只有 items/total, 对象形态含三级分类字段 → 用统一接口描述, 缺省键消费前补齐
-  const _sr0: StockRiskShim = Array.isArray(stockRisk)
+  const _srSrc: StockRiskShim = Array.isArray(stockRisk)
     ? { items: stockRisk as InventoryRow[], total: stockRisk.length }
     : stockRisk || {
         items: [],
@@ -896,35 +915,54 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         ownCritical: 0,
         ownWarning: 0,
       }
+  /**
+   * 2026-11-06 P2-10: **构造新对象**, 不再就地改。
+   *
+   * 原实现 `const _sr0 = stockRisk || {...}` 之后直接 `_sr0.items = ...`:
+   * 当 `stockRisk` 是对象形态时, `_sr0` 与 Zustand store 里那份是**同一引用** ——
+   * 等于在**渲染期改写 store state**。后果是订阅比较失真(渲染函数改了 state,
+   * 却没有 setState, 订阅方看不到变化)、StrictMode/并发渲染下尤其不稳。
+   * 现在用展开构造副本, store 那份一个字段都不碰。
+   */
+  let _sr0: StockRiskShim
   if (_replMode === 'bbcc') {
-    _sr0.items = _sr0.bcItems || []
-    _sr0.total = _sr0.bcTotal != null ? _sr0.bcTotal : _sr0.items.length
-    _sr0.critical =
-      _sr0.bcCritical != null ? _sr0.bcCritical : _sr0.items.filter(x => x.days_to_empty < 3).length
-    _sr0.warning =
-      _sr0.bcWarning != null
-        ? _sr0.bcWarning
-        : _sr0.items.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
+    const _it = _srSrc.bcItems || []
+    _sr0 = {
+      ..._srSrc,
+      items: _it,
+      total: _srSrc.bcTotal != null ? _srSrc.bcTotal : _it.length,
+      critical:
+        _srSrc.bcCritical != null ? _srSrc.bcCritical : _it.filter(x => x.days_to_empty < 3).length,
+      warning:
+        _srSrc.bcWarning != null
+          ? _srSrc.bcWarning
+          : _it.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length,
+    }
   } else {
     // 传统多仓: C 仓维度(主) + 自有/三方仓维度(own, 由采购管控)
-    _sr0.items = _sr0.cItems || []
-    _sr0.total = _sr0.cTotal != null ? _sr0.cTotal : _sr0.items.length
-    _sr0.critical =
-      _sr0.cCritical != null ? _sr0.cCritical : _sr0.items.filter(x => x.days_to_empty < 3).length
-    _sr0.warning =
-      _sr0.cWarning != null
-        ? _sr0.cWarning
-        : _sr0.items.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
-    _sr0.ownItems = _sr0.ownItems || []
-    _sr0.ownTotal = _sr0.ownTotal != null ? _sr0.ownTotal : _sr0.ownItems.length
-    _sr0.ownCritical =
-      _sr0.ownCritical != null
-        ? _sr0.ownCritical
-        : _sr0.ownItems.filter(x => x.days_to_empty < 3).length
-    _sr0.ownWarning =
-      _sr0.ownWarning != null
-        ? _sr0.ownWarning
-        : _sr0.ownItems.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length
+    const _it = _srSrc.cItems || []
+    const _own = _srSrc.ownItems || []
+    _sr0 = {
+      ..._srSrc,
+      items: _it,
+      total: _srSrc.cTotal != null ? _srSrc.cTotal : _it.length,
+      critical:
+        _srSrc.cCritical != null ? _srSrc.cCritical : _it.filter(x => x.days_to_empty < 3).length,
+      warning:
+        _srSrc.cWarning != null
+          ? _srSrc.cWarning
+          : _it.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length,
+      ownItems: _own,
+      ownTotal: _srSrc.ownTotal != null ? _srSrc.ownTotal : _own.length,
+      ownCritical:
+        _srSrc.ownCritical != null
+          ? _srSrc.ownCritical
+          : _own.filter(x => x.days_to_empty < 3).length,
+      ownWarning:
+        _srSrc.ownWarning != null
+          ? _srSrc.ownWarning
+          : _own.filter(x => x.days_to_empty >= 3 && x.days_to_empty < 7).length,
+    }
   }
   const _sr = _sr0
   // 传统多仓: C 仓 + 自有/三方仓 混合显示(同一列表, 标签区分)——曾用 C仓/自有三方 tab 分开

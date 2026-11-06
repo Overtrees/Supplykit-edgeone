@@ -59,7 +59,15 @@ def _build_purchase(channel, mode, days=28):
                    "AND channel=%s", [channel]):
         products[p.get("sku")] = p
     if not products:
-        return ok({"suggestions": []})
+        # 2026-11-06 P1-4: 这里原来 `return ok({"suggestions": []})` —— 返回**已包装的 dict**,
+        #   而本函数其余所有路径都 `return result`(list)。契约不一致的后果是连锁的:
+        #     ① 调用方 `shape(rows)` 迭代 dict 得到的是 key 字符串("ok"/"data");
+        #     ② need_only=1 时 `r.get("actual_purchase")` 对字符串调用 .get → AttributeError → 500
+        #        (看板「采购&补货」卡正好走 need_only=1);
+        #     ③ 不筛时返回 {"suggestions": <dict>}, 前端 `data.suggestions` 不是数组 → 表格空白;
+        #     ④ 更糟的是这个坏值会被写进 analysis_cache, 300s 内所有请求都复现。
+        #   新建渠道 / 重置后未导商品时(商品库为空)就是这条路径。
+        return []
 
     # 日销 14+28 双窗口 → fused(趋势加权)
     # 2026-10-17 物化短路: 读物化 plain ds14/ds28 现场算 14/28 自权重(与直算 calc_sales_multi 逐 SKU 等价——

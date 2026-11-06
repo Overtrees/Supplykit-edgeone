@@ -196,7 +196,13 @@ def _build_orders(where, params, page, page_size, include_deleted):
 def soft_delete_order(oid: int):
     """软删除(前端 5s 撤销窗口, 回收站可恢复)"""
     _skus = _skus_of([oid])
+    # 2026-11-06 P2-8: 与批量删除对齐 —— 登记物化重建日期。
+    #   原来这里只 invalidate("orders"): agg 有 60s 窗口自愈, 但**快照**(7/14/28 日销)要等
+    #   每日对账才修正, 这段时间日销偏大(删掉的单仍计入)。批量删/恢复/永久删早已登记,
+    #   只有这个单条入口漏了。日期必须在 UPDATE **之前**取 —— _days_of 依赖 deleted_at=''。
+    _touch_days = _days_of([oid])
     execute("UPDATE orders SET deleted_at=NOW() WHERE id=%s", [oid])
+    _mark_days(_touch_days, reason="order_delete")
     from routes.analysis_cache import invalidate
     invalidate("orders")
     _close_orphan(_skus)
