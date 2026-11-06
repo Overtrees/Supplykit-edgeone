@@ -567,6 +567,16 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
                             _s0.get("warehouse"), _s0.get("qty"), _s0.get("bq")),))
     except Exception as _e_rc:
         try_err('cron', '批次对账降级', _e_rc)
+    # 2026-11-06 S2-1: 评估跑完 → 采购需求重判(purchase_need 告警)。
+    #   采购告警原来由 `_build_purchase` 顺手写, 于是"有没有人打开采购页"决定了它更不更新;
+    #   现在写入收敛到 core.alert_jobs, 这里是四个写侧触发源之一(评估会关闭一批告警,
+    #   采购需求必须跟着重判)。异步 + 每渠道 120s 限频, 不拖慢评估本身。
+    try:
+        from core.alert_jobs import kick_purchase_alerts as _kick_pa
+        for _ch in _chs:
+            _kick_pa(_ch)
+    except Exception as _e_pa:
+        try_err('cron', '采购告警同步调度降级', _e_pa)
     _log("info", "规则评估[%s]: 渠道 %s, 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
         "每日" if deep else "变更", ",".join(_chs), cleaned, len(triggered),
         ",".join(str(t)[:20] for t in triggered[:8])))

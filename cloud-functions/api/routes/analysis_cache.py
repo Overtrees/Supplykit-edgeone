@@ -118,6 +118,71 @@ def cache_put(key, value, tok=None, raw=False):
 _CALC_INFLIGHT = {}
 
 
+def cache_peek(key, ttl):
+    """**只读**缓存: 命中(TTL 内且值可用) → (True, value); 否则 (False, None)
+
+    与 `cache_get` 的唯一区别: 绝不调用 builder、绝不写表。
+    为什么需要它(2026-11-06 S2-2 分块缓存):
+      分块方案要"先看 meta 在不在, 在就按块号读回来"。若用 cache_get 探测,
+      miss 时它会调用 builder 并把结果写成一条缓存 —— 探测动作本身变成了写操作,
+      而且会用 `None` 覆盖真实数据。探测必须是纯读。
+    过期行**不删**: TTL 判断已经足够, 删它会跟并发写入打架(删完别人刚写的就没了)。
+    """
+    try:
+        from db import one
+        row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                  "FROM analysis_cache WHERE `key`=%s", [key])
+        if not row:
+            return False, None
+        age = row.get("age")
+        v0 = row.get("value")
+        if v0 == "__CALC__" or age is None or int(age) >= ttl:
+            return False, None
+        v = _loads(v0 or "")
+        if v is _FAILED:
+            return False, None
+        return True, v
+    except Exception:
+        return False, None
+
+
+def cache_peek_many(keys, ttl):
+    """**批量只读**: 返回 {key: value}, 未命中/过期/坏值的 key 不出现在结果里。
+
+    为什么需要(2026-11-06 S2-2 分块缓存的读侧):
+      全量分块把 6.2MB 切成 7 块。逐块 `cache_peek` = 7 次串行往返,
+      在跨区域网络下实测 **4.5s** —— 比重算(线上 5~7s)只快一点点, 等于白做。
+      一次 `WHERE key IN (...)` 把 7 块全部取回, 往返从 7 次降到 1 次(总字节不变)。
+      TiDB 默认 max_allowed_packet 64MB, 6.2MB 的单行集合远在上限内。
+
+    只读语义与 cache_peek 完全一致: 不调 builder、不写表、不删过期行。
+    """
+    if not keys:
+        return {}
+    try:
+        from db import query as _q
+        _ks = list(keys)
+        out = {}
+        # 分批 50 个: 块数通常 <10, 这个上限只是防御"调用方传了上千个键"把语句撑爆
+        for i in range(0, len(_ks), 50):
+            batch = _ks[i:i + 50]
+            ph = ",".join(["%s"] * len(batch))
+            rows = _q("SELECT `key`, value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                      "FROM analysis_cache WHERE `key` IN (" + ph + ")", batch) or []
+            for r in rows:
+                age = r.get("age")
+                v0 = r.get("value")
+                if v0 == "__CALC__" or age is None or int(age) >= ttl:
+                    continue
+                v = _loads(v0 or "")
+                if v is _FAILED:
+                    continue
+                out[str(r.get("key"))] = v
+        return out
+    except Exception:
+        return {}
+
+
 def cache_get(key, ttl, builder, max_bytes=None):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
     2026-10-25 去悲观锁(性能根治): 原 SELECT ... FOR UPDATE 持锁重算(10-11 并发根治设计),

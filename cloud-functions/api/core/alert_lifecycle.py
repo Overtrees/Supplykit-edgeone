@@ -93,39 +93,47 @@ def find_dim(dim, statuses=("active",)):
 
 
 def open_or_reopen(dim, fields):
-    """写入侧唯一入口: 同维度已关闭 → 重开; 已 active → 不动; 从未出现 → 插入
+    """写入侧唯一入口: 单语句 upsert(2026-11-06 S2-4, 依赖 alerts.uq_alerts_dim)
 
     dim    : ALERT_DIM 的键值(alerts 表列名)
     fields : 其余列(title/description/severity/source/related_rule_id/warehouse_type...)
-    返回 "opened" / "reopened" / "exists"
+    返回 "opened"(新插入) / "reopened"(命中已有行) / "exists"(命中且一字未改)
 
-    为什么重开而不是插新行:
+    为什么从"先查后改"换成 upsert:
+      · 原实现 `SELECT ... ORDER BY FIELD(status,'active') DESC LIMIT 1` 再决定
+        INSERT/UPDATE —— 这是 check-then-act, 两个并发写入方各自读到"不存在"就各插一条。
+        线上实证: purchase_need 同一 SKU 13 行, 全部 inactive(一次分页重算写一遍)。
+      · 唯一键 uq_alerts_dim 把"同一维度只有一行"变成库约束, 并发怎么写都只有一行。
+      · 同时消掉一次全表预载(评估路径原本还要另读一次 active 全量)。
+
+    ⚠ 赋值顺序: `reopen_count` / `created_at` 必须在 `status='active'` **之前**。
+      ON DUPLICATE KEY UPDATE 从左到右执行, 后面表达式读到的是已赋过值的列 ——
+      反过来写的话 `IF(status<>'active',1,0)` 永远为 0, 重开次数再也不增长。
+
+    为什么仍要重开而不是插新行:
       · 同一格库存的同一个问题只有一条"当前状态", 历史由 quality_logs 承载;
       · 不重开的话每次"恢复→再触发"都新增一行, 表按抖动次数膨胀, 且无法统计抖动频次。
     """
-    w, p = _dim_where(dim)
-    rows = query("SELECT id, status, reopen_count FROM alerts WHERE %s "
-                 "ORDER BY FIELD(status,'active') DESC, id DESC LIMIT 1" % w, p)
-    if rows:
-        r = rows[0]
-        if str(r.get("status")) == "active":
-            # 已 active: 只刷新展示字段(规则文案可能变了), 不动 status/closed_*
-            sets = ", ".join(["`%s`=%%s" % k for k in fields.keys() if k in _WRITABLE])
-            if sets:
-                execute("UPDATE alerts SET %s WHERE id=%%s" % sets, list(fields[k] for k in fields if k in _WRITABLE) + [r["id"]])
-            return "exists"
-        sets = ", ".join(["`%s`=%%s" % k for k in fields.keys() if k in _WRITABLE])
-        execute("UPDATE alerts SET status='active', closed_reason='', closed_at=NULL, "
-                "reopen_count=COALESCE(reopen_count,0)+1, created_at=NOW()"
-                + ((", " + sets) if sets else "") + " WHERE id=%s",
-                list(fields[k] for k in fields if k in _WRITABLE) + [r["id"]])
-        return "reopened"
     cols = list(dim.keys()) + [k for k in fields.keys() if k in _WRITABLE]
     vals = [("" if dim[k] is None else str(dim[k])) for k in dim.keys()] + \
            [fields[k] for k in fields if k in _WRITABLE]
-    execute("INSERT INTO alerts(%s) VALUES(%s)" % (
-        ", ".join("`%s`" % c for c in cols), ", ".join(["%s"] * len(cols))), vals)
-    return "opened"
+    sets = [
+        # 这两行必须在 status 之前(见 docstring)
+        "reopen_count=COALESCE(reopen_count,0)+IF(status<>'active',1,0)",
+        "created_at=IF(status<>'active', NOW(), created_at)",
+    ]
+    sets += ["`%s`=VALUES(`%s`)" % (k, k) for k in fields.keys() if k in _WRITABLE]
+    sets += ["closed_reason=''", "closed_at=NULL", "status='active'"]
+    n = int(execute(
+        "INSERT INTO alerts(%s) VALUES(%s) ON DUPLICATE KEY UPDATE %s" % (
+            ", ".join("`%s`" % c for c in cols),
+            ", ".join(["%s"] * len(cols)),
+            ", ".join(sets)),
+        vals) or 0)
+    # ODKU 的 rowcount: 1=插入, 2=更新, 0=命中但值未变
+    if n == 1:
+        return "opened"
+    return "reopened" if n >= 2 else "exists"
 
 
 # 可写入列白名单 —— 防止调用方把 status/closed_* 混进 fields 绕过状态机

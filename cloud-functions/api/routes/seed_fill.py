@@ -1052,8 +1052,12 @@ def _seed_alerts():
     #   返回值却是 len(inserts)(看起来全写了), 对账也发现不了。两处必须同值。
     #   500 行/批是 TiDB serverless 单条多值 INSERT 的实测上限, 不要改步长, 改切片。
     for i in range(0, len(inserts), 500):
+        # 2026-11-06 S2-4: 加 ON DUPLICATE KEY UPDATE id=id(等价 DO NOTHING)。
+        #   seed 的语义是"造演示数据", 已存在的维度不该被覆盖 —— 否则一次重新 seed
+        #   会把用户手动关掉的告警重新点亮。这里只需要它不撞 uq_alerts_dim 报 1062。
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
-                    "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s)",
+                    "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s) "
+                    "ON DUPLICATE KEY UPDATE id=id",
                     inserts[i:i + 500])
     return len(inserts)
 

@@ -50,7 +50,22 @@ type Watch = {
 
 const _watches = new Map<string, Watch>()
 let _timer: number | null = null
-let _inflight = false
+/**
+ * 在途的 taskId 集合(2026-11-06 审计 P1-23)
+ *
+ * 原来是模块级布尔 `let _inflight = false` —— **全仓只有一个在途名额**。
+ * 同时有导入 + 评估 + 导出三个任务时, 只有先跑的那个能被推进, 另外两个要等它这次
+ * 请求彻底结束(单次预算 DRIVE_TIMEOUT=100s)。而 `_beat` 每秒遍历所有 watch 调 `_drive`,
+ * 被挡的直接 return 且**没有轮转** —— 遍历顺序靠 Map 插入序, 后进来的任务可能一直排在后面。
+ *
+ * 叠加后端 `updated_at` 不刷新 → 30 分钟后被判超时 error(用户看到"任务莫名失败",
+ * 但其实是前端把它饿死了)。
+ *
+ * 改为 per-task: 每个任务独立登记在途, 并发上限 2(再多也没意义 —— 后端的租约与
+ * 单实例执行槽本来就是瓶颈, 并发 3 个只会互相抢连接), 其余按"最久没被推进的优先"轮转。
+ */
+const _driving = new Set<string>()
+const MAX_CONCURRENT_DRIVES = 2
 const _listeners = new Set<() => void>()
 
 function _notify() {
@@ -120,12 +135,15 @@ function _url(kind: WatchKind, id: string): string {
 /**
  * 一次续跑: 成功推进 → 记 lastDrive; 无进展 → stalls+1
  *
- * 串行化: 全局只允许一个请求在途。后端本来有租约, 但前端并发只会让"抢不到锁"的请求
- * 白白占住一个连接、把续跑间隔拉长(而且会把 In-flight 计数打高, 胶囊一直转)。
+ * 并发控制(2026-11-06 P1-23): 同一个 taskId 不允许重叠; 全局最多 2 个任务并行推进。
+ *   后端本来有租约, 但前端并发只会让"抢不到锁"的请求白白占住连接、把续跑间隔拉长
+ *   (而且会把 In-flight 计数打高, 胶囊一直转)。上限 2 = 够覆盖"导入 + 评估"这种正常并发,
+ *   再多也只是在同一批执行槽上互相排队。
  */
 async function _drive(w: Watch) {
-  if (_inflight) return
-  _inflight = true
+  if (_driving.has(w.taskId)) return
+  if (_driving.size >= MAX_CONCURRENT_DRIVES) return
+  _driving.add(w.taskId)
   w.lastDrive = Date.now()
   try {
     const d = await apiJson<Record<string, unknown>>('GET', _url(w.kind, w.taskId), {
@@ -175,7 +193,7 @@ async function _drive(w: Watch) {
     w.onTick && w.onTick(w.taskId, w.lastTick)
     _notify()
   } finally {
-    _inflight = false
+    _driving.delete(w.taskId)
   }
 }
 
@@ -183,11 +201,20 @@ function _beat() {
   if (!_watches.size) return
   // 若某个任务"租约被人持有、这轮没推进", 别在 3s 节奏上硬撞 —— 按 stalls 退避,
   //   最多退到 15s。这样单任务卡住时不会刷请求(也不烧 RU), 但一旦解锁马上接上。
+  //
+  // 2026-11-06 P1-23: 遍历顺序改为"最久没被推进的优先"。原来直接 forEach Map 插入序,
+  //   名额被前排任务占住时后排永远排不上(全局单飞时代是必然, 现在只剩并发 2 的边界情况,
+  //   但排序成本是 O(n log n) 且 n 通常 <5, 直接排掉这个隐患)。
   const now = Date.now()
-  _watches.forEach(w => {
+  const due = [..._watches.values()]
+    .filter(w => !_driving.has(w.taskId))
+    .sort((a, b) => a.lastDrive - b.lastDrive)
+  for (const w of due) {
+    if (_driving.size >= MAX_CONCURRENT_DRIVES) break
     const gap = Math.min(BEAT_MS * Math.pow(1.25, Math.min(w.stalls, 8)), 15000)
-    if (now - w.lastDrive >= gap) void _drive(w)
-  })
+    if (now - w.lastDrive < gap) continue
+    void _drive(w)
+  }
   _notify()
 }
 

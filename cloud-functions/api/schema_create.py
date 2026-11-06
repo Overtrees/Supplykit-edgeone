@@ -591,7 +591,7 @@ _COLUMN_ADDS = {
 #   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
 # v12(2026-11-05 租约心跳): sync_tasks 增 lease_token —— 租约改由执行方心跳续期(TTL 30s),
 #   令牌保证只有当前持有者能续约; 没有它, 被网关切断的上一任会替下一任续期。
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def table_ddl(name):
@@ -733,6 +733,52 @@ def create_all_tables():
                 log_info('schema', 'inventory 唯一键 uq_inventory_biz 建立完成')
     except Exception as _eix5:
         try_err('schema', 'inventory 唯一键迁移降级', _eix5)
+    # 2026-11-06 S2-4 告警维度唯一键(审计 P0-9):
+    #   写入侧一直是"先查同维度 -> 没有就 INSERT"(core.alert_lifecycle.open_or_reopen), 而
+    #   purchase_need 在 _build_purchase 里是裸 INSERT —— check-then-act 叠加无唯一键:
+    #   两个并发 builder(不同分页键)各自读到"不存在"就各插一条。
+    #   线上实证(建键前): 3761 行里 11 组重复, 10 组是 purchase_need 每个 SKU 13 条、
+    #   全部 inactive —— 13 正好等于一次分页重算的次数, 即"翻一页写一遍"的物证。
+    #   唯一键把去重从"内存判断"降级为"库约束": 并发怎么写都只有一行。
+    # 顺序照 orders 的范式: 先归一 NULL -> 再合并重复(留痕) -> 最后建键。
+    #   NULL 会让唯一键失效(多行 NULL 互不冲突), 而本表这几列 DEFAULT '' 但历史行可能是 NULL。
+    try:
+        from db import query as _qk6, one as _q1k6, execute as _ek6
+        _idx6 = {str(r.get("Key_name") or "") for r in (_qk6("SHOW INDEX FROM alerts") or [])}
+        if "uq_alerts_dim" not in _idx6:
+            for _c6 in ("channel", "alert_type", "related_sku", "barcode", "warehouse", "source"):
+                _ek6("UPDATE alerts SET `%s`='' WHERE `%s` IS NULL" % (_c6, _c6))
+            _dup6 = _q1k6("SELECT COUNT(*) c FROM (SELECT 1 FROM alerts GROUP BY channel, "
+                          "alert_type, related_sku, barcode, warehouse, source "
+                          "HAVING COUNT(*)>1) t")
+            _dn6 = int((_dup6 or {}).get("c") or 0)
+            if _dn6 > 2000:
+                # 与 orders 同口径: 删数据的事宁可不做, 留给人判断(不阻断启动, 只登记待办)
+                _ek6("INSERT IGNORE INTO migration_log(name) VALUES('uq_alerts_dim_blocked')")
+                try_err('schema', '告警唯一键待办: %d 组重复行, 需先人工合并再建键' % _dn6, None)
+            else:
+                if _dn6:
+                    # 保留"active 优先, 其次 id 最大"的一条。
+                    #   不能像 orders 那样只按 id DESC —— 有 active 的组必须保住 active,
+                    #   否则一个正在生效的告警会凭空消失(用户看到卡片数字掉了却查不到原因)。
+                    _keep6 = _qk6(
+                        "SELECT alert_type, related_sku, MAX(id) AS keep_id, COUNT(*) AS n "
+                        "FROM alerts GROUP BY channel, alert_type, related_sku, barcode, "
+                        "warehouse, source HAVING COUNT(*)>1") or []
+                    _ek6("DELETE FROM alerts WHERE id IN (SELECT id FROM (SELECT id, "
+                         "ROW_NUMBER() OVER (PARTITION BY channel, alert_type, related_sku, "
+                         "barcode, warehouse, source ORDER BY (status='active') DESC, id DESC) "
+                         "rn FROM alerts) t WHERE t.rn > 1)")
+                    log_info('schema', '告警维度重复已合并(每组保留 active 优先/最新) %d 组: %s'
+                             % (_dn6, "; ".join("%s/%s->%s" % (r.get("alert_type"),
+                                                               r.get("related_sku"),
+                                                               r.get("keep_id"))
+                                                for r in _keep6[:20])))
+                _ek6("ALTER TABLE alerts ADD UNIQUE KEY uq_alerts_dim "
+                     "(channel, alert_type, related_sku, barcode, warehouse, source)")
+                log_info('schema', 'alerts 维度唯一键 uq_alerts_dim 建立完成')
+    except Exception as _eix6:
+        try_err('schema', '告警唯一键迁移降级(旧行为不变: 仍靠内存去重)', _eix6)
     return ok_n, _failed
 
 

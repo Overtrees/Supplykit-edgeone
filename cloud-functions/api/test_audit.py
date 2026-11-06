@@ -82,7 +82,10 @@ EXPECT = [
 ]
 key_defs = []
 for f, s in srcs.items():
-    for m in re.finditer(r'_key\s*=\s*"([^"]+)"\s*%\s*\(([^)]*)\)', s):
+    # 2026-11-06: 上一轮把 purchase/repl 的 `_key` 换成 `shape_cached(base, ...)` 分片缓存,
+    #   键的**业务维度全在 base 里**(slice_key 只追加 need_only/search/page/page_size)。
+    #   所以断言也要认 `_base` —— 否则 db 里真丢了 channel 没人拦, 而测试还显示"通过"。
+    for m in re.finditer(r'(?:_key|_base)\s*=\s*"([^"]+)"\s*%\s*\(([^)]*)\)', s):
         key_defs.append((f, m.group(1), m.group(2)))
 seen = set()
 for f, tmpl, args in key_defs:
@@ -109,6 +112,27 @@ for f, s in srcs.items():
     for m in re.finditer(r'_cache_get\(\s*"[^"]+"', s):
         extra_keys.append("%s: %s" % (f, m.group(0)[:60]))
 check("无 _cache_get 直传字符串 key(均走 _key 变量)", not extra_keys, "; ".join(extra_keys[:5]))
+
+# B3: 分片缓存的切片键必须拼满五段 —— 少一段就会出现"翻页拿到上一页"、
+#     "搜索词不生效"、"need_only 串味" 这类不报错但结果错的静默故障。
+try:
+    _lp = open(os.path.join(os.path.dirname(ROUTES), "core", "list_page.py"), encoding="utf-8").read()
+except Exception:
+    _lp = ""
+_m_slice = re.search(r"def slice_key\(([^)]*)\)\s*:(.*?)(?=\ndef |\Z)", _lp, re.S)
+check("slice_key 定义存在", bool(_m_slice), "core/list_page.py 未找到 slice_key")
+if _m_slice:
+    # 只看 slice_key 函数体(到下一个顶层 def 为止): 必须拼够 5 段, 且四个切片维度全部参与。
+    #   不解析表达式(会踩 int(bool(...)) / `or ""` 的括号), 只数占位符与出现 —— 锁结构不锁写法。
+    _body = _m_slice.group(2)
+    _params = [a.strip().split("=")[0].strip() for a in _m_slice.group(1).split(",") if a.strip()]
+    _need = ["need_only", "search", "page", "page_size"]
+    _miss_p = [p for p in _need if p not in _params]
+    _miss_b = [p for p in _need if p not in _body]
+    _n_ph = len(re.findall(r"%[sd]", _body))
+    check("slice_key 五段齐全(%s)" % ",".join(_need),
+          not _miss_p and not _miss_b and _n_ph >= 5,
+          "参数缺=%s 拼装缺=%s 段数=%d" % (_miss_p, _miss_b, _n_ph))
 
 print("=" * 60)
 print("C. except pass 静默吞异常统计(纪律基线)")
@@ -151,6 +175,52 @@ for _f, _s in srcs.items():
         if "%" in m.group(1) and "%%" not in m.group(1):
             _mig_ok = False
 check("全库 DATE_FORMAT 格式串无单 %% (M3 防复发; 迁移段退役后全库同口径)", _mig_ok)
+
+print("=" * 60)
+print("E. 读接口零副作用(2026-11-06 S2-1 审计 P0-10)")
+# 事故: `_build_purchase` 里写 purchase_need 告警 → "
+#   ① 告警更不更新取决于"有没有人打开采购页";
+#   ② 缓存粒度改成一页一条后, 每翻一页重写一遍(线上实证同 SKU 13 条)。
+# 现在: builder 只算不写, 写入收敛到 core/alert_jobs。以下三条守这条边界。
+
+_api_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+def _fn_body(path, fn_name):
+    """截取模块级函数的函数体文本(到下一个同级 def / 文件尾)"""
+    src = open(path, encoding="utf-8").read()
+    m = re.search(r"\ndef\s+" + re.escape(fn_name) + r"\s*\(", src)
+    if not m:
+        return ""
+    rest = src[m.end():]
+    nxt = re.search(r"\n(?:def |class |@)", rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
+_pc = os.path.join(_api_dir, "routes", "purchase_calc.py")
+_bp_body = _fn_body(_pc, "_build_purchase")
+check("采购 builder 函数体存在(函数被改名会让本组断言空跑)",
+      len(_bp_body) > 500, "len=%d" % len(_bp_body))
+check("采购 builder 内不得出现写语句(INSERT/UPDATE/DELETE)",
+      not re.search(r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM", _bp_body, re.I),
+      "builder 里又出现写库语句了")
+check("采购 builder 默认不写告警(with_alerts 默认 False)",
+      "with_alerts=False" in _bp_body.split("\n")[0] or "with_alerts=False" in _bp_body[:200],
+      "签名默认值被改成 True 会让读接口又带副作用")
+
+# 读路由不得调用写侧 job —— 那等于把副作用换个函数名塞回读路径
+_pr = open(os.path.join(_api_dir, "routes", "purchase.py"), encoding="utf-8").read()
+check("采购读路由不调用 alert_jobs / sync_purchase_alerts",
+      "alert_jobs" not in _pr and "sync_purchase_alerts" not in _pr, "routes/purchase.py")
+
+# 触发源必须存在(四个写侧入口), 否则"零副作用"退化成"永不更新"
+_trig = 0
+for _rel in ("routes/cleansing.py", "routes/cron.py", "routes/suppliers.py"):
+    _src = open(os.path.join(_api_dir, *_rel.split("/")), encoding="utf-8").read()
+    if "kick_purchase_alerts" in _src:
+        _trig += 1
+check("采购告警的三个写侧触发源都在(导入完成/评估完成/参数保存)",
+      _trig == 3, "只在 %d 个文件里找到" % _trig)
 
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -55,8 +55,56 @@ function pruneCache() {
   }
 }
 
+/**
+ * 请求参数的稳定序列化(2026-11-06 审计 P0-7)
+ *
+ * 原实现直接 `JSON.stringify(params)`, 键顺序一变 key 就变: 调用方写 `{t:1}` 时
+ * 注入 channel 后是 `{t:1,channel:'jd'}`, 而自己写 `{channel:'jd',t:1}` 的调用方是
+ * 另一种顺序 —— 同一份数据两个 key, 缓存命中率凭空归零。按 key 排序后消除这个差异。
+ */
+function _stable(v: unknown): string {
+  if (v === null || v === undefined) return 'null'
+  if (typeof v !== 'object') return JSON.stringify(v) ?? 'null'
+  if (Array.isArray(v)) return '[' + v.map(_stable).join(',') + ']'
+  const o = v as Record<string, unknown>
+  return (
+    '{' +
+    Object.keys(o)
+      .sort()
+      .map(k => JSON.stringify(k) + ':' + _stable(o[k]))
+      .join(',') +
+    '}'
+  )
+}
+
 function cacheKey(method?: string, url?: string, params?: unknown) {
-  return (method ?? '') + ':' + (url ?? '') + ':' + JSON.stringify(params || {})
+  return (method ?? '').toLowerCase() + ':' + (url ?? '') + ':' + _stable(params)
+}
+
+/**
+ * 全局渠道参数注入(2026-11-06 审计 P0-7 的根)
+ *
+ * 缓存键必须**在注入 channel 之后**才算, 否则两侧不同源:
+ *   写侧(响应拦截器)拿的是 axios 的 config.params —— 已被拦截器塞了 channel;
+ *   读侧(apiGet)拿的是调用方原始 config.params —— 没有 channel。
+ * 结果 `get:/api/x:{"channel":"jd","t":9}` 与 `get:/api/x:{"t":9}` 两个 key,
+ * **30s 缓存永远不命中**(实测: 切页/返回都要重新请求)。
+ * 现在两侧都走同一个函数, 键天然一致。
+ */
+function _channelOf(): string {
+  try {
+    return localStorage.getItem('c_channel') || 'jd'
+  } catch {
+    return 'jd'
+  }
+}
+function _withChannel(params?: unknown): Record<string, unknown> {
+  const p =
+    params && typeof params === 'object' && !Array.isArray(params)
+      ? { ...(params as Record<string, unknown>) }
+      : {}
+  if (!p.channel) p.channel = _channelOf()
+  return p
 }
 
 /**
@@ -85,10 +133,13 @@ let _activeReq = 0
  *   用户看到的是"什么页面都在加载中/同步中"(问题 4 的另一半)。
  * 所以把在途分成两档: 前台(页面取数) 与 后台(看守/轮询)。徽标只认前台;
  *   后台请求仍照常登记/注销, 只是不进徽标分子 —— 将来要做"任务在跑"的独立指示也有数据可用。
+ *
+ * 2026-11-06 审计 P1-32: 原来是模块级布尔 `_reqBg`(markBackground 设、_reqEnd 复位),
+ *   并发时就串了 —— A 请求标了后台, B 紧跟着进来也读到 true, 于是**前台请求被当成后台**
+ *   (徽标不亮, 用户看着页面不动); 反过来 A 复位后 B 的 _reqEnd 又少减一次, 计数漏减。
+ *   改为按请求传参: axios 走 config.__bg, apiJson 走局部变量, 不再有共享可变状态。
  */
 let _bgReq = 0
-/** 当前正在登记的请求是否为"后台"(由 markBackground 在发请求前设定, _reqEnd 时复位) */
-let _reqBg = false
 const _reqListeners = new Set<() => void>()
 function _notifyReq() {
   _reqListeners.forEach(fn => {
@@ -97,18 +148,20 @@ function _notifyReq() {
     } catch {}
   })
 }
-/** 标记一个请求为"后台"(不点亮用户可见的忙徽标)。必须在发请求**之前**调用。 */
-export function markBackground(on = true) {
-  _reqBg = on
+/** 标记一个请求为"后台"(不点亮用户可见的忙徽标)。
+ *  @deprecated 2026-11-06 审计 P1-32: 全局开关会让并发请求互相串味(见上)。
+ *  已在全仓核实**无调用方**, 仅保留空实现一版防止外部脚本引用报错; 新代码请用请求级参数
+ *  (`apiJson` 的 `background: true` / axios 的 `config.__bg`), 下个大版本删除。 */
+export function markBackground(_on = true) {
+  /* no-op: 全局后台标记已废弃, 见 client.ts 顶部 P1-32 注释 */
 }
-function _reqStart() {
+function _reqStart(isBg = false) {
   _activeReq += 1
-  if (_reqBg) _bgReq += 1
+  if (isBg) _bgReq += 1
   _notifyReq()
 }
-function _reqEnd() {
-  if (_reqBg) _bgReq = Math.max(0, _bgReq - 1)
-  _reqBg = false
+function _reqEnd(isBg = false) {
+  if (isBg) _bgReq = Math.max(0, _bgReq - 1)
   _activeReq = Math.max(0, _activeReq - 1)
   _notifyReq()
 }
@@ -143,17 +196,16 @@ const instance = axios.create({
 
 // 请求拦截器：自动注入全局 channel 参数 + 认证 token
 instance.interceptors.request.use(config => {
+  const c = config as unknown as Record<string, unknown>
   // 在途登记放在拦截器里 = 所有 axios 请求自动覆盖, 页面无需逐个配对
-  ;(config as unknown as Record<string, unknown>).__tracked = true
-  _reqStart()
-  if (!config.params || !config.params.channel) {
-    const ch = localStorage.getItem('c_channel') || 'jd'
-    if (config.params) {
-      config.params.channel = ch
-    } else {
-      config.params = { channel: ch }
-    }
-  }
+  c.__tracked = true
+  const isBg = Boolean(c.__bg)
+  _reqStart(isBg)
+  // channel 注入与缓存键顺序(2026-11-06 P0-7): 先注入再算键, 并把键挂到 config 上。
+  //   读侧(apiGet)用同一个 _withChannel 算键 → 两侧必然一致。
+  config.params = _withChannel(config.params)
+  c.__cacheKey = cacheKey(config.method || 'get', config.url || '', config.params)
+  c.__epoch = _writeEpoch
   // 注入认证 token
   const token = (() => {
     try {
@@ -177,6 +229,27 @@ instance.interceptors.request.use(config => {
 //   后续同 URL 请求全部卡死(loadCfg 等永不返回 → UI 显示旧值, 重进页面才恢复)
 //   → 超过 INFLIGHT_TTL 的在途视为挂起, 删除并重新发起
 const inflight = new Map<string, InflightEntry<ApiResult<unknown>>>()
+// 2026-11-06 审计 P0-7: 在途表加硬上限。原来只靠响应/错误/abortScope 三路 delete,
+//   任何一条路径漏了(拦截器抛错、页面卸载不走 abortScope)条目就永久驻留, 且**永远复用
+//   那个 promise** —— 同一 URL 从此再也发不出新请求。上限 + 插入序淘汰, 最坏退化为多一次请求。
+const INFLIGHT_MAX = 120
+function _setInflight(k: string, p: InflightEntry<ApiResult<unknown>>) {
+  if (!inflight.has(k) && inflight.size >= INFLIGHT_MAX) {
+    const oldest = inflight.keys().next()
+    if (!oldest.done) inflight.delete(oldest.value)
+  }
+  inflight.set(k, p)
+}
+
+/**
+ * 写操作代次(2026-11-06 审计 P0-7)
+ *
+ * 只清 cache 不够: 写之前发出的 GET 还在路上, 写完之后它才回来, 响应拦截器会把它
+ * **无条件写进刚清空的缓存** —— 用户点完保存看到的还是旧数字, 而且这个旧值要挂 30s。
+ * 所以每次写操作把代次 +1, GET 发出时记下当时的代次, 回来时不一致就**丢弃这次缓存写入**
+ * (请求结果照常返回给调用方, 只是不进缓存)。
+ */
+let _writeEpoch = 0
 // 2026-11-05: 必须 ≥ axios timeout。原来 15s 会在一个正常但偏慢的请求(40s)还没回来时
 //   就判定"挂起"并**自动补发**新请求 → 请求风暴 + 胶囊永久转圈。现在在途请求在自己的
 //   超时内一律复用, 超时后由 axios 明确 reject(页面显示可重试的错误态), 不再偷偷补发。
@@ -185,10 +258,14 @@ const INFLIGHT_TTL = 50000
 // 响应拦截器：写缓存 + 清理在途 + 日志 + 自动解包 {ok,data}
 instance.interceptors.response.use(
   response => {
-    _reqEnd()
+    const cfg = response.config as unknown as Record<string, unknown>
+    _reqEnd(Boolean(cfg.__bg))
     const { method, url, params } = response.config
-    const key = cacheKey(method || 'get', url || '', params)
-    if ((method || 'get').toLowerCase() === 'get') {
+    // 2026-11-06 P0-7: 键由请求拦截器算好(已含注入的 channel), 这里直接用 ——
+    //   原来在这里重算, 拿到的 params 已带 channel, 与 apiGet 读侧不含 channel 的键不同源。
+    const key = String(cfg.__cacheKey || cacheKey(method || 'get', url || '', params))
+    if ((method || 'get').toLowerCase() === 'get' && cfg.__epoch === _writeEpoch) {
+      // 代次一致才写缓存: 写操作之后回来的旧响应不许回灌(见 _writeEpoch 注释)
       cache.set(key, { data: response.data, ts: Date.now() })
       pruneCache()
     }
@@ -223,14 +300,18 @@ instance.interceptors.response.use(
     return response
   },
   error => {
-    _reqEnd()
+    const cfg0 = (error as AxiosError).config as unknown as Record<string, unknown> | undefined
+    _reqEnd(Boolean(cfg0 && cfg0.__bg))
     const err = error as AxiosError
     // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
     if (axios.isCancel(err)) {
       return Promise.reject(err)
     }
     const cfg: AxiosRequestConfig = err.config || {}
-    const key = cacheKey(cfg.method || 'get', cfg.url || '', cfg.params)
+    const key = String(
+      (cfg as unknown as Record<string, unknown>).__cacheKey ||
+        cacheKey(cfg.method || 'get', cfg.url || '', cfg.params),
+    )
     inflight.delete(key)
     console.debug(`[API] ${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ❌ ${err.message}`)
     // 统一收口: 网络错误/5xx 上报(4xx 业务错误不上报防噪音)
@@ -266,7 +347,8 @@ const apiGet = async <T = unknown>(
   url: string,
   config: ApiGetConfig = {},
 ): Promise<ApiResult<T>> => {
-  const key = cacheKey('get', url, config.params)
+  // 2026-11-06 P0-7: 与请求拦截器同源 —— 都用 _withChannel 补 channel 后再算键
+  const key = cacheKey('get', url, _withChannel(config.params))
 
   // 1) 缓存命中
   const hit = cache.get(key)
@@ -315,7 +397,7 @@ const apiGet = async <T = unknown>(
       __dead: false,
     },
   )
-  inflight.set(key, promise)
+  _setInflight(key, promise as unknown as InflightEntry<ApiResult<unknown>>)
   return promise as unknown as Promise<ApiResult<T>>
 }
 
@@ -337,6 +419,10 @@ export function abortScope(scope: string) {
 // 非 GET 请求后清空缓存（数据变了，缓存失效）
 function invalidateCache() {
   cache.clear()
+  // 2026-11-06 P0-7: 代次 +1 → 写之前发出的 GET 回来后不再写缓存(否则旧值回灌 30s);
+  //   同时清在途表, 避免后续请求复用"写之前的那个 promise"(它带的是旧数据)。
+  _writeEpoch += 1
+  inflight.clear()
 }
 
 // ── S3-2/S3-3 收口: 裸 fetch 统一通道 ──
@@ -375,8 +461,9 @@ export async function apiJson<T = unknown>(
     else opts.signal.addEventListener('abort', onAbort)
   }
   const hasBody = opts.data !== undefined
-  if (opts.background) markBackground(true)
-  _reqStart()
+  // 2026-11-06 P1-32: 按请求传参, 不再用全局 markBackground —— 并发时全局标记会串味
+  const _bg = Boolean(opts.background)
+  _reqStart(_bg)
   try {
     const resp = await fetch(target, {
       method,
@@ -387,6 +474,8 @@ export async function apiJson<T = unknown>(
       },
       signal: ctrl.signal,
     })
+    // 2026-11-06 P0-7: 写操作也要失效缓存 —— 本通道不吃缓存, 但它改的数据被 axios 缓存着
+    if (method !== 'GET') invalidateCache()
     return (opts.raw ? resp : await resp.json()) as T
   } catch (e: unknown) {
     try {
@@ -395,7 +484,7 @@ export async function apiJson<T = unknown>(
     } catch {}
     throw e
   } finally {
-    _reqEnd()
+    _reqEnd(_bg)
     clearTimeout(_tid)
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   }

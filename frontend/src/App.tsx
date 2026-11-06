@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
 import { clearCache, clearInflight, apiJson, activeRequests, onActiveRequests } from './api/client'
 import { adoptRunning, onWatchChange, watchCount } from './api/taskWatch'
+import { registerPoll, POLL_EVERY } from './api/poller'
 import { reportError } from './api/logger'
 import { ToastProvider, ToastAutoClear } from './components/Toast'
 import { useFreshness } from './components/Freshness'
@@ -396,6 +397,10 @@ export default function App() {
         startedAt: Date.now(),
       })
       const poll = setInterval(async () => {
+        // 2026-11-06 S1: 隐藏时直接不发请求。原来这行在 await **之后** —— 等于每次都先把
+        //   请求打出去、拿到响应再丢弃, 挂后台 8h 白打 5760 次/任务。任务推进由 taskWatch
+        //   负责(它不受可见性影响), 这里只是看进度, 回来后 5s 内补上完全够。
+        if (document.visibilityState === 'hidden') return
         try {
           // 2026-11-05 竞态根治: 这里只**看**进度, 一律走 probe=1 纯读。
           //   本端点原是"查一次 = 抢锁 + 推进一步 + 写库"的副作用端点, 而 App 层 3 个老轮询
@@ -405,7 +410,6 @@ export default function App() {
             'GET',
             API + '/api/seed/fill/status?task_id=' + seedTask + '&probe=1',
           )
-          if (document.visibilityState === 'hidden') return // 挂后台暂停轮询, 回前台立即补查
           if (d.data?.status === 'done') {
             clearInterval(poll)
             try {
@@ -453,6 +457,10 @@ export default function App() {
         startedAt: Date.now(),
       })
       const poll = setInterval(async () => {
+        // 2026-11-06 S1: 隐藏时直接不发请求。原来这行在 await **之后** —— 等于每次都先把
+        //   请求打出去、拿到响应再丢弃, 挂后台 8h 白打 5760 次/任务。任务推进由 taskWatch
+        //   负责(它不受可见性影响), 这里只是看进度, 回来后 5s 内补上完全够。
+        if (document.visibilityState === 'hidden') return
         try {
           // 2026-11-05 竞态根治: 本处原为「GET /cleansing/status + 并行 POST /cleansing/driver」
           //   两个请求, 而两者**都会推进任务**; taskWatch 看守再加一份 → 同一任务 3 个驱动源。
@@ -464,7 +472,6 @@ export default function App() {
               cleansingTask.task_id +
               '&page_size=1000&probe=1',
           )
-          if (document.visibilityState === 'hidden') return
           if (d.status === 'done') {
             clearInterval(poll)
             try {
@@ -513,13 +520,16 @@ export default function App() {
         startedAt: Date.now(),
       })
       const poll = setInterval(async () => {
+        // 2026-11-06 S1: 隐藏时直接不发请求。原来这行在 await **之后** —— 等于每次都先把
+        //   请求打出去、拿到响应再丢弃, 挂后台 8h 白打 5760 次/任务。任务推进由 taskWatch
+        //   负责(它不受可见性影响), 这里只是看进度, 回来后 5s 内补上完全够。
+        if (document.visibilityState === 'hidden') return
         try {
           // 2026-11-05: 只读进度(probe=1), 推进交给 taskWatch —— 见上方 seed 轮询的说明
           const d = await apiJson<JobStatusResp>(
             'GET',
             API + '/api/seed/fill/status?task_id=' + resetTask + '&probe=1',
           )
-          if (document.visibilityState === 'hidden') return
           if (d.data?.status === 'done' || d.data?.status === 'error') {
             clearInterval(poll)
             try {
@@ -554,6 +564,10 @@ export default function App() {
         startedAt: Date.now(),
       })
       const poll = setInterval(async () => {
+        // 2026-11-06 S1: 隐藏时直接不发请求。原来这行在 await **之后** —— 等于每次都先把
+        //   请求打出去、拿到响应再丢弃, 挂后台 8h 白打 5760 次/任务。任务推进由 taskWatch
+        //   负责(它不受可见性影响), 这里只是看进度, 回来后 5s 内补上完全够。
+        if (document.visibilityState === 'hidden') return
         try {
           // 2026-11-06 P0-1: 原为 /seed/fill/status?probe=1 —— 那是 seed 的结构
           //   ({data:{step,total_step}}), 拿它读导出任务只能读到 status, 进度字段全是 0,
@@ -562,7 +576,6 @@ export default function App() {
             'GET',
             API + '/api/exports/status?task_id=' + exportTask.task_id + '&probe=1',
           )
-          if (document.visibilityState === 'hidden') return
           const _st = d?.data?.status || d?.status
           if (_st === 'done') {
             clearInterval(poll)
@@ -724,21 +737,26 @@ export default function App() {
     }
   }, [])
   useEffect(() => {
-    checkApi()
-    const _tid = setInterval(checkApi, 30000)
-    return () => clearInterval(_tid)
+    // 2026-11-06 P1-22: 交给统一调度器 —— 原来这里裸 setInterval 30s, 不看可见性,
+    //   标签页挂后台 8 小时照样每 30s 打一次探针。调度器接管后: 隐藏时升到 5min,
+    //   回前台立刻补一次, 在途未结束不叠加。
+    return registerPoll('app:ping', POLL_EVERY.health, checkApi)
   }, [checkApi])
 
-  // 数据版本轮询：后端_ cache_version 变化时自动刷新
+  // 数据版本轮询：后端 _cache_version 变化时自动刷新
   const [, setDbVersion] = useState(0)
   const versionRef = useRef(0)
   useEffect(() => {
-    const poll = setInterval(async () => {
-      try {
+    // 2026-11-06 P1-22: 同上, 走统一调度器。
+    //   注意这里保留"只**判断**要不要刷"的语义: 版本没变就不动, 变了才 clearCache + loadAll。
+    //   (根治"version 一动就全量 loadAll"需要后端按域返回, 属于另一项, 不在本包。)
+    return registerPoll(
+      'app:version',
+      POLL_EVERY.health,
+      async () => {
         const d = await apiJson<{ version?: number }>('GET', API + '/api/health')
         const v = d.version || 0
         if (versionRef.current !== 0 && versionRef.current !== v) {
-          // 版本变化，清除前端缓存
           clearCache()
           useAppStore
             .getState()
@@ -747,9 +765,9 @@ export default function App() {
         }
         versionRef.current = v
         setDbVersion(v)
-      } catch {}
-    }, 30000)
-    return () => clearInterval(poll)
+      },
+      { immediate: false },
+    )
   }, [])
 
   const [showMenu, setShowMenu] = useState(false)

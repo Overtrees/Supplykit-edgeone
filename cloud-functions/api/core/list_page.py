@@ -31,6 +31,7 @@
 顺序铁律: **先筛后切**。先按 need_only / search 收窄, 再切片; 反过来会导致
 "第 2 页只有 3 条"这类页码与总数对不上的错位。
 """
+import json
 
 
 def _num(row, key):
@@ -110,31 +111,134 @@ def slice_key(base, need_only=0, search="", page=0, page_size=0):
                                int(page or 0), int(page_size or 0))
 
 
+# ── v3: 全量分块持久化(2026-11-06 S2-2 审计 P0-17) ──────────────────────
+#
+# v2(每页一条)解决了 8025, 但留了一个结构性浪费: **换 page_size 或改 search 就全部 miss**。
+# 而 builder 一次要 4~7s —— 用户拖一下"每页 100 条"、或者搜个关键字, 就要再等 7 秒。
+# 分页键的爆炸面 = 页数 × page_size 档位 × 搜索词个数, 缓存条数随使用方式膨胀,
+# 而它们背后是**同一份全量结果**。
+#
+# v3 把"全量结果"按字节切块持久化(meta + chunk0..N), 页级缓存变成它上面的一层薄壳:
+#
+#     请求 ──> 页级缓存(40KB, 命中即回)          ← 常态路径, 零反序列化成本
+#                └─miss─> 全量分块(6MB, 4 块)     ← 只算一次, 任意页/搜索都能命中
+#                            └─miss─> builder     ← 4~7s, 一天只有几次
+#
+# 为什么"全量一条缓存"不行(审计报告的建议): 实测 purchase 全量 6,222,602 B,
+#   TiDB 单条上限 6,291,456 B, **余量只有 69KB**; 补货 6,835,645 B 已经超了。
+#   一条缓存 = 立刻 8025 = 回到原点(这正是 v1 踩过的坑)。分块是唯一同时满足
+#   "只算一次"和"不撞上限"的做法。
+_CHUNK_VER = "v3"
+
+
+def _chunk_meta_key(base):
+    return "%s|%s|meta" % (base, _CHUNK_VER)
+
+
+def _chunk_key(base, idx):
+    return "%s|%s|c%d" % (base, _CHUNK_VER, idx)
+
+
+def _row_bytes(row):
+    """单行的字节估算。用 json 而不是 len(str(row)): 前者与实际落库形态同构,
+    后者会把 dict 的 repr 当成传输体积(引号/空格/True 大小写都不同)。"""
+    try:
+        return len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
+    except Exception:
+        return 256   # 估不出来按一个保守值算, 只影响切块位置, 不影响正确性
+
+
+def split_chunks(rows, chunk_bytes=1024 * 1024):
+    """按**序列化后字节**切块(不是按行数)。
+
+    按行数切是错的: 采购建议每行 643 B, 补货有 note_segs 数组的行能到 4KB ——
+    同样 1600 行, 前者 1MB、后者 6MB。按字节切才能保证"单条永不接近上限"。
+    """
+    chunks, cur, size = [], [], 0
+    for r in rows:
+        n = _row_bytes(r)
+        if cur and size + n > chunk_bytes:
+            chunks.append(cur)
+            cur, size = [], 0
+        cur.append(r)
+        size += n
+    if cur or not chunks:
+        chunks.append(cur)
+    return chunks
+
+
+def full_get(base, full_builder, ttl, chunk_bytes=1024 * 1024):
+    """取全量行(分块缓存; miss 才算)。返回 list。
+
+    一致性: meta 在**所有 chunk 写完之后**才写 —— 反过来会出现"meta 说有 4 块,
+    但第 3 块没写进去", 之后每次请求都拼不全 → 只能回退重算, 且永远修不好。
+    这里宁可 meta 晚一步, 也不让它指向不存在的块。
+    """
+    from routes.analysis_cache import cache_get, cache_peek, cache_peek_many
+    mk = _chunk_meta_key(base)
+    hit, meta = cache_peek(mk, ttl)
+    if hit and isinstance(meta, dict):
+        n_chunks = int(meta.get("chunks") or 0)
+        n_rows = int(meta.get("rows") or -1)
+        if n_chunks > 0:
+            # 一次 IN 查询把全部块取回 —— 逐块读实测 7 块要 4.5s(跨区域往返),
+            #   批量后只有 1 次往返, 总字节不变。
+            got = cache_peek_many([_chunk_key(base, i) for i in range(n_chunks)], ttl)
+            if len(got) == n_chunks:
+                rows = []
+                for i in range(n_chunks):
+                    part = got.get(_chunk_key(base, i))
+                    if not isinstance(part, list):
+                        rows = None
+                        break
+                    rows.extend(part)
+                # 行数必须与 meta 对齐: 对不上说明块内容被换过(版本/口径变更),
+                #   宁可重算也不返回半份数据 —— 半份会让 total 变小、分页看起来"少了"。
+                if rows is not None and len(rows) == n_rows:
+                    return rows
+    rows = full_builder()
+    if not isinstance(rows, list):
+        rows = []
+    chunks = split_chunks(rows, chunk_bytes)
+    for i, part in enumerate(chunks):
+        # 每块留 64KB 余量: cache_get 的 max_bytes 比实际序列化体积略宽,
+        # 免得因为"估算少了 3 个字节"整块被跳过(跳过就等于这份永远存不进去)
+        cache_get(_chunk_key(base, i), ttl, lambda p=part: p, max_bytes=chunk_bytes + 65536)
+    cache_get(mk, ttl, lambda: {"chunks": len(chunks), "rows": len(rows)},
+              max_bytes=8192)
+    return rows
+
+
 def shape_cached(base, full_builder, cache_get, ttl, need_only=0, search="",
                  page=0, page_size=0, max_bytes=1024 * 1024,
                  need_keys=None, out_key="suggestions"):
-    """**分片缓存**版: 每页各自一条缓存(单条远小于 6MB, 8025 不再发生)
+    """两级缓存版: 页级(快) → 全量分块(只算一次) → builder(4~7s)
 
     :param base        : 基础缓存键(渠道/模式/天数)
     :param full_builder: 产出**全量**行的 builder(算法与旧版一致, 不动)
     :param cache_get   : `routes.analysis_cache.cache_get`
-    :param max_bytes   : 单条 entry 上限。一页 50 条约 40KB, 给 1MB 足够;
+    :param max_bytes   : 页级单条上限。一页 50 条约 40KB, 给 1MB 足够;
                          超了宁可这条不落缓存, 也不去撞 TiDB 的 6MB。
     :param need_keys   : `need_only` 判定字段(采购 `actual_purchase` / 补货两个字段)
     :param out_key     : 列表字段名 —— 采购用 `suggestions`, 补货用 `items`。
                          不改调用方契约(前端各页各读各的键), 只换外壳名。
 
-    设计取舍: builder 仍是"全量一次算完再切"(不是 SQL 分页)。
-    理由: 这两个算子里都有跨 SKU 的聚合/排序/关联, 改成 SQL 分页要重写整条
-    计算链, 口径极易漂移; 而现在这条链**已经在 3~6s 内算完**, 真正的浪费是"每次重算"
-    —— 分片缓存正好消掉它。等后续有需要再谈下推。
+    顺序铁律: **先筛后切**。先按 need_only / search 收窄, 再切片; 反过来会导致
+    "第 2 页只有 3 条"这类页码与总数对不上的错位。
     """
-    key = slice_key(base, need_only=need_only, search=search,
-                    page=page, page_size=page_size)
+    from routes.analysis_cache import cache_peek
 
-    def _build():
-        items, total = shape(full_builder(), need_only=need_only, search=search,
-                             page=page, page_size=page_size, need_keys=need_keys)
-        return {out_key: items, "total": total, "page": page, "page_size": page_size}
+    sk = slice_key(base, need_only=need_only, search=search,
+                   page=page, page_size=page_size)
+    # ① 页级命中(常态路径): 只读一条 40KB, 不做任何反序列化再拼装
+    hit, val = cache_peek(sk, ttl)
+    if hit and isinstance(val, dict):
+        return val
 
-    return cache_get(key, ttl, _build, max_bytes=max_bytes)
+    # ② 页级 miss → 全量分块(命中则零计算) → 在内存里筛/切
+    rows = full_get(base, full_builder, ttl)
+    items, total = shape(rows, need_only=need_only, search=search,
+                         page=page, page_size=page_size, need_keys=need_keys)
+    out = {out_key: items, "total": total, "page": page, "page_size": page_size}
+    # ③ 回写页级(下次同参数直接命中; 超 max_bytes 就不落, 本次结果照常返回)
+    return cache_get(sk, ttl, lambda: out, max_bytes=max_bytes)

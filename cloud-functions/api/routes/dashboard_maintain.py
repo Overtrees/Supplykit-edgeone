@@ -200,7 +200,8 @@ def _track_data(channel, _db2):
     ON DUPLICATE 幂等覆盖; 修复后一致即停)——兜底"非尾部缺口"(软删残留/历史遗留/手动改库:
     尾部 MAX 检测发现不了中间缺口, 曾 10-16 agg cnt 残留 2809 vs orders 1100)"""
     try:
-        _r = one("SELECT (SELECT COALESCE(MAX(DATE(ordered_at)),'') FROM orders "
+        # 2026-11-06 审计 P0-2: 同上 —— MAX(DATE()) 全表扫, 改 MAX() 走索引末项
+        _r = one("SELECT (SELECT COALESCE(MAX(ordered_at),'') FROM orders "
                  "WHERE (deleted_at IS NULL OR deleted_at='')) AS om, "
                  "(SELECT MAX(`date`) FROM daily_sales_snapshot WHERE channel=%s) AS sm, "
                  "(SELECT COALESCE(MAX(`date`),'') FROM orders_day_agg) AS am", [channel]) or {}

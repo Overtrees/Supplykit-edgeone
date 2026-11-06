@@ -146,6 +146,15 @@ async def update_config(request: Request):
         _sre()
     except Exception as _e:
         try_err('suppliers', '配置变更重算告警降级', _e)
+    # 2026-11-06 S2-1: 采购告警也要重判 —— 提前期/MOQ/安全天数/目标周转都是采购建议的
+    #   直接输入, 参数一变 purchase_qty 就变, 而 purchase_need 的判定吃的正是它。
+    #   原来这条路径只重算规则告警: 改完参数, 低库存告警跟着变了, 采购需求却要等
+    #   "下次有人打开采购页"才更新(那正是 P0-10 描述的情形)。
+    try:
+        from core.alert_jobs import kick_purchase_alerts as _kick_pa
+        _kick_pa(channel, mode)
+    except Exception as _e:
+        try_err('suppliers', '配置变更采购告警同步降级', _e)
     return ok({"updated": n})
 
 

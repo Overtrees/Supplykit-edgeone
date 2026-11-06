@@ -14,9 +14,12 @@ from biz.sales import pick_ds   # 日销取值单一真源(2026-11-01 收敛)
 from core.alert_lifecycle import close as _close_alerts, close_by_ids as _close_ids
 
 
-def close_orphan_for_skus(skus, channel="jd"):
+def close_orphan_for_skus(skus, channel):
     """删单联动通用化(2026-10-15): 该 SKU active 告警 → 其规则 event → 重评估(基于现有未删订单)——命中保留/未命中关;
-    + low_stock 无行特殊(无未删订单且无在档——关); 替代硬编码 oversell/low_stock(自定义 alert_type 覆盖)"""
+    + low_stock 无行特殊(无未删订单且无在档——关); 替代硬编码 oversell/low_stock(自定义 alert_type 覆盖)
+
+    2026-11-06 审计 P1-20: channel 去默认值(原 "jd")——默认值让 other 渠道的删单
+    跑去重评估 jd 的告警, 是最典型的"静默错配", 必须强制调用方显式给渠道。"""
     if not skus:
         return
     from db import query as _q, execute as _e

@@ -3,6 +3,7 @@ import RiskCard from '../components/dash/RiskCard'
 import { GmvCard, AlertSummaryCard, HealthCard } from './dashboard/StatCards'
 import { MidCharts, ChartRow3 } from './dashboard/ChartRows'
 import { api, freshStamp } from '../api/client'
+import { registerPoll, POLL_EVERY } from '../api/poller'
 import type { ApiObject, InventoryRow, ListResponse, StockRiskShim } from '../api/types'
 import { useAppStore } from '../store/useAppStore'
 import ErrorRetry from '../components/ErrorRetry'
@@ -517,10 +518,15 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   }, [])
   const silentBusy = useRef(false)
   useEffect(() => {
-    const timer = setInterval(async () => {
+    // 2026-11-06 S1: 交给统一调度器(可见才跑 / 隐藏降 5min / 在途去重 / 回前台补一次)。
+    //   原来是裸 setInterval 30s 且**不看可见性** —— 标签页挂后台时仍每 30s 拉
+    //   summary+aux+stock-risk 三个重接口, 而这正是 P1-22 说的"读风暴"。
+    //   silentBusy 保留为第二道闸: 调度器已按 key 去重, 但这里一轮里有 3 个请求并发,
+    //   自己守一层更直观。
+    const stop = registerPoll('dash:silent', POLL_EVERY.dash, async () => {
       if (silentBusy.current) return
       silentBusy.current = true
-      useAppStore.getState().setSyncing(1) // 30s 静默刷新接入徽标提示
+      useAppStore.getState().setSyncing(1) // 静默刷新接入徽标提示
       useAppStore.getState().setSyncOld(true) // 静默刷新必然有旧值→同步中
       try {
         const _t = 't=' + freshStamp()
@@ -562,8 +568,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         silentBusy.current = false
         useAppStore.getState().setSyncing(-1) // 静默刷新完成/失败均消失提示
       }
-    }, 30000)
-    return () => clearInterval(timer)
+    })
+    return stop
     // 2026-11-06: 加 _replMode(同首屏 load) —— 否则切模式后 30s 静默刷新仍按旧 mode 请求
   }, [channel, _replMode])
   // 2026-11-03 D5: 规则重算中 → 每 4s 重拉(最多 6 次), 评估完成后告警自动出现。

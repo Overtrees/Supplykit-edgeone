@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { apiJson } from '../api/client'
+import { registerPoll } from '../api/poller'
 import { adoptRunning } from '../api/taskWatch'
 import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
@@ -177,21 +178,11 @@ export default function TaskPage() {
   //   并行驱动同一个任务 —— 两边各发一次 /seed/fill/status, 服务端租约只让其中一个推进,
   //   另一个白跑; 而离开任务页后本页卸载, 只剩 App 看守, 用户却以为是"任务停了"。
   //   现在页面只**展示**(3s 刷列表), 推进一律交给 App 层看守(taskWatch), 全仓一处驱动。
+  // 2026-11-06 S1: 交给统一调度器。这一处的收益最直接 —— 任务列表挂后台时
+  //   原来每 3s 打一次, 一天挂 8 小时就是 9600 次; 现在隐藏时降到 5min。
+  //   immediate:false 因为下面 channel 那个 effect 已经手动 loadTasks() 过一次。
   useEffect(() => {
-    const poll = setInterval(loadTasks, 3000)
-    return () => clearInterval(poll)
-  }, [channel])
-  // 页面从后台回到前台时立即刷新（不等下一次轮询）
-  useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === 'visible') loadTasks()
-    }
-    document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('focus', onVis)
-    return () => {
-      document.removeEventListener('visibilitychange', onVis)
-      window.removeEventListener('focus', onVis)
-    }
+    return registerPoll('task:list', 3_000, loadTasks, { immediate: false })
   }, [channel])
 
   const download = async (taskId, filename) => {

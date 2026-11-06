@@ -723,11 +723,6 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
         else:
             where += " AND COALESCE(barcode,'')=%s"
             params += [str(barcode)]
-        if skus:
-            _ph = ",".join(["%s"] * min(len(list(skus)), 500))
-            if _ph:
-                where += " AND sku IN (" + _ph + ")"
-                params += list(skus)[:500]
         if wh is not None:
             if wh in (WH_C, WH_BC, WH_ALL) or (isinstance(wh, str) and wh):
                 where += " AND warehouse=%s"
@@ -735,23 +730,34 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
             else:
                 where += " AND warehouse IN (%s,%s,%s)"  # 非法 wh → 查全部聚合行
                 params += [WH_C, WH_BC, WH_ALL]
-        rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, ds7, ds14, ds28, sigma, "
-                  "ds7_cut, ds14_cut, ds28_cut, nnz7, nnz14, nnz28, last_sale "
-                  "FROM sku_sales_stats WHERE %s" % where, params)
+        # 2026-11-06 审计 P0-12: 原 `min(len,500)` + `[:500]` 是**静默截断**——传 2 万个 SKU
+        #   只查前 500 个, 其余行的日销恒 0(断货/健康/补货据此判"无销量", 不报错)。
+        #   SQL 参数没有 64KB 限制(那限制的是 sync_tasks.params 这类 TEXT 列), 但一条 9 万
+        #   占位符的语句文本 ≈540KB, TiDB 解析成本高于多跑几十次往返 → 按 2000/批分会查再合并。
+        _skus = [s for s in (skus or []) if s]
+        _chunks = [_skus[i:i + 2000] for i in range(0, len(_skus), 2000)] if _skus else [None]
         out = {}
-        for r in rows:
-            _w = str(r.get("warehouse") or "")
-            _b = str(r.get("barcode") or "")
-            # 2026-10-29 按 69码: key 加码(原 sku|wh —— 同 SKU 多码同仓会互相覆盖);
-            #   返回 dict 也带 barcode, 消费方无需再查库
-            wk = "%s|%s|%s" % (r.get("sku") or "", _b, _w)
-            out[wk] = {"sku": r.get("sku"), "barcode": _b, "warehouse": _w,
-                       "ds7": float(r.get("ds7") or 0), "ds14": float(r.get("ds14") or 0),
-                       "ds28": float(r.get("ds28") or 0), "sigma": float(r.get("sigma") or 0),
-                       "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),
-                       "ds28_cut": float(r.get("ds28_cut") or 0),
-                       "nnz7": int(r.get("nnz7") or 0), "nnz14": int(r.get("nnz14") or 0),
-                       "nnz28": int(r.get("nnz28") or 0), "last_sale": str(r.get("last_sale") or "")[:10]}
+        for _ck in _chunks:
+            _where, _params = where, list(params)
+            if _ck:
+                _where += " AND sku IN (" + ",".join(["%s"] * len(_ck)) + ")"
+                _params += _ck
+            rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, ds7, ds14, ds28, sigma, "
+                      "ds7_cut, ds14_cut, ds28_cut, nnz7, nnz14, nnz28, last_sale "
+                      "FROM sku_sales_stats WHERE %s" % _where, _params)
+            for r in rows:
+                _w = str(r.get("warehouse") or "")
+                _b = str(r.get("barcode") or "")
+                # 2026-10-29 按 69码: key 加码(原 sku|wh —— 同 SKU 多码同仓会互相覆盖);
+                #   返回 dict 也带 barcode, 消费方无需再查库
+                wk = "%s|%s|%s" % (r.get("sku") or "", _b, _w)
+                out[wk] = {"sku": r.get("sku"), "barcode": _b, "warehouse": _w,
+                           "ds7": float(r.get("ds7") or 0), "ds14": float(r.get("ds14") or 0),
+                           "ds28": float(r.get("ds28") or 0), "sigma": float(r.get("sigma") or 0),
+                           "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),
+                           "ds28_cut": float(r.get("ds28_cut") or 0),
+                           "nnz7": int(r.get("nnz7") or 0), "nnz14": int(r.get("nnz14") or 0),
+                           "nnz28": int(r.get("nnz28") or 0), "last_sale": str(r.get("last_sale") or "")[:10]}
         return out
     except Exception as _e:
         from routes.common import try_err

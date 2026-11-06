@@ -13,6 +13,22 @@ from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8
 from core.note_segs import zh_note  # 2026-11-04 结构化备注: segs 单一真源, note=zh_note(segs)
 from core.clock import now_cn
 
+# 采购需求告警的单语句 upsert(2026-11-06 S2-4): 依赖 alerts.uq_alerts_dim。
+#   warehouse / barcode 显式置空 —— 采购是 SKU 级语义(不按仓), 两个并发 builder
+#   落进同一维度键, 不再各插一条。
+# ⚠ 顺序不能改: reopen_count / created_at 必须在 `status='active'` 之前赋值,
+#   因为 ON DUPLICATE KEY UPDATE 从左到右执行, 后面读到的已是更新后的 status。
+_PURCHASE_ALERT_UPSERT = (
+    "INSERT INTO alerts(alert_type, title, description, severity, source, related_sku, "
+    "status, channel, warehouse, barcode) "
+    "VALUES('purchase_need',%s,%s,'warning','purchase_engine',%s,'active',%s,'','') "
+    "ON DUPLICATE KEY UPDATE "
+    "reopen_count=COALESCE(reopen_count,0)+IF(status<>'active',1,0), "
+    "created_at=IF(status<>'active', NOW(), created_at), "
+    "title=VALUES(title), description=VALUES(description), "
+    "closed_reason='', closed_at=NULL, status='active'"
+)
+
 
 # 内置默认滞销品类线(2026-10-25 抽取公共共享——get_slow_cats 接口与 disposal 计算同源, 防两处漂移)
 _DEFAULT_SLOW_CATS = [
@@ -29,8 +45,17 @@ _DEFAULT_SLOW_CATS = [
 ]
 
 
-def _build_purchase(channel, mode, days=28):
-    """采购建议计算体(共享缓存 builder, 返回全量列表; 缓存命中时跳过 purchase_need 告警评估——与原语义一致)"""
+def _build_purchase(channel, mode, days=28, with_alerts=False):
+    """采购建议计算体(共享缓存 builder, 返回全量列表)
+
+    2026-11-06 S2-1 审计 P0-10: **读接口零副作用**。
+      原来这个 builder 里写 purchase_need 告警 —— 后果是"有没有人打开采购页"决定了
+      告警是否更新: 没人看 → 告警停在最后一次被浏览的时刻, 而看板上采购卡却显示"正常"。
+      更糟的是上一轮把缓存粒度改成一页一条之后, **每翻一页就重写一遍告警**
+      (线上实证: 同 SKU 13 条 purchase_need, 正好等于一次分页重算的次数)。
+      现在 builder 只算不写; 写入由 core.alert_jobs 的写入侧入口驱动。
+    :param with_alerts: 仅供 alert_jobs 在"算完立刻同步"时使用(同一进程内复用结果, 不重算)
+    """
     from biz.sales import load_daily_sales, calc_sales_multi
 
     raw = {}
@@ -281,16 +306,39 @@ def _build_purchase(channel, mode, days=28):
                     "old": _old, "new": _r["purchase_qty"]})
                 _r["note"] = zh_note(_r["note_segs"])
 
-    # 采购告警 purchase_need(批量: 需采购且可撑<14天 → active; 无需 → closed)
+    # 采购告警 purchase_need —— 2026-11-06 S2-1: 只在显式要求时写(读接口零副作用)。
+    #   写入逻辑本身已抽到 sync_purchase_alerts(), 这里只是"算完顺手同步"的快捷入口,
+    #   供 core.alert_jobs 在同一进程内复用本次结果(不重算一遍)。
+    if with_alerts:
+        sync_purchase_alerts(channel, result)
+
+    result.sort(key=lambda x: x["days_to_empty"])
+    return result
+
+
+def sync_purchase_alerts(channel, result):
+    """把一次采购建议结果同步成 purchase_need 告警(写入侧专用, **不得在读接口里调用**)
+
+    判定: 需采购且可撑 <14 天 → active; 不再需要采购 → 关闭。
+    返回 {"opened": n, "closed": n} 供 job 日志。
+
+    2026-11-06 S2-4: 写入改单语句 upsert(依赖 alerts.uq_alerts_dim)。
+      · 原来"先 SELECT 已有 active SKU 集合 → 不在集合里才裸 INSERT"是 check-then-act,
+        并发两个 builder 各读到"不存在"就各插一条(线上实证同 SKU 13 条);
+      · 建唯一键后裸 INSERT 会直接 1062, 被外层 except 吞掉 → 告警整批不更新。
+      · existing 只用于判断"要不要关闭"(那是业务条件, 库约束管不了), 写入不再依赖它。
+    """
     try:
-        existing = set()
+        # 采购是 SKU 级(不按仓): warehouse / barcode 置空 → 落在同一维度键上,
+        #   两个并发 writer 不再各插一条。
+        _existing = set()
         for r in query("SELECT related_sku FROM alerts WHERE alert_type='purchase_need' "
                        "AND status='active' AND channel=%s", [channel]):
-            existing.add(r.get("related_sku"))
+            _existing.add(r.get("related_sku"))
         ins, upd = [], []
         for _r in result:
             sku = _r.get("sku")
-            if _r.get("purchase_qty", 0) > 0 and _r.get("days_to_empty", 999) < 14 and sku not in existing:
+            if _r.get("purchase_qty", 0) > 0 and _r.get("days_to_empty", 999) < 14:
                 ins.append(("需采购: %s" % _r.get("product_name"),
                             # 2026-10-30 口径对齐: 低库存/断货/采购统一用"可售(可用+在途)",
                             #   原此处只报 sys_available(纯可用) 与另两处口径不一致
@@ -298,22 +346,19 @@ def _build_purchase(channel, mode, days=28):
                                                             _r.get("actual_purchase") or 0,
                                                             _r.get("days_to_empty") or 0),
                             sku, channel))
-            elif _r.get("purchase_qty", 0) == 0 and sku in existing:
+            elif _r.get("purchase_qty", 0) == 0 and sku in _existing:
                 upd.append(sku)
         for i in range(0, len(ins), 100):
-            executemany("INSERT INTO alerts(alert_type, title, description, severity, source, "
-                        "related_sku, status, channel) VALUES('purchase_need',%s,%s,'warning',"
-                        "'purchase_engine',%s,'active',%s)", ins[i:i + 100])
+            executemany(_PURCHASE_ALERT_UPSERT, ins[i:i + 100])
         if upd:
             ph = ",".join(["%s"] * len(upd))
             # ph 为本函数生成的 %s 占位符串(非用户数据), 直接拼接安全; channel 走参数化
             _close_alerts("alert_type='purchase_need' AND related_sku IN (" + ph + ") AND channel=%s",
                           upd + [channel], "purchase_converted", status="closed")
+        return {"opened": len(ins), "closed": len(upd)}
     except Exception as _e:
-            try_err('purchase', '静默降级', _e)
-
-    result.sort(key=lambda x: x["days_to_empty"])
-    return result
+        try_err('purchase', '采购告警同步降级', _e)
+        return {"opened": 0, "closed": 0}
 
 def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                          search: str = ""):

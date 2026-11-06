@@ -5,7 +5,7 @@ import time as _time
 from fastapi import APIRouter
 
 from db import query, one, execute
-from routes.common import ok, PAID_STATUSES, SALES_STATUSES, FUNNEL_STAGES, traced, try_err, INVENTORY_COLS as _INV_COLS
+from routes.common import ok, PAID_STATUSES, SALES_STATUSES, DEMAND_STATUSES, FUNNEL_STAGES, traced, try_err, INVENTORY_COLS as _INV_COLS
 from routes.common import ch_default_mode  # 2026-11-06 P0-2: mode 缺省按渠道默认(不再硬编码 bbcc)
 from routes.common import track_run  # 2026-11-02 S1-2: 链路运行流水
 
@@ -547,9 +547,22 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
         # 陈旧检测(数据驱动, 非时间驱动): 基准=orders 最新日期——无新数据时 agg 停留不算陈旧
         # (曾用 now-3天: 数据停更 3 天后误判陈旧 → 每次降级直查 60 天, 看板 0.88s→3-13s 体感退化)
         _aggmx = str(_aggc.get("m") or "")[:10]
-        _omx = one("SELECT COALESCE(MAX(DATE(ordered_at)),'') AS m FROM orders "
-                   "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
-        _omd = str(_omx.get("m") or "")[:10]
+        # 2026-11-06 审计 P0-2: 原来无条件查 `MAX(DATE(ordered_at))` —— 全表扫 41 万行/次。
+        #   实测: 仅把 MAX(DATE()) 改成 MAX(ordered_at) **不够**, `(deleted_at IS NULL OR
+        #   deleted_at='')` 这个 OR 过滤把索引挡住了, EXPLAIN 仍是 TableFullScan。
+        #   真正的解法是**短路**: agg 已经覆盖到今天 ⇒ aggmx ≥ today > agg_cut(-3 天),
+        #   陈旧判据必然不成立, 这次 orders 扫描对结果没有任何影响。只有 agg 落后于今天
+        #   (导入延迟/重建失败)才去查, 那时一次全表扫是可接受的低频代价。
+        _today = now.strftime("%Y-%m-%d")
+        if not _agg_ok:
+            # agg 不可用 → 下面两个陈旧判据都要求 _agg_ok, 这次扫描对结果零影响, 直接跳过
+            _omd = ""
+        elif _aggmx and _aggmx >= _today:
+            _omd = _aggmx  # 已覆盖到今天 → 跳过 orders 全表扫(常态零扫描)
+        else:
+            _omx = one("SELECT COALESCE(MAX(ordered_at),'') AS m FROM orders "
+                       "WHERE (deleted_at IS NULL OR deleted_at='')") or {}
+            _omd = str(_omx.get("m") or "")[:10]
         _agg_cut = ""
         if _omd:
             _agg_cut = (datetime.strptime(_omd, "%Y-%m-%d") - timedelta(days=3)).strftime("%Y-%m-%d")
@@ -1259,7 +1272,9 @@ def _hourly_accel(channel, now, ratio=1.3, min_qty=10.0):
 
 def _compute_accel(channel, now, ratio, min_qty):
     from datetime import timedelta
-    paid = tuple(SALES_STATUSES)  # 加速判定用日销口径(排除申请退款)
+    # 2026-11-06 审计 P0-15: 原用 SALES_STATUSES(仅"已完成") → 今天的单当天不可能完成,
+    #   today_q 恒空 → 加速判定恒空、功能等于没开。改需求口径(待发货+已发货+已完成)。
+    paid = tuple(DEMAND_STATUSES)  # 需求口径(排除申请退款/已退货/待确认)
     today = now.strftime("%Y-%m-%d")
     since = (now - timedelta(days=3)).strftime("%Y-%m-%d 00:00:00")
     cur_h = now.hour

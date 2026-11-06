@@ -12,6 +12,27 @@ from routes.common import try_err
 from core.rule_eval import evaluate_stock_skus, close_oversell_for_skus, close_orphan_for_skus  # 拆分 re-export(2026-10-15)
 from core.rule_cond import _resolve_single, _resolve_muldiv, _resolve_value, _resolve_any, _check_single, _check_condition
 
+# 告警写入的唯一语句(2026-11-06 S2-4): 依赖 alerts 的 uq_alerts_dim
+#   (channel, alert_type, related_sku, barcode, warehouse, source)。
+#   语义 = "这个维度当前是否在告警": 已 active 只刷新展示字段; 已关闭则重开并计数。
+#
+# ⚠ 赋值顺序不能改: `reopen_count` / `created_at` 必须排在 `status='active'` **之前**。
+#   MySQL/TiDB 的 ON DUPLICATE KEY UPDATE 是**从左到右**执行赋值的, 后面的表达式
+#   读到的是**已被前面赋过值**的列。若先写 `status='active'`, 后面的
+#   `IF(status<>'active',1,0)` 永远为 0 —— 重开次数再也不增长, 且 created_at 不刷新,
+#   "抖了多久"就彻底查不出来了。
+_ALERT_UPSERT_SQL = (
+    "INSERT INTO alerts(alert_type, title, description, severity, status, source, "
+    "related_sku, related_rule_id, warehouse_type, warehouse, channel, barcode) "
+    "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s,%s) "
+    "ON DUPLICATE KEY UPDATE "
+    "reopen_count=COALESCE(reopen_count,0)+IF(status<>'active',1,0), "
+    "created_at=IF(status<>'active', NOW(), created_at), "
+    "title=VALUES(title), description=VALUES(description), severity=VALUES(severity), "
+    "related_rule_id=VALUES(related_rule_id), warehouse_type=VALUES(warehouse_type), "
+    "closed_reason='', closed_at=NULL, status='active'"
+)
+
 
 
 
@@ -83,26 +104,13 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
     rules = [r for r in rules if str((r.get("_params") or {}).get("alert_enabled")) != "0"]
     if not rules:
         return ([], set()) if return_hits else []
-    # 预载已有 active 告警 key(去重, 含 warehouse 维度——逐仓粒度)
-    existing = set()
-    # 2026-10-29 按 69码: 去重键加 barcode(同 SKU 两个码各自独立, 否则互相覆盖/误关)
-    for r in query("SELECT alert_type, related_sku, channel, warehouse, COALESCE(barcode,'') AS bc "
-                   "FROM alerts WHERE status='active' AND source='rules_engine'"):
-        existing.add((r.get("alert_type"), r.get("related_sku"), r.get("channel"),
-                      r.get("warehouse") or "", str(r.get("bc") or "")))
-    # 2026-11-03 D8: 已关闭但可能"重开"的维度 —— 只取近 7 天(抖动是短周期现象;
-    #   全量取历史关闭行会把表扫大, 而 7 天外的重开按新行插入, 语义上可接受)。
-    #   重开的理由: 同一格库存的同一个问题只该有一条"当前状态", 原实现每次恢复→再触发都
-    #   插一条新行 → 表按抖动次数膨胀, 且"抖了多少次"永远数不出来。
-    closed_map = {}
-    for r in query("SELECT id, alert_type, related_sku, channel, warehouse, COALESCE(barcode,'') AS bc "
-                   "FROM alerts WHERE status<>'active' AND source='rules_engine' "
-                   "AND closed_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY id DESC"):
-        _k = (r.get("alert_type"), r.get("related_sku"), r.get("channel"),
-              r.get("warehouse") or "", str(r.get("bc") or ""))
-        closed_map.setdefault(_k, r.get("id"))  # DESC 保证取最新一条
-    inserts = []
-    reopens = []
+    # 2026-11-06 S2-3/S2-4: 删掉两次全表预载(active 全量 + 近 7 天 inactive)。
+    #   原来这两条 SELECT 在 5 万告警库下每次评估要读 5 万行, 而且**根本挡不住并发**:
+    #   两个 evaluate_many 同时读到"不存在"就各插一条(线上实证 purchase_need 同 SKU 13 条)。
+    #   现在"同一维度只有一行"由 alerts.uq_alerts_dim 的库约束保证, 写入走单语句 upsert。
+    #   batch_seen 只做**本批内**去重(同 SKU 多仓/多码时同维度可能出现两次), 不查库。
+    batch_seen = set()
+    upserts = []
     triggered = []
     hits = set()
     for ctx in contexts:
@@ -156,9 +164,9 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
             at = rule.get("alert_type", "")
             hits.add((at, sku, wh, channel_x, bc_x))  # 条件触发即命中(含已存在告警, 反向关闭勿误关)
             key = (at, sku, channel_x, wh, bc_x)
-            if key in existing:
+            if key in batch_seen:
                 continue
-            existing.add(key)
+            batch_seen.add(key)
             title_tpl = rule.get("alert_title", "") or ""
             desc_tpl = rule.get("alert_desc", "") or ""
             try:
@@ -170,36 +178,19 @@ def evaluate_many(event, contexts, channel=None, rule_cache=None, return_hits=Fa
                 #   改为留痕, 便于发现规则模板与 ctx 键不匹配。
                 title, desc = title_tpl, desc_tpl
                 try_err("rules", "告警模板渲染失败(变量未匹配 ctx): %s" % (at,), _etpl)
-            # 2026-11-03 D8: 已关闭的同一维度 → 重开(不新增行, reopen_count+1)
-            _rid_old = closed_map.pop(key, None)
-            if _rid_old:
-                reopens.append((title, desc, rule.get("severity", "warning"),
-                                int(rule.get("id") or 0),
-                                (ctx.get("inv") or {}).get("warehouse_type", ""), _rid_old))
-            else:
-                inserts.append((at, title, desc, rule.get("severity", "warning"),
-                                sku, int(rule.get("id") or 0),
-                                (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
+            # 2026-11-06 S2-4: 不再区分"重开"与"新插入" —— 一条 upsert 覆盖两种语义,
+            #   由 uq_alerts_dim 决定命中哪一行(不存在则插, 存在则重开/刷新)。
+            upserts.append((at, title, desc, rule.get("severity", "warning"),
+                            sku, int(rule.get("id") or 0),
+                            (ctx.get("inv") or {}).get("warehouse_type", ""), wh, channel_x, bc_x))
             triggered.append(rule.get("name") or str(rule.get("id")))
             hits.add((at, sku, wh, channel_x, bc_x))
-    if reopens:
-        for i in range(0, len(reopens), 100):
+    if upserts:
+        for i in range(0, len(upserts), 100):
             try:
-                executemany("UPDATE alerts SET status='active', closed_reason='', closed_at=NULL, "
-                            "reopen_count=COALESCE(reopen_count,0)+1, created_at=NOW(), "
-                            "title=%s, description=%s, severity=%s, related_rule_id=%s, "
-                            "warehouse_type=%s WHERE id=%s", reopens[i:i + 100])
+                executemany(_ALERT_UPSERT_SQL, upserts[i:i + 100])
             except Exception as _e:
-                try_err("rules", "告警重开失败(%d条)" % len(reopens[i:i + 100]), _e)
-    if inserts:
-        for i in range(0, len(inserts), 100):
-            try:
-                executemany("INSERT INTO alerts(alert_type, title, description, severity, status, "
-                            "source, related_sku, related_rule_id, warehouse_type, warehouse, channel, barcode) "
-                            "VALUES(%s,%s,%s,%s,'active','rules_engine',%s,%s,%s,%s,%s,%s)",
-                            inserts[i:i + 100])
-            except Exception as _e:
-                try_err("rules", "告警批量写入失败(%d条)" % len(inserts[i:i + 100]), _e)
+                try_err("rules", "告警批量写入失败(%d条)" % len(upserts[i:i + 100]), _e)
     if return_hits:
         return list(dict.fromkeys(triggered)), hits
     return list(dict.fromkeys(triggered))

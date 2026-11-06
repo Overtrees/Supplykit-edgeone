@@ -97,8 +97,13 @@ def run(channel="jd"):
     """
     from routes.common import try_err
     # ① 数据追平(orders → 快照 → 日聚合; 含 60 天窗口完整性自愈)
+    #    ⚠️ 导入路径必须是 dashboard_maintain —— 2026-11-06 拆分时 _track_data 从
+    #    dashboard.py 迁到了 dashboard_maintain.py, 这里原本还指向旧模块, 结果是
+    #    ImportError 被 except 吞成一条 quiet_error: 维护线程每 60s 起一次、每次都
+    #    在第一步就失败 → "请求路径已清空"看起来成立, 实际追平从未执行。
+    #    这类错误只有在线上日志里才看得见(单测 import 的是函数名, 不校验来源)。
     try:
-        from routes.dashboard import _track_data
+        from routes.dashboard_maintain import _track_data
         _track_data(channel, None)
     except Exception as _e:
         try_err('dashboard', '后台维护-数据追平降级', _e)

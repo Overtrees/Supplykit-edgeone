@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { api, abortScope } from '../api/client'
+import { registerPoll, POLL_EVERY } from '../api/poller'
 import { mutate } from '../api/mutate'
 import { useFreshness } from '../components/Freshness'
 import { useToast } from '../components/Toast'
@@ -364,10 +365,9 @@ export default function InsightsPage() {
   // 已下单列表(0.5 RU/次实测, 5人×8h×30天 ≈7.2万RU/月 = 额度0.14%/常态耗0.5%, RU 预算内)——多设备变更 ≤30s 收敛
   useEffect(() => {
     if (tab !== 'replen' || globalChannel !== 'jd') return
-    const _tid = setInterval(() => {
-      if (document.visibilityState === 'visible') loadOrdered(true)
-    }, 30000)
-    return () => clearInterval(_tid)
+    // 2026-11-06 S1: 原来自己判断 visible 再跑, 交给统一调度器(隐藏降 5min + 在途去重)。
+    //   已下单列表 0.5 RU/次, 保留 30s 是因为"多设备变更要 ≤30s 收敛"是产品口径。
+    return registerPoll('insights:ordered', POLL_EVERY.dash, () => loadOrdered(true))
   }, [tab, globalChannel])
 
   const [orderedKeys, setOrderedKeys] = useState([])

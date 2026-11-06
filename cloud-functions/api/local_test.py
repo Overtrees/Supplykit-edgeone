@@ -1014,7 +1014,10 @@ try:
     check("低库存: 关闭判定与 hits 同为含码 5 元组",
           'str(a.get("bc") or "")) not in hits' in _re, "rule_eval.py")
     _ru = _rf("core/rules.py")
-    check("告警: 去重/写入均带 barcode", "COALESCE(barcode,'') AS bc" in _ru and "channel, barcode)" in _ru, "rules.py")
+    # 2026-11-06 S2-4: 去重从"预载 active 集合"改为 uq_alerts_dim 唯一键 + 单语句 upsert,
+    #   所以不再要求出现预载 SQL; 改为守"写入语句的维度键里必须有 barcode"。
+    check("告警: 写入的维度键含 barcode(同 SKU 多码各自独立)",
+          "channel, barcode)" in _ru and "_ALERT_UPSERT_SQL" in _ru, "rules.py")
     check("采购: 可售不再重复计 own", "_avl_all = sys_total" in _rf("routes/purchase_calc.py"), "purchase_calc.py")
     # 2026-11-03 S3-1 拆分后 RulesPage 主体外提到 pages/rules/ 子组件,
     # 静态断言改为扫「主页面 + rules/ 目录全部组件」拼接文本(内容断言与拆分位置解耦)
@@ -2307,9 +2310,14 @@ try:
     # 该缺陷是本次迁移的直接动机: 老写法把数据迁移塞进了建表函数
     _sc5 = open('schema_create.py', encoding='utf-8').read()
     _cat5 = _sc5.split("def create_all_tables")[1].split("def ensure_schema")[0]
-    check("S3-5 建表函数里不再内联存量数据 UPDATE(只看 DDL + 约束)",
-          "UPDATE rules SET" not in _cat5 and "UPDATE alerts SET" not in _cat5
-          and "UPDATE products SET" not in _cat5 and "UPDATE channels SET" not in _cat5,
+    # 2026-11-06: 唯一允许的内联编辑是"建唯一键前把 NULL 归一成 ''" —— 多行 NULL 在
+    #   MySQL/TiDB 的唯一键里互不冲突, 不归一就等于键没建成。它属于"约束前置整形",
+    #   不是存量业务数据迁移(后者仍必须走 migrations/steps/)。
+    _alerts_upd5 = [ln for ln in _cat5.splitlines() if "UPDATE alerts SET" in ln]
+    check("S3-5 建表函数里不再内联存量数据 UPDATE(只允许建键前的 NULL 归一)",
+          "UPDATE rules SET" not in _cat5 and "UPDATE products SET" not in _cat5
+          and "UPDATE channels SET" not in _cat5
+          and all("IS NULL" in ln for ln in _alerts_upd5),
           "schema_create.py")
     check("S3-5 ensure_schema 接入迁移框架(失败计入 _errors → 不写版本)",
           "from migrations.runner import run_pending" in _sc5
@@ -2517,8 +2525,12 @@ try:
           "core/alert_lifecycle.py")
     check("D8 关闭统一写 closed_reason/closed_at",
           "closed_reason=%s, closed_at=NOW()" in _al_src, "core/alert_lifecycle.py")
-    check("D8 重开复用同维度行(reopen_count+1, 不新增)",
-          "reopen_count=COALESCE(reopen_count,0)+1" in _al_src and 'return "reopened"' in _al_src,
+    # 2026-11-06 S2-4: 从"先查后改"改为单语句 upsert —— 重开不再靠 UPDATE 某一行,
+    #   而是 ON DUPLICATE KEY UPDATE 命中唯一键后条件自增(只有原本非 active 的才算一次重开)。
+    check("D8 重开复用同维度行(upsert 命中唯一键后条件自增, 不新增)",
+          "ON DUPLICATE KEY UPDATE" in _al_src
+          and "reopen_count=COALESCE(reopen_count,0)+IF(status<>'active',1,0)" in _al_src
+          and 'return "reopened"' in _al_src,
           "core/alert_lifecycle.py")
     import glob as _g24
     _bare = []
@@ -2581,17 +2593,24 @@ try:
           _n24 == 3 and _cap24 and _cap24[0][1][:2] == ["inactive", "rule_unhit"]
           and _cap24[0][1][2:] == ["jd", "low_stock"], str(_cap24[:1])[:160])
 
+    # 2026-11-06 S2-4: open_or_reopen 已改为单语句 upsert(不再先 SELECT 再决定
+    #   INSERT/UPDATE)。这里守三件事: ①语句是 upsert ②维度键含 barcode ③
+    #   `status='active'` 必须排在 reopen_count 之后(否则重开计数永远是 0)。
     _cap24.clear()
-    _db.query = lambda sql, p=None: ([{"id": 7, "status": "inactive", "reopen_count": 1}]
-                                     if "FROM alerts" in str(sql) else [])
+    _db.query = lambda sql, p=None: []
     _al24.query = _db.query
     _r24 = _al24.open_or_reopen(
         {"alert_type": "low_stock", "related_sku": "S1", "warehouse": "W1",
          "channel": "jd", "barcode": "69"},
         {"title": "t", "description": "d", "severity": "warning", "source": "rules_engine"})
-    check("D8 已关闭维度 → 重开(UPDATE ... reopen_count+1), 不插新行",
-          _r24 == "reopened" and _cap24 and "reopen_count=COALESCE(reopen_count,0)+1" in _cap24[0][0]
-          and "INSERT INTO alerts" not in _cap24[0][0], str(_cap24[:1])[:160])
+    _sql24 = _cap24[0][0] if _cap24 else ""
+    _i_reopen = _sql24.find("reopen_count=COALESCE")
+    _i_active = _sql24.find("status='active'")
+    check("D8 已关闭维度 → 同一条 upsert 重开(rowcount 映射 reopened)",
+          _r24 == "reopened" and "ON DUPLICATE KEY UPDATE" in _sql24
+          and "`barcode`" in _sql24, str(_cap24[:1])[:160])
+    check("D8 upsert 赋值顺序: reopen_count 在 status='active' 之前(否则重开计数恒 0)",
+          0 <= _i_reopen < _i_active, "reopen@%d active@%d" % (_i_reopen, _i_active))
 except Exception as _e25:
     check("D8 动态用例无异常", False, str(_e25)[:200])
 
@@ -3271,11 +3290,12 @@ try:
           "function (t)" not in _tp11 and "function (task)" in _tp11, "TaskPage.tsx")
     _cl11 = open(_os.path.join(_FE, "api", "client.ts"), encoding="utf-8").read()
     # ③ 胶囊此前只信 store.syncing(9 处手工配对, 漏一处就卡死)。网络层补"真实在途请求数"硬信号。
+    # 2026-11-06 S1: _reqStart/_reqEnd 带 isBg 参数(后台请求不计入用户可见在途)
     check("同步胶囊: 在途请求数来自网络层(拦截器统一登记, 不靠页面手工配对)",
-          "_reqStart()" in _cl11 and "_reqEnd()" in _cl11 and "onActiveRequests" in _cl11,
+          "_reqStart(" in _cl11 and "_reqEnd(" in _cl11 and "onActiveRequests" in _cl11,
           "api/client.ts")
     check("同步胶囊: 请求成功/失败/取消三条路径都注销(否则计数泄漏=永久转圈)",
-          _cl11.count("_reqEnd()") >= 3, _cl11.count("_reqEnd()"))
+          _cl11.count("_reqEnd(") >= 3, _cl11.count("_reqEnd("))
     _app11 = open(_os.path.join(_FE, "App.tsx"), encoding="utf-8").read()
     check("同步胶囊: 页面声明(syncing) ∪ 真实在途(reqBusy) 取或",
           "badgeBusy" in _app11 and "syncing > 0 || reqBusy > 0" in _app11, "App.tsx")
@@ -3428,10 +3448,13 @@ try:
           "routes/cleanse_write.py")
     # ② 覆盖索引: 没有 (sku, barcode) 上面那条查询就只能全扫
     _sc11 = open("schema_create.py", encoding="utf-8").read()
+    # 版本号只断言"≥13"(= 引入覆盖索引那一版), 不锁死具体数字 ——
+    #   后续每次加 DDL 都要 bump, 锁死会让无关改动把这条打红。
+    _sv11 = __import__("re").search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc11)
     check("schema: orders/batches 补 (sku, barcode) 覆盖索引 + 版本号递增触发补建",
           '("idx_orders_sku_bc", "orders", "(sku, barcode)")' in _sc11
           and '("idx_batches_sku_bc", "batches", "(sku, barcode)")' in _sc11
-          and "SCHEMA_VERSION = 13" in _sc11,
+          and bool(_sv11) and int(_sv11.group(1)) >= 13,
           "schema_create.py")
     # ③ 聚合接口不许再背明细: aux 的 ownHealth 曾经 13,615 条 / 5.9MB
     _db11 = open("routes/dashboard.py", encoding="utf-8").read()
@@ -3631,8 +3654,18 @@ try:
           "runLabel(_runSec)" in _tc12 and "_runSec" in _tc12, "TaskCard.tsx")
     # 看守: 驱动从任务页搬到 App 层 —— 切页面/持锁期间都有推进, 且全局串行
     _tw = open(_os.path.join(_FE2, "api", "taskWatch.ts"), encoding="utf-8").read()
-    check("任务看守: 全局串行(同一时刻只有一个续跑请求, 不并发抢锁)",
-          "_inflight" in _tw and "if (_inflight) return" in _tw, "api/taskWatch.ts")
+    # 2026-11-06 P1-23: 原来是全局布尔 _inflight —— 同时有导入+评估+导出时,
+    #   只有第一个能被推进, 另两个被饿死最长 100s(后端 30 分钟后判超时 error)。
+    #   改为 per-taskId 在途集合 + 并发上限 2 + "最久没被推进的优先"轮转。
+    check("任务看守: per-task 在途(不再全局单飞饿死其它任务) + 并发上限 2",
+          "_driving.has(w.taskId)" in _tw and "_driving.add(w.taskId)" in _tw
+          and "_driving.delete(w.taskId)" in _tw
+          and "MAX_CONCURRENT_DRIVES = 2" in _tw
+          and "_driving.size >= MAX_CONCURRENT_DRIVES" in _tw,
+          "api/taskWatch.ts")
+    # 名额有限时必须轮转, 否则"先注册的"永远抢到名额, 后面的任务一直排不上。
+    check("任务看守: 名额有限时按「最久没被推进」轮转(不饿死后排任务)",
+          "sort((a, b) => a.lastDrive - b.lastDrive)" in _tw, "api/taskWatch.ts")
     check("任务看守: 单请求超时 < 网关硬上限 120s(后端预算 90s + 余量)",
           "DRIVE_TIMEOUT = 100000" in _tw, "api/taskWatch.ts")
     check("任务看守: 无进展时指数退避(租约被持有时不硬撞、不烧 RU)",
@@ -3650,8 +3683,11 @@ try:
     check("同步胶囊: 后台请求(看守/轮询)不计入用户可见在途数",
           "markBackground" in _cl12 and "backgroundRequests" in _cl12
           and "_activeReq - _bgReq" in _cl12, "api/client.ts")
-    check("同步胶囊: apiJson 支持 background 标记(看守单走后台通道)",
-          "background?: boolean" in _cl12 and "if (opts.background) markBackground(true)" in _cl12,
+    # 2026-11-06 S1: 全局 markBackground 会让并发请求串味(A 标了后台, B 也读成 true),
+    #   改为请求级参数(apiJson 的 opts.background / axios 的 config.__bg)。
+    check("同步胶囊: apiJson 支持 background 标记(按请求传参, 不用全局开关)",
+          "background?: boolean" in _cl12 and "const _bg = Boolean(opts.background)" in _cl12
+          and "_reqStart(_bg)" in _cl12 and "_reqEnd(_bg)" in _cl12,
           "api/client.ts")
     check("任务看守: 驱动请求标为 background(自己不点亮忙徽标)",
           "background: true" in _tw, "api/taskWatch.ts")

@@ -86,14 +86,26 @@ def _evaluate_restored_ch(ids, channel):
 
 
 def _skus_of(ids):
+    """按渠道分组的 SKU 集合 —— 返回 {channel: [sku]}
+
+    2026-11-06 审计 P1-20: 原实现只取 sku 丢掉 channel, 下游 close_orphan_for_skus 的
+    channel 参数走默认值 "jd" → 删 other 渠道的订单会把 **jd 渠道同 SKU 的告警**拿去重评估,
+    other 的告警反而没被关(跨渠道误关 + 该关的没关)。批量操作可能跨渠道, 必须分组。
+    """
     if not ids:
-        return []
+        return {}
     _ph = ",".join(["%s"] * len(ids))
     try:
-        rows = query("SELECT DISTINCT sku FROM orders WHERE id IN (%s)" % _ph, ids)
-        return [r.get("sku") for r in rows if r.get("sku")]
+        rows = query("SELECT DISTINCT channel, sku FROM orders WHERE id IN (%s)" % _ph, ids)
+        out = {}
+        for r in rows:
+            _ch = str(r.get("channel") or "")
+            _sk = r.get("sku")
+            if _ch and _sk:
+                out.setdefault(_ch, []).append(_sk)
+        return out
     except Exception:
-        return []
+        return {}
 
 
 def _days_of(ids):
@@ -135,11 +147,15 @@ def _mark_days(pairs, reason="order_edit"):
             try_err('orders', '订单变更后登记重建降级', _e)
 
 
-def _close_orphan(skus):
-    """删单联动(2026-10-15 通用化): SKU 级孤儿关闭——core/rules.close_orphan_for_skus(该 SKU active 告警→规则 event 重评估——自定义 alert_type 覆盖 + low_stock 无行特殊)"""
+def _close_orphan(by_ch):
+    """删单联动(2026-10-15 通用化): SKU 级孤儿关闭——core/rules.close_orphan_for_skus(该 SKU active 告警→规则 event 重评估——自定义 alert_type 覆盖 + low_stock 无行特殊)
+
+    2026-11-06 审计 P1-20: 入参改为 {channel: [sku]}, 逐渠道调用 —— 见 _skus_of 注释。
+    """
     try:
         from core.rules import close_orphan_for_skus
-        close_orphan_for_skus(skus)
+        for _ch, _sks in (by_ch or {}).items():
+            close_orphan_for_skus(_sks, channel=_ch)
     except Exception as _e:
         try_err('orders', '删单联动孤儿关闭降级', _e)
 

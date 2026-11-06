@@ -29,6 +29,7 @@ export interface Channel {
 
 import { create } from 'zustand'
 import { api, clearCache, clearInflight, freshStamp } from '../api/client'
+import { registerPoll } from '../api/poller'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
 import { daysAgoCn, todayCn } from '../utils/date'
@@ -630,27 +631,35 @@ const initAppStore = (set, get) => ({
   },
 
   startPolling() {
+    // 2026-11-06 S1: 交给统一调度器 —— 原来裸 setInterval, 不看可见性, 且与看板/任务页
+    //   各自为政。这里保留"WS 没连上才轮询"的语义(WS 连上时不该重复拉)。
     const old = get().poller
-    if (old) clearInterval(old)
+    if (old) old()
     get()
       .loadAll()
       .catch(() => {})
     // Try WebSocket first, fall back to polling
     get().connectWebSocket()
-    const timer = setInterval(() => {
-      // Only poll if WS is not connected
-      if (get().wsStatus !== 'connected') {
-        get()
-          .loadAll()
-          .catch(() => {})
-      }
-    }, POLL_MS)
-    set({ poller: timer })
+    const stop = registerPoll(
+      'store:refresh',
+      POLL_MS,
+      () => {
+        // Only poll if WS is not connected
+        if (get().wsStatus !== 'connected') {
+          get()
+            .loadAll()
+            .catch(() => {})
+        }
+      },
+      // 上面已经手动 loadAll() 过一次, 首轮不必重复
+      { immediate: false },
+    )
+    set({ poller: stop })
   },
 
   stopAll() {
     const oldPoller = get().poller
-    if (oldPoller) clearInterval(oldPoller)
+    if (oldPoller) oldPoller()
     const oldWs = get().ws
     if (oldWs) {
       try {

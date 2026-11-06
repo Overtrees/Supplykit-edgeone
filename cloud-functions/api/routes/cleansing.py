@@ -758,6 +758,15 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                     _kick_ev(task_id, target, channel)
                 except Exception as _ek:
                     try_err('cleansing', '评估联动事件推进启动降级', _ek)
+            # 2026-11-06 S2-1: 导入写完库存 → 采购需求同步重判。
+            #   与上面的评估 kick 是**两条独立链**: 评估管规则告警(低库存/超卖/效期),
+            #   这里管采购需求(purchase_need)。原来后者挂在"打开采购页"上 ——
+            #   导完不点采购页, 卡片上永远看不到新需求。
+            try:
+                from core.alert_jobs import kick_purchase_alerts as _kick_pa
+                _kick_pa(channel)
+            except Exception as _ekp:
+                try_err('cleansing', '导入后采购告警同步启动降级', _ekp)
             # 2026-11-06 P1-6: 数据新鲜度写入。
             #   原来唯一的写入点在 `cleanse_write._finalize_import()` 里, 而那个函数自
             #   2026-10-16 拆分成 cleansing_status + cleansing_eval_status 之后**再无调用点**
@@ -953,11 +962,15 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         # 累计已超卖(如 1095 件 vs 库存 9)但单笔都小于库存时**永不报警**(系统性漏报)
         # → 补 order.total_qty = 该 SKU 累计未删订单量(与 close_oversell 判定口径一致)
         _cum = {}
-        if _batch:
-            _ph2 = ",".join(["%s"] * len(_batch[:500]))
+        # 2026-11-06 审计 P0-12: 原 `_batch[:500]` —— 本函数 page_size=1000, 每片后 500 个
+        #   SKU 拿不到 total_qty, ctx 退化为"单行最大量", 累计超卖(1095 vs 库存 9)判定失效。
+        #   改为 500/批循环拼接(与上方 inv_map 同一写法), 覆盖率 100%。
+        for _i2 in range(0, len(_batch), 500):
+            _seg = _batch[_i2:_i2 + 500]
+            _ph2 = ",".join(["%s"] * len(_seg))
             for _r in _q5("SELECT sku, SUM(quantity) AS q FROM orders WHERE channel=%s "
                           "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
-                          "GROUP BY sku" % ("%s", _ph2), [channel] + _batch[:500]):
+                          "GROUP BY sku" % ("%s", _ph2), [channel] + _seg):
                 _cum[_r.get("sku")] = int(_r.get("q") or 0)
         # 2026-10-29 SKU 级去重评估(数学等价): 原每行一 ctx, 同 SKU 多行重复评估
         #   等价性: "存在某行 quantity > X" ⟺ max_quantity > X; "< X" ⟺ min_quantity < X
@@ -1073,7 +1086,9 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                 try_err('cleansing', '出入库→库存变更评估降级', _ie)
         if o_ctxs:
             evaluate_many("order.created", o_ctxs, channel, load_rules_for("order.created", channel))
-            evaluated = len(o_ctxs)
+            # 2026-11-06 审计 P1-34: 原 `=` 覆盖 —— 上面出入库两段已累加的 evaluated 被清零,
+            #   进度条只显示订单规则数, "rules_evaluated" 统计口径偏小。改累加。
+            evaluated += len(o_ctxs)
         # 2026-10-29: 重算已前移到评估之前(见上方 adjusted) —— 此处不再重复执行
         #   (原顺序导致 ctx.available_qty 用旧值, 且重算两次虽幂等但浪费)
         # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)

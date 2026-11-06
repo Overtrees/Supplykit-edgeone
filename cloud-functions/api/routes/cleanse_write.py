@@ -813,15 +813,18 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
             _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
                           "inv": {"sku": sku, "warehouse": wh, "warehouse_type": wht,
                                   "product_name": "", "available_qty": _q,
-                                  "safety_qty": 10, "in_transit_qty": 0}})
+                                  "safety_qty": 0, "in_transit_qty": 0}})
         n += 1
         if sku not in touched:
             touched.append(sku)
     if _upd:
         executemany("UPDATE inventory SET available_qty=%s WHERE id=%s", _upd)
     if _ins:
+        # 2026-11-06 审计 P1-33: safety_qty 硬编码 10 → 0。原 10 会让每条新建库存行自带
+        #   "手工安全线 10", 一旦启用"手工 >0 优先于动态线"的口径, 动态线对所有新行永久失效。
+        #   DDL 本就是 DEFAULT 0(见 schema_create.py:53/77), 这里与 DDL 对齐。
         executemany("INSERT INTO inventory(sku, barcode, warehouse, warehouse_type, available_qty, "
-                    "beginning_stock, safety_qty, channel) VALUES(%s,%s,%s,%s,%s,%s,10,%s)", _ins)
+                    "beginning_stock, safety_qty, channel) VALUES(%s,%s,%s,%s,%s,%s,0,%s)", _ins)
     skus = touched
     try:
         from core.rules import evaluate_many, load_rules_for

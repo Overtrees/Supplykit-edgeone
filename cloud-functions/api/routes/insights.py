@@ -137,7 +137,10 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     _wh_bc_ds = {}
     _wh_ds = {}
     try:
-        _sk_l = [k for k in skus if k][:500]
+        # 2026-11-06 审计 P0-12: 去掉 [:500] 静默截断 —— 分页 100 时不触发, 但裸调/导出
+        #   (9 万行)只给前 500 行取日销, 其余行可撑天数恒为空。get_sku_sales_stats 已同步
+        #   支持全长 skus(见 biz/sales.py)。
+        _sk_l = [k for k in skus if k]
         if _sk_l:
             from biz.sales import get_sku_sales_stats as _gss_i, rolling_predict as _rp_i
             _SENT = ("__C__", "__ALL__", "__BC__")
