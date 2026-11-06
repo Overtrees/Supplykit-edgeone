@@ -481,6 +481,11 @@ check("认领=租约(claimed_at+TTL 可重认领), applied=完成标记(成功�
       and "_claimed != len(_ids)" in _j_cl,
       "2026-11-06 线上验证实证: 领取即置位后实例冻结 → 兜底见未领行已空直接 done, "
       "冻结丢失的评估永久无法重放(兜底安全网被静默打穿)")
+_smk = open(os.path.join(_api_dir, "sql_smoke.py"), encoding="utf-8").read()
+check("冒烟含客户端格式化检查(PyMySQL %d 进参数位在发请求前就 TypeError, EXPLAIN 看不见)",
+      "def client_fmt_err(" in _smk and "_fmt = client_fmt_err(" in _smk
+      and "_preload_module_sqls" in _smk,
+      "2026-11-06 连踩两次: 占位符少一个 + %d 进参数位, 两次都'冒烟全绿、线上全红'")
 check("applied=0 但租约未到期时不得提前 done(别的驱动处理中)",
       "waiting_claim" in _j_cl and "_left" in _j_cl,
       "提前 done = 重演冻结丢评估")

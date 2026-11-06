@@ -26,6 +26,19 @@ from routes.common import ok, fail, traced, try_err, type_ok as _type_ok
 
 router = APIRouter(tags=["cleansing"])
 
+# ── eval_queue 认领(2026-11-06 S5): SQL 提到模块级, 供 sql_smoke 直接实跑 ──────
+#   为什么提到模块级: 这两句的失败模式是**客户端**的(PyMySQL 把 int 参数转成 str,
+#   `INTERVAL %d` 一旦进参数位就 TypeError), EXPLAIN 发不到服务端, 只有真跑才暴露。
+#   线上连踩两次(先 UPDATE 少一个占位, 再 SELECT 的 %d 进参数位), 故做成冒烟可引用。
+_EVAL_CLAIM_TTL = 120   # 认领租约秒数: 冻结的认领者 2 分钟后可被重认领(评估幂等, 重放安全)
+_EVAL_SEL_SQL = ("SELECT id, sku FROM eval_queue WHERE task_id=%%s AND applied=0 "
+                 "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
+                 "ORDER BY id LIMIT %%s") % _EVAL_CLAIM_TTL
+_EVAL_CLAIM_SQL = ("UPDATE eval_queue SET claimed_at=NOW(6), claimed_token=%%s "
+                   "WHERE task_id=%%s AND applied=0 "
+                   "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
+                   "AND id IN (%%s)") % _EVAL_CLAIM_TTL
+
 # 目标类型 → 表/仓库类型映射
 from routes.common import TARGET_WH as _TARGET_WH  # 单一真源(2026-10-29)
 
@@ -960,7 +973,6 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
     #   原 sku_list 全量塞 params JSON: 2 万 SKU ≈ 数百 KB, 每次 offset 推进都要整份
     #   读改写(64KB 上限风险 + params 变成"既当配置又当游标")。清单只写一次进表,
     #   params 里只剩 src_task/target/channel 这些**真配置**。
-    _EVAL_CLAIM_TTL = 120   # 认领租约秒数: 冻结的认领者 2 分钟后可被重认领(评估幂等, 重放安全)
     _ev_skus = params.get("sku_list") or []      # 兼容旧任务(迁移期可能有 running 行)
     _ev_total = len(_ev_skus)
     _offset = int(params.get("offset") or 0)     # 进度游标(展示/旧路径取片; 新路径取片按 applied=0)
@@ -995,21 +1007,17 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
             _ids = []
             _batch = []
             _claim_tok = ""
-            for _qr in query("SELECT id, sku FROM eval_queue WHERE task_id=%s AND applied=0 "
-                             "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
-                             "ORDER BY id LIMIT %s", [task_id, _EVAL_CLAIM_TTL, page_size]):
+            # TTL 已在模块级常量里 Python 级内联(PyMySQL 会把 int 参数转成 str,
+            #   进 %d 参数位必 TypeError —— 见 _EVAL_SEL_SQL 上方说明)。
+            for _qr in query(_EVAL_SEL_SQL, [task_id, page_size]):
                 _ids.append(int(_qr.get("id") or 0))
                 _batch.append(str(_qr.get("sku") or ""))
             if _ids:
                 _ph8 = ",".join(["%s"] * len(_ids))
                 _claim_tok = _lk or ("t%d" % int(_t.time() * 1000))
-                # Python 级 % 格式化: token/task/IN 列表是 %s 占位, TTL 用 %d 内联(整数常量,
-                #   不进参数位 —— INTERVAL %s 占位在 TiDB 运行期必 1064)。四对四, 漏一个就是
-                #   "%d format: a real number is required"(本次实测)。
-                _claimed = execute("UPDATE eval_queue SET claimed_at=NOW(6), claimed_token=%s "
-                                   "WHERE task_id=%s AND applied=0 "
-                                   "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
-                                   "AND id IN (%s)" % ("%s", "%s", _EVAL_CLAIM_TTL, _ph8),
+                # 占位符: token/task/IN 列表是 %s, TTL 已内联。四对四 —— 漏一个就是
+                #   "TypeError: %d format"(本次实测)。
+                _claimed = execute(_EVAL_CLAIM_SQL % ("%s", "%s", _ph8),
                                    [_claim_tok, task_id] + _ids)
                 if _claimed != len(_ids):
                     # 被别的实例抢先认领(重试/并发), 本片跳过 —— 下一轮重选可认领的

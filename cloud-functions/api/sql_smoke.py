@@ -151,6 +151,29 @@ def audit(fn):
     return wrapper
 
 
+# ── 客户端格式化(PyMySQL 在**发出前**就失败的那类错)──────────────────
+def client_fmt_err(sql, params):
+    """模拟 PyMySQL `cursor.execute` 里的 `query % escaped_args`。
+
+    为什么必须单独查: `INTERVAL %d` 一旦落进**参数位**, PyMySQL 会把 int 参数转成
+    str, 客户端直接抛 `TypeError: %d format: a real number is required, not str` ——
+    这句 SQL 根本没发到服务端, EXPLAIN 永远抓不到。2026-11-06 线上连踩两次
+    (先占位符少一个, 再 %d 进参数位), 两次都是"冒烟全绿、线上全红"。
+    返回错误串或 None。
+    """
+    if not params:
+        return None
+    try:
+        args = tuple(("'%s'" % str(p)) if isinstance(p, str)
+                     else ("NULL" if p is None else str(p)) for p in params)
+        sql % args
+    except (TypeError, ValueError) as e:
+        return str(e)[:160]
+    except Exception:
+        return None
+    return None
+
+
 # ── 分类 ──────────────────────────────────────────────────────────
 def explain_sql(sql):
     """返回可执行的验证语句, 或 None 表示不验证(DDL/SHOW/SET…)"""
@@ -249,8 +272,21 @@ def probe_db(conn):
     return db, n
 
 
+def _preload_module_sqls():
+    """模块级常量 SQL 不经 mock 调用, 但同样必须被验(否则"提成常量"= 提进盲区)"""
+    if not ENABLED:
+        return
+    try:
+        from routes import cleansing as _cl
+        collect(_cl._EVAL_SEL_SQL, ["__smoke__", 500])
+        collect(_cl._EVAL_CLAIM_SQL % ("%s", "%s", "%s"), ["tok", "__smoke__", 1])
+    except Exception:
+        pass
+
+
 def verify(verbose=False):
     """连库逐条 EXPLAIN。返回 (fail_list, warn_list, skipped, total)"""
+    _preload_module_sqls()
     if not _SEEN:
         return ([("no-collect", "未收集到任何 SQL —— 审计包装未生效", "")], [], 0, 0)
     # 覆盖率下限: 2026-11-03 基线 388 条唯一 SQL。腰斩只可能是"包装被拆"或"大量分支没跑到",
@@ -279,6 +315,11 @@ def verify(verbose=False):
     cur = conn.cursor()
     try:
         for item in _SEEN.values():
+            _fmt = client_fmt_err(item["sql"], item["params"])
+            if _fmt:
+                # 客户端就失败 = 线上必红, 且 EXPLAIN 看不见 —— 直接 fatal
+                failed.append((None, "客户端格式化失败: " + _fmt, item))
+                continue
             stmt = explain_sql(item["sql"])
             if stmt is None:
                 if is_skipped(item["sql"]):
