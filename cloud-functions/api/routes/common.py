@@ -648,7 +648,9 @@ def verify_token(token: str):
             return None
         expected = _b64(hmac.new(secret.encode(), ("%s.%s" % (parts[0], parts[1])).encode(),
                                  hashlib.sha256).digest())
-        if parts[2] != expected:
+        # 2026-11-06 S7/P1-24: 逐字节比较会在第一个不同字符处返回 —— 时间差足够做
+        #   签名逐位爆破(经典 timing attack)。compare_digest 是常数时间。
+        if not hmac.compare_digest(str(parts[2]), expected):
             return None
         payload = json.loads(_b64decode(parts[1]))
         if payload.get("exp", 0) < time.time():

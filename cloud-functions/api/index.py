@@ -153,7 +153,10 @@ _LAST_CONT = 0.0
 async def auth_middleware(request: Request, next):
     """鉴权: auth/health/debug 放行, 其余需 Bearer; demo 只读"""
     path = request.url.path
-    if (path.startswith("/auth") or path == "/health" or path.startswith("/debug")
+    # 2026-11-06 S7/P1-24: /debug 只有显式打开调试(DEBUG_ENDPOINTS=1)时才放行 ——
+    #   路由本身也只在那种情况下注册, 两处同一条开关, 避免"路由没了但前缀还放行"的错觉。
+    _dbg = path.startswith("/debug") and os.environ.get("DEBUG_ENDPOINTS", "") == "1"
+    if (path.startswith("/auth") or path == "/health" or _dbg
             or path.startswith("/docs") or path.startswith("/openapi")
             or path == "/insights/ping" or path.startswith("/cron")
             or path.endswith("/logs/frontend")):

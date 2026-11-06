@@ -31,7 +31,9 @@ def jwt_check(token: str = ""):
         return ok({"fail": "no-token"})
     try:
         user = verify_token(token)
-        return ok({"verify_user": user, "secret_len": len(jwt_secret() or "")})
+        # 2026-11-06 S7/P1-24: 不再回显 secret 长度/指纹 —— 那是给爆破者做"对不对"的
+        #   判定信号(长度对了说明配了密钥、指纹一致说明多实例共用同一份)。只回结论。
+        return ok({"verify_user": user, "secret_set": bool(jwt_secret())})
     except Exception as e:
         return ok({"fail": "err:" + str(e)[:60]})
 
@@ -51,8 +53,10 @@ def auth_sim(request: Request):
 @router.get("/debug/jwt-fingerprint")
 @traced
 def jwt_fingerprint():
-    """当前实例 JWT_SECRET 指纹(sha256 前16——不泄露; 多实例一致性排查)"""
-    import hashlib as _h
+    """当前实例是否配了 JWT_SECRET(2026-11-06 S7: 去掉指纹与长度回显)
+
+    指纹虽然不可逆, 但它对"多实例是否共用同一份密钥"给出的是**可被外部观测的等价判断**,
+    对排查的收益远小于泄给攻击者的信息。真需要比对时, 直接看两个实例各自环境变量即可。
+    """
     from routes.common import jwt_secret as _js
-    _s = _js() or ""
-    return ok({"fp": _h.sha256(_s.encode()).hexdigest()[:16], "len": len(_s)})
+    return ok({"secret_set": bool(_js())})

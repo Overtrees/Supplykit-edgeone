@@ -7,9 +7,17 @@ from db import query, one, execute
 from routes.common import ok, fail, traced, try_err, SALES_SQL as _SALES_SQL
 
 router = APIRouter(tags=["misc"])
-from routes.debug import router as debug_router
+
+# /logs/frontend 的来源限频桶(进程内): {ip:分钟: 计数}
+_FE_LIMIT = {}
 from core.clock import CN_TZ, now_cn
-router.include_router(debug_router)  # 2026-10-13 调试端点统一收口(debug.py)
+# 2026-11-06 S7/P1-24: /debug/* 默认**不注册**(生产 404)。原来无条件注册 + 中间件对
+#   /debug 前缀放行 → 匿名可读 JWT_SECRET 指纹与长度、可用任意 token 试校验, 等于把
+#   鉴权实现细节摊开给外部。排查时显式 `DEBUG_ENDPOINTS=1` 打开(只在需要的那次实例上)。
+import os as _os
+if _os.environ.get("DEBUG_ENDPOINTS", "") == "1":
+    from routes.debug import router as debug_router
+    router.include_router(debug_router)
 
 # ── 日志收口分级白名单(2026-10-17 统一收敛: 曾 3 处重复定义漂移——export 多 detect_debug/business_error,
 #    其余 2 处缺——且 5 个实际产生类型(cache_invalidate/cleansing_eval/config_history/migration/rule_action)
@@ -219,6 +227,19 @@ async def frontend_log(request: Request):
     msg = (d.get("message") or "").strip()[:200]
     if not msg:
         return ok({})
+    # 2026-11-06 S7/P1-24: 本端点鉴权放行(前端崩溃时可能还没有 token), 于是它是一条
+    #   **匿名可写**的通道 ——  floods quality_logs 就能把证据冲掉(分级保留后 info 只留 3 天)。
+    #   按来源限频: 同 IP 60s 内最多 30 条, 超出静默丢弃(前端不重试, 不会形成风暴)。
+    _ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() \
+        or (request.client.host if request.client else "") or "?"
+    _now_s = int(__import__("time").time() // 60)
+    _k = "fl:%s:%s" % (_ip, _now_s)
+    _cnt = _FE_LIMIT.get(_k, 0) + 1
+    if len(_FE_LIMIT) > 5000:
+        _FE_LIMIT.clear()      # 进程内简单防膨胀(每分钟最多 5000 个 IP 桶)
+    _FE_LIMIT[_k] = _cnt
+    if _cnt > 30:
+        return ok({"dropped": True})
     lt = (d.get("log_type") or "frontend_error")[:40]
     # 2026-11-04 日志排查: 本端点鉴权放行, lt 由调用方任意给 —— 若给了白名单外的类型,
     # 写进库后 user/dev 两维度 + Markdown 导出 + 归档全都过滤掉(与 rule_guard 同类

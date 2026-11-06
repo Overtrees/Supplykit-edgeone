@@ -216,8 +216,18 @@ r = client.get("/auth/check", headers={"X-Auth-Token": TOKEN})
 check("auth/check 带 token", r.status_code == 200 and r.json().get("ok"), r.text[:150])
 
 # admin 用户(写操作测试用; demo 只读)
+# 2026-11-06 S7/P1-24: /auth/setup 在鉴权中间件里放行 —— 不校验就是"谁先调谁拿到 admin"。
+#   新契约: 配了 SETUP_TOKEN 必须带对令牌; 没配则生产一律拒绝(本地 sqlite 除外)。
+import os as _os9
+_os9.environ["SETUP_TOKEN"] = "t-setup-9x"
 r = client.post("/auth/setup", json={"username": "admin", "password": "admin123"})
-check("auth/setup admin", r.status_code == 200 and r.json().get("ok") is True, r.text[:150])
+check("auth/setup 无令牌被拒", r.json().get("ok") is False and "令牌" in str(r.json().get("error")), r.text[:150])
+r = client.post("/auth/setup", json={"username": "admin", "password": "admin123",
+                                    "setup_token": "wrong"})
+check("auth/setup 错令牌被拒", r.json().get("ok") is False and "令牌" in str(r.json().get("error")), r.text[:150])
+r = client.post("/auth/setup", json={"username": "admin", "password": "admin123"},
+                headers={"X-Setup-Token": "t-setup-9x"})
+check("auth/setup 带对令牌成功", r.status_code == 200 and r.json().get("ok") is True, r.text[:150])
 ADMIN = r.json().get("token", "")
 check("setup 返回 admin token", bool(ADMIN))
 r = client.post("/auth/login", json={"username": "admin", "password": "admin123"})
@@ -474,7 +484,9 @@ check("cron 窗口: archive 判定与区间一致",
       "cur=%d lo=%d hi=%d" % (_cur, _lo, _hi))
 # 防漏接: 窗口表里每个任务都必须在端点上真调用了守卫(加新任务忘接 = 静默失效)
 _src = open("routes/cron.py", encoding="utf-8").read()
-_missing = [t for t in _WINDOWS if ('_off_window("%s")' % t) not in _src]
+# 2026-11-06 S7: 运维补跑入口把调用改成 `_off_window("x", force_ok=_force_ok(request))`,
+#   断言守"每个任务都接守卫"这个契约, 不锁调用写法(带不带 force_ok 都算接上)
+_missing = [t for t in _WINDOWS if ('_off_window("%s"' % t) not in _src]
 check("cron 窗口: 8 个任务都接了守卫(防漏接)", not _missing, str(_missing))
 
 # ── A1 规则引擎: 表达式解析 / 条件评估 / test 端点 / evaluate 触发告警 ──

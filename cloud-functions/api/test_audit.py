@@ -439,8 +439,9 @@ check("前端默认超卖条件用未发货量",
 
 # I3: cron force 的鉴权必须先于窗口检查(否则窗口外带 secret 也进不来 = 运维入口失效)
 _cr = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
-_i_auth = _cr.find("_force_ok = False")
-_i_win = _cr.find("_off_window(\"daily_rules\")")
+# 2026-11-06 S7: 密钥校验收口到 _force_ok(request)(与 archive/cleanup 同一判据)
+_i_auth = _cr.find("force = 1 if (force and _force_ok(request))")
+_i_win = _cr.find('_off_window("daily_rules")')
 check("daily-rules force 鉴权先于窗口检查, 且支持 channels/alert_types 定向重跑",
       0 < _i_auth < _i_win and "run_daily_rules(channels=_chs" in _cr,
       "原顺序: 窗口检查在前 → 窗口外 force 永远被 skip, 数据重建后无法补跑")
@@ -550,6 +551,33 @@ _cc6 = [ln.strip() for ln in _cl6.splitlines()
 check("查重不再用 CONCAT 包列(改行构造器, 可走索引)",
       not _cc6 and '["(%s,%s)"] * len(' in _cl6 and '["(%s,%s,%s)"] * len(' in _cl6,
       "CONCAT 把列包进函数 → 索引必然失效, 每次导入/打开导入页都整表扫; 残留 %s" % (_cc6[:2],))
+
+# ── L. S7 安全面(2026-11-06)──────────────────────────────────────────
+_mi7 = open(os.path.join(_api_dir, "routes", "misc.py"), encoding="utf-8").read()
+_dg7 = open(os.path.join(_api_dir, "routes", "debug.py"), encoding="utf-8").read()
+_ix7 = open(os.path.join(_api_dir, "index.py"), encoding="utf-8").read()
+_au7 = open(os.path.join(_api_dir, "routes", "auth.py"), encoding="utf-8").read()
+_cm7 = open(os.path.join(_api_dir, "routes", "common.py"), encoding="utf-8").read()
+
+check("/debug/* 默认不注册路由(DEBUG_ENDPOINTS=1 才挂), 中间件同一开关",
+      'DEBUG_ENDPOINTS' in _mi7 and 'DEBUG_ENDPOINTS' in _ix7,
+      "匿名可读 JWT_SECRET 指纹/长度 = 把鉴权实现摊开给外部")
+check("debug 端点不再回显 secret 长度/指纹(只回 secret_set 布尔)",
+      "secret_len" not in _dg7 and '"fp"' not in _dg7,
+      "长度/指纹是给爆破者的判定信号")
+check("/auth/setup 需 SETUP_TOKEN(未配置时生产一律拒绝)",
+      "SETUP_TOKEN" in _au7 and "compare_digest" in _au7
+      and 'DB_BACKEND", "tidb"' in _au7,
+      "本端点在中间件里放行 —— 不校验就是谁先调谁拿到 admin")
+check("verify_token 用常数时间比较(防逐位爆破签名)",
+      "hmac.compare_digest(str(parts[2]), expected)" in _cm7,
+      "逐字节比较在第一个不同字符处返回, 时间差可做 timing attack")
+check("/logs/frontend 有来源限频(匿名可写通道不能被刷爆)",
+      "_FE_LIMIT" in _mi7 and "dropped" in _mi7,
+      "分级保留后 info 只留 3 天, 刷日志就能把证据冲掉")
+check("cron 窗口对带密钥的 force 放行(数据重建后能立刻补跑)",
+      "def _force_ok(request)" in _cr and _cr.count("force_ok=_force_ok(request)") >= 8,
+      "只有窗口内能跑 = 修完 bug 还得等到凌晨")
 
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

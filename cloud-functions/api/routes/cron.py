@@ -190,10 +190,34 @@ _WINDOWS = {
 #   continue_tasks  —— 被 index.py 请求驱动**直接调用**(不走 HTTP), 设窗会连带打死续跑
 
 
-def _off_window(task):
-    """None = 在窗口内(可执行); 否则返回 skip 响应体。未登记的任务一律放行。"""
+def _force_ok(request):
+    """force=1 + 正确的 X-Cron-Secret → True(窗口外也放行)
+
+    运维补跑入口。为什么必须有: 数据重建/迁移/修完 bug 之后, 用户要的是"现在补一次",
+    而窗口守卫会把它挡回"00:30 再来"。窗口守卫防的是**调度抖动**(平台时间漂移导致的
+    重复执行), 不是防运维 —— 所以带密钥的显式 force 应当放行。没密钥/密钥错则完全按
+    普通调用走(窗口+当日抢占), 匿名 force 不会变成放大器。
+    """
+    if str(request.query_params.get("force") or "") not in ("1", "true", "yes"):
+        return False
+    _sec = os.environ.get("CRON_SECRET", "")
+    _h = request.headers.get("X-Cron-Secret", "")
+    if not (_sec and _h):
+        return False
+    try:
+        import hmac as _hm
+        return _hm.compare_digest(_h.encode(), _sec.encode())
+    except Exception:
+        return False
+
+
+def _off_window(task, force_ok=False):
+    """None = 在窗口内(可执行); 否则返回 skip 响应体。未登记的任务一律放行。
+
+    force_ok=True 表示调用方已用 `_force_ok(request)` 验过密钥, 跳过窗口限制。
+    """
     w = _WINDOWS.get(task)
-    if not w:
+    if not w or force_ok:
         return None
     now = datetime.now(_SH_TZ)
     cur = now.hour * 60 + now.minute
@@ -326,7 +350,7 @@ async def cron_snapshot(request: Request):
     """日销快照构建。2026-11-02 S0: 全量重建 90 天是 RU 最重的操作之一, 加当日一次性抢占"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("snapshot")
+    _off = _off_window("snapshot", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     if not _throttle("snapshot", 300):
@@ -354,7 +378,7 @@ async def cron_freshness(request: Request):
     改为"先判断, 确实要重建才抢占"。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("freshness")
+    _off = _off_window("freshness", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot") or {}
@@ -382,7 +406,7 @@ async def cron_archive(request: Request):
     2026-11-02 S0: 全表拉取 + 逐条 INSERT, 是本项目最重的操作; 加当日一次性抢占。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("archive")
+    _off = _off_window("archive", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     if not _throttle("archive", 600):
@@ -414,7 +438,7 @@ async def cron_cleanup_logs(request: Request):
     """
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("cleanup_logs")
+    _off = _off_window("cleanup_logs", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     # 月结随本条调度执行(2026-11-04): edgeone.json 的 schedules 上限 10 条已占满,
@@ -633,14 +657,8 @@ async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
       同时支持 channels=a,b / alert_types=x,y 定向重跑 —— 运维不必为看一个渠道跑全渠道。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _force_ok = False
-    if force:
-        _sec = os.environ.get("CRON_SECRET", "")
-        _h = request.headers.get("X-Cron-Secret", "")
-        if _sec and _h:
-            import hmac as _hm2
-            _force_ok = _hm2.compare_digest(_h.encode(), _sec.encode())
-    force = 1 if _force_ok else 0
+    # 密钥校验统一走 _force_ok(与 archive/cleanup 等运维补跑同一个判据, 不再各写一份 hmac)
+    force = 1 if (force and _force_ok(request)) else 0
     if not force:
         _off = _off_window("daily_rules")
         if _off:
@@ -678,7 +696,7 @@ async def cron_recycle(request: Request):
     2026-11-02 S0: 不可逆删除, 加当日一次性抢占; 幂等(DELETE 按条件), 失败可安全回滚重试"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("recycle")
+    _off = _off_window("recycle", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     if not _claim("cron:recycle"):
@@ -726,7 +744,7 @@ async def cron_push_alerts(request: Request):
     不设当日抢占 —— pushed 标记本身幂等, 推送失败需要重试。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("push_alerts")
+    _off = _off_window("push_alerts", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     if not _throttle("push-alerts", 300):
@@ -982,7 +1000,7 @@ async def cron_reconcile(request: Request, days: int = 90):
     2026-11-02 S0: 加 5 分钟限频(只读, 重复执行无害但耗 RU); days 已在 run_reconcile 内 clamp 到 [1,365]"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("reconcile")
+    _off = _off_window("reconcile", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     if not _throttle("reconcile", 300):
@@ -1090,7 +1108,7 @@ async def cron_ledger_close(request: Request):
     """账期自动结账入口(平台每月 1 号 00:40 CST 调度)"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("ledger_close")
+    _off = _off_window("ledger_close", force_ok=_force_ok(request))
     if _off:
         return ok(_off)
     return ok(run_ledger_close())
