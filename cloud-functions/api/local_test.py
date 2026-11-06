@@ -2043,12 +2043,20 @@ try:
     finally:
         _cw5.query, _cw5.executemany = _o5
         _cr5.evaluate_many = _o_em5
+    # 2026-11-06 S5/P0-5: UPDATE 改**相对增量**(delta 下推 DB 单语句原子), 不再应用层算绝对值
+    #   —— 读-改-写在并发分片/重试下丢更新/双算。断言守契约(delta 参数 + GREATEST SQL), 不锁写法细节。
     _upd5 = dict((r[1], r[0]) for (sq, rr) in _seen5["upd"] for r in rr)
-    check("S2-1e 多码各扣各的(A码 10→6, B码 50→45, id 不串)",
-          _upd5.get(11) == 6 and _upd5.get(12) == 45, str(_upd5))
+    check("S2-1e 多码各扣各的(delta 下推: A码 -4, B码 -5, id 不串)",
+          _upd5.get(11) == -4 and _upd5.get(12) == -5, str(_upd5))
+    _upd_sql5 = " ".join(sq for (sq, rr) in _seen5["upd"])
+    check("S2-1e UPDATE 是原子增量(GREATEST(0, available_qty+%s)), 不是绝对值覆盖",
+          "GREATEST(0, available_qty+%s)" in _upd_sql5.replace("`", ""), _upd_sql5[:120])
     _ins5 = [r for (sq, rr) in _seen5["ins"] for r in rr]
-    check("S2-1e 新行走 INSERT 且带码(旧三维键→空码行, 新 SKU→BC-C)",
+    _ins_sql5 = " ".join(sq for (sq, rr) in _seen5["ins"])
+    check("S2-1e 新行走 INSERT..ON DUPLICATE 增量且带码(旧三维键→空码行, 新 SKU→BC-C)",
           len(_ins5) == 2
+          and "ON DUPLICATE KEY UPDATE" in _ins_sql5
+          and "GREATEST(0, available_qty+VALUES(available_qty))" in _ins_sql5.replace("`", "")
           and any(r[1] == "" and r[2] == "集货仓" and r[4] == 0 for r in _ins5)
           and any(r[1] == "BC-C" and r[5] == 8 for r in _ins5), str(_ins5))
     check("S2-1e 评估上下文逐行(sku×码×仓)且用更新后的量",

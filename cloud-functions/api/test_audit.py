@@ -457,5 +457,43 @@ check("规则 ctx 注入码级明细(inv.code_detail / 顶层 code_detail), 文�
       '"inv.code_detail"' in _rf and _re4.count("code_detail") >= 2,
       "多码 SKU 触发告警时用户要能看到各码可用量")
 
+# ── J. S5 导入链路(2026-11-06): 租约统一 / O(n²) 消除 / 原子增量 / 清单出 params ──
+_j_cl = open(os.path.join(_api_dir, "routes", "cleansing.py"), encoding="utf-8").read()
+_j_ex = open(os.path.join(_api_dir, "routes", "task_export.py"), encoding="utf-8").read()
+_j_sc = open(os.path.join(_api_dir, "schema_create.py"), encoding="utf-8").read()
+check("四类任务锁统一: cleansing/eval/export 均用 task_lease(不再有 3s updated_at 窗口锁)",
+      "INTERVAL 3 SECOND" not in _j_cl and "INTERVAL 3 SECOND" not in _j_ex
+      and "_lease.acquire(" in _j_cl and "_lease.acquire(" in _j_ex,
+      "3s 窗口挡不住看守+event+兜底三路轮询 → 同片执行两遍 → sum 双算(线上实证 3100=1550×2)")
+check("租约心跳绑定退出路径(finally stop+release), 僵尸心跳不会替下一任续租",
+      _j_cl.count("finally:") >= 2 and "_stop_beat()" in _j_cl
+      and "_lease.release(task_id" in _j_cl, "start_beat 后必须保证 stop")
+check("同步分支 sleep(4) 已删(新建任务 lease_until=NULL 即可抢)",
+      "_ts.sleep(4)" not in _j_cl, "那 4 秒是所有小导入的固定延迟")
+check("评估清单落 eval_queue(applied 即幂等键), params 不再塞 sku_list",
+      '"eval_queue"' in _j_sc and "INSERT IGNORE INTO eval_queue(task_id, sku) " in _j_cl
+      and '"sku_list": _ev_skus' not in _j_cl,
+      "2 万 SKU ≈ 数百 KB params, 每次推进整份读改写(64KB 上限风险)")
+check("领取即置位(applied=1 原子 UPDATE), 重试不重放同一批 SKU",
+      "SET applied=1 WHERE task_id=%s " in _j_cl and "_claimed != len(_ids)" in _j_cl,
+      "置位与 delta 同请求; affected 行数校验防并发/重试双算")
+check("导入分片真源 import_stage(一次解析+清洗落库), 分窗/eval 按 stage 直读",
+      '"import_stage"' in _j_sc
+      and "INSERT IGNORE INTO import_stage(task_id, row_no, sku, payload)" in _j_cl
+      and "SELECT payload FROM import_stage WHERE task_id=%s " in _j_cl,
+      "原'每窗重读 BLOB+重解析+重清洗整份'是 O(n²), 100 万行不可完成")
+check("eval 分片不再解析源文件(_parse_table 已移出 eval 路径)",
+      "_parse_table" not in _j_cl.split("def cleansing_eval_status")[1].split("def cleansing_templates")[0],
+      "每片重读重解析是 O(n²) 的另一半")
+check("_adjust_inventory 原子增量(相对 delta 下推 DB), 不再读-改-写绝对值覆盖",
+      "GREATEST(0, available_qty+%s)" in open(os.path.join(_api_dir, "routes", "cleanse_write.py"),
+                                             encoding="utf-8").read(),
+      "并发分片后写覆盖前写(丢 delta) / 重试双算(错账纠正不了)")
+_cw_src = open(os.path.join(_api_dir, "routes", "cleanse_write.py"), encoding="utf-8").read()
+check("新行走 INSERT..ON DUPLICATE 增量(并发双建不 1062 不覆盖)",
+      "ON DUPLICATE KEY UPDATE " in _cw_src
+      and "GREATEST(0, available_qty+VALUES(available_qty))" in _cw_src,
+      "uq_inventory_biz 五维键兜底并发建行")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

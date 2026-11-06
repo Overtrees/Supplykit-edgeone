@@ -798,13 +798,17 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
         sku, bc, wh, wht = key
         cur = _cur_map.get(key)
         if cur:
-            new_qty = max(0, int(cur.get("available_qty") or 0) + delta)
-            _upd.append((new_qty, cur.get("id")))
-            # 评估上下文复用本次查到的行(更新后量), 不再逐 SKU 回查
+            # 2026-11-06 S5/P0-5: **原子增量**取代读-改-写。原实现应用层算
+            #   new_qty = max(0, cur+delta) 后 UPDATE 绝对值 —— 两个分片并发推进同一 SKU
+            #   时后写覆盖前写(丢一次 delta); 进程被冻结后重放同一片时 delta 再算一次(sum 双算)。
+            #   `GREATEST(0, available_qty+%s)` 把计算下推 DB, 单语句原子; 下限 0 语义不变。
+            _upd.append((delta, cur.get("id")))
+            # 评估上下文: 乐观值(cur+delta) —— 并发下可能差 1, 每日评估会纠正;
+            #   错账纠正不了, 所以宁可 ctx 近似也不回到读-改-写
             _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
                           "inv": {"sku": sku, "warehouse": wh, "warehouse_type": wht,
                                   "product_name": cur.get("product_name") or "",
-                                  "available_qty": new_qty,
+                                  "available_qty": max(0, int(cur.get("available_qty") or 0) + delta),
                                   "safety_qty": cur.get("safety_qty") or 0,
                                   "in_transit_qty": cur.get("in_transit_qty") or 0}})
         else:
@@ -823,13 +827,19 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
         if sku not in touched:
             touched.append(sku)
     if _upd:
-        executemany("UPDATE inventory SET available_qty=%s WHERE id=%s", _upd)
+        # 2026-11-06 S5/P0-5: 相对增量(见上) —— 单语句原子, 并发/重试不丢更新不双算
+        executemany("UPDATE inventory SET available_qty=GREATEST(0, available_qty+%s) WHERE id=%s", _upd)
     if _ins:
         # 2026-11-06 审计 P1-33: safety_qty 硬编码 10 → 0。原 10 会让每条新建库存行自带
         #   "手工安全线 10", 一旦启用"手工 >0 优先于动态线"的口径, 动态线对所有新行永久失效。
         #   DDL 本就是 DEFAULT 0(见 schema_create.py:53/77), 这里与 DDL 对齐。
+        # 2026-11-06 S5/P0-5: 裸 INSERT → ON DUPLICATE 增量 —— 并发两片同时建同一行时,
+        #   后到者不再 1062 也不覆盖, 而是把自己的 delta 加上去(uq_inventory_biz 五维键兜底)。
         executemany("INSERT INTO inventory(sku, barcode, warehouse, warehouse_type, available_qty, "
-                    "beginning_stock, safety_qty, channel) VALUES(%s,%s,%s,%s,%s,%s,0,%s)", _ins)
+                    "beginning_stock, safety_qty, channel) VALUES(%s,%s,%s,%s,%s,%s,0,%s) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "available_qty=GREATEST(0, available_qty+VALUES(available_qty)), "
+                    "beginning_stock=GREATEST(beginning_stock, VALUES(beginning_stock))", _ins)
     skus = touched
     try:
         from core.rules import evaluate_many, load_rules_for

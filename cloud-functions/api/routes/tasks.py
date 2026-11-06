@@ -51,7 +51,9 @@ _TABLES_RESET = ["orders", "inventory", "products", "daily_sales_snapshot", "sku
                  #   · seed_watermark 残留 → 水位对账拿旧 run_id 的预期值比新一轮的实际值。
                  # 重置的语义是"回到干净的空库", 账期状态属于数据的一部分, 不能例外。
                  "ledger_state", "ledger_begin_adj", "batch_opening", "inventory_month",
-                 "seed_watermark"]
+                 "seed_watermark",
+                 # 2026-11-06 S5: 导入分片真源 + 评估清单(残留在表里=重置后旧任务"复活")
+                 "import_stage", "eval_queue"]
 
 _BRANDS_FOOD = ["禾味", "山泉", "椒香", "酱乡", "醋乡", "味源", "禾田", "青禾", "禾风",
                 "谷香", "醇味", "鲜禾", "禾记"]

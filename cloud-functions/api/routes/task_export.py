@@ -262,15 +262,14 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
         return {"ok": True, "task_id": task_id, "status": status,
                 "filename": _ri.get("filename"), "name": _ri.get("name"),
                 "parts": _ri.get("parts") or [], "error": _ri.get("error")}
-    # 续跑一步(防并发: 原子抢占 updated_at 锁, 同 seed)
-    try:
-        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
-                          [task_id])
-        if not _locked:
-            return {"ok": True, "task_id": task_id, "status": "running"}
-    except Exception as _e:
-            try_err('tasks', '静默降级', _e)
+    # 续跑一步(2026-11-06 S5/P0-6: 3s updated_at 锁 → 通用租约(令牌+心跳+TTL), 同 cleansing)
+    from core import task_lease as _lease
+    _stop_beat = None
+    _lk = ""
+    _lk, _got = _lease.acquire(task_id)
+    if not _got:
+        return {"ok": True, "task_id": task_id, "status": "running"}
+    _stop_beat = _lease.start_beat(task_id, _lk)
     try:
         import time as _ttx
         _t0x = _ttx.time()
@@ -370,9 +369,16 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
         return {"ok": True, "task_id": task_id, "status": "running", "page": page + 1}
     except Exception as e:
         import traceback as _tb
-        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW(), "
+                "lease_until=NULL, lease_token='' WHERE task_id=%s",
                 (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]}, ensure_ascii=False), task_id))
         return {"ok": True, "task_id": task_id, "status": "error", "error": str(e)[:200]}
+    finally:
+        # 2026-11-06 S5/P0-6: 窗口结束/异常都停心跳+释放租约
+        if _stop_beat:
+            _stop_beat()
+        if _lk:
+            _lease.release(task_id, _lk)
 
 def _save_export_part(filename, content):
     """存导出分片(与正式文件同列, base64 兜底)"""

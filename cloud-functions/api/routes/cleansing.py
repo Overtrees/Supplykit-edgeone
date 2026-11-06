@@ -442,8 +442,8 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
             _, rows0 = _parse_table(data, fname)
             if len(rows0) < 1000:
                 # 同步分支(2026-10-14 修复): 任务刚建锁未满足(updated_at<3s 返回 running)——sleep 3 等锁; done 才 success, running 返 task_id 前端轮询
-                import time as _ts
-                _ts.sleep(4)  # 锁需 updated_at < NOW-3s(建任务 3s 后仍边界 false——4s 稳)
+                # 2026-11-06 S5/P0-6: sleep(4) 已删 —— 租约(lease_until=NULL)新建即可抢,
+                #   不再需要"睡 4 秒等 3s 窗口打开"(那 4 秒是所有小导入的固定延迟)
                 _sr = cleansing_status(task_id, page_size=5000)
                 _sd = _sr.get("data") or _sr
                 if _sr.get("ok") is not False and _sd.get("status") == "done":
@@ -537,15 +537,15 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                 "success": _ri.get("success"), "failed": _ri.get("failed"),
                 "message": _ri.get("message"), "error": _ri.get("error"),
                 "failed_details": _ri.get("failed_details") or []}
-    # 抢占锁(防并发续跑): 锁 3s(窗间快——done 步防重跑用 finalizing 标记——见 done 分支)
-    try:
-        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
-                          [task_id])
-        if not _locked:
-            return {"ok": True, "task_id": task_id, "status": "running"}
-    except Exception as _e:
-            try_err('cleansing', '静默降级', _e)
+    # 抢占锁(2026-11-06 S5/P0-6: 3s updated_at 窗口锁 → 通用租约(令牌+心跳+TTL))。
+    #   窗间不持锁(每窗 acquire/release), done 步防重跑仍用 finalizing 标记。
+    _stop_beat = None
+    _lk = ""
+    from core import task_lease as _lease
+    _lk, _got = _lease.acquire(task_id)
+    if not _got:
+        return {"ok": True, "task_id": task_id, "status": "running"}
+    _stop_beat = _lease.start_beat(task_id, _lk)
     import time as _t
     started = _t.time()
     try:
@@ -573,32 +573,58 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
         offset = int(params.get("offset") or 0)
         success = int(params.get("success") or 0)
         failed = int(params.get("failed") or 0)
-        # 读源文件(局部 import base64——覆盖模块级 def _b64(line 399)冲突——曾 _b64.b64decode attr error 任务 error)
-        import base64 as _b64x
-        fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + task_id])
-        c = fr.get("content") if fr else None
-        if isinstance(c, str):
-            data = _b64x.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8")
-        elif c is not None:
-            data = bytes(c)
-        else:
-            raise Exception("源文件不存在")
-        headers, rows = _parse_table(data, fname)
-        total = len(rows)
-        # 分窗清洗+写入(2026-10-15 进度中: 窗口开始即设 cur_step——前端 TaskCard 实时显示进行中)
+        # 2026-11-06 S5/P0-4: 导入分片真源 = import_stage 表。
+        #   原"每窗重读 BLOB + 重解析整份 + 重清洗整份"是 O(n²) —— 100 万行不可完成
+        #   (P0-4); 物化一次(O(n))后, 每窗按 row_no 直读本窗口, done 步全量复用同表。
+        if not params.get("staged"):
+            # ── 物化: 读 BLOB → 解析 → 清洗 → 落 stage(每批 1000 行 executemany) ──
+            import base64 as _b64x
+            fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + task_id])
+            c = fr.get("content") if fr else None
+            if isinstance(c, str):
+                data = _b64x.b64decode(c[7:]) if c.startswith("base64:") else c.encode("utf-8")
+            elif c is not None:
+                data = bytes(c)
+            else:
+                raise Exception("源文件不存在")
+            _headers, _rows = _parse_table(data, fname)
+            _staged = _clean_rows(_rows, mp)
+            if target == "order":
+                # order_status 归一化在物化时做一次(分窗/done 步都不再做, 语义一致)
+                try:
+                    from routes.suppliers import _norm_column_value as _ncol0
+                    for x in _staged:
+                        if x.get("order_status"):
+                            x["order_status"] = _ncol0(channel, "order_status", str(x["order_status"]))
+                except Exception as _e0:
+                    try_err('cleansing', '静默降级', _e0)
+            _stage_rows = []
+            for _sno, _sc in enumerate(_staged):
+                _stage_rows.append((task_id, _sno, str(_sc.get("sku") or ""),
+                                    json.dumps(_sc, ensure_ascii=False)))
+            for _si in range(0, len(_stage_rows), 1000):
+                executemany("INSERT IGNORE INTO import_stage(task_id, row_no, sku, payload) "
+                            "VALUES(%s,%s,%s,%s)", _stage_rows[_si:_si + 1000])
+            params = {**params, "staged": 1, "total": len(_rows),
+                      "stage_rows": len(_stage_rows)}
+            execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
+                    (json.dumps(params, ensure_ascii=False), task_id))
+            try_err('cleansing', 'stage 物化完成: %d 行(%s)' % (len(_stage_rows), task_id), '')
+        total = int(params.get("total") or 0)
+        # 分窗写入(2026-10-15 进度中: 窗口开始即设 cur_step——前端 TaskCard 实时显示进行中)
         _win_no = offset // page_size + 1
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "cur_step": {"name": "清洗写入窗口 %d/%d" % (_win_no, max((total // page_size) + 1, 1)), "name_key": "task.win_clean", "p": {"n": _win_no, "m": max((total // page_size) + 1, 1)}, "started": int(_t.time())}}, ensure_ascii=False), task_id))
-        window = rows[offset:offset + page_size]
-        cleaned = _clean_rows(window, mp)
-        if target == "order":
+        # 本窗口直读 stage(不再解析/清洗 —— 物化时已做)
+        cleaned = []
+        for _sr2 in query("SELECT payload FROM import_stage WHERE task_id=%s "
+                          "ORDER BY row_no LIMIT %s OFFSET %s",
+                          [task_id, page_size, offset]):
             try:
-                from routes.suppliers import _norm_column_value as _ncol
-                for x in cleaned:
-                    if x.get("order_status"):
-                        x["order_status"] = _ncol(channel, "order_status", str(x["order_status"]))
-            except Exception as _e:
-                    try_err('cleansing', '静默降级', _e)
+                cleaned.append(json.loads(_sr2.get("payload") or "{}"))
+            except Exception:
+                continue
+        window_len = len(cleaned)
         # 2026-10-16 force_new 只写新增: 确认导入后过滤重叠行(unique idx 兜底防重复插入失败)
         #   —— 泛化 2026-10-16: order(键=order_no|sku) + gmv_flow(键=platform|flow_no) 对称
         # 2026-10-17 职责边界(用户): 前端检测三键优先, 后端 force_new 保持二键(写入性能稳定)
@@ -633,7 +659,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
         for _e1 in (err_details or []):
             if len(_fd) < 50:
                 _fd.append(_e1)
-        offset += len(window)
+        offset += window_len
         # 2026-10-16 窗口写后计数留痕(message 含 task_id——唯一不禁频)——窗口5 failed 1000 定位
         try:
             from db import execute as _ew
@@ -650,9 +676,23 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                     [json.dumps({**params, "finalizing": 1, "success": success, "failed": failed, "offset": offset, "total": total}, ensure_ascii=False), task_id])
             except Exception:
                 pass
-            # 最后步: 全量重清洗(联动/评估/汇总用)
+            # 最后步: 全量行(stage 流式读, 2000/批 —— 不再"全量重清洗整份", P0-4 的另一半)
             _st0 = _t.time()
-            cleaned_all = _clean_rows(rows, mp)
+            cleaned_all = []
+            _stage_off = 0
+            while True:
+                _srp = query("SELECT payload FROM import_stage WHERE task_id=%s "
+                             "ORDER BY row_no LIMIT 2000 OFFSET %s", [task_id, _stage_off])
+                if not _srp:
+                    break
+                for _sr3 in _srp:
+                    try:
+                        cleaned_all.append(json.loads(_sr3.get("payload") or "{}"))
+                    except Exception:
+                        continue
+                _stage_off += len(_srp)
+                if len(_srp) < 2000:
+                    break
             # 2026-11-01 效期标记值校验(列必填由前端拦, 这里兜"填了但值不合法/为空"):
             #   _norm_expiry 只认 是/否(含同义词), 其余返回 '?' → _write_batch 留空且仅记质量日志。
             #   导入结果页看不到 = 运营以为标了、实际全走"按做效期处理+告警" → 在此显性回到 message。
@@ -691,19 +731,13 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                       "(临期预警/处置建议会缺这批货)" % _miss_n)
                 except Exception as _ei:
                     try_err('cleansing', '入库效期缺失提示降级', _ei)
-            try_err('cleansing', 'done步 清洗耗时: %s' % round(_t.time() - _st0, 1))
-            if target == "order":
-                try:
-                    from routes.suppliers import _norm_column_value as _ncol2
-                    for x in cleaned_all:
-                        if x.get("order_status"):
-                            x["order_status"] = _ncol2(channel, "order_status", str(x["order_status"]))
-                except Exception as _e:
-                        try_err('cleansing', '静默降级', _e)
+            try_err('cleansing', 'done步 stage 读取耗时: %s' % round(_t.time() - _st0, 1))
+            # order_status 归一化已在物化时做过一次(S5/P0-4), done 步不再重复
             elapsed = round(_t.time() - started, 1)
             # 2026-10-16 分离: 导入 done(写 done 计数——联动评估由独立 cleansing_eval 任务续跑分片——根治 done 步 80s 请求被杀)
-            _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - len(window)) // page_size + 1}, "elapsed": round(_t.time() - started, 1)}]
-            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
+            _steps_done = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - window_len) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - window_len) // page_size + 1}, "elapsed": round(_t.time() - started, 1)}]
+            execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW(), "
+                    "lease_until=NULL, lease_token='' WHERE task_id=%s",
                     (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
                                  "total": total, "steps": _steps_done, "cur_step": None}, ensure_ascii=False),
                      json.dumps({"result": {"target": target, "success": success, "failed": failed,
@@ -713,25 +747,24 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                                             "eval_task": task_id + "_eval"}}, ensure_ascii=False), task_id))
             # 2026-10-16 分离: 创建评估联动任务(独立续跑——分片评估不超时——导入 done 后自动触发)
             try:
-                _ev_skus = []
-                _ev_seen = set()
-                # 2026-10-17 修复: 曾从 cleaned(最后窗)提取——分窗接力时只有末窗 SKU 漏前面窗(异步1100行 sku_list=100 实测);
-                # 改从 cleaned_all(全量重清洗)提取——所有窗口 SKU 全覆盖
-                for _ec in cleaned_all:
-                    _esk = str(_ec.get("sku") or "").strip()
-                    if _esk and _esk not in _ev_seen:
-                        _ev_seen.add(_esk)
-                        _ev_skus.append(_esk)
-                from db import execute as _ee2
+                # 2026-11-06 S5/P0-3: SKU 清单直接从 import_stage 派生进 eval_queue(一条 SQL,
+                #   不再内存提取几百 KB 塞 params)。
+                _ee2 = execute
+                _ee2("INSERT IGNORE INTO eval_queue(task_id, sku) "
+                     "SELECT DISTINCT %s, sku FROM import_stage "
+                     "WHERE task_id=%s AND sku IS NOT NULL AND sku!=''",
+                     [task_id + "_eval", task_id])
+                _ev_cnt = int((one("SELECT COUNT(*) AS c FROM eval_queue WHERE task_id=%s",
+                                   [task_id + "_eval"]) or {}).get("c") or 0)
                 _eval_task = task_id + "_eval"
                 # 2026-10-29 修复: 导入失败(success=0)时 sku_list 为空, 仍创建 running 任务
                 # → 无分片可推进, 任务页永久显示"进行中 0%"(实测卡 64 分钟, 需保活/前端拾起)
-                if not _ev_skus:
+                if not _ev_cnt:
                     _ee2("INSERT INTO sync_tasks(task_id, task_type, status, params, result, channel) "
                          "VALUES(%s,'cleansing_eval','done',%s,%s,%s) "
                          "ON DUPLICATE KEY UPDATE status='done', params=VALUES(params), updated_at=NOW()",
                          [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
-                                                  "sku_list": [], "offset": 0}, ensure_ascii=False),
+                                                  "offset": 0}, ensure_ascii=False),
                           json.dumps({"result": {"target": target, "success": 0, "failed": 0,
                                                  "rules_evaluated": 0, "inventory_adjusted": 0,
                                                  "message": "无可评估 SKU(导入全部失败或映射无 SKU 列)"}},
@@ -742,7 +775,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                          "ON DUPLICATE KEY UPDATE status='running', params=VALUES(params), updated_at=NOW()",
                          [_eval_task, json.dumps({"src_task": task_id, "target": target, "channel": channel,
                                                   "mp": mp, "fname": fname, "offset": 0, "success": 0, "failed": 0,
-                                                  "sku_list": _ev_skus, "steps": [],
+                                                  "total": _ev_cnt, "steps": [],
                                                   "cur_step": {"name": "评估联动准备", "name_key": "task.eval_prep", "started": int(_t.time())}}, ensure_ascii=False), channel])
             except Exception as _e4:
                 try_err('cleansing', '创建评估任务降级', _e4)
@@ -752,7 +785,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
             #   created_at 散落在 12:58/13:06/13:13 几个不相邻批次, 全是"有人碰兜底"才补的。
             #   现在建完立刻在后台线程把分片跑完(与看守/兜底**同一条代码路径**), 导入即联动。
             #   线程被冻结也不影响正确性: 任务仍 running, 兜底/看守/手工照旧能接上。
-            if _ev_skus:
+            if _ev_cnt:
                 try:
                     from core.eval_kick import kick_eval_task as _kick_ev
                     _kick_ev(task_id, target, channel)
@@ -811,11 +844,18 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                 "page": offset // page_size, "total": total}
     except Exception as e:
         import traceback as _tb
-        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW() WHERE task_id=%s",
+        execute("UPDATE sync_tasks SET status='error', result=%s, updated_at=NOW(), "
+                "lease_until=NULL, lease_token='' WHERE task_id=%s",
                 (json.dumps({"error": str(e)[:400], "tb": _tb.format_exc()[-1200:]},
                             ensure_ascii=False), task_id))
         try_err("cleansing", "导入续跑失败", e)
         return {"ok": True, "task_id": task_id, "status": "error", "error": str(e)[:200]}
+    finally:
+        # 2026-11-06 S5/P0-6: 窗口结束/异常都停心跳+释放(窗间不持锁)
+        if _stop_beat:
+            _stop_beat()
+        if _lk:
+            _lease.release(task_id, _lk)
 
 
 def _b64(code):
@@ -881,6 +921,10 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
             _pj = json.loads(_p.get("params") or "{}") or {}
             _d["offset"] = int(_pj.get("offset") or 0)
             _d["total"] = len(_pj.get("sku_list") or [])
+            if not _d["total"]:
+                # 2026-11-06 S5/P0-3: 新任务清单在 eval_queue, params 不再带 sku_list
+                _d["total"] = int((one("SELECT COUNT(*) AS c FROM eval_queue WHERE task_id=%s",
+                                       [task_id]) or {}).get("c") or 0)
         except Exception:
             pass
         if _st in ("done", "error"):
@@ -911,30 +955,65 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
     params = json.loads(row.get("params") or "{}")
     channel = params.get("channel") or "jd"
     target = params.get("target") or "order"
-    sku_list = params.get("sku_list") or []
-    offset = int(params.get("offset") or 0)
     started = _t.time()
+    # 2026-11-06 S5/P0-3: SKU 清单出 params, 落 eval_queue(行级, applied 标记即幂等键)。
+    #   原 sku_list 全量塞 params JSON: 2 万 SKU ≈ 数百 KB, 每次 offset 推进都要整份
+    #   读改写(64KB 上限风险 + params 变成"既当配置又当游标")。清单只写一次进表,
+    #   params 里只剩 src_task/target/channel 这些**真配置**。
+    _ev_skus = params.get("sku_list") or []      # 兼容旧任务(迁移期可能有 running 行)
+    _ev_total = len(_ev_skus)
+    _offset = int(params.get("offset") or 0)     # 进度游标(展示/旧路径取片; 新路径取片按 applied=0)
+    if not _ev_skus:
+        try:
+            _ev_total = int((one("SELECT COUNT(*) AS c FROM eval_queue WHERE task_id=%s",
+                                 [task_id]) or {}).get("c") or 0)
+        except Exception:
+            _ev_total = 0
+    _stop_beat = None
+    _lk = ""
     try:
-        # 抢占锁(防并发续跑——同导入)
-        _locked = execute("UPDATE sync_tasks SET updated_at=NOW() WHERE task_id=%s "
-                          "AND (updated_at IS NULL OR updated_at < DATE_SUB(NOW(), INTERVAL 3 SECOND))",
-                          [task_id])
-        if not _locked:
+        # 抢占锁(2026-11-06 S5/P0-6: 3s updated_at 窗口锁 → 通用租约(令牌+心跳+TTL)。
+        #   3s 窗口挡不住"看守+event 线程+兜底"三路同时轮询, 同片执行两遍 → sum 双算)
+        from core import task_lease as _lease
+        _lk, _got = _lease.acquire(task_id)
+        if not _got:
             return {"ok": True, "task_id": task_id, "status": "running"}
-        _batch = sku_list[offset:offset + page_size]
+        _stop_beat = _lease.start_beat(task_id, _lk)
+        if _ev_skus:
+            _batch = _ev_skus[_offset:_offset + page_size]
+            _ids = None
+        else:
+            # 新路径: 从 eval_queue 取未应用分片(applied=0)。applied 标记即幂等键 ——
+            #   处理成功才置 1, 重试不会重放同一批 SKU。
+            _ids = []
+            _batch = []
+            for _qr in query("SELECT id, sku FROM eval_queue WHERE task_id=%s AND applied=0 "
+                             "ORDER BY id LIMIT %s", [task_id, page_size]):
+                _ids.append(int(_qr.get("id") or 0))
+                _batch.append(str(_qr.get("sku") or ""))
+            if _ids:
+                # 领取即置位(原子): affected 行数 = 本片行数才继续; 否则说明已被别的实例
+                # 领走(重试/并发), 本片跳过 —— 这是"重试不双算"的幂等键。
+                _ph8 = ",".join(["%s"] * len(_ids))
+                _claimed = execute("UPDATE eval_queue SET applied=1 WHERE task_id=%s "
+                                   "AND applied=0 AND id IN (%s)" % ("%s", _ph8),
+                                   [task_id] + _ids)
+                if _claimed != len(_ids):
+                    _batch, _ids = [], []
         if not _batch:
             # 全部分片完成 → done(累计 result)
             _rj = json.loads(row.get("result") or "{}") or {}
             _rri = _rj.get("result") or {}
-            execute("UPDATE sync_tasks SET status='done', params=%s, updated_at=NOW() WHERE task_id=%s",
+            execute("UPDATE sync_tasks SET status='done', params=%s, updated_at=NOW(), "
+                    "lease_until=NULL, lease_token='' WHERE task_id=%s",
                     (json.dumps({**params, "cur_step": None}, ensure_ascii=False), task_id))
             from routes.analysis_cache import invalidate
             invalidate("rules", "inventory")
             return {"ok": True, "task_id": task_id, "status": "done",
                     "rules_evaluated": _rri.get("rules_evaluated"), "inventory_adjusted": _rri.get("inventory_adjusted")}
-        _total = len(sku_list)
-        _seg_no = offset // page_size + 1
-        _seg_cnt = (_total + page_size - 1) // page_size
+        _total = _ev_total
+        _seg_no = _offset // page_size + 1
+        _seg_cnt = max((_total + page_size - 1) // page_size, 1)
         # 该片 SKU: 评估(order.created——库存上下文)+ 联动(销售扣减——deltas 只算该片)
         from db import query as _q5, execute as _e5, transaction as _txn5
         from core.rules import evaluate_many, load_rules_for
@@ -947,16 +1026,19 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                          "WHERE channel=%s AND sku IN (%s) GROUP BY sku" % ("%s", _ph),
                          [channel] + _batch[_i:_i + 500]):
                 inv_map[r.get("sku")] = int(r.get("avail") or 0)
-        # 从源文件取该片 SKU 的订单行(quantity 聚合——评估 ctx 行级?——SKU 级聚合: order_qty=该 SKU 该片总量)
+        # 从 stage 取该片 SKU 的行(2026-11-06 S5/P0-4: 不再"重读 BLOB+重解析+重清洗整份"
+        #   —— 物化时清洗已做, 这里按 (task_id, sku) 索引直读本片)
         src_task = params.get("src_task") or ""
-        import base64 as _b64e
-        fr = one("SELECT content FROM export_files WHERE filename=%s", ["clean_" + src_task])
-        c = fr.get("content") if fr else None
-        _data = _b64e.b64decode(c[7:]) if isinstance(c, str) and c.startswith("base64:") else (c.encode("utf-8") if isinstance(c, str) else (bytes(c) if c is not None else b""))
-        _mpd = params.get("mp") or {}
-        _mpd = _mpd if isinstance(_mpd, dict) else json.loads(_mpd or "{}")
-        headers, rows = _parse_table(_data, params.get("fname") or "import.csv")
-        _cleaned = _clean_rows(rows, _mpd)
+        _cleaned = []
+        for _i4 in range(0, len(_batch), 500):
+            _seg4 = _batch[_i4:_i4 + 500]
+            _ph4 = ",".join(["%s"] * len(_seg4))
+            for _sr4 in query("SELECT payload FROM import_stage WHERE task_id=%s AND sku IN (%s)",
+                              [src_task] + _seg4):
+                try:
+                    _cleaned.append(json.loads(_sr4.get("payload") or "{}"))
+                except Exception:
+                    continue
         # 该片 SKU 行级评估 ctx(与导入 done 步同口径——每行 ctx——order.created 规则行级判定)
         # 2026-10-29 超卖口径修复: 原 ctx 只给 order.quantity=本次导入量(单笔) →
         # 累计已超卖(如 1095 件 vs 库存 9)但单笔都小于库存时**永不报警**(系统性漏报)
@@ -1098,7 +1180,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         #   (原顺序导致 ctx.available_qty 用旧值, 且重算两次虽幂等但浪费)
         # order: 不做任何库存联动(平台库存导出已含销售影响, 再扣=重复计算)
         # 推进 offset + 累积 result
-        _new_off = offset + len(_batch)
+        _new_off = _offset + len(_batch)
         _rj = json.loads(row.get("result") or "{}") or {}
         _rri = _rj.get("result") or {}
         _cum_rules = int(_rri.get("rules_evaluated") or 0) + evaluated
@@ -1121,6 +1203,13 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
     except Exception as _e6:
         try_err('cleansing', '评估任务异常(可重试)', _e6)
         return {"ok": True, "task_id": task_id, "status": "running"}
+    finally:
+        # 2026-11-06 S5/P0-6: 所有退出路径停心跳+释放租约(僵尸心跳会替下一任续租)
+        if _stop_beat:
+            _stop_beat()
+        if _lk:
+            from core import task_lease as _lease_r
+            _lease_r.release(task_id, _lk)
 
 
 @router.post("/cleansing/templates")

@@ -321,6 +321,28 @@ _TABLES = {
         "CREATE TABLE IF NOT EXISTS eval_pending ("
         "`task` VARCHAR(32) PRIMARY KEY, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))"
     ),
+    # 2026-11-06 S5/P0-3: 评估联动 SKU 清单(行级) —— 取代"sku_list 全量塞 params"。
+    #   applied 标记就是幂等键: 领取即置位(原子 UPDATE applied=1), 重试/并发不会重放同一批
+    #   SKU(旧 offset 游标在"置位后崩溃"窗口里会双算)。旧 eval_pending(task 主键脏标记)
+    #   保留不动(无代码引用, 但保持表稳定), 新需求用独立表。
+    "eval_queue": (
+        "CREATE TABLE IF NOT EXISTS eval_queue ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(80) NOT NULL, "
+        "sku VARCHAR(80) NOT NULL, applied TINYINT DEFAULT 0, "
+        "applied_at DATETIME(6) NULL, "
+        "UNIQUE KEY uq_eval_queue (task_id, sku))"
+    ),
+    # 2026-11-06 S5/P0-4: 导入分片真源 —— 源文件在第一次续跑时**一次**解析+清洗落行级
+    #   JSON, 后续窗口/评估分片按 row_no / sku 索引直读, 不再"每片重读 BLOB + 重解析
+    #   整份"(O(n²): 100 万行不可完成)。
+    "import_stage": (
+        "CREATE TABLE IF NOT EXISTS import_stage ("
+        "id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(80) NOT NULL, "
+        "row_no INT NOT NULL, sku VARCHAR(80) DEFAULT '', "
+        "payload MEDIUMTEXT NOT NULL, "
+        "UNIQUE KEY uq_import_stage (task_id, row_no), "
+        "KEY idx_import_stage_sku (task_id, sku))"
+    ),
     # 2026-11-03 D4/D5: 规则评估任务化 —— 取代"只存一个脏标记"的做法。
     #   标记只能回答"要不要跑", 回答不了"跑了没有/跑了多久/影响了多少行/前端该等谁"。
     #   scope 是 JSON: {"channels": [...], "ats": [...], "deep": false}
@@ -591,7 +613,9 @@ _COLUMN_ADDS = {
 #   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
 # v12(2026-11-05 租约心跳): sync_tasks 增 lease_token —— 租约改由执行方心跳续期(TTL 30s),
 #   令牌保证只有当前持有者能续约; 没有它, 被网关切断的上一任会替下一任续期。
-SCHEMA_VERSION = 14
+# v13(2026-11-06 S5): eval_queue(评估清单行级+applied 幂等键) + import_stage(导入分片真源,
+#   一次解析落库, 消 O(n²) 重读重解析)
+SCHEMA_VERSION = 15
 
 
 def table_ddl(name):
