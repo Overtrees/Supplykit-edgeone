@@ -437,5 +437,13 @@ check("前端默认超卖条件用未发货量",
                                        encoding="utf-8").read(),
       "新建超卖规则的默认条件必须是现行口径")
 
+# I3: cron force 的鉴权必须先于窗口检查(否则窗口外带 secret 也进不来 = 运维入口失效)
+_cr = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
+_i_auth = _cr.find("_force_ok = False")
+_i_win = _cr.find("_off_window(\"daily_rules\")")
+check("daily-rules force 鉴权先于窗口检查, 且支持 channels/alert_types 定向重跑",
+      0 < _i_auth < _i_win and "run_daily_rules(channels=_chs" in _cr,
+      "原顺序: 窗口检查在前 → 窗口外 force 永远被 skip, 数据重建后无法补跑")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

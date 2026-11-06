@@ -633,7 +633,8 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
 @_pipe("daily_rules", rows_key="orphan_cleaned")
-async def cron_daily_rules(request: Request, force: int = 0):
+async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
+                           alert_types: str = ""):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
     maintenance_log(date+'daily_rules') 抢占 —— 与应用层兜底互斥, 一天只评估一次(先到者执行);
     force=1: 运维强制重跑(重置后/数据重建场景, 绕过当天抢占)
@@ -641,21 +642,26 @@ async def cron_daily_rules(request: Request, force: int = 0):
     2026-11-02 S0 两处修正:
       ① force=1 此前匿名可传 —— 等于给了一个"每调一次就跑 10 万行全量评估"的免费放大器;
          现在必须带正确 CRON_SECRET 才认, 否则降级为普通调用。
-      ② 执行失败回滚抢占标记 —— 原实现失败后当天不再重试(dashboard._daily_maintenance 同款问题)。"""
+      ② 执行失败回滚抢占标记 —— 原实现失败后当天不再重试(dashboard._daily_maintenance 同款问题)。
+
+    2026-11-06 运维入口收口: force 的 secret 校验**提前到窗口检查之前** ——
+      原顺序是"先查窗口再验密", 于是窗口外 force 永远被 skip 挡住, 带 secret 也进不来;
+      而"数据重建后补跑某渠道"(如 other 首次完整评估)恰恰发生在窗口外。
+      同时支持 channels=a,b / alert_types=x,y 定向重跑 —— 运维不必为看一个渠道跑全渠道。"""
     if not await _authed(request):
         return fail("未授权", 401)
-    _off = _off_window("daily_rules")
-    if _off:
-        return ok(_off)
+    _force_ok = False
     if force:
         _sec = os.environ.get("CRON_SECRET", "")
         _h = request.headers.get("X-Cron-Secret", "")
-        if not (_sec and _h):
-            force = 0
-        else:
+        if _sec and _h:
             import hmac as _hm2
-            if not _hm2.compare_digest(_h.encode(), _sec.encode()):
-                force = 0
+            _force_ok = _hm2.compare_digest(_h.encode(), _sec.encode())
+    force = 1 if _force_ok else 0
+    if not force:
+        _off = _off_window("daily_rules")
+        if _off:
+            return ok(_off)
     if not force:
         if not _claim("daily_rules"):
             return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
@@ -665,7 +671,9 @@ async def cron_daily_rules(request: Request, force: int = 0):
             _unclaim("daily_rules")
             raise
         return ok(_r)
-    return ok(run_daily_rules())
+    _chs = [c.strip() for c in (channels or "").split(",") if c.strip()] or None
+    _ats = [a.strip() for a in (alert_types or "").split(",") if a.strip()] or None
+    return ok(run_daily_rules(channels=_chs, deep=True, alert_types=_ats))
 
 
 @router.api_route("/cron/ping", methods=["GET","POST"])
