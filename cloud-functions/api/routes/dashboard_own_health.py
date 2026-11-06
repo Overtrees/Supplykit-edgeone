@@ -116,50 +116,66 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
 
     skus = list({k[0] for k in own_rows})
     pmap = {}
-    # 2026-11-02 冷算: 原按 800 分片走 IN 列表(1000 SKU → 2 次往返)。products 单渠道实测仅 1000 行、
-    #   7 列, 全量取回比"拼 IN + 分片循环"更省(一次往返 + 更小的 SQL 文本)。
-    # 2026-11-06 只取真正被读的两列(原取 5 列: barcode/supplier_code 在本函数**从未被读**,
-    #   却要多传 10,000 行 × 2 列 ≈ 0.4MB)。aux 冷算是热路径, 按字节收费的字段不白传。
-    for r in query(
-            "SELECT sku, product_name, IFNULL(expiry_managed,'') AS expiry_managed "
-            "FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]):
-        pmap[str(r.get("sku") or "")] = r
-
-    # ── 下游(平台仓)日销 —— 自有仓的"消耗"= 调拨给平台仓的量 ──
-    # 键与库存行同粒度: ①该 69码(平台仓 __C__ 的按码行) ②该 SKU 合计码(无码行/该码无记录时)
-    #   取值降级规则走 biz.sales.pick_ds(单一真源: 只有"码"可降级, 维度不降级)。
-    #   注意: 空码行必须读合计行(barcode=''), 不能拿档案码去借该码的销量。
-    #   一次取"合计行 + 按码行"(barcode="all"): 分两次查只是多一次往返(实测 1.5s vs 2.8s)。
     _bc_ds, _agg_ds = {}, {}
-    try:
-        rows = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all") or {}
-        for _k, r in rows.items():
-            _s = str(r.get("sku") or "")
-            if not _s:
-                continue
-            _ds = rolling_predict(float(r.get("ds7") or 0), float(r.get("ds14") or 0),
-                                  float(r.get("ds28") or 0))
-            _bc = str(r.get("barcode") or "")
-            if _bc:
-                _bc_ds[(_s, _bc, WH_C)] = _ds
-            else:
-                _agg_ds[(_s, WH_C)] = _ds
-    except Exception as _e:
-        try_err("own_health", "下游日销读取降级(积压/覆盖判定将不出数)", _e)
-
-    # ── 自有仓批次效期(仅 expiry_managed 管效期的品类) ──
-    # 注意: products.expiry_managed 是 **字符串 'yes'/'no'**(实测 874 yes / 126 no),
-    #   不是 0/1 —— 曾写 int(...) 直接 ValueError。这里统一按真值集判定。
-    _yes = ("yes", "1", "true", "y", "on")
     exp_map = {}
-    _expiry_skus = [s for s in skus
-                    if str((pmap.get(s) or {}).get("expiry_managed") or "").strip().lower() in _yes]
-    if _expiry_skus:
+    _yes = ("yes", "1", "true", "y", "on")
+
+    # ── 三块取数并行(2026-11-06) ─────────────────────────────────────────────
+    # 原来串行: products → 下游日销 → 批次效期, 三条互不依赖的查询排队等。
+    # 线上 aux 冷算 7s 里, 自有仓这一路独占 9 条 SQL、是最慢分支(其余两路 3~6 条)。
+    # 并行的 3 条连接 + aux 外层 3 路 = 峰值 6 < DB_POOL_LIMIT(10), 不挤占其它请求。
+    # 每块自带 try + 降级(与原来一致: 单块失败只少一档数据, 不拖垮整卡)。
+    def _load_products():
+        # 2026-11-02 冷算: 原按 800 分片走 IN 列表(1000 SKU → 2 次往返)。products 单渠道实测
+        #   仅 1000 行, 全量取回比"拼 IN + 分片循环"更省(一次往返 + 更小的 SQL 文本)。
+        # 2026-11-06 只取真正被读的两列(原取 5 列: barcode/supplier_code 在本函数**从未被读**)。
+        _m = {}
+        for r in query(
+                "SELECT sku, product_name, IFNULL(expiry_managed,'') AS expiry_managed "
+                "FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')",
+                [channel]):
+            _m[str(r.get("sku") or "")] = r
+        return _m
+
+    def _load_ds():
+        """下游(平台仓)日销 —— 自有仓的"消耗"= 调拨给平台仓的量
+
+        键与库存行同粒度: ①该 69码(平台仓 __C__ 的按码行) ②该 SKU 合计码(无码行/该码无记录)。
+        取值降级规则走 biz.sales.pick_ds(单一真源: 只有"码"可降级, 维度不降级)。
+        空码行必须读合计行(barcode=''), 不能拿档案码去借该码的销量。
+        一次取"合计行 + 按码行"(barcode="all"): 分两次查只是多一次往返(实测 1.5s vs 2.8s)。
+        """
+        _bc, _agg = {}, {}
         try:
-            # 2026-11-02 冷算: 同上, 去掉 800 分片 —— own 仓有有效期的批次实测仅 1696 行。
-            # 注意: batches 表**无 batch_no 列**(实测字段: id/sku/warehouse/warehouse_type/
-            #   channel/prod_date/exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
-            # 2026-11-06 只取判定要用的列(qty 在本函数未被读; 15,496 行 × 1 列白传)。
+            # 2026-11-06: 只取 rolling_predict 用到的三列(原 14 列, 2 万行白传 8 列 ≈ 2.5MB)
+            rows = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all",
+                                      fields=("ds7", "ds14", "ds28")) or {}
+            for _k, r in rows.items():
+                _s = str(r.get("sku") or "")
+                if not _s:
+                    continue
+                _ds = rolling_predict(float(r.get("ds7") or 0), float(r.get("ds14") or 0),
+                                      float(r.get("ds28") or 0))
+                _bcv = str(r.get("barcode") or "")
+                if _bcv:
+                    _bc[(_s, _bcv, WH_C)] = _ds
+                else:
+                    _agg[(_s, WH_C)] = _ds
+        except Exception as _e:
+            try_err("own_health", "下游日销读取降级(积压/覆盖判定将不出数)", _e)
+        return _bc, _agg
+
+    def _load_batches():
+        """自有仓批次效期(仅 expiry_managed 管效期的品类真正会被用到)
+
+        注意: products.expiry_managed 是**字符串 'yes'/'no'**(实测 874 yes / 126 no),
+          不是 0/1 —— 曾写 int(...) 直接 ValueError。这里统一按真值集判定。
+        batches 表**无 batch_no 列**(id/sku/warehouse/warehouse_type/channel/prod_date/
+          exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
+        2026-11-06 只取判定要用的列(qty 在本函数未被读; 15,496 行 × 1 列白传)。
+        """
+        _m = {}
+        try:
             for r in query(
                     "SELECT id AS batch_id, sku, IFNULL(barcode,'') AS barcode, "
                     "IFNULL(warehouse,'') AS warehouse, exp_date "
@@ -170,9 +186,31 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
                 #   其它码/其它自有仓批次也并进来, 再取"最早到期" → 报出的批次/到期日可能
                 #   属于**另一个码或另一个仓**。现在按 (sku, 码, 仓) 分组, 由 _pick_batch
                 #   逐级取: ①同码同仓 ②同仓(码缺失) ③该 SKU 最早 —— 只降"码"不跨仓。
-                exp_map.setdefault(str(r.get("sku") or ""), []).append(r)
+                _m.setdefault(str(r.get("sku") or ""), []).append(r)
         except Exception as _e:
             try_err("own_health", "批次效期读取降级", _e)
+        return _m
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=3) as _ex:
+            _f_p = _ex.submit(_load_products)
+            _f_d = _ex.submit(_load_ds)
+            _f_b = _ex.submit(_load_batches)
+            pmap = _f_p.result()
+            _bc_ds, _agg_ds = _f_d.result()
+            exp_map = _f_b.result()
+    except Exception as _e:
+        try_err("own_health", "取数并行降级(退回串行)", _e)
+        pmap = _load_products()
+        _bc_ds, _agg_ds = _load_ds()
+        exp_map = _load_batches()
+
+    # 没有管效期的 SKU 就丢掉批次结果(与原来"不查"等价, 只是这次查了才发现用不上)
+    _expiry_skus = [s for s in skus
+                    if str((pmap.get(s) or {}).get("expiry_managed") or "").strip().lower() in _yes]
+    if not _expiry_skus:
+        exp_map = {}
 
     def _pick_batch(_sku, _bc, _wh):
         """该库存行对应的最早到期批次: 精确(码+仓) → 同仓(码缺) → 该 SKU 最早

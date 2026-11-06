@@ -664,13 +664,31 @@ async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
         if _off:
             return ok(_off)
     if not force:
-        if not _claim("daily_rules"):
-            return ok({"skipped": True, "reason": "今天已评估(应用层兜底或另一实例)"})
+        # 2026-11-06: 与看板兜底共用同一套三态占位(core.maintenance)。
+        # 原实现用 `_claim` 只 INSERT 空 details, 于是 cron 跑完 details 仍为空,
+        # 用户随后打开看板时兜底路径判定"依据已变"又整跑一遍; 反过来 cron 被冻结时
+        # 留下的空 details 也看不出"有实例在跑"还是"该重跑"。
+        from core.maintenance import inventory_fingerprint, claim_rules, settle_rules
+        _fp = inventory_fingerprint()
+        if not _fp:
+            # 指纹查不到(库存表异常) → 退回无指纹的原抢占: 调度该跑的仍要跑
+            if not _claim("daily_rules"):
+                return ok({"skipped": True, "reason": "今天已评估"})
+            try:
+                _r = run_daily_rules()
+            except Exception:
+                _unclaim("daily_rules")
+                raise
+            return ok(_r)
+        _claimed, _token = claim_rules(_fp)
+        if not _claimed:
+            return ok({"skipped": True, "reason": "今天已按当前库存依据评估, 或另一实例正在评估"})
         try:
             _r = run_daily_rules()
         except Exception:
-            _unclaim("daily_rules")
+            settle_rules(_token, _fp, ok=False)   # 回滚成待跑, 下次可重试
             raise
+        settle_rules(_token, _fp, ok=True)
         return ok(_r)
     _chs = [c.strip() for c in (channels or "").split(",") if c.strip()] or None
     _ats = [a.strip() for a in (alert_types or "").split(",") if a.strip()] or None

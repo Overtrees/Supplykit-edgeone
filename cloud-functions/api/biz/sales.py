@@ -720,14 +720,16 @@ def rebuild_sku_stats_for_days(channel, days, max_skus=2000):
     return _rebuild_sku_sales_stats(channel, 90, skus=_skus)
 
 
-def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
+def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None, fields=None):
     """物化读取(消费方入口): 按 sku/wh 查行返回 {wh|sku: {ds7/14/28, sigma, *_cut, nnz*, last_sale}}
 
     wh 显式枚举(无魔法值): WH_C(__C__ 全国platform) / WH_BC(__BC__ platform+b) /
     WH_ALL(__ALL__ 全仓) / 具体仓名(逐仓) / None(全部仓维度)
     - 表空(首启/重建失败)→ 自动重建(含当天); 消费方读表 miss 时降级直算(调用侧)
     - 不返回 fused——消费方现场 rolling_predict/own 权重, 口径零冲突
-    """
+    - fields: 只取点名的指标列(2026-11-06)。aux 的自有仓块要 2 万行但只用 ds7/ds14/ds28,
+      全字段是白传 8 列(线上实测 ~2.5MB/次)。缺列在返回 dict 里按 0 补齐 —— 读侧本来就是
+      `float(r.get(x) or 0)`, 无需改消费方。None = 全部列(原行为)。"""
     try:
         from db import query as _q, one as _o
         _ensure_stats_table()
@@ -779,9 +781,13 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None):
             if _ck:
                 _where += " AND sku IN (" + ",".join(["%s"] * len(_ck)) + ")"
                 _params += _ck
-            rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, ds7, ds14, ds28, sigma, "
-                      "ds7_cut, ds14_cut, ds28_cut, nnz7, nnz14, nnz28, last_sale "
-                      "FROM sku_sales_stats WHERE %s" % _where, _params)
+            # 2026-11-06: 指标列按 fields 裁剪(键列 sku/barcode/warehouse 恒取)
+            _all_cols = ("ds7", "ds14", "ds28", "sigma", "ds7_cut", "ds14_cut", "ds28_cut",
+                         "nnz7", "nnz14", "nnz28", "last_sale")
+            _cols = [c for c in _all_cols if (not fields or c in fields)] or ["ds28"]
+            rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, "
+                      + ", ".join(_cols)
+                      + " FROM sku_sales_stats WHERE %s" % _where, _params)
             for r in rows:
                 _w = str(r.get("warehouse") or "")
                 _b = str(r.get("barcode") or "")

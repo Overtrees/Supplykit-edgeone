@@ -43,6 +43,7 @@
 
 import threading
 import time
+import uuid
 
 # 每渠道维护限频(秒)。60s 与中间件续跑同量级: 足够让维护及时跟上, 又不给实例留常驻负担。
 _THROTTLE_S = 60
@@ -59,6 +60,99 @@ def _lock_for(channel):
             lk = threading.Lock()
             _locks[channel] = lk
         return lk
+
+
+# ── 当日评估占位(三态) ─────────────────────────────────────────────────────────
+# maintenance_log(date+task) 的 details 同时承担"今天评估到哪了"的职责。三种取值:
+#   ''                  待跑(从未跑 / 上次失败已回滚)
+#   '#run#<fp>#<token>'  某实例正持有; created_at 超过 _RUN_STALE_MIN 仍未落地 = 该实例被
+#                        平台冻结(收尾语句永远不执行), 允许别的实例抢回来重跑
+#   '<fp>'               已完成, 依据为该指纹
+# 为什么不能"开始前就写指纹"(2026-11-06 线上 5.5 小时空窗的根因): 写着写着实例被冻结,
+# 指纹却已经是"最新依据", 之后每次请求都判定"今天已按此依据评估过"直接返回 —— 告警停在
+# 11:37, 而库存/订单早已变了。
+_RUN_MARK = "#run#"
+_RUN_STALE_MIN = 20
+
+
+def inventory_fingerprint():
+    """库存指纹 = 行数 | 正可用行数 | 可用量总和(整数)
+
+    为什么用业务量而不是时间戳: `inventory` 没有 updated_at 列, 而导入/改量/删行都会改变
+    这三元组; ROUND 收敛避免浮点抖动导致反复重评估。
+    :return: 指纹字符串; '' 表示查不到(调用方应放弃本轮 —— 空串会和"待跑"状态撞车)
+    """
+    try:
+        from db import one
+        r = one("SELECT COUNT(*) AS c, "
+                "SUM(CASE WHEN available_qty>0 THEN 1 ELSE 0 END) AS p, "
+                "IFNULL(ROUND(SUM(available_qty)),0) AS s FROM inventory") or {}
+        return "%s|%s|%s" % (int(r.get("c") or 0), int(r.get("p") or 0), int(r.get("s") or 0))
+    except Exception:
+        return ""
+
+
+def claim_rules(fp, task="daily_rules"):
+    """当日评估原子抢占(三态 CAS)。返回 (是否抢到, 令牌)。
+
+    抢到的语义是"由**你**执行本次评估", 令牌用于结束时结算 —— 只有还持有令牌的实例
+    才能把状态改成"已完成", 避免把别人正在跑的那次覆盖掉。
+    表异常时放行执行(与 `cron._claim` 同一取舍: 宁可多跑一次, 也不要护栏自己出错导致整天空转)。
+    """
+    if not fp:
+        return False, ""
+    token = "%s%s#%s" % (_RUN_MARK, fp, uuid.uuid4().hex[:8])
+    try:
+        from core.clock import now_cn
+        from db import execute, one
+        today = now_cn().strftime("%Y-%m-%d")
+        row = one("SELECT IFNULL(details,'') AS d FROM maintenance_log "
+                  "WHERE `date`=%s AND task=%s", [today, task])
+        d = str((row or {}).get("d") or "")
+        _CAS = ("UPDATE maintenance_log SET details=%s, created_at=NOW() "
+                "WHERE `date`=%s AND task=%s AND IFNULL(details,'')=%s")
+        if not row:
+            got = execute("INSERT IGNORE INTO maintenance_log(`date`, task, details) "
+                          "VALUES(%s, %s, %s)", [today, task, token])
+        elif d == fp:
+            return False, ""      # 今天已按当前依据评估完成
+        elif d.startswith(_RUN_MARK):
+            # 有人持着: 未超时让路; 超时说明它被冻结了, 抢回来重跑。
+            # INTERVAL 的量必须字面量(PyMySQL 把 int 参数转字符串, %d 会在运行期炸)。
+            got = execute(_CAS + " AND created_at < DATE_SUB(NOW(), INTERVAL "
+                          + str(int(_RUN_STALE_MIN)) + " MINUTE)", [token, today, task, d])
+        else:
+            got = execute(_CAS, [token, today, task, d])   # '' 待跑 / 旧指纹(依据已变)
+        return (bool(got), token if got else "")
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('maintenance', '评估占位抢占失败(放行执行)', _e)
+        return True, token
+
+
+def settle_rules(token, fp, task="daily_rules", ok=True):
+    """结算: 成功 → 落指纹(下次同依据直接跳过); 失败 → 置 ''(下次请求可重跑)
+
+    必须是条件更新(`AND details=<令牌>`): 跑的过程中令牌可能已被超时抢占者换掉,
+    此时不该覆写 —— 否则会把"正在重跑"错标成"已完成"。
+    """
+    if not token:
+        return 0
+    try:
+        from core.clock import now_cn
+        from db import execute
+        today = now_cn().strftime("%Y-%m-%d")
+        if ok and fp:
+            return int(execute(
+                "UPDATE maintenance_log SET details=%s WHERE `date`=%s AND task=%s "
+                "AND IFNULL(details,'')=%s", [fp, today, task, token]) or 0)
+        return int(execute(
+            "UPDATE maintenance_log SET details='' WHERE `date`=%s AND task=%s "
+            "AND IFNULL(details,'')=%s", [today, task, token]) or 0)
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('maintenance', '评估占位结算失败', _e)
+        return 0
 
 
 _STALE_MIN = 10

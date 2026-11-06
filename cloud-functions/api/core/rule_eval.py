@@ -4,9 +4,11 @@
 """
 LAST_DIAG = {}   # 2026-10-29 诊断用: 最近一次评估的关键计数(供 /rules/evaluate 返回定位)
 _WARNED_REFS = set()  # 2026-11-05: 未登记字段只留痕一次(避免每次评估刷日志)
-# 2026-11-06 S4-1: 全量评估的分页大小 —— 单次往返 5000 行(TiDB 上约 20~40ms),
-#   只影响"读"的分片, 不改变判定/关闭语义(见 evaluate_stock_skus 的游标注释)
-_PAGE = 5000
+# 2026-11-06 S4-1: 全量评估的分页大小 —— 只影响"读"的分片, 不改变判定/关闭语义
+# 2026-11-06 S4-3: 5000 → 20000。分批后每页是一次独立往返, 页数就是纯税:
+#   线上 other 8 万行实测 5000→11.5s / 10000→6.3s / 20000→4.1s / 40000→2.9s(全量一次读 2.2s)。
+#   取 20000 是拐点: 4 页把往返税压到 1.9s, 峰值内存 ~150MB(全量方式 300MB)。
+_PAGE = 20000
 
 import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import → NameError 被 except 吞
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
@@ -213,36 +215,56 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
     #   直到撞上安全上限 —— 实测抓到的正是这行: 12 万行的渠道读了 30 万行。
     _SEL = ("SELECT id, " + _IC + " FROM inventory "
             "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
+    from core import metrics as _M
+    _mode_e = str(mode or _M.mode_of(channel))
+    # 粒度由渠道补货模式决定(bbcc=SKU×69码 / traditional=SKU), 见 metrics.grain_of
+    _grain_e = _M.grain_of(channel, _mode_e)
+    # 2026-11-06 S4-3 真分批: 原始行**不再全量驻留**。逐页读 → 直接喂给 units 的增量累加器,
+    #   页内行用完即弃。峰值内存 = 单元数 + 单页行数, 与库存总行数无关(原来 17 万行全在内存,
+    #   且还要再复制一份单元列表)。归并语义与"一次全量"完全等价 —— `units(acc=...)` 是同一份
+    #   索引跨页续写(有等价性单测)。
+    _seen = 0
+    _uacc = {}
+
+    def _feed(_batch):
+        nonlocal _seen
+        if not _batch:
+            return
+        _M.units(_batch, merge_bc=(_mode_e == "bbcc"), drop_platform_b=(_mode_e != "bbcc"),
+                 grain=_grain_e, acc=_uacc)
+        _seen += len(_batch)
+
     if skus:
         # 2026-10-29 增量入口: 出入库导入后只评本批 SKU(不全量/不拖慢), 分片防超长 IN
         _sk = [str(x) for x in skus if x]
-        rows = []
         for _i0 in range(0, len(_sk), 500):
             _b0 = _sk[_i0:_i0 + 500]
             _ph0 = ",".join(["%s"] * len(_b0))
-            rows.extend(query(_SEL + "AND sku IN (%s)" % _ph0, [channel] + _b0))
+            _feed(query(_SEL + "AND sku IN (%s)" % _ph0, [channel] + _b0))
     else:
         # 2026-11-06 S4-1: 原实现一条 `ORDER BY id LIMIT 100000` —— 超过 10 万行的那部分
         #   **静默不评估**(不是报错, 是永远轮不到): 告警不生成、旧告警不被关闭, 用户看到的是
         #   一份"冻结在 10 万行"的判定。线上 jd 90,100 / other 80,100, 离上限只差 1 万行。
         #   改为 id 游标分页读全量: 语义与"一次全读"完全等价(hits 仍跨全量累积 → 关闭逻辑不变),
-        #   只是把单条 10 万行的大结果集拆成若干 5000 行往返, 峰值内存也不再是一次性大包。
+        #   只是把单条 10 万行的大结果集拆成若干页往返, 峰值内存也不再是一次性大包。
         #   `limit` 因此改为**安全上限**而非分页大小; 真触到上限会留痕, 不再静默。
-        rows = []
         _after = 0
         _page = []
-        while len(rows) < limit:
+        while _seen < limit:
             _page = query(_SEL + "AND id>%s ORDER BY id LIMIT %s",
-                          [channel, _after, min(_PAGE, limit - len(rows))])
+                          [channel, _after, min(_PAGE, limit - _seen)])
             if not _page:
                 break
-            rows.extend(_page)
+            _feed(_page)
             _after = int(_page[-1].get("id") or 0)
-        if len(rows) >= limit and _page:
+        if _seen >= limit and _page:
             try_err("core_rules", "库存评估达到安全上限 %d 行, 该渠道剩余行未评估(需分批作业化)"
                     % limit, RuntimeError("eval_limit:%s" % channel))
-    if not rows:
+    if not _uacc:
         return []
+    # 收口: 用空输入再调一次, 拿到合并后的完整单元列表(顺序 = 首次出现顺序, 与一次性调用一致)
+    _units = _M.units([], merge_bc=(_mode_e == "bbcc"),
+                      drop_platform_b=(_mode_e != "bbcc"), grain=_grain_e, acc=_uacc)
     _tick("rows")
     # 规则是否引用计算变量(决定是否注入; 无引用 → 快速路径, 不加载日销/供应商/加速)
     # alert_enabled=0 的参数载体规则(如内置断货/健康)不产生告警 → 不参与评估/注入
@@ -374,8 +396,7 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
                 _health = (_health_index(channel) or {}).get("score")
             except Exception as _e:
                 try_err("rules", "评估健康分降级", _e)
-        # SKU 聚合(avail/transit/safety + 供应商)
-        _agg = {}
+        # SKU 聚合(avail/transit/safety) 已由前面的 GROUP BY 算好(见 `_agg`), 这里只补供应商映射
         _prod_sup = {}
         try:
             for _r4 in query("SELECT sku, supplier_code FROM products WHERE channel=%s "
@@ -457,12 +478,6 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
                 }
         except Exception as _eown:
             try_err('core_rules', '自有仓供应量加载降级(own.* 键不注入)', _eown)
-        for _r in rows:
-            _sku = str(_r.get("sku") or "")
-            _st = _agg.setdefault(_sku, {"avail": 0, "transit": 0, "safety": 0})
-            _st["avail"] += int(_r.get("available_qty") or 0)
-            _st["transit"] += int(_r.get("in_transit_qty") or 0)
-            _st["safety"] += int(_r.get("safety_qty") or 0)
 
     # 2026-10-29 模式分流(与补货建议的安全线提示完全同源):
     #   bbcc        → BC 合计(C可用+C在途+B可用+B在途) 对 ds×全周期, 粒度 SKU×69码 一条
@@ -478,21 +493,23 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
     #   那是真能发的货)。2026-11-06 S4: 原来这段只在 `_need_calc` 为真时才算, 于是"没有规则
     #   引用计算变量"的那条路径里 `_agg` 是 None → available_stock 恒 0 → 每个有订单的 SKU
     #   都被判超卖(假告警)。判定用的量不该取决于"别的规则要不要算变量"。
-    if _order_rules and not isinstance(_agg, dict):
-        _agg = {}
-        for _r in rows:
-            _sku0 = str(_r.get("sku") or "")
-            if not _sku0:
-                continue
-            _st0 = _agg.setdefault(_sku0, {"avail": 0, "transit": 0, "safety": 0})
-            _st0["avail"] += int(_r.get("available_qty") or 0)
-            _st0["transit"] += int(_r.get("in_transit_qty") or 0)
-            _st0["safety"] += int(_r.get("safety_qty") or 0)
-    _mode_e = str(mode or _M.mode_of(channel))
-    # 粒度由渠道补货模式决定(bbcc=SKU×69码 / traditional=SKU), 见 metrics.grain_of
-    _grain_e = _M.grain_of(channel, _mode_e)
-    _units = _M.units(rows, merge_bc=(_mode_e == "bbcc"), drop_platform_b=(_mode_e != "bbcc"),
-                      grain=_grain_e)
+    #   2026-11-06 S4-3: 汇总改由库内 GROUP BY 完成 —— 原来遍历 `rows` 逐个累加, 要求全量行
+    #   在内存里; 现在只回 SKU 级结果(几万行 → 结果集远小于 17 万原始行), 且省一趟 Python 循环。
+    _agg = _agg or {}
+    if _need_calc or _order_rules:
+        try:
+            for _ra in query(
+                    "SELECT sku, IFNULL(SUM(available_qty),0) AS av, "
+                    "IFNULL(SUM(in_transit_qty),0) AS tr, IFNULL(SUM(safety_qty),0) AS sf "
+                    "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' "
+                    "GROUP BY sku", [channel]):
+                _ska = str(_ra.get("sku") or "")
+                if _ska:
+                    _agg[_ska] = {"avail": int(_ra.get("av") or 0),
+                                  "transit": int(_ra.get("tr") or 0),
+                                  "safety": int(_ra.get("sf") or 0)}
+        except Exception as _eag:
+            try_err("rules", "超卖基准库存汇总降级(available_stock 可能为 0)", _eag)
     # 规则求值仍然吃"行"形态(condition_json 里写的是 inv.* / own.*), 这里把单元映射回行:
     #   BC 单元 → warehouse='__BC__' / warehouse_type='bc'; 其余单元 → 各自的仓与仓型。
     #   available_qty 只放"已到仓可用", in_transit_qty 单独放 —— 规则要含在途就显式相加,
@@ -767,7 +784,7 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
         _tick("close")
         try:
             global LAST_DIAG
-            LAST_DIAG = {"rows": len(rows), "inv_rules": len(_inv_rules),
+            LAST_DIAG = {"rows": _seen, "units": len(rows), "inv_rules": len(_inv_rules),
                          "need_calc": bool(_need_calc), "agg": len(_agg or {}),
                          "ctx": len(inv_ctxs), "hits": len(hits),
                          "marks": list(_marks)}

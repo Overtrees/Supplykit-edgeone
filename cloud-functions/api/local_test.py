@@ -1028,14 +1028,21 @@ try:
           '"warehouse_type": "bc"' in _met
           and 'wt in ("platform", "platform_b")' in _met
           and "merge_bc=True" not in _re and "_bc_agg" not in _re
-          and "_M.units(rows, merge_bc=" in _re, "core/metrics.py")
+          # 2026-11-06 S4-3: 改成增量累加后不再是 `_M.units(rows, ...)` 一次调用,
+          #   守"唯一真源 + 粒度由 grain_of 决定"这两件结构事实。
+          and "_M.units(" in _re and "acc=_uacc" in _re
+          and "_M.grain_of(channel, _mode_e)" in _re, "core/metrics.py")
     check("低库存: 关闭判定与 hits 同为含码 5 元组",
           'str(a.get("bc") or "")) not in hits' in _re, "rule_eval.py")
     # 2026-11-06 S4-1: 原实现 `ORDER BY id LIMIT 100000` —— 超出部分静默不评估(既不生成新告警,
     #   也不关闭旧告警), 线上 jd 90,100 行离上限只差 1 万。改成 id 游标分页读全量。
     check("S4 全量评估: 按 id 游标分页读全量(超单页不再丢行)",
-          "while len(rows) < limit" in _re and "_after = int(_page[-1]" in _re
+          "while _seen < limit" in _re and "_after = int(_page[-1]" in _re
           and "ORDER BY id LIMIT %s\", [channel, limit]" not in _re, "rule_eval.py")
+    # 2026-11-06 S4-3: 原始行不得全量驻留 —— 逐页喂给 units 的增量累加器
+    check("S4 全量评估: 原始行逐页喂入, 不再全量驻留(_feed + acc)",
+          "def _feed(" in _re and "acc=_uacc" in _re and "rows.extend(_page)" not in _re,
+          "rule_eval.py")
     check("S4 全量评估: 触到安全上限必须留痕(不静默截断)",
           "达到安全上限" in _re, "rule_eval.py")
     _ru = _rf("core/rules.py")
@@ -1342,6 +1349,73 @@ try:
     check("cron 当日抢占: 首次 True / 重复 False / 回滚后可重抢", (a, b, c) == (True, False, True), str((a, b, c)))
 except Exception as _e6:
     check("cron 护栏用例无异常", False, str(_e6)[:200])
+
+# ── 当日评估三态占位(2026-11-06): 冻结不再造成"永久跳过" ──
+# 背景: 原实现执行前就写指纹, 实例被冻结后指纹已是"最新依据" → 之后每次请求都判定
+# "今天已评估"直接返回, 线上出现 5.5 小时空窗。三态 = '' / '#run#..' / '<fp>', 只有
+# 跑成功才落指纹; '#run#' 超时视为冻结遗留可被抢占。
+try:
+    import db as _dbm
+    import core.maintenance as _mt
+
+    _st = {"d": None, "age": 0}
+
+    def _m_one(sql, params=None):
+        if _st["d"] is None:
+            return None
+        return {"d": _st["d"]}
+
+    def _m_exec(sql, params=None):
+        s = sql.strip()
+        if s.startswith("INSERT IGNORE"):
+            if _st["d"] is not None:
+                return 0
+            _st["d"] = params[2]
+            return 1
+        if s.startswith("UPDATE"):
+            cur = _st["d"] if _st["d"] is not None else ""
+            if cur != params[-1]:
+                return 0            # CAS 期望值不匹配 → 没抢到
+            if "INTERVAL" in sql and _st["age"] < _mt._RUN_STALE_MIN:
+                return 0            # 令牌还新鲜 → 让路
+            _st["d"] = params[0]
+            return 1
+        return 0
+
+    _o_one, _o_exec = _dbm.one, _dbm.execute
+    _dbm.one, _dbm.execute = _m_one, _m_exec
+    try:
+        _c1, _t1 = _mt.claim_rules("1|2|3")
+        _mark = _st["d"] or ""
+        _c2, _ = _mt.claim_rules("1|2|3")          # 令牌在跑 → 让路
+        _mt.settle_rules(_t1, "1|2|3", ok=True)
+        _settled = _st["d"]
+        _c3, _ = _mt.claim_rules("1|2|3")          # 已完成同指纹 → 不抢
+        _c4, _ = _mt.claim_rules("9|9|9")          # 指纹变了 → 重新抢
+        _st["d"] = "#run#5|5|5#deadbeef"
+        _st["age"] = 1
+        _c5, _ = _mt.claim_rules("5|5|5")          # 令牌新鲜 → 让路
+        _st["age"] = _mt._RUN_STALE_MIN + 5
+        _c6, _ = _mt.claim_rules("5|5|5")          # 令牌超时(冻结) → 抢回
+    finally:
+        _dbm.one, _dbm.execute = _o_one, _o_exec
+    check("评估占位: 首次抢占占 #run# 令牌",
+          _c1 and str(_mark).startswith("#run#1|2|3#"), _mark)
+    check("评估占位: 令牌在跑时不重复抢占", not _c2)
+    check("评估占位: 成功才落指纹", _settled == "1|2|3", str(_settled))
+    check("评估占位: 同指纹不再评估", not _c3)
+    check("评估占位: 指纹变化可重评估", _c4)
+    check("评估占位: 新鲜令牌让路 / 超时令牌抢回(冻结自愈)", (not _c5) and _c6, str((_c5, _c6)))
+
+    # 结构: cron 与看板兜底必须共用同一套(否则 cron 跑完 details 为空, 兜底会再跑一遍)
+    _cn_src = open("routes/cron.py", encoding="utf-8").read()
+    _db_src = open("routes/dashboard.py", encoding="utf-8").read()
+    check("评估占位: cron 路由走公共三态",
+          "claim_rules" in _cn_src and "settle_rules" in _cn_src, "cron.py")
+    check("评估占位: 看板兜底走公共三态(不再自己算指纹)",
+          "claim_rules" in _db_src and "_RUN_MARK" not in _db_src, "dashboard.py")
+except Exception as _e6b:
+    check("评估占位用例无异常", False, str(_e6b)[:200])
 
 # ── traced 不回传 traceback(2026-11-02 S0) ──
 try:
@@ -2123,8 +2197,11 @@ try:
           and "_e(_SKU_STATS_DDL)" in _src6b.split("def _ensure_stats_table")[1][:300]
           and "_e(_SKU_STATS_DDL)" not in _g6,
           "biz/sales.py")
+    # 2026-11-06: 取数改为三路并行(products/日销/批次), 变量名随之变化 —— 守"没有分片循环"
+    #   与"批次仍按 own 仓 + 有效期非空查询"这两个结构事实, 不守具体变量名。
     check("S2-6 自有仓产品/批次不再按 800 分片(实测仅 1000/1696 行)",
-          "_chunk" not in _src6c and "exp_map.setdefault(" in _src6c,
+          "_chunk" not in _src6c
+          and "FROM batches WHERE channel=%s AND warehouse_type='own'" in _src6c,
           "routes/dashboard_own_health.py")
 
     # 动态: 全部预取注入时, 组装阶段一条 SQL 都不该发

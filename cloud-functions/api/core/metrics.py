@@ -378,7 +378,7 @@ def dims_needed(inv_rows, channel, mode=None):
 
 # ── 归桶(库存行 → 判定单元)────────────────────────────────────────
 def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
-          grain=GRAIN_BARCODE, status=None):
+          grain=GRAIN_BARCODE, status=None, acc=None):
     """库存行 → 判定单元。**唯一**的归并规则。
 
     merge_bc          platform + platform_b 合并成 `DIM_BC`, 平台行从输出剔除(规则引擎用)
@@ -388,6 +388,9 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
                       由 `grain_of(channel, mode)` 决定(**不要**在各调用点手写 True/False,
                       否则同一渠道的告警与看板粒度不同)
     status            {sku: products.status}; 传了才标 `paused`(停用不进缺口)
+    acc               增量累加器(2026-11-06): 传同一个 dict 多次调用, 结果跨调用合并。
+                      评估 17 万行时不必把原始行全读进内存 —— 逐页喂进来, 峰值内存只与
+                      单元数 + 单页行数相关, 与总行数无关。不传则每次独立(原行为)。
 
     ⚠️ 与旧实现的差别(都是修 bug, 不是换口径):
       · BC 行的分子**只含 platform + platform_b**, 不再把 own 仓库存加进来(P0-13) ——
@@ -396,13 +399,11 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
         单元数还按 SKU 算, 与 platform 的"按行"不同粒度, 两个数字不可比(P0-14(2))。
     """
     by_barcode = str(grain or GRAIN_BARCODE) == GRAIN_BARCODE
-    out = []
-    bc = {}
+    _idx = acc.setdefault("idx", {}) if acc is not None else {}
+    bc = acc.setdefault("bc", {}) if acc is not None else {}
 
     def _key(sku, barcode, kind, wh):
         return (sku, barcode if by_barcode else "", kind if kind != DIM_WH else (DIM_WH, wh))
-
-    _idx = {}
 
     def _merge_code(u, barcode, qty):
         """码级明细随合并记录 —— **合并不静默**(2026-11-06)
@@ -431,7 +432,6 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
             u = _idx[k] = {"sku": sku, "barcode": barcode, "kind": kind, "warehouse": wh,
                            "warehouse_type": wt, "name": name or "",
                            "avail": 0, "transit": 0, "manual_safety": 0}
-            out.append(u)
         u["avail"] += qty
         u["transit"] += tr
         _merge_code(u, barcode, qty)
@@ -475,7 +475,7 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
             if merge_bc:
                 continue          # 平台行由 BC 行代表
         _emit(sku, _bc, DIM_OWN if wt == "own" else DIM_WH, _w, wt, _n, _q, _t, _m)
-    out.extend(bc.values())
+    out = list(_idx.values()) + list(bc.values())
     if status:
         for u in out:
             if str(status.get(u["sku"]) or "active") != "active":
