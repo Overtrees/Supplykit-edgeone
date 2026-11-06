@@ -8,7 +8,7 @@
 |---|---|
 | 最近交付了什么 | 本文件（保留最近一个月） |
 | 某天为什么这么改、踩了什么坑 | `docs/history/` |
-| 代码怎么写、红线是什么 | `docs/DEVELOPMENT.md`（规范册，377 行） |
+| 代码怎么写、红线是什么 | `docs/DEVELOPMENT.md`（规范册） |
 | 当前已知遗留 | `CONTEXT.md` → 「已知遗留」 |
 | 架构与数据流 | `docs/ARCHITECTURE.md` |
 

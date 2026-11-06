@@ -17,7 +17,7 @@
 |---|---|
 | **一屏入口(坑位/八步闭环/失败黑名单/三条红线)** | `docs/SKILL.md` |
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
-| **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（377 行） |
+| **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 250 行） |
 | 根因与变更史(按日期分卷, §15.x 编号全局唯一) | `docs/history/` — `grep -rn '15.104' docs/` |
 | 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.105 |
@@ -85,7 +85,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 568 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 681 通过/0 失败
   (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 30
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
   - **i18n 专项快照**: `python3 scripts/ui_shot_matrix.py --serve --locale zh|en --viewport 375|390|844|1440`

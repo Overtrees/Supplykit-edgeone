@@ -215,7 +215,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 | 跑 `edgeone makers env ls` | 明文回显 `TIDB_PASSWORD` / `JWT_SECRET`; 要值读本地 `.env` |
 | 只信 `git push \| tail -2` 的退出码 | 那是 `tail` 的 0; 失败会被当成功 |
 | 两个重灌进程并发 | 批次删除是整段 DELETE, 会互相清表 |
-| 照 `DEVELOPMENT.md` 一~九章施工 | 那是 PA + SQLite 时代的旧架构(写 `backend/`、19 路由、90 天归档), 与现状冲突; 现行判据只看 §15.10x 之后 + `ARCHITECTURE.md` |
+| 引用文档里的**具体实现**而不看代码 | 2026-11-06 前 `DEVELOPMENT.md` 一~十四章是 PA+SQLite 时代写的(`backend/`、WAL、Cloudflare 部署), 已整体重写; 但**任何文档都可能滞后于代码** —— 判据以代码 + ARCHITECTURE.md 为准, 文档只给方向 |
 | 往页面/路由文件里继续堆新逻辑 | 上帝文件是这么长出来的; 新逻辑落独立文件, 页面只编排 —— 见 §11 红线 A |
 | JSX / toast / placeholder 写中文字面量 | 语言切换立刻露馅; 文案一律 `t('key')` 且 zh/en 双份 —— 见 §11 红线 B |
 
