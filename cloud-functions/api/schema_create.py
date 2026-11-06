@@ -478,6 +478,13 @@ _ADD_INDEXES = [
     ("idx_products_barcode_ch", "products", "(barcode, channel)"),
     # 2026-11-03 D8: 告警按维度查(重开判定 / 关闭匹配) —— 没有它每次写告警都要扫全表
     ("idx_alerts_dim", "alerts", "(alert_type, channel, related_sku, warehouse)"),
+    # 2026-11-06 「69码多码证据」覆盖索引。这条查询是 `WHERE sku IN (500) GROUP BY sku`
+    #   数 DISTINCT barcode, 而 orders 上层唯一键是 (channel, order_no, sku, barcode) ——
+    #   sku 在第三位, 用不上最左前缀, EXPLAIN 实测退化成 **IndexFullScan 44 万条索引项**;
+    #   batches 更差, 是 **TableFullScan 18 万行**。导入链路每 500 个 SKU 发一次(×3 张表),
+    #   一份大文件几十个批次 = 上百次全表扫。补 (sku, barcode) 后变成 500 个索引区间。
+    ("idx_orders_sku_bc", "orders", "(sku, barcode)"),
+    ("idx_batches_sku_bc", "batches", "(sku, barcode)"),
 ]
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),        # 被 idx_orders_sku_ordered_at 前缀覆盖
@@ -584,7 +591,7 @@ _COLUMN_ADDS = {
 #   本周口径); 订单/流水批量 upsert 键含 deleted_at —— 与导入写入层的业务键完全一致。
 # v12(2026-11-05 租约心跳): sync_tasks 增 lease_token —— 租约改由执行方心跳续期(TTL 30s),
 #   令牌保证只有当前持有者能续约; 没有它, 被网关切断的上一任会替下一任续期。
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def table_ddl(name):

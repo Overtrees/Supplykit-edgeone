@@ -1,6 +1,8 @@
 import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fmtInt } from '../format'
 import type { OwnHealthData, OwnHealthItem } from '../../../components/dash/OwnHealthCard'
+import { apiJson } from '../../../api/client'
 import { t } from '../../../locale'
 
 interface Props {
@@ -9,11 +11,98 @@ interface Props {
   /** 供给侧健康数据(结构由 OwnHealthData 描述, 边界处断言收敛) */
   ownHealth?: unknown
   onAlert?: (sku?: string, whType?: string, wh?: string) => void
+  /** 分页拉明细用(2026-11-06): 弹窗自己按页取, 不再让 /dashboard/aux 背 1.3 万条 */
+  channel?: string
+}
+
+/** 每页条数 —— 与后端 /dashboard/own-health 的 limit 上限(500)留出余量 */
+const PAGE = 200
+
+const TYPE_ORDER = ['own_transfer_gap', 'own_expiry_risk', 'own_overstock']
+
+/** 按「缺口 → 效期 → 积压」排序, 组内保持后端给的紧急度顺序 */
+function orderRows(rows: OwnHealthItem[]): OwnHealthItem[] {
+  return TYPE_ORDER.map(function (k) {
+    return rows.filter(function (x) {
+      return x.alert_type === k
+    })
+  }).reduce(function (a, b) {
+    return a.concat(b)
+  }, [] as OwnHealthItem[])
 }
 
 export default function OwnHealthSheet(props: Props) {
-  const { open, onClose, ownHealth, onAlert } = props
+  const { open, onClose, ownHealth, onAlert, channel } = props
+  const [rows, setRows] = useState<OwnHealthItem[]>([])
+  const [busy, setBusy] = useState(false)
+  const [end, setEnd] = useState(false)
+  const offRef = useRef(0)
+  const busyRef = useRef(false)
+  const endRef = useRef(false)
+
+  /**
+   * 2026-11-06 分页拉取(结构改造, 不是"藏起来")
+   *
+   * 原来弹窗的数据来自 /dashboard/aux 的 ownHealth.items —— **全量**。当条目从 90 涨到
+   * 13,615 条时: aux 响应 5.6MB、共享表缓存单条超 TiDB 6MB 上限永远写不进去、每个请求
+   * 重算两遍(线上单请求 9.5s)、同实例其它接口全部排队 → "切页面加载不出"。
+   * 现在弹窗打开才按页拉(200/页, 滚到底自动续), 翻到底仍是全量, 一条不少。
+   */
+  const load = useCallback(
+    async function (reset: boolean) {
+      if (!open || busyRef.current) return
+      if (!reset && endRef.current) return
+      busyRef.current = true
+      setBusy(true)
+      const off = reset ? 0 : offRef.current
+      try {
+        const r =
+          (await apiJson<{ data?: { items?: OwnHealthItem[] } }>(
+            'GET',
+            '/api/dashboard/own-health?channel=' +
+              encodeURIComponent(channel || 'jd') +
+              '&offset=' +
+              off +
+              '&limit=' +
+              PAGE,
+            { timeout: 45000 },
+          )) || {}
+        const add = (r.data && r.data.items ? r.data.items : []) as OwnHealthItem[]
+        offRef.current = off + add.length
+        setRows(function (prev) {
+          return orderRows(off === 0 ? add : prev.concat(add))
+        })
+        if (add.length < PAGE) {
+          endRef.current = true
+          setEnd(true)
+        }
+      } catch {
+        // 失败不阻塞弹窗: 已加载的行照常展示, 用户可点「加载更多」重试
+      } finally {
+        busyRef.current = false
+        setBusy(false)
+      }
+    },
+    [open, channel],
+  )
+
+  useEffect(
+    function () {
+      if (!open) return
+      offRef.current = 0
+      endRef.current = false
+      setRows([])
+      setEnd(false)
+      load(true)
+    },
+    [open, channel, load],
+  )
+
   if (!open) return null
+  const _src = rows.length
+    ? rows
+    : (((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[])
+
   return createPortal(
     <>
       <div
@@ -38,6 +127,10 @@ export default function OwnHealthSheet(props: Props) {
         <div
           onClick={function (e) {
             e.stopPropagation()
+          }}
+          onScroll={function (e) {
+            const el = e.currentTarget
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) load(false)
           }}
           className="material-regular"
           style={{
@@ -67,32 +160,15 @@ export default function OwnHealthSheet(props: Props) {
                 (用户明确要求去除): 口径解释属实现注释, 不该占弹窗首屏; 行首 pill 已标类型。 */}{' '}
           {/* 2026-11-01 改为**单一全量列表 + 行首标签区分类型**(用户定, 参考「采购&补货」卡):
                 原按三类分组各带小标题, 与采购补货卡的行标签范式不一致, 且分组标题
-                占用垂直空间。现在统一按 缺口→效期→积压 排序铺平, 每行行首 pill 标类型。 */}
+                占用垂直空间。现在统一按 缺口→效期→积压 排序铺平, 每行行首 pill 标类型。
+              2026-11-06: 数据来源改为分页接口(见 load()), 排序仍按 缺口→效期→积压。 */}
           {(() => {
             const _OWN_META: Record<string, { tag: string; cls: string; c: string }> = {
               own_transfer_gap: { tag: 'oh.tag_transfer_gap', cls: 'danger', c: 'var(--danger)' },
               own_expiry_risk: { tag: 'oh.tag_expiry', cls: 'danger', c: 'var(--danger)' },
               own_overstock: { tag: 'oh.tag_overstock', cls: 'warning', c: 'var(--warning)' },
             }
-            const _all = ((ownHealth as OwnHealthData | null)?.items || []) as OwnHealthItem[]
-            // 2026-11-01 分类型配额(每类上限 20, 总数上限 60)——
-            //   直接整体 sort 后 slice(0,60) 时, 缺口 9 条排在最前, 剩下 51 个名额
-            //   全被"效期"吃掉, "积压" 35 条一条都进不来(实测弹窗只剩 积压 5)。
-            //   改为三类各自排序后各取前 20 再拼回, 保证三类都可见。
-            // 2026-11-01 改为**全量展示**(用户裁决: 改全量)。
-            //   原为分类型配额每类 20(共 49), 导致标题写 (90) 而弹窗只有 49 行, 效期 26 条、
-            //   积压 15 条在弹窗里看不到 —— 弹窗是唯一能看全的入口, 截断即等于丢数据。
-            //   仍按 缺口→效期→积压 排序, 便于顺序阅读; 高度由 maxHeight:70vh + 滚动承接。
-            const all = (['own_transfer_gap', 'own_expiry_risk', 'own_overstock'] as string[])
-              .map(function (t) {
-                return _all.filter(function (x) {
-                  return x.alert_type === t
-                })
-              })
-              .reduce(function (a, b) {
-                return a.concat(b)
-              }, [])
-            return all.map(function (x, i) {
+            return _src.map(function (x, i) {
               const m = _OWN_META[x.alert_type] || {
                 tag: 'oh.tag_warning',
                 cls: 'warning',
@@ -150,7 +226,9 @@ export default function OwnHealthSheet(props: Props) {
                       >
                         {t(m.tag)}
                       </span>
-                      {x.product_name || x.sku}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {x.product_name || x.sku}
+                      </span>
                     </span>
                     <span
                       style={{
@@ -173,6 +251,22 @@ export default function OwnHealthSheet(props: Props) {
               )
             })
           })()}
+          {busy ? (
+            <div className="small muted" style={{ padding: 12, textAlign: 'center' }}>
+              {t('common.loading')}
+            </div>
+          ) : null}
+          {!busy && !end ? (
+            <div
+              onClick={function () {
+                load(false)
+              }}
+              className="clickable"
+              style={{ padding: 12, textAlign: 'center', fontSize: 'var(--font-sm)' }}
+            >
+              {t('ins.load_more')}
+            </div>
+          ) : null}
           <div
             onClick={function () {
               onClose()

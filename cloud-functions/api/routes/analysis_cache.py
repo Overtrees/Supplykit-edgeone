@@ -143,7 +143,15 @@ def cache_get(key, ttl, builder, max_bytes=None):
         _s = json.dumps(val, ensure_ascii=False, default=str)
         if max_bytes and len(_s.encode("utf-8")) > max_bytes:
             return val
-        cache_put(key, _s, tok=_tok, raw=True)
+        # 2026-11-06 性能根治: cache_put 失败**不许**触发重算。
+        #   原来它抛异常会被下面的 except 接住 → 删 key + 记 cache_error + `return builder()`,
+        #   于是"缓存写不进去"变成了"每个请求算两遍"。aux 5.6MB 超 TiDB 单条 6MB 上限时
+        #   正是这条路: 线上 aux 单请求 9.5s(≈ 两次 6~9s 的 build), 同时把 8025 噪音刷进日志。
+        #   写缓存失败是"缓存坏了", 不是"算错了" —— 本次结果照常返回, 只是没落表。
+        try:
+            cache_put(key, _s, tok=_tok, raw=True)
+        except Exception as _ep:
+            try_err('analysis_cache', 'cache_put 失败(本次结果照常返回, 不重算)', _ep)
         return val
     except Exception as e:
         # 治本自愈(非纯降级): 删损坏 key + 幂等建表 + 记日志 → 下次请求恢复缓存;

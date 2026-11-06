@@ -919,11 +919,27 @@ def _fill_barcode_from_products(channel, cleaned, cache=None):
     _multi = {k for k, s in _codes.items() if len(s) > 1}
     _hist = cache.setdefault("multi", set()) if cache is not None else set()
     _multi |= _hist
+    # 2026-11-06 性能根治: **只查会被读到的证据**
+    #
+    # _multi 的读点只有两处, 且都在"缺码"分支里(见下面逐行判定):
+    #   · `if not _arc:` → `if _k in _multi: 留空`      档案缺码
+    #   · `if not _own:` → `if _k not in _multi and ...` 本行缺码
+    # 档案有码 **且** 本批这一 SKU 每行都有码 → 两个分支都进不去 → 证据算了也没人读。
+    #
+    # 而这条证据查询是 `WHERE sku IN (...)` 过滤, orders 上能用的索引只有
+    # (channel, order_no, sku, barcode) 的**最左**前缀, 用不到 sku →
+    # 实测 EXPLAIN 是 IndexFullScan 44 万条索引项; batches 更是 TableFullScan 18 万行。
+    # 每 500 个 SKU 发 3 条, 一份大文件几十个批次就是上百次全表扫 —— 这正是
+    # seed 订单段单窗口 20 次探针 × 6 窗 = 120 次全表扫的来源。
+    # 收紧到 _need 后: 判定结果逐行不变(不读的就不算), 常规导入(档案有码)探针数=0。
+    _no_code = {str(r.get("sku") or "").strip() for r in cleaned
+                if r.get("sku") and not str(r.get("barcode") or "").strip()}
+    _need = [s for s in _skus if (not _amap.get(s)) or (s in _no_code)]
     if cache is not None:
         _probed = cache.setdefault("probed", set())
-        _probe = [s for s in _skus if s not in _probed]
+        _probe = [s for s in _need if s not in _probed]
     else:
-        _probe = _skus
+        _probe = _need
     for _i in range(0, len(_probe), 500):
         _part = _probe[_i:_i + 500]
         _ph = ",".join(["%s"] * len(_part))
@@ -1219,7 +1235,6 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
         return _res
     if target == "gmv_flow":
         # 2026-10-16 GMV 回款(资金流水——表B): platform+flow_no 去重——月度回款/在途数据源
-        try_err('cleanse_write', 'gmv_flow 分支进入 cleaned=%d' % len(cleaned))
         try:
             execute("CREATE TABLE IF NOT EXISTS gmv_flows (id BIGINT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(32) NOT NULL, shop VARCHAR(64) DEFAULT '', flow_no VARCHAR(64) NOT NULL, related_no VARCHAR(64) DEFAULT '', arrived_time DATETIME, amount DECIMAL(14,2) DEFAULT 0, flow_type VARCHAR(32) DEFAULT '', settled_amount DECIMAL(14,2) DEFAULT 0, channel VARCHAR(20) DEFAULT 'jd', data_source VARCHAR(32) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_platform_flow_ch (channel, platform, flow_no))")
         except Exception as _etb:

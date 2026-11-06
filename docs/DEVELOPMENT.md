@@ -7212,3 +7212,194 @@ GMV 回款    jd 450 条 / 8,594.5 万 · other 450 条 / 8,564.5 万（按渠�
 69 码       订单空码 0 行（0.0%）
 四维键      orders 重复组 0 / inventory 唯一键重复组 0
 ```
+
+## §15.163 「改成导入链路后慢了几十倍」+「任务期间页面加载不出」的根因(2026-11-06)
+
+用户两个问题，一句话各自回答：
+
+> **① 慢**：不是"导入链路本身慢"，是链路里三处 **O(行数) 的查库动作**被放大成了
+> "每 500 行全表扫一遍 / 每 2000 行回读一次 / 17 万行写三遍"。
+> **② 加载不出**：不是并发竞态，也不是 DB 连接打满 —— 是一个 5.6MB 的响应把
+> 共享缓存顶穿 TiDB 单条 6MB 上限，于是**每个请求都重算两遍**，把实例和连接池一起堵死。
+
+下面是量出来的证据与改法。凡是没直接测到的，本节明确标"未测"。
+
+### 一、把"慢"拆开：每一段多贵，是测出来的不是猜的
+
+沙箱直连 TiDB（公网 221ms 往返，见 §15.162），所有数字已扣除/标注往返。
+
+| 动作 | 实测 | 服务端净耗时 | 说明 |
+|---|---|---|---|
+| 2000 键点查（全不命中） | 0.24 s | ~0.02 s | 纯往返，便宜 |
+| 2000 键点查（全命中，取 4 列） | 0.68 s | ~0.46 s | 回表 2000 行，0.23ms/行 |
+| INSERT 2000 行 | 0.33 s | ~0.11 s | 写不是瓶颈 |
+| INSERT 10000 行 | 1.24 s | ~1.0 s | 0.1ms/行，线性 |
+| to_csv + _parse_table + _clean_rows（2000 行订单） | — | **0.035 s** | 纯 CPU，全程 441k 行 ≈ 8 s |
+
+**第一条被证伪的猜想**：不是"CSV 往返把时间吃掉了"。441,913 行订单的 CSV 序列化 + 解析 +
+清洗合计只有 ~8 秒，占比 2.6%。§15.160 引入的"真 CSV 往返"设计是对的，不该回退。
+
+**真正的三块开销**，全部是"每批一次 × 批次数"：
+
+#### 1) 69 码多码证据：每 500 个 SKU 全表扫一次
+
+`cleanse_write._fill_barcode_from_products` 里有一条证据查询：
+
+```sql
+SELECT sku, COUNT(DISTINCT barcode) FROM `orders`
+WHERE sku IN (…500 个…) AND barcode<>'' GROUP BY sku
+```
+
+EXPLAIN 实测（线上库）：
+
+| 表 | 计划 | 规模 |
+|---|---|---|
+| orders | **IndexFullScan** `uq_orders_biz(channel,order_no,sku,barcode)` | 扫 **441,373** 条索引项 |
+| batches | **TableFullScan** | 扫 **180,579** 行 |
+| inventory | IndexRangeScan（`uq_inventory_biz` 的最左就是 sku） | 正常 |
+
+原因很直白：orders 的唯一键把 `sku` 放在**第三位**，`sku IN (...)` 用不上最左前缀。
+而这条查询在订单导入里 **每个窗口的每个 500 行批次**都要发 3 条（inventory/orders/batches），
+一个窗口 1 万 SKU = 20 批 × 3 = 60 条，6 个窗口 = **360 次全表扫**。
+
+**改法（语义等价）**：这条证据只服务于两个分支 —— "档案缺码"和"本行缺码"。
+档案有码、本行也有码时，结论算出来根本没人读。于是：
+
+```python
+_no_code = {r["sku"] for r in cleaned if not r["barcode"].strip()}
+_need    = [s for s in _skus if (not _amap.get(s)) or (s in _no_code)]
+_probe   = [s for s in _need if s not in _probed]     # 只查"会被读到"的
+```
+
+实测（同一批真实档案）：全码批次 **4 条查询 → 1 条**（只剩档案查询）；
+含缺码行的批次仍是 4 条，且判定结果逐行不变（`效期管理=yes/多码=是` → 留空，与改前一致）。
+配套补了覆盖索引 `(sku, barcode)`（orders / batches），把剩下那部分从全表扫压成 500 个索引区间。
+
+#### 2) 订单四维键预读：每条 2000 行都要回读一次库
+
+`_align_order_keys` 每批发一条 `order_no IN (2000)` 的回读。这条本身是对的（防"同一笔订单
+因为码变了分裂成两行"），但它是 **O(批次数)** 的固定成本：441k 行 / 2000 = 221 次。
+命中 0.46s、不命中 0.02s —— 首次灌库时表是空的，所以它几乎全是"白查"。
+
+**没动它**。原因：`prev` 同时承担三件事（补码、空码升级、旧日期重建 agg），
+任何"跳过"的写法都要在三种场景下重新证明等价，收益却只有首次灌库这一条路径上的几十秒。
+先把 ①③ 做完再量，不够再动（§15.162 的教训：不要用推理代替测量）。
+
+#### 3) 月汇总：同一批 17 万行被写了三遍
+
+原实现 = `UPDATE inventory SET month_*=0 WHERE channel IN (jd,other)`（全表清零）
+\+ 入库 `UPDATE ... JOIN` + 出库 `UPDATE ... JOIN`。线上该段 **325 s**（含两次 504 重试）。
+
+改法：一条语句 LEFT JOIN 两张聚合表，两列一起写，且
+
+```sql
+WHERE i.channel=%s
+  AND (i.month_inbound<>COALESCE(fi.q,0) OR i.month_outbound<>COALESCE(fo.q,0))
+```
+
+"没流水的行要归 0"没丢 —— LEFT JOIN 出 NULL，`COALESCE(...,0)` 就是 0，老值非 0 照样写回。
+只是现在只为"真的变了"的行付费。**已在线上库空跑验证：jd 0 行 / other 0 行，各 0.7~0.9 s**（数据本就正确）。
+
+### 二、把"加载不出"拆开：一条 5.6MB 的响应拖垮了整个实例
+
+先给结论，再给证据：**不是竞态，也不是 TiDB 连接被打满，是队头阻塞。**
+
+#### 证据 1：连一条 `SELECT` 都超时，说明卡在排队而不是算不动
+
+`quality_logs`（11:42 那一分钟，用户正在切页面）：
+
+```
+严重慢请求: GET /dashboard/aux 15.6s / 19.0s
+timeout of 45000ms exceeded /api/orders?page=1&page_size=30&…
+timeout of 45000ms exceeded /api/tasks?channel=jd&limit=8
+timeout of 90000ms exceeded /api/insights/replenishment?…
+Network Error /api/dashboard/stock-risk?…
+```
+
+`/api/tasks` 是 `sync_tasks` 上一条 `ORDER BY id DESC LIMIT 8`，毫秒级；
+`/api/orders` 是 `idx_orders_ch_id` 上的 30 行分页。它们超时，只能是**前面有东西占着**。
+
+#### 证据 2：库侧连接只有 12 条 Sleep
+
+```
+SELECT COUNT(*) FROM information_schema.processlist → 13（含自己）
+command: Sleep 12 条，最长空闲 421s
+```
+
+TiDB 没被打满，`DB_POOL_LIMIT=10` 也没被饿死。问题在**每个请求要占着连接好几秒**。
+
+#### 证据 3：aux 自己就 5.6MB，且缓存永远写不进去
+
+```
+GET /api/dashboard/aux → 5,648,116 B / 9.56 s
+  ownHealth   5,998,436 B   items: 13,615   ← 全部明细
+  alerts         35,883 B   (100 条)
+  stockOverview  26,820 B   (100 条)
+```
+
+写共享缓存时：
+
+```
+cache_error: cache_get 降级直算[dash_aux|jd|bbcc]:
+  (8025, 'entry too large, the max entry size is 6291456, the size of data is 6835645')
+```
+
+**这一条把三件事串起来了**：
+
+1. `own_health(channel, full=1)` 返回**全部** 13,615 条（7,143 积压 + 5,256 效期 + 1,216 缺口）；
+2. 6.8MB > TiDB 单条事务 6MB 上限 → `cache_put` 抛错；
+3. 抛错被 `cache_get` 的 `except` 接住 → 删 key → 记 `cache_error` → **`return builder()`**，
+   也就是**再算一遍**。于是每个请求 = 2 ×（own_health 的 9 条 SQL + 1.3 万条 Python 组装）≈ 9.5s。
+
+再叠加"seed 每个窗口 `invalidate("all")`"——缓存永远是冷的。多个页面同时进来，
+每个都在算 5.6MB，同一实例上其它接口（含 `/tasks`）只能排队 → 45s 超时 → 用户看到"加载不出"。
+
+#### 为什么不是"并发/竞态"
+
+- 竞态那部分在 §15.161 前已经收口：`probe=1` 纯读、租约心跳、`_LAST_CONT` 限频，日志里
+  没有一条"抢锁/双写"痕迹；
+- 真正串行化的是**连接与实例**：`DB_POOL_LIMIT=10` + `_acquire()` 阻塞等 20s，
+  10 条连接被 10 个"重算中的看板请求"占满后，第 11 个请求连 SQL 都发不出去；
+- 而重算本身是被上一条（缓存写不进）逼出来的 —— 因果链是
+  **明细塞进聚合响应 → 缓存失效 → 每请求重算 → 连接被长时间占用 → 队列堵死**，
+  不是两个请求抢同一份数据。
+
+### 三、改了什么
+
+| # | 位置 | 改法 | 实测效果 |
+|---|---|---|---|
+| 1 | `cleanse_write._fill_barcode_from_products` | 多码证据只查"会被读到"的 SKU | 全码批次 4 条查询 → 1 条；判定逐行不变 |
+| 2 | `schema_create._ADD_INDEXES` + v13 | orders/batches 补 `(sku, barcode)` | 残留探针从全表扫 → 索引区间 |
+| 3 | `seed_fill._sync_inv_month` | 清零合并进 LEFT JOIN，只写变化行 | 3 遍写 → 1 遍；空跑 0 行/0.7s |
+| 4 | `dashboard._build_aux` | `own_health(full=0, per_type=3)` | aux **5,648,116 B → 67,644 B**（-98.8%），ownHealth 5,998,436 → 4,164 B |
+| 5 | 新增 `GET /dashboard/own-health` | 明细分页（`offset/limit/only`，上限 500/页） | 弹窗 200 条/页，滚到底仍可看全 |
+| 6 | `OwnHealthSheet.tsx` | 打开时按页拉、滚到底续拉 | 首屏不再背 1.3 万行 |
+| 7 | `analysis_cache.cache_get` | `cache_put` 失败**只丢缓存，不重算** | 消除"每请求算两遍" |
+| 8 | `cache_get` aux 调用 | 加 1MB `max_bytes` 护栏 | 体积反弹时不再炸 8025 |
+
+**红线**：没有把"全量"取消。弹窗仍是"翻到底就是全量"，只是不再由**聚合接口**一次性背负；
+也没有把慢接口的超时调大，没有给明细加"折叠按钮"。
+
+### 四、还没做的（明写，避免下次又靠猜）
+
+| 项 | 现状 | 为什么先不动 |
+|---|---|---|
+| `_align_order_keys` 每批回读 | 首次灌库 ≈ 221 次白查 | 三种语义耦合，需先量出它到底占多少秒再决定 |
+| `_build_aux` 冷算 6~9 s | 修好后**每 60 s 一次**，不再是每请求 | 里面 `low` 计数把 8 万行库存拉进 Python 算动态安全线，应改聚合 SQL |
+| seed 每窗口 `invalidate("all")` | 任务期间缓存恒冷 | 属刷新策略变更，要单独定口径 |
+| `alerts` 段恒 0 条 | `safety_qty` 静态线已退役 | §15.162 第七节，口径变更待定案 |
+
+### 五、验证
+
+```
+local_test      632 通过 / 0 失败（新增 6 条断言：探针门控 / 覆盖索引 / 月汇总单遍 /
+                aux 有界 / 缓存写失败不重算 / own_health 分页）
+preflight       八步全绿；i18n 1428 键 zh/en 相等、中文硬编码 0 行
+线上库空跑       _sync_inv_month 合并语句：jd 0 行 0.95s、other 0 行 0.77s（数据不变）
+                _build_aux：67,644 B，ownHealth items=9 / total=13,615
+                own_health 分页：页1/页2 各 300 条，重叠 0；全量 13,615 条可拼回
+```
+
+**未测**：线上端到端的 seed 全链路耗时（需重灌 27 分钟 + RU 配额）。按上表第 1/3 条
+的换算，订单段与月汇总段应各降一个量级，但**这个数必须下次真跑才写**——
+§15.162 已经把"用换算当实测"的错误犯过一次（182.9s 那次），不再重犯。

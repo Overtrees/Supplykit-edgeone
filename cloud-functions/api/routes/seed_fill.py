@@ -861,50 +861,39 @@ def _sync_inv_month():
     #   53,915 (1.83 倍), 157 行是 10 月残留。月汇总语义 =「本月流水合计」, 无流水即 0。
     #   注: 本函数仅 seed 调用(seed_step 8 / run_seed_fill); 生产环境客户导入的月度值
     #   (ERP 口径, cleanse_write 可写 month_* 列)不得被此函数覆盖 —— 导入路径不调这里。
-    try:
-        # 清零范围必须与下面的重算范围**完全一致**(channel IN ('jd','other')):
-        #   清零更宽 → 该渠道被清 0 却永远不重算, 静默丢数据(seed 库现无其他渠道, 但不该靠运气)
-        execute("UPDATE inventory SET month_inbound=0, month_outbound=0 "
-                "WHERE channel IN ('jd','other')")
-        _stat['cleared'] = "channel in (jd,other)"
-    except Exception as _e:
-        try_err('seed_fill', '月汇总清零', _e)
-    for table, date_col, target_col in (('inbound_records', 'inbound_date', 'month_inbound'),
-                                        ('outbound_records', 'outbound_date', 'month_outbound')):
-        rows = query("SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, channel, "
-                     "SUM(quantity) AS q FROM `%s` "
-                     "WHERE channel IN ('jd','other') AND `%s` >= %%s "
-                     "GROUP BY warehouse_type, sku, COALESCE(barcode,''), warehouse, channel"
-                     % (table, date_col), [month_start])
-        _stat[target_col] = len(rows or [])
-        if not rows:
-            continue
-        # 2026-11-05 线上事故修复(step22 单段 122s): 原 WHERE 写 `COALESCE(barcode,'')=%%s`,
-        #   表达式让唯一键 uq_inventory_biz(sku,barcode,warehouse,channel,warehouse_type)
-        #   只能用上 sku 前缀 —— EXPLAIN 从 Point_Get 退化成 IndexRangeScan + 逐行
-        #   TableRowIDScan。inbound 7,869 + outbound 13,820 = 2.1 万组, 每组都要回表扫,
-        #   单请求实测 122s 被网关 120s 硬切。
-        #   改法: barcode 分两支 —— 有码走等值(命中完整唯一键, Point_Get);
-        #   空码走 `barcode IS NULL OR barcode=''`(既有有码行不会被误改, 因为条件限定了空/无)。
-        # 2026-11-06 性能根治: executemany 对 UPDATE **不是批量** —— PyMySQL 会循环单条执行,
-        #   2.1 万组 = 2.1 万次往返。线上实测 step14 单段 122s, 连续两次撞穿网关硬切(504)。
-        #   这条 §15.96 第二节就写过(「executemany 只对 INSERT 是批量」), 这里又踩了一次。
-        #   改 UPDATE ... JOIN: 一条语句一次往返, 按渠道各一条(控制单语句体积)。
-        #   顺带解决索引问题: 驱动表是聚合子查询, 不再逐组用 WHERE 回表, 空码也就不必
-        #   拆成两套参数 —— 上一版为绕开「表达式破坏 uq_inventory_biz」写的两支可以合并。
-        for _ch1 in ('jd', 'other'):
-            try:
-                execute("UPDATE inventory i JOIN ("
-                        "  SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, "
-                        "         SUM(quantity) AS q FROM `%s` "
-                        "  WHERE channel=%%s AND `%s` >= %%s "
-                        "  GROUP BY warehouse_type, sku, COALESCE(barcode,''), warehouse"
-                        ") f ON f.sku=i.sku AND f.bc=COALESCE(i.barcode,'') "
-                        "   AND f.warehouse=i.warehouse AND f.warehouse_type=i.warehouse_type "
-                        "SET i.`%s`=f.q WHERE i.channel=%%s"
-                        % (table, date_col, target_col), [_ch1, month_start, _ch1])
-            except Exception as _e:
-                try_err('seed_fill', '月汇总批量更新(JOIN %s)' % _ch1, _e)
+    #
+    # 2026-11-06 性能根治(第二步): 上面这条"清零"再也不能单独发。
+    #   它是一次**全表 UPDATE**(17 万行), 而紧接着的 JOIN 更新又会再扫一遍同样的行 ——
+    #   清零 + 入库 JOIN + 出库 JOIN = 同一批行被写了 3 遍。线上实测该段 325s(含两次 504 重试)。
+    #   现改成: 一条语句里 LEFT JOIN 两张聚合表, 两列一起写, 并且
+    #   `WHERE i.month_inbound<>COALESCE(fi.q,0) OR i.month_outbound<>COALESCE(fo.q,0)`
+    #   —— 只写"值真的变了"的行。
+    #   清零语义没丢: 没有流水的行 LEFT JOIN 得到 NULL → COALESCE(...,0) = 0, 老值非 0 时
+    #   仍然会被写回 0 —— 这正是原来那条 UPDATE 想干的事, 只是现在它只为"真的有差异"的行付费。
+    _MONTH_SQL = (
+        "UPDATE inventory i "
+        "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
+        "                  SUM(quantity) AS q FROM inbound_records "
+        "           WHERE channel=%s AND inbound_date>=%s "
+        "           GROUP BY sku, COALESCE(barcode,''), warehouse, warehouse_type) fi "
+        "  ON fi.sku=i.sku AND fi.bc=COALESCE(i.barcode,'') "
+        " AND fi.warehouse=i.warehouse AND fi.warehouse_type=i.warehouse_type "
+        "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
+        "                  SUM(quantity) AS q FROM outbound_records "
+        "           WHERE channel=%s AND outbound_date>=%s "
+        "           GROUP BY sku, COALESCE(barcode,''), warehouse, warehouse_type) fo "
+        "  ON fo.sku=i.sku AND fo.bc=COALESCE(i.barcode,'') "
+        " AND fo.warehouse=i.warehouse AND fo.warehouse_type=i.warehouse_type "
+        "SET i.month_inbound=COALESCE(fi.q,0), i.month_outbound=COALESCE(fo.q,0) "
+        "WHERE i.channel=%s "
+        "  AND (i.month_inbound<>COALESCE(fi.q,0) OR i.month_outbound<>COALESCE(fo.q,0))")
+    _stat['cleared'] = "channel in (jd,other)"
+    for _ch1 in ('jd', 'other'):
+        try:
+            _n1 = execute(_MONTH_SQL, [_ch1, month_start, _ch1, month_start, _ch1])
+            _stat[_ch1] = _n1
+        except Exception as _e:
+            try_err('seed_fill', '月汇总批量更新(JOIN %s)' % _ch1, _e)
     # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
     #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
     #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**

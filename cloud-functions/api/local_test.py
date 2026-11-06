@@ -3325,9 +3325,18 @@ try:
     _sf11_code = "\n".join(x for x in _sf11.splitlines()
                            if x.strip() and not x.strip().startswith("#"))
     check("月汇总: 单条 UPDATE JOIN(executemany 对 UPDATE 是 N 次往返, 2.1 万组曾撞 122s)",
-          "UPDATE inventory i JOIN (" in _sf11_code
-          and "=f.q" in _sf11_code
+          "UPDATE inventory i" in _sf11_code
+          and "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc" in _sf11_code
+          and "=COALESCE(fi.q,0)" in _sf11_code
           and 'executemany("UPDATE inventory SET' not in _sf11_code,
+          "routes/seed_fill.py")
+    # 2026-11-06 第二步: 清零不再单独发一条全表 UPDATE。
+    #   原实现 = 全表清零 + 入库 JOIN + 出库 JOIN, 同一批 17 万行被写 3 遍(线上实测该段 325s)。
+    #   现在一条语句 LEFT JOIN 两张聚合表, 两列一起写, 且只写"值真的变了"的行 ——
+    #   "没流水的行要归 0"这条语义由 COALESCE(f.q,0) + `<>` 守卫自然成立, 不靠额外一趟写。
+    check("月汇总: 清零合并进 JOIN(不再全表 UPDATE 一遍) + 只写变化行",
+          "UPDATE inventory SET month_inbound=0" not in _sf11_code
+          and "i.month_inbound<>COALESCE(fi.q,0)" in _sf11_code,
           "routes/seed_fill.py")
     # 2026-11-05 期初全 0 的完整根因(三层叠加, 修一层露一层):
     #   ① reset 不清 ledger_state → jd 带着 closed/2026-10 重跑;
@@ -3343,6 +3352,45 @@ try:
                                    'SCENE_FIRST = "C_first"', 'SCENE_OUTSIDE = "D_outside"',
                                    'def detect_scene(')),
           "core/ledger_adj.py")
+    # ── 2026-11-06 性能: "种子/导入慢" 的三处结构性开销 ──────────────────
+    # ① 69码多码证据: 原来对**本批所有** SKU 都查 3 张表, 而结论(_multi)只在
+    #    "档案缺码 / 本行缺码"两个分支被读 → 查了也用不上。EXPLAIN 实测该查询在 orders
+    #    上是 IndexFullScan(44 万索引项)、batches 上是 TableFullScan(18 万行)。
+    _cw11 = open("routes/cleanse_write.py", encoding="utf-8").read()
+    _cw11_code = "\n".join(x for x in _cw11.splitlines()
+                           if x.strip() and not x.strip().startswith("#"))
+    check("69码多码证据: 只对「档案缺码/本行缺码」的 SKU 探针(其余结论没人读)",
+          "_need = [s for s in _skus if (not _amap.get(s)) or (s in _no_code)]" in _cw11_code
+          and "_probe = [s for s in _need if s not in _probed]" in _cw11_code
+          and "_probe = _need" in _cw11_code
+          and "_probe = _skus" not in _cw11_code,
+          "routes/cleanse_write.py")
+    # ② 覆盖索引: 没有 (sku, barcode) 上面那条查询就只能全扫
+    _sc11 = open("schema_create.py", encoding="utf-8").read()
+    check("schema: orders/batches 补 (sku, barcode) 覆盖索引 + 版本号递增触发补建",
+          '("idx_orders_sku_bc", "orders", "(sku, barcode)")' in _sc11
+          and '("idx_batches_sku_bc", "batches", "(sku, barcode)")' in _sc11
+          and "SCHEMA_VERSION = 13" in _sc11,
+          "schema_create.py")
+    # ③ 聚合接口不许再背明细: aux 的 ownHealth 曾经 13,615 条 / 5.9MB
+    _db11 = open("routes/dashboard.py", encoding="utf-8").read()
+    # 只看代码行: 上面那条注释里引用了旧写法 `own_health(channel, full=1)`
+    _db11_code = "\n".join(x for x in _db11.splitlines()
+                           if x.strip() and not x.strip().startswith("#"))
+    check("看板 aux: 自有仓明细有界(三类各 3 条), 全量走分页口 /dashboard/own-health",
+          "own_health(channel, full=0, per_type=3)" in _db11
+          and "own_health(channel, full=1)" not in _db11_code
+          and '@router.get("/dashboard/own-health")' in _db11,
+          "routes/dashboard.py")
+    # ④ 缓存写失败 ≠ 算错了: 原实现会把 builder 再跑一遍(体积超上限时每请求算两遍)
+    _ac11 = open("routes/analysis_cache.py", encoding="utf-8").read()
+    check("缓存: cache_put 失败只丢缓存, 不触发重算(曾致 aux 每请求算两遍)",
+          "cache_put 失败(本次结果照常返回, 不重算)" in _ac11,
+          "routes/analysis_cache.py")
+    check("own_health: 支持 offset/per_type/only 分页切片(返回仍带全量计数)",
+          "def _page(items, full=0, limit=10, offset=0, per_type=0, only=" in
+          open("routes/dashboard_own_health.py", encoding="utf-8").read(),
+          "routes/dashboard_own_health.py")
     # 只看代码行(去注释): 历史说明里会引用被废弃的写法, 否则断言被自己的注释干成假红
     _la11_code = "\n".join(x for x in _la11.splitlines()
                            if x.strip() and not x.strip().startswith("#"))

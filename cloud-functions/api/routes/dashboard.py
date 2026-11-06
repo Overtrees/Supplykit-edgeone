@@ -938,7 +938,10 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
     traditional → 低库存显示 C 仓(platform)+own(自有/三方仓)
     """
     _key = "dash_aux|%s|%s" % (channel, mode)
-    _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode))
+    # 1MB 上限: aux 是"卡片聚合", 正常 30~80KB。超 1MB 说明又有明细列表被误塞进聚合响应,
+    #   宁可这次不落缓存(也不至于把 TiDB 单条 6MB 事务打爆 / 让每个请求算两遍)。
+    _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
+                       max_bytes=1024 * 1024)
     # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
     #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
     #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
@@ -1087,12 +1090,32 @@ def _build_aux(channel, mode):
     #   失败降级为空结构 —— 不给 aux 整体添故障点。
     try:
         from routes.dashboard_own_health import own_health
-        _aux_result["ownHealth"] = own_health(channel, full=1)
+        # 2026-11-06 结构改造: 原来是 own_health(channel, full=1) —— 把**全部**条目塞进 aux。
+        #   线上实测 13,615 条 / 5.9MB → 响应 5.6MB、缓存超 6MB 上限永久写不进去(8025)、
+        #   每个请求都重算。聚合接口只发"够卡片渲染"的一段(三类各 3 条), 全量改由
+        #   /dashboard/own-health 分页拉(弹窗里翻到底即全量, 一条不少)。
+        _aux_result["ownHealth"] = own_health(channel, full=0, per_type=3)
     except Exception as _e:
         try_err("dash", "自有仓健康计算降级", _e)
         _aux_result["ownHealth"] = {"items": [], "total": 0, "transferGap": 0, "overstock": 0,
                                     "expiryRisk": 0, "critical": 0, "warning": 0, "limits": {}}
     return _aux_result
+
+
+@router.get("/dashboard/own-health")
+@traced
+def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
+                         only: str = "", per_type: int = 0):
+    """自有仓健康**明细**(分页) —— 聚合接口 /dashboard/aux 只发前若干条卡面行
+
+    2026-11-06 为什么要单独一个口: 这段明细随规模线性增长(线上实测 13,615 条 / 5.9MB),
+    放进 aux 会把"看板首屏"变成"下载一个 5.6MB 的清单", 并且写不进共享缓存 ——
+    首屏与明细是两种读法, 本就该两个口。弹窗按页拉, 翻到底即全量, 一条不少。
+    """
+    from routes.dashboard_own_health import own_health as _oh
+    _lim = max(1, min(int(limit or 200), 500))
+    return ok(_oh(channel, full=1, limit=_lim, offset=max(0, int(offset or 0)),
+                  only=only, per_type=int(per_type or 0)))
 
 
 @router.get("/dashboard/stock-risk")

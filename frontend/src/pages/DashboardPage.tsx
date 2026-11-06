@@ -1160,6 +1160,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           setShowAllOwn(false)
         }}
         ownHealth={ownHealth}
+        channel={channel}
         onAlert={onAlert}
       />
 

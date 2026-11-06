@@ -58,7 +58,8 @@ def _cf(cfg, key, default):
         return float(default)
 
 
-def own_health(channel, full: int = 0, limit: int = 10):
+def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
+               per_type: int = 0, only: str = ""):
     """自有仓三类告警: 调拨覆盖 / 积压 / 效期
 
     返回 {
@@ -294,10 +295,52 @@ def own_health(channel, full: int = 0, limit: int = 10):
     er = sum(1 for i in items if i["alert_type"] == "own_expiry_risk")
     crit = sum(1 for i in items if i.get("level") == "error")
     warn = sum(1 for i in items if i.get("level") == "warning")
+    out = _page(items, full=full, limit=limit, offset=offset, per_type=per_type, only=only)
     return {
-        "items": items if full else items[:limit],
+        "items": out,
         "total": len(items), "transferGap": tg, "overstock": os_, "expiryRisk": er,
         "critical": crit, "warning": warn,
         "limits": {"overstock_days": overstock_days, "expiry_buffer_days": expiry_buffer_days,
                    "b2c_days": b2c_days},
     }
+
+
+def _page(items, full=0, limit=10, offset=0, per_type=0, only=""):
+    """把排序后的全量条目裁成**有界**的一段(2026-11-06 结构改造)
+
+    为什么必须有这个函数: 这张卡的条目数随规模线性增长, 线上实测 13,615 条 / 5.9MB。
+    它原来被整包塞进 /dashboard/aux 的响应里(full=1), 于是:
+      · 响应 5.6MB, 浏览器解析 + React 渲染 1.3 万行;
+      · 写共享表缓存时超出 TiDB 单条事务 6MB 上限 → 缓存**永远存不进去**(cache_error 6 次),
+        每个请求都得重算一遍 —— 这才是"切页面就加载不出"的直接原因;
+      · 重算又反过来拖慢同实例上所有其它接口。
+    数据的"全量可见"没有取消: 弹窗改成按页拉(见路由 /dashboard/own-health),
+    翻到底就是全量。聚合接口只发"够卡片渲染"的一小段 —— 这是把大对象从热路径上拿掉,
+    不是把行藏起来。
+    """
+    if only:
+        items = [x for x in items if x.get("alert_type") == only]
+        if full and not per_type:
+            return items[int(offset or 0):int(offset or 0) + int(limit or 10)]
+    if full:
+        if per_type:
+            return _per_type(items, int(per_type))
+        _o = max(0, int(offset or 0))
+        return items[_o:_o + max(1, int(limit or 10))]
+    if per_type:
+        return _per_type(items, int(per_type))
+    return items[:max(1, int(limit or 10))]
+
+
+def _per_type(items, n):
+    """每类各取前 n 条(卡片要"三类都露头", 不能整段截断)"""
+    _c = {}
+    out = []
+    for x in items:
+        _k = x.get("alert_type")
+        _i = _c.get(_k, 0)
+        if _i >= n:
+            continue
+        _c[_k] = _i + 1
+        out.append(x)
+    return out
