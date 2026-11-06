@@ -955,7 +955,15 @@ def dashboard_aux(channel: str = "jd", mode: str = "bbcc"):
 
 
 def _build_aux(channel, mode):
-    """aux 计算体(共享缓存 builder)"""
+    """aux 计算体(共享缓存 builder)
+
+    2026-11-06 并行化(第二项排查结论): 这里原来 24 条 SQL **全串行**, 其中四段彼此
+    **无任何数据依赖**(告警组 / 库存概览 / 低库存判定 / 自有仓健康), 只是代码顺序排下来。
+    线上单次往返 ~57ms → 光往返就 1.4s; 再叠上自有仓健康那 4 条大查询(5.6 万行)
+    排在最后串行等 → 冷算 6~9s。改成 4 路并行(与 _build_summary_agg 同一套写法,
+    线程在 EdgeOne 运行时已验证可用)：峰值 4 条连接 < DB_POOL_LIMIT=10, 不挤占其它请求。
+    降级口径不变 —— 每块失败只退化成自己的空结构, 不拖垮整包。
+    """
     from routes.alerts import _FIELDS as _AF
     # 低库存维度过滤(跟随补货模式): bbcc → BC+own; traditional → C+own(白名单拼接)
     # 2026-10-30 修复"低库存卡无数据": 原 Python 判定写成 `wt in "(...)"` —— **字符串子串匹配**,
@@ -971,135 +979,179 @@ def _build_aux(channel, mode):
     _wh_types = (("own", "bc")
                  if mode == "bbcc" else ("own", "platform"))
     _wh_in = "(" + ",".join("'%s'" % _t for _t in _wh_types) + ")"
-    _wh_cond = " AND warehouse_type IN " + _wh_in
-    # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
-    # 2026-11-02 拆回两条: low_stock 必须单独查 —— 实测 bbcc 模式下头 300 条 id DESC 全是
-    #   platform(逐仓,C 仓) 行, bc(B+C 合计) 行 id 比它小 6 万, 被整体挤出 300 条窗口;
-    #   白名单 (own, bc) 再一过滤 → 卡面 0 条, 而 alertCounts 走独立 COUNT 显示 160 条
-    #   ("标题有 N、卡面空白"的根因)。分开查 + 白名单后, bbcc 稳定拿到 bc 的 160 条。
-    alerts = []
-    _sel = "SELECT %s FROM alerts WHERE channel=%%s AND status='active' " % _AF
-    _ls_rows = query(_sel + "AND alert_type='low_stock' AND warehouse_type IN " + _wh_in +
-                     " ORDER BY id DESC LIMIT 200", [channel])
-    _ar = query(_sel + "AND alert_type <> 'low_stock' ORDER BY id DESC LIMIT 300", [channel])
-    alerts.extend(_ls_rows)
-    _ls_c = len(_ls_rows)
-    _rp_c = _ot_c = 0
-    # 2026-11-01 自有仓三条不进 aux 的 alerts 列表(其他组) ——
-    #   它们由 ownHealth 专属块承载(看板「自有仓健康」卡), 再混进"其他告警"会双重计数且语义相悖
-    _OWN_AT = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
-    for r in _ar:
-        at = r.get("alert_type") or ""
-        if at in _OWN_AT:
-            continue
-        if at == "replenish":
-            if _rp_c < 100:
+    _EMPTY_OWN = {"items": [], "total": 0, "transferGap": 0, "overstock": 0,
+                  "expiryRisk": 0, "critical": 0, "warning": 0, "limits": {}}
+
+    def _block_alerts():
+        """告警列表 + 计数(两条列表查询 + 一次分组计数 + 仓库名回填)"""
+        # alerts 分组配额(2026-10-11 合并: 原 3 次串行查询 → 一次全量 + Python 分组——降查询数)
+        # 2026-11-02 拆回两条: low_stock 必须单独查 —— 实测 bbcc 模式下头 300 条 id DESC 全是
+        #   platform(逐仓,C 仓) 行, bc(B+C 合计) 行 id 比它小 6 万, 被整体挤出 300 条窗口;
+        #   白名单 (own, bc) 再一过滤 → 卡面 0 条, 而 alertCounts 走独立 COUNT 显示 160 条
+        #   ("标题有 N、卡面空白"的根因)。分开查 + 白名单后, bbcc 稳定拿到 bc 的 160 条。
+        alerts = []
+        _sel = "SELECT %s FROM alerts WHERE channel=%%s AND status='active' " % _AF
+        _ls_rows = query(_sel + "AND alert_type='low_stock' AND warehouse_type IN " + _wh_in +
+                         " ORDER BY id DESC LIMIT 200", [channel])
+        _ar = query(_sel + "AND alert_type <> 'low_stock' ORDER BY id DESC LIMIT 300", [channel])
+        alerts.extend(_ls_rows)
+        _rp_c = _ot_c = 0
+        # 2026-11-01 自有仓三条不进 aux 的 alerts 列表(其他组) ——
+        #   它们由 ownHealth 专属块承载(看板「自有仓健康」卡), 再混进"其他告警"会双重计数且语义相悖
+        _OWN_AT = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
+        for r in _ar:
+            at = r.get("alert_type") or ""
+            if at in _OWN_AT:
+                continue
+            if at == "replenish":
+                if _rp_c < 100:
+                    alerts.append(r)
+                    _rp_c += 1
+            elif _ot_c < 100:
                 alerts.append(r)
-                _rp_c += 1
-        elif _ot_c < 100:
-            alerts.append(r)
-            _ot_c += 1
-    from routes.alerts import _attach_warehouse as _att
-    _att(alerts, channel)
-    counts = query("SELECT alert_type, severity, "
-                   "IFNULL(NULLIF(warehouse_type,''),'') AS wt, COUNT(*) AS c "
-                   "FROM alerts WHERE channel=%s AND status='active' "
-                   "AND (alert_type != 'low_stock' OR warehouse_type IN " + _wh_in + ") "
-                   "GROUP BY alert_type, severity, wt", [channel])
-    by_type, by_sev, by_wh, total = {}, {}, {}, 0
-    by_wh_ls, by_wh_slow, by_wh_rp = {}, {}, {}
-    for r in counts:
-        at = r.get("alert_type") or "other"
-        sev = r.get("severity") or "info"
-        wt = r.get("wt") or ""
-        c = int(r.get("c") or 0)
-        total += c
-        by_type[at] = by_type.get(at, 0) + c
-        by_sev[sev] = by_sev.get(sev, 0) + c
-        by_wh[wt] = by_wh.get(wt, 0) + c
-        tgt = by_wh_rp if at == "replenish" else (by_wh_slow if at == "slow_moving" else by_wh_ls)
-        tgt[wt] = tgt.get(wt, 0) + c
+                _ot_c += 1
+        from routes.alerts import _attach_warehouse as _att
+        _att(alerts, channel)
+        counts = query("SELECT alert_type, severity, "
+                       "IFNULL(NULLIF(warehouse_type,''),'') AS wt, COUNT(*) AS c "
+                       "FROM alerts WHERE channel=%s AND status='active' "
+                       "AND (alert_type != 'low_stock' OR warehouse_type IN " + _wh_in + ") "
+                       "GROUP BY alert_type, severity, wt", [channel])
+        by_type, by_sev, by_wh, total = {}, {}, {}, 0
+        by_wh_ls, by_wh_slow, by_wh_rp = {}, {}, {}
+        for r in counts:
+            at = r.get("alert_type") or "other"
+            sev = r.get("severity") or "info"
+            wt = r.get("wt") or ""
+            c = int(r.get("c") or 0)
+            total += c
+            by_type[at] = by_type.get(at, 0) + c
+            by_sev[sev] = by_sev.get(sev, 0) + c
+            by_wh[wt] = by_wh.get(wt, 0) + c
+            tgt = by_wh_rp if at == "replenish" else (by_wh_slow if at == "slow_moving" else by_wh_ls)
+            tgt[wt] = tgt.get(wt, 0) + c
 
-    def _wmap(m):
-        b = m.get("platform_b", 0)
-        c = m.get("platform", 0)
-        o = m.get("own", 0)
-        return {"b": b, "c": c, "own": o, "bc": b + c, "unknown": m.get("", 0)}
+        def _wmap(m):
+            b = m.get("platform_b", 0)
+            c = m.get("platform", 0)
+            o = m.get("own", 0)
+            return {"b": b, "c": c, "own": o, "bc": b + c, "unknown": m.get("", 0)}
 
-    _rp = by_type.get("replenish", 0)
-    alert_counts_full = {"total": total, "by_type": by_type, "by_severity": by_sev,
-                         "replenish": _rp, "non_replenish": total - _rp,
-                         "by_warehouse": _wmap(by_wh), "ls_warehouse": _wmap(by_wh_ls),
-                         "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)}
-    # stockOverview(缺货/低库存)
-    out = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0", [channel]) or {}
-    # 低库存(动态安全线判定, 替代静态 safety_qty): avail < ds×周期; 维度过滤跟随模式(bbcc→BC+own / trad→C+own)
-    low = {"c": 0}
-    try:
-        from biz.sales import get_sales_digest
-        _, _dsm, _ = get_sales_digest(channel)
-        _cfg2 = {r.get("key"): r.get("value") for r in
-                 query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-        def _mc2(key, m2, default):
-            v = _cfg2.get("mode_%s_%s" % (m2, key))
-            if v is None:
-                v = _cfg2.get(key)
-            try:
-                return int(float(v or default))
-            except Exception:
-                return default
-        _per_bbcc = (_mc2("b_to_c_days", "bbcc", 3) + _mc2("c_safety_days", "bbcc", 0)
-                     + _mc2("ship_to_b_days", "bbcc", 0) + _mc2("safety_multiplier", "bbcc", 0))
-        _per_trad = _mc2("lead_time_days", "traditional", 10) + _mc2("safety_multiplier", "traditional", 0)
-        _per_pur = _mc2("purchase_lead_days", "bbcc", 14) + _mc2("purchase_safety_days", "bbcc", 3)
-        _period = _per_bbcc if mode == "bbcc" else _per_trad
-        _rows2 = query("SELECT sku, warehouse_type, available_qty FROM inventory "
-                       "WHERE channel=%s AND available_qty>0 AND warehouse_type IN " + _wh_in, [channel])
-        _cnt = 0
-        for _r2 in _rows2:
-            _wt2 = str(_r2.get("warehouse_type") or "")
-            _p2 = _per_pur if _wt2 == "own" else _period
-            _d2 = _dsm.get(str(_r2.get("sku") or ""), 0)
-            _dyn2 = round(_d2 * _p2, 1) if _d2 > 0 and _p2 > 0 else 0.0
-            if _dyn2 > 0 and int(_r2.get("available_qty") or 0) < _dyn2:
-                _cnt += 1
-        low = {"c": _cnt}
-    except Exception as _e:
+        _rp = by_type.get("replenish", 0)
+        full = {"total": total, "by_type": by_type, "by_severity": by_sev,
+                "replenish": _rp, "non_replenish": total - _rp,
+                "by_warehouse": _wmap(by_wh), "ls_warehouse": _wmap(by_wh_ls),
+                "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)}
+        return alerts, full
+
+    def _block_stock():
+        """缺货计数 / 缺货清单 / BC 合计缺货(三条彼此独立)"""
+        out = one("SELECT COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0",
+                  [channel]) or {}
+        so_items = query("SELECT " + _INV_COLS + " FROM inventory "
+                         "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
+        # bc 合计缺货 SKU
+        bc_rows = query(
+            "SELECT sku, MAX(product_name) AS product_name FROM inventory "
+            "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
+            "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku LIMIT 100", [channel])
+        bc_out = [{"sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
+                   "warehouse_type": "bc"} for r in bc_rows]
+        return int(out.get("c") or 0), so_items, bc_out
+
+    def _block_low():
+        """低库存(动态安全线判定, 替代静态 safety_qty): avail < ds×周期; 维度过滤跟随模式"""
+        try:
+            from biz.sales import get_sales_digest
+            _, _dsm, _ = get_sales_digest(channel)
+            _cfg2 = {r.get("key"): r.get("value") for r in
+                     query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+
+            def _mc2(key, m2, default):
+                v = _cfg2.get("mode_%s_%s" % (m2, key))
+                if v is None:
+                    v = _cfg2.get(key)
+                try:
+                    return int(float(v or default))
+                except Exception:
+                    return default
+
+            _per_bbcc = (_mc2("b_to_c_days", "bbcc", 3) + _mc2("c_safety_days", "bbcc", 0)
+                         + _mc2("ship_to_b_days", "bbcc", 0) + _mc2("safety_multiplier", "bbcc", 0))
+            _per_trad = _mc2("lead_time_days", "traditional", 10) + _mc2("safety_multiplier", "traditional", 0)
+            _per_pur = _mc2("purchase_lead_days", "bbcc", 14) + _mc2("purchase_safety_days", "bbcc", 3)
+            _period = _per_bbcc if mode == "bbcc" else _per_trad
+            _rows2 = query("SELECT sku, warehouse_type, available_qty FROM inventory "
+                           "WHERE channel=%s AND available_qty>0 AND warehouse_type IN " + _wh_in, [channel])
+            _cnt = 0
+            for _r2 in _rows2:
+                _wt2 = str(_r2.get("warehouse_type") or "")
+                _p2 = _per_pur if _wt2 == "own" else _period
+                _d2 = _dsm.get(str(_r2.get("sku") or ""), 0)
+                _dyn2 = round(_d2 * _p2, 1) if _d2 > 0 and _p2 > 0 else 0.0
+                if _dyn2 > 0 and int(_r2.get("available_qty") or 0) < _dyn2:
+                    _cnt += 1
+            return _cnt
+        except Exception as _e:
             try_err('dash', '低库存动态判定降级', _e)
-    so_items = query("SELECT " + _INV_COLS + " FROM inventory "
-                     "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
-    # bc 合计缺货 SKU
-    bc_rows = query(
-        "SELECT sku, MAX(product_name) AS product_name FROM inventory "
-        "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
-        "GROUP BY sku HAVING SUM(available_qty) <= 0 ORDER BY sku LIMIT 100", [channel])
-    bc_out = [{"sku": r.get("sku"), "product_name": r.get("product_name") or r.get("sku"),
-               "warehouse_type": "bc"} for r in bc_rows]
-    _aux_result = {
+            return 0
+
+    def _block_own():
+        """自有仓健康(2026-11-01 新增): 自有仓不产生销售, 低库存/断货口径结构性不适用,
+        改用供给侧口径(调拨覆盖/积压/效期)。独立成块, 不进 alerts 表也不进"其他告警",
+        避免与低库存卡语义互串(用户明确: 补货卡会形成噪音, 需专属卡)。
+        失败降级为空结构 —— 不给 aux 整体添故障点。
+
+        2026-11-06 结构改造: 原来调用时传 full=1 —— 把**全部**条目塞进 aux。
+          线上实测 13,615 条 / 5.9MB → 响应 5.6MB、缓存超 6MB 上限永久写不进去(8025)、
+          每个请求都重算。聚合接口只发"够卡片渲染"的一段(三类各 3 条), 全量改由
+          /dashboard/own-health 分页拉(弹窗里翻到底即全量, 一条不少)。
+        """
+        try:
+            from routes.dashboard_own_health import own_health
+            return own_health(channel, full=0, per_type=3)
+        except Exception as _e:
+            try_err("dash", "自有仓健康计算降级", _e)
+            return _EMPTY_OWN
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _f1 = _ex.submit(_block_alerts)
+        _f2 = _ex.submit(_block_stock)
+        _f3 = _ex.submit(_block_low)
+        _f4 = _ex.submit(_block_own)
+        try:
+            alerts, alert_counts_full = _f1.result()
+        except Exception as _e:
+            try_err('dash', '告警块降级', _e)
+            alerts = []
+            alert_counts_full = {"total": 0, "by_type": {}, "by_severity": {}, "replenish": 0,
+                                 "non_replenish": 0, "by_warehouse": {}, "ls_warehouse": {},
+                                 "slow_warehouse": {}, "rp_warehouse": {}}
+        try:
+            _out_c, so_items, bc_out = _f2.result()
+        except Exception as _e:
+            try_err('dash', '库存概览降级', _e)
+            _out_c, so_items, bc_out = 0, [], []
+        try:
+            _low_c = _f3.result()
+        except Exception:
+            _low_c = 0
+        try:
+            _own = _f4.result()
+        except Exception:
+            _own = _EMPTY_OWN
+
+    return {
         "alerts": alerts,
         "alertCounts": alert_counts_full,
         "stockOverview": {"items": so_items,
-                          "out_of_stock_count": int(out.get("c") or 0),
-                          "low_stock_count": int(low.get("c") or 0),
-                          "total": int(out.get("c") or 0) + int(low.get("c") or 0)},
+                          "out_of_stock_count": _out_c,
+                          "low_stock_count": _low_c,
+                          "total": _out_c + _low_c},
         "bcOutOfStock": bc_out,
+        "ownHealth": _own,
     }
-    # 自有仓健康(2026-11-01 新增): 自有仓不产生销售, 低库存/断货口径结构性不适用,
-    #   改用供给侧口径(调拨覆盖/积压/效期)。独立成块, 不进 alerts 表也不进"其他告警",
-    #   避免与低库存卡语义互串(用户明确: 补货卡会形成噪音, 需专属卡)。
-    #   失败降级为空结构 —— 不给 aux 整体添故障点。
-    try:
-        from routes.dashboard_own_health import own_health
-        # 2026-11-06 结构改造: 原来是 own_health(channel, full=1) —— 把**全部**条目塞进 aux。
-        #   线上实测 13,615 条 / 5.9MB → 响应 5.6MB、缓存超 6MB 上限永久写不进去(8025)、
-        #   每个请求都重算。聚合接口只发"够卡片渲染"的一段(三类各 3 条), 全量改由
-        #   /dashboard/own-health 分页拉(弹窗里翻到底即全量, 一条不少)。
-        _aux_result["ownHealth"] = own_health(channel, full=0, per_type=3)
-    except Exception as _e:
-        try_err("dash", "自有仓健康计算降级", _e)
-        _aux_result["ownHealth"] = {"items": [], "total": 0, "transferGap": 0, "overstock": 0,
-                                    "expiryRisk": 0, "critical": 0, "warning": 0, "limits": {}}
-    return _aux_result
 
 
 @router.get("/dashboard/own-health")

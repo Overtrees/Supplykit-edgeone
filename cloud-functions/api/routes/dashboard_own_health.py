@@ -124,8 +124,10 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     pmap = {}
     # 2026-11-02 冷算: 原按 800 分片走 IN 列表(1000 SKU → 2 次往返)。products 单渠道实测仅 1000 行、
     #   7 列, 全量取回比"拼 IN + 分片循环"更省(一次往返 + 更小的 SQL 文本)。
+    # 2026-11-06 只取真正被读的两列(原取 5 列: barcode/supplier_code 在本函数**从未被读**,
+    #   却要多传 10,000 行 × 2 列 ≈ 0.4MB)。aux 冷算是热路径, 按字节收费的字段不白传。
     for r in query(
-            "SELECT sku, product_name, barcode, supplier_code, IFNULL(expiry_managed,'') AS expiry_managed "
+            "SELECT sku, product_name, IFNULL(expiry_managed,'') AS expiry_managed "
             "FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')", [channel]):
         pmap[str(r.get("sku") or "")] = r
 
@@ -163,9 +165,10 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
             # 2026-11-02 冷算: 同上, 去掉 800 分片 —— own 仓有有效期的批次实测仅 1696 行。
             # 注意: batches 表**无 batch_no 列**(实测字段: id/sku/warehouse/warehouse_type/
             #   channel/prod_date/exp_date/qty/barcode) —— 批次标识用 id, 展示用 id+仓库。
+            # 2026-11-06 只取判定要用的列(qty 在本函数未被读; 15,496 行 × 1 列白传)。
             for r in query(
                     "SELECT id AS batch_id, sku, IFNULL(barcode,'') AS barcode, "
-                    "IFNULL(warehouse,'') AS warehouse, exp_date, IFNULL(qty,0) AS qty "
+                    "IFNULL(warehouse,'') AS warehouse, exp_date "
                     "FROM batches WHERE channel=%s AND warehouse_type='own' "
                     "AND exp_date IS NOT NULL AND exp_date<>'' "
                     "ORDER BY exp_date ASC", [channel]):
