@@ -886,27 +886,25 @@ def _sync_inv_month():
         #   单请求实测 122s 被网关 120s 硬切。
         #   改法: barcode 分两支 —— 有码走等值(命中完整唯一键, Point_Get);
         #   空码走 `barcode IS NULL OR barcode=''`(既有有码行不会被误改, 因为条件限定了空/无)。
-        _n_bc = [r for r in rows if str(r.get('bc') or '')]
-        _n_nul = [r for r in rows if not str(r.get('bc') or '')]
-        if _n_bc:
-            _args = [(int(r.get('q') or 0), str(r.get('sku') or ''), str(r.get('bc') or ''),
-                      str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
-                      str(r.get('warehouse_type') or '')) for r in _n_bc]
+        # 2026-11-06 性能根治: executemany 对 UPDATE **不是批量** —— PyMySQL 会循环单条执行,
+        #   2.1 万组 = 2.1 万次往返。线上实测 step14 单段 122s, 连续两次撞穿网关硬切(504)。
+        #   这条 §15.96 第二节就写过(「executemany 只对 INSERT 是批量」), 这里又踩了一次。
+        #   改 UPDATE ... JOIN: 一条语句一次往返, 按渠道各一条(控制单语句体积)。
+        #   顺带解决索引问题: 驱动表是聚合子查询, 不再逐组用 WHERE 回表, 空码也就不必
+        #   拆成两套参数 —— 上一版为绕开「表达式破坏 uq_inventory_biz」写的两支可以合并。
+        for _ch1 in ('jd', 'other'):
             try:
-                executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s AND barcode=%%s "
-                            "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args)
+                execute("UPDATE inventory i JOIN ("
+                        "  SELECT warehouse_type, sku, COALESCE(barcode,'') AS bc, warehouse, "
+                        "         SUM(quantity) AS q FROM `%s` "
+                        "  WHERE channel=%%s AND `%s` >= %%s "
+                        "  GROUP BY warehouse_type, sku, COALESCE(barcode,''), warehouse"
+                        ") f ON f.sku=i.sku AND f.bc=COALESCE(i.barcode,'') "
+                        "   AND f.warehouse=i.warehouse AND f.warehouse_type=i.warehouse_type "
+                        "SET i.`%s`=f.q WHERE i.channel=%%s"
+                        % (table, date_col, target_col), [_ch1, month_start, _ch1])
             except Exception as _e:
-                try_err('seed_fill', '月汇总批量更新(有码)', _e)
-        if _n_nul:
-            _args2 = [(int(r.get('q') or 0), str(r.get('sku') or ''),
-                       str(r.get('warehouse') or ''), str(r.get('channel') or 'jd'),
-                       str(r.get('warehouse_type') or '')) for r in _n_nul]
-            try:
-                executemany("UPDATE inventory SET `%s`=%%s WHERE sku=%%s "
-                            "AND (barcode IS NULL OR barcode='') "
-                            "AND warehouse=%%s AND channel=%%s AND warehouse_type=%%s" % target_col, _args2)
-            except Exception as _e:
-                try_err('seed_fill', '月汇总批量更新(空码)', _e)
+                try_err('seed_fill', '月汇总批量更新(JOIN %s)' % _ch1, _e)
     # 2026-10-29 修复(恒等式 998 项偏差根因): 原此处 `beginning_stock = available_qty`
     #   会在重算(step7)之后再次覆盖期初 → available 被打回期初值, 流水不生效
     #   用户定案: 期初 = 库存导入值(_seed_inventory 已设), **任何后续步骤不得改写**

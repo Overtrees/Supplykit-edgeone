@@ -3317,13 +3317,17 @@ try:
     # 2026-11-05 线上事故(step22 单段 122s 被网关切断): 月汇总 UPDATE 用 COALESCE(barcode,'')
     #   做等值条件 → 唯一键 uq_inventory_biz 只能用 sku 前缀, Point_Get 退化
     #   成 IndexRangeScan + 逐行回表; 2.1 万组 × 17 万行, 必然超 120s。
+    # 2026-11-06 同一个 122s 又出现了一次, 但根因不是索引 —— 是 **executemany 对 UPDATE
+    #   根本不是批量**(PyMySQL 循环单条), 2.1 万组 = 2.1 万次往返。上一版按"分两支走等值"
+    #   绕索引, 绕得过计划绕不过往返数。现改为单条 UPDATE ... JOIN: 驱动表是聚合子查询,
+    #   既没有逐组回表, 也没有 N 次往返。断言改为锁这个形状。
     # 只看代码行(去注释): 说明性注释里会引用旧写法, 否则断言被自己的注释干成假红
     _sf11_code = "\n".join(x for x in _sf11.splitlines()
                            if x.strip() and not x.strip().startswith("#"))
-    check("月汇总: 不走 COALESCE(barcode,'') 等值条件(否则唯一键失效, 退化成逐行回表)",
-          "COALESCE(barcode,'')=%%s" not in _sf11_code
-          and "AND barcode=%%s " in _sf11_code
-          and "AND (barcode IS NULL OR barcode='') " in _sf11_code,
+    check("月汇总: 单条 UPDATE JOIN(executemany 对 UPDATE 是 N 次往返, 2.1 万组曾撞 122s)",
+          "UPDATE inventory i JOIN (" in _sf11_code
+          and "=f.q" in _sf11_code
+          and 'executemany("UPDATE inventory SET' not in _sf11_code,
           "routes/seed_fill.py")
     # 2026-11-05 期初全 0 的完整根因(三层叠加, 修一层露一层):
     #   ① reset 不清 ledger_state → jd 带着 closed/2026-10 重跑;
