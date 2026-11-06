@@ -16,6 +16,42 @@ _local = threading.local()
 _POOL = None
 _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每实例——TiDB serverless 连接限制保险)
 
+# 2026-11-06: 线上逐层计时(只读埋点, 不改任何执行路径)
+#   背景: 同区(新加坡2)部署后 summary 仍 3.8s, 但 perf_debug 只有"查询 2.5s / 组装 1.2s"两段,
+#   无法判断 2.5s 里是"建连握手"还是"SQL 执行"还是"结果传输"。三者优化手段完全不同:
+#     建连贵 → 减连接数/改多语句;  执行贵 → 加索引/改 SQL;  传输贵 → 减列/减行/物化。
+#   这里把 connect 与每条 stmt 的真实耗时记进进程内 STATS, 由调用方写进 perf_debug。
+#   STATS 是**每请求新进程**的实例内变量, 天然只统计本请求, 无跨请求污染。
+STATS = {"conn_n": 0, "conn_s": 0.0, "stmt_n": 0, "stmt_s": 0.0, "stmt_max": 0.0}
+_STAT_LK = threading.Lock()
+
+
+def stats_reset():
+    """请求开始时清零(同一请求内多线程累加, 由 GIL+锁保证不丢)"""
+    with _STAT_LK:
+        STATS["conn_n"] = 0
+        STATS["conn_s"] = 0.0
+        STATS["stmt_n"] = 0
+        STATS["stmt_s"] = 0.0
+        STATS["stmt_max"] = 0.0
+    return STATS
+
+
+def stats_add(field, sec):
+    try:
+        with _STAT_LK:
+            STATS[field + "_n"] = STATS.get(field + "_n", 0) + 1
+            STATS[field + "_s"] = STATS.get(field + "_s", 0.0) + float(sec)
+            if field == "stmt" and float(sec) > STATS.get("stmt_max", 0.0):
+                STATS["stmt_max"] = float(sec)
+    except Exception:
+        pass
+
+
+def stats_snapshot():
+    with _STAT_LK:
+        return dict(STATS)
+
 # 2026-11-02 S0 修复: 原实现用 `q.qsize() < _POOL_LIMIT` 判断能否新建连接, 但队列里只有
 # 「已归还」的连接, 正在使用的根本不在队列里 —— qsize 几乎永远 < 上限, 于是每次池空都新建,
 # 上限形同虚设。复刻原逻辑压测: 上限 10 / 并发 60 → 实际建了 60 条连接, 一次尖峰即可打满
@@ -77,6 +113,15 @@ def _new_conn():
 
 
 def _connect_db(database):
+    import time as _t
+    _ts = _t.time()
+    try:
+        return _connect_db_inner(database)
+    finally:
+        stats_add("conn", _t.time() - _ts)
+
+
+def _connect_db_inner(database):
     c = pymysql.connect(
         host=os.environ.get("TIDB_HOST"),
         port=int(os.environ.get("TIDB_PORT", "4000")),
@@ -207,8 +252,12 @@ def query(sql, params=None):
     c = conn()
     cur = c.cursor()
     try:
+        import time as _t
+        _ts = _t.time()
         cur.execute(sql, params or ())
-        return cur.fetchall()
+        rows = cur.fetchall()
+        stats_add("stmt", _t.time() - _ts)
+        return rows
     finally:
         cur.close()
         _release(c)

@@ -269,6 +269,30 @@ check("funnel: 未列入的状态按原值追加不丢弃", "未知脏值" in _n
 check("funnel: 各档合计==总订单",
       sum(x["value"] for x in _out[1:]) == _out[0]["value"], str(_out))
 
+# 2026-11-06: 六个小结果集合成一条 UNION ALL 宽表(_q_bundle) —— 还原必须逐字等价。
+#   合并的动机是"每请求少建 5 条 TiDB Serverless 连接"(见 db.STATS), 但宽表列序一旦错位
+#   (历史上 cfg 就把 value 当 key 用了)会让安全线退化成默认值 —— 卡片照出, 数字全错。
+from routes.dashboard import _split_bundle as _sb  # noqa: E402
+_brows = [
+    {"tag": "agg", "s1": "2026-11-01", "s2": "已完成", "s3": "店A", "n1": 10, "n2": 1, "n3": 2},
+    {"tag": "recent", "s1": "2026-11-05", "s2": "已完成", "s3": "店A", "n1": 5, "n2": 0, "n3": 1},
+    {"tag": "brands", "s1": "2026-11-01", "s2": "品牌X", "s3": "", "n1": 9, "n2": 0, "n3": 0},
+    {"tag": "flows", "s1": "2026-11-01", "s2": "店A", "s3": "", "n1": 3.5, "n2": None, "n3": None},
+    {"tag": "counts", "s1": "", "s2": "", "s3": "", "n1": 7, "n2": 8, "n3": 9},
+    {"tag": "cfg", "s1": "lead_time_days", "s2": "10", "s3": "", "n1": None, "n2": None, "n3": None},
+]
+_a, _rc, _bd, _fl, _ct, _cg = _sb(_brows)
+check("bundle 还原: agg/recent 分表, 字段名与 _q_agg 一致",
+      _a[0]["d"] == "2026-11-01" and _a[0]["cnt"] == 2 and _a[0]["order_status"] == "已完成"
+      and _rc[0]["d"] == "2026-11-05", str(_a))
+check("bundle 还原: brands 用 d/brand/g/sb/rf",
+      _bd[0]["brand"] == "品牌X" and float(_bd[0]["g"]) == 9.0, str(_bd))
+check("bundle 还原: flows 折回 (总额, 按日, 按店)",
+      _fl[0] == 3.5 and _fl[1] == {"2026-11-01": 3.5} and _fl[2] == {"店A": 3.5}, str(_fl))
+check("bundle 还原: counts 三个计数", _ct == {"alerts": 7, "products": 8, "suppliers": 9}, str(_ct))
+check("bundle 还原: cfg 的 key 在 s1、value 在 s2",
+      _cg == {"lead_time_days": "10"}, str(_cg))
+
 
 # 自定义日期
 r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=2026-08-31",

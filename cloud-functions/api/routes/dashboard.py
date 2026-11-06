@@ -446,6 +446,102 @@ def _q_brands(channel, d_from, d_to=""):
         return []
 
 
+def _q_bundle(channel, days60, d1, st30, today):
+    """6 条小查询 → 1 条 UNION ALL(1 条连接 / 1 次往返)
+
+    2026-11-06 线上埋点(db.STATS): summary 每请求要建 6~8 条 TiDB Serverless 连接, 每次建连
+    含 TLS 握手 + 网关认证; 沙箱到同区集群 6 次建连累计 99.7s(其中一次挂起 91s, 直接把
+    `_q_flows_month` 拖到 91s)。请求慢与"偶发 30s 不可用"是同一个原因: **在建连上赌博**。
+    合并后连接数 6→1。六段 SQL 与 _q_agg/_q_recent/_q_brands/_q_flows_month/_q_counts/_q_cfg
+    **逐字同源**(同 _status_cond、同 _FLOW_NET、同 JOIN、同 deleted_at 过滤), 只把结果拍成宽表
+    (tag, s1, s2, s3, n1, n2, n3), 由 _split_bundle 还原成各自原来的结构。
+    """
+    _sc = _status_cond()
+    _sc_o = _status_cond("o.order_status")
+    _gmv = ("total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) "
+            "+ COALESCE(tax_amount,0)")
+    _gmv_o = ("o.total_amount - COALESCE(o.discount_amount,0) + COALESCE(o.freight_amount,0) "
+              "+ COALESCE(o.tax_amount,0)")
+    sql = (
+        "SELECT 'agg' AS tag, DATE(`date`) AS s1, order_status AS s2, store AS s3, "
+        "SUM(gmv) AS n1, SUM(subsidy) AS n2, SUM(cnt) AS n3 "
+        "FROM orders_day_agg WHERE channel=%s AND `date`>=%s AND `date`<%s "
+        "GROUP BY `date`, order_status, store "
+        "UNION ALL SELECT 'recent', DATE(ordered_at), order_status, store, "
+        "SUM(IF(" + _sc + "," + _gmv + ",0)), "
+        "SUM(IF(" + _sc + ",COALESCE(subsidy_amount,0),0)), COUNT(*) "
+        "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at>=%s "
+        "GROUP BY DATE(ordered_at), order_status, store "
+        "UNION ALL SELECT 'brands', DATE(o.ordered_at), COALESCE(p.brand,''), '', "
+        "SUM(IF(" + _sc_o + "," + _gmv_o + ",0)), "
+        "SUM(IF(" + _sc_o + ",COALESCE(o.subsidy_amount,0),0)), "
+        "SUM(IF(o.order_status='申请退款'," + _gmv_o + ",0)) "
+        "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products "
+        "WHERE brand IS NOT NULL AND brand!='') p ON o.sku=p.sku AND o.channel=p.channel "
+        "WHERE o.channel=%s AND (o.deleted_at IS NULL OR o.deleted_at='') AND o.ordered_at>=%s "
+        "AND o.ordered_at<=%s GROUP BY DATE(o.ordered_at), COALESCE(p.brand,'') "
+        "UNION ALL SELECT 'flows', DATE(arrived_time), shop, '', "
+        "COALESCE(SUM(" + _FLOW_NET + "),0), NULL, NULL "
+        "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
+        "GROUP BY DATE(arrived_time), shop "
+        "UNION ALL SELECT 'counts','','','', a.c, b.c, c.c FROM "
+        "(SELECT COUNT(*) c FROM alerts WHERE channel=%s AND status='active') a, "
+        "(SELECT COUNT(*) c FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')) b, "
+        "(SELECT COUNT(*) c FROM suppliers WHERE channel=%s) c "
+        "UNION ALL SELECT 'cfg', `key`, value, '', NULL, NULL, NULL "
+        "FROM replenishment_config WHERE channel=%s OR channel=''"
+    )
+    _p = [channel, days60, d1,
+          channel, d1 + " 00:00:00",
+          channel, min(days60, st30) + " 00:00:00", today + " 23:59:59",
+          channel, st30 + " 00:00:00", today + " 23:59:59",
+          channel, channel, channel,
+          channel]
+    return query(sql, _p)
+
+
+def _split_bundle(rows):
+    """宽表 → 六个消费方各自的原结构(键名与 _q_* 返回值逐字一致)"""
+    agg, recent, brands, flows = [], [], [], []
+    counts, cfg = None, None
+    for r in rows:
+        _t = r.get("tag")
+        s1 = str(r.get("s1") or "")[:10]
+        s2 = str(r.get("s2") or "")
+        s3 = str(r.get("s3") or "")
+        n1, n2, n3 = r.get("n1"), r.get("n2"), r.get("n3")
+        if _t == "agg":
+            agg.append({"d": s1, "order_status": s2, "store": s3, "g": n1, "sub": n2, "cnt": n3})
+        elif _t == "recent":
+            recent.append({"d": s1, "order_status": s2, "store": s3, "g": n1, "sub": n2, "cnt": n3})
+        elif _t == "brands":
+            brands.append({"d": s1, "brand": s2, "g": n1, "sb": n2, "rf": n3})
+        elif _t == "flows":
+            flows.append({"d": s1, "shop": s2, "v": n1})
+        elif _t == "counts":
+            counts = {"alerts": int(n1 or 0), "products": int(n2 or 0), "suppliers": int(n3 or 0)}
+        elif _t == "cfg":
+            cfg = cfg or {}
+            # value 保持原值(NULL 仍是 None) —— 与 _q_cfg 的 dict 逐字同构
+            cfg[str(r.get("s1") or "")] = r.get("s2")
+    if flows:
+        _tot = 0.0
+        _by_day, _by_shop = {}, {}
+        for r in flows:
+            _v = float(r.get("v") or 0)
+            _dd = str(r.get("d") or "")[:10]
+            _sh = str(r.get("shop") or "")
+            _tot += _v
+            _by_day[_dd] = _by_day.get(_dd, 0.0) + _v
+            _by_shop[_sh] = _by_shop.get(_sh, 0.0) + _v
+        flows = (round(_tot, 2),
+                 {k: round(v, 2) for k, v in _by_day.items()},
+                 {k: round(v, 2) for k, v in _by_shop.items()})
+    else:
+        flows = (None, None, None)
+    return agg, recent, brands, flows, counts, cfg
+
+
 def _build_summary_agg(channel, days60, now, mode="bbcc"):
     """agg 路径(强实时): 前天及以前读 orders_day_agg, 昨天+今天实时直查 orders(补录/新增当日立即反映)
 
@@ -457,45 +553,35 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     _st30 = (now - timedelta(days=29)).strftime("%Y-%m-%d")
     import time as _t
+    from db import stats_reset as _sreset, stats_snapshot as _ssnap
+    _sreset()
+    _lap = {}
+
+    def _wrap(_name, _fn, *_a):
+        """每条查询单独计时 —— 定位"2.5s 查询"到底是哪一条、是建连还是执行"""
+        def _run():
+            _ts = _t.time()
+            try:
+                return _fn(*_a)
+            finally:
+                _lap[_name] = round(_t.time() - _ts, 3)
+        return _run
+
     _t0 = _t.time()
     from concurrent.futures import ThreadPoolExecutor
-    # max_workers=6: 八个任务两波(6+2); 连接池上限 10, 峰值 6 不挤占其他请求
-    with ThreadPoolExecutor(max_workers=6) as _ex:
-        _f1 = _ex.submit(_q_agg, channel, days60, d1)
-        _f2 = _ex.submit(_q_recent, channel, d1)
-        _f3 = _ex.submit(_q_inventory, channel)
-        _f4 = _ex.submit(_q_digest, channel, mode)
-        _f5 = _ex.submit(_q_counts, channel)
-        _f6 = _ex.submit(_q_flows_month, channel, _st30, today)
-        _f7 = _ex.submit(_q_brands, channel, min(days60, _st30), today)
-        _f8 = _ex.submit(_q_cfg, channel)
-        agg = _f1.result()
-        try:
-            recent = _f2.result()
-        except Exception:
-            recent = []  # 近 2 天直查失败: 仅 agg, 不阻塞
+    # 2026-11-06: 8 条查询/6~8 条连接 → 3 条查询/3 条连接。
+    #   六个小结果集(agg/recent/brands/flows/counts/cfg)合成 _q_bundle 一条 UNION ALL;
+    #   两个大结果集(库存 9 万行 / 日销切片 6 万行)各自独立并行 —— 它们才是传输大头, 不便合并。
+    #   合并后: 建连次数从'6 次各自握手'变'3 次并行握手', 且任一手慢不再拖住别的结果集。
+    with ThreadPoolExecutor(max_workers=3) as _ex:
+        _fb = _ex.submit(_wrap("bundle", _q_bundle, channel, days60, d1, _st30, today))
+        _f3 = _ex.submit(_wrap("inv", _q_inventory, channel))
+        _f4 = _ex.submit(_wrap("digest", _q_digest, channel, mode))
+        # bundle 失败即整体降级到直查路径(外层 try 捕) —— 原 6 条里只有 agg 是硬依赖,
+        #   合并后它们同一条 SQL, 要么全有要么全无; 少 5 次建连后失败概率本身也降了。
+        agg, recent, _brands_raw, _flows, _counts, _cfg = _split_bundle(_fb.result())
         _inv_rows = _f3.result()
         _ds_map = _f4.result()
-        try:
-            _counts = _f5.result()
-        except Exception as _ec:
-            try_err('dashboard', '概览计数降级', _ec)
-            _counts = None
-        try:
-            _flows = _f6.result()
-        except Exception as _ef:
-            try_err('dashboard', '月度回款降级', _ef)
-            _flows = (None, None, None)
-        try:
-            _brands_raw = _f7.result()
-        except Exception as _eb:
-            try_err('dashboard', '品牌聚合降级', _eb)
-            _brands_raw = None
-        try:
-            _cfg = _f8.result()
-        except Exception as _eg:
-            try_err('dashboard', '补货配置降级', _eg)
-            _cfg = None
     _t1 = _t.time()
     _ass = _assemble(list(agg) + list(recent), channel, _st30, today, mode,
                      _inv_rows=_inv_rows, _series=_ds_map,
@@ -505,10 +591,16 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     #   (本地往返数不能外推线上), 部署验收/回归都读它。写 quality_logs 限每屏一条, 成本可忽略。
     try:
         from db import execute as _et
+        _st = _ssnap()
+        _parts = " ".join("%s=%.2f" % (k, v) for k, v in
+                          sorted(_lap.items(), key=lambda kv: -kv[1]))
         _et("INSERT INTO quality_logs(log_type, level, message, details, source) "
             "VALUES('perf_debug','info',%s,%s,'dash')",
             ("summary agg 计时: 查询 %.2fs 组装 %.2fs" % (_t1 - _t0, _t2 - _t1),
-             "parallel8"))
+             "parallel8 conn=%d/%.2fs stmt=%d/%.2fs max=%.2fs | %s | %s"
+             % (_st.get("conn_n", 0), _st.get("conn_s", 0.0),
+                _st.get("stmt_n", 0), _st.get("stmt_s", 0.0),
+                _st.get("stmt_max", 0.0), _parts, channel)))
     except Exception:
         pass
     return _ass
