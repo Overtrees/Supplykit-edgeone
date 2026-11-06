@@ -78,7 +78,8 @@ def _sync_health_snapshot_async(channel, health):
     _sync_health_snapshot(channel, health)
 
 
-def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _series=None):
+def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _series=None,
+                  _tally=None):
     """健康指数四档 —— 判定全部走 `core.metrics`(口径单一真源)
 
     ## 2026-11-06 S3 改了什么(以及为什么)
@@ -119,17 +120,22 @@ def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _
         _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
     # 判定单元: 保留逐仓行(own/platform/platform_b 三个 tab 各看各的), **另外**追加 BC 单元
     #   传统模式下 B 仓不参与(它只是 jd 的中转仓) —— 与告警规则的 `_close_wt` 白名单同口径
-    _us = _M.units(rows, merge_bc=False, with_bc=True,
-                   grain=_M.grain_of(channel, _mode, _cfg),
-                   drop_platform_b=(_mode != "bbcc"))
-    _pairs = _M.judge_units(_us, _series, channel, _mode, metric="ds28",
-                            include_transit=_M.include_transit_default(), p=_p)
-    _c_own = _M.counts(_pairs, ("own",))
-    _c_plat = _M.counts(_pairs, wt="platform")
-    _c_pb = _M.counts(_pairs, wt="platform_b")
-    _c_bc = _M.counts(_pairs, ("bc",))
+    #
+    # 2026-11-06 第二刀: 调用方(看板摘要)已经把 units+判定 跑过一遍时, 直接接 `_tally`,
+    #   不再重算 —— 否则同一批 8 万个单元会被建两遍、判两遍(组装 3.14s 的主因)。
+    #   `_tally` 与 `judge_units` 共用 `metrics.classify()`, 计数口径逐单元一致。
+    if _tally is None:
+        _us = _M.units(rows, merge_bc=False, with_bc=True,
+                       grain=_M.grain_of(channel, _mode, _cfg),
+                       drop_platform_b=(_mode != "bbcc"))
+        _tally = _M.tally(_us, _series, channel, _mode, metric="ds28",
+                          include_transit=_M.include_transit_default(), p=_p)
+    _c_own = _M.roll(_tally, kinds=("own",))
+    _c_plat = _M.roll(_tally, wt_in=("platform",))
+    _c_pb = _M.roll(_tally, wt_in=("platform_b",))
+    _c_bc = _M.roll(_tally, kinds=("bc",))
     # 总分不含 bc: bc 是 platform+platform_b 的合并, 与它们同时计入就是把同一批货数两遍
-    _c_all = _M.counts(_pairs, ("own", "wh"))
+    _c_all = _M.roll(_tally, kinds=("own", "wh"))
 
     # 健康分档参数: 内置'库存健康监控'规则 params 配置(默认 85/60 与硬编码一致)
     _hrp = _rule_params("health", channel)

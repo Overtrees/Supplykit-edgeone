@@ -4057,6 +4057,36 @@ try:
     check("S3 计分: 空维度给 None/empty(前端显示—, 不给 100 分假象)",
           _SM.score(_SM.counts([]))["score"] is None
           and _SM.score(_SM.counts([]))["level"] == "empty")
+
+    # 2026-11-06 第二刀: tally(只计数)必须与 judge_units+counts(造 verdict)逐单元等价 ——
+    #   看板摘要改用 tally 省掉 16 万个 dict, 但"卡上低库存 / 点开列表"的数必须还是同一个。
+    _t_us = _SM.units(_inv + [dict(_inv[0], barcode="B2", available_qty=100)],
+                      merge_bc=False, with_bc=True, grain=_SM.GRAIN_SKU)
+    _ser = _SM.Series("jd", {("S1", "", "__C__"): {"ds28": 1.0},
+                             ("S2", "", "__C__"): {"ds28": 0.0}}, ("ds28",))
+    _tly = _SM.tally(_t_us, _ser, "jd", "bbcc", p=_SM.periods({}))
+    _prs = _SM.judge_units(_t_us, _ser, "jd", "bbcc", p=_SM.periods({}))
+    _same = all(_SM.roll(_tly, kinds=(k,)) == _SM.counts(_prs, (k,))
+                for k in (_SM.DIM_BC, _SM.DIM_WH, _SM.DIM_OWN))
+    check("tally 与 judge_units 等价: 按桶类型的计数逐项相等", _same,
+          "tally=%s pairs=%s" % (_tly, _SM.counts(_prs)))
+    check("tally 与 judge_units 等价: 档位顺序不变(out 优先于 paused)",
+          _SM.classify(0, 0, 0, paused=True) == _SM.ST_OUT
+          and _SM.classify(10, 10, 0, paused=True) == _SM.ST_PAUSED,
+          "%s / %s" % (_SM.classify(0, 0, 0, paused=True),
+                       _SM.classify(10, 10, 0, paused=True)))
+    # 低库存那一套: 旧的独立一遍(merge_bc=True, 平台行已并入 BC) 与新的"从 with_bc 结果里
+    #   roll 出 bc + 非平台仓 wh"必须给出同一组数 —— 否则卡片和列表会重新分成两张脸。
+    _us_ls = _SM.units(_inv + [dict(_inv[0], barcode="B2", available_qty=100)],
+                       merge_bc=True, grain=_SM.GRAIN_SKU)
+    _prs_ls = _SM.judge_units(_us_ls, _ser, "jd", "bbcc", p=_SM.periods({}))
+    check("roll: 与旧的低库存独立一遍(merge_bc=True)逐项相等",
+          _SM.roll(_tly, kinds=(_SM.DIM_BC, _SM.DIM_WH),
+                   wt_not_in=("platform", "platform_b"))
+          == _SM.counts(_prs_ls, (_SM.DIM_BC, _SM.DIM_WH)),
+          "new=%s old=%s" % (_SM.roll(_tly, kinds=(_SM.DIM_BC, _SM.DIM_WH),
+                                      wt_not_in=("platform", "platform_b")),
+                             _SM.counts(_prs_ls, (_SM.DIM_BC, _SM.DIM_WH))))
 except Exception as _e30:
     check("S3 口径用例无异常", False, str(_e30)[:300])
 

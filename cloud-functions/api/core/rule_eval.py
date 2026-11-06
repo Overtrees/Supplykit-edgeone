@@ -225,6 +225,25 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
     #   索引跨页续写(有等价性单测)。
     _seen = 0
     _uacc = {}
+    # 2026-11-06 第二刀 · 作用域下推:
+    #   本函数的"库存行"早已按 skus 分片读, 但喂 ctx 的 6 条加载查询一律**整渠道** ——
+    #   线上实测 inv_ctx=15 时 calc_load 仍要 19.3s(批次 18 万行 + 末销 20 万行 + 库存聚合
+    #   17 万行), 把 TiDB 连接与 RU 吃满, 同期所有读接口从 0.9s 掉到 20~34s。
+    #   导入触发的评估只该付"本批 SKU"的代价, 所以把这些查询一起收窄。
+    #   超过 _SCOPE_MAX 时退化为全渠道一次 —— 与分片结果等价, 只是少绕几趟。
+    _scope_sk = [str(x) for x in (skus or []) if x]
+    if len(_scope_sk) > _M._SCOPE_MAX:
+        _scope_sk = []
+    _BATCHES = ([None] if not _scope_sk else
+                [_scope_sk[_i:_i + _M._SCOPE_STEP]
+                 for _i in range(0, len(_scope_sk), _M._SCOPE_STEP)])
+
+    def _scoped(_head, _tail, _batch):
+        """head 已含 `WHERE channel=%s`; _batch=None → 全渠道; 否则 `AND sku IN (...)`"""
+        if not _batch:
+            return query(_head + _tail, [channel])
+        return query(_head + " AND sku IN (" + ",".join(["%s"] * len(_batch)) + ")" + _tail,
+                     [channel] + list(_batch))
 
     def _feed(_batch):
         nonlocal _seen
@@ -304,9 +323,10 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
                         KeyError(_ref))
     _tick("rules")
     last_map = {}
-    for r in query("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s GROUP BY sku",
-                   [channel]):
-        last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
+    for _lb in _BATCHES:
+        for r in _scoped("SELECT sku, MAX(date) AS m FROM daily_sales_snapshot WHERE channel=%s",
+                         " GROUP BY sku", _lb):
+            last_map[str(r.get("sku"))] = str(r.get("m") or "")[:10]
     now = now_cn()   # 北京时间: 末销天数按自然日算
     _tick("lastmap")
 
@@ -379,7 +399,8 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
             # 2026-11-06 S3: 一次取回(按码 + 逐仓 + 全维), 取代原来"按码一次 + 合计一次"
             #   两趟 12 万行 —— 只取 ds28/sigma 两列, 传输量降到原来的 1/5。
             #   同时取代 get_sales_digest: 它给的是 SKU 级 `__C__` 一个数, 正是本模块要消灭的东西。
-            _SER = _M.load(channel, dims=None, with_barcode=True, fields=("ds28", "sigma"))
+            _SER = _M.load(channel, dims=None, with_barcode=True,
+                           fields=("ds28", "sigma"), skus=_scope_sk or None)
             _sigma = _SER.sigma_by_sku() if _SER is not None else {}
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)
@@ -391,17 +412,31 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
         except Exception as _e:
             try_err("rules", "评估小时加速降级", _e)
         if _need_health:
+            # 2026-11-06 第二刀: 原来无条件 `_health_index(channel)` —— 那是**整渠道**
+            #   9 万单元的完整判定(线上实测这一步就 5s+, 与"本次只评 3 个 SKU"无关),
+            #   而它要的只是"渠道健康分"这一个数。看板每次 cache miss 都会把当天分写进
+            #   `health_snapshot`(date+channel 唯一键), 这里直接读当天那一行:
+            #   既快, 又与用户看到的分数**同源同值**(规则按 health.score 判阈值时,
+            #   "告警用的分"和"卡片上的分"不该是两个数)。
+            #   当天没写过(没人开看板)才回落到完整计算。
             try:
-                from routes.dashboard import _health_index
-                _health = (_health_index(channel) or {}).get("score")
+                _hs = one("SELECT score FROM health_snapshot WHERE `date`=%s AND channel=%s",
+                          [now_cn().strftime("%Y-%m-%d"), channel])
+                _hv = int((_hs or {}).get("score") if (_hs or {}).get("score") is not None else -1)
+                if _hv >= 0:
+                    _health = _hv
+                else:
+                    from routes.dashboard import _health_index
+                    _health = (_health_index(channel) or {}).get("score")
             except Exception as _e:
                 try_err("rules", "评估健康分降级", _e)
         # SKU 聚合(avail/transit/safety) 已由前面的 GROUP BY 算好(见 `_agg`), 这里只补供应商映射
         _prod_sup = {}
         try:
-            for _r4 in query("SELECT sku, supplier_code FROM products WHERE channel=%s "
-                             "AND (deleted_at IS NULL OR deleted_at='')", [channel]):
-                _prod_sup[_r4.get("sku")] = _r4.get("supplier_code") or ""
+            for _pb in _BATCHES:
+                for _r4 in _scoped("SELECT sku, supplier_code FROM products WHERE channel=%s "
+                                   "AND (deleted_at IS NULL OR deleted_at='')", "", _pb):
+                    _prod_sup[_r4.get("sku")] = _r4.get("supplier_code") or ""
         except Exception as _e:
             try_err("rules", "评估加载供应商映射降级", _e)
         # 2026-10-29 ctx 扩展: 批次效期(最近到期剩余天数) + 供应商评分 + 周转天数
@@ -411,15 +446,16 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
             from datetime import datetime as _dtx
             from core.clock import now_cn as _now_cn
             _todayx = _now_cn().date()   # 北京时间自然日: 剩余保质期差一天就会误报临期
-            for _rx in query("SELECT sku, MIN(exp_date) AS e FROM batches WHERE channel=%s "
-                             "AND exp_date IS NOT NULL AND exp_date!='' GROUP BY sku", [channel]):
-                _e = str(_rx.get("e") or "")[:10]
-                if _e:
-                    try:
-                        _exp_map[str(_rx.get("sku"))] = (
-                            _dtx.strptime(_e, "%Y-%m-%d").date() - _todayx).days
-                    except Exception:
-                        pass
+            for _xb in _BATCHES:
+                for _rx in _scoped("SELECT sku, MIN(exp_date) AS e FROM batches WHERE channel=%s",
+                                   " AND exp_date IS NOT NULL AND exp_date!='' GROUP BY sku", _xb):
+                    _e = str(_rx.get("e") or "")[:10]
+                    if _e:
+                        try:
+                            _exp_map[str(_rx.get("sku"))] = (
+                                _dtx.strptime(_e, "%Y-%m-%d").date() - _todayx).days
+                        except Exception:
+                            pass
         except Exception as _ex:
             try_err('core_rules', '批次效期加载降级', _ex)
         _sup_score = {}
@@ -452,13 +488,15 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
         _own_map = {}
         try:
             _wm = {}
-            for _ro in query("SELECT sku, warehouse_type, IFNULL(SUM(IFNULL(available_qty,0)),0) AS av, "
-                             "IFNULL(SUM(IFNULL(in_transit_qty,0)),0) AS tr FROM inventory "
-                             "WHERE channel=%s AND warehouse_type IN ('own','platform','platform_b') "
-                             "GROUP BY sku, warehouse_type", [channel]):
-                _wm.setdefault(str(_ro.get("sku") or ""), {})[
-                    str(_ro.get("warehouse_type") or "")] = (
-                    int(_ro.get("av") or 0), int(_ro.get("tr") or 0))
+            for _ob in _BATCHES:
+                for _ro in _scoped("SELECT sku, warehouse_type, "
+                                   "IFNULL(SUM(IFNULL(available_qty,0)),0) AS av, "
+                                   "IFNULL(SUM(IFNULL(in_transit_qty,0)),0) AS tr FROM inventory "
+                                   "WHERE channel=%s AND warehouse_type IN ('own','platform','platform_b')",
+                                   " GROUP BY sku, warehouse_type", _ob):
+                    _wm.setdefault(str(_ro.get("sku") or ""), {})[
+                        str(_ro.get("warehouse_type") or "")] = (
+                        int(_ro.get("av") or 0), int(_ro.get("tr") or 0))
             # 阈值同样走规则 params(可配置): 这里只给"默认值", 规则条件用 params.* 覆盖
             _own_cover_mult = float(_rp.get("transfer_cover_mult", 1.0) or 1.0) if _rp else 1.0
             for _sk, _d in _wm.items():
@@ -498,14 +536,15 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
     _agg = _agg or {}
     if _need_calc or _order_rules:
         try:
-            for _ra in query(
-                    "SELECT sku, IFNULL(SUM(available_qty),0) AS av, "
-                    "IFNULL(SUM(in_transit_qty),0) AS tr, IFNULL(SUM(safety_qty),0) AS sf "
-                    "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' "
-                    "GROUP BY sku", [channel]):
-                _ska = str(_ra.get("sku") or "")
-                if _ska:
-                    _agg[_ska] = {"avail": int(_ra.get("av") or 0),
+            for _ab in _BATCHES:
+                for _ra in _scoped(
+                        "SELECT sku, IFNULL(SUM(available_qty),0) AS av, "
+                        "IFNULL(SUM(in_transit_qty),0) AS tr, IFNULL(SUM(safety_qty),0) AS sf "
+                        "FROM inventory WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''",
+                        " GROUP BY sku", _ab):
+                    _ska = str(_ra.get("sku") or "")
+                    if _ska:
+                        _agg[_ska] = {"avail": int(_ra.get("av") or 0),
                                   "transit": int(_ra.get("tr") or 0),
                                   "safety": int(_ra.get("sf") or 0)}
         except Exception as _eag:

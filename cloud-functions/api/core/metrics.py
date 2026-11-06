@@ -154,6 +154,10 @@ def dim_of(kind, warehouse="", wt=""):
 # 可覆盖: replenishment_config 的 `mode_<mode>_grain` 优先, 其次 `grain`(sku / barcode)
 GRAIN_SKU = "sku"
 GRAIN_BARCODE = "barcode"
+# SKU 作用域下推(2026-11-06): 评估"只评本批 SKU"时, 加载查询带 `sku IN (...)`
+#   _SCOPE_MAX 之上不再分片 —— 分片反而多绕几趟, 且全渠道一次的结果与它等价
+_SCOPE_MAX = 5000
+_SCOPE_STEP = 800
 _CFG_TTL = 60
 _CFG_CACHE = {}   # channel → (ts, {key: value})
 
@@ -286,7 +290,7 @@ class Series(object):
 
 
 def load(channel, dims=None, with_barcode=False, days=28, fields=("ds28",),
-         ttl=_SERIES_TTL, fresh=False):
+         ttl=_SERIES_TTL, fresh=False, skus=None):
     """取该渠道日销切片(进程内 30s) —— **唯一**的日销读取入口
 
     dims         需要的维度标签集合(None = 全渠道)。按维度下推 SQL ——
@@ -296,13 +300,19 @@ def load(channel, dims=None, with_barcode=False, days=28, fields=("ds28",),
                  规则引擎要按码判(**告警是 SKU×码×仓**), 那里显式传 True。
     fields       只取点名的列 —— 传输量是这里的唯一成本(见模块 docstring)。
     fresh        跳过进程内缓存(写后重算用)
+    skus         SKU 作用域(2026-11-06): 传了就只取这些 SKU 的行, 且**不进进程缓存**
+                 (每批清单不同, 缓存键会退化成"按批"而失去意义)。评估只评一批 SKU 时,
+                 没必要把整渠道 12 万行搬回来 —— 这是 calc_load 19.3s 的一半。
     """
     import time as _t
     _dims = frozenset(str(d) for d in dims) if dims else None
     _flds = tuple(fields or ("ds28",))
+    _scope = [str(x) for x in (skus or []) if x]
+    if len(_scope) > _SCOPE_MAX:
+        _scope = []          # 太大时按 SKU 分片反而多绕几趟; 全渠道一次(结果等价)
     _key = (str(channel), _dims, bool(with_barcode), int(days), _flds)
     _now = _t.time()
-    if not fresh:
+    if not fresh and not _scope:
         _hit = _SERIES.get(_key)
         if _hit and _now - _hit[0] < ttl:
             return _hit[1]
@@ -315,22 +325,32 @@ def load(channel, dims=None, with_barcode=False, days=28, fields=("ds28",),
         _p += sorted(_dims)
     if not with_barcode:
         _sql += " AND COALESCE(barcode,'')=''"
+    _p = tuple(_p)
     rows = {}
     try:
-        for r in query(_sql, _p):
-            _row = {}
-            for f in _flds:
-                try:
-                    _row[f] = float(r.get(f) or 0)
-                except Exception:
-                    _row[f] = 0.0
-            rows[(str(r.get("sku") or ""), str(r.get("barcode") or ""),
-                  str(r.get("warehouse") or ""))] = _row
+        for _b0 in range(0, len(_scope), _SCOPE_STEP) if _scope else [None]:
+            if _b0 is None:
+                _parts = [(_sql, _p)]
+            else:
+                _part = _scope[_b0:_b0 + _SCOPE_STEP]
+                _parts = [(_sql + " AND sku IN (" + ",".join(["%s"] * len(_part)) + ")",
+                           _p + tuple(_part))]
+            for _s, _sp in _parts:
+                for r in query(_s, list(_sp)):
+                    _row = {}
+                    for f in _flds:
+                        try:
+                            _row[f] = float(r.get(f) or 0)
+                        except Exception:
+                            _row[f] = 0.0
+                    rows[(str(r.get("sku") or ""), str(r.get("barcode") or ""),
+                          str(r.get("warehouse") or ""))] = _row
     except Exception as _e:
         try_err("metrics", "日销切片读取降级(%s)" % channel, _e)
         return Series(channel, {}, _flds)
     s = Series(channel, rows, _flds)
-    _SERIES[_key] = (_now, s)
+    if not _scope:
+        _SERIES[_key] = (_now, s)
     return s
 
 
@@ -504,6 +524,25 @@ def safety_line(ds, period, manual=0):
     return round(d * p, 1), "dynamic"
 
 
+def classify(qty, cover, line, paused=False):
+    """分档 —— **唯一**判定点(`judge` 与 `tally` 共用)
+
+    抽出来的理由不是"少写几行", 而是 2026-11-06 的实测: 看板两个消费方
+    (健康分/低库存)各自跑一遍 units+judge, 每次为 8 万个单元各造一个 13 键 verdict,
+    组装从 0.20s 涨到 3.14s —— 而它们**只要计数**。计数与判定必须共用同一处顺序,
+    否则"卡上低库存 509 / 列表 507"这种偏差会以另一种形式长回来。
+    """
+    if qty <= 0:
+        return ST_OUT          # 断货只看可用量: 在途的货还没到, 不能算断货
+    if paused:
+        return ST_PAUSED       # 停用不进缺口, 库存照常呈现
+    if line <= 0:
+        return ST_IDLE         # 无日销 → 安全线 0 → 不判高低
+    if cover < line:
+        return ST_LOW
+    return ST_OK
+
+
 def judge(u, ds, p, channel, mode=None, include_transit=True, sigma=0.0, z=1.65,
           otif=1.0, accel=1.0):
     """一个单元 → 一个结论(所有视图共用这一个)
@@ -524,16 +563,7 @@ def judge(u, ds, p, channel, mode=None, include_transit=True, sigma=0.0, z=1.65,
     line, src = safety_line(ds, per, u.get("manual_safety"))
     _lead = float((p or {}).get("lead") or 0) or 1.0
     ss = float(z) * float(sigma or 0) * (_lead ** 0.5)
-    if qty <= 0:
-        state = ST_OUT
-    elif u.get("paused"):
-        state = ST_PAUSED
-    elif line <= 0:
-        state = ST_IDLE
-    elif cover < line:
-        state = ST_LOW
-    else:
-        state = ST_OK
+    state = classify(qty, cover, line, u.get("paused"))
     return {
         "ds": round(float(ds or 0), 3), "period": per, "line": line, "line_src": src,
         "qty": qty, "transit": tr, "cover": cover, "state": state,
@@ -555,6 +585,60 @@ def judge_units(us, series, channel, mode=None, metric="ds28", include_transit=T
         ds = series.value(metric, u["sku"], u.get("barcode"), dim) if series is not None else 0.0
         out.append((u, judge(u, ds, p, channel, mode, include_transit=include_transit, z=z)))
     return out
+
+
+def tally(us, series, channel, mode=None, metric="ds28", include_transit=True, p=None):
+    """批量判定 → **分档计数**(不造 per-unit verdict)
+
+    返回 `{(kind, warehouse_type): {total/ok/low/out/idle/paused}}`。
+
+    为什么需要它(2026-11-06 线上实测):
+        看板摘要里健康分与低库存**只要 10 个整数**, 却各自走了一遍 `units + judge_units` ——
+        8 万个单元 × 两遍 × 每个单元一个 13 键 dict, 组装 3.14s。`tally` 与 `judge` 共用
+        `classify()`, 结论逐单元一致, 只是不再把中间结果留在内存里。
+
+    分档口径、`include_transit` 语义、周期取值全部沿用 `judge()`, 本函数不含任何新判断。
+    """
+    _p = p or periods({})
+    _cls, _line_of, _per_of, _dim_of = classify, safety_line, period_of, dim_of
+    _val = series.value if series is not None else None
+    out = {}
+    for u in us:
+        _kind = u.get("kind")
+        dim = _dim_of(_kind, u.get("warehouse"), u.get("warehouse_type"))
+        ds = _val(metric, u["sku"], u.get("barcode"), dim) if _val is not None else 0.0
+        qty = int(u.get("avail") or 0)
+        tr = int(u.get("transit") or 0)
+        cover = qty + tr if include_transit else qty
+        line, _src = _line_of(ds, _per_of(_kind, channel, mode, _p), u.get("manual_safety"))
+        st = _cls(qty, cover, line, u.get("paused"))
+        k = (_kind, str(u.get("warehouse_type") or ""))
+        c = out.get(k)
+        if c is None:
+            c = out[k] = {"total": 0, "ok": 0, "low": 0, "out": 0, "idle": 0, "paused": 0}
+        c["total"] += 1
+        c[st] = c.get(st, 0) + 1
+    return out
+
+
+def roll(t, kinds=None, wt_in=None, wt_not_in=None):
+    """`tally` 的结果 → 一组计数。三个过滤条件与 `counts()` 的语义一一对应
+
+    kinds     只数这些桶类型(如 ("bc",) / ("own","wh"))
+    wt_in     只数这些仓型(如 ("platform",))
+    wt_not_in 排除这些仓型 —— bbcc 下 platform/platform_b 已并入 BC 单元, 逐仓行不能再数一次
+    """
+    c = {"total": 0, "ok": 0, "low": 0, "out": 0, "idle": 0, "paused": 0}
+    for (kind, wt), d in t.items():
+        if kinds and kind not in kinds:
+            continue
+        if wt_in is not None and wt not in wt_in:
+            continue
+        if wt_not_in is not None and wt in wt_not_in:
+            continue
+        for k, v in d.items():
+            c[k] = c.get(k, 0) + v
+    return c
 
 
 def code_risk(u):

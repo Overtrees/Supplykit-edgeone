@@ -755,7 +755,38 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                   "payout": round(mg - _refund(d30, d31) - _sub(d30, d31), 2)},
     }
 
-    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg, _series=_series)
+    # 一次判定, 两处消费(2026-11-06 第二刀: 组装 3.14s → 见 docs 15.152)
+    #
+    # 在这之前: 健康分(`_health_index`)建一遍 units+judge, 低库存下面再建一遍 —— 同一批
+    #   8.5 万行、同一份日销、同一个 cfg, 只有"取哪些桶"不同, 却付了两遍全量代价。
+    # 现在: 一次 units(with_bc=True, 同时含 bc/wh/own 三种桶), 一次 tally(只计数不造
+    #   verdict dict), 两处各自 roll 出自己那几个数。桶集合与原来**逐个相等**:
+    #     · 健康四个 tab: own / wt=platform / wt=platform_b / bc / (own+wh)
+    #     · 低库存:       bbcc = bc + 非平台仓的 wh(platform 行已并入 bc, 不能再数一次)
+    #                     traditional = 逐仓 wh(B 仓已被 drop_platform_b 剔除)
+    from core import metrics as _M
+    _t_sum = None
+    try:
+        _mode_sum = _M.mode_of(channel, mode)
+        _cfg_sum = _cfg if _cfg is not None else _q_cfg(channel)
+        _p_sum = _M.periods(_cfg_sum)
+        _rows_sum = (_inv_rows if _inv_rows is not None else
+                     query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                           "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
+                           [channel]))
+        _ser_sum = _series
+        if _ser_sum is None:
+            _ser_sum = _M.load(channel, dims=_M.dims_needed(_rows_sum, channel, _mode_sum),
+                               fields=("ds28",))
+        _us_sum = _M.units(_rows_sum, merge_bc=False, with_bc=True,
+                           grain=_M.grain_of(channel, _mode_sum, _cfg_sum),
+                           drop_platform_b=(_mode_sum != "bbcc"))
+        _t_sum = _M.tally(_us_sum, _ser_sum, channel, _mode_sum, metric="ds28",
+                          include_transit=_M.include_transit_default(), p=_p_sum)
+    except Exception as _e:
+        try_err('dashboard', '看板判定降级(健康/低库存各自重算)', _e)
+    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg, _series=_series,
+                           _tally=_t_sum)
     # 低库存计数 —— 与健康卡/告警规则同一套判定(core.metrics), 不再自己拼安全线
     #
     # 2026-11-06 S3: 原实现有四处各写一遍, 且都拿 **SKU 级 `__C__` 日销** 去比每个仓的可用量:
@@ -764,29 +795,17 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     #   现在只有一个来源: 桶由 metrics.units 归并, ds 按桶维度取, 安全线由 metrics 算。
     #   `out` 单列(可用<=0), 不混进低库存 —— 断货和"快没了"是两件事, 卡上要分开。
     low_stock = {"c": 0, "out": 0, "total": 0}
-    try:
-        from core import metrics as _M
-        _cfg_ls = _cfg if _cfg is not None else _q_cfg(channel)
-        _p_ls = _M.periods(_cfg_ls)
-        _rows_ls = (_inv_rows if _inv_rows is not None else
-                    query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                          "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
-                          [channel]))
-        _s_ls = _series
-        if _s_ls is None:
-            _s_ls = _M.load(channel, dims=_M.dims_needed(_rows_ls, channel, mode), fields=("ds28",))
-        # 桶集合必须与**规则引擎实际评估的那一套**一致(bbcc=BC 合计+自有仓 / 传统=逐仓+自有仓),
-        #   否则卡片说 3823、点开列表只有 507 —— 又是"同一件事两个数"。
-        _us_ls = _M.units(_rows_ls, merge_bc=(mode == "bbcc"),
-                          grain=_M.grain_of(channel, mode, _cfg_ls),
-                          drop_platform_b=(mode != "bbcc"))
-        _pairs_ls = _M.judge_units(_us_ls, _s_ls, channel, mode, metric="ds28",
-                                   include_transit=_M.include_transit_default(), p=_p_ls)
-        # 与 aux 卡同口径: 只数销售仓(自有仓的缺口归「自有仓健康」, 不在这里重复计)
-        _c_ls = _M.counts(_pairs_ls, (_M.DIM_BC, _M.DIM_WH))
-        low_stock = {"c": int(_c_ls.get("low") or 0), "out": int(_c_ls.get("out") or 0),
-                     "total": int(_c_ls.get("total") or 0)}
-    except Exception as _e:
+    if _t_sum is not None:
+        try:
+            # 与 aux 卡同口径: 只数销售仓(自有仓的缺口归「自有仓健康」, 不在这里重复计)
+            if _mode_sum == "bbcc":
+                _c_ls = _M.roll(_t_sum, kinds=(_M.DIM_BC, _M.DIM_WH),
+                                wt_not_in=("platform", "platform_b"))
+            else:
+                _c_ls = _M.roll(_t_sum, kinds=(_M.DIM_WH,))
+            low_stock = {"c": int(_c_ls.get("low") or 0), "out": int(_c_ls.get("out") or 0),
+                         "total": int(_c_ls.get("total") or 0)}
+        except Exception as _e:
             try_err('dashboard', '低库存计数降级', _e)
     # 三个概览计数: 原 3 次往返 → 一条(标量子查询, 同快照同口径); 调用方已预取则直接用
     _cnts = _counts if _counts is not None else _q_counts(channel)
