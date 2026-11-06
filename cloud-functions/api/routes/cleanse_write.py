@@ -786,6 +786,9 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
     _upd = []
     _ins = []
     _ctxs = []
+    # 2026-11-06 同上: 这处也在循环里, 新建行时逐行查 ledger_state。本函数只处理自有仓,
+    #   channel 固定, 一次导入内账期状态不变 → 循环外取一次。
+    _ledger_on = _ledger_started(channel)
     for key, delta in _K.items():
         sku, bc, wh, wht = key
         cur = _cur_map.get(key)
@@ -804,7 +807,7 @@ def _adjust_inventory(channel, deltas, evaluate_skus=None):
             # 2026-11-04 已建账后改为 0 —— 这时那条入库流水本来就在本月窗口里会被 Σ 统计,
             #   再把增量写成期初就是双算(同一个 +N 进两次)。
             _q = max(0, delta)
-            if wht == SELF_WAREHOUSE_TYPES[0] and _ledger_started(channel):
+            if wht == SELF_WAREHOUSE_TYPES[0] and _ledger_on:
                 _q = 0
             _ins.append((sku, bc, wh, wht, _q, _q, channel))
             _ctxs.append({"sku": sku, "channel": channel, "barcode": bc,
@@ -1292,6 +1295,14 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
             else:
                 _keep.append(it)
         cleaned = _keep
+        # 2026-11-06 性能根治: `_ledger_started` → `core.ledger.begin_date` → `state_get`,
+        #   **每次调用都发一条 SELECT** `ledger_state`(无进程内缓存)。它原先写在下面
+        #   `for it in cleaned` 循环里 → **每行一次往返**。
+        #   线上实测: 库存·JD·自有仓 2600 行 → 2600 次往返 → 单段 121s 撞穿网关硬限(504),
+        #   任务反复被切成僵尸租约; 同期平台仓 8 万行只要 24s(它不走 own 分支)。
+        #   账期状态在一次导入内不可能变, 循环外取一次即可, 与 §15.157「耗时只跟查询次数有关」
+        #   是同一条账: 这里砍掉的正是「查询次数」, 判定口径一个字节都没动。
+        _ledger_on = _ledger_started(channel) if wt == "own" else False
         for it in cleaned:
             # 2026-11-05 修: 原实现无条件 it["warehouse_type"] = wt, 把**文件里自己的仓型**抹掉。
             #   后果(线上实测): seed 的"平台仓"文件走 inventory_b 入口 → 北京/上海/成都等 7 个
@@ -1309,7 +1320,7 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
                 _bs = it.get("beginning_stock")
                 if _bs in (None, "", 0):
                     _bs = it.get("available_qty") or 0
-                if _ledger_started(channel):
+                if _ledger_on:
                     it["snapshot_qty"] = _bs
                     it.pop("beginning_stock", None)
                 else:
