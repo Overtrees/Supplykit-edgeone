@@ -44,7 +44,7 @@ def build_sim_ctx(cond_json, params, body, channel="jd"):
             "buffer": float(inv.get("buffer") or 0),
         },
         "order": {"quantity": int(order.get("quantity") or 0),
-                  "total_qty": int(order.get("total_qty") or order.get("quantity") or 0),
+                  "open_qty": int(order.get("open_qty") or order.get("quantity") or 0),
                   "total_amount": float(order.get("total_amount") or 0)},
         "channel": channel,
         "days_since_last": int(inv.get("days_since_last") or 0),

@@ -47,6 +47,29 @@ def _open_qty_map(channel, skus):
     return out
 
 
+def _close_grain_mismatch(channel, grain, limit=2000):
+    """关闭与新粒度不符的 active 告警 —— 粒度切换后的一次性收尾
+
+    告警的唯一键是 (channel, alert_type, sku, barcode, warehouse, source)。粒度从
+    "SKU×69码" 换成 "SKU"(或反向)时, 旧告警的键里 barcode 与新键永远不相等 →
+    "未命中即关闭"本该关掉它们, 但那条路径: ①只在有命中时走 ②受批量误关护栏限制
+    (单轮拟关 >=80% 判为数据异常)。于是改粒度后旧告警会长期挂在列表上, 计数虚高。
+
+    这里只按"键结构已失效"这一确定事实关闭, 不依赖本轮评估结果是否完整。
+    """
+    _expect_empty = str(grain) != "barcode"       # sku 粒度 → barcode 应为空
+    try:
+        _rows = query("SELECT id FROM alerts WHERE channel=%s AND status='active' "
+                      "AND source='rules_engine' "
+                      "AND ((COALESCE(barcode,'')='') <> %s) LIMIT %d"
+                      % ("%s", "%s", int(limit)),
+                      [channel, 1 if _expect_empty else 0])
+        if _rows:
+            _close_ids([r["id"] for r in _rows], "grain_changed")
+    except Exception as _e:
+        try_err("core_rules", "粒度切换收尾降级", _e)
+
+
 def close_orphan_for_skus(skus, channel):
     """删单联动通用化(2026-10-15): 该 SKU active 告警 → 其规则 event → 重评估(基于现有未删订单)——命中保留/未命中关;
     + low_stock 无行特殊(无未删订单且无在档——关); 替代硬编码 oversell/low_stock(自定义 alert_type 覆盖)
@@ -102,8 +125,7 @@ def close_orphan_for_skus(skus, channel):
                 _av = float(_avail.get(_sk, 0) or 0)
                 _oq = _open.get(_sk, 0) or 0
                 _ctxs.append({"sku": _sk, "channel": channel,
-                              "order": {"quantity": _oq, "open_qty": _oq, "total_qty": _oq,
-                                        "lifetime_qty": _live.get(_sk, 0) or 0},
+                              "order": {"quantity": _oq, "open_qty": _oq},
                               "order_qty": _oq,
                               "available_stock": _av,
                               "inv": {"available_qty": _av, "safety_qty": 0, "in_transit_qty": 0}})
@@ -443,8 +465,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
             _st0["transit"] += int(_r.get("in_transit_qty") or 0)
             _st0["safety"] += int(_r.get("safety_qty") or 0)
     _mode_e = str(mode or _M.mode_of(channel))
+    # 粒度由渠道补货模式决定(bbcc=SKU×69码 / traditional=SKU), 见 metrics.grain_of
+    _grain_e = _M.grain_of(channel, _mode_e)
     _units = _M.units(rows, merge_bc=(_mode_e == "bbcc"), drop_platform_b=(_mode_e != "bbcc"),
-                      by_barcode=True)
+                      grain=_grain_e)
     # 规则求值仍然吃"行"形态(condition_json 里写的是 inv.* / own.*), 这里把单元映射回行:
     #   BC 单元 → warehouse='__BC__' / warehouse_type='bc'; 其余单元 → 各自的仓与仓型。
     #   available_qty 只放"已到仓可用", in_transit_qty 单独放 —— 规则要含在途就显式相加,
@@ -598,7 +622,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
             _oagg = {}
             _skus_u = {str(r.get("sku") or "") for r in rows if r.get("sku")}
             _osql = (
-                "SELECT sku, SUM(quantity) AS lifetime, "
+                "SELECT sku, "
                 "SUM(CASE WHEN {c} THEN quantity ELSE 0 END) AS open_qty, "
                 "SUM(CASE WHEN {c} THEN total_amount ELSE 0 END) AS amt, "
                 "MAX(CASE WHEN {c} THEN quantity ELSE 0 END) AS mx, "
@@ -623,8 +647,7 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                 _av = int(_st.get("avail") or 0)
                 _oa = _oagg.get(_sk) or {}
                 o_ctxs.append({"sku": _sk, "channel": channel,
-                               "order": {"quantity": _v, "open_qty": _v, "total_qty": _v,
-                                         "lifetime_qty": int(_oa.get("lifetime") or 0),
+                               "order": {"quantity": _v, "open_qty": _v,
                                          "total_amount": float(_oa.get("amt") or 0),
                                          "max_quantity": int(_oa.get("mx") or 0),
                                          "min_quantity": int(_oa.get("mn") or 0),
@@ -698,6 +721,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
                     continue
                 if _close:
                     _close_ids(_close, "eval_unhit")
+        # 粒度切换收尾(2026-11-06): 旧粒度的 active 告警的新键**永远不会**再被命中,
+        #   却会被上面的批量误关护栏挡住(单轮 >=80% 视为数据异常)。粒度不符是确定的失效键,
+        #   不是"疑似数据不全", 单独按键失效关闭, 否则改粒度后旧告警永远挂在列表上。
+        _close_grain_mismatch(channel, _grain_e)
     except Exception as _e:
             try_err('core_rules', '静默降级', _e)
     # 2026-10-29 评估审计(只增日志, 零数据影响): 事件数/ctx 数/命中数/耗时

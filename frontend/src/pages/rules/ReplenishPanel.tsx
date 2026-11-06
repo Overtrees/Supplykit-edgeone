@@ -46,6 +46,28 @@ export default function RulesReplenishPanel(props: Props) {
     saveErr,
   } = props
   const toast = useToast()
+  // 判定粒度(2026-11-06): 默认跟随渠道补货模式(bbcc=SKU×69码 / traditional=SKU),
+  //   留空即跟随; 存 `mode_<mode>_grain` 前缀键, 后端 metrics.grain_of 优先读它
+  const grainField: ParamField[] = [{ k: 'grain', l: 'rp.param_grain' }]
+  const grainSelect = (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 14, marginBottom: 20 }}>
+      <label style={{ fontSize: 'var(--font-13)' }}>
+        {t('rp.param_grain')}
+        <select
+          value={String(cfg['grain'] || '')}
+          onChange={e => setCfg(p => ({ ...p, grain: e.target.value }))}
+          style={IS}
+        >
+          <option value="">{t('rp.grain_auto')}</option>
+          <option value="barcode">{t('rp.grain_barcode')}</option>
+          <option value="sku">{t('rp.grain_sku')}</option>
+        </select>
+        <div className="small muted" style={{ fontSize: 'var(--font-xs)', marginTop: 2 }}>
+          {t('rp.grain_h')}
+        </div>
+      </label>
+    </div>
+  )
   return (
     <div>
       {isBBCC ? (
@@ -117,27 +139,31 @@ export default function RulesReplenishPanel(props: Props) {
               </label>
             ))}
           </div>
+          {grainSelect}
         </>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr 1fr',
-            gap: 14,
-            marginBottom: 20,
-          }}
-        >
-          {paramFields.map(({ k, l }) => (
-            <label key={k} style={{ fontSize: 'var(--font-13)' }}>
-              {t(l)}
-              <input
-                value={String(cfg[k] || '')}
-                onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
-                style={IS}
-              />
-            </label>
-          ))}
-        </div>
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr 1fr',
+              gap: 14,
+              marginBottom: 20,
+            }}
+          >
+            {paramFields.map(({ k, l }) => (
+              <label key={k} style={{ fontSize: 'var(--font-13)' }}>
+                {t(l)}
+                <input
+                  value={String(cfg[k] || '')}
+                  onChange={e => setCfg(p => ({ ...p, [k]: e.target.value }))}
+                  style={IS}
+                />
+              </label>
+            ))}
+          </div>
+          {grainSelect}
+        </>
       )}
       <button
         disabled={saving}
@@ -147,7 +173,7 @@ export default function RulesReplenishPanel(props: Props) {
           const ch = globalChannel
           try {
             const toSave = {}
-            ;[...cParams, ...bParams, ...paramFields].forEach(f => {
+            ;[...cParams, ...bParams, ...paramFields, ...grainField].forEach(f => {
               if (cfg[f.k] !== undefined) toSave[f.k] = cfg[f.k]
             })
             await api.put('/api/replenishment-config?mode=' + m + '&channel=' + ch, toSave)

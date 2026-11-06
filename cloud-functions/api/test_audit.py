@@ -263,8 +263,9 @@ check("健康分不再用 get_sales_digest 的 SKU 级单维日销",
 check("健康分 mode 不再默认 bbcc(默认值由渠道配置回答)",
       'mode="bbcc"' not in _hh.split("def _health_index")[1][:300],
       "cron 每渠道调一次 → other 用 jd 的周期")
-check("健康分四个 tab 同一粒度(by_barcode=False, 单元=SKU)",
-      "by_barcode=False" in _hh, "unit 不一致时 total 不可横向比较")
+check("健康分粒度由 metrics.grain_of 决定(不再各写 by_barcode)",
+      "grain_of" in _hh and "by_barcode" not in _hh,
+      "同一渠道告警按码、看板按 SKU → 两个数放在一张卡上必然对不上")
 
 # F3: 低库存计数不再自拼安全线
 _dsh = open(os.path.join(_api_dir, "routes", "dashboard.py"), encoding="utf-8").read()
@@ -387,6 +388,54 @@ for _f in ("App.tsx", os.path.join("pages", "DashboardPage.tsx")):
         _hits.append(_f)
 check("前端不再用静态 safety_qty 自算低库存(第 6 份口径)",
       not _hits, "残留: %s" % ",".join(_hits))
+
+# ── I. 粒度单一真源 + 旧字段删除(2026-11-06 第二轮定案)────────────────
+# I1: units 调用一律传 grain(由 metrics.grain_of 决定), 禁止各调用点手写 by_barcode
+import glob as _glob
+_bad_bc = []
+for _f in _glob.glob(os.path.join(_api_dir, "routes", "*.py")) + \
+        [os.path.join(_api_dir, "core", "rule_eval.py")]:
+    _src = open(_f, encoding="utf-8").read()
+    if "by_barcode" in _src:
+        _bad_bc.append(os.path.basename(_f))
+check("判定粒度只由 metrics.grain_of 决定(调用点禁手写 by_barcode)",
+      not _bad_bc, "残留: %s" % ",".join(_bad_bc))
+_mm = open(os.path.join(_api_dir, "core", "metrics.py"), encoding="utf-8").read()
+check("grain_of 存在且可配置(mode_<m>_grain / grain)",
+      "def grain_of(" in _mm and "mode_%s_grain" in _mm and 'cfg.get(_k)' in _mm,
+      "粒度必须唯一决定处, 且留业务覆盖口")
+check("规则评估用 grain_of 并对粒度残留告警收尾",
+      "grain_of" in _re4 and "_close_grain_mismatch" in _re4,
+      "改粒度后旧键告警永远不被命中, 会被批量护栏挡住挂死在列表上")
+
+# I2: 历史累计量字段已删(total_qty / lifetime_qty), 只留 order.open_qty
+_rf = open(os.path.join(_api_dir, "core", "rule_fields.py"), encoding="utf-8").read()
+check("字段表只有 order.open_qty, 不再有 total_qty/lifetime_qty 兼容别名",
+      '"order.open_qty"' in _rf and "total_qty" not in _rf and "lifetime_qty" not in _rf,
+      "留'同值兼容'会让人以为历史累计量是合法判定量")
+_bad_qty = []
+for _f in _glob.glob(os.path.join(_api_dir, "core", "*.py")) + \
+        _glob.glob(os.path.join(_api_dir, "routes", "*.py")) + \
+        [os.path.join(_api_dir, "core", "rule_sim.py")]:
+    if "local_test" in _f or "test_audit" in _f:
+        continue
+    _src = open(_f, encoding="utf-8").read()
+    if "total_qty" in _src or "lifetime_qty" in _src:
+        _bad_qty.append(os.path.basename(_f))
+check("ctx 构造不再注入 total_qty/lifetime_qty(线上规则已核查无引用)",
+      not _bad_qty, "残留: %s" % ",".join(_bad_qty))
+_fe_rules = _glob.glob(os.path.join(_fe, "pages", "rules", "*.tsx"))
+_bad_fe = []
+for _f in _fe_rules:
+    _src = open(_f, encoding="utf-8").read()
+    if "order.total_qty" in _src or "order.lifetime_qty" in _src:
+        _bad_fe.append(os.path.basename(_f))
+check("前端规则页不再提供历史累计量字段",
+      not _bad_fe, "残留: %s" % ",".join(_bad_fe))
+check("前端默认超卖条件用未发货量",
+      "left: 'order.open_qty'" in open(os.path.join(_fe, "pages", "rules", "EditForm.tsx"),
+                                       encoding="utf-8").read(),
+      "新建超卖规则的默认条件必须是现行口径")
 
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

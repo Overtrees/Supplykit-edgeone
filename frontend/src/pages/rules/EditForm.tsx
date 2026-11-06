@@ -133,8 +133,8 @@ export default function RuleEditForm({
     oversell: {
       event: 'order.created',
       cond: {
-        // 2026-10-29 累计口径: 单笔 quantity 会漏报"累计超卖"(历史订单每笔都小于库存)
-        left: 'order.total_qty',
+        // 2026-11-06 超卖口径: 判定量是未发货订单量(历史累计量恒大于可用, 不可作判定量)
+        left: 'order.open_qty',
         op: '>',
         right: 'inv.available_qty',
         rightType: 'field',

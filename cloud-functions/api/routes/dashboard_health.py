@@ -119,7 +119,8 @@ def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _
         _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
     # 判定单元: 保留逐仓行(own/platform/platform_b 三个 tab 各看各的), **另外**追加 BC 单元
     #   传统模式下 B 仓不参与(它只是 jd 的中转仓) —— 与告警规则的 `_close_wt` 白名单同口径
-    _us = _M.units(rows, merge_bc=False, with_bc=True, by_barcode=False,
+    _us = _M.units(rows, merge_bc=False, with_bc=True,
+                   grain=_M.grain_of(channel, _mode, _cfg),
                    drop_platform_b=(_mode != "bbcc"))
     _pairs = _M.judge_units(_us, _series, channel, _mode, metric="ds28",
                             include_transit=_M.include_transit_default(), p=_p)

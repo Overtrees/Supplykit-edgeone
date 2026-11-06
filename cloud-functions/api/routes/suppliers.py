@@ -138,6 +138,13 @@ async def update_config(request: Request):
         n += 1
     from routes.analysis_cache import invalidate
     invalidate("config")
+    # 2026-11-06 粒度可配置(grain / mode_<mode>_grain): metrics.channel_cfg 有 60s 进程内
+    #   缓存, 保存后必须失效, 否则"改了粒度 → 下次评估还按旧的判"。
+    try:
+        from core import metrics as _M
+        _M.invalidate_cfg(channel)
+    except Exception as _e:
+        try_err('suppliers', '粒度配置缓存失效降级', _e)
     # 2026-11-02 S2-1: 前置期/安全天数/季节系数既是补货采购的输入, 也是规则 ctx 的动态安全线
     #   (_mcv 现读配置)。只清缓存不重算 → 告警仍按旧阈值, 等下一次库存变动或每日任务才追平。
     #   这里补一次后台重算(脏标记, 连续调参合并成尾追), 让"改参数 → 告警跟着变"当天成立。

@@ -114,8 +114,8 @@ export const LF = [
   { l: 'rf.lf.16', v: 'inv.warehouse_type' },
   { l: 'rf.lf.17', v: 'barcode' },
   { l: 'rf.lf.18', v: 'order.quantity' },
-  // 2026-10-29 累计订单量(超卖判定应使用此字段: 单笔口径会漏报累计超卖)
-  { l: 'rf.lf.19', v: 'order.total_qty' },
+  // 2026-11-06 超卖判定量 = 未发货订单量(历史累计量已从字段表删除)
+  { l: 'rf.lf.19', v: 'order.open_qty' },
   { l: 'rf.lf.20', v: 'order.max_quantity' },
   { l: 'rf.lf.21', v: 'order.min_quantity' },
   { l: 'rf.lf.22', v: 'order.line_count' },

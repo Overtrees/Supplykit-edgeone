@@ -146,6 +146,68 @@ def dim_of(kind, warehouse="", wt=""):
     return str(warehouse or "")
 
 
+# ── 判定粒度 ─────────────────────────────────────────────────────
+# 粒度 = "一个判定单元是什么", 必须与渠道的补货模式一致, 且**同一渠道只许一个**:
+#   bbcc        SKU×69码 —— BC 是一盘货, 平台按码卖/按码对账; 两个码的库存相加而日销只取
+#               一个, 单元数与数量都对不上(旧 P0-14 就是这么来的)
+#   traditional SKU     —— 逐仓按 SKU 备货; 码只是同货不同条码, 拆开判会把同一个缺口报两次
+# 可覆盖: replenishment_config 的 `mode_<mode>_grain` 优先, 其次 `grain`(sku / barcode)
+GRAIN_SKU = "sku"
+GRAIN_BARCODE = "barcode"
+_CFG_TTL = 60
+_CFG_CACHE = {}   # channel → (ts, {key: value})
+
+
+def channel_cfg(channel, ttl=_CFG_TTL):
+    """该渠道的 replenishment_config(进程内 60s)。`channel=''` 是全局默认, 渠道行覆盖它
+
+    只给"必须自己回答"的判定用(粒度)。周期/参数仍由调用方把手里的 cfg 传进 periods(),
+    这样一次请求里只读一份配置, 不会出现"前半段按旧值、后半段按新值"。
+    """
+    import time as _t
+    _k = str(channel or "")
+    _now = _t.time()
+    _hit = _CFG_CACHE.get(_k)
+    if _hit and _now - _hit[0] < ttl:
+        return _hit[1]
+    cfg = {}
+    for _ch in (("",) if not _k else ("", _k)):
+        try:
+            for r in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [_ch]):
+                if r.get("key"):
+                    cfg[str(r.get("key"))] = r.get("value")   # 渠道行覆盖全局默认
+        except Exception as _e:
+            try_err("metrics", "渠道配置读取降级(%s)" % (_ch or "默认"), _e)
+    _CFG_CACHE[_k] = (_now, cfg)
+    return cfg
+
+
+def grain_of(channel, mode=None, cfg=None):
+    """渠道 → 判定粒度(`barcode` / `sku`)。**唯一**的粒度决定处
+
+    为什么不能各调用点自己写 `by_barcode=True/False`:
+      同一个渠道, 规则引擎按码判、看板按 SKU 数, 两个数放在一张卡上必然对不上
+      —— 这正是 S3 要消灭的"同一个词指两个东西"。
+    默认跟随补货模式(bbcc→码 / 其他→SKU); 业务要改就写配置:
+      `mode_bbcc_grain` / `mode_traditional_grain` / `grain`(取值 sku / barcode)
+    """
+    m = mode_of(channel, mode)
+    _cfg = channel_cfg(channel) if cfg is None else (cfg or {})
+    for _k in ("mode_%s_grain" % m, "grain"):
+        v = str(_cfg.get(_k) or "").strip().lower()
+        if v in (GRAIN_SKU, GRAIN_BARCODE):
+            return v
+    return GRAIN_BARCODE if m == "bbcc" else GRAIN_SKU
+
+
+def invalidate_cfg(channel=""):
+    """清配置缓存(配置保存后调用)"""
+    if not channel:
+        _CFG_CACHE.clear()
+        return
+    _CFG_CACHE.pop(str(channel), None)
+
+
 # ── 日销序列(一次取回, 只取点名的列)────────────────────────────────
 _SERIES_TTL = 30
 _SERIES = {}   # (channel, dims, with_barcode, days, fields) → (ts, Series)
@@ -316,14 +378,15 @@ def dims_needed(inv_rows, channel, mode=None):
 
 # ── 归桶(库存行 → 判定单元)────────────────────────────────────────
 def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
-          by_barcode=True, status=None):
+          grain=GRAIN_BARCODE, status=None):
     """库存行 → 判定单元。**唯一**的归并规则。
 
     merge_bc          platform + platform_b 合并成 `DIM_BC`, 平台行从输出剔除(规则引擎用)
     with_bc           保留平台行, **另外**追加 BC 单元(健康卡四档要四个口径并存)
     drop_platform_b   传统模式下 B 仓不参与(它只是 jd 的中转仓, 不是判定对象)
-    by_barcode        单元粒度是否含 69码。False → (SKU, 桶) 一个单元, 库存按 SKU 合计
-                      (健康卡 "total SKU" 就是这个粒度; 规则必须 True —— 告警是 SKU×码×仓)
+    grain             单元粒度: `barcode`=(SKU,69码) / `sku`=按 SKU 合计。
+                      由 `grain_of(channel, mode)` 决定(**不要**在各调用点手写 True/False,
+                      否则同一渠道的告警与看板粒度不同)
     status            {sku: products.status}; 传了才标 `paused`(停用不进缺口)
 
     ⚠️ 与旧实现的差别(都是修 bug, 不是换口径):
@@ -332,6 +395,7 @@ def units(inv_rows, merge_bc=False, with_bc=False, drop_platform_b=False,
       · BC 单元按 (SKU, 69码) 建键, 不是按 SKU —— 旧实现两个码的库存相加、日销却取一个,
         单元数还按 SKU 算, 与 platform 的"按行"不同粒度, 两个数字不可比(P0-14(2))。
     """
+    by_barcode = str(grain or GRAIN_BARCODE) == GRAIN_BARCODE
     out = []
     bc = {}
 

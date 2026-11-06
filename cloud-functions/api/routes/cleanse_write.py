@@ -122,7 +122,7 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                                      "AND (deleted_at IS NULL OR deleted_at='') AND sku IN (%s) "
                                      "GROUP BY sku" % ("%s", _ph3), [channel] + _b2):
                         _cum2[_r2.get("sku")] = int(_r2.get("q") or 0)
-            # 2026-10-29 SKU 级去重(数学等价: max 覆盖 ">", min 覆盖 "<", total_qty 用于累计超卖)
+            # 2026-10-29 SKU 级去重(数学等价: max 覆盖 ">", min 覆盖 "<", open_qty 用于未发货量判定)
             _grp2 = {}
             for c in cleaned_all:
                 sku = c.get("sku")
@@ -139,8 +139,7 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
                 o_ctxs.append({"sku": sku, "channel": channel,
                                "order": {"quantity": oq, "max_quantity": _g2["max"],
                                          "min_quantity": _g2["min"], "line_count": _g2["n"],
-                                         "open_qty": _cum2.get(sku, oq),
-                                         "total_qty": _cum2.get(sku, oq)},
+                                         "open_qty": _cum2.get(sku, oq)},
                                "order_qty": _cum2.get(sku, oq),
                                "available_stock": inv_map.get(sku, 0),
                                "inv": {"available_qty": inv_map.get(sku, 0), "safety_qty": 0,

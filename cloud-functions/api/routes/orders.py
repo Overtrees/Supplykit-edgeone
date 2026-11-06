@@ -74,7 +74,7 @@ def _evaluate_restored_ch(ids, channel):
                 _agg3[_sk4] = _r4
         _o_ctxs = [{"sku": sk, "channel": channel,
                     "order": {"quantity": _qty.get(sk, 0),
-                              "open_qty": _cum3.get(sk, 0), "total_qty": _cum3.get(sk, 0),
+                              "open_qty": _cum3.get(sk, 0),
                               "total_amount": float((_agg3.get(sk) or {}).get("amt") or 0),
                               "max_quantity": int((_agg3.get(sk) or {}).get("mx") or 0),
                               "min_quantity": int((_agg3.get(sk) or {}).get("mn") or 0),

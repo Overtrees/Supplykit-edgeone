@@ -960,10 +960,10 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         # 该片 SKU 行级评估 ctx(与导入 done 步同口径——每行 ctx——order.created 规则行级判定)
         # 2026-10-29 超卖口径修复: 原 ctx 只给 order.quantity=本次导入量(单笔) →
         # 累计已超卖(如 1095 件 vs 库存 9)但单笔都小于库存时**永不报警**(系统性漏报)
-        # → 补 order.total_qty = 该 SKU 累计未删订单量(与 close_oversell 判定口径一致)
+        # → 补 order.open_qty = 该 SKU 未发货订单量(与每日评估/删单联动同一口径)
         _cum = {}
         # 2026-11-06 审计 P0-12: 原 `_batch[:500]` —— 本函数 page_size=1000, 每片后 500 个
-        #   SKU 拿不到 total_qty, ctx 退化为"单行最大量", 累计超卖(1095 vs 库存 9)判定失效。
+        #   SKU 拿不到 open_qty, ctx 退化为"单行最大量", 未发货超卖(1095 vs 库存 9)判定失效。
         #   改为 500/批循环拼接(与上方 inv_map 同一写法), 覆盖率 100%。
         # 2026-11-06 口径收敛: 判定量 = **未发货订单量**(待确认/待发货 且 近 N 天),
         #   与每日全量评估/删单联动同一个取数口径(定义只在 core.metrics 一处)。
@@ -979,7 +979,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                 _cum[_r.get("sku")] = int(_r.get("q") or 0)
         # 2026-10-29 SKU 级去重评估(数学等价): 原每行一 ctx, 同 SKU 多行重复评估
         #   等价性: "存在某行 quantity > X" ⟺ max_quantity > X; "< X" ⟺ min_quantity < X
-        #   → 提供 max/min/total_qty/line_count 四个字段, 任何单调条件都可精确表达(语义不漂移)
+        #   → 提供 max/min/open_qty/line_count 四个字段, 任何单调条件都可精确表达(语义不漂移)
         # 2026-10-29 顺序修正(实证漏报): 出入库必须**先重算再评估**
         #   原顺序: 取 inv_map → 评估 → 重算 → ctx.available_qty 是重算前旧值
         #   实证: 出库 800 后 own 仓 803→3, 但评估仍按 803 判定"库存充足" → 低库存不告警
@@ -1063,7 +1063,6 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
                                      "min_quantity": _g["min"],
                                      "line_count": _g["n"],
                                      "open_qty": _cum.get(sku, _g["max"]),
-                                     "total_qty": _cum.get(sku, _g["max"]),
                                      "total_amount": round(_g["amt"], 2),
                                      "unit_price": _g["price"]},
                            "order_qty": _cum.get(sku, _g["max"]),

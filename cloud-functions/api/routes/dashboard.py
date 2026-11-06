@@ -787,7 +787,8 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
             _s_ls = _M.load(channel, dims=_M.dims_needed(_rows_ls, channel, mode), fields=("ds28",))
         # 桶集合必须与**规则引擎实际评估的那一套**一致(bbcc=BC 合计+自有仓 / 传统=逐仓+自有仓),
         #   否则卡片说 3823、点开列表只有 507 —— 又是"同一件事两个数"。
-        _us_ls = _M.units(_rows_ls, merge_bc=(mode == "bbcc"), by_barcode=False,
+        _us_ls = _M.units(_rows_ls, merge_bc=(mode == "bbcc"),
+                          grain=_M.grain_of(channel, mode, _cfg_ls),
                           drop_platform_b=(mode != "bbcc"))
         _pairs_ls = _M.judge_units(_us_ls, _s_ls, channel, mode, metric="ds28",
                                    include_transit=_M.include_transit_default(), p=_p_ls)
@@ -1112,9 +1113,11 @@ def _build_aux(channel, mode):
         _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
                       "available_qty, in_transit_qty, safety_qty, product_name FROM inventory "
                       "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
-        _pp = _M.periods(_q_cfg(channel))
+        _cfg_sl = _q_cfg(channel)
+        _pp = _M.periods(_cfg_sl)
         _ser = _M.load(channel, dims=_M.dims_needed(_rows, channel, mode), fields=("ds28",))
-        _us = _M.units(_rows, merge_bc=(mode == "bbcc"), by_barcode=False,
+        _us = _M.units(_rows, merge_bc=(mode == "bbcc"),
+                       grain=_M.grain_of(channel, mode, _cfg_sl),
                        drop_platform_b=(mode != "bbcc"))
         _pr = _M.judge_units(_us, _ser, channel, mode, metric="ds28",
                              include_transit=_M.include_transit_default(), p=_pp)

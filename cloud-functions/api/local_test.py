@@ -3894,9 +3894,25 @@ try:
     check("S3 归桶: 传统模式 B 仓不参与判定",
           not [x for x in _trad if x["warehouse_type"] == "platform_b"], "B 仓混进来了")
     _sku_level = _SM.units(_inv[:1] + [dict(_inv[0], barcode="B2", available_qty=1)],
-                           merge_bc=False, by_barcode=False)
+                           merge_bc=False, grain=_SM.GRAIN_SKU)
     check("S3 归桶: 按 SKU 粒度时多码合并成一个单元",
           len(_sku_level) == 1 and _sku_level[0]["avail"] == 101, str(_sku_level))
+
+    # ── 粒度单一真源(2026-11-06): grain_of 默认跟随补货模式, 配置可覆盖 ──
+    check("S3 粒度: bbcc 默认按 69码, traditional 默认按 SKU",
+          _SM.grain_of("jd", "bbcc", {}) == "barcode"
+          and _SM.grain_of("other", "traditional", {}) == "sku",
+          "%s/%s" % (_SM.grain_of("jd", "bbcc", {}), _SM.grain_of("other", "traditional", {})))
+    check("S3 粒度: mode 前缀配置优先于平铺键",
+          _SM.grain_of("jd", "bbcc", {"mode_bbcc_grain": "sku", "grain": "barcode"}) == "sku")
+    check("S3 粒度: 平铺 grain 可覆盖默认, 非法值落回模式默认",
+          _SM.grain_of("jd", "bbcc", {"grain": "sku"}) == "sku"
+          and _SM.grain_of("jd", "bbcc", {"grain": "xxx"}) == "barcode")
+    check("S3 归桶: grain=barcode 时多码是两个单元, grain=sku 时合并",
+          len(_SM.units(_inv[:1] + [dict(_inv[0], barcode="B2", available_qty=1)],
+                        merge_bc=False, grain=_SM.GRAIN_BARCODE)) == 2
+          and len(_SM.units(_inv[:1] + [dict(_inv[0], barcode="B2", available_qty=1)],
+                            merge_bc=False, grain=_SM.GRAIN_SKU)) == 1)
 
     _pairs = [({"kind": _SM.DIM_WH, "sku": "S1"}, {"state": _SM.ST_LOW}),
               ({"kind": _SM.DIM_WH, "sku": "S2"}, {"state": _SM.ST_OK}),
