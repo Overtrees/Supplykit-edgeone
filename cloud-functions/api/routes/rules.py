@@ -188,7 +188,7 @@ async def update_rule(rid: int, request: Request):
         elif _new_ae == "1":
             try:
                 from core.rules import evaluate_stock_skus
-                evaluate_stock_skus(_ch, limit=100000)
+                evaluate_stock_skus(_ch)
             except Exception as _e:
                     try_err('rules', '静默降级', _e)
     from routes.analysis_cache import invalidate
@@ -385,7 +385,7 @@ async def rules_batch(request: Request):
             from core.rules import evaluate_stock_skus
             from routes.common import ch_codes as _chc0
             for _ch in _chc0():   # 2026-11-02 S1-5: 渠道数据驱动(原硬编码 jd/other)
-                evaluate_stock_skus(_ch, limit=100000)
+                evaluate_stock_skus(_ch)
         except Exception as _e:
                 try_err('rules', '静默降级', _e)
     elif action == "inactive":
@@ -445,7 +445,7 @@ async def rules_evaluate(request: Request):
     out = {}
     for ch in channels:
         try:
-            out[ch] = len(evaluate_stock_skus(ch, limit=100000, mode=mode or None))
+            out[ch] = len(evaluate_stock_skus(ch, mode=mode or None))
         except Exception as e:
             out[ch] = "error: %s" % str(e)[:80]
     from routes.analysis_cache import invalidate

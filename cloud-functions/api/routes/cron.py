@@ -539,7 +539,7 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
     for _ch in _chs:
         # 2026-11-02 S1-2: 逐渠道留一条运行记录(scope=渠道) —— 出问题时一眼看出哪个渠道没评估到
         with _tr("rule_eval", _ch) as _rec:
-            _hits = evaluate_stock_skus(_ch, limit=100000, only_ats=_ats or None)
+            _hits = evaluate_stock_skus(_ch, only_ats=_ats or None)
             _rec.rows = len(_hits or [])
             _rec.detail = {"triggered": len(_hits or []), "deep": bool(deep), "ats": _ats}
         triggered.extend(_hits or [])

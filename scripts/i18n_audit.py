@@ -244,6 +244,10 @@ DYNAMIC_PREFIXES = {
     "col": "components/colLabels.ts",          # colLabel(id) -> t('col.' + id)
     "fld": "pages/cleansing/fieldNames.ts",    # fldLabel(name) -> t('fld.' + name)
     "seg": "pages/insights/shared.tsx",        # 备注片段 k -> t('seg.' + k)
+    # 2026-11-06: 后缀拼接的特例 —— expiryStatusLabel 先选字面量 'inv.exp.ok' 等,
+    #   再 `t(key + '_icon')` 拼后缀。字面量本身扫得到, `_icon` 变体扫不到 → 3 条误报死键。
+    #   该命名空间下也就 10 条键, 整体交给产键函数兜底比加一套后缀识别规则划算。
+    "inv.exp": "components/statusLabels.ts",   # expiryStatusLabel(code) -> t('inv.exp.' + code + '_icon')
 }
 
 # 后端下发的词条键(task 进度步的 name_key), 前端 t(s.name_key) 渲染 —— 静态扫不到

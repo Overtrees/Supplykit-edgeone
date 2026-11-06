@@ -1,7 +1,8 @@
 # WorkBuddy(WBY) 专属开发工作流
 
-> 定位: 把 `DEVELOPMENT.md §15` 的规范落成**可执行顺序**。规则本身以 §15 为准, 本文只定义"先做什么、门禁是什么、证据从哪来"。
-> 适用: 在 WBY 沙箱内维护 Supplykit(EdgeOne Makers, Provider=Github)。其他项目可复用第 2/6 章骨架。
+> 定位: 在 WBY 沙箱里**干活时的环境差异与故障速查**。通用闭环/门禁只在 `docs/SKILL.md` §4 与
+> `docs/DEVELOPMENT.md` 维护, 本文不重复（重复过, 已经漂移: 这里曾写着"回归 392 通过"）。
+> 适用: 在 WBY 沙箱内维护 Supplykit(EdgeOne Makers, Provider=Github)。其他项目可复用第 1/3/7 章骨架。
 
 ---
 
@@ -21,71 +22,22 @@
 
 ---
 
-## 2. 标准闭环(六步, 不可跳)
+## 2. 标准闭环 → 见 `docs/SKILL.md` §4「七步交付闭环」
 
-### 2.1 改前
+闭环本身（改前 → 门禁 → 提交 → 推送 → 部署判据 → 线上验证 → 落文档）**只在一处维护**，
+本文不再抄第二份。本沙箱特有的四条差异记在这里：
 
-- 读 `DEVELOPMENT.md §15.8`(数据优化原则)与本项目既有定案(见 `CHANGELOG.md` 同日条目);
-- `git status --short` 确认工作区干净, 避免把无关改动混进提交;
-- **先把验收指标写成可量化的数字**(如"四维偏差 0 项""入库日期 100%"), 否则无法判断"改完了"。
-
-### 2.2 本地验证三件套
-
-```bash
-# ① 语法门禁(线上 runtime 是 Python 3.10)
-python3 -c "import ast;ast.parse(open('cloud-functions/api/routes/xxx.py').read(),feature_version=(3,10))"
-
-# ② 全量回归
-cd cloud-functions/api && python3 local_test.py   # 期望: 392 通过, 0 失败
-
-# ③ 规模 mock(单 SKU + 200 SKU 各跑一轮)
-python3 /tmp/verify_xxx.py
-```
-
-**为什么必须跑规模 mock**: 单 SKU 样本会让"批次/分组/分摊"类缺陷全部通过(每次只走一条分支)。
-
-### 2.3 提交
-
-- 约定式: `fix(scope): 主题` / `perf(scope)` / `feat(scope)`;
-- body 写清 **根因 → 修法 → 验证**, 带实测数字(便于日后回溯"当时凭什么判断好了");
-- 绝不提交 `.env` / `.edgeone/` / 任何密钥。
-
-### 2.4 推送(`github.com:443` 不可达 → 只能走 API)
-
-```bash
-cd /workspace/supplykit
-python3 scripts/push_api.py -m "fix(x): ..."       # 一次推送 = 远端一个 squash 提交
-python3 scripts/push_api.py -m "..." --dry-run     # 只列差异文件, 不真推
-```
-
-- **不要用 `git push`**：本沙箱到 `github.com:443` 的 TLS 在 131s 断开，重试 3 次只是白等 ~7 分钟，
-  且退出码还会被管道吃掉（`git push | tail -2` 返回的是 `tail` 的 0）。`api.github.com` 是稳定的，
-  脚本走 Git Data API 把"提交→传 blob→建 tree→建 commit→移 ref"手工走一遍。
-- **代价**：本地 commit SHA ≠ 远端 SHA（author/committer 时间戳不同）。所以"`Commit == 本地 HEAD`"
-  这条判据在这里**不成立**，别拿它判断失败。
-- **判据改为**：脚本结束打印的 `逐文件复核: 一致`（按 blob 内容比对远端 HEAD 树 vs 本地 HEAD 树）。
-- 若将来 `git push` 恢复可用，两者可无损混用（脚本按内容 diff，不看本地历史）。
-
-### 2.5 部署确认
-
-```bash
-python3 scripts/deploy_status.py        # 最近 3 次; 传数字看更多
-python3 scripts/deploy_status.py 10
-```
-
-- 脚本读 `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN` 与 `.edgeone/project.json` 的 `ProjectId`
-  （**不需要腾讯云 SecretId/SecretKey** —— 这一点曾误判，已纠正）；
-- 判据：`Status=Success` + `Prod=yes`；提交哈希按第 2.4 节改为"逐文件一致"而非"等于本地 HEAD"；
-- 构建耗时 2~2.5 分钟；`DescribePagesDeployments` 偶发连不上时先跑 `scripts/env_check.py` 定位。
-
-### 2.6 线上验证
-
-1. `curl https://supplykit.top/api/health` → 200(记录耗时);
-2. 跑附录 A 的十项只读指标;
-3. 若改动涉及写路径, 查 `quality_logs` 最近 2 小时是否出现新告警;
-4. **部署成功 ≠ 功能生效** —— 分支未触发的路径(如"未填批次告警")必须说明"当前无数据触发", 不能声称已验证。
+1. **推送只能走 `scripts/push_api.py`**：到 `github.com:443` 的 TLS 在 131s 断开，重试 3 次只是白等
+   ~7 分钟，且 `git push | tail -2` 的退出码是 `tail` 的 0（会被当成成功）。`api.github.com` 稳定。
+2. **部署判据是"逐文件一致"**，不是 `Commit == 本地 HEAD` —— API 建提交时 author/committer 时间戳
+   不同，SHA 必然不同，这是预期不是失败。
+3. **`deploy_status.py` 只需要 `EDGEONE_PAGES_API_TOKEN` + ProjectId**，不需要腾讯云 SecretId/SecretKey
+   （这一点曾误判，已纠正）。构建 2~2.5 分钟；连不上先跑 `scripts/env_check.py`。
+4. **门禁是 `bash scripts/preflight.sh` 八步**（回归 681 / SQL 冒烟 / lint / tsc / vitest / i18n），
+   不是本文旧版列的三条手工命令 —— 手工命令只用于门禁没覆盖的临时脚本。
 
 ---
+
 
 ## 3. 数据操作工作流
 
@@ -192,10 +144,10 @@ seed step6(生成流水) → _recalc_own_inventory(重算可用) → _rebuild_ow
 
 | 文档 | 用途 |
 |---|---|
-| `docs/DEVELOPMENT.md §15.8` | 数据优化原则十条(本文门禁的来源) |
-| `docs/DEVELOPMENT.md §15.9` | 生产操作红线(改前 commit / 改后验证) |
-| `docs/DEVELOPMENT.md §15.37` | 生产库排查方法论 |
+| `docs/DEVELOPMENT.md` | 现行规范册(写法/门禁/数据流) |
+| `docs/SKILL.md` §4 | 七步交付闭环(唯一真源) |
+| `docs/history/` | §15.8 数据十条 / §15.9 生产红线 / §15.37 排查方法论 |
 | `docs/MAKERS_API.md` | pages-api 认证与 Action 清单 |
 | `docs/ARCHITECTURE.md` | 免费额度 / RU 口径 / 数据流 |
 | `docs/security.md` | 密钥与权限边界 |
-| `CHANGELOG.md` | 定案与教训的原始记录(改前必读同日条目) |
+| `CHANGELOG.md` (当月) + `docs/history/` | 定案与教训的原始记录(改前必读同日条目) |

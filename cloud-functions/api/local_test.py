@@ -1031,6 +1031,13 @@ try:
           and "_M.units(rows, merge_bc=" in _re, "core/metrics.py")
     check("低库存: 关闭判定与 hits 同为含码 5 元组",
           'str(a.get("bc") or "")) not in hits' in _re, "rule_eval.py")
+    # 2026-11-06 S4-1: 原实现 `ORDER BY id LIMIT 100000` —— 超出部分静默不评估(既不生成新告警,
+    #   也不关闭旧告警), 线上 jd 90,100 行离上限只差 1 万。改成 id 游标分页读全量。
+    check("S4 全量评估: 按 id 游标分页读全量(超单页不再丢行)",
+          "while len(rows) < limit" in _re and "_after = int(_page[-1]" in _re
+          and "ORDER BY id LIMIT %s\", [channel, limit]" not in _re, "rule_eval.py")
+    check("S4 全量评估: 触到安全上限必须留痕(不静默截断)",
+          "达到安全上限" in _re, "rule_eval.py")
     _ru = _rf("core/rules.py")
     # 2026-11-06 S2-4: 去重从"预载 active 集合"改为 uq_alerts_dim 唯一键 + 单语句 upsert,
     #   所以不再要求出现预载 SQL; 改为守"写入语句的维度键里必须有 barcode"。

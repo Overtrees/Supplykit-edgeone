@@ -51,23 +51,19 @@ export function orderStatusTone(status: string): 'success' | 'danger' | 'info' |
   return 'warning'
 }
 
+/** 效期档位码白名单 —— 后端只可能有这四种; 未登记值渲染 '-' 而不是裸键名 */
+const EXP_STATUS_CODES = new Set(['ok', 'warn', 'no', 'expired'])
+
 /**
  * 效期档位(批次/行级): 后端给 ok / warn / no / expired 四种码。
  * 带符号的写法只在表格里用(密度高), 语义与文字一致, 便于扫读。
  */
 export function expiryStatusLabel(code: string, withIcon = true): string {
-  const key =
-    code === 'ok'
-      ? 'inv.exp.ok'
-      : code === 'warn'
-        ? 'inv.exp.warn'
-        : code === 'no'
-          ? 'inv.exp.no'
-          : code === 'expired'
-            ? 'inv.exp.expired'
-            : ''
-  if (!key) return '-'
-  return withIcon ? t(key + '_icon') : t(key)
+  // 2026-11-06: 原来先选字面量 key 再 `t(key + '_icon')`, 审计脚本只认前缀拼接,
+  //   于是 3 条 `inv.exp.*_icon` 被算成死键。改成直接前缀拼接(审计可识别), 但保留
+  //   白名单兜底 —— 后端若返回未登记的档位码, 仍返回 '-' 而不是渲染出裸键名。
+  if (!EXP_STATUS_CODES.has(code)) return '-'
+  return withIcon ? t('inv.exp.' + code + '_icon') : t('inv.exp.' + code)
 }
 
 /** 效期档位的颜色变量(与文案同源, 避免两处各写一套 if) */

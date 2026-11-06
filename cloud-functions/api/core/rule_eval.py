@@ -4,6 +4,9 @@
 """
 LAST_DIAG = {}   # 2026-10-29 诊断用: 最近一次评估的关键计数(供 /rules/evaluate 返回定位)
 _WARNED_REFS = set()  # 2026-11-05: 未登记字段只留痕一次(避免每次评估刷日志)
+# 2026-11-06 S4-1: 全量评估的分页大小 —— 单次往返 5000 行(TiDB 上约 20~40ms),
+#   只影响"读"的分片, 不改变判定/关闭语义(见 evaluate_stock_skus 的游标注释)
+_PAGE = 5000
 
 import json  # 2026-10-29 修复: _is_alert_rule 用 json.loads 但从未 import → NameError 被 except 吞
              #   → 所有规则都被当"告警规则"(含 alert_enabled=0 的参数载体), 内置断货/健康规则重复产告警
@@ -181,7 +184,7 @@ def close_oversell_for_skus(skus, channel):
     except Exception as _e2:
         _terr('core_rules', 'close_oversell 降级', _e2)
 
-def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=None):
+def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=None):
     import time as _t
     _t0 = _t.time()
     # 2026-10-29 分段计时(仅日志, 零数据影响): 先实测再决定是否下推 SQL
@@ -205,7 +208,10 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
     from core.clock import CN_TZ, now_cn
     # 2026-10-29 按 69码: 库存行已按码拆分 → 行级判定自动按码; ctx 透出 barcode 供规则引用
     from routes.common import INVENTORY_COLS as _IC
-    _SEL = ("SELECT " + _IC + " FROM inventory "
+    # 2026-11-06 S4-1: 必须带 id —— 分页游标靠 `_page[-1]["id"]` 推进。
+    #   初版没带(INVENTORY_COLS 不含 id), 结果 `_after` 恒 0, 同一页被反复读 60 次
+    #   直到撞上安全上限 —— 实测抓到的正是这行: 12 万行的渠道读了 30 万行。
+    _SEL = ("SELECT id, " + _IC + " FROM inventory "
             "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!='' ")
     if skus:
         # 2026-10-29 增量入口: 出入库导入后只评本批 SKU(不全量/不拖慢), 分片防超长 IN
@@ -216,7 +222,25 @@ def evaluate_stock_skus(channel, limit=100000, mode=None, skus=None, only_ats=No
             _ph0 = ",".join(["%s"] * len(_b0))
             rows.extend(query(_SEL + "AND sku IN (%s)" % _ph0, [channel] + _b0))
     else:
-        rows = query(_SEL + "ORDER BY id LIMIT %s", [channel, limit])
+        # 2026-11-06 S4-1: 原实现一条 `ORDER BY id LIMIT 100000` —— 超过 10 万行的那部分
+        #   **静默不评估**(不是报错, 是永远轮不到): 告警不生成、旧告警不被关闭, 用户看到的是
+        #   一份"冻结在 10 万行"的判定。线上 jd 90,100 / other 80,100, 离上限只差 1 万行。
+        #   改为 id 游标分页读全量: 语义与"一次全读"完全等价(hits 仍跨全量累积 → 关闭逻辑不变),
+        #   只是把单条 10 万行的大结果集拆成若干 5000 行往返, 峰值内存也不再是一次性大包。
+        #   `limit` 因此改为**安全上限**而非分页大小; 真触到上限会留痕, 不再静默。
+        rows = []
+        _after = 0
+        _page = []
+        while len(rows) < limit:
+            _page = query(_SEL + "AND id>%s ORDER BY id LIMIT %s",
+                          [channel, _after, min(_PAGE, limit - len(rows))])
+            if not _page:
+                break
+            rows.extend(_page)
+            _after = int(_page[-1].get("id") or 0)
+        if len(rows) >= limit and _page:
+            try_err("core_rules", "库存评估达到安全上限 %d 行, 该渠道剩余行未评估(需分批作业化)"
+                    % limit, RuntimeError("eval_limit:%s" % channel))
     if not rows:
         return []
     _tick("rows")

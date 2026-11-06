@@ -6,6 +6,9 @@
     python3 scripts/local_api.py POST /seed/step '{"from_step":7}'
     python3 scripts/local_api.py POST /ops/snapshot-barcode '{"dry_run":true}'
     python3 scripts/local_api.py GET  /products/list --raw     # 完整输出不截断
+    python3 scripts/local_api.py GET '/cron/archive?force=1' --hdr X-Cron-Secret:$CRON_SECRET
+        # --hdr K:V 可重复 —— cron 的 force 逃生口要真密钥(见 routes/cron._force_ok),
+        #   否则窗口守卫会把它挡回"01:05 再来", 无法做定向补跑验证
 
 为什么值得用:
   云函数 wall clock 120s 是硬限, 部署一次 2~2.5 分钟。本地进程内调用两者都没有 ——
@@ -46,6 +49,11 @@ def main():
     path = sys.argv[2]
     body = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else None
     raw = "--raw" in sys.argv
+    extra_hdrs = {}
+    for i, a in enumerate(sys.argv):
+        if a == "--hdr" and i + 1 < len(sys.argv):
+            k, _, v = sys.argv[i + 1].partition(":")
+            extra_hdrs[k.strip()] = v.strip()
 
     load_env(os.path.join(ROOT, ".env"))
     os.environ.setdefault("JWT_SECRET", "local-test-secret")
@@ -59,6 +67,7 @@ def main():
     token = create_token("admin")
     client = TestClient(app)
     headers = {"X-Auth-Token": token, "Authorization": "Bearer " + token}
+    headers.update(extra_hdrs)
 
     kw = {"headers": headers, "timeout": 3600}   # 本地无 120s 网关, 给足时间
     if body:

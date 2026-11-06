@@ -15,23 +15,25 @@
 
 | 主题 | 位置 |
 |---|---|
-| **一屏入口(口径/坑位/八步闭环/失败黑名单)** | `docs/SKILL.md` |
+| **一屏入口(坑位/八步闭环/失败黑名单/三条红线)** | `docs/SKILL.md` |
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
-| 开发经验与根因记录(按天追加) | `docs/DEVELOPMENT.md` §15.x |
-| 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/DEVELOPMENT.md` §15.105 |
-| 低库存卡明细丢失三层根因(最顽固 bug) | `docs/DEVELOPMENT.md` §15.104 第五节 |
-| 自有仓为什么不能用低库存口径 | `docs/DEVELOPMENT.md` §15.102 |
-| 库存导入职责边界(期初/在途 vs 批次) | `docs/DEVELOPMENT.md` §15.98 |
-| 69 码不猜: 补码两道闸 | `docs/DEVELOPMENT.md` §15.97 |
-| 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/DEVELOPMENT.md` §15.101 |
-| 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/DEVELOPMENT.md` §15.106 |
-| 低库存卡口径: bbcc=BC 合计 / traditional=逐仓(轮转只服务后者) | `docs/DEVELOPMENT.md` §15.109 |
-| S0 止血: cron 执行次数护栏 / 连接池名额 / traceback 收口 / 前端泄漏 | `docs/DEVELOPMENT.md` §15.110 |
-| 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/DEVELOPMENT.md` §15.107 |
-| S2-8/S2-9 启动优化(DDL 版本门禁/补列统一/迁移退役) | `docs/DEVELOPMENT.md` §15.122 / §15.123 |
-| 2026-11-02 午后 UI 批次(归档页二次收敛/渠道页样式上提/CI 修复) | `docs/DEVELOPMENT.md` §15.124 |
+| **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（377 行） |
+| 根因与变更史(按日期分卷, §15.x 编号全局唯一) | `docs/history/` — `grep -rn '15.104' docs/` |
+| 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
+| 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.105 |
+| 低库存卡明细丢失三层根因(最顽固 bug) | `docs/history/` §15.104 第五节 |
+| 自有仓为什么不能用低库存口径 | `docs/history/` §15.102 |
+| 库存导入职责边界(期初/在途 vs 批次) | `docs/history/` §15.98 |
+| 69 码不猜: 补码两道闸 | `docs/history/` §15.97 |
+| 定时任务(平台 schedules, 不是 GitHub Actions) | `docs/history/` §15.101 |
+| 门禁转绿 + 三处「try 吞 NameError」潜伏 bug | `docs/history/` §15.106 |
+| 低库存卡口径: bbcc=BC 合计 / traditional=逐仓(轮转只服务后者) | `docs/history/` §15.109 |
+| S0 止血: cron 执行次数护栏 / 连接池名额 / traceback 收口 / 前端泄漏 | `docs/history/` §15.110 |
+| 凭据来源 + 只能走 GitHub API 推送(附踩坑) | `docs/history/` §15.107 |
+| S2-8/S2-9 启动优化(DDL 版本门禁/补列统一/迁移退役) | `docs/history/` §15.122 / §15.123 |
+| 2026-11-02 午后 UI 批次(归档页二次收敛/渠道页样式上提/CI 修复) | `docs/history/` §15.124 |
 | **安全: 已根治 / 平台终态 / 轮换步骤** | `docs/security.md` |
-| 安全三件事能不能根治(cron 时间窗/历史扫描/认证头定案) | `docs/DEVELOPMENT.md` §15.127 |
+| 安全三件事能不能根治(cron 时间窗/历史扫描/认证头定案) | `docs/history/` §15.127 |
 
 ## 关键口径(不可破坏的业务约定)
 
@@ -58,7 +60,7 @@
 - **B 不硬编码中文**: 界面文案一律 `t('key')`, 新增 key 必须 zh+en 双份且键集合相等;
   后端 `error` 属诊断文本可用中文, 但不能是唯一用户提示
   - **判据: "界面的说法" vs "世界的名字"**。是界面说法 → 翻; 是世界的名字(商品名/仓库名/
-    渠道名/订单状态值/规则名/告警模板) → 不翻, 翻了下游匹配就断。见 `docs/DEVELOPMENT.md` §15.145
+    渠道名/订单状态值/规则名/告警模板) → 不翻, 翻了下游匹配就断。见 `docs/history/` §15.145
   - **词表化后必须补解析函数**: 字典存词条键时(`DOC_TYPE_NAMES`/`STATUS_LABEL`/`INV_COLS`),
     必须有 `docTypeLabel()`/`statusLabelOf()`/`colLabel()` 这类出口, 否则键没人渲染
   - **动态拼键是审计盲区**: `t('col.' + id)` 这类拼出来的键, 静态引用检查看不见。
@@ -120,22 +122,29 @@ cd cloud-functions/api && python3 local_test.py
 cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 ```
 
-## 已知遗留(截至 2026-11-04)
+## 已知遗留(截至 2026-11-06)
 
+- ~~字典死键 483~~ **已清零(2026-11-06)**: 最后 3 条是 `inv.exp.*_icon` 的**后缀拼接**误报
+  (`t(key + '_icon')` 审计只认前缀拼接) —— 已把 `inv.exp` 登记为动态前缀命名空间、产键函数改前缀拼接,
+  现在 `i18n_audit --gate` 死键 0 / 动态前缀 4/4 就位。**新增死键就说明有文案下线却没删词条。**
 - **后端拼装的分析文案未英文化**(只有中文): 补货备注「7天走弱 · B建议补120.0件(…)」、
   采购建议「🔴 库存告急：只够卖4天…」、任务步名「窗口 1 / 评估分片 1/1」——
   由 `routes/replenishment.py` / `purchase_calc.py` / `cleansing.py` 拼成字符串返回,
   与数字混在一起, 还进任务记录和 Excel 导出。要英文化需把 `note` 改为结构化片段数组
-  (前端渲染), 属数据契约变更, 影响导出/历史/告警文本 —— 单独议题。见 §15.145 五
-- **字典死键 483**(`app.desc`、`cl.title`、`clean.title`、`cleansing.empty` 等):
-  多为历史命名空间残留, 待甄别后删除; 不影响运行, 但会干扰"键集合"判读
+  (前端渲染), 属数据契约变更, 影响导出/历史/告警文本 —— 单独议题。见 `docs/history/` §15.145 五
+- **`/api/dashboard/aux` 偏慢**: 冷启 7.3s / 热 2.5~3.0s(线上实测)。既有性能问题, 不在 S0~S8 范围。
+  先量再改: 分块缓存已就位, 下一步应看 aux 内部哪一段占大头, 不要再加一层缓存。
+- **`rule_eval` 被掐断后有 5.5 小时空窗**: 11:37 实例冻结 → 16:38 挂起清理标 `timeout`,
+  17:22 `daily_rules` 才兜底。"中断即入队重跑"要不要做, **待定**(代价是多一条自触发路径)。
+- **评估仍是"全量读进内存"**: 2026-11-06 已用 id 游标分页消除 10 万行截断(12 万行实测全覆盖),
+  但内存仍随行数线性增长; 真正的"分批建 ctx→评估→释放"未做。
 - ~~低库存卡 5 行全落郑州仓~~ **已修**: 卡面改「按仓轮转 + 轮内 SKU 去重」——第一轮每仓 1 条,
   轮内跳过已上卡的 SKU; 不满 5 条继续第二轮(3 个仓 = 3+2, 仍是 5 行)。
   **不要再做"每仓最多 1 条"的硬配额**(仓少时卡面塌成 3 行), **也不要只按仓轮转**
-  (各仓头一条是同一个 SKU, 会变成同 SKU × 5 仓)。见 `docs/DEVELOPMENT.md` §15.108
+  (各仓头一条是同一个 SKU, 会变成同 SKU × 5 仓)。见 `docs/history/` §15.108
 - ~~bbcc 模式低库存卡空白(标题 160 条 / 卡面 0 行)~~ **已修(2026-11-02)**: bc 行 id 比 platform 行
   小 6 万, 混在 `ORDER BY id DESC LIMIT 300` 里被整体挤出窗口 → low_stock 拆成单独查询。
-  别再"从截断样本推断全量"(11-01 就误判成"库里没有 bc 行")。见 `docs/DEVELOPMENT.md` §15.108 第三节
+  别再"从截断样本推断全量"(11-01 就误判成"库里没有 bc 行")。见 `docs/history/` §15.108 第三节
 - ~~bbcc 卡面显示 C 仓(应为 BC 合计)~~ **已修(2026-11-02)**: `lowStockAlerts = fullAlerts || alertsList`
   这个"数据源优先级"把 aux 已按模式筛好的结果顶掉了; 仓型过滤上提到 lowStockAlerts 这一层,
   卡面与弹窗共用一份数据。bbcc 只有 `__BC__` 一个桶, **轮转退化为顺序取 5 条(无害无功)**,

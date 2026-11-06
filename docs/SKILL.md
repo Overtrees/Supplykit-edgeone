@@ -19,8 +19,8 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 平台 | EdgeOne Makers, ProjectId `makers-8gstkvheqm2c`(名 supplykit, Area=overseas 免备案) |
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
-| 规模 | 23 个 APIRouter / 32 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
-| 回归 | `local_test.py` **568 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(400 条 EXPLAIN + schema 对账) |
+| 规模 | 23 个 APIRouter / 33 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
+| 回归 | `local_test.py` **681 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
@@ -35,28 +35,20 @@ python3 scripts/smoke_check.py                    # 线上冒烟(health JSON + �
 
 ---
 
-## 1. 六条业务口径(不可破坏)
+## 1. 业务口径 → 唯一真源 `CONTEXT.md`
 
-改任何计算前先对照; 违反其中一条 = 数据错了, 不是"显示问题"。
+**七条口径（含期初两场景）只在 [`CONTEXT.md`](../CONTEXT.md) 维护一处**，本手册不再抄第二份
+（抄一份就多一处漂移：2026-11-06 之前两边已经出现 6 vs 7 条的差异）。
 
-1. **自有仓(集货仓)不产生销售** —— 低库存/断货口径在自有仓**恒不触发**。自有仓只走供给侧三口径:
-   调拨缺口 `own_transfer_gap` / 积压 `own_overstock` / 效期 `own_expiry_risk`
-2. **补货模式**: `bbcc`(B→C 一盘) / `traditional`(C 仓逐仓); 日销统一走 `biz.sales.pick_ds`,
-   **绝不拿全国合计兜底**(兜底会掩盖"该仓没数据")
-3. **告警是「SKU × 仓」粒度** —— 同 SKU 多仓各一条; **卡面去重, 弹窗全量**。
-   维度键 5 维(`alert_type`+渠道+SKU+69码+仓), 与库存四维对账同构;
-   **关闭必须经 `core.alert_lifecycle.close()` 带 reason**, 重开复用同维度行(`reopen_count`)
-4. **计数与列表分离** —— 卡面 `(N)` 用后端独立 COUNT, 列表可截断, 二者天然不等; 不要"对齐"它们
-5. **库存月汇总** = 仓型 × SKU × 69码 × 仓, 聚合后**先清零再覆盖**
-6. **效期三态** —— `expiry_managed` 是→FEFO 精确批次, 否→到货序 FIFO
+这里只留三条**改动时最容易踩**的，其余全部去 CONTEXT：
 
-配套: **金额口径分两套**。看板 GMV = 已支付; 历史归档金额 = 订单原价全状态
-(`total_amount` 含未支付/退款)。所以历史页挂着「非 GMV 口径」胶囊, 不要统一成一个数。
-
-前端配套(2026-11-03): **所有写操作走 `api/mutate.ts`** —— 提示 / 缓存失效 / 联动事件 / 操作态
-一次声明, 不再手写三件套(规则撤销曾因此漏发事件、采购下单曾只弹 toast)。**`syncing` 只表示
-"前端在取数", 后端在算/在导用 `ops`**, 二者不可混用 —— `syncing` 有 20s 强制归零, 长任务会被
-显示成已完成。`App` 顶层在 `ToastProvider` 之外, 那里 `useToast()` 是 no-op, 必须用 `notify.*`。
+1. **告警关闭必须经 `core.alert_lifecycle.close()` 并带 reason**；重开复用同维度行（`reopen_count`），
+   维度键 5 维 `alert_type + 渠道 + SKU + 69码 + 仓`，与库存四维对账同构。
+2. **金额口径分两套**：看板 GMV = 已支付；历史归档金额 = 订单原价全状态（含未支付/退款）。
+   历史页挂着「非 GMV 口径」胶囊，**不要统一成一个数**。
+3. **前端所有写操作走 `api/mutate.ts`**（提示 / 缓存失效 / 联动事件 / 操作态一次声明）。
+   `syncing` 只表示"前端在取数"，后端在算/在导用 `ops` —— `syncing` 有 20s 强制归零，
+   长任务会被显示成已完成。`App` 顶层在 `ToastProvider` 之外，那里 `useToast()` 是 no-op，必须用 `notify.*`。
 
 ---
 
@@ -130,7 +122,7 @@ recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— �
 ```bash
 bash scripts/preflight.sh
 # [1/8] 后端 Python 3.10 语法   [2/8] pyflakes(undefined name / 重定义)
-# [3/8] local_test 回归 497 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
+# [3/8] local_test 回归 681 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
 # [5/8] Prettier  [6/8] tsc  [7/8] vitest 单测
 # [8/8] i18n 门禁(红线 B: 中文硬编码为 0 + zh/en 键集相等 + 无死引用)
 ```
@@ -270,14 +262,13 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 ---
 
-## 10. 用户偏好(影响交付方式, 不只影响代码)
+## 10. 用户偏好 → 见 `CONTEXT.md`「用户偏好」
 
-- **中文交流**; 需要拍板时给选项 + 推荐 + 理由, 但最终由用户决定
-- **要"彻底根治", 不接受前端兜底糊弄**; 出问题先怀疑口径而不是先加兜底提示
-- **实测优先于推断**: 间距/颜色/请求参数一律用浏览器或直连接口量出来, 不靠估算("应该差不多"会被追问)
-- **敢说"我判断错了"并回滚** —— 比硬撑一个错结论有价值
-- UI 改动**先读 `docs/UI_DESIGN.md`**, 改完给截图; 信息结构有疑问时先画结构图再动手
-- 文档数字与描述必须与代码一致; 发现过时描述要主动报告, 而不是照着过时描述干活
+交付方式偏好（中文交流、拍板要给推荐、彻底根治不要兜底、实测优先、敢认错）是**同一份**，
+两处维护必然漂移，只在 CONTEXT.md 更新。本手册只补充一条工程侧的：
+
+- **文档里的数字是门禁的一部分**：回归数 / 路由数 / 页面数 / 字典键数改了必须全库同步，
+  发现过时描述要主动报告，而不是照着过时描述干活。
 
 ---
 
@@ -316,7 +307,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
   `t()` 引用了不存在的键 / 变量名遮蔽 `t` / 空串假翻译, 任一命中即 exit 1。
   逐条定位用 `--lines`, 按文件汇总 `--by-file`。
 - 死键(字典有但没被引用)只报数、不拦门禁。**当前基线 0 条**, 新增即说明有文案下线却没删词条。
-  2026-11-05 从 513(其中 386 条是脚本误报)→ 127 → 0, 详见 DEVELOPMENT §15.154~§15.156。
+  2026-11-05 从 513(其中 386 条是脚本误报)→ 127 → 0, 详见 `docs/history/2026-11-03~04.md` §15.144。
 - **门禁扫不到的地方**: `document.title` / `<html lang>` / `meta description` 不在 React 树里,
   也不经过 `t()` —— 它们由 `locale.ts` 的 `applyDocumentLang()` 同步(setLocale + 启动各一次)。
   新增这类"文档级字符串"要挂进同一个函数, 否则切语言时它会留在中文。
@@ -325,7 +316,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 - 判定自检: `python3 scripts/i18n_audit.py --selftest`(18 条正负例)。改扫描规则必先过它 ——
   这条命令也进了 preflight [8/8] 与 CI, 自检红说明规则坏了, 后面的 PASS 不可信。
 
-**为什么较真**: 项目已有中英双份字典(1548 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
+**为什么较真**: 项目已有中英双份字典(1437 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
 
 ### 红线 C: 禁用显式 any, 按 TS 原生类型写
 
