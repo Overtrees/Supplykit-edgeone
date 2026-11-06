@@ -666,6 +666,10 @@ def _recalc_own_inventory(channel, skus, begin_date=None):
         "  AND (i.deleted_at IS NULL OR i.deleted_at='')"
         # 2026-11-04 去掉 `max(0, val)` 兜底: 负可用是"出库 > 期初+入库"的真实异常,
         #   归 0 会把它伪装成"恰好卖完", 看板与对账永远发现不了。负值一路带到前端标「负库存异常」。
+        # 2026-11-06 用户定案: **保持负值**。这是账实不符的证据, 不要"顺手夹 0"让它消失:
+        #   夹 0 之后"出库 30 / 期初 0"和"卖完了"在看板上长得一模一样, 谁也发现不了期初缺失。
+        #   注意与 _adjust_inventory 的区别: 那里是增量扣减, GREATEST(0, ...) 防的是重复扣成
+        #   负数(幂等/并发场景); 这里是按期初+流水重算的**结果**, 结果就该是负的。
     ) % (_d_in, _d_out, _ph_wt)
     try:
         rows = _q(sql, [channel, channel, channel] + list(SELF_WAREHOUSE_TYPES))

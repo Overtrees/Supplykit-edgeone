@@ -594,5 +594,20 @@ check("读 products 的效期查询按渠道(换键后同 SKU 两行会互相覆
       "WHERE sku IN (%s) AND (channel=%%s OR COALESCE(channel,'')='')" in _cw8,
       "只按 sku 查会拿到两渠道两行, _em_map[sku] 被后写覆盖 → 出库效期策略随机")
 
+# ── N. 负库存口径(2026-11-06 用户定案: 保持负值)──────────────────────
+# 重算 SQL 是"期初 + Σ入 − Σ出"的结果, 负值 = 账实不符的证据。夹 0 会让"出库 30/期初 0"
+# 和"卖完了"在看板上一模一样 —— 谁也发现不了期初缺失。这条断言防"顺手夹 0"回流。
+_cwn = open(os.path.join(_api_dir, "routes", "cleanse_write.py"), encoding="utf-8").read()
+_recalc_body = _cwn.split("def _recalc_own_inventory")[1].split("def ")[0] \
+    if "def _recalc_own_inventory" in _cwn else ""
+_n_code = [ln for ln in _recalc_body.splitlines() if not ln.strip().startswith("#")]
+_n_hit = [ln.strip()[:80] for ln in _n_code if "GREATEST(0" in ln or "max(0," in ln]
+check("库存重算保留负值(不夹 0), 与增量扣减的 GREATEST(0,...) 是两件事",
+      "去掉 `max(0, val)` 兜底" in _cwn and not _n_hit,
+      "夹 0 = 把账实不符伪装成恰好卖完; 用户定案(2026-11-06)保持负值; 残留 %s" % (_n_hit[:2],))
+check("前端对负值有明确标识(负库存异常), 不是静默显示",
+      "inv.negative_stock" in open(os.path.join(_fe, "locale.zh.ts"), encoding="utf-8").read(),
+      "保持负值的前提是它可见; 否则等于把异常藏起来")
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
