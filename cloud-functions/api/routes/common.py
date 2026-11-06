@@ -268,31 +268,69 @@ def log_info(src, message):
 # ── quality_logs 保留策略(单一真源) ──────────────────────────────────
 # 2026-11-02 S1-3: 原策略「只留最近 500 条」是按条数截断, 高峰期(规则评估+清洗+导入)一天就写满,
 # 回头查问题时前一天的证据已被冲掉; 低谷期又白留。改为按天保留 + 硬上限兜底。
-QUALITY_LOG_KEEP_DAYS = 30
-QUALITY_LOG_HARD_CAP = 20000
+QUALITY_LOG_KEEP_DAYS = 30          # 兼容旧调用(未分级时的统一保留天数)
+QUALITY_LOG_HARD_CAP = 50000        # 条数上限(分级后 error 也能在 5 万条内)
+QUALITY_LOG_TARGET_BYTES = 48 << 20  # 字节上限: 按实际平均行宽换算条数, 防"条数没超但每行都带 300 字 details"
+
+# 2026-11-06 S6/P1-37 分级保留: 原来一律 30 天。结果是 info 级(每次重建/每次空态返回都写)
+#   把 30 天的配额占满, 真正要留的证据(error)反而被 2 万条硬上限截断删掉 —— 保留策略
+#   与"证据价值"完全倒挂。现在按级别:
+#     error/fatal 30 天(排障必须)  warning 14 天  info 及以下 3 天(只用于看"刚刚发生了什么")
+QUALITY_LOG_KEEP_BY_LEVEL = (("error", 30), ("warning", 14))   # 其余一律 3 天
+QUALITY_LOG_KEEP_OTHER = 3
 
 
 def prune_quality_logs(keep_days=None, hard_cap=None):
-    """清理 quality_logs: ① deleted 超过 keep_days 天的 ② 仍超 hard_cap 则按 id 兜底截断
+    """清理 quality_logs: ①按级别保留 ②仍超条数/字节上限则按 id 兜底截断
 
-    返回 {"old": 按天删除数, "cap": 兜底删除数, "total": 清理后总数}。
+    返回 {"old": 按天删除数, "cap": 兜底删除数, "total": 清理后总数, "by_level": {...}}。
     调用方(cron / 每日维护)共用本函数, 避免两处策略漂移(历史上 cron 留 500、dashboard 截到 300)。
     INTERVAL 不能用占位符(TiDB 报错), 天数走 int() 内联, 不接受外部输入。
+    keep_days: 传了就退回"统一保留 N 天"(兼容旧调用/测试); 不传则按级别。
     """
-    _kd = int(keep_days if keep_days is not None else QUALITY_LOG_KEEP_DAYS)
-    _cap = int(hard_cap if hard_cap is not None else QUALITY_LOG_HARD_CAP)
-    out = {"old": 0, "cap": 0, "total": 0}
     from db import execute as _e, one as _o
-    if _kd > 0:
-        out["old"] = int(_e("DELETE FROM quality_logs WHERE created_at < "
-                            "DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd) or 0)
-    _c = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
+    out = {"old": 0, "cap": 0, "total": 0, "by_level": {}}
+    if keep_days:
+        _kd = int(keep_days)
+        out["by_level"]["all"] = int(_e("DELETE FROM quality_logs WHERE created_at < "
+                                        "DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd) or 0)
+        out["old"] = out["by_level"]["all"]
+    else:
+        for _lv, _d in QUALITY_LOG_KEEP_BY_LEVEL:
+            _n = int(_e("DELETE FROM quality_logs WHERE level=%s AND created_at < "
+                        "DATE_SUB(NOW(), INTERVAL " + str(int(_d)) + " DAY)", [_lv]) or 0)
+            out["by_level"][_lv] = _n
+            out["old"] += _n
+        # 其余级别(含 level 为空的历史行): COALESCE 兜底, 否则 NULL NOT IN (...) 恒为 NULL
+        _ph = ",".join(["%s"] * (len(QUALITY_LOG_KEEP_BY_LEVEL) + 1))
+        _others = [x[0] for x in QUALITY_LOG_KEEP_BY_LEVEL] + ["fatal"]
+        # 天数用字符串拼接而不是 % 格式化: 这条 SQL 里还有 %s 占位符, 一起走 % 会把
+        #   `IN (%s)` 也当成格式位(2026-11-06 实测 "not enough arguments for format string")
+        _n2 = int(_e("DELETE FROM quality_logs WHERE COALESCE(level,'info') NOT IN (" + _ph + ") "
+                     "AND created_at < DATE_SUB(NOW(), INTERVAL "
+                     + str(int(QUALITY_LOG_KEEP_OTHER)) + " DAY)", _others) or 0)
+        out["by_level"]["other"] = _n2
+        out["old"] += _n2
+
+    # 兜底截断: 条数上限与字节上限取小 —— 只按条数管不住"每行 300 字 details"的情形
+    _cap = int(hard_cap if hard_cap is not None else QUALITY_LOG_HARD_CAP)
+    try:
+        _st = _o("SELECT COUNT(*) AS c, "
+                 "SUM(LENGTH(message) + LENGTH(COALESCE(details,''))) AS b FROM quality_logs") or {}
+        _c = int(_st.get("c") or 0)
+        _b = int(_st.get("b") or 0)
+        if _c > 0 and _b > 0:
+            _cap_bytes = int(QUALITY_LOG_TARGET_BYTES / max(_b / float(_c), 1.0))
+            _cap = min(_cap, max(_cap_bytes, 5000))
+    except Exception:
+        _c = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
     if _cap > 0 and _c > _cap:
         _k = _o("SELECT id FROM quality_logs ORDER BY id DESC LIMIT %s", [_cap]) or {}
         if _k.get("id"):
             out["cap"] = int(_e("DELETE FROM quality_logs WHERE id < %s", [_k.get("id")]) or 0)
     out["total"] = int((_o("SELECT COUNT(*) AS c FROM quality_logs") or {}).get("c") or 0)
     # pipeline_runs / eval_tasks 同生命周期(30 天): 运行流水只用于"最近一次/最近几天"排查
+    _kd = int(keep_days or QUALITY_LOG_KEEP_DAYS)
     if _kd > 0:
         try:
             _e("DELETE FROM pipeline_runs WHERE started_at < DATE_SUB(NOW(), INTERVAL %d DAY)" % _kd)

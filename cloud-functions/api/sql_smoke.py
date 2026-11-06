@@ -249,6 +249,72 @@ def _run(cur, sql, params):
     return False
 
 
+# ── 全表扫描断言(2026-11-06 S6/P2-53)────────────────────────────────
+# 「表 >10 万行不得 FullScan」不能简单等于 "type='ALL'": 每日归档与批次对账本身就是
+# 全表聚合, 逐表 COUNT 也必然全扫。真正要挡的是**本可用索引却整表扫**的过滤查询。
+# TiDB 的 EXPLAIN 没有 MySQL 的 type 列, 全扫表现为 `TableFullScan_N` 算子 +
+# `access object: table:xxx` + estRows=整表行数。这里按「TableFullScan 且 estRows
+# 超过阈值」收集, 再用白名单豁免已被论证为"必须全扫"的形状。
+_FULLSCAN_ROWS = 100000
+# 已论证"扫全表是对的/无收益"的表: 只登记逐条核实过的, 并在注释里写清为什么。
+_FULLSCAN_ALLOW_TABLES = {
+    # 2026-11-06 实测(25.5 万行): `WHERE channel=? AND warehouse=?` 取 2 万行, EXPLAIN 一直
+    # 是 TableFullScan。加 (channel, warehouse) 索引 + ANALYZE 后仍不走 —— 要回表 2 万次,
+    # 优化器估得比扫窄表更贵; 真要走索引得把 11 个指标列全塞进索引(等于第二份物化),
+    # 写入放大不值。实测 0.5s, 不是瓶颈, 故豁免而不是硬压。
+    "sku_sales_stats": "优化器成本选择(实测 0.5s), 非缺索引",
+}
+
+_FULLSCAN_ALLOW = (
+    # 归档/对账/覆盖率类的整表聚合: 语义就是全表(见 core/archive.py 注释)
+    "FROM orders WHERE id >",
+    "FROM batches WHERE channel=",
+    "SELECT DISTINCT sku FROM sku_sales_stats",
+    "SELECT COUNT(*) AS c FROM quality_logs",
+    "FROM inventory WHERE channel=",
+)
+_FULLSCANS = []
+
+
+def _fullscan_hits(rows):
+    """从 EXPLAIN 结果里挑出"整表扫描"算子。返回 [(表, 估算行数)]"""
+    out = []
+    for r in (rows or []):
+        _id = str(r.get("id") or "")
+        if "TableFullScan" not in _id and str(r.get("type") or "") != "ALL":
+            continue
+        _est = r.get("estRows", r.get("rows"))
+        try:
+            _n = float(str(_est).replace(",", ""))
+        except Exception:
+            _n = 0.0
+        if _n <= _FULLSCAN_ROWS:
+            continue
+        _obj = str(r.get("access object") or r.get("table") or "")
+        _tbl = _obj.split("table:", 1)[-1].split(",", 1)[0].strip() or "?"
+        out.append((_tbl, int(_n)))
+    return out
+
+
+def _is_filter_query(sql):
+    """这条 SQL 是不是"靠条件筛一小部分行"的取数查询?
+
+    只有这类全表扫才是缺陷: 条件明明能走索引, 却在整表上筛。聚合(GROUP BY /
+    SUM / COUNT / DISTINCT)、无 WHERE 的整表统计、迁移用的 UPDATE/DELETE,
+    本来就是全表语义, 扫全表是对的实现 —— 把它们报成"全扫"只会让人习惯性关掉门禁。
+    """
+    u = (sql or "").upper()
+    if not re.search(r"\bWHERE\b", u):
+        return False
+    if re.search(r"\bGROUP\s+BY\b", u) or re.search(r"\bDISTINCT\b", u):
+        return False
+    if re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", u):
+        return False
+    if re.match(r"^\s*(UPDATE|DELETE|INSERT)", u):
+        return False
+    return True
+
+
 _CORE_TABLES = ("inventory", "orders", "rules")
 
 
@@ -287,6 +353,7 @@ def _preload_module_sqls():
 
 def verify(verbose=False):
     """连库逐条 EXPLAIN。返回 (fail_list, warn_list, skipped, total)"""
+    del _FULLSCANS[:]
     _preload_module_sqls()
     if not _SEEN:
         return ([("no-collect", "未收集到任何 SQL —— 审计包装未生效", "")], [], 0, 0)
@@ -332,9 +399,17 @@ def verify(verbose=False):
                 else:
                     ok += 1
                 try:
-                    cur.fetchall()
+                    _exp_rows = cur.fetchall() or []
                 except Exception:
-                    pass
+                    _exp_rows = []
+                _fs = _fullscan_hits(_exp_rows)
+                if _fs:
+                    _allowed = ((not _is_filter_query(item["sql"]))
+                                or _fs[0][0] in _FULLSCAN_ALLOW_TABLES
+                                or any(a.upper() in item["sql"].upper() for a in _FULLSCAN_ALLOW))
+                    _FULLSCANS.append({"table": _fs[0][0], "rows": _fs[0][1],
+                                       "where": item.get("where", ""), "sql": item["sql"],
+                                       "allowed": _allowed})
             except Exception as e:
                 level, code, why = classify_error(e)
                 row = (code if code is not None else "?", why, item)
@@ -375,6 +450,18 @@ def report(fail_n_before=0):
 
     print("  校验 %d 条(跳过非查询 %d 条) → ✓ %d / ✗ %d / ⚠ %d"
           % (checked, skipped, max(0, checked - len(failed) - len(warned)), len(failed), len(warned)))
+    _fs_bad = [x for x in _FULLSCANS if not x["allowed"]]
+    if _FULLSCANS:
+        print("  全表扫描(estRows > %d): %d 条, 已豁免 %d 条, 未豁免 %d 条"
+              % (_FULLSCAN_ROWS, len(_FULLSCANS), len(_FULLSCANS) - len(_fs_bad), len(_fs_bad)))
+        for x in _fs_bad[:12]:
+            print("  ✗ 全表扫 %s(估 %s 行) | %s" % (x["table"], x["rows"], x["sql"][:110]))
+            print("      %s" % x["where"])
+        if len(_fs_bad) > 12:
+            print("    … 其余 %d 条" % (len(_fs_bad) - 12))
+        if _fs_bad:
+            print("    判据: 有 WHERE 的取数查询(非聚合/非迁移)在 10 万行以上的表上整表扫 = 条件"
+                  "没用上索引; 确属优化器合理选择时登记 _FULLSCAN_ALLOW_TABLES 并写明实测耗时")
     if skipped:
         heads = {}
         for item in _SEEN.values():
@@ -414,7 +501,7 @@ def report(fail_n_before=0):
     except Exception as e:
         print("\n── schema 对账 ──\n  ⚠ 未执行: %s" % str(e)[:120])
         n_schema = 0
-    return len(failed) + n_schema
+    return len(failed) + n_schema + len(_fs_bad)
 
 
 # ── 结构对账(DDL 无法 EXPLAIN, 但"声明了却没建"是同一类事故) ─────────

@@ -511,5 +511,45 @@ check("新行走 INSERT..ON DUPLICATE 增量(并发双建不 1062 不覆盖)",
       and "GREATEST(0, available_qty+VALUES(available_qty))" in _cw_src,
       "uq_inventory_biz 五维键兜底并发建行")
 
+# ── K. S6 容量与观测(2026-11-06)──────────────────────────────────────
+_arc = open(os.path.join(_api_dir, "core", "archive.py"), encoding="utf-8").read()
+_cr6 = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
+_sl6 = open(os.path.join(_api_dir, "biz", "sales.py"), encoding="utf-8").read()
+_cm6 = open(os.path.join(_api_dir, "routes", "common.py"), encoding="utf-8").read()
+_cl6 = open(os.path.join(_api_dir, "routes", "cleansing.py"), encoding="utf-8").read()
+
+check("归档是集合式(INSERT...SELECT...GROUP BY), 不是逐条 INSERT",
+      "INSERT INTO daily_stats" in _arc and "SELECT DATE(ordered_at)" in _arc
+      and "GROUP BY" in _arc and "for o in old" not in _cr6,
+      "逐条 INSERT: 50 万行 = 50 万次往返, 单实例执行槽被占几十分钟且云函数 60s 必被切断")
+check("归档 INSERT 与 DELETE 同事务(归档成功才删, 重跑不重复累加)",
+      "with transaction():" in _arc and "_INS_SQL" in _arc and "_DEL_SQL" in _arc,
+      "若归档了但没删, 重跑同一区间会把 daily_stats 再加一遍")
+check("归档按 id 区间分批(不是全量进内存), 切线段用 ordered_at 而非 DATE() 包列",
+      "ordered_at < %s" in _arc and "DATE(ordered_at) < %s" not in _arc,
+      "DATE() 包列 = 索引失效; 全量 SELECT 进内存 = 峰值内存随订单量线性涨")
+check("重建按 SKU 分片、每片一个事务(DELETE 与 INSERT 原子)",
+      "from db import transaction as _txn" in _sl6 and "with _txn():" in _sl6
+      and "_groups.setdefault(str(r[\"sku\"])" in _sl6,
+      "整渠道 DELETE 后分批 INSERT 有真空窗: 并发读会拿到空表/半量")
+check("批次对账改 LEFT JOIN 聚合子查询(去相关子查询与裸 HAVING)",
+      "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc" in _cr6
+      and "(SELECT SUM(b.qty) FROM batches b" not in _cr6,
+      "相关子查询对 inventory 每行跑一次 SUM(18 万批次)")
+check("quality_logs 按级别保留(error 30 / warning 14 / 其余 3 天)+ 字节上限",
+      "QUALITY_LOG_KEEP_BY_LEVEL" in _cm6 and "QUALITY_LOG_TARGET_BYTES" in _cm6,
+      "一律 30 天时 info 级把配额占满, 真正的 error 反被硬上限截断删掉")
+check("sql_smoke 有全表扫断言(过滤型查询在 >10 万行表上整表扫 = 红)",
+      "def _fullscan_hits" in open(os.path.join(_api_dir, "sql_smoke.py"),
+                                   encoding="utf-8").read()
+      and "_FULLSCAN_ALLOW_TABLES" in open(os.path.join(_api_dir, "sql_smoke.py"),
+                                           encoding="utf-8").read(),
+      "P2-53: 加索引/改条件后回归挡住, 而不是等线上慢查询")
+_cc6 = [ln.strip() for ln in _cl6.splitlines()
+        if "CONCAT(" in ln and not ln.strip().startswith("#")]
+check("查重不再用 CONCAT 包列(改行构造器, 可走索引)",
+      not _cc6 and '["(%s,%s)"] * len(' in _cl6 and '["(%s,%s,%s)"] * len(' in _cl6,
+      "CONCAT 把列包进函数 → 索引必然失效, 每次导入/打开导入页都整表扫; 残留 %s" % (_cc6[:2],))
+
 print("\n审计结果: %d 通过, %d 失败" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

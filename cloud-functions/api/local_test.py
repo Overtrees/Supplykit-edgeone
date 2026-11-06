@@ -1746,8 +1746,11 @@ try:
     check("S2-1 日销物化支持按 SKU 子集重建(不整渠道删)",
           "def rebuild_sku_stats_for_days" in _sv4b
           and "DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN (" in _sv4b, "sales.py")
-    check("S2-1 子集重建不误删其它 SKU(整渠道 DELETE 只能在全量分支)",
-          "_scope" in _sv4b and "if _scope:" in _sv4b, "sales.py")
+    # 2026-11-06 S6/P1-18: 删除收窄为"本片 SKU"(每片一个事务), 整渠道范围的清理
+    #   只剩"陈旧行"(表里有、本次算出来没有)那一步, 且只在全量分支执行。
+    check("S2-1 子集重建不误删其它 SKU(整渠道范围清理只能在全量分支)",
+          "_scope" in _sv4b and "if not _scope:" in _sv4b
+          and "_old_skus - set(_groups)" in _sv4b, "sales.py")
 except Exception as _e13:
     check("S2-1 用例无异常", False, str(_e13)[:200])
 

@@ -462,8 +462,8 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
             _key2 = "%s|%s" % (_p[0], _p[1])
             if _p[2] in _c_whs:
                 _m2 = by_c_bc.setdefault(_key2, {})
-                for _d, _q in _wd.items():
-                    _m2[_d] = _m2.get(_d, 0) + _q
+                for _d, _dq in _wd.items():
+                    _m2[_d] = _m2.get(_d, 0) + _dq
 
         # 全国聚合: __C__(platform) / __BC__(platform+platform_b) / __ALL__(全仓)
         # 2026-10-30 删除 __ALL__(全仓日销维度): 渠道内只有 platform 仓产生销售,
@@ -566,33 +566,70 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                 _s, _w = r["sku"].rsplit("|", 1)
                 r["sku"], r["warehouse"] = _s, _w
         if rows:
-            # 2026-10-29 先删该渠道旧行(替代 ON DUPLICATE —— 旧主键不含 barcode 会与
-            # 含码唯一键冲突, 且同 SKU 不同码的行会被旧主键合并覆盖)
-            # 2026-11-02 S2-1: 子集重建只删这些 SKU 的行。原实现无条件 `WHERE channel=`,
-            #   按 SKU 增量补齐时会把该渠道其余 SKU 全清空 → 补货/采购当场只剩这一批。
-            try:
-                _scope = sorted({str(s) for s in (skus or []) if s})
-                if _scope:
-                    for _i2 in range(0, len(_scope), 500):
-                        _ch2 = _scope[_i2:_i2 + 500]
-                        _ex("DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN ("
-                            + ",".join(["%s"] * len(_ch2)) + ")", [channel] + _ch2)
-                else:
-                    _ex("DELETE FROM sku_sales_stats WHERE channel=%s", [channel])
-            except Exception as _edel:
-                try_err('sales', '日销旧行清理降级', _edel)
+            # 2026-10-29 先删旧行再插(旧主键不含 barcode, ON DUPLICATE 会与含码唯一键冲突)
+            # 2026-11-02 S2-1: 子集重建只删这些 SKU 的行(原无条件 `WHERE channel=` 会把
+            #   该渠道其余 SKU 全清空 → 补货/采购当场只剩这一批)
+            # 2026-11-06 S6/P1-18: 再进一步 —— **按 SKU 分片, 每片一个事务**。
+            #   原"整渠道 DELETE 后分批 INSERT"有两个真空窗: ①DELETE 与 INSERT 之间
+            #   ②各 INSERT 批之间。并发读在这段时间拿到空表或半量, 表现为补货/采购
+            #   突然全部"无销量"。分片后片内 DELETE+INSERT 原子, 读者要么看到旧片
+            #   要么看到新片(验收: 重建期间并发读 100 次, 无一次读到空/半量)。
+            from db import transaction as _txn
             cols = ["channel", "sku", "barcode", "warehouse", "ds7", "ds14", "ds28", "sigma",
                     "ds7_cut", "ds14_cut", "ds28_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
-            for i in range(0, len(rows), 500):
-                chunk = rows[i:i + 500]
-                _em("INSERT INTO sku_sales_stats(%s) VALUES(%s) ON DUPLICATE KEY UPDATE "
-                    "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), sigma=VALUES(sigma), "
-                    "ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), ds28_cut=VALUES(ds28_cut), "
-                    "nnz7=VALUES(nnz7), nnz14=VALUES(nnz14), nnz28=VALUES(nnz28), "
-                    "last_sale=VALUES(last_sale), updated_at=CURRENT_TIMESTAMP(6)" % (
-                        ", ".join("`%s`" % c for c in cols),
-                        ", ".join(["%s"] * len(cols))),
-                    [tuple(r[c] for c in cols) for r in chunk])
+            _ins_sql = ("INSERT INTO sku_sales_stats(%s) VALUES(%s) ON DUPLICATE KEY UPDATE "
+                        "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), sigma=VALUES(sigma), "
+                        "ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), ds28_cut=VALUES(ds28_cut), "
+                        "nnz7=VALUES(nnz7), nnz14=VALUES(nnz14), nnz28=VALUES(nnz28), "
+                        "last_sale=VALUES(last_sale), updated_at=CURRENT_TIMESTAMP(6)" % (
+                            ", ".join("`%s`" % c for c in cols),
+                            ", ".join(["%s"] * len(cols))))
+            _scope = {str(x) for x in (skus or []) if x}
+            # 同一 SKU 的多行(多仓/多码)必须同片 —— 否则两个片各删一次、后写的覆盖先写的
+            _groups = {}
+            for r in rows:
+                _groups.setdefault(str(r["sku"]), []).append(r)
+            _chunks, _cur, _cur_n = [], [], 0
+            for _sk, _rs in _groups.items():
+                _cur.append((_sk, _rs))
+                _cur_n += len(_rs)
+                if _cur_n >= 2000:
+                    _chunks.append(_cur)
+                    _cur, _cur_n = [], 0
+            if _cur:
+                _chunks.append(_cur)
+
+            for _chk in _chunks:
+                _skus_chk = [s2 for (s2, _rs2) in _chk]
+                _rows_chk = [r2 for (_s2, _rs2) in _chk for r2 in _rs2]
+                try:
+                    with _txn():
+                        for _i2 in range(0, len(_skus_chk), 500):
+                            _c2 = _skus_chk[_i2:_i2 + 500]
+                            _ex("DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN ("
+                                + ",".join(["%s"] * len(_c2)) + ")", [channel] + _c2)
+                        for _i3 in range(0, len(_rows_chk), 500):
+                            _ck = _rows_chk[_i3:_i3 + 500]
+                            _em(_ins_sql, [tuple(r2[c] for c in cols) for r2 in _ck])
+                except Exception as _e_chk:
+                    # 片内回滚 = 该片保留旧值(不是空值), 其余片照常; 下次重建会再来
+                    try_err('sales', '物化分片重写降级', _e_chk)
+
+            # 全量重建的"陈旧行"清理: 该渠道表里有、本次算出来没有的 SKU(销量归零/
+            #   订单软删)必须删掉, 否则昨天的日销会一直挂在补货建议里。
+            #   子集重建(skus 指定)不碰其余 SKU —— 那是 S2-1 的既定语义。
+            if not _scope:
+                try:
+                    _old_skus = {str(x.get("sku") or "") for x in
+                                 _q("SELECT DISTINCT sku FROM sku_sales_stats WHERE channel=%s",
+                                    [channel])}
+                    _gone = sorted(_old_skus - set(_groups))
+                    for _i4 in range(0, len(_gone), 500):
+                        _g2 = _gone[_i4:_i4 + 500]
+                        _ex("DELETE FROM sku_sales_stats WHERE channel=%s AND sku IN ("
+                            + ",".join(["%s"] * len(_g2)) + ")", [channel] + _g2)
+                except Exception as _eg:
+                    try_err('sales', '物化陈旧行清理降级', _eg)
         # 2026-10-30 可观测: 每次重建落一条(渠道/行数/耗时/范围), 用于评估"一天重建几次"与 RU 风险
         try:
             _ex("INSERT INTO quality_logs(log_type, level, message, source) "

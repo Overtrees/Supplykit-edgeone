@@ -389,36 +389,17 @@ async def cron_archive(request: Request):
         return ok({"skipped": True, "reason": "10 分钟内已执行"})
     if not _claim("cron:archive"):
         return ok({"skipped": True, "reason": "今天已归档"})
-    cutoff = (now_cn() - timedelta(days=365)).strftime("%Y-%m-%d")
-    old = query(
-        "SELECT id, ordered_at, channel, store, sku, order_status, total_amount, quantity "
-        "FROM orders WHERE DATE(ordered_at) < %s AND (deleted_at IS NULL OR deleted_at='')",
-        [cutoff])
-    if not old:
-        return ok({"archived": 0, "stats_rows": 0})
-    ok_n = 0
-    for o in old:
-        try:
-            execute(
-                "INSERT INTO daily_stats(date, channel, store, sku, order_status, gmv, order_count, quantity) "
-                "VALUES(%s,%s,%s,%s,%s,%s,1,%s) "
-                "ON DUPLICATE KEY UPDATE gmv=gmv+VALUES(gmv), order_count=order_count+1, "
-                "quantity=quantity+VALUES(quantity)",
-                (str(o.get("ordered_at") or "")[:10], o.get("channel", "jd"), o.get("store", ""),
-                 o.get("sku", ""), str(o.get("order_status") or "")[:10],
-                 float(o.get("total_amount") or 0), int(o.get("quantity") or 0)))
-            ok_n += 1
-        except Exception as _e:
-                try_err('cron', '静默降级', _e)
-    if ok_n != len(old):
-        _log("error", "归档中止: daily_stats 写入 %d/%d, 不删除 orders(防数据丢失)" % (ok_n, len(old)))
-        return ok({"archived": 0, "stats_rows": ok_n, "aborted": True})
-    ids = [o.get("id") for o in old]
-    for i in range(0, len(ids), 200):
-        batch = ids[i:i + 200]
-        execute("DELETE FROM orders WHERE id IN (%s)" % ",".join(["%s"] * len(batch)), batch)
-    _log("info", "归档: %d 订单 → daily_stats" % len(old))
-    return ok({"archived": len(old), "stats_rows": ok_n})
+    # 2026-11-06 S6/P0-11: 逐条 INSERT(50 万次往返) → core.archive 集合式批次
+    #   (每区间 1 条 INSERT...SELECT...GROUP BY + 1 条 DELETE, 同事务)
+    from core.archive import archive_orders as _arch
+    _r = _arch(cutoff_days=365)
+    if _r.get("failed_batches"):
+        # 失败区间已整体回滚(账单一致), 其余区间照常；留 error 让监控能看见
+        _log("error", "归档部分失败: %d 区间回滚, 已归档 %d 行, 首个错误: %s"
+             % (_r["failed_batches"], _r["archived"], (_r.get("error") or "")[:120]))
+    _log("info", "归档: %d 订单 → daily_stats(%d 行, %d 区间, 切线 %s)"
+         % (_r["archived"], _r["stats_rows"], _r["batches"], _r["cutoff"]))
+    return ok(_r)
 
 
 @router.api_route("/cron/cleanup-logs", methods=["GET","POST"])
@@ -548,20 +529,22 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
         from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
         _ph = ",".join(["%s"] * len(_SELF))
         for _ch in (_chs if deep else []):
+            # 2026-11-06 S6/P1-31: 相关子查询(每行 inventory 跑一次 SUM batches, 18 万批次
+            #   × 每行一次) → LEFT JOIN 聚合子查询(整批只算一遍) + WHERE 过滤。
+            #   原来的 `HAVING ABS(qty-bq)>1` 无 GROUP BY 是 MySQL 扩展写法, 语义等价但
+            #   不直观; 改 WHERE 后与常规聚合查询同形, 也便于 EXPLAIN 判断。
             _bad = query(
                 "SELECT i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
-                "  i.available_qty AS qty, "
-                "  COALESCE((SELECT SUM(b.qty) FROM batches b WHERE b.channel=i.channel "
-                "    AND b.sku=i.sku AND b.warehouse=i.warehouse "
-                "    AND b.warehouse_type=i.warehouse_type "
-                # 69码匹配: 必须严格相等(2026-11-01 收紧)
-                #   原为 "任一方为空 → 降级匹配", 属双向通配: 库存行有码 + 批次无码时,
-                #   会匹配上该仓**所有码**的批次, 偏差被别的码抵消 → 与本节"四维逐一、不能
-                #   抵消"的初衷自相矛盾, 等于给错配开了后门。空码只能匹配空码。
-                "    AND COALESCE(b.barcode,'')=COALESCE(i.barcode,'')), 0) AS bq "
-                "FROM inventory i WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
-                "HAVING ABS(qty - bq) > 1" % _ph,
-                [_ch] + list(_SELF))
+                "  i.available_qty AS qty, COALESCE(b.bq, 0) AS bq "
+                "FROM inventory i "
+                "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
+                "                  SUM(qty) AS bq FROM batches WHERE channel=%%s "
+                "           GROUP BY sku, COALESCE(barcode,''), warehouse, warehouse_type) b "
+                "  ON b.sku=i.sku AND b.bc=COALESCE(i.barcode,'') "
+                " AND b.warehouse=i.warehouse AND b.warehouse_type=i.warehouse_type "
+                "WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
+                "  AND ABS(i.available_qty - COALESCE(b.bq, 0)) > 1" % _ph,
+                [_ch, _ch] + list(_SELF))
             if _bad:
                 _log("warning", "批次对账偏差 %s: %d 项 (Σ批次 ≠ 可用, 按仓库类型+SKU+69码+仓逐一比对)"
                      % (_ch, len(_bad)))

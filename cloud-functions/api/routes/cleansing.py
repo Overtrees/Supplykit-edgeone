@@ -221,24 +221,40 @@ async def cleansing_dup_check(request: Request, file: UploadFile = File(None),
                 (str(r.get("order_no") or "") + "|" + str(r.get("sku") or "")
                  + (("|" + str(r.get("barcode") or "").strip()) if str(r.get("barcode") or "").strip() else ""))
                 for r in _cb if r.get("order_no") and r.get("sku")]
-            _expr = "CONCAT_WS('|', `order_no`, `sku`, NULLIF(`barcode`,''))"
+            _dcols = ("order_no", "sku", "barcode")
             _tbl, _soft = "orders", " AND (deleted_at IS NULL OR deleted_at='')"
         else:
             _keys = [str(r.get("platform") or "") + "|" + str(r.get("flow_no") or "") for r in _cb
                      if r.get("platform") and r.get("flow_no")]
-            _expr = "CONCAT(`platform`,'|',`flow_no`)"
+            _dcols = ("platform", "flow_no")
             _tbl, _soft = "gmv_flows", ""
         _uk = list(dict.fromkeys(_keys))
         if not _uk:
             return {"ok": True, "duplicate": 0, "overlap": 0, "new": 0}
         _exists = 0
+        # 2026-11-06 S6/P1-40: `CONCAT_WS(...) IN (...)` → 行构造器。CONCAT 把列包进函数,
+        #   索引一定用不上(该端点每次打开导入页都被调, 等于每次整表扫)。
+        #   三键(有 69码)/二键(无码)与建键处同一规则: 有码三键、空码降级二键。
         for _i in range(0, len(_uk), 200):
             _batch = _uk[_i:_i + 200]
-            _ph = ",".join(["%s"] * len(_batch))
-            _cnt = one("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                       "AND %s IN (%s)" % (_tbl, _soft, _expr, _ph),
-                       [_ch] + _batch)
-            _exists += int((_cnt or {}).get("c") or 0)
+            _cnt = {"c": 0}
+            if len(_dcols) == 3:
+                _t3 = [b.split("|", 2) for b in _batch if b.count("|") == 2]
+                _t2 = [b.split("|", 1) for b in _batch if b.count("|") == 1]
+            else:
+                _t3, _t2 = [], [b.split("|", 1) for b in _batch]
+            if _t3:
+                _ph3 = ",".join(["(%s,%s,%s)"] * len(_t3))
+                _q3 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                       "AND (`%s`,`%s`,COALESCE(`%s`,'')) IN (%s)"
+                       % (_tbl, _soft, _dcols[0], _dcols[1], _dcols[2], _ph3))
+                _cnt["c"] += int((one(_q3, [_ch] + [v for _t in _t3 for v in _t]) or {}).get("c") or 0)
+            if _t2:
+                _ph2 = ",".join(["(%s,%s)"] * len(_t2))
+                _q2 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
+                       "AND (`%s`,`%s`) IN (%s)" % (_tbl, _soft, _dcols[0], _dcols[1], _ph2))
+                _cnt["c"] += int((one(_q2, [_ch] + [v for _t in _t2 for v in _t]) or {}).get("c") or 0)
+            _exists += int(_cnt.get("c") or 0)
         _n = len(set(_keys))
         return {"ok": True, "duplicate": 1 if _exists >= _n else 0,
                 "overlap": _exists if 0 < _exists < _n else 0,
@@ -394,34 +410,36 @@ async def cleansing_execute(request: Request, file: UploadFile = File(None),
                 _exists = 0
                 for _i in range(0, len(_uk), 200):
                     _batch = _uk[_i:_i+200]
-                    _in_ph = ",".join(["%s"] * len(_batch))
                     _soft = (" AND (deleted_at IS NULL OR deleted_at='')" if _tbl_d == "orders" else "")
+                    # 2026-11-06 S6/P1-40: `CONCAT(k1,'|',k2) IN (...)` → 行构造器
+                    #   `(k1,k2) IN ((..),(..))`。理由: CONCAT 把列包在函数里, 索引完全用不上
+                    #   (每次导入的查重都是整表扫); 行构造器是标准的等值集合匹配, 能走
+                    #   (k1,k2) 前缀索引。另: CONCAT 遇 NULL 返回 NULL, 键会静默消失 ——
+                    #   行构造器里 NULL 同样不匹配, 但语义是显式的。
                     if _k3_d:
-                        # 三键/二键混合: CONCAT 时 69码 为空自动落二键(||'' 不改变键)
-                        _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                                "AND CONCAT(`%s`,'|',`%s`" % (_tbl_d, _soft, _k1_d, _k2_d))
-                        # 有值的用三键、无值的用二键 → 分两次查
-                        _k3 = [b for b in _batch if b.count("|") == 2]
-                        _k2 = [b for b in _batch if b.count("|") == 1]
+                        # 三键/二键混合: 69码 有值的用三键, 空值降级二键(与建键处同一规则)
+                        _k3 = [b.split("|", 2) for b in _batch if b.count("|") == 2]
+                        _k2 = [b.split("|", 1) for b in _batch if b.count("|") == 1]
                         _cnt_v = {"c": 0}
                         if _k3:
-                            _ph3 = ",".join(["%s"] * len(_k3))
+                            _ph3 = ",".join(["(%s,%s,%s)"] * len(_k3))
                             _sql3 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                                     "AND CONCAT(`%s`,'|',`%s`,'|',COALESCE(`%s`,'')) IN (%s)"
+                                     "AND (`%s`,`%s`,COALESCE(`%s`,'')) IN (%s)"
                                      % (_tbl_d, _soft, _k1_d, _k2_d, _k3_d, _ph3))
-                            _c3 = one(_sql3, [channel] + _k3)
+                            _c3 = one(_sql3, [channel] + [v for _t in _k3 for v in _t])
                             _cnt_v["c"] += int((_c3 or {}).get("c") or 0)
                         if _k2:
-                            _ph2 = ",".join(["%s"] * len(_k2))
+                            _ph2 = ",".join(["(%s,%s)"] * len(_k2))
                             _sql2 = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                                     "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _ph2))
-                            _c2 = one(_sql2, [channel] + _k2)
+                                     "AND (`%s`,`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _ph2))
+                            _c2 = one(_sql2, [channel] + [v for _t in _k2 for v in _t])
                             _cnt_v["c"] += int((_c2 or {}).get("c") or 0)
                         _cnt = _cnt_v
                     else:
+                        _ph_row = ",".join(["(%s,%s)"] * len(_batch))
                         _sql = ("SELECT COUNT(*) c FROM `%s` WHERE channel=%%s%s "
-                                "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _in_ph))
-                        _cnt = one(_sql, [channel] + _batch)
+                                "AND (`%s`,`%s`) IN (%s)" % (_tbl_d, _soft, _k1_d, _k2_d, _ph_row))
+                        _cnt = one(_sql, [channel] + [v for _b2 in _batch for v in _b2.split("|", 1)])
                     _exists += int((_cnt or {}).get("c") or 0)
                 _force_new = request.query_params.get("force_new", "")
                 if _keys and not _force_new:
@@ -661,14 +679,16 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                 _fexists = set()
                 for _fi in range(0, len(_fuk), 200):
                     _fb = _fuk[_fi:_fi+200]
-                    _fp = ",".join(["%s"] * len(_fb))
                     _fsoft = (" AND (deleted_at IS NULL OR deleted_at='')" if _ftbl == "orders" else "")
-                    _frow = query("SELECT CONCAT(`%s`,'|',`%s`) k FROM `%s` WHERE channel=%%s%s "
-                                  "AND CONCAT(`%s`,'|',`%s`) IN (%s)" % (_fk1, _fk2, _ftbl, _fsoft,
-                                                                          _fk1, _fk2, _fp),
-                                  [channel] + _fb)
+                    # 2026-11-06 S6/P1-40: 同上, CONCAT 查重 → 行构造器(键在 Python 端拼,
+                    #   不再让 DB 把两列拼成字符串; CONCAT 包列 = 索引必然失效)
+                    _fp2 = ",".join(["(%s,%s)"] * len(_fb))
+                    _frow = query("SELECT `%s` AS k1, `%s` AS k2 FROM `%s` WHERE channel=%%s%s "
+                                  "AND (`%s`,`%s`) IN (%s)" % (_fk1, _fk2, _ftbl, _fsoft,
+                                                               _fk1, _fk2, _fp2),
+                                  [channel] + [v for _b3 in _fb for v in _b3.split("|", 1)])
                     for _r2 in _frow:
-                        _fexists.add(_r2.get("k") or "")
+                        _fexists.add("%s|%s" % (_r2.get("k1") or "", _r2.get("k2") or ""))
                 if _fexists:
                     cleaned = [r for r in cleaned if not (str(r.get(_fk1) or "") + "|" + str(r.get(_fk2) or "") in _fexists)]
             except Exception:
@@ -857,7 +877,7 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
                     "failed_details": _fd if _fd else []}
         # 未完 → 更新 offset/累积, running(2026-10-15 每窗 steps 耗时 + cur_step 进度中——前端 TaskCard 可视化)
         _sq = round(_t.time() - started, 1)
-        _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - len(window)) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - len(window)) // page_size + 1}, "elapsed": _sq}]
+        _steps = (params.get("steps") or []) + [{"name": "窗口 %d" % ((offset - window_len) // page_size + 1), "name_key": "task.win", "p": {"n": (offset - window_len) // page_size + 1}, "elapsed": _sq}]
         _cur = {"name": "窗口 %d" % (offset // page_size + 1), "name_key": "task.win", "p": {"n": offset // page_size + 1}, "started": int(_t.time())}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "offset": offset, "success": success, "failed": failed,
