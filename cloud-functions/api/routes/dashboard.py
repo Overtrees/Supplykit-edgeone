@@ -16,6 +16,7 @@ router = APIRouter(tags=["dashboard"])
 # _grade_risk 虽然本文件已不直接用, 但 local_test 从这里 import 它 —— 模块再导出, 不许删
 from routes.dashboard_stock_risk import _stock_risk, _grade_risk
 from routes.dashboard_health import _health_index, _sync_health_snapshot_async
+from routes.dashboard_bundle import _q_bundle, _split_bundle  # 红线A: 六合取数落独立文件
 from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 from core.clock import now_cn
 _register_cache(lambda: (_summary_cache.clear(), _aux_cache.clear(), _risk_cache.clear(), _accel_cache.clear()))
@@ -444,102 +445,6 @@ def _q_brands(channel, d_from, d_to=""):
     except Exception as _e:
         try_err('dashboard', '品牌按日聚合降级', _e)
         return []
-
-
-def _q_bundle(channel, days60, d1, st30, today):
-    """6 条小查询 → 1 条 UNION ALL(1 条连接 / 1 次往返)
-
-    2026-11-06 线上埋点(db.STATS): summary 每请求要建 6~8 条 TiDB Serverless 连接, 每次建连
-    含 TLS 握手 + 网关认证; 沙箱到同区集群 6 次建连累计 99.7s(其中一次挂起 91s, 直接把
-    `_q_flows_month` 拖到 91s)。请求慢与"偶发 30s 不可用"是同一个原因: **在建连上赌博**。
-    合并后连接数 6→1。六段 SQL 与 _q_agg/_q_recent/_q_brands/_q_flows_month/_q_counts/_q_cfg
-    **逐字同源**(同 _status_cond、同 _FLOW_NET、同 JOIN、同 deleted_at 过滤), 只把结果拍成宽表
-    (tag, s1, s2, s3, n1, n2, n3), 由 _split_bundle 还原成各自原来的结构。
-    """
-    _sc = _status_cond()
-    _sc_o = _status_cond("o.order_status")
-    _gmv = ("total_amount - COALESCE(discount_amount,0) + COALESCE(freight_amount,0) "
-            "+ COALESCE(tax_amount,0)")
-    _gmv_o = ("o.total_amount - COALESCE(o.discount_amount,0) + COALESCE(o.freight_amount,0) "
-              "+ COALESCE(o.tax_amount,0)")
-    sql = (
-        "SELECT 'agg' AS tag, DATE(`date`) AS s1, order_status AS s2, store AS s3, "
-        "SUM(gmv) AS n1, SUM(subsidy) AS n2, SUM(cnt) AS n3 "
-        "FROM orders_day_agg WHERE channel=%s AND `date`>=%s AND `date`<%s "
-        "GROUP BY `date`, order_status, store "
-        "UNION ALL SELECT 'recent', DATE(ordered_at), order_status, store, "
-        "SUM(IF(" + _sc + "," + _gmv + ",0)), "
-        "SUM(IF(" + _sc + ",COALESCE(subsidy_amount,0),0)), COUNT(*) "
-        "FROM orders WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at>=%s "
-        "GROUP BY DATE(ordered_at), order_status, store "
-        "UNION ALL SELECT 'brands', DATE(o.ordered_at), COALESCE(p.brand,''), '', "
-        "SUM(IF(" + _sc_o + "," + _gmv_o + ",0)), "
-        "SUM(IF(" + _sc_o + ",COALESCE(o.subsidy_amount,0),0)), "
-        "SUM(IF(o.order_status='申请退款'," + _gmv_o + ",0)) "
-        "FROM orders o LEFT JOIN (SELECT DISTINCT sku, brand, channel FROM products "
-        "WHERE brand IS NOT NULL AND brand!='') p ON o.sku=p.sku AND o.channel=p.channel "
-        "WHERE o.channel=%s AND (o.deleted_at IS NULL OR o.deleted_at='') AND o.ordered_at>=%s "
-        "AND o.ordered_at<=%s GROUP BY DATE(o.ordered_at), COALESCE(p.brand,'') "
-        "UNION ALL SELECT 'flows', DATE(arrived_time), shop, '', "
-        "COALESCE(SUM(" + _FLOW_NET + "),0), NULL, NULL "
-        "FROM gmv_flows WHERE channel=%s AND arrived_time>=%s AND arrived_time<=%s "
-        "GROUP BY DATE(arrived_time), shop "
-        "UNION ALL SELECT 'counts','','','', a.c, b.c, c.c FROM "
-        "(SELECT COUNT(*) c FROM alerts WHERE channel=%s AND status='active') a, "
-        "(SELECT COUNT(*) c FROM products WHERE channel=%s AND (deleted_at IS NULL OR deleted_at='')) b, "
-        "(SELECT COUNT(*) c FROM suppliers WHERE channel=%s) c "
-        "UNION ALL SELECT 'cfg', `key`, value, '', NULL, NULL, NULL "
-        "FROM replenishment_config WHERE channel=%s OR channel=''"
-    )
-    _p = [channel, days60, d1,
-          channel, d1 + " 00:00:00",
-          channel, min(days60, st30) + " 00:00:00", today + " 23:59:59",
-          channel, st30 + " 00:00:00", today + " 23:59:59",
-          channel, channel, channel,
-          channel]
-    return query(sql, _p)
-
-
-def _split_bundle(rows):
-    """宽表 → 六个消费方各自的原结构(键名与 _q_* 返回值逐字一致)"""
-    agg, recent, brands, flows = [], [], [], []
-    counts, cfg = None, None
-    for r in rows:
-        _t = r.get("tag")
-        s1 = str(r.get("s1") or "")[:10]
-        s2 = str(r.get("s2") or "")
-        s3 = str(r.get("s3") or "")
-        n1, n2, n3 = r.get("n1"), r.get("n2"), r.get("n3")
-        if _t == "agg":
-            agg.append({"d": s1, "order_status": s2, "store": s3, "g": n1, "sub": n2, "cnt": n3})
-        elif _t == "recent":
-            recent.append({"d": s1, "order_status": s2, "store": s3, "g": n1, "sub": n2, "cnt": n3})
-        elif _t == "brands":
-            brands.append({"d": s1, "brand": s2, "g": n1, "sb": n2, "rf": n3})
-        elif _t == "flows":
-            flows.append({"d": s1, "shop": s2, "v": n1})
-        elif _t == "counts":
-            counts = {"alerts": int(n1 or 0), "products": int(n2 or 0), "suppliers": int(n3 or 0)}
-        elif _t == "cfg":
-            cfg = cfg or {}
-            # value 保持原值(NULL 仍是 None) —— 与 _q_cfg 的 dict 逐字同构
-            cfg[str(r.get("s1") or "")] = r.get("s2")
-    if flows:
-        _tot = 0.0
-        _by_day, _by_shop = {}, {}
-        for r in flows:
-            _v = float(r.get("v") or 0)
-            _dd = str(r.get("d") or "")[:10]
-            _sh = str(r.get("shop") or "")
-            _tot += _v
-            _by_day[_dd] = _by_day.get(_dd, 0.0) + _v
-            _by_shop[_sh] = _by_shop.get(_sh, 0.0) + _v
-        flows = (round(_tot, 2),
-                 {k: round(v, 2) for k, v in _by_day.items()},
-                 {k: round(v, 2) for k, v in _by_shop.items()})
-    else:
-        flows = (None, None, None)
-    return agg, recent, brands, flows, counts, cfg
 
 
 def _build_summary_agg(channel, days60, now, mode="bbcc"):
