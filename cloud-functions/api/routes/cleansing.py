@@ -34,6 +34,15 @@ _EVAL_CLAIM_TTL = 120   # 认领租约秒数: 冻结的认领者 2 分钟后可�
 _EVAL_SEL_SQL = ("SELECT id, sku FROM eval_queue WHERE task_id=%%s AND applied=0 "
                  "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
                  "ORDER BY id LIMIT %%s") % _EVAL_CLAIM_TTL
+def _eval_done_sql(n):
+    """完成标记 SQL(IN 列表按 n 展开)。做成函数而不是就地拼: 就地拼时极易只写
+    `IN (%s)` 而把 ids 平铺进参数位 —— 占位符 3 个、参数 5 个 → "not all arguments
+    converted"(2026-11-06 第三次同一类踩坑, 就地拼的代码看不到这个错)。"""
+    return ("UPDATE eval_queue SET applied=1, applied_at=NOW(6) "
+            "WHERE task_id=%%s AND claimed_token=%%s AND id IN (%s)"
+            % ",".join(["%s"] * max(int(n), 1)))
+
+
 _EVAL_CLAIM_SQL = ("UPDATE eval_queue SET claimed_at=NOW(6), claimed_token=%%s "
                    "WHERE task_id=%%s AND applied=0 "
                    "AND (claimed_at IS NULL OR claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)) "
@@ -1061,8 +1070,10 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         for _i4 in range(0, len(_batch), 500):
             _seg4 = _batch[_i4:_i4 + 500]
             _ph4 = ",".join(["%s"] * len(_seg4))
-            for _sr4 in query("SELECT payload FROM import_stage WHERE task_id=%s AND sku IN (%s)",
-                              [src_task] + _seg4):
+            # IN 列表必须插值: 只写 `IN (%s)` 而把 sku 平铺进参数位, 单 SKU 时恰好
+            #   2 对 2 蒙对, 多 SKU 必 "not all arguments converted"(2026-11-06 实测)。
+            for _sr4 in query("SELECT payload FROM import_stage WHERE task_id=%s AND sku IN (%s)"
+                              % ("%s", _ph4), [src_task] + _seg4):
                 try:
                     _cleaned.append(json.loads(_sr4.get("payload") or "{}"))
                 except Exception:
@@ -1210,10 +1221,7 @@ def cleansing_eval_status(task_id: str = "", page_size: int = 1000, driver: str 
         # 本片处理**成功后才置完成标记**(applied=1 + 时间戳)。带 claimed_token:
         #   只有认领者能置位, 防止并发下别人替我"宣布完成"。
         if _ids:
-            _ph9 = ",".join(["%s"] * len(_ids))
-            execute("UPDATE eval_queue SET applied=1, applied_at=NOW(6) "
-                    "WHERE task_id=%s AND claimed_token=%s AND id IN (%s)",
-                    [task_id, _claim_tok] + _ids)
+            execute(_eval_done_sql(len(_ids)), [task_id, _claim_tok] + _ids)
         # 推进 offset + 累积 result
         _new_off = _offset + len(_batch)
         _rj = json.loads(row.get("result") or "{}") or {}

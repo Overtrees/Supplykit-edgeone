@@ -477,11 +477,15 @@ check("评估清单落 eval_queue(applied=完成标记+认领租约), params 不
 check("认领=租约(claimed_at+TTL 可重认领), applied=完成标记(成功才置 1+token 归属)",
       "claimed_at < DATE_SUB(NOW(6), INTERVAL %d SECOND)" in _j_cl
       and "SET applied=1, applied_at=NOW(6) " in _j_cl
-      and "AND claimed_token=%s AND id IN" in _j_cl.replace("`", "")
+      and "AND claimed_token=%%s AND id IN" in _j_cl.replace("`", "")
       and "_claimed != len(_ids)" in _j_cl,
       "2026-11-06 线上验证实证: 领取即置位后实例冻结 → 兜底见未领行已空直接 done, "
       "冻结丢失的评估永久无法重放(兜底安全网被静默打穿)")
 _smk = open(os.path.join(_api_dir, "sql_smoke.py"), encoding="utf-8").read()
+_db = open(os.path.join(_api_dir, "db.py"), encoding="utf-8").read()
+check("db 层前置守卫: 占位符/参数错配在发请求前报出带 SQL 的错误(4 次同类踩坑后固化)",
+      "def _guard_fmt(" in _db and _db.count("_guard_fmt(sql, params)") >= 3,
+      "PyMySQL 自己的报错不带 SQL, 线上只看到'任务卡住/评估静默失败'")
 check("冒烟含客户端格式化检查(PyMySQL %d 进参数位在发请求前就 TypeError, EXPLAIN 看不见)",
       "def client_fmt_err(" in _smk and "_fmt = client_fmt_err(" in _smk
       and "_preload_module_sqls" in _smk,

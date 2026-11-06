@@ -180,8 +180,30 @@ def transaction():
         _release(c)
 
 
+def _guard_fmt(sql, params):
+    """发请求前先模拟 PyMySQL 的 `query % escaped_args`, 把"占位符与参数对不上"
+    变成**带 SQL 上下文**的错误。
+
+    2026-11-06 同一类错在 S5 连踩 4 次(认领 SELECT 的 %d 进参数位 / 认领 UPDATE 少一个
+    占位 / 完成标记 `IN (%s)` 没插值 / stage 直读 `IN (%s)` 没插值)。PyMySQL 自己抛的是
+    `TypeError: not all arguments converted` 或 `%d format: a real number is required`,
+    **不带 SQL**, 线上表现是"任务卡住/评估静默失败", 要翻代码才定位。
+    守卫只在参数为 list/tuple 且 SQL 含 % 时执行(全库无字面量 % 的 SQL, 不会误伤)。
+    """
+    if not params or not isinstance(params, (list, tuple)) or "%" not in sql:
+        return
+    try:
+        args = tuple(("'%s'" % str(x)) if isinstance(x, str)
+                     else ("NULL" if x is None else str(x)) for x in params)
+        sql % args
+    except (TypeError, ValueError) as e:
+        raise ValueError("SQL 占位符与参数不匹配(%s): 参数 %d 个 | SQL=%s"
+                         % (str(e)[:120], len(params), str(sql)[:240]))
+
+
 def query(sql, params=None):
     """SELECT, 返回 list[dict](连接用后归还池)"""
+    _guard_fmt(sql, params)
     c = conn()
     cur = c.cursor()
     try:
@@ -199,6 +221,7 @@ def one(sql, params=None):
 
 def execute(sql, params=None):
     """写操作(autocommit), 返回受影响行数(分批删除等按 rowcount 判断; 连接用后归还)"""
+    _guard_fmt(sql, params)
     c = conn()
     cur = c.cursor()
     try:
@@ -211,6 +234,7 @@ def execute(sql, params=None):
 
 def execute_id(sql, params=None):
     """写操作返回 lastrowid(自增主键; create 类接口返回真实 id 用, 2026-09-11 体检; 连接用后归还)"""
+    _guard_fmt(sql, params)
     c = conn()
     cur = c.cursor()
     try:

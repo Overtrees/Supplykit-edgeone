@@ -280,6 +280,7 @@ def _preload_module_sqls():
         from routes import cleansing as _cl
         collect(_cl._EVAL_SEL_SQL, ["__smoke__", 500])
         collect(_cl._EVAL_CLAIM_SQL % ("%s", "%s", "%s"), ["tok", "__smoke__", 1])
+        collect(_cl._eval_done_sql(1), ["__smoke__", "tok", 1])
     except Exception:
         pass
 
