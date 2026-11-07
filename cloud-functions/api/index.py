@@ -195,59 +195,51 @@ async def auth_middleware(request: Request, next):
 
 @app.get("/health")
 def health(detail: int = 0):
-    """健康探针。detail=1 追加链路运行流水(前端 15s 轮询不带此参数, 零额外查询/RU)"""
+    """健康探针。detail=1 追加链路运行流水(默认路径零额外查询)
+
+    2026-11-07 P0(固定税): 原来这个"只回 status:ok"的探针要发 **5 条 SQL** ——
+      sync_tasks 续跑检查 / SELECT 1 / snapshot 最新日期 / 7 段版本指纹 / data_version。
+      线上实测 1.0~1.9s, 而 Makers 每次请求都要重新建连(单次往返 0.2s 量级),
+      这 5 趟就是整站每次请求的地板; 它还是前端每 30s 的轮询基座 → 白烧 RU 与延迟。
+      合并成**一条** SQL(标量子查询): 一次建连、一次往返, 语义逐项等价。
+    """
     from datetime import datetime, timezone
     out = {"status": "ok", "db_backend": "tidb", "timestamp": now_cn().isoformat()}
-    # 2026-10-15 保活顺带续跑(UptimeRobot 5min ping——有 running 任务才调 continue——无任务零开销——RU 不浪费)
     try:
-        _run = one("SELECT COUNT(*) AS c FROM sync_tasks WHERE status='running' AND updated_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE)")
-        if _run and int(_run.get("c") or 0) > 0:
+        r = one(
+            "SELECT 1 AS ok,"
+            "(SELECT COUNT(*) FROM sync_tasks WHERE status='running' "
+            " AND updated_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE)) AS run_c,"
+            "(SELECT COALESCE(MAX(`date`),'') FROM daily_sales_snapshot) AS snap,"
+            "(SELECT v FROM data_version WHERE id=1) AS dv,"
+            "CONCAT_WS('-',"
+            "(SELECT COALESCE(MAX(id),0) FROM orders),"
+            "(SELECT COALESCE(MAX(id),0) FROM inventory),"
+            "(SELECT COALESCE(MAX(id),0) FROM products),"
+            "(SELECT COALESCE(MAX(id),0) FROM alerts),"
+            "(SELECT COALESCE(MAX(`date`),'') FROM daily_sales_snapshot),"
+            "(SELECT COALESCE(MAX(id),0) FROM rules),"
+            "(SELECT COALESCE(MAX(id),0) FROM suppliers),"
+            "(SELECT COALESCE(MAX(updated_at),'') FROM replenishment_config)) AS v") or {}
+        out["db"] = "ok"
+        out["snapshot_max"] = r.get("snap") or ""
+        try:
+            _dvz = int(r.get("dv") or 0)
+        except Exception:
+            _dvz = 0
+        out["data_version"] = _dvz
+        out["version"] = "%s|%s" % (_dvz, str(r.get("v") or "0"))
+        # 保活顺带续跑(UptimeRobot 5min ping——有 running 任务才调 continue——无任务零开销)
+        if int(r.get("run_c") or 0) > 0:
             from routes.cron import continue_tasks
             continue_tasks()
             out["continue"] = "ran"
     except Exception as _e:
-        try_err('index', '保活顺带续跑降级', _e)
-    try:
-        r = one("SELECT 1 AS ok")
-        out["db"] = "ok" if r else "unknown"
-    except Exception as e:
-        out["db"] = "error: %s" % str(e)[:150]
+        # 降级必须留痕(静默吞异常曾让 version 恒 0 而无人知)
+        out["db"] = "error: %s" % str(_e)[:150]
         out["status"] = "degraded"
-    try:
-        r = one("SELECT COALESCE(MAX(date),'') AS m FROM daily_sales_snapshot")
-        out["snapshot_max"] = (r or {}).get("m") or ""
-    except Exception as _e:
-            try_err('index', '静默降级', _e)
-    # 数据版本指纹: 关键表 MAX(id)/MAX(date)/MAX(updated_at) 拼接, 任何数据变更即变化
-    # (前端每 15s 轮询 /health 取 version, 变化时 clearCache+loadAll 绕过 30s 前端缓存)
-    # 2026-10-29 修复: replenishment_config 主键是 (key, channel), **无 id 列** →
-    #   原 SQL `MAX(id)` 抛 Unknown column 被吞 → version 恒 "0" → 前端指纹链路全失效。
-    #   该表以 updated_at 表征变更(值改写会刷新时间戳)。
-    try:
-        r = one(
-            "SELECT CONCAT_WS('-',"
-            "(SELECT COALESCE(MAX(id),0) FROM orders),"
-            "(SELECT COALESCE(MAX(id),0) FROM inventory),"  # no-barcode-ok: 仅版本指纹
-            "(SELECT COALESCE(MAX(id),0) FROM products),"
-            "(SELECT COALESCE(MAX(id),0) FROM alerts),"
-            "(SELECT COALESCE(MAX(date),'') FROM daily_sales_snapshot),"
-            "(SELECT COALESCE(MAX(id),0) FROM rules),"
-            "(SELECT COALESCE(MAX(id),0) FROM suppliers),"
-            "(SELECT COALESCE(MAX(updated_at),'') FROM replenishment_config)) AS v")
-        # 计数版(2026-10-29): 任何走应用层的写操作都会递增 → UPDATE 也能被前端感知;
-        # 后段保留表指纹(覆盖绕过应用层直接改库的"新增"场景)。前端只做字符串不等比较。
-        _dvz = 0
-        try:
-            _dvr = one("SELECT v FROM data_version WHERE id=1") or {}
-            _dvz = int(_dvr.get("v") or 0)
-        except Exception as _edv:
-            try_err('index', '数据版本读取降级', _edv)
-        out["data_version"] = _dvz
-        out["version"] = "%s|%s" % (_dvz, str((r or {}).get("v") or "0"))
-    except Exception as _ev:
-        # 静默降级=指纹失效且无人知(本次 bug 正是如此) → 必须留痕
-        try_err('index', 'health 版本指纹降级', _ev)
         out["version"] = "0"
+        try_err("index", "health 探针降级", _e)
     # 2026-11-02 S1-2: 链路运行流水(仅 detail=1 时查 —— 默认路径保持轻量)
     # 只给 pipeline/status/耗时/行数, 不给 error 正文(本端点匿名可读, 防泄漏表名与 SQL 片段)
     if detail:

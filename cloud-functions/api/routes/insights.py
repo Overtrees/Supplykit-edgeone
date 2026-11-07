@@ -238,20 +238,23 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     month_in, month_out = {}, {}
     if skus and wh_type == "own":
         _ph = ",".join(["%s"] * len(skus))
-        for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
-                        "FROM inbound_records WHERE channel=%s AND inbound_date>=%s "
-                        "AND inbound_date<%s "
-                        "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
-                        "GROUP BY sku, COALESCE(barcode,''), warehouse",
-                        [channel, month_start, _next_month_start, wh_type] + skus):
-            month_in[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
-        for _r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
-                        "FROM outbound_records WHERE channel=%s AND outbound_date>=%s "
-                        "AND outbound_date<%s "
-                        "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
-                        "GROUP BY sku, COALESCE(barcode,''), warehouse",
-                        [channel, month_start, _next_month_start, wh_type] + skus):
-            month_out[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
+        # 2026-11-07: 入/出两条合并成一条 UNION ALL —— 单页 100 行也要付 2 次往返,
+        #   Makers 每次往返 0.2s 量级, 合并纯赚; 分子查询各自走原索引, 语义不变。
+        _mv = query(
+            "SELECT 'in' AS k, sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
+            "FROM inbound_records WHERE channel=%s AND inbound_date>=%s AND inbound_date<%s "
+            "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
+            "GROUP BY sku, COALESCE(barcode,''), warehouse "
+            "UNION ALL "
+            "SELECT 'out' AS k, sku, COALESCE(barcode,'') AS bc, warehouse, SUM(quantity) AS q "
+            "FROM outbound_records WHERE channel=%s AND outbound_date>=%s AND outbound_date<%s "
+            "AND COALESCE(warehouse_type,'')=%s AND sku IN (" + _ph + ") "
+            "GROUP BY sku, COALESCE(barcode,''), warehouse",
+            [channel, month_start, _next_month_start, wh_type] + skus
+            + [channel, month_start, _next_month_start, wh_type] + skus)
+        for _r in _mv:
+            _tgt = month_in if _r.get("k") == "in" else month_out
+            _tgt[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
     items = []
     # 动态安全线周期(own→采购周期 / platform→补货周期按渠道默认模式)
     _cfg3 = {}

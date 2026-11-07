@@ -28,7 +28,7 @@ export interface Channel {
 }
 
 import { create } from 'zustand'
-import { api, clearCache, clearInflight, freshStamp } from '../api/client'
+import { api, clearCache, clearInflight, freshStamp, isCanceled } from '../api/client'
 import { registerPoll } from '../api/poller'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
@@ -103,6 +103,8 @@ const safeGetJSON = (key, def = null) => {
 // 2026-11-05 并发序号(模块级, 不在 store state 里): 只用于"丢弃过期响应", 不参与渲染,
 //   所以不该进 state(进 state 会额外触发订阅者重渲染, 且 reset() 时还得记着复位)
 const _seqBox = { v: 0 }
+// 订单列表单独一条序号(2026-11-07): 翻页/搜索只刷订单, 与 loadAll 的全站刷新互不干扰。
+const _orderSeqBox = { v: 0 }
 
 const initAppStore = (set, get) => ({
   channel: safeGet('c_channel') || 'jd',
@@ -618,16 +620,63 @@ const initAppStore = (set, get) => ({
     set(state => ({ importLogs: [item, ...state.importLogs].slice(0, 20) }))
   },
 
+  /**
+   * 只刷新订单列表(2026-11-07)
+   *
+   * 订单页的翻页/搜索/状态筛选原来调 `loadAll()` —— 那会把看板 summary、stock-risk、
+   * 告警、质检日志全部重拉一遍(6~8 个接口), 只为换一页 30 条订单。用户输入一次搜索词
+   * 就触发一次全站重算; 叠加"切页不清缓存"之前的行为, 单个实例被打满。
+   * 现在: 订单页的高频操作只发 `/api/orders` 一条, 全站数据留给看板/各页自己刷新。
+   * 序号独立于 loadAll —— 两者并发时, 后发起的订单请求赢(不会被旧的 loadAll 订单段覆盖)。
+   */
+  async loadOrdersOnly(page?, search?, status?) {
+    const p = page || get().orderPage || 1
+    // 搜索词真源是 hammerSearch(订单页输入框); orderSearch 只是历史字段, 恒空 —— 用它会导致翻页丢条件
+    const s = search ?? (get().hammerSearch || '')
+    const st = status ?? (get().orderStatus || '')
+    const _my = ++_orderSeqBox.v
+    set({ orderLoading: true })
+    try {
+      const r = await api.get(
+        '/api/orders?page=' +
+          p +
+          '&page_size=30&search=' +
+          encodeURIComponent(s) +
+          '&status=' +
+          encodeURIComponent(st),
+        { scope: 'orders', timeout: 35000 },
+      )
+      if (_my !== _orderSeqBox.v) return
+      const d = (r.data || {}) as {
+        items?: unknown[]
+        total?: number
+        page?: number
+      }
+      set({
+        orders: d.items || (d as unknown[]) || [],
+        orderTotal: d.total || (d.items || []).length || 0,
+        orderPage: d.page || p,
+        orderLoadErr: '',
+        orderLoading: false,
+      })
+    } catch (e) {
+      if (isCanceled(e)) return
+      if (_my === _orderSeqBox.v) {
+        set({ orderLoadErr: errText(e as string), orderLoading: false })
+      }
+    }
+  },
+
   setOrderPage(p, search?, status?) {
-    const s = search ?? get().orderSearch
+    const s = search ?? (get().hammerSearch || '')
     const st = status ?? get().orderStatus
     set({ orderPage: p, orderSearch: s, orderStatus: st, orderLoading: true })
-    get().loadAll(p)
+    get().loadOrdersOnly(p, s, st)
   },
 
   setOrderFilterLocal(search, status) {
     set({ orderSearch: search, orderStatus: status, orderPage: 1 })
-    get().loadAll(1)
+    get().loadOrdersOnly(1, search, status)
   },
 
   startPolling() {

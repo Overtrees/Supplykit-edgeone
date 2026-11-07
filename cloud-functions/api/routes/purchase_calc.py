@@ -370,7 +370,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     """
     from routes.common import ch_supports_b as _csb2
     _ch_b = _csb2(channel)   # 该渠道是否走 BBCC(B 仓调拨链)
-    from biz.sales import calc_sales_multi, load_daily_sales_grouped
+    from biz.sales import calc_sales_multi
     now = now_cn().replace(tzinfo=None)
 
     def _cfg_number(key, default):
@@ -442,12 +442,26 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             if mx > last_order_bc.get((_s0, _b0), ""):
                 last_order_bc[(_s0, _b0)] = mx
     # 28 天日销 —— SKU 级(降级用) + 按码"sku|69码"(主用)
+    # 2026-11-07 P0(去重叠加): 原来这里 `load_daily_sales_grouped(28, 全渠道 1 万 SKU)`
+    #   把 28 天快照(约 20 万行)全拉回 Python 再算一遍三窗口 —— 而同一份结果早已物化在
+    #   `sku_sales_stats`(补货/断货/健康读的就是它)。线上实测 disposal 5~8s, 大头就是这趟。
+    #   现在直接读物化 __C__ 行: 合计行 → daily_map, 按码行 → daily_bc。
+    #   口径等价性: 该渠道只有 platform 仓产生销售(__ALL__ 与 __C__ 逐 SKU 0 差异, 见
+    #   biz.sales._rebuild 的注释), 且 ds28 与 calc_sales_multi(plain)[28] 是同一函数同一窗口。
     daily_map = {}
     daily_bc = {}
     if products:
-        _grp = load_daily_sales_grouped(28, channel, skus=set(products.keys()), with_bc_wh=True)
-        daily_map = calc_sales_multi(_grp[0], windows=[28])[28]
-        daily_bc = calc_sales_multi(_grp[2], windows=[28])[28]
+        from biz.sales import get_sku_sales_stats as _gss_d, WH_C as _WH_C_D
+        _rws_d = _gss_d(channel, skus=list(products.keys()), days=28,
+                        barcode="all", fields=("ds28",)) or {}
+        for _rd in _rws_d.values():
+            if str(_rd.get("warehouse") or "") != _WH_C_D:
+                continue
+            _bd = str(_rd.get("barcode") or "")
+            if _bd:
+                daily_bc["%s|%s" % (_rd.get("sku"), _bd)] = float(_rd.get("ds28") or 0)
+            else:
+                daily_map[str(_rd.get("sku"))] = float(_rd.get("ds28") or 0)
     # B 仓入库批次(到仓日期)
     b_arrival = {}
     for r in query("SELECT sku, arrival_date FROM purchase_orders "

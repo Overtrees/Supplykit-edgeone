@@ -107,7 +107,9 @@ export default function OrdersPage() {
     setHammerSearch('')
   }, [channel])
   useEffect(() => {
-    useAppStore.getState().loadAll()
+    // 2026-11-07: 只刷订单(原来 loadAll 会连带 summary/stock-risk/alerts/质检 6~8 个接口)
+    const st = useAppStore.getState()
+    st.loadOrdersOnly(1, st.hammerSearch || '', st.orderStatus || '')
   }, [hammerSearch, orderStatus])
   const [confirmDel, setConfirmDel] = useState(null)
   useEffect(() => () => abortScope('orders'), [])
