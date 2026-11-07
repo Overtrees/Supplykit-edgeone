@@ -155,7 +155,22 @@ def settle_rules(token, fp, task="daily_rules", ok=True):
         return 0
 
 
-_STALE_MIN = 10
+EVAL_STALE_MIN = 10          # 评估任务/运行流水的新鲜度阈值(分钟), 跨模块唯一真源
+_STALE_MIN = EVAL_STALE_MIN   # 兼容既有 close_stale_runs(minutes=...) 默认值
+
+
+def eval_live_cond():
+    """「评估任务仍在跑」的唯一判定(读侧文案 / 状态接口 / 写侧任务合并共用)
+
+    2026-11-07 §15.158: 实例可被平台随时冻结, daemon 线程的 done/error 回写不保证执行。
+    于是 `status='running'` 不等于「在跑」——必须带新鲜度: pending 或最近 _STALE_MIN
+    分钟内才开始的 running 才算。超时 running 一律视为僵户, 由 close_stale_runs 留痕。
+
+    为什么不放进各路由各自写一遍: 三处口径一旦漂移(比如一处放宽到 30 分钟), 就会出现
+    「看板说在算、胶囊说算完了、保存规则却复用僵户 id」这类互相打架的状态。
+    """
+    return ("(status='pending' OR (status='running' AND "
+            "started_at > DATE_SUB(NOW(), INTERVAL %d MINUTE)))" % EVAL_STALE_MIN)
 
 
 def close_stale_runs(minutes=_STALE_MIN):
@@ -183,6 +198,16 @@ def close_stale_runs(minutes=_STALE_MIN):
             "UPDATE pipeline_runs SET status='timeout', finished_at=NOW(), "
             "error=CONCAT('挂起超时: running 超过 %d 分钟(实例被冻结/掐断, 收尾语句未执行)') "
             "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % (_m, _m)
+        ) or 0)
+        # 2026-11-07 §15.158: eval_tasks 是同一类「实例被冻结就没人收尾」的表, 但 S4 当时
+        #   只收了 pipeline_runs(纯观测表)。线上实证: 13:21 那条 running 卡 3 小时 →
+        #   aux.evaluating 恒 true → 看板「规则重算中」永久挂着; 且 _schedule_rule_eval 的
+        #   合并语义会一直复用这个僵户 id, 之后保存规则再也不产生新评估。
+        #   同阈值、同一次收尾、同样只留痕不重跑(要不要重跑由调度决定)。
+        out["eval_tasks"] = int(_ex(
+            "UPDATE eval_tasks SET status='timeout', finished_at=NOW(), "
+            "error='stale running: instance frozen (no done/error writeback)' "
+            "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % _m
         ) or 0)
         if out["runs"]:
             try:

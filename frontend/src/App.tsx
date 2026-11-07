@@ -254,7 +254,9 @@ export default function App() {
           )
           if (!alive) return
           const st = j?.data?.status
-          if (st === 'done' || st === 'expired') {
+          // 2026-11-07 §15.158: timeout = 实例被冻结遗留的僵户(后端按新鲜度判定),
+          //   对前端等价于「已结束」——否则胶囊「规则重算中」会永远转下去
+          if (st === 'done' || st === 'expired' || st === 'timeout') {
             useAppStore.getState().opDone(o.id)
             // 评估写完 alerts 才算"变了" —— 此时通知各页重拉, 看板的"重算中"同步消失
             window.dispatchEvent(new Event('rules-changed'))

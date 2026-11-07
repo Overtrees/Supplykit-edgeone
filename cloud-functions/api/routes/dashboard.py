@@ -1058,8 +1058,12 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
     # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
     #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
     #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
+    # 2026-11-07 §15.158: 计数改带新鲜度(与状态接口/任务合并共用 eval_live_cond)。
+    #   实例被平台冻结时 daemon 线程的 done/error 回写不会发生, 裸 `status='running'`
+    #   会永远成立 → 线上出现过看板「规则重算中」挂 3 小时。
     try:
-        _pend = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE status IN ('pending','running')") or {}
+        from core.maintenance import eval_live_cond as _live
+        _pend = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE " + _live()) or {}
         _data = dict(_data or {})
         _data["evaluating"] = bool(int(_pend.get("c") or 0))
     except Exception as _e:

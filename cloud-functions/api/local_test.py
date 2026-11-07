@@ -2685,13 +2685,46 @@ try:
     check("D5 保存返回 eval_task_id 且提供状态接口",
           '"eval_task_id": _tid' in _rules_src and "/rules/eval-status" in _rules_src,
           "routes/rules.py")
-    check("D5 aux 的 evaluating 在缓存之外读",
-          "FROM eval_tasks WHERE status IN ('pending','running')" in _dash_src,
+    check("D5 aux 的 evaluating 在缓存之外读(且带新鲜度, 不认僵户 running)",
+          "FROM eval_tasks WHERE \" + _live()" in _dash_src
+          and "eval_live_cond" in _dash_src,
           "routes/dashboard.py")
     check("D5 前端按真实状态等待(ops 轮询, 不再页面内阻塞 20s)",
           "waitEvalDone" not in open('../../frontend/src/pages/RulesPage.tsx', encoding='utf-8').read()
           and "/api/rules/eval-status" in open('../../frontend/src/App.tsx', encoding='utf-8').read(),
           "RulesPage/App")
+
+    # ── §15.158: 评估任务僵户(实例被冻结, done/error 回写永不执行) ──
+    _maint_src = open('core/maintenance.py', encoding='utf-8').read()
+    _own_src = open('core/own_store.py', encoding='utf-8').read()
+    _app_src = open('../../frontend/src/App.tsx', encoding='utf-8').read()
+    check("15.158 新鲜度判定单一真源(读侧/状态接口/任务合并共用 eval_live_cond)",
+          "def eval_live_cond():" in _maint_src
+          and "eval_live_cond" in _dash_src
+          and _rules_src.count("eval_live_cond") >= 2,
+          "core/maintenance.py / dashboard.py / rules.py")
+    check("15.158 裸 status IN ('pending','running') 已从读侧与状态接口移除",
+          "FROM eval_tasks WHERE status IN ('pending','running')" not in _dash_src
+          and "COUNT(*) AS c FROM eval_tasks WHERE status IN" not in _rules_src,
+          "routes/dashboard.py / routes/rules.py")
+    check("15.158 close_stale_runs 同步收尾 eval_tasks(不只 pipeline_runs)",
+          "UPDATE eval_tasks SET status='timeout'" in _maint_src
+          and "close_stale_runs as _csr" in _rules_src,
+          "core/maintenance.py / routes/rules.py")
+    check("15.158 合并任务排除僵户(否则保存规则永远复用旧 id 不再评估)",
+          "FROM eval_tasks WHERE \" + _live()" in _rules_src,
+          "routes/rules.py")
+    check("15.158 eval-status 对僵户 running 返回 timeout, 前端认它",
+          '_r["status"] = "timeout"' in _rules_src and "st === 'timeout'" in _app_src,
+          "routes/rules.py / App.tsx")
+    check("15.158 own_store 明细 SQL 不残留 %d(_guard_fmt 会把参数转 str 喂给 %d)",
+          "LIMIT %d" not in _own_src and "OFFSET %d" not in _own_src
+          and 'LIMIT " + str(int(per_type))' in _own_src,
+          "core/own_store.py")
+    check("15.158 评估取规则参数走 dashboard_stock_risk(原 routes.dashboard 导入不存在)",
+          "from routes.dashboard import _rule_params" not in _re_src
+          and "from routes.dashboard_stock_risk import _rule_params" in _re_src,
+          "core/rule_eval.py")
 
     # ── D8: 生命周期单一入口(维度键/关闭原因/重开不新增行) ──
     check("D8 维度键单一真源(5 维: 类型/SKU/仓/渠道/69码)",

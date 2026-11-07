@@ -156,6 +156,10 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only=""):
         _where += " AND alert_type=%s"
         _p.append(only)
     rows = []
+    # 2026-11-07 §15.158: LIMIT/OFFSET 一律 str() 显式拼接, SQL 里不许残留 `%d`。
+    #   db._guard_fmt 会把所有参数转成字符串再模拟 `sql % args`, 残留的 `%d` 必抛
+    #   "a real number is required, not str" → 线上 per_type 明细一直静默降级回现算。
+    #   (另两条 `% (_lim,_off)` 因 % 优先级高于 + 只格式化了尾段, 结果虽对但太脆, 一并收紧)
     try:
         if per_type:
             for _t in _TYPES:
@@ -163,13 +167,14 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only=""):
                     continue
                 rows.extend(query(
                     "SELECT " + _COLS + " FROM own_health_snapshot WHERE " + _where +
-                    " AND alert_type=%s ORDER BY seq LIMIT %d", _p + [_t, int(per_type)]) or [])
+                    " AND alert_type=%s ORDER BY seq LIMIT " + str(int(per_type)),
+                    _p + [_t]) or [])
         elif full:
             rows = query("SELECT " + _COLS + " FROM own_health_snapshot WHERE " + _where +
-                         " ORDER BY seq LIMIT %d OFFSET %d" % (_lim, _off), _p) or []
+                         " ORDER BY seq LIMIT " + str(_lim) + " OFFSET " + str(_off), _p) or []
         else:
             rows = query("SELECT " + _COLS + " FROM own_health_snapshot WHERE " + _where +
-                         " ORDER BY seq LIMIT %d" % _lim, _p) or []
+                         " ORDER BY seq LIMIT " + str(_lim), _p) or []
     except Exception as _e:
         try_err("own_store", "明细读取降级", _e)
         return None

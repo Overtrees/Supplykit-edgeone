@@ -288,9 +288,17 @@ def _schedule_rule_eval(channel=None, alert_types=None, deep=False):
     _chs = [channel] if isinstance(channel, str) and channel else (list(channel or []) or [])
     _scope = json.dumps({"channels": _chs, "ats": list(alert_types or []), "deep": bool(deep)},
                         ensure_ascii=False, sort_keys=True)
+    # 2026-11-07 §15.158: 先把被冻结实例遗留的 running 收尾(只留痕, 不重跑)。
+    #   不做的后果: 下面的合并语义会一直复用那条僵户 id → 之后再保存规则永远不产生新评估。
     try:
-        _exist = one("SELECT id FROM eval_tasks WHERE status IN ('pending','running') "
-                     "AND scope=%s ORDER BY id DESC LIMIT 1", [_scope])
+        from core.maintenance import close_stale_runs as _csr
+        _csr()
+    except Exception as _e:
+        try_err('rules', '评估任务超时收尾降级', _e)
+    try:
+        from core.maintenance import eval_live_cond as _live
+        _exist = one("SELECT id FROM eval_tasks WHERE " + _live() +
+                     " AND scope=%s ORDER BY id DESC LIMIT 1", [_scope])
         if _exist:
             _tid = int(_exist.get("id") or 0)
         else:
@@ -417,13 +425,23 @@ def rules_eval_status(task_id: int = 0):
 
     不返回 404: 任务过期(保留策略清理)对前端等价于"已结束, 可以刷新了"。
     """
+    from core.maintenance import eval_live_cond as _live, EVAL_STALE_MIN as _stale
     if task_id:
         _r = one("SELECT id, status, rows_out, duration_ms, error, created_at, "
-                 "started_at, finished_at FROM eval_tasks WHERE id=%s", [task_id])
+                 "started_at, finished_at, "
+                 "TIMESTAMPDIFF(MINUTE, started_at, NOW()) AS age_min "
+                 "FROM eval_tasks WHERE id=%s", [task_id])
         if not _r:
             return ok({"id": task_id, "status": "expired", "rows_out": 0})
+        # 2026-11-07 §15.158: 僵户 running 对前端等价于「已结束」——否则 OpsWatcher
+        #   会永远轮询下去, 胶囊「规则重算中」也不消失。收尾留痕由 close_stale_runs 负责。
+        if _r.get("status") == "running":
+            _age = _r.get("age_min")
+            if _age is None or int(_age) >= _stale:
+                _r = dict(_r)
+                _r["status"] = "timeout"
         return ok(_r)
-    _r2 = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE status IN ('pending','running')") or {}
+    _r2 = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE " + _live()) or {}
     return ok({"running": int(_r2.get("c") or 0)})
 
 

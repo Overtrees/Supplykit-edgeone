@@ -380,8 +380,11 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
             try_err("rules", "评估加载补货周期配置降级", _e)
         try:
             # 看板计算参数(规则 params 优先, 兼容 config)
-            from routes.dashboard import _rule_params
-            _rp = _rule_params("stockout")
+            # 2026-11-07 §15.158: _rule_params 早在 10-11 就移到 dashboard_stock_risk,
+            #   这里仍从 routes.dashboard 导入 → 线上每次评估都 ImportError 静默降级,
+            #   断货规则回落到默认参数(与卡面口径漂移)。带 channel 与 core.metrics 同源。
+            from routes.dashboard_stock_risk import _rule_params
+            _rp = _rule_params("stockout", channel) or {}
         except Exception as _e:
             try_err("rules", "评估加载看板计算参数降级", _e)
         try:
