@@ -110,8 +110,14 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
     if not legacy:
         try:
             from core import unit_store as _US
-            _mat = _US.risk_of(channel, full=full, limit=limit, offset=offset, level=level)
+            # 2026-11-07 §15.162 P0 SWR: fp 失配但上一版完整快照可用时, 返回上一版
+            #   (不退 4.4s 现算), __swr 随 payload 带回、由路由层 pop 到响应顶层;
+            #   从未构建/不可用才落到底部现算(保证完整数据)。legacy=True 对账路径不 SWR。
+            _mat, _swr = _US.serve_risk(channel, full=full, limit=limit, offset=offset,
+                                        level=level)
             if _mat is not None:
+                if _swr and isinstance(_mat, dict):
+                    _mat["__swr"] = _swr
                 return _mat
         except Exception as _e:
             try_err("dash_stock", "risk 物化读取降级(走现算)", _e)

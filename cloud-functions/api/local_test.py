@@ -4276,7 +4276,7 @@ try:
     _sr18 = _rd("routes/dashboard_stock_risk.py")
     _us18 = _rd("core/unit_store.py")
     check("risk 物化: 请求路径可命中, legacy 强制现算(对账用)",
-          "risk_of(" in _sr18 and "legacy: bool = False" in _sr18,
+          "serve_risk(" in _sr18 and "legacy: bool = False" in _sr18,
           "dashboard_stock_risk.py")
     check("risk 物化: 重建侧直接调现算入口, 不复制公式(红线 D)",
           "_stock_risk(channel, full=1, legacy=True" in _us18, "core/unit_store.py")
@@ -4670,6 +4670,124 @@ try:
           and set(_p20) == {"items", "total", "page", "page_size"}, str(_p20))
 except Exception as _e34:
     check("§15.161 冷算治理/SWR 用例无异常", False, str(_e34)[:300])
+
+# ── §15.162 看板冷算根治: 判定读模型 SWR 化 + 等待链收敛 + boot 冒泡 ─────────────
+try:
+    _us22src = _rd("core/unit_store.py") if "_rd" in dir() else open(
+        _os.path.join(_API_DIR, "core/unit_store.py"), encoding="utf-8").read()
+    _dash22 = _os.path.join(_API_DIR, "routes/dashboard.py")
+    _bundle22 = _os.path.join(_API_DIR, "routes/dashboard_bundle.py")
+    _ac22 = _os.path.join(_API_DIR, "routes/analysis_cache.py")
+    _dsr22 = _os.path.join(_API_DIR, "routes/dashboard_stock_risk.py")
+    _dashsrc = open(_dash22, encoding="utf-8").read()
+    _bundlesrc = open(_bundle22, encoding="utf-8").read()
+    _acsrc22 = open(_ac22, encoding="utf-8").read()
+    _dsrsrc = open(_dsr22, encoding="utf-8").read()
+
+    # ① 静态: SWR 骨架复用不叠加(红线 2/4/5)
+    check("§15.162 后台重建复用 list_store 分舱单飞(db.heavy 全局预算), 不另造队列/worker",
+          "list_store as _LS" in _us22src and "_LS.submit_background(" in _us22src
+          and "queue.Queue" not in _us22src and "_FLIGHTS = {}" not in _us22src,
+          "core/unit_store.py")
+    check("§15.162 allow_stale 只跳过 fp 比对, 完整性哨兵一字不减(tally_of/risk_of)",
+          _us22src.count("if not allow_stale:") == 2
+          and 'int(h.get("risk_rows", -1)) < 0' in _us22src
+          and 'not int(h.get("stale") or 0)' in _us22src, "core/unit_store.py")
+    check("§15.162 serve_tally/serve_overview/serve_risk 三入口: 失配返回上一版, 不可用才现算",
+          all(("def serve_%s" % f) in _us22src for f in ("tally", "overview", "risk"))
+          and _us22src.count("submit_rebuild(channel, _m)") >= 3, "core/unit_store.py")
+    check("§15.162 swr_meta 用 DB 时间算 freshness_s(不参与数据新鲜度判定, 只用于播报)",
+          "TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s" in _us22src
+          and "def swr_meta" in _us22src, "core/unit_store.py")
+    check("§15.162 _store_tally 返回 (tally, swr), 快路径判据 _store_on 语义不变",
+          "return _US.serve_tally(channel, mode)" in _dashsrc
+          and "_t_sum, _swr_tally = _store_tally(channel, mode)" in _dashsrc
+          and "max_workers=3 if not _store_on else 1" in _dashsrc, "routes/dashboard.py")
+
+    # ② 静态: 等待链收敛 + 空旧值兜底修正(完整性)
+    check("§15.162 heavy 等待 15s → 2s 快速失败(aux/stock-risk 同一常量)",
+          "timeout=15" not in _dashsrc and "_DASH_HEAVY_WAIT = 2.0" in _dashsrc
+          and _dashsrc.count('timeout=_DASH_HEAVY_WAIT') == 2, "routes/dashboard.py")
+    check("§15.162 单飞等锁 12s → 2s(与 insights 系同源收敛, 等待不创造价值)",
+          "acquire(timeout=2)" in _acsrc22 and "acquire(timeout=12)" not in _acsrc22,
+          "routes/analysis_cache.py")
+    check("§15.162 无旧值可退时排队现算, 不再返回空结构(aux or {} / 全 0 兜底已修)",
+          "_cache_stale(_key) or {}" not in _dashsrc
+          and "宁可排队现算保证完整数据" in _dashsrc, "routes/dashboard.py")
+    check("§15.162 cache_stale 旧值必须显式播报 __swr(不再静默返旧值)",
+          _dashsrc.count('"source": "stale_cache"') == 2, "routes/dashboard.py")
+
+    # ③ 静态: 播报走响应顶层, data 形状不变 + boot 冒泡
+    check("§15.162 summary/aux/stock-risk 的 __swr 都 pop 到响应顶层(不进 data)",
+          "_result.pop(\"__swr\", None)" in _dashsrc
+          and "_data.pop(\"__swr\", None)" in _dashsrc
+          and "_r.pop(\"__swr\", None)" in _dashsrc, "routes/dashboard.py")
+    check("§15.162 stock_risk 读侧 SWR: serve_risk 返回上一版并带 __swr, 对账 legacy 不 SWR",
+          "_US.serve_risk(" in _dsrsrc and 'if not legacy:' in _dsrsrc, "dashboard_stock_risk.py")
+    check("§15.162 boot 把子项 __swr 冒泡到聚合顶层, 子项 data 形状逐字不变",
+          '_d.pop("__swr", None)' in _bundlesrc
+          and '"parts": _swrs' in _bundlesrc
+          and '"state": "serving_previous"' in _bundlesrc, "routes/dashboard_bundle.py")
+
+    # ④ 动态: serve_tally 三态(mock head/fp/query, 不碰真库)
+    _US22 = _US
+    _o22 = (_US22.head, _US22.fp_now, _US22.read_enabled, _US22.query,
+            _US22.submit_rebuild)
+    _subs22 = []
+    try:
+        _H22 = {"gen": 3, "fp": "OLD", "stale": 0, "enabled": 1, "channel": "jd",
+                "mode": "bbcc", "built_at": "2026-11-07 10:00:00", "risk_enabled": 1,
+                "risk_rows": 2, "risk_fp": "OLD", "risk_stat": "bc:1/1/0"}
+        _ROWS22 = [{"kind": "bc", "wtype": "bc", "total": 10, "ok": 8, "low": 2,
+                    "out": 0, "idle": 0, "paused": 0, "code_out": 0}]
+        _RISKROWS22 = [{"dim": "bc", "sku": "S1", "barcode": "", "warehouse": "W",
+                        "product_name": "P", "avail": 5, "ds": 1.0, "adj_dos": 2.0,
+                        "level": "red", "accel": 0}]
+        _US22.head = lambda ch, m=None: dict(_H22)
+        _US22.read_enabled = lambda: True
+        _US22.fp_now = lambda ch, m=None: "OLD"
+        _US22.fp_risk_now = lambda ch, m=None: "OLD"
+        _US22.query = lambda sql, p=None, **k: (_RISKROWS22 if "risk_snapshot" in sql
+                                                else _ROWS22)
+        _US22.one = lambda sql, p=None: {"age_s": 30}
+        _US22.submit_rebuild = lambda ch, m: (_subs22.append((ch, m)) or "started")
+
+        _t22, _s22 = _US22.serve_tally("jd", "bbcc")
+        check("§15.162 serve_tally: fp 命中 → 完整 tally, 无播报, 不触发重建",
+              _t22 and _s22 is None and not _subs22, str(_s22))
+        _US22.fp_now = lambda ch, m=None: "NEW"     # 数据变了 → 失配窗口
+        _t22, _s22 = _US22.serve_tally("jd", "bbcc")
+        check("§15.162 serve_tally: fp 失配 → 返回上一版完整 tally + __swr 显式播报 + 后台补建",
+              _t22 and _t22.get(("bc", "bc"), {}).get("total") == 10
+              and _s22 and _s22.get("state") == "serving_previous"
+              and _s22.get("fp_changed") is True and _s22.get("rebuild") == "started"
+              and _s22.get("freshness_s") == 30, str(_s22))
+        _H22["stale"] = 1
+        _subs22.clear()
+        _t22, _s22 = _US22.serve_tally("jd", "bbcc")
+        check("§15.162 serve_tally: stale=1 → 上一版也不可读, 返回 (None, None) 现算保证完整",
+              _t22 is None and _s22 is None and len(_subs22) == 1, str(_subs22))
+        _H22["stale"] = 0
+        _H22["gen"] = 0
+        _t22, _s22 = _US22.serve_tally("jd", "bbcc")
+        check("§15.162 serve_tally: 从未构建(gen=0) → (None, None) 现算, 后台首建",
+              _t22 is None and _s22 is None and len(_subs22) == 2, str(_subs22))
+        _H22["gen"] = 3
+        _US22.fp_now = lambda ch, m=None: "NEW"
+        _US22.fp_risk_now = lambda ch, m=None: "NEW"
+        _pr22, _sr22 = _US22.serve_risk("jd")
+        check("§15.162 serve_risk: fp 失配 → 上一版完整 payload(计数与明细同 gen) + __swr",
+              _pr22 and _pr22.get("bcTotal") == 1 and len(_pr22.get("bcItems") or []) == 1
+              and _sr22 and _sr22.get("state") == "serving_previous", str(_sr22))
+        _US22.fp_now = lambda ch, m=None: "OLD"
+        _US22.fp_risk_now = lambda ch, m=None: "OLD"
+        _pr22, _sr22 = _US22.serve_risk("jd")
+        check("§15.162 serve_risk: 双指纹全命中 → 正常返回, 无播报",
+              _pr22 and _sr22 is None, str(_sr22))
+    finally:
+        _US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild = _o22
+except Exception as _e35:
+    check("§15.162 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

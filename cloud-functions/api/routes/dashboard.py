@@ -290,6 +290,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
         return _r
 
     _result = _cache_get(_key, _SUMMARY_TTL, _b)
+    # §15.162: SWR 播报 pop 到响应**顶层**, 不进 data 形状; 必须在 part 过滤**之前**
+    #   (part=main/charts 的白名单不认识 __swr)。缓存值内的 __swr 每次读出都被 pop, 无累积。
+    _swr = _result.pop("__swr", None) if isinstance(_result, dict) else None
     # 维护触发: **无论命中与否**都只做一次"要不要起后台线程"的轻判断(限频在 kick 内部),
     #   不再阻塞本次响应。放在缓存之后 → 命中路径也不会因为维护而变慢。
     try:
@@ -307,8 +310,9 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                   "funnel", "period_funnel")
         _keep = _MAIN if part == "main" else _CHART if part == "charts" else None
         if _keep is not None:
-            return ok({k: v for k, v in _result.items() if k in _keep})
-    return ok(_result)
+            return ok({k: v for k, v in _result.items() if k in _keep},
+                      **({"__swr": _swr} if _swr else {}))
+    return ok(_result, **({"__swr": _swr} if _swr else {}))
 
 
 
@@ -492,7 +496,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     # 2026-11-07 P1: 判定读模型可用时, 「库存 9 万行」与「日销切片 6 万行」**根本不取** ——
     #   这两条是 summary 3.8s 里唯一的大头(线上 stmt max=2.07s / bundle 仅 0.88s),
     #   取回来只为了算 10 个整数。命中时并行池只剩 bundle 一路。
-    _t_sum = _store_tally(channel, mode)
+    _t_sum, _swr_tally = _store_tally(channel, mode)
     _store_on = _t_sum is not None
     # 2026-11-06: 8 条查询/6~8 条连接 → 3 条查询/3 条连接。
     #   六个小结果集(agg/recent/brands/flows/counts/cfg)合成 _q_bundle 一条 UNION ALL;
@@ -529,26 +533,29 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
                 _st.get("stmt_max", 0.0), _parts, channel)))
     except Exception:
         pass
+    # §15.162: SWR 播报随结果带回(仍在 cache 值内), 由路由层 pop 到响应顶层
+    if _swr_tally and isinstance(_ass, dict):
+        _ass["__swr"] = _swr_tally
     return _ass
 
 
 def _store_tally(channel, mode):
-    """判定读模型: 命中返回 tally, 未命中返回 None 并起后台补建
+    """判定读模型: 返回 (tally, swr_or_None)
 
+    2026-11-07 P0(§15.162) SWR 一刀 —— 线上实证: fp 失配窗口 summary 冷算 14~19s
+    (_q_inventory 9万行 + _q_digest 6万行回退全量)、boot 24.5~29.0s/502; 命中窗口同样
+    代码只有 0.8~1.0s。现在失配时由 `unit_store.serve_tally` 返回**上一版完整 tally**,
+    `_store_on` 仍为 True → 快路径只跑 bundle, 全量路径不再进请求(红线 6);
+    swr 由路由层 pop 到响应顶层显式播报(准确: 不静默把旧值当新值)。
+    从未构建/上一版不可用才返回 (None, None) → 现算保证完整数据(绝不让卡片清零)。
     两条路径共用 —— `_build_summary_agg`(agg 可用)与 `_build_summary` 的直查降级分支。
-    2026-11-07 教训: 只在 agg 路径接它是不够的。`agg_dirty` 脏标记/重建期间会整体降级直查,
-    那条分支原来没有判定快照 → 一次 sweep 之后卡片又回到 8~10s(线上实测 09:46 后 4.6s,
-    且 `summary agg 计时` 一条日志都不再出现)。判定快照与 agg 无关, 没有理由跟着一起降级。
     """
     try:
         from core import unit_store as _US
-        _t = _US.tally_of(channel, mode)
-        if _t is None:
-            _US.ensure_async()
-        return _t
+        return _US.serve_tally(channel, mode)
     except Exception as _e:
         try_err('dashboard', '判定读模型不可用, 退回现算', _e)
-        return None
+        return None, None
 
 
 def _build_summary(channel, start_date, end_date, mode="bbcc"):
@@ -625,8 +632,13 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
         (channel, days60 + " 00:00:00"))
-    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode,
-                     _t_sum=_store_tally(channel, mode))
+    _t_sum, _swr_tally = _store_tally(channel, mode)
+    _r = _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode,
+                   _t_sum=_t_sum)
+    # §15.162: 直查降级分支同样带回 SWR 播报(判定快照与 agg 无关, 不跟着一起降级)
+    if _swr_tally and isinstance(_r, dict):
+        _r["__swr"] = _swr_tally
+    return _r
 
 
 def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None,
@@ -1028,6 +1040,8 @@ _aux_cache = {}
 _AUX_TTL = 60
 _risk_cache = {}
 _RISK_TTL = 30
+# §15.162: 与 list_store 同源的全局预算等待 —— 2s 快速失败, 不再 15s 排队(等待链收敛)
+_DASH_HEAVY_WAIT = 2.0
 
 
 @router.get("/dashboard/aux")
@@ -1046,15 +1060,29 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
     # 1MB 上限: aux 是"卡片聚合", 正常 30~80KB。超 1MB 说明又有明细列表被误塞进聚合响应,
     #   宁可这次不落缓存(也不至于把 TiDB 单条 6MB 事务打爆 / 让每个请求算两遍)。
     # 2026-11-07 S0 防雪崩: 重计算名额(全局 3) —— 拿不到就返回旧快照, 不再跟别人抢连接。
+    # 2026-11-07 §15.162 P1: 等待 15s → 2s 快速失败(与 insights 系同源); 旧快照带 __swr
+    #   显式播报(不再静默); **无旧值可退时排队现算而不是返回 {}** —— 空结构会让卡片清零
+    #   (完整性缺口, §15.162 排查实证)。
     from db import heavy as _heavy, HeavyBusy as _HeavyBusy
     from routes.analysis_cache import cache_stale as _cache_stale
+
+    def _aux_build():
+        return _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
+                          max_bytes=1024 * 1024)
+
+    _from_stale = False
     try:
-        with _heavy("aux", timeout=15):
-            _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
-                               max_bytes=1024 * 1024)
+        with _heavy("aux", timeout=_DASH_HEAVY_WAIT):
+            _data = _aux_build()
     except _HeavyBusy as _eh:
         try_err('dashboard', 'aux 并发繁忙, 返回旧快照', _eh)
-        _data = _cache_stale(_key) or {}
+        _data = _cache_stale(_key)
+        _from_stale = True
+        if _data is None:
+            # 无旧值可退: 宁可排队现算保证完整数据(宁可慢, 不可错——绝不让卡片清零)
+            _from_stale = False
+            with _heavy("aux", timeout=20):
+                _data = _aux_build()
     # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
     #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
     #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
@@ -1068,7 +1096,13 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
         _data["evaluating"] = bool(int(_pend.get("c") or 0))
     except Exception as _e:
         try_err('dashboard', '重算标记读取降级(不影响主数据)', _e)
-    return ok(_data)
+    # §15.162: SWR 播报 pop 到响应顶层(不进 data 形状); HeavyBusy 退回的 cache_stale 旧值
+    #   无 built_at → freshness_s=-1(未知年龄), 前端按"数据更新中"播报, 不静默。
+    _swr = _data.pop("__swr", None) if isinstance(_data, dict) else None
+    if not _swr and _from_stale and isinstance(_data, dict):
+        _swr = {"state": "serving_previous", "freshness_s": -1,
+                "fp_changed": True, "source": "stale_cache"}
+    return ok(_data, **({"__swr": _swr} if _swr else {}))
 
 
 def _build_aux(channel, mode):
@@ -1179,13 +1213,19 @@ def _build_aux(channel, mode):
         # 线上 aux 冷算因此仍是 4.1~5.5s(slow_request 自报), 是首屏 11s 的一半。
         # 命中条件与 summary 完全一致: fp 相等 + gen 非 0 + 未 stale; 任一不满足就落到原路径。
         from core import unit_store as _US
-        _ov = _US.stock_overview(channel, mode)
+        # 2026-11-07 §15.162 P0 SWR: serve_overview 失配时返回**上一版完整 overview**
+        #   (仍走物化口径, 卡面完整), __swr 随 dict 带回由路由层 pop 到顶层; 后台补建同 key
+        #   去重(与 summary 侧 serve_tally 幂等)。绝不返回空结构。
+        _ov, _swr_ov = _US.serve_overview(channel, mode)
         if _ov is not None:
             so_items = query("SELECT " + _INV_COLS + " FROM inventory "
                              "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
-            return {"out": _ov["out"], "low": _ov["low"], "total": _ov["total"],
+            _blk = {"out": _ov["out"], "low": _ov["low"], "total": _ov["total"],
                     "items": so_items, "bc_out": _ov["bc_out"],
                     "ok": _ov["ok"], "idle": _ov["idle"], "code_out": _ov["code_out"]}
+            if _swr_ov:
+                _blk["__swr"] = _swr_ov
+            return _blk
         _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
                       "available_qty, in_transit_qty, safety_qty, product_name FROM inventory "
                       "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
@@ -1358,20 +1398,35 @@ def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int
                         "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
 
     # 2026-11-07 S0 防雪崩: 与 aux 同一道名额(全局 3), 拿不到返回旧快照 —— 断货卡保持"有数"
+    # 2026-11-07 §15.162 P1: 等待 15s → 2s 快速失败; 旧快照带 __swr 显式播报(不再静默);
+    #   无旧值可退时排队现算而不是返回全 0 空结构(绝不让卡片清零——完整性)。
     from db import heavy as _heavy, HeavyBusy as _HeavyBusy
     from routes.analysis_cache import cache_stale as _cache_stale
+    _EMPTY_RISK = {"items": [], "total": 0, "critical": 0, "warning": 0,
+                   "bcItems": [], "bcTotal": 0, "bcCritical": 0, "bcWarning": 0,
+                   "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
+                   "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
+
+    def _risk_build():
+        return _cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024)
+
     try:
-        with _heavy("stock-risk", timeout=15):
-            return ok(_cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024))
+        with _heavy("stock-risk", timeout=_DASH_HEAVY_WAIT):
+            _r = _risk_build()
     except _HeavyBusy as _eh:
         try_err('dash', 'stock-risk 并发繁忙, 返回旧快照', _eh)
         _st = _cache_stale(_key)
         if _st is not None:
-            return ok(_st)
-        return ok({"items": [], "total": 0, "critical": 0, "warning": 0,
-                   "bcItems": [], "bcTotal": 0, "bcCritical": 0, "bcWarning": 0,
-                   "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
-                   "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0})
+            _swr_st = _st.pop("__swr", None) if isinstance(_st, dict) else None
+            if not _swr_st:
+                _swr_st = {"state": "serving_previous", "freshness_s": -1,
+                           "fp_changed": True, "source": "stale_cache"}
+            return ok(_st, __swr=_swr_st)
+        # 无旧值可退: 宁可排队现算保证完整数据(宁可慢, 不可错——绝不返回全 0 空结构)
+        with _heavy("stock-risk", timeout=20):
+            _r = _risk_build()
+    _swr = _r.pop("__swr", None) if isinstance(_r, dict) else None
+    return ok(_r, **({"__swr": _swr} if _swr else {}))
 
 
 _accel_cache = {}

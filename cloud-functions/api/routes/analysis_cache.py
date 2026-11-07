@@ -244,9 +244,12 @@ def cache_get(key, ttl, builder, max_bytes=None):
         #   连接池没满(12 实例各 1 条连接), 并发 8 也不退化, 所以不是"连接不够";
         #   真正发生的是**同一份结果被并发算了 N 遍**, 每个都在抢同一实例的 CPU。
         #   原注释"并发重复算可接受"只在 build 200ms 时成立; build 4~9s 时它就是雪崩源。
-        #   现在: 拿不到锁就等(最多 12s), 等到就二次读缓存; 等不到返回旧快照快速收尾。
+        #   现在: 拿不到锁就等(最多 2s), 等到就二次读缓存; 等不到返回旧快照快速收尾。
+        #   2026-11-07 §15.162 P1: 12s → 2s —— 线上实证等待链(12s 单飞锁 + 15s heavy 名额)
+        #   是 boot 24.5~29.0s/502 的叠加项; 与 list_store 的 heavy(2s) 快速失败同源收敛,
+        #   等待不创造价值, 只把上游慢放大给同 key 的所有请求。
         _lk = _key_lock(key)
-        _got = _lk.acquire(timeout=12)
+        _got = _lk.acquire(timeout=2)
         if not _got:
             _stale = cache_stale(key)
             try_err('analysis_cache', '单飞等待超时, 返回旧快照[%s]' % str(key)[:60], None)

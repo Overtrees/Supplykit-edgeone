@@ -135,11 +135,16 @@ def head(channel, mode=None):
     return r or None
 
 
-def tally_of(channel, mode=None, gen=None):
+def tally_of(channel, mode=None, gen=None, allow_stale=False):
     """读回 `metrics.tally()` 的结构；`None` = 不可用。
 
-    None 的三种含义（调用方都退回现算, 语义一致）：
-      ① 从未构建过；② fp 已变（源数据变了）；③ 上次重建校验未通过（stale=1）。
+    None 的两种含义（调用方都退回现算, 语义一致）：
+      ① 从未构建过；② 上次重建校验未通过（stale=1）。
+    fp 已变(源数据变了)时: 默认返回 None(宁慢不错, §15.120); 但 `allow_stale=True`
+    时返回**上一版完整快照** —— 这是 2026-11-07 P0 的 SWR 一刀(与 list_store.page_of
+    同一骨架): 失配窗口读侧不再退回"拉 9 万行库存 + 6 万行日销"的全量路径,
+    而是立即拿到上一版完整判定 + 由调用方在响应顶层显式播报新鲜度(绝不静默)。
+    allow_stale 只跳过 fp 比对, gen>0 / stale=0 / enabled 哨兵一字不减(完整性)。
     """
     _m = M.mode_of(channel, mode)
     if not read_enabled():
@@ -149,9 +154,10 @@ def tally_of(channel, mode=None, gen=None):
         return None
     if not int(h.get("enabled") or 0):
         return None          # 双写观察期: 有数据但不读
-    _fp = fp_now(channel, _m)
-    if not _fp or str(h.get("fp") or "") != _fp:
-        return None
+    if not allow_stale:
+        _fp = fp_now(channel, _m)
+        if not _fp or str(h.get("fp") or "") != _fp:
+            return None
     try:
         rows = query("SELECT kind, wtype, total, ok, low, `out`, idle, paused, code_out "
                      "FROM unit_summary WHERE channel=%s AND mode=%s AND gen=%s",
@@ -168,7 +174,7 @@ def tally_of(channel, mode=None, gen=None):
         "code_out": int(r.get("code_out") or 0)} for r in rows}
 
 
-def low_stock_counts(channel, mode=None):
+def low_stock_counts(channel, mode=None, allow_stale=False):
     """低库存卡片的三个数 —— 与 `dashboard` 原实现**同口径**, 只是从物化读
 
     原实现: `counts(judge_units(units(merge_bc=(mode=="bbcc"))), (DIM_BC, DIM_WH))`
@@ -176,7 +182,7 @@ def low_stock_counts(channel, mode=None):
       · traditional → 不建 bc, 逐仓行含全部仓型
     物化表存的是 `with_bc=True, merge_bc=False` 的四种桶, 所以这里用 `roll` 还原同一集合。
     """
-    t = tally_of(channel, mode)
+    t = tally_of(channel, mode, allow_stale=allow_stale)
     if not t:
         return None
     _m = M.mode_of(channel, mode)
@@ -188,7 +194,7 @@ def low_stock_counts(channel, mode=None):
             "total": int(c.get("total") or 0)}
 
 
-def stock_overview(channel, mode=None, bc_limit=100):
+def stock_overview(channel, mode=None, bc_limit=100, allow_stale=False):
     """`/dashboard/aux` 的 stockOverview 三个数 —— 与 `_block_stock_low` **同口径**，从物化读
 
     原来 aux 每次冷算都要 `SELECT 7 列 × 9 万行` + 日销切片 + `units` + `judge_units`,
@@ -197,8 +203,9 @@ def stock_overview(channel, mode=None, bc_limit=100):
     线上实测 aux 冷算 4.1~5.5s（slow_request 自报），切到本函数后只剩两次小查询。
 
     返回 `None` = 不可用（从未构建 / fp 已变 / 校验未过）→ 调用方退回现算。
+    `allow_stale=True`: fp 已变时返回**上一版完整快照**(SWR, 见 tally_of 注释)。
     """
-    t = tally_of(channel, mode)
+    t = tally_of(channel, mode, allow_stale=allow_stale)
     if not t:
         return None
     _m = M.mode_of(channel, mode)
@@ -235,12 +242,14 @@ def stock_overview(channel, mode=None, bc_limit=100):
 _RISK_DIMS = (("bc", "bcItems", "BC"), ("c", "cItems", "C"), ("own", "ownItems", "OWN"))
 
 
-def risk_of(channel, mode=None, full=0, limit=0, offset=0, level=""):
+def risk_of(channel, mode=None, full=0, limit=0, offset=0, level="", allow_stale=False):
     """濒临断货三级（stock-risk）读物化 —— 返回与 `_stock_risk` **逐字段同构**的 payload
 
     `None` = 不可用（从未构建 / fp 已变 / stale / 开关未开 / 查询失败）→ 调用方退回现算。
     ⚠️「真的没有断货」必须返回**合法空 payload**（全 0），不能返回 None ——
        否则每次请求都会退回那个 4.4s 的现算，物化等于白做。
+    `allow_stale=True`: fp 已变时返回**上一版完整快照**(SWR, 见 tally_of 注释) ——
+       双指纹(fp/risk_fp)都只在此前提下跳过, risk_rows>=0 / risk_enabled / stale 哨兵保留。
     """
     _m = M.mode_of(channel, mode)
     if not read_enabled():
@@ -255,17 +264,18 @@ def risk_of(channel, mode=None, full=0, limit=0, offset=0, level=""):
     #   "今天没有断货风险", 比慢 4 秒严重得多。0 是合法值(真的没有断货)。
     if int(h.get("risk_rows", -1)) < 0:
         return None
-    _rfp = fp_risk_now(channel, _m)
-    if not _rfp or str(h.get("risk_fp") or "") != _rfp:
-        # suppliers 等"只影响断货、不影响判定"的域变了 → 这里挡住, 退回现算(慢但新)。
-        #   注意不能拿 unit 的 fp 代替: 判定不看 OTIF, 供应商评分变化时 unit fp 是不动的。
-        return None
-    # unit 的 fp 也要对得上: risk 行与 unit 行是同一次发布写进去的, 只对 risk_fp 不够 ——
-    #   若 unit 侧因数据变更已重建、risk 还没跟上, head.gen 会指向新的 unit gen 而 risk 行是空的,
-    #   读出来就是"0 条断货"。两个指纹都要一致才认。
-    _fp = fp_now(channel, _m)
-    if not _fp or str(h.get("fp") or "") != _fp:
-        return None
+    if not allow_stale:
+        _rfp = fp_risk_now(channel, _m)
+        if not _rfp or str(h.get("risk_fp") or "") != _rfp:
+            # suppliers 等"只影响断货、不影响判定"的域变了 → 这里挡住, 退回现算(慢但新)。
+            #   注意不能拿 unit 的 fp 代替: 判定不看 OTIF, 供应商评分变化时 unit fp 是不动的。
+            return None
+        # unit 的 fp 也要对得上: risk 行与 unit 行是同一次发布写进去的, 只对 risk_fp 不够 ——
+        #   若 unit 侧因数据变更已重建、risk 还没跟上, head.gen 会指向新的 unit gen 而 risk 行是空的,
+        #   读出来就是"0 条断货"。两个指纹都要一致才认。
+        _fp = fp_now(channel, _m)
+        if not _fp or str(h.get("fp") or "") != _fp:
+            return None
     _g = int(h.get("gen"))
     # 2026-11-07 P2 真分页: 弹窗一次只要 300/500 条, 卡片只要各维度 TOP 10。
     #   原来 full=0 也要把 4656 行全查回来再 `[:10]` 切片 —— 897KB/2.2s 里绝大部分是为
@@ -394,6 +404,108 @@ def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=
     except Exception as _e:
         try_err("unit_store", "alert 明细读取降级", _e)
         return None
+
+
+# ── SWR(2026-11-07 P0, §15.162) —— 失配窗口读侧永不回退全量 ────────────────
+# 线上实证(§15.162 排查): 判定读模型 fp 失配窗口内, summary 冷算 14~19s(_q_inventory
+# 9万行 + _q_digest 6万行回退全量)、boot 24.5~29.0s/502; 而 fp 命中窗口同样代码只有 0.8~1.0s。
+# 根治 = 「失配→返回 None→回退全量」改为「失配→返回上一版完整快照→仍走快路径」,
+# 与 list_store(§15.161)同一套已验证骨架:
+#   · allow_stale 只跳过 fp 比对, 完整性哨兵一字不减;
+#   · 后台重建复用 list_store.submit_background(db.heavy 全局预算 + 同 key 单飞, 红线 2/4/5,
+#     不另造队列/worker/租约);
+#   · 新鲜度放响应顶层 __swr(准确: 不静默把旧值当新值); 从未构建/上一版不可用才现算(完整)。
+def swr_meta(channel, mode, h, state):
+    """SWR 新鲜度播报(放响应**顶层**, 不进 data → 形状契约一字不变)。
+
+    freshness_s 用 DB 时间算, 不用 Python 本地时钟(DB 与实例时区可能不同)。
+    """
+    age = -1
+    try:
+        _r = one("SELECT TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s "
+                 "FROM unit_state_head WHERE channel=%s AND mode=%s", [channel, mode])
+        _v = (_r or {}).get("age_s")
+        age = int(_v) if _v is not None else -1
+    except Exception:
+        age = -1
+    return {"state": "serving_previous", "freshness_s": age,
+            "built_at": str(h.get("built_at") or ""), "fp_changed": True,
+            "rebuild": state, "retry_after_ms": 900}
+
+
+def submit_rebuild(channel, mode):
+    """fp 失配/未建时的后台补建 —— 复用 list_store 的分舱单飞(同 key 去重 + heavy 名额)"""
+    try:
+        from core import list_store as _LS
+        _fp = fp_now(channel, mode) or "?"
+        return _LS.submit_background("unit:" + str(channel), str(mode), _fp,
+                                     lambda: build(channel, mode, force=False))
+    except Exception as _e:
+        try_err("unit_store", "后台重建调度降级(%s), 退回裸线程" % channel, _e)
+        try:
+            threading.Thread(target=build, args=(channel, mode), daemon=True).start()
+            return "fallback_thread"
+        except Exception:
+            return "failed"
+
+
+def _swr_prev_ok(h):
+    """head 是否指向一份**完整的上一版**(gen 已切换 + 未置 stale + 读开关开)"""
+    return bool(h and read_enabled() and int(h.get("gen") or 0)
+                and not int(h.get("stale") or 0) and int(h.get("enabled") or 0))
+
+
+def serve_tally(channel, mode=None):
+    """summary 判定读模型的 SWR 入口 → (tally, swr_meta_or_None)
+
+    fp 命中 → (tally, None); 失配但有上一版 → (上一版 tally, swr) + 后台重建;
+    从未构建/上一版不可用 → (None, None) + 后台重建(调用方现算保证完整数据, first_legacy 语义)。
+    """
+    _m = M.mode_of(channel, mode)
+    t = tally_of(channel, _m)
+    if t is not None:
+        return t, None
+    h = head(channel, _m)
+    if _swr_prev_ok(h):
+        _st = submit_rebuild(channel, _m)
+        t = tally_of(channel, _m, allow_stale=True)
+        if t is not None:
+            return t, swr_meta(channel, _m, h, _st)
+    submit_rebuild(channel, _m)
+    return None, None
+
+
+def serve_overview(channel, mode=None):
+    """aux stockOverview 的 SWR 入口 → (overview, swr_meta_or_None), 语义同 serve_tally"""
+    _m = M.mode_of(channel, mode)
+    ov = stock_overview(channel, _m)
+    if ov is not None:
+        return ov, None
+    h = head(channel, _m)
+    if _swr_prev_ok(h):
+        _st = submit_rebuild(channel, _m)
+        ov = stock_overview(channel, _m, allow_stale=True)
+        if ov is not None:
+            return ov, swr_meta(channel, _m, h, _st)
+    submit_rebuild(channel, _m)
+    return None, None
+
+
+def serve_risk(channel, full=0, limit=0, offset=0, level=""):
+    """stock-risk 读物化的 SWR 入口 → (payload, swr_meta_or_None), 语义同 serve_tally"""
+    _m = M.mode_of(channel, None)
+    p = risk_of(channel, _m, full=full, limit=limit, offset=offset, level=level)
+    if p is not None:
+        return p, None
+    h = head(channel, _m)
+    if _swr_prev_ok(h):
+        _st = submit_rebuild(channel, _m)
+        p = risk_of(channel, _m, full=full, limit=limit, offset=offset, level=level,
+                    allow_stale=True)
+        if p is not None:
+            return p, swr_meta(channel, _m, h, _st)
+    submit_rebuild(channel, _m)
+    return None, None
 
 
 # ── 构建 ────────────────────────────────────────────────────────
@@ -737,18 +849,46 @@ def _ensure_all(force=False):
             try_err("unit_store", "重建失败(%s)" % _ch, _e)
 
 
+def _dispatch_rebuilds():
+    """遍历已开启读的渠道, 逐个走分舱单飞后台补建(调用本身已在后台线程)"""
+    for _ch in _channels():
+        try:
+            _m = M.mode_of(_ch)
+            _h = head(_ch, _m)
+            if not _h or not int(_h.get("enabled") or 0):
+                continue
+            submit_rebuild(_ch, _m)
+        except Exception as _e:
+            try_err("unit_store", "重建失败(%s)" % _ch, _e)
+
+
 def ensure_async(force=False):
     """写操作后/读未命中时后台重建 —— 不在响应路径上等它
 
-    重复执行无害(幂等 + `_COOLDOWN`), 实例被冻结也无害(head 未切换 = 旧版本继续生效)。
+    2026-11-07 P0(§15.162): 默认路径改为复用 list_store 的分舱单飞
+    (db.heavy 全局预算 2s 快速失败 + 同 (channel,mode) 去重, 红线 2/4/5) ——
+    不再为每个渠道起裸线程直算全量(那会和读路径的重建互相抢 GIL/RU)。
+    `force=True`(手动强制全量)保留原全渠道线程语义, 仅供诊断/显式重建用。
     """
     try:
-        _t = threading.Thread(target=_ensure_all, args=(force,), daemon=True)
+        if force:
+            _t = threading.Thread(target=_ensure_all, args=(True,), daemon=True)
+        else:
+            _t = threading.Thread(target=_dispatch_rebuilds, daemon=True)
         _t.start()
         return True
     except Exception as _e:
         try_err("unit_store", "重建线程启动降级", _e)
         return False
+
+
+def _cold_stats():
+    """与 list_store 共用的全局分舱单飞计数器快照(status 观测用, 不另造第二套统计)"""
+    try:
+        from core import list_store as _LS
+        return dict(getattr(_LS, "_STATS", {}), inflight=len(getattr(_LS, "_FLIGHTS", {})))
+    except Exception:
+        return {}
 
 
 def status(channel, mode=None):
@@ -783,4 +923,7 @@ def status(channel, mode=None):
             "risk_enabled": int(h.get("risk_enabled") or 0),
             "risk_rows": int(h.get("risk_rows", -1)),
             "risk_rows_actual": _risk_rows,
-            "risk_fp_match": bool(_rfp) and str(h.get("risk_fp") or "") == _rfp}
+            "risk_fp_match": bool(_rfp) and str(h.get("risk_fp") or "") == _rfp,
+            # 冷算治理观测(§15.162): 与 list_store 共用的全局分舱单飞计数器 ——
+            #   started/dedup/done/failed/busy + 在途 inflight。失败/繁忙在本页可查, 不靠猜。
+            "cold": _cold_stats()}
