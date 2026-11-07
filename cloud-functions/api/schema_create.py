@@ -402,6 +402,10 @@ _TABLES = {
         "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
         "gen BIGINT NOT NULL DEFAULT 0, fp VARCHAR(64) NOT NULL DEFAULT '', "
         "units INT NOT NULL DEFAULT 0, alerts INT NOT NULL DEFAULT 0, "
+        # risk_rows: 本轮断货快照写了多少行。**-1 = 本轮没算成**（异常/未计算）。
+        #   读取侧靠它区分「真的没有断货(0)」与「这次没算出来(-1 → 退回现算)」——
+        #   否则一次计算失败会让断货卡显示 0 条, 比慢更糟。
+        "risk_rows INT NOT NULL DEFAULT -1, "
         # enabled 是**读路径开关**: 0 = 只写不读(双写观察期), 1 = 读路径可命中。
         #   放库里的理由: 切换与回滚只需 UPDATE 一行, 不用重新部署(env 是部署时快照)。
         #   环境变量 UNIT_STATE_READ=0 仍可**一刀关闭**(优先于本列), 用于紧急回滚。
@@ -603,7 +607,8 @@ _COLUMN_ADDS = {
     #   risk_enabled 独立于 enabled: 判定物化与断货物化是**两套口径**, 观察期/回滚必须能分开切,
     #   否则一个表校验不过要把另一个也一起退回现算(白慢)。
     "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0"),
-                        ("risk_enabled", "TINYINT NOT NULL DEFAULT 0")],
+                        ("risk_enabled", "TINYINT NOT NULL DEFAULT 0"),
+                        ("risk_rows", "INT NOT NULL DEFAULT -1")],
     # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
     "unit_summary": [("code_out", "INT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
@@ -716,7 +721,9 @@ _COLUMN_ADDS = {
 # v20(2026-11-07 P0): risk_snapshot —— 濒临断货三级(red/orange/yellow)结果物化,
 #   stock-risk 冷算 4.4s 的根因是"为 10 条明细搬 inventory 9 万行 + 日销 12.6 万行"。
 #   独立表/独立开关(unit_state_head.risk_enabled), 不与 unit_alert 混口径。
-SCHEMA_VERSION = 20
+# v21(2026-11-07 P0): unit_state_head.risk_rows —— 区分「真的 0 条断货」与「本轮没算成」。
+#   没有这一列, 一次 risk 计算异常会让卡片显示"0 条断货"(比慢更糟); 有了它, 异常即退回现算。
+SCHEMA_VERSION = 21
 
 
 def table_ddl(name):

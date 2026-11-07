@@ -4218,6 +4218,8 @@ try:
           "risk_snapshot" in _us18 and "risk_enabled" in _us18, "core/unit_store.py")
     check("risk 物化: 排序唯一真源(现算/读回共用 risk_sort_key, 否则两路错位)",
           "def risk_sort_key(" in _sr18 and "risk_sort_key as _rsk" in _us18, "")
+    check("risk 物化: 本轮没算成必须退回现算(risk_rows<0), 不能当'0 条断货'",
+          'int(h.get("risk_rows", -1)) < 0' in _us18, "core/unit_store.py")
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 

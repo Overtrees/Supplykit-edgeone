@@ -224,6 +224,11 @@ def risk_of(channel, mode=None, full=0):
         return None
     if not int(h.get("risk_enabled") or 0):
         return None
+    # risk_rows < 0 = 本轮没算成(异常/未计算) → 必须退回现算。
+    #   这一条是"完整性"的兜底: 没有它, 计算失败会让卡片显示 0 条断货 —— 用户会以为
+    #   "今天没有断货风险", 比慢 4 秒严重得多。0 是合法值(真的没有断货)。
+    if int(h.get("risk_rows", -1)) < 0:
+        return None
     _fp = fp_now(channel, _m)
     if not _fp or str(h.get("fp") or "") != _fp:
         return None
@@ -481,11 +486,14 @@ def _publish(channel, mode, fp, summ, alerts, n_units, risk=None):
     except Exception as _e:
         try_err("unit_store", "risk 发布失败(断货卡退回现算)", _e)
     # ── 唯一切换点 ──
-    execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,stale,note,built_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
+    #   risk_rows: -1 = 本轮断货快照没算成 → 读侧退回现算(宁慢不错)。
+    execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,risk_rows,stale,note,built_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
             "ON DUPLICATE KEY UPDATE gen=VALUES(gen), fp=VALUES(fp), units=VALUES(units), "
-            "alerts=VALUES(alerts), stale=0, note='ok', built_at=VALUES(built_at)",
-            [channel, mode, gen, fp, n_units, len(alerts)])
+            "alerts=VALUES(alerts), risk_rows=VALUES(risk_rows), stale=0, note='ok', "
+            "built_at=VALUES(built_at)",
+            [channel, mode, gen, fp, n_units, len(alerts),
+             -1 if risk is None else len(risk)])
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
     execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen<%s",
@@ -600,5 +608,8 @@ def status(channel, mode=None):
             "fp_head": h.get("fp") or "", "fp_now": _fp,
             "fp_match": bool(_fp) and str(h.get("fp") or "") == _fp,
             "available": _t is not None, "buckets": len(_t or {}),
-            # 断货三级快照(独立开关/独立表): risk_rows=-1 表示查询失败, 0 表示本轮没产出
-            "risk_enabled": int(h.get("risk_enabled") or 0), "risk_rows": _risk_rows}
+            # 断货三级快照(独立开关/独立表): risk_rows 是 head 记录的本轮产出数(-1=没算成),
+            #   risk_rows_actual 是表里实际行数 —— 两者不等说明发布没写完(该报警)。
+            "risk_enabled": int(h.get("risk_enabled") or 0),
+            "risk_rows": int(h.get("risk_rows", -1)),
+            "risk_rows_actual": _risk_rows}
