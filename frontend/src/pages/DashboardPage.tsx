@@ -354,14 +354,16 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   不在那 3 个名额里), 所以只能在**调用侧**错开: 主数据落地后再拉这两条。
   // 现在: boot 先跑完(≈2.5s) → 再拉采购/补货(≈1.4s 并发) → 卡面补齐。总数不变, 峰值降一半。
   const _procKey = useRef('')
-  const _storeLoading = useAppStore(s => s.loading)
+  // 用 dataLoaded(首屏主数据已落地) 而不是 loading:
+  //   loading 初值是 false —— 拿它做门槛等于"一进页面就发", 完全没起到错峰作用(实测仍是并发)。
+  const _storeReady = useAppStore(s => s.dataLoaded)
   useEffect(() => {
-    if (_storeLoading) return // 首屏主数据还在路上, 这时候发只会互相踩
+    if (!_storeReady) return
     const k = channel + '|' + _replMode
     if (_procKey.current === k) return
     _procKey.current = k
     loadProc()
-  }, [channel, _replMode, _storeLoading])
+  }, [channel, _replMode, _storeReady])
   // 2026-11-01 根治「低库存卡明细丢失」: 进入看板即预拉全量告警(limit=20000),
   //   卡面在此之前吃的是 alertsList —— 那是 `/api/alerts` 每组 200 条的**首屏截断快照**,
   //   与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200), 且 id DESC 的前 N 条
