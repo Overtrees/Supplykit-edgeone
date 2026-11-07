@@ -373,20 +373,27 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     from biz.sales import calc_sales_multi
     now = now_cn().replace(tzinfo=None)
 
+    # 2026-11-07: 三个配置项原来是三条独立 `SELECT value ... WHERE key=?` —— 每条都要付
+    #   一次往返(线上固定 0.23s/条)。一次读回本渠道全部配置, 后面纯内存取。
+    _cfg_all = {}
+    try:
+        for _cr in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel]):
+            if _cr.get("key"):
+                _cfg_all[str(_cr["key"])] = _cr.get("value")
+    except Exception as _ecf:
+        try_err('purchase', '滞销配置读取降级', _ecf)
+
     def _cfg_number(key, default):
-        row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
-                  [key, channel])
         try:
-            return int((row or {}).get("value") or default)
+            return int(_cfg_all.get(key) or default)
         except Exception:
             return default
 
     def _cfg_list(key, default):
-        row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
-                  [key, channel])
-        if row and row.get("value"):
+        _v = _cfg_all.get(key)
+        if _v:
             try:
-                d = json.loads(row["value"])
+                d = json.loads(_v)
                 # 空数组视为"未自定义"→ 返回内置默认(避免丢个护家清等品类配置, 全按食品线误判)
                 if isinstance(d, list) and d:
                     return d
@@ -403,44 +410,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                    "FROM products WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s",
                    [channel]):
         products[r.get("sku")] = r
-    # 最后销售日(快照 + 近90天订单) —— 按 69码(2026-11-01)
-    #   原为纯 SKU 级: 多码时冷码行(该码早就没卖过)的 days_zero 被同 SKU 热码的最后销售日
-    #   拉小 → 滞销程度被低估、处置优先级排后。level 判定用的就是 days_zero, 属真判据。
-    #   降级规则: 该码无任何销售记录且档案有码、快照只剩空码组(历史未归码) → 用 SKU 合计;
-    #   其余一律按码(冷码就是 0 天销售, 不拿别的码来顶)
+    # 最后销售日(按 69码) —— 2026-11-07: 改读物化 `sku_sales_stats.last_sale`。
+    #   原来这里扫两遍: `daily_sales_snapshot` 全渠道 GROUP BY(10 万行, 实测 1.28s)
+    #   + 近 90 天 orders GROUP BY(30 万行, 0.73s) —— 表达的都是"这个码最后哪天卖过",
+    #   而物化表里早就有这条(补货/断货读的就是它)。一次物化读同时拿到 ds28 与 last_sale。
+    #   降级规则保持不变: 该码无记录且档案有码、且该 SKU 只有空码组 → 用 SKU 合计。
     last_order = {}      # sku → 最后销售日(所有码合计, 仅无码行/历史未归码降级用)
     last_order_bc = {}   # (sku, 69码) → 最后销售日
     _sku_has_bc = set()  # 该 SKU 存在过非空 69码 的销售记录(用于区分"冷码"与"整体未归码")
-    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, MAX(`date`) AS m "
-                   "FROM daily_sales_snapshot WHERE channel=%s "
-                   "GROUP BY sku, COALESCE(barcode,'')", [channel]):
-        _s0 = str(r.get("sku") or "")
-        _b0 = str(r.get("bc") or "")
-        _m0 = str(r.get("m") or "")[:10]
-        if _b0:
-            _sku_has_bc.add(_s0)
-        if _m0:
-            last_order_bc[(_s0, _b0)] = _m0
-            if _m0 > last_order.get(_s0, ""):
-                last_order[_s0] = _m0
-    # 2026-11-07 P0(去重叠加): 原来这里再扫 **90 天 orders 全量**(线上 30 万行) 重算一遍
-    #   最后销售日 —— 而上面 `daily_sales_snapshot` 已经是同一批订单按天的物化聚合(同样 90 天)。
-    #   两段表达的是同一件事, 后者只是"补物化尚未追平的最近几天"(当天导入/增量重建延迟)。
-    #   现在只补最近 7 天: 数据量与订单总量解耦, 语义不变(更早的日期快照一定有)。
-    cutoff_recent = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    for r in query("SELECT sku, COALESCE(barcode,'') AS bc, MAX(ordered_at) AS m FROM orders "
-                   "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='') "
-                   "GROUP BY sku, COALESCE(barcode,'')", [channel, cutoff_recent + " 00:00:00"]):
-        _s0 = str(r.get("sku") or "")
-        _b0 = str(r.get("bc") or "")
-        mx = str(r.get("m") or "")[:10]
-        if _b0:
-            _sku_has_bc.add(_s0)
-        if mx:
-            if mx > last_order.get(_s0, ""):
-                last_order[_s0] = mx
-            if mx > last_order_bc.get((_s0, _b0), ""):
-                last_order_bc[(_s0, _b0)] = mx
     # 28 天日销 —— SKU 级(降级用) + 按码"sku|69码"(主用)
     # 2026-11-07 P0(去重叠加): 原来这里 `load_daily_sales_grouped(28, 全渠道 1 万 SKU)`
     #   把 28 天快照(约 20 万行)全拉回 Python 再算一遍三窗口 —— 而同一份结果早已物化在
@@ -453,15 +430,25 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     if products:
         from biz.sales import get_sku_sales_stats as _gss_d, WH_C as _WH_C_D
         _rws_d = _gss_d(channel, skus=list(products.keys()), days=28,
-                        barcode="all", fields=("ds28",)) or {}
+                        barcode="all", fields=("ds28", "last_sale")) or {}
         for _rd in _rws_d.values():
+            _sd = str(_rd.get("sku") or "")
+            _bd = str(_rd.get("barcode") or "")
+            # 末销: 跨仓取最大(同一码可能分布在多个仓, 任一仓卖过就算该码卖过)
+            _lsd = str(_rd.get("last_sale") or "")[:10]
+            if _bd:
+                _sku_has_bc.add(_sd)
+                if _lsd and _lsd > last_order_bc.get((_sd, _bd), ""):
+                    last_order_bc[(_sd, _bd)] = _lsd
+            if _lsd and _lsd > last_order.get(_sd, ""):
+                last_order[_sd] = _lsd
+            # 日销只取 __C__(全国 platform 合计) —— 与页面/补货同口径
             if str(_rd.get("warehouse") or "") != _WH_C_D:
                 continue
-            _bd = str(_rd.get("barcode") or "")
             if _bd:
-                daily_bc["%s|%s" % (_rd.get("sku"), _bd)] = float(_rd.get("ds28") or 0)
+                daily_bc["%s|%s" % (_sd, _bd)] = float(_rd.get("ds28") or 0)
             else:
-                daily_map[str(_rd.get("sku"))] = float(_rd.get("ds28") or 0)
+                daily_map[_sd] = float(_rd.get("ds28") or 0)
     # B 仓入库批次(到仓日期)
     b_arrival = {}
     for r in query("SELECT sku, arrival_date FROM purchase_orders "

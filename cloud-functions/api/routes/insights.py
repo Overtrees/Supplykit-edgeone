@@ -104,8 +104,13 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     if search:
         where += " AND (i.sku LIKE %s OR i.product_name LIKE %s)"
         params += ["%%%s%%" % search] * 2
-    total = one("SELECT COUNT(*) AS c FROM inventory i WHERE %s" % where, params) or {}
-    total = int(total.get("c") or 0)
+    # 2026-11-07: page=1 且无搜索时, 下面的全量 summary 本来就要 `COUNT(*)` —— 不再单独算一遍。
+    #   线上固定往返 0.23s/条, 一条也不该白付; 其余情况(搜索/翻页)仍独立 COUNT。
+    _reuse_cnt = bool(page > 0 and page_size > 0 and int(page) <= 1 and not search)
+    total = 0
+    if not _reuse_cnt:
+        _tc = one("SELECT COUNT(*) AS c FROM inventory i WHERE %s" % where, params) or {}
+        total = int(_tc.get("c") or 0)
     # 2026-11-04 补 i.id: 进销存页的批量勾选依赖行主键, 此前 SELECT 未带 id →
     #   前端 x.id 恒为 undefined → indexOf(undefined) 对每行都成立, 点一行等于全选
     #   (视觉全勾、store 里只有 1 条)。id 也是 React key 的唯一来源, 一并能消掉重复 key 警告。
@@ -395,15 +400,23 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                               [channel, wh_type]) or {}
                     _mi, _mo = int(_r0.get("mi") or 0), int(_r0.get("mo") or 0)
                     if wh_type == "own":
-                        _ri = one("SELECT COALESCE(SUM(quantity),0) AS q FROM inbound_records "
-                                  "WHERE channel=%s AND inbound_date>=%s AND inbound_date<%s "
-                                  "AND COALESCE(warehouse_type,'')=%s",
-                                  [channel, month_start, _next_month_start, wh_type]) or {}
-                        _ro = one("SELECT COALESCE(SUM(quantity),0) AS q FROM outbound_records "
-                                  "WHERE channel=%s AND outbound_date>=%s AND outbound_date<%s "
-                                  "AND COALESCE(warehouse_type,'')=%s",
-                                  [channel, month_start, _next_month_start, wh_type]) or {}
-                        _mi, _mo = int(_ri.get("q") or 0), int(_ro.get("q") or 0)
+                        # 入/出合并一条 UNION ALL(省一次固定往返 0.23s), 分子查询各走原索引
+                        _rmv = query(
+                            "SELECT 'in' AS k, COALESCE(SUM(quantity),0) AS q FROM inbound_records "
+                            "WHERE channel=%s AND inbound_date>=%s AND inbound_date<%s "
+                            "AND COALESCE(warehouse_type,'')=%s "
+                            "UNION ALL "
+                            "SELECT 'out' AS k, COALESCE(SUM(quantity),0) AS q FROM outbound_records "
+                            "WHERE channel=%s AND outbound_date>=%s AND outbound_date<%s "
+                            "AND COALESCE(warehouse_type,'')=%s",
+                            [channel, month_start, _next_month_start, wh_type]
+                            + [channel, month_start, _next_month_start, wh_type])
+                        _mi = _mo = 0
+                        for _rx in _rmv:
+                            if _rx.get("k") == "in":
+                                _mi = int(_rx.get("q") or 0)
+                            else:
+                                _mo = int(_rx.get("q") or 0)
                     # 2026-11-04 合计与行值同口径: 先把该维度所有 SKU 的期初/月入/月出分别求和,
                     #   再除一次(期间天数 × Σ(期初+月入) / Σ月出); 不是各行天数的算术平均
                     return {"cnt": int(_r0.get("c") or 0), "beg": int(_r0.get("beg") or 0),
@@ -412,8 +425,17 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                             "pd": _period_days}
                 # 缓存键带 pd: 期间天数逐日变(当月未满用已过天数), 不带就会拿昨天的天数算今天
                 _sum = _cg("inv_sum|%s|%s|%s" % (channel, wh_type, _period_days), 60, _build_sum)
+                if _reuse_cnt and _sum and _sum.get("cnt") is not None:
+                    total = int(_sum["cnt"])   # 与 summary 同一次 COUNT, 不再单发
             except Exception as _es:
                 try_err('insights', '进销存全量汇总降级', _es)
+            if _reuse_cnt and not _sum:
+                # summary 不可用(缓存读写失败) → 退回独立 COUNT, 不能让分页总数变 0
+                try:
+                    total = int((one("SELECT COUNT(*) AS c FROM inventory i WHERE %s" % where,
+                                     params) or {}).get("c") or 0)
+                except Exception as _et:
+                    try_err('insights', '进销存总数兜底降级', _et)
         return ok({"items": items, "total": total, "page": page, "page_size": page_size,
                    "summary": _sum, "period_days": _period_days, "month_days": _month_days,
                    "is_open": _is_open,

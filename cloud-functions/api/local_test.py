@@ -3044,8 +3044,12 @@ try:
     _ins = open("routes/insights.py").read()
     check("账期: 自有仓当月量缺流水按 0, 不回落静态列(防跨月串号)",
           "month_inbound = mi if mi is not None else 0" in _ins, "routes/insights.py")
+    # 2026-11-07: 入/出两条合并成一条 UNION ALL(省一次固定往返), 判据改为"两条记录集都在、
+    #   结果按 k 分流进 mi/mo" —— 仍必须是流水现算, 不许退回 SUM 静态列。
     check("账期: 进销存汇总的自有仓月入出按流水现算(不 SUM 静态列)",
-          'inbound_records "' in _ins and '_ri.get("q")' in _ins, "routes/insights.py")
+          'inbound_records "' in _ins and "outbound_records " in _ins
+          and '_rx.get("k") == "in"' in _ins and '"0 AS mi, 0 AS mo' in _ins,
+          "routes/insights.py")
     # 2026-11-05 平台仓/ B 仓解绑(用户定案: 该维度不需要当月入出):
     #   两列在平台仓没有任何消费方(页面列集无 / 导出只对 own / 周转列只在 own),
     #   读进来只会让 API 返回一个"看起来是真值"的快照数。
