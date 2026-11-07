@@ -231,12 +231,17 @@ def risk_of(channel, mode=None, full=0):
     try:
         rows = query(
             "SELECT dim, sku, barcode, warehouse, product_name, avail, ds, adj_dos, level, accel "
-            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s "
-            "ORDER BY dim, FIELD(level,'red','orange','yellow'), adj_dos",
+            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s",
             [channel, _m, _g]) or []
     except Exception as _e:
         try_err("unit_store", "risk 读取降级", _e)
         return None
+    # 排序交给 `risk_sort_key`（现算/物化唯一真源），不交给 SQL：
+    #   MySQL collation 与 Python 码位序不一致，同一批 SKU 格式不统一就会错位。
+    try:
+        from routes.dashboard_stock_risk import risk_sort_key as _rsk
+    except Exception:
+        _rsk = None
     buckets = {"bc": [], "c": [], "own": []}
     for r in rows:
         _d = str(r.get("dim") or "")
@@ -256,6 +261,8 @@ def risk_of(channel, mode=None, full=0):
     out = {"items": [], "total": 0, "critical": 0, "warning": 0}
     for _d, _k, _t in _RISK_DIMS:
         _it = buckets[_d]
+        if _rsk is not None:
+            _it.sort(key=_rsk)
         out[_k] = _it if full else _it[:10]
         out[_d + "Total"] = len(_it)
         out[_d + "Critical"] = sum(1 for x in _it if x["level"] == "red")

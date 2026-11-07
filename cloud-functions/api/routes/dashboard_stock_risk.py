@@ -40,6 +40,24 @@ def _grade_risk(adj_dos, buffer, lit, orange_slack=1.0, buffer_orange=1.2, buffe
     if buffer <= buffer_yellow:
         return True, "yellow"
     return False, None
+_RISK_LV = {"red": 0, "orange": 1, "yellow": 2}
+
+
+def risk_sort_key(x):
+    """断货行排序**唯一真源** —— 现算(Python)与物化(读回后)必须同序
+
+    2026-11-07 P0: 原来排序 key 只有 (level, days_to_empty), 同值行顺序取决于 dict 插入序
+    (inventory 的物理返回序, TiDB 不保证稳定) —— 同一份数据两次请求顺序可能不同;
+    物化后读侧若是 SQL 排序, 又与 Python 稳定排序对不上, 双路对账会报"每行都不同"
+    (实测 jd full=1 报 17616 条, 全是错位不是数值差)。补 (sku, barcode, warehouse) 成全序。
+
+    为什么不交给 SQL 排: MySQL 的 collation('-','_' 视为等价/忽略重音) 与 Python 的码位序
+    不一致, 同一批 SKU 只要格式不统一就会错位。排序放在 Python, 两路共用这一个函数。
+    """
+    return (_RISK_LV.get(x.get("level"), 9), x.get("days_to_empty") or 0,
+            x.get("sku") or "", x.get("barcode") or "", x.get("warehouse") or "")
+
+
 def _risk_compare(channel, full: int = 0):
     """双写期对账：现算(legacy) vs 物化，逐字段比 —— 切换开关前的 0 差异证明
 
@@ -354,10 +372,10 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False):
         warn = sum(1 for i in items if i.get("level") == "orange")
         return len(items), crit, warn
 
-    _lv = {"red": 0, "orange": 1, "yellow": 2}
-    bc_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
-    c_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
-    own_items.sort(key=lambda x: (_lv.get(x.get("level"), 9), x["days_to_empty"]))
+    # 2026-11-07 P0: 排序统一走 risk_sort_key(现算/物化两路唯一真源)
+    bc_items.sort(key=risk_sort_key)
+    c_items.sort(key=risk_sort_key)
+    own_items.sort(key=risk_sort_key)
     bt, bc, bw = _stats(bc_items)
     ct, cc, cw = _stats(c_items)
     ot, oc, ow = _stats(own_items)

@@ -4216,6 +4216,8 @@ try:
           "_stock_risk(channel, full=1, legacy=True)" in _us18, "core/unit_store.py")
     check("risk 物化: 与 unit_alert 分表分开关(两套口径不混)",
           "risk_snapshot" in _us18 and "risk_enabled" in _us18, "core/unit_store.py")
+    check("risk 物化: 排序唯一真源(现算/读回共用 risk_sort_key, 否则两路错位)",
+          "def risk_sort_key(" in _sr18 and "risk_sort_key as _rsk" in _us18, "")
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 
