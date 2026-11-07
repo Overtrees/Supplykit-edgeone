@@ -415,6 +415,7 @@ def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=
 #   · 后台重建复用 list_store.submit_background(db.heavy 全局预算 + 同 key 单飞, 红线 2/4/5,
 #     不另造队列/worker/租约);
 #   · 新鲜度放响应顶层 __swr(准确: 不静默把旧值当新值); 从未构建/上一版不可用才现算(完整)。
+_SWR_SERVED = {"served": 0}   # 观测: 三个 serve_* 入口实际走了 SWR 播报的次数
 def swr_meta(channel, mode, h, state):
     """SWR 新鲜度播报(放响应**顶层**, 不进 data → 形状契约一字不变)。
 
@@ -470,6 +471,7 @@ def serve_tally(channel, mode=None):
         _st = submit_rebuild(channel, _m)
         t = tally_of(channel, _m, allow_stale=True)
         if t is not None:
+            _SWR_SERVED["served"] += 1
             return t, swr_meta(channel, _m, h, _st)
     submit_rebuild(channel, _m)
     return None, None
@@ -486,6 +488,7 @@ def serve_overview(channel, mode=None):
         _st = submit_rebuild(channel, _m)
         ov = stock_overview(channel, _m, allow_stale=True)
         if ov is not None:
+            _SWR_SERVED["served"] += 1
             return ov, swr_meta(channel, _m, h, _st)
     submit_rebuild(channel, _m)
     return None, None
@@ -503,6 +506,7 @@ def serve_risk(channel, full=0, limit=0, offset=0, level=""):
         p = risk_of(channel, _m, full=full, limit=limit, offset=offset, level=level,
                     allow_stale=True)
         if p is not None:
+            _SWR_SERVED["served"] += 1
             return p, swr_meta(channel, _m, h, _st)
     submit_rebuild(channel, _m)
     return None, None
@@ -886,9 +890,10 @@ def _cold_stats():
     """与 list_store 共用的全局分舱单飞计数器快照(status 观测用, 不另造第二套统计)"""
     try:
         from core import list_store as _LS
-        return dict(getattr(_LS, "_STATS", {}), inflight=len(getattr(_LS, "_FLIGHTS", {})))
+        return dict(getattr(_LS, "_STATS", {}), inflight=len(getattr(_LS, "_FLIGHTS", {})),
+                    unit_swr_served=_SWR_SERVED["served"])
     except Exception:
-        return {}
+        return {"unit_swr_served": _SWR_SERVED["served"]}
 
 
 def status(channel, mode=None):

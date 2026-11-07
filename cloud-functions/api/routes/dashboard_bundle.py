@@ -69,13 +69,12 @@ def dashboard_boot(channel: str = "jd", mode: str = "", page: int = 1, page_size
         try:
             _r = _fn(**kw)
             # 各路由返回 {ok, data}; 这里解包成前端直接可用的结构, 与单独请求的 response.data 同形
+            # 2026-11-07 §15.162 P2: 子项冷态 SWR 的播报在 ok() 包装的**响应顶层**
+            #   (不在 data 里 —— data 形状契约不变), 必须从包装层取, 再冒泡到聚合顶层。
+            _s = (_r or {}).get("__swr") if isinstance(_r, dict) else None
             _d = (_r or {}).get("data") if isinstance(_r, dict) and "data" in _r else _r
-            # 2026-11-07 §15.162 P2: 子项冷态 SWR 的播报冒泡到聚合顶层 —— 子项 data
-            #   里的 __swr 在这里摘掉, 前端拿到的 data 与单独请求完全同形
-            if isinstance(_d, dict):
-                _s = _d.pop("__swr", None)
-                if _s:
-                    _swrs[_name] = _s
+            if _s:
+                _swrs[_name] = _s
             _res[_name] = _d
         except Exception as _e:
             _res[_name] = None

@@ -4724,8 +4724,8 @@ try:
           and "_r.pop(\"__swr\", None)" in _dashsrc, "routes/dashboard.py")
     check("§15.162 stock_risk 读侧 SWR: serve_risk 返回上一版并带 __swr, 对账 legacy 不 SWR",
           "_US.serve_risk(" in _dsrsrc and 'if not legacy:' in _dsrsrc, "dashboard_stock_risk.py")
-    check("§15.162 boot 把子项 __swr 冒泡到聚合顶层, 子项 data 形状逐字不变",
-          '_d.pop("__swr", None)' in _bundlesrc
+    check("§15.162 boot 把子项 __swr 冒泡到聚合顶层(从 ok 包装层取, data 形状逐字不变)",
+          '__swr") if isinstance(_r, dict) else None' in _bundlesrc
           and '"parts": _swrs' in _bundlesrc
           and '"state": "serving_previous"' in _bundlesrc, "routes/dashboard_bundle.py")
 
