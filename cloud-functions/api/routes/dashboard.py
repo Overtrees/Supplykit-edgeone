@@ -492,17 +492,8 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     # 2026-11-07 P1: 判定读模型可用时, 「库存 9 万行」与「日销切片 6 万行」**根本不取** ——
     #   这两条是 summary 3.8s 里唯一的大头(线上 stmt max=2.07s / bundle 仅 0.88s),
     #   取回来只为了算 10 个整数。命中时并行池只剩 bundle 一路。
-    _t_sum = None
-    _store_on = False
-    try:
-        from core import unit_store as _US
-        if _US.read_enabled():
-            _t_sum = _US.tally_of(channel, mode)
-            _store_on = _t_sum is not None
-            if not _store_on:
-                _US.ensure_async()          # 未命中: 后台补建, 本次仍走原路径(慢但正确)
-    except Exception as _eu:
-        try_err('dashboard', '判定读模型不可用, 退回现算', _eu)
+    _t_sum = _store_tally(channel, mode)
+    _store_on = _t_sum is not None
     # 2026-11-06: 8 条查询/6~8 条连接 → 3 条查询/3 条连接。
     #   六个小结果集(agg/recent/brands/flows/counts/cfg)合成 _q_bundle 一条 UNION ALL;
     #   两个大结果集(库存 9 万行 / 日销切片 6 万行)各自独立并行 —— 它们才是传输大头, 不便合并。
@@ -539,6 +530,25 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
     except Exception:
         pass
     return _ass
+
+
+def _store_tally(channel, mode):
+    """判定读模型: 命中返回 tally, 未命中返回 None 并起后台补建
+
+    两条路径共用 —— `_build_summary_agg`(agg 可用)与 `_build_summary` 的直查降级分支。
+    2026-11-07 教训: 只在 agg 路径接它是不够的。`agg_dirty` 脏标记/重建期间会整体降级直查,
+    那条分支原来没有判定快照 → 一次 sweep 之后卡片又回到 8~10s(线上实测 09:46 后 4.6s,
+    且 `summary agg 计时` 一条日志都不再出现)。判定快照与 agg 无关, 没有理由跟着一起降级。
+    """
+    try:
+        from core import unit_store as _US
+        _t = _US.tally_of(channel, mode)
+        if _t is None:
+            _US.ensure_async()
+        return _t
+    except Exception as _e:
+        try_err('dashboard', '判定读模型不可用, 退回现算', _e)
+        return None
 
 
 def _build_summary(channel, start_date, end_date, mode="bbcc"):
@@ -615,7 +625,8 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
         "FROM orders WHERE channel=%%s AND (deleted_at IS NULL OR deleted_at='') AND ordered_at >= %%s "
         "GROUP BY DATE(ordered_at), order_status, store" % (_status_cond(), _status_cond()),
         (channel, days60 + " 00:00:00"))
-    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode)
+    return _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode,
+                     _t_sum=_store_tally(channel, mode))
 
 
 def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None,
