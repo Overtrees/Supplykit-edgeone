@@ -9,12 +9,9 @@ from core.note_segs import zh_note  # 2026-11-04 结构化备注: segs 单一真
 
 router = APIRouter(tags=["insights"])
 
-from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
-_register_cache(lambda: _repl_cache.clear())
-
-
-_repl_cache = {}
-_REPL_TTL = 300
+# 2026-11-07 P0: 补货建议改走 `core/list_store` 域指纹物化 —— 旧的 300s 表缓存
+#   （页级 → 全量分块 → builder）已整体删除, 不再在请求路径同步全量现算（红线 2 / 6）。
+#   线上基线: 热 min 0.666s, 但 TTL 到点/写操作后的第一个请求 8.815s。
 # 需求门控阈值: 日销低于此值(近28天不足 2.8 件)视为无实际需求——无需求时库存不会被消耗,
 # 安全线缺口不触发补货(安全线是需求波动的缓冲; 参考 bbcc 无需求不补的驱动语义)
 _MIN_DS = 0.1
@@ -24,40 +21,39 @@ _MIN_DS = 0.1
 @traced
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
                                   channel: str = "jd", page: int = 0, page_size: int = 0,
-                                  search: str = "", need_only: int = 0):
-    """补货建议(300s 共享表缓存分页——TiDB 表跨实例一致——降 RU): mode=bbcc/traditional
+                                  search: str = "", need_only: int = 0,
+                                  legacy: int = 0, state: int = 0, force: int = 0):
+    """补货建议(域指纹物化 + 后台重建, 见 core/list_store.py): mode=bbcc/traditional
 
-    2026-11-06 缓存粒度改为一页一条(与 purchase 同因同治, 见 core/list_page.py):
-      原来缓存里存**全量**(实测 5 万+ 行 / 6,835,645 B)→ 超 TiDB 单条 6,291,456 B 上限 →
-      `cache_put` 抛 8025 → **这份结果从来没进过缓存** → 每个请求都全量重算。
-      线上日志可证: 13:30 / 13:36 的 8025 size 恒为 6835645(与 purchase 的 5.93MB 不是同一条),
-      而 purchase 修好后 8025 仍在, 说明漏了这一处。
-    现在缓存键带 `need_only|search|page|page_size`, 每条只是当前页, 天然不会撞上限。
-    `_build_repl` 算法一个字没动; 不传 page/page_size 与旧版行为一致(无分页裸调仍截断 2000)。
+    2026-11-07 P0 根治「读时全量现算 + TTL 300s 表缓存」:
+      旧路径每 300s 到点(哪怕没有写操作)就由下一个请求在**请求路径**同步跑
+      `_build_repl`(全量读 inventory + 算 5 万行) → 线上首次 8.815s。
+      缓存失效打墓碑时同样刺穿, 所以「改一次配置、下一个用户等 8 秒」。
+    现在: 请求路径只读 list_snapshot 按 seq 的一页 + head 计数; 重建在后台线程,
+      由 data_version_dom 域计数 fp 驱动(**无 TTL**), 算完核对行数/need 数才切 head。
+      fp 不命中 → 退回现算(慢但正确, 不返回旧值) + 起后台重建。
+
+    形状契约**不变**: 无分页裸调 data 是列表(截断 2000, 导出/内部调用方按列表读);
+    分页返回 {items,total,page,page_size}。`_build_repl` 算法一个字没动。
+    `legacy=1` 强制现算(线上逐字段对账用), `state=1` 返回物化四维诊断,
+    `force=1` 同步重建并回四维状态(部署后预热/对账用, 属诊断口非常态读路径)。
     """
-    from core.list_page import shape_cached as _shape_cached
+    from core import list_store as _LS
     _base = "repl|%s|%s|%s|%s" % (channel, mode, days, source)
-    _no_page = page <= 0 or page_size <= 0
-    if _no_page:
-        # 无分页裸调: **保持旧契约 —— data 直接是列表**(导出/内部调用方/回归用例都按列表读)。
-        #   2026-11-06 提醒: 第一版改动把这里也换成了 {items,total}, 直接把 local_test
-        #   「replenish 返回列表」打红 —— 形状是契约, 不是实现细节。
-        #   截断 2000 仍保留(全量 5 万+ 行会被 EdgeOne 网关 413 拦)。
-        #   分片缓存照用: 裸调就是 page=0/page_size=0 那一片, 自身也只有 ≤2000 行。
-        _d = _shape_cached(_base, lambda: _build_repl(channel, mode), _cache_get, _REPL_TTL,
-                           need_only=need_only, search=search,
-                           page=0, page_size=0,
-                           max_bytes=2 * 1024 * 1024,
-                           need_keys=("suggested_qty", "b_suggested"),
-                           out_key="items")
+    if state or force:
+        if force:
+            _LS.register_scope("repl", _base, channel, mode, days, source)
+            _rb = _LS.build("repl", _base, force=True)
+            return ok({"rebuild": _rb, "state": _LS.status("repl", _base)})
+        return ok(_LS.status("repl", _base))
+    _d = _LS.serve("repl", _base, channel, mode, days, source,
+                   lambda: _build_repl(channel, mode),
+                   need_only=need_only, search=search,
+                   page=page, page_size=page_size, legacy=legacy)
+    if page <= 0 or page_size <= 0:
+        # 无分页裸调: 形状是契约(见 §15.153 打红教训), 截断 2000 防 EdgeOne 网关 413
         _items = (_d.get("items") if isinstance(_d, dict) else None) or []
         return ok(_items[:2000])
-    _d = _shape_cached(_base, lambda: _build_repl(channel, mode), _cache_get, _REPL_TTL,
-                       need_only=need_only, search=search,
-                       page=page, page_size=page_size,
-                       max_bytes=2 * 1024 * 1024,
-                       need_keys=("suggested_qty", "b_suggested"),
-                       out_key="items")
     return ok(_d)
 
 

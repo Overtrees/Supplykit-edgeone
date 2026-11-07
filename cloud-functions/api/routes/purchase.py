@@ -11,9 +11,8 @@ from db import query, one, execute, executemany
 from routes.common import ok, fail, traced, try_err
 router = APIRouter(tags=["purchase"])
 
-from routes.analysis_cache import register as _register_cache, cache_get as _cache_get
 from routes.purchase_calc import _build_purchase
-_register_cache(lambda: _purchase_cache.clear())
+# 2026-11-07 P0: 采购建议改走 core/list_store 域指纹物化 —— 旧的 300s 表缓存注册已删除。
 
 
 # ── 已下单标记(purchase-orders) ─────────────────────────────────────────
@@ -86,34 +85,37 @@ async def update_purchase_order(pid: int, request: Request):
 
 
 # ── 采购建议(insights/purchase) ─────────────────────────────────────────
-_purchase_cache = {}
-_PURCHASE_TTL = 300
-
-
 @router.get("/insights/purchase")
 @traced
 def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd",
                          search: str = "", need_only: int = 0,
-                         page: int = 0, page_size: int = 0):
-    """采购建议(300s 共享表缓存): 系统总库存+供应商级参数+目标周转+采购告警
+                         page: int = 0, page_size: int = 0,
+                         legacy: int = 0, state: int = 0, force: int = 0):
+    """采购建议(域指纹物化 + 后台重建, 见 core/list_store.py)
 
-    2026-11-06 分页(治队头阻塞): 原来一次返回 9,684 条 / 5.93MB(TiDB 单条上限 6MB → 缓存
-    永远写不进去 → 每请求全量重算 → 同实例其它请求排队)。
+    2026-11-07 P0 根治「读时全量现算 + TTL 300s 表缓存」:
+      旧路径 TTL 到点(无写操作)或 invalidate 打墓碑, 就由下一个请求在请求路径
+      同步跑 `_build_purchase`(9,684 条 / 5.93MB) → 线上首次 5.015s。
+    现在请求路径只读 list_snapshot 按 seq 的一页 + head 计数, 重建在后台由域计数
+      fp 驱动(无 TTL), 发布前核对行数/need 数; fp 不命中才退回现算(慢但正确)。
 
-    **缓存粒度 = 一页一条**(v2, 见 core/list_page.py 的演进说明):
-      第一版把全量存进缓存、只切响应 —— 出网字节降了 140 倍, 但 `cache_put` 存的仍是
-      5.93MB, 8025 照旧, 耗时纹丝不动。现在缓存键带 `need_only|search|page|page_size`,
-      每条只是当前页(size×≈800B), 真正能落库。
-    · 不传 page/page_size 时行为与旧版完全一致(导出/内部调用方零改动)
-    · total 是**收窄后**的总数, 前端"已加载 N/total"与触底加载不受截断影响
+    形状契约不变: 始终返回 {suggestions,total,page,page_size}; 无分页裸调返回全量
+    (导出/内部调用方零改动)。`_build_purchase` 算法一个字没动。
+    `legacy=1` 强制现算(线上对账用), `state=1` 返回物化四维诊断,
+    `force=1` 同步重建并回四维状态(部署后预热/对账用, 属诊断口非常态读路径)。
     """
-    from core.list_page import shape_cached as _shape_cached
+    from core import list_store as _LS
     _base = "purchase|%s|%s|%s" % (channel, mode, days)
-    _d = _shape_cached(_base,
-                       lambda: _build_purchase(channel, mode, days),
-                       _cache_get, _PURCHASE_TTL,
-                       need_only=need_only, search=search,
-                       page=page, page_size=page_size)
+    if state or force:
+        if force:
+            _LS.register_scope("purchase", _base, channel, mode, days, "")
+            _rb = _LS.build("purchase", _base, force=True)
+            return ok({"rebuild": _rb, "state": _LS.status("purchase", _base)})
+        return ok(_LS.status("purchase", _base))
+    _d = _LS.serve("purchase", _base, channel, mode, days, "",
+                   lambda: _build_purchase(channel, mode, days),
+                   need_only=need_only, search=search,
+                   page=page, page_size=page_size, legacy=legacy)
     return ok(_d)
 
 

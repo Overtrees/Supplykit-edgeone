@@ -511,6 +511,34 @@ _TABLES = {
         "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, PRIMARY KEY (channel))"
     ),
+    # 2026-11-07 P0: 补货/采购建议行「域指纹物化」—— 见 core/list_store.py。
+    #   旧路径是「读时全量现算 + TTL 300s 表缓存」: TTL 到点(**无写操作**)或 invalidate 打墓碑,
+    #   下一个请求就在请求路径里同步跑 builder() → 线上首次 8.8s / 5.0s。
+    #   物化后请求路径只剩按 seq 读一页 + head 计数; 重建在后台, 由域计数 fp 驱动(无 TTL)。
+    #   payload 用 MEDIUMTEXT 存整行 JSON: 补货/采购每行几十列且随算法演进, 摊成列会让
+    #   "加一个字段就要改表 + 迁移"。检索列(sku/product_name/barcode/need)单独落, 供
+    #   need_only / search / 分页在 SQL 侧完成, 读路径不搬全量(红线 6)。
+    "list_snapshot": (
+        "CREATE TABLE IF NOT EXISTS list_snapshot ("
+        "kind VARCHAR(12) NOT NULL, scope VARCHAR(96) NOT NULL, gen BIGINT NOT NULL, "
+        "seq INT NOT NULL, need TINYINT NOT NULL DEFAULT 0, "
+        "sku VARCHAR(80) NOT NULL DEFAULT '', product_name VARCHAR(255) NOT NULL DEFAULT '', "
+        "barcode VARCHAR(40) NOT NULL DEFAULT '', payload MEDIUMTEXT NOT NULL, "
+        "PRIMARY KEY (kind, scope, gen, seq), "
+        "KEY idx_list_need (kind, scope, gen, need, seq))"
+    ),
+    "list_head": (
+        "CREATE TABLE IF NOT EXISTS list_head ("
+        "kind VARCHAR(12) NOT NULL, scope VARCHAR(96) NOT NULL, "
+        "channel VARCHAR(16) NOT NULL DEFAULT 'jd', mode VARCHAR(16) NOT NULL DEFAULT '', "
+        "days INT NOT NULL DEFAULT 0, source VARCHAR(32) NOT NULL DEFAULT '', "
+        "gen BIGINT NOT NULL DEFAULT 0, fp VARCHAR(64) NOT NULL DEFAULT '', "
+        # row_cnt = -1 哨兵: 本轮没算成(异常/未计算) ≠ 真的是 0 条(红线 8①)。
+        "row_cnt INT NOT NULL DEFAULT -1, need_cnt INT NOT NULL DEFAULT 0, "
+        "timing VARCHAR(255) NOT NULL DEFAULT '', "
+        "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
+        "built_at DATETIME(6) NULL, PRIMARY KEY (kind, scope))"
+    ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
     #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的
@@ -797,7 +825,12 @@ _COLUMN_ADDS = {
 #   /dashboard/own-health 每页 1.92s、翻第 2 页还是 1.92s: 它每页都把 1.4 万条从头算一遍。
 #   debug 分段证明慢在三次取数(库存聚合 0.9s + 下游日销 0.59s + 批次效期 0.59s), 不在 Python。
 #   物化后一页只读 200 行 + head 里的 9 个计数。
-SCHEMA_VERSION = 25
+# v26(2026-11-07 P0): list_snapshot / list_head —— 补货/采购建议行域指纹物化。
+#   repl 热 0.666s 但首次 8.815s、purchase 热 0.764s 但首次 5.015s: 根因是 TTL 300s
+#   表缓存让"没写操作"也周期性在请求路径全量现算。物化后读侧按 seq 分页 + head 计数,
+#   重建由 data_version_dom 域计数驱动(无 TTL), 后台执行; LIST_READ=0 可秒级回滚。
+#   payload 存整行 JSON, 检索列单独落以支持 need_only/search 的 SQL 下推。
+SCHEMA_VERSION = 26
 
 
 def table_ddl(name):

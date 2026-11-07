@@ -119,6 +119,9 @@ def cache_put(key, value, tok=None, raw=False):
 _CALC_INFLIGHT = {}
 
 
+# 2026-11-07 §15.159: 下面两个纯读探测工具原本服务于 list_page 的「全量分块缓存」,
+#   该层已随补货/采购改为域指纹物化而整体删除（见 core/list_store.py）。
+#   目前无调用方; 保留为通用只读探测 API（不参与任何请求路径, 不构成两套机制并存）。
 def cache_peek(key, ttl):
     """**只读**缓存: 命中(TTL 内且值可用) → (True, value); 否则 (False, None)
 
@@ -468,12 +471,18 @@ def invalidate(*domains):
             #   只 bump 判定域的话,"改了供应商评分"会静默不生效(卡片还是旧的可撑天数)。
             #   代价: 供应商评分变化会触发一次完整重建(约 30s, 后台线程, 旧 gen 继续服务);
             #   该操作是手工维护、频率极低, 用一点点后台算力换"改了就生效"。
-            _udoms = (set(_US.RISK_DOMAINS) if _wipe
-                      else (set(_doms) & set(_US.RISK_DOMAINS)))
+            # 2026-11-07 P0(本轮): 再从 RISK_DOMAINS 扩到**全部已知域**。
+            #   data_version_dom 语义本就是「每个域的变更次数」, 原来只为判定读模型服务,
+            #   漏了 purchases / flows —— list_store 里 purchase 的 fp 读
+            #   data_version_dom.purchases 恒为 0, 「改了采购单、采购建议不刷新」会静默发生
+            #   (红线 8②: fp 必须覆盖全部输入域)。多记其它域不影响 unit_store 的 fp(它只读自己那几个)。
+            _all_doms = set(_KNOWN_DOMAINS) | set(_US.RISK_DOMAINS)
+            _udoms = _all_doms if _wipe else (set(_doms) & _all_doms)
             for _dm in sorted(_udoms):
                 _e("INSERT INTO data_version_dom(dom, v) VALUES(%s,1) "
                    "ON DUPLICATE KEY UPDATE v=v+1", [_dm])
-            if _udoms:
+            # 只有判定域真变了才重建判定模型 —— 改一张采购单不该白跑 17 万单元重建
+            if _udoms & set(_US.RISK_DOMAINS):
                 _US.ensure_async()
         except Exception as _du:
             try_err('analysis_cache', '判定读模型失效降级', _du)
@@ -486,6 +495,18 @@ def invalidate(*domains):
                 _OS.ensure_async()
         except Exception as _do:
             try_err('analysis_cache', '自有仓读模型失效降级', _do)
+        # 2026-11-07 P0: 补货/采购建议行物化(list_store)同源失效 —— 写操作 bump 域计数后
+        #   fp 已变(读侧不会读到旧值); 这里起后台线程是为了让「下一次请求」就能命中,
+        #   而不是让那一次请求自己现算 8s。仍是后台线程, 不压在导入响应上。
+        #   放在 agg 的 `if not orders: return` 之前 —— 否则改采购单/config 会提前 return,
+        #   本族重建根本不会被触发。
+        try:
+            from core import list_store as _LS
+            for _kind, _deps in _LS.DEPS.items():
+                if _wipe or (set(_doms) & set(_deps)):
+                    _LS.ensure_async(_kind)
+        except Exception as _dl:
+            try_err('analysis_cache', '建议行读模型失效降级', _dl)
         # 物化追平(异步线程尽力——写操作不阻塞)
         # 2026-11-02 S2-2: 由「5 分钟限频 + 全量 90 天」改为「按业务日期增量」。
         #   旧做法两个硬伤:

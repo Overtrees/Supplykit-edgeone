@@ -4339,6 +4339,171 @@ try:
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 
+# ── §15.159 P0: 补货/采购建议行「域指纹物化」(2026-11-07) ──────────────
+try:
+    _ls18 = _rd("core/list_store.py")
+    _lp18 = _rd("core/list_page.py")
+    _rp18 = _rd("routes/replenishment.py")
+    _pu18 = _rd("routes/purchase.py")
+    _sc18b = _rd("schema_create.py")
+    _ac18 = _rd("routes/analysis_cache.py")
+    import core.list_store as _LS
+    import core.list_page as _LP
+
+    # ① 红线 2: 旧路径整体删除, 不许两套缓存并存兜底
+    check("建议行物化: 旧 TTL 分块缓存已删除(不许两套并存)",
+          all(x not in _lp18 for x in ("def shape_cached", "def full_get",
+                                       "def split_chunks", "def full_get_slice"))
+          and "shape_cached" not in _rp18 and "shape_cached" not in _pu18
+          and "_REPL_TTL" not in _rp18 and "_PURCHASE_TTL" not in _pu18,
+          "core/list_page.py + 两路由")
+    check("建议行物化: 读侧走 list_store.serve, 形状契约不变",
+          "_LS.serve(" in _rp18 and "_LS.serve(" in _pu18
+          and "_items[:2000]" in _rp18 and "return ok(_d)" in _pu18, "两路由")
+
+    # ② 四维 + 红线 8: 全输入域 fp / 哨兵 / 确定性排序 / 发布自校验 / 回滚
+    check("建议行物化: fp 覆盖全部输入域(含 purchases), 且失效矩阵同源 bump",
+          '"purchases"' in _ls18 and "_US.fp_of(DEPS[kind]" in _ls18
+          and "set(_KNOWN_DOMAINS) | set(_US.RISK_DOMAINS)" in _ac18,
+          "list_store + analysis_cache")
+    check("建议行物化: 哨兵 row_cnt=-1 区分'没算成'与'真的 0 条'",
+          'row_cnt") or -1) < 0' in _ls18 and "row_cnt INT NOT NULL DEFAULT -1" in _sc18b,
+          "list_store + schema")
+    check("建议行物化: 排序落 seq, 读侧 ORDER BY seq 切页(红线 12)",
+          "ORDER BY seq" in _ls18 and "seq INT NOT NULL" in _sc18b,
+          "list_store + schema")
+    check("建议行物化: 发布前核对总行数 + need 数, 不过不切 head",
+          "校验未通过" in _ls18 and "SUM(need)" in _ls18
+          and "_mark_stale(kind, scope" in _ls18, "core/list_store.py")
+    check("建议行物化: 回滚开关 LIST_READ=0 不必发版",
+          "LIST_READ" in _ls18 and "def read_enabled" in _ls18, "core/list_store.py")
+    check("建议行物化: 算法不复制, build 只调 builder(红线 9)",
+          "rows = _builder_of(kind, h)()" in _ls18
+          and "lambda: _build_repl(channel, mode)" in _ls18
+          and "lambda: _build_purchase(channel, mode, days)" in _ls18, "core/list_store.py")
+    check("建议行物化: 写操作失效链路已接(后台重建, 不等下一请求现算)",
+          "list_store as _LS" in _ac18 and "_LS.ensure_async(_kind)" in _ac18,
+          "routes/analysis_cache.py")
+    check("建议行物化: schema v26 声明 list_snapshot/list_head",
+          '"list_snapshot"' in _sc18b and '"list_head"' in _sc18b
+          and "SCHEMA_VERSION = 26" in _sc18b, "schema_create.py")
+    check("建议行物化: 新鲜度只由 fp 决定, 读侧无 TTL/时间判断",
+          "created_at" not in _ls18 and "TIMESTAMPDIFF" not in _ls18
+          and 'str(h.get("fp") or "") != _fp' in _ls18, "core/list_store.py")
+    check("建议行物化: 无筛选 total 直接读物化计数, 不扫全表(红线 11)",
+          "if not need_only and not search:" in _ls18
+          and 'h.get("row_cnt")' in _ls18, "core/list_store.py")
+
+    # ③ 筛选等价(四维-准确性): 物化读侧 SQL 与 filter_rows 逐字等价
+    _rows18 = [
+        {"sku": "A%01", "product_name": "甲商品", "barcode": "B_1", "suggested_qty": 5, "b_suggested": 0},
+        {"sku": "A02", "product_name": "乙商品", "barcode": "B2", "suggested_qty": 0, "b_suggested": 0},
+        {"sku": "A03", "product_name": "丙", "barcode": "B3", "suggested_qty": 0, "b_suggested": 3},
+        {"sku": None, "product_name": "丁", "barcode": "", "suggested_qty": 0, "b_suggested": 0},
+    ]
+    _nk18 = ("suggested_qty", "b_suggested")
+    _hit18 = _LP.filter_rows(_rows18, need_only=1, need_keys=_nk18)
+    _need_py = [1 if r in _hit18 else 0 for r in _rows18]
+    _need_sql = [_LS._row_vals(r, _nk18)[0] for r in _rows18]
+    check("建议行物化: need 列与 filter_rows(need_only) 逐行一致",
+          _need_py == _need_sql, str((_need_py, _need_sql)))
+    _cols_ok = all(
+        _LS._row_vals(r, _nk18)[1:4] == (str(r.get("sku", ""))[:80],
+                                         str(r.get("product_name", ""))[:255],
+                                         str(r.get("barcode", ""))[:40])
+        for r in _rows18)
+    check("建议行物化: 检索三列与 filter_rows 同一表达式(含 None 边界)", _cols_ok)
+    _w18, _p18 = _LS._where("repl", "s", 1, 1, "A%_")
+    check("建议行物化: search 走 INSTR 而非 LIKE(%/_ 不当通配符)",
+          "INSTR(LOWER(sku)" in _w18 and "LIKE" not in _w18
+          and _p18[-3:] == ["a%_", "a%_", "a%_"], _w18)
+
+    # ④ 动态: fp/stale/哨兵/回滚 四种不可用都必须退回现算, 绝不返回旧行
+    _o18 = (_LS.head, _LS.fp_now, _LS.read_enabled, _LS._stale_recent)
+    try:
+        _H18 = {"gen": 3, "fp": "AAA", "row_cnt": 10, "stale": 0,
+                "channel": "jd", "mode": "bbcc", "days": 28, "source": ""}
+        _LS.head = lambda k, s: dict(_H18)
+        _LS.fp_now = lambda k, c, m, e="": "BBB"
+        check("建议行物化: fp 不等 → page_of 返回 None(宁慢不错)",
+              _LS.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        _LS.fp_now = lambda k, c, m, e="": "AAA"
+        _H18["stale"] = 1
+        check("建议行物化: stale=1 → 退回现算",
+              _LS.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        _H18["stale"] = 0
+        _H18["row_cnt"] = -1
+        check("建议行物化: row_cnt=-1 哨兵 → 退回现算",
+              _LS.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        _H18["row_cnt"] = 10
+        _LS.read_enabled = lambda: False
+        check("建议行物化: LIST_READ=0 → 一律现算",
+              _LS.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+    finally:
+        _LS.head, _LS.fp_now, _LS.read_enabled, _LS._stale_recent = _o18
+
+    # ⑤ 动态: 发布前自校验 —— 写少一行必须拦下, 不切 head(红线 8②)
+    import db as _db18
+    _mem18 = {"snap": [], "published": [], "stale": []}
+
+    def _ex18(sql, params=None):
+        s = sql.strip()
+        if "ON DUPLICATE KEY UPDATE gen" in s:
+            _mem18["published"].append(params)
+        elif "ON DUPLICATE KEY UPDATE stale=1" in s:
+            _mem18["stale"].append(params)
+        return 0
+
+    def _exm18(sql, rows):
+        _mem18["snap"].extend(rows)
+
+    def _one18(sql, params=None):
+        if "SUM(need)" in sql:
+            sel = [r for r in _mem18["snap"]
+                   if r[0] == params[0] and r[1] == params[1] and r[2] == params[2]]
+            return {"n": len(sel), "nd": sum(r[4] for r in sel)}
+        return {"n": 0}
+
+    _brows18 = [{"sku": "S%d" % i, "product_name": "P", "barcode": "",
+                 "suggested_qty": i, "b_suggested": 0} for i in range(5)]
+    # `from db import ...` 是绑定引用: 只桩 db 模块属性不够, list_store 内的名字也要一起桩
+    _odb18 = (_db18.execute, _db18.executemany, _db18.one, _db18.query,
+              _LS.execute, _LS.executemany, _LS.one, _LS.query)
+    _ols18 = (_LS.head, _LS.fp_now, _LS._stale_recent, _LS._builder_of)
+    try:
+        _db18.execute, _db18.executemany = _ex18, _exm18
+        _db18.one, _db18.query = _one18, lambda sql, params=None: []
+        _LS.execute, _LS.executemany = _ex18, _exm18
+        _LS.one, _LS.query = _one18, lambda sql, params=None: []
+        _LS.head = lambda k, s: {"gen": 3, "fp": "", "row_cnt": -1, "stale": 0,
+                                 "channel": "jd", "mode": "bbcc", "days": 28, "source": ""}
+        _LS.fp_now = lambda k, c, m, e="": "FPX"
+        _LS._stale_recent = lambda k, s: False
+        _LS._builder_of = lambda k, h: (lambda: _brows18)
+        _r18 = _LS.build("repl", "sc", force=True)
+        check("建议行物化: 正常一轮发布切 head(gen/fp/计数同次写入)",
+              bool(_r18.get("ok")) and _r18.get("error") != "validate"
+              and len(_mem18["published"]) == 1, str(_r18))
+        _mem18["snap"], _mem18["published"], _mem18["stale"] = [], [], []
+        _LS.executemany = lambda sql, rows: _mem18["snap"].extend(rows[:-1])  # 故意丢最后一行
+        _r18b = _LS.build("repl", "sc", force=True)
+        check("建议行物化: 写少一行 → 校验拦下且不切 head",
+              (not _r18b.get("ok")) and _r18b.get("error") == "validate"
+              and not _mem18["published"] and bool(_mem18["stale"]), str(_r18b))
+    finally:
+        (_db18.execute, _db18.executemany, _db18.one, _db18.query,
+         _LS.execute, _LS.executemany, _LS.one, _LS.query) = _odb18
+        _LS.head, _LS.fp_now, _LS._stale_recent, _LS._builder_of = _ols18
+
+    # ⑥ 失效矩阵与物化依赖域逐项相等(防两处漂移)
+    from routes.analysis_cache import _FAMILY_DEPS as _FD18
+    check("建议行物化: DEPS 与失效矩阵对应族逐项相等",
+          set(_LS.DEPS["repl"]) == _FD18["repl"]
+          and set(_LS.DEPS["purchase"]) == _FD18["purchase"],
+          str((_LS.DEPS, _FD18.get("purchase"))))
+except Exception as _e32:
+    check("§15.159 建议行物化用例无异常", False, str(_e32)[:300])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()
