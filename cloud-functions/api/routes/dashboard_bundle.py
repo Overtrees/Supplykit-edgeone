@@ -26,6 +26,66 @@ TiDB Cloud Serverless 的建连含 TLS 握手 + 网关认证, 单次与一次普
 """
 from db import query
 
+from fastapi import APIRouter
+
+from routes.common import ok, traced, try_err
+
+
+# ── 2026-11-07 S0: 首屏聚合(boot) ─────────────────────────────────────────────
+# 为什么需要它(线上端口实测, 不是本地直连):
+#   `GET /api/nonexistent`(不碰库/不鉴权)打 5 次中位 **879ms** —— 这是 EdgeOne Makers
+#   函数入口的固定成本(启动 + 网关), 与 SQL 无关。于是"一屏要多久"≈ 0.88s × 请求数 + 重算。
+#   看板首屏实际发 8 个请求(store.loadAll 的 summary/orders/logs/alerts/stock-risk +
+#   DashboardPage 自拉的 summary(还**不带 part**, 全量含 charts)/aux/stock-risk),
+#   其中 summary/stock-risk 各被拉两遍 —— 光入口成本就 7s 量级, 再叠加串行编排就是 10s+。
+#   合并成 1 个请求后: 0.88s(一次入口) + 内部并行取数(缓存命中时 <0.5s) ≈ 1.4~1.7s。
+#
+# 为什么内部只用 3 个 worker:
+#   db 连接池是**每实例 10 条**的全局资源(见 db._POOL_LIMIT / heavy)。4 个模块各自再开
+#   并行会把名额吃满, 后面的请求在 _acquire 排队 —— 这正是 2026-11-06 那次雪崩的形状。
+#   3 路分批能把"冷算 6s 的 stock-risk"和其它快项错开, 又不至于一次抢占 10 条连接。
+router = APIRouter(tags=["dashboard"])
+
+
+@router.get("/dashboard/boot")
+@traced
+def dashboard_boot(channel: str = "jd", mode: str = "", page: int = 1, page_size: int = 30,
+                   search: str = "", status: str = "", start_date: str = "",
+                   end_date: str = ""):
+    """首屏一次取全: summary(part=main) + aux + orders + stock-risk
+
+    每一项**复用各自原有的路由函数**, 所以缓存键/TTL/失效口径/业务数值与单独调用逐字一致,
+    不存在"聚合接口另算一套"的第二真源(红线 B)。任一项失败只让该项为 None, 其余照常返回 ——
+    前端按字段缺失走原有兜底, 不会整屏白。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from routes.dashboard import dashboard_summary, dashboard_aux, stock_risk
+    from routes.orders import list_orders
+
+    _res = {}
+
+    def _one(_name, _fn, **kw):
+        try:
+            _r = _fn(**kw)
+            # 各路由返回 {ok, data}; 这里解包成前端直接可用的结构, 与单独请求的 response.data 同形
+            _res[_name] = (_r or {}).get("data") if isinstance(_r, dict) and "data" in _r else _r
+        except Exception as _e:
+            _res[_name] = None
+            try_err("boot", "首屏聚合项失败: " + _name, _e)
+
+    with ThreadPoolExecutor(max_workers=3) as _ex:
+        _futs = [
+            _ex.submit(_one, "summary", dashboard_summary, channel=channel,
+                       start_date=start_date, end_date=end_date, mode=mode, part="main"),
+            _ex.submit(_one, "orders", list_orders, channel=channel, page=page,
+                       page_size=page_size, search=search, status=status),
+            _ex.submit(_one, "aux", dashboard_aux, channel=channel, mode=mode),
+            _ex.submit(_one, "stock_risk", stock_risk, channel=channel, full=0),
+        ]
+        for _f in _futs:
+            _f.result()
+    return ok(_res)
+
 
 def _deps():
     """延迟取 dashboard 的口径常量 —— 顶层 import 会与 dashboard.py 形成循环"""

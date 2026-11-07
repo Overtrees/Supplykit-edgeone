@@ -123,9 +123,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   // 采购&补货告警卡(重构): 补货建议需补(接口) + 采购建议需采(接口), 行标签区分, 跟随补货模式
   const [procList, setProcList] = useState([])
   const [procLoading, setProcLoading] = useState(true)
-  // 2026-11-03 D5: 后端规则评估是否仍在跑(aux.evaluating) —— 在跑就提示并自动重拉,
-  //   否则用户看到的是"评估前"的告警, 会误判规则没生效。
-  const [evaluating, setEvaluating] = useState(false)
+  // 2026-11-03 D5: 后端规则评估是否仍在跑(aux.evaluating) —— 在跑就提示并自动重拉。
+  // 2026-11-07 S0: 改为读 store(boot 的 aux 段)。原来本地 state 只能由"页面自己再拉一次 aux"
+  //   维护, 首屏合并成一个请求后那次拉取已删除, 否则等于把刚消掉的重复请求加回来。
+  const evaluating = useAppStore(s => s.auxEvaluating)
   const _evalPolls = useRef(0)
   const [showAllProc, setShowAllProc] = useState(false)
   const [showAllOther, setShowAllOther] = useState(false)
@@ -372,126 +373,30 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     .reduce((sum, [, v]) => sum + (v || 0), 0)
   useEffect(() => {
     const seq = ++reqSeq.current
-    // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架, 有旧数据则不骨架(先显示旧值, 后台拉新替换)
+    // 无感刷新: 仅当无 dashboard 数据(首次/清空后)才骨架; 有旧值先渲染旧值(用户要的"瞬时")
     setChLoading(!useAppStore.getState().dashboard)
-    const load = () => {
-      useAppStore.getState().setSyncing(1) // 2026-10-27 看板拉新(进入/切回/事件/重试)计入徽标
-      useAppStore.getState().setSyncOld(Boolean(useAppStore.getState().dashboard)) // 有旧值→同步中/无→加载中
-      // 首屏拆流: summary+aux 先渲染(不阻塞骨架屏), stock-risk 后置到达后更新断货卡
-      // (stock-risk 含 OTIF/逐仓日销/动态SS/加速判定较重, 首屏先看 GMV/告警/健康, 断货 1-2s 补齐)
-      Promise.allSettled([
-        (() => {
-          const _u = dashUrl('t=' + freshStamp())
-          return api.get<SummaryResponse>(_u, { timeout: 60000 })
-        })(),
-        api.get<AuxResponse>(
-          '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&t=' + freshStamp(),
-          { timeout: 60000 },
-        ),
-      ])
-        .then(([s, ax]) => {
-          if (seq !== reqSeq.current) {
-            setChLoading(false)
-            return
-          } // 竞态丢弃
-          // 兜底: summary 必须 fulfilled 且 data.summary 存在才算成功(seed填充/表重建期间
-          // 可能返回异常结构 → dash=null 且无ErrorRetry → 看板空白缺口)
-          const dashOk = s.status === 'fulfilled' && s.value.data && s.value.data.summary
-          const dash = dashOk ? s.value.data : null
-          setDashErr(s.status === 'rejected' || !dashOk ? t('dash.load_fail_processing') : '')
-          const aux = (ax && ax.status === 'fulfilled' ? ax.value.data || {} : {}) as AuxResponse
-          setEvaluating(Boolean(aux.evaluating))
-          const alerts = aux.alerts || []
-          // stockRisk 双形态(数组|对象) → 归一化后统一消费; 对象形态缺省键消费前补齐
-          const stockRisk: unknown[] | StockRiskShim =
-            useAppStore.getState().stockRisk || ({} as StockRiskShim)
-          const ov = aux.stockOverview || {}
-          useAppStore.setState({
-            dashboard: dash,
-            alerts,
-            stockRisk,
-            alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
-            // 自有仓健康(2026-11-01): aux 新增块; 同样抖动兜底保留上次值
-            ownHealth: aux.ownHealth || useAppStore.getState().ownHealth || null,
-            bcOutOfStock: aux.bcOutOfStock || [],
-            inventory: ov.items || [],
-            _stockOverview: ov,
-            loading: false,
-            dataLoaded: true,
-          })
-          setChLoading(false)
-          // 首次加载关键数据为空时自动重试（进程重启后缓存未就绪/慢接口超时兜底），最多 3 次
-          // B 维度(items)已移除(bbcc 用 bcItems / traditional 用 cItems+ownItems) → 空检查按各维度数组
-          const _srEmpty = Array.isArray(stockRisk)
-            ? stockRisk.length === 0
-            : !(
-                stockRisk &&
-                ((stockRisk.bcItems || []).length ||
-                  (stockRisk.cItems || []).length ||
-                  (stockRisk.ownItems || []).length)
-              )
-          if ((!dash || _srEmpty) && seq === reqSeq.current) {
-            let retries = 0
-            const timer = setInterval(() => {
-              retries += 1
-              if (retries > 3 || seq !== reqSeq.current) {
-                clearInterval(timer)
-                return
-              }
-              // 2026-11-02 重试必须绕开缓存: 走到这里说明上一轮拿到的不是可用数据(异常结构),
-              //   而那次 200 响应已经写进 30s 缓存 —— 若沿用 freshStamp() 的时间窗 key,
-              //   3s/6s/9s 三次重试会全部命中同一份坏数据, 重试等于没做。此处用真实时间戳。
-              const _rt = 't=' + Date.now()
-              Promise.allSettled([
-                (() => {
-                  const _u = dashUrl('t=' + Date.now())
-                  return api.get<SummaryResponse>(_u)
-                })(),
-                api.get<StockRiskShim | InventoryRow[]>('/api/dashboard/stock-risk?' + _rt),
-              ]).then(([s2, r2]) => {
-                if (seq !== reqSeq.current) {
-                  clearInterval(timer)
-                  return
-                }
-                const d2 = s2.status === 'fulfilled' ? s2.value.data : null
-                const rv2 = r2.status === 'fulfilled' ? r2.value.data || [] : []
-                useAppStore.setState({
-                  dashboard: d2 || useAppStore.getState().dashboard,
-                  stockRisk: (
-                    Array.isArray(rv2)
-                      ? rv2.length
-                      : rv2 &&
-                        ((rv2.bcItems || []).length ||
-                          (rv2.cItems || []).length ||
-                          (rv2.ownItems || []).length)
-                  )
-                    ? rv2
-                    : useAppStore.getState().stockRisk,
-                })
-                if (d2 && (rv2 as InventoryRow[]).length) clearInterval(timer)
-              })
-            }, 3000)
-          }
-        })
-        .catch(() => setChLoading(false))
-        .finally(() => useAppStore.getState().setSyncing(-1))
-      // stock-risk 后置(独立 30s TTL 接口, 不阻塞首屏骨架; 到达后更新断货卡)
-      api
-        .get<StockRiskShim | InventoryRow[]>(
-          '/api/dashboard/stock-risk?channel=' + channel + '&t=' + freshStamp(),
-          {
-            timeout: 60000,
-          },
-        )
-        .then(r => {
-          if (seq === reqSeq.current && r.data) useAppStore.setState({ stockRisk: r.data })
-        })
-        .catch(() => {})
-        .finally(() => useAppStore.getState().setSyncing(-1))
-    }
-    load()
-    // 2026-11-06: 加 _replMode —— 切 bbcc/traditional 后 summary 必须按新口径重算,
-    //   否则卡片停在旧模式的健康分/低库存(只有下次换渠道或刷新才会变)。
+    setDashErr('')
+    // ── 2026-11-07 S0: 首屏只剩 1 个请求 ──────────────────────────────────────
+    // 原来这里自己发 summary(**全量, 带 charts**)+aux+stock-risk, 而同一时刻
+    //   store.loadAll 也发 summary(part=main)+orders+alerts+stock-risk —— 同一屏 8 个请求、
+    //   两份重复。线上端口实测入口固定成本 **0.88s/请求**(404 探测), 8 个请求就是 7s 地板,
+    //   再叠加原 loadAll 的三批串行编排, 就是用户看到的"看板 10 秒以上"。
+    // 现在: 数据只要一处真源(store.loadAll → /api/dashboard/boot), 页面只负责骨架与错误态;
+    //   charts 由 loadAll 内部并行拉取后合并, 到达即渲染, 不阻塞主项。
+    useAppStore
+      .getState()
+      .loadAll()
+      .catch(() => {
+        if (seq === reqSeq.current) setDashErr(t('dash.load_fail_processing'))
+      })
+      .finally(() => {
+        if (seq === reqSeq.current) setChLoading(false)
+      })
+    // 兜底: 网络挂住时 35s 收起骨架(与请求 timeout 同量级, 防骨架永久不消失)
+    const _tt = setTimeout(() => {
+      if (seq === reqSeq.current) setChLoading(false)
+    }, 35000)
+    return () => clearTimeout(_tt)
   }, [channel, pageVersion, _replMode])
   // 30s 静默自动刷新（不显示 loading 骨架屏，避免闪烁）
   // 规则保存/删除/批量启用停用完成 → 'rules-changed' 事件 → 立即重拉看板。
@@ -520,58 +425,24 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const silentBusy = useRef(false)
   useEffect(() => {
     // 2026-11-06 S1: 交给统一调度器(可见才跑 / 隐藏降 5min / 在途去重 / 回前台补一次)。
-    //   原来是裸 setInterval 30s 且**不看可见性** —— 标签页挂后台时仍每 30s 拉
-    //   summary+aux+stock-risk 三个重接口, 而这正是 P1-22 说的"读风暴"。
-    //   silentBusy 保留为第二道闸: 调度器已按 key 去重, 但这里一轮里有 3 个请求并发,
-    //   自己守一层更直观。
+    // 2026-11-07 S0: 刷新内容统一走 store.loadAll()(单请求聚合 /api/dashboard/boot)。
+    //   原来这里另发 summary+aux+stock-risk **三个**重接口, 还带 `t=` 破缓存 —— 与首屏那套
+    //   完全重复, 且 30s 一轮 × 3 个请求 × 0.88s 入口成本 = 持续白烧。一处真源。
     const stop = registerPoll('dash:silent', POLL_EVERY.dash, async () => {
       if (silentBusy.current) return
       silentBusy.current = true
-      useAppStore.getState().setSyncing(1) // 静默刷新接入徽标提示
-      useAppStore.getState().setSyncOld(true) // 静默刷新必然有旧值→同步中
+      useAppStore.getState().setSyncing(1)
+      useAppStore.getState().setSyncOld(true)
       try {
-        const _t = 't=' + freshStamp()
-        const [s, ax, sr] = await Promise.all([
-          (() => {
-            const _u = dashUrl(_t)
-            return api.get<SummaryResponse>(_u, { timeout: 60000 })
-          })(),
-          api.get<AuxResponse>(
-            '/api/dashboard/aux?channel=' + channel + '&mode=' + _replMode + '&' + _t,
-            {
-              timeout: 60000,
-            },
-          ),
-          api.get<StockRiskShim | InventoryRow[]>(
-            '/api/dashboard/stock-risk?channel=' + channel + '&' + _t,
-            { timeout: 60000 },
-          ),
-        ])
-        const aux = (ax.data || {}) as AuxResponse
-        setEvaluating(Boolean(aux.evaluating))
-        useAppStore.setState({
-          dashboard: s.data,
-          // 2026-10-30 抖动修复: aux 偶发失败时不再把 alerts 置空(数字取自 alertCounts 保留值,
-          //   列表却被清空 → 卡片「有数字无明细」); 只在 aux 成功返回时覆盖
-          alerts: aux.alerts || useAppStore.getState().alerts || [],
-          stockRisk: ((sr && sr.data) || useAppStore.getState().stockRisk || {}) as
-            StockRiskShim | unknown[],
-          alertCounts: aux.alertCounts || useAppStore.getState().alertCounts || null, // 2026-10-30 抖动修复: 失败时保留上次计数
-          // 自有仓健康(2026-11-01): 供给侧口径块(调拨缺口/积压/效期), 抖动时保留上次值
-          ownHealth: aux.ownHealth || useAppStore.getState().ownHealth || null,
-          bcOutOfStock: aux.bcOutOfStock || [],
-          inventory: (aux.stockOverview || {}).items || [],
-          loading: false,
-          dataLoaded: true,
-        })
+        await useAppStore.getState().loadAll()
       } catch {
       } finally {
         silentBusy.current = false
-        useAppStore.getState().setSyncing(-1) // 静默刷新完成/失败均消失提示
+        useAppStore.getState().setSyncing(-1)
       }
     })
     return stop
-    // 2026-11-06: 加 _replMode(同首屏 load) —— 否则切模式后 30s 静默刷新仍按旧 mode 请求
+    // 2026-11-06: 加 _replMode —— 否则切模式后静默刷新仍按旧 mode 请求
   }, [channel, _replMode])
   // 2026-11-03 D5: 规则重算中 → 每 4s 重拉(最多 6 次), 评估完成后告警自动出现。
   //   没有这个, 用户保存规则后看到的是"评估前"的告警, 会重复保存(越改越乱)。

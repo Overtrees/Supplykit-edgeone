@@ -17,6 +17,26 @@ interface OrderItem {
   deleted_at?: string | null
 }
 
+/**
+ * `/api/dashboard/boot` 响应(2026-11-07 S0): 首屏四项合一
+ *
+ * 服务端每一项都是原路由函数的返回值(原缓存键/原口径), 所以这里的形状必须与各自单独
+ * 请求时的 `response.data` 一致 —— 这也是为什么 `loadAll` 能直接按字段 set 而不改业务字段名。
+ */
+type BootPayload = {
+  summary?: Record<string, unknown> | null
+  aux?: {
+    alerts?: unknown[]
+    alertCounts?: Record<string, unknown> | null
+    ownHealth?: unknown
+    bcOutOfStock?: unknown[]
+    stockOverview?: { items?: unknown[] } | null
+    evaluating?: boolean
+  } | null
+  orders?: { items?: unknown[]; total?: number; page?: number } | null
+  stock_risk?: unknown
+}
+
 // 渠道注册表条目(2026-10-30 P0: 渠道数据驱动)
 export interface Channel {
   code: string
@@ -28,7 +48,7 @@ export interface Channel {
 }
 
 import { create } from 'zustand'
-import { api, clearCache, clearInflight, freshStamp, isCanceled } from '../api/client'
+import { api, clearCache, clearInflight, isCanceled } from '../api/client'
 import { registerPoll } from '../api/poller'
 import type { StockRiskShim } from '../api/types'
 import { errText } from '../components/ErrorRetry'
@@ -127,6 +147,10 @@ const initAppStore = (set, get) => ({
   _stockOverview: null,
   // 自有仓健康(2026-11-01): 供给侧口径(调拨缺口/积压/效期) —— 自有仓无销售行, 低库存卡不适用
   ownHealth: null as unknown,
+  // 规则评估是否仍在跑(aux.evaluating) —— 2026-11-07 S0 从 DashboardPage 的局部 state 提上来:
+  //   首屏改为一次 boot 后, aux 只在 store.loadAll 里被消费; 页面再单独拉一次 aux 只为这一个
+  //   布尔值, 等于把刚消掉的重复请求又加回去。
+  auxEvaluating: false,
   alertCounts: null as {
     by_type?: Record<string, number>
     by_severity?: Record<string, number>
@@ -504,88 +528,75 @@ const initAppStore = (set, get) => ({
     dashUrl += (dashUrl.includes('?') ? '&' : '?') + 'mode=' + get().hammerReplenMode
     if (opts && opts.refresh) dashUrl += '&refresh=1'
     try {
-      // 首屏错峰(2026-10-11 三批): summary 先行渲染 → orders/alerts 0.3s 后 → stock-risk 最后——
-      // 避免 5 接口并发竞争 TiDB(10s+ → 3-5s; 数据最终一致)
-      // 2026-10-28 超时分级: 重接口 35s(实测峰值 13.9s + 余量, 兼顾响应性——60s 过长)
-      // 2026-10-28 两阶段加载(根治组装慢): part=main(卡片数字/健康, 组装轻)先渲染 →
-      // part=charts(趋势/店铺/品牌/漏斗, 组装重)后到合并。同一缓存键派生两份视野(同源同快照, 四维一致)
-      const _sep = dashUrl.includes('?') ? '&' : '?'
-      const _getMain = () => api.get(dashUrl + _sep + 'part=main', { timeout: 35000 })
-      let r0 = await Promise.allSettled([_getMain()])
-      // 2026-10-28 部署窗口冷启动加固: 实例重启期首个请求可能前端超时而后端已算完
-      // (15:58/16:25 两次 35s 超时, 同时刻后端 perf_debug 显示 1.1s 正常)——静默重试 1 次(1.2s 后, 破缓存)
-      if (r0[0].status === 'rejected') {
-        await new Promise<void>(res => setTimeout(res, 1200))
-        if (_mySeq !== _seq.v) return
-        r0 = await Promise.allSettled([
-          api.get(dashUrl + _sep + 'part=main&t=' + freshStamp(), { timeout: 35000 }),
-        ])
-      }
-      const dashboard = r0[0].status === 'fulfilled' ? r0[0].value : { data: null }
+      // ── 2026-11-07 S0 首屏聚合(boot): 8 个请求 → 3 个 ──────────────────────
+      // 线上端口实测(不是本地直连): GET /api/nonexistent(不碰库/不鉴权) 中位 **879ms**
+      //   —— 这是 Makers 函数入口的固定成本, 与 SQL 无关。所以"一屏多久"
+      //   ≈ 0.88s × 请求数 + 重算, **请求数就是主因**。
+      // 原实现: summary(part=main) → 等 300ms → orders/logs/alerts(3 路) → stock-risk,
+      //   串行三批共 6 个请求; 而 DashboardPage 又自拉 summary(还是**不带 part** 的全量)/
+      //   aux/stock-risk —— 同一屏 8 个请求、两份重复, 光入口成本就 7s。这就是"看板 10 秒"。
+      // 现在: 1 个 /api/dashboard/boot 取 summary+aux+orders+stock-risk(服务端各项仍走
+      //   原路由函数与原缓存键, 不另算一套), charts 与角标并行且不阻塞主项。
+      // 常规加载**绝不带 t=**: 带了就绕过后端表缓存 → 每次冷算(6s/项)。只有 refresh 才破。
+      const bootUrl =
+        dashUrl.replace('/api/dashboard/summary', '/api/dashboard/boot') +
+        '&page=' +
+        p +
+        '&page_size=30' +
+        '&search=' +
+        encodeURIComponent(s) +
+        '&status=' +
+        encodeURIComponent(st)
+      const r0 = await api.get(bootUrl, { timeout: 35000 })
       if (_mySeq !== _seq.v) return // 快速切换: 旧 loadAll 结果丢弃(最新点击优先)
-      // ⚠️ 合并而非替换: part=main 不含 charts —— 若整体替换, 静默刷新时图表会闪空等 charts 回填
-      const _prev: Record<string, unknown> = get().dashboard || {}
+      const b = (r0.data || {}) as BootPayload
+      const main = b.summary || null
+      const aux = b.aux || {}
+      const ord = b.orders || {}
+      // ⚠️ 合并而非替换: boot 的 summary 只有 part=main 三个键 —— 若整体替换, 静默刷新时
+      //   图表会闪空等 charts 回填
+      const _prev = (get().dashboard || {}) as Record<string, unknown>
       set({
-        dashboard: dashboard.data ? { ..._prev, ...dashboard.data } : _prev,
+        dashboard: main ? { ..._prev, ...main } : _prev,
+        orders: (ord.items || []) as never,
+        orderTotal: ord.total || 0,
+        orderPage: ord.page || p,
+        alerts: (aux.alerts || get().alerts) as never,
+        // 抖动兜底: 失败时保留上次值(曾用 `|| []` 把已有计数清空, 卡面闪一下归零)
+        alertCounts: (aux.alertCounts || get().alertCounts || null) as never,
+        ownHealth: aux.ownHealth ?? get().ownHealth ?? null,
+        bcOutOfStock: (aux.bcOutOfStock || []) as never,
+        inventory: ((aux.stockOverview || {}).items || []) as never,
+        _stockOverview: (aux.stockOverview || null) as never,
+        stockRisk: (b.stock_risk || get().stockRisk) as never,
+        auxEvaluating: Boolean(aux.evaluating),
         loading: false,
         dataLoaded: true,
+        orderLoading: false,
       })
       // 图表数据并行拉取(不阻塞主项渲染), 到达后合并到 dashboard(同快照键)
+      const _sep = dashUrl.includes('?') ? '&' : '?'
       const _getCharts = () => api.get(dashUrl + _sep + 'part=charts', { timeout: 60000 })
       _getCharts()
         .catch(() => {
           // 部署窗口冷启动: 静默重试一次(带 t= 破缓存)
-          return new Promise(res => setTimeout(res, 1200)).then(() =>
+          return new Promise<void>(res => setTimeout(res, 1200)).then(() =>
             _getCharts().catch(() => null),
           )
         })
         .then(rc => {
           if (_mySeq !== _seq.v) return
-          const cur: Record<string, unknown> = get().dashboard || {}
-          set({ dashboard: { ...cur, ...(rc?.data || {}) } })
+          const cur = (get().dashboard || {}) as Record<string, unknown>
+          set({ dashboard: { ...cur, ...((rc && rc.data) || {}) } })
         })
         .catch(() => {})
-      await new Promise<void>(resolve => setTimeout(resolve, 300))
-      const r1 = await Promise.allSettled([
-        api.get(
-          '/api/orders?page=' +
-            p +
-            '&page_size=30&search=' +
-            encodeURIComponent(s) +
-            '&status=' +
-            encodeURIComponent(st),
-        ),
-        api.get('/api/quality-logs?scope=user'), // 2026-10-17 角标按用户维度(曾全量 200 截断——含 dev 排查日志误导)
-        api.get('/api/alerts'),
-      ])
-      const arr = r1.map(r => (r.status === 'fulfilled' ? r.value : { data: null }))
-      if (_mySeq !== _seq.v) return // 旧 loadAll 丢弃
-      set({
-        orders: arr[0].data?.items || arr[0].data || [],
-        orderTotal: arr[0].data?.total || (arr[0].data || []).length || 0,
-        orderPage: arr[0].data?.page || p,
-        qualityLogs: arr[1].data || [],
-        alerts: arr[2].data || [],
-        orderLoadErr:
-          r1[0] && r1[0].status === 'rejected'
-            ? errText((r1[0] as { reason?: unknown }).reason as string)
-            : '',
-        // 2026-11-05 修(用户报「多页面一直加载中/同步中」的关键一环):
-        //   原来 orderLoading 只在这一处(以及 stock-risk 之后)被置 false, 且**没有序号保护**。
-        //   场景: 用户在 0.5s 内从订单页切到别的页, 第二次 loadAll 已把 orderLoading 置 true,
-        //   而第一次的这次 set 无条件把它刷成 false → 列表闪一下骨架又空白; 反过来当第一次
-        //   卡在下面 stock-risk(35s 超时)时, orderLoading 会一直 true 长达 35s。
-        //   订单数据已经写入, 同一次 set 里收掉它 —— 既不依赖后续慢请求, 也不会互相踩。
-        orderLoading: false,
-      })
-      // 最后: stock-risk 断货卡(重接口, 不阻塞渲染; 失败保留旧值不闪空)
-      //   2026-11-05: 这里原有一次 `set({ orderLoading: false })` —— 位置在慢请求之后且无序号
-      //   保护, 是上面那条 bug 的第二个写入点。已随上面并入, 不再单独写。
-      const sr = await Promise.allSettled([
-        api.get('/api/dashboard/stock-risk', { timeout: 35000 }),
-      ])
-      const srData = sr[0].status === 'fulfilled' ? sr[0].value.data : null
-      if (srData && _mySeq === _seq.v) set({ stockRisk: srData })
+      // 角标(轻量, 并行不阻塞主项)
+      api
+        .get('/api/quality-logs?scope=user')
+        .then(r => {
+          if (_mySeq === _seq.v) set({ qualityLogs: r.data || [] })
+        })
+        .catch(() => {})
     } catch (e) {
       console.error('loadAll failed:', e)
       // 2026-11-05: 只在"自己仍是最新那次"时收起 loading —— 否则旧请求的失败会把

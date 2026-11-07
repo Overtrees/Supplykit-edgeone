@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from db import one
 from routes.auth import router as auth_router
 from routes.dashboard import router as dashboard_router
+from routes.dashboard_bundle import router as dashboard_boot_router
 from routes.replenishment import router as replenishment_router
 from routes.orders import router as orders_router
 from routes.products import router as products_router
@@ -254,6 +255,7 @@ def health(detail: int = 0):
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(dashboard_boot_router)
 app.include_router(replenishment_router)
 app.include_router(orders_router)
 app.include_router(products_router)
