@@ -487,6 +487,8 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         pseudo.add(str(r.get("related_sku")))
 
     _mk("pseudo")
+    _cat_match = {}
+    _ld_days = {}
     sug = {"black": "临期紧急处理(促销/退供)", "red": "退货供应商/清仓甩卖",
            "yellow": "补货降量/持续跟踪", "observe": "继续观察/补货降量"}
     items = []
@@ -507,13 +509,20 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         if not p:
             continue
         cat = p.get("category") or ""
-        match = None
-        for c in cat_cfg:
-            if c.get("enabled") is False:
-                continue
-            if any(w.strip() and w.strip() in cat for w in str(c.get("cats") or "").split(",")):
-                match = c
-                break
+        # 2026-11-07 CPU 热点: 原来对**每一行库存**(9 万行)都遍历一遍品类配置并 split 字符串 ——
+        #   品类实际只有几十种, 结果是同一个 category 被匹配上万次。线上冷实例实测该循环
+        #   占 26s(0.29ms/行, 正常应是微秒级)。按 category 记忆化后只算一次。
+        if cat in _cat_match:
+            match = _cat_match[cat]
+        else:
+            match = None
+            for c in cat_cfg:
+                if c.get("enabled") is False:
+                    continue
+                if any(w.strip() and w.strip() in cat for w in str(c.get("cats") or "").split(",")):
+                    match = c
+                    break
+            _cat_match[cat] = match
         slow_days = int(match.get("slow_days", 30)) if match else 30
         shelf_m = int(match.get("shelf_months", 3)) if match else 3
         cat_name = (match.get("name") or "未归类") if match else "未归类(默认食品线)"
@@ -527,7 +536,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         ld = _ldbc or ""
         # 2026-11-04 去兜底: 从未销售 → days_zero = None(前端显示「从未销售」), 不再用 999 冒充;
         #   末销日期在未来(数据错) → 如实给负数, 不夹 0。
-        days_zero = None if not ld else (now - datetime.strptime(ld, "%Y-%m-%d")).days
+        # 日期解析同样按值缓存: 9 万行里 ld 只有几百个不同取值, strptime 是纯 CPU 浪费
+        if not ld:
+            days_zero = None
+        elif ld in _ld_days:
+            days_zero = _ld_days[ld]
+        else:
+            days_zero = (now - datetime.strptime(ld, "%Y-%m-%d")).days
+            _ld_days[ld] = days_zero
         # 阈值/排序比较键: 从未销售 = 最滞销(仅内部用, 不写进返回值/不展示)
         _dz = float("inf") if days_zero is None else days_zero
         _dzs = "从未销售" if days_zero is None else "%d天未销售" % days_zero
