@@ -272,19 +272,37 @@ def risk_of(channel, mode=None, full=0, limit=0, offset=0, level=""):
     #   会出现"标题 54 条、列表 3 条"这种自相矛盾的画面(第 1 页 300 条里只有 3 条是红色)。
     _lv = str(level or "")
     _lv_sql = " AND level=%s" if _lv else ""
-    try:
-        agg = query(
-            "SELECT dim, COUNT(*) AS n, "
-            "SUM(level='red') AS crit, SUM(level='orange') AS warn, MAX(ord) AS mx "
-            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s" + _lv_sql + " GROUP BY dim",
-            [channel, _m, _g] + ([_lv] if _lv else [])) or []
-    except Exception as _e:
-        try_err("unit_store", "risk 计数读取降级", _e)
-        return None
     _cnt = {}
-    for r in agg:
-        _cnt[str(r.get("dim") or "")] = (int(r.get("n") or 0), int(r.get("crit") or 0),
-                                         int(r.get("warn") or 0), int(r.get("mx") or 0))
+    # ① 优先读重建时算好的计数(head.risk_stat) —— 零查询。
+    #    计数必须扫该 gen 全部 4 千多行, 实测占弹窗请求 0.6~0.9s(总 1.4s); 而它只有 9 个数,
+    #    本来就不该在请求路径上算。
+    #    有 risk_stat 就说明该 gen 是 v24+ 建的 → `ord` 必然已写(同一次发布), 不必再探 MAX(ord)。
+    _stat_ok = False
+    for _seg in str(h.get("risk_stat") or "").split(";"):
+        if not _seg:
+            continue
+        try:
+            _d, _v = _seg.split(":", 1)
+            _n, _cr, _wn = [int(x) for x in _v.split("/")]
+            _cnt[_d] = (_n, _cr, _wn, 1)
+            _stat_ok = True
+        except Exception:
+            _stat_ok = False
+            _cnt = {}
+            break
+    if not _stat_ok:
+        try:
+            agg = query(
+                "SELECT dim, COUNT(*) AS n, "
+                "SUM(level='red') AS crit, SUM(level='orange') AS warn, MAX(ord) AS mx "
+                "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s GROUP BY dim",
+                [channel, _m, _g]) or []
+        except Exception as _e:
+            try_err("unit_store", "risk 计数读取降级", _e)
+            return None
+        for r in agg:
+            _cnt[str(r.get("dim") or "")] = (int(r.get("n") or 0), int(r.get("crit") or 0),
+                                             int(r.get("warn") or 0), int(r.get("mx") or 0))
     # 排序交给 `risk_sort_key`（现算/物化唯一真源）。分页读靠 ord（重建时已按它排好），
     #   只有**旧 gen 的 ord 全 0** 才退回"全量读 + Python 排序"——过渡期宁慢不错。
     try:
@@ -297,6 +315,14 @@ def risk_of(channel, mode=None, full=0, limit=0, offset=0, level=""):
     out = {"items": [], "total": 0, "critical": 0, "warning": 0}
     for _d, _k, _t in _RISK_DIMS:
         _n, _crit, _warn, _mx = _cnt.get(_d, (0, 0, 0, 0))
+        # 选了级别时, "总数"就是该级别的条数 —— 与明细的 WHERE 条件必须同一个口径,
+        #   否则弹窗会出现"共 663 条"却只翻得出 54 条红色。
+        if _lv == "red":
+            _n, _warn = _crit, 0
+        elif _lv == "orange":
+            _n, _crit = _warn, 0
+        elif _lv == "yellow":
+            _n = max(0, _n - _crit - _warn)
         _items = []
         if _n:
             try:
@@ -530,6 +556,24 @@ def _risk_rows(channel, mode, inv_rows=None):
     return rows
 
 
+def _risk_stat(risk):
+    """断货三维度计数 → "bc:663/54/24;c:0/0/0;own:12/3/4" (total/red/orange)
+
+    计数必须与明细**同一次发布**写进去: 分开算就会出现"标题 663、翻到底 661"。
+    """
+    _b = {}
+    for a in (risk or []):
+        _d = a.get("dim")
+        _s = _b.setdefault(_d, [0, 0, 0])
+        _s[0] += 1
+        if a.get("level") == "red":
+            _s[1] += 1
+        elif a.get("level") == "orange":
+            _s[2] += 1
+    return ";".join("%s:%d/%d/%d" % (d, _b[d][0], _b[d][1], _b[d][2])
+                    for d in ("bc", "c", "own") if d in _b)
+
+
 def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp="", timing=""):
     """gen+1 写入 → 校验已过 → head 一步切换 → 清 N-2 及更早"""
     _tp0 = time.time()
@@ -576,13 +620,15 @@ def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp="", ti
     #   risk_rows: -1 = 本轮断货快照没算成 → 读侧退回现算(宁慢不错)。
     _timing = "%s,publish=%.1f" % (str(timing or ""), time.time() - _tp0)
     execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,risk_rows,risk_fp,"
-            "timing,stale,note,built_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
+            "timing,risk_stat,stale,note,built_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
             "ON DUPLICATE KEY UPDATE gen=VALUES(gen), fp=VALUES(fp), units=VALUES(units), "
             "alerts=VALUES(alerts), risk_rows=VALUES(risk_rows), risk_fp=VALUES(risk_fp), "
-            "timing=VALUES(timing), stale=0, note='ok', built_at=VALUES(built_at)",
+            "timing=VALUES(timing), risk_stat=VALUES(risk_stat), stale=0, note='ok', "
+            "built_at=VALUES(built_at)",
             [channel, mode, gen, fp, n_units, len(alerts),
-             -1 if risk is None else len(risk), str(risk_fp or ""), _timing[:255]])
+             -1 if risk is None else len(risk), str(risk_fp or ""), _timing[:255],
+             _risk_stat(risk) if risk else ""])
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
     execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen<%s",

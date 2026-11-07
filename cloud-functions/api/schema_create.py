@@ -418,6 +418,10 @@ _TABLES = {
         #   重建 30s+ 但只有总数、没有分解 → 优化全靠猜。落到 head 上, /dashboard/unit-state
         #   一次就能看到钱花在哪一段, 不用为加埋点再发一版。
         "timing VARCHAR(255) NOT NULL DEFAULT '', "
+        # 2026-11-07 P2: 断货三维度计数(格式 bc:663/54/24;c:..;own:..)。弹窗要"共 N 条"和
+        #   三个 pill 的数字, 而 GROUP BY 一次要扫该 gen 的全部 4 千多行 —— 实测这一条就占
+        #   弹窗请求的 0.6~0.9s(总 1.4s)。重建时顺手算好, 读侧零查询。
+        "risk_stat VARCHAR(120) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, "
         "PRIMARY KEY (channel, mode))"
     ),
@@ -606,6 +610,10 @@ _ADD_INDEXES = [
     # 2026-11-07 P2: 断货明细真分页(读侧 ORDER BY ord LIMIT/OFFSET) —— 没有它 TiDB 要
     #   把该 gen 的 4 千多行取回来再排序; 有了它就是覆盖索引上的区间扫描。
     ("idx_risk_ord", "risk_snapshot", "(channel, mode, gen, dim, ord)"),
+    # 2026-11-07 P2: 弹窗分页的 COUNT 必须走索引, 否则每次翻页先全表扫 10 万行 ——
+    #   实测缺索引时 out-of-stock 一页 1.3s(500 行只要 48KB), 行的搬运不是瓶颈, COUNT 是。
+    ("idx_inv_ch_wt_avail", "inventory", "(channel, warehouse_type, available_qty)"),
+    ("idx_alerts_ch_status_type", "alerts", "(channel, status, alert_type)"),
 ]
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),        # 被 idx_orders_sku_ordered_at 前缀覆盖
@@ -626,7 +634,8 @@ _COLUMN_ADDS = {
                         ("risk_enabled", "TINYINT NOT NULL DEFAULT 0"),
                         ("risk_rows", "INT NOT NULL DEFAULT -1"),
                         ("risk_fp", "VARCHAR(64) NOT NULL DEFAULT ''"),
-                        ("timing", "VARCHAR(255) NOT NULL DEFAULT ''")],
+                        ("timing", "VARCHAR(255) NOT NULL DEFAULT ''"),
+                        ("risk_stat", "VARCHAR(120) NOT NULL DEFAULT ''")],
     # 2026-11-07 P2: 断货明细分页序号(存量表补列; 新表 DDL 已含)
     "risk_snapshot": [("ord", "INT NOT NULL DEFAULT 0")],
     # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
@@ -749,7 +758,10 @@ _COLUMN_ADDS = {
 #   ① risk_snapshot.ord: 维度内展示序号(重建时按 risk_sort_key 排好)。弹窗按 ord 切页,
 #      保证"第 1 页 + 第 2 页 = 卡面 TOP N 的同一序列", 不会因 SQL 与 Python 排序差异漏行/重行;
 #   ② unit_state_head.timing: 重建分段耗时。重建 30s+ 只有总数没有分解, 优化只能猜。
-SCHEMA_VERSION = 23
+# v24(2026-11-07 P2): unit_state_head.risk_stat —— 断货三维度计数物化。
+#   计数与明细是两种读法: 明细能靠 LIMIT 只取一页, 计数却必须扫全部(实测 0.6~0.9s)。
+#   把 9 个数字在重建时算好, 弹窗标题/三个 pill 就不再触发聚合查询。
+SCHEMA_VERSION = 24
 
 
 def table_ddl(name):
