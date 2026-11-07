@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, RISK_LV } from '../format'
 import { t } from '../../../locale'
+import { usePaged, atBottom } from './usePaged'
 
 type RiskFilter = 'all' | 'red' | 'orange' | 'yellow'
 
@@ -24,6 +25,18 @@ interface RiskData {
   warning?: number
   items?: RiskRow[]
   _full?: RiskRow[]
+  bcItems?: RiskRow[]
+  bcTotal?: number
+  bcCritical?: number
+  bcWarning?: number
+  cItems?: RiskRow[]
+  cTotal?: number
+  cCritical?: number
+  cWarning?: number
+  ownItems?: RiskRow[]
+  ownTotal?: number
+  ownCritical?: number
+  ownWarning?: number
 }
 
 interface Props {
@@ -39,6 +52,7 @@ interface Props {
   riskData: RiskData
   showOwn: boolean
   onAlert?: (sku?: string, whType?: string, wh?: string) => void
+  channel?: string
 }
 
 export default function RiskSheet(props: Props) {
@@ -55,7 +69,38 @@ export default function RiskSheet(props: Props) {
     riskData: _r,
     showOwn: _showOwn,
     onAlert,
+    channel,
   } = props
+  /**
+   * 2026-11-07 P2 真分页: 原来点击时拉 `full=1` 一次搬 897KB / 2.19s(4656 行),
+   * 而弹窗一屏只看 6 行。现在 300/页, 维度内按 `ord`(重建时排序落库)切页,
+   * 第 1 页 + 第 2 页正好接上卡面 TOP N —— 不重不漏。
+   * 级别过滤放后端(SQL): 否则"标题 54 条、列表 3 条"(第 1 页里只有 3 条红色)。
+   */
+  const _lv = riskFilter === 'all' ? '' : riskFilter
+  const pg = usePaged<RiskRow>(
+    open,
+    function (off, lim) {
+      return (
+        '/api/dashboard/stock-risk?channel=' +
+        encodeURIComponent(channel || 'jd') +
+        '&full=1&limit=' +
+        lim +
+        '&offset=' +
+        off +
+        (_lv ? '&level=' + _lv : '')
+      )
+    },
+    300,
+    function (d) {
+      const o = (d || {}) as RiskData
+      const items =
+        _replMode === 'bbcc' ? o.bcItems || [] : (o.cItems || []).concat(o.ownItems || [])
+      const total = _replMode === 'bbcc' ? o.bcTotal || 0 : (o.cTotal || 0) + (o.ownTotal || 0)
+      return { items, total }
+    },
+    _lv,
+  )
   if (!open) return null
   return createPortal(
     <>
@@ -81,6 +126,9 @@ export default function RiskSheet(props: Props) {
         <div
           onClick={function (e) {
             e.stopPropagation()
+          }}
+          onScroll={function (e) {
+            if (atBottom(e)) pg.more()
           }}
           className="material-regular"
           style={{
@@ -156,7 +204,12 @@ export default function RiskSheet(props: Props) {
               </span>
             ))}
           </div>
-          {(fullRisk && fullRisk.length ? fullRisk : _r._full || _r.items || [])
+          {(pg.rows.length
+            ? pg.rows
+            : fullRisk && fullRisk.length
+              ? fullRisk
+              : _r._full || _r.items || []
+          )
             .filter(x => riskFilter === 'all' || x.level === riskFilter)
             .map(function (x, i) {
               const whLabel =

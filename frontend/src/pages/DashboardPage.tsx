@@ -142,11 +142,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [_riskTab] = useState('c') // 传统模式子视图: c=C仓 / own=自有三方仓
   const [_storeDim, setStoreDim] = useState('store') // 店铺GMV卡维度: store=店铺(盘子) / brand=品牌(渗透)
   const [showAllOut, setShowAllOut] = useState(false)
-  const [fullOut, setFullOut] = useState<InventoryRow[] | null>(null) // 缺货弹窗完整数据(点击时按当前维度拉取)
   const [oosList, setOosList] = useState(null) // 当前维度缺货全量(随 healthTab 拉取, 预览+计数+弹窗同源)
   const [healthTrend, setHealthTrend] = useState([]) // 健康分数趋势(近14天, health-trend 接口)
-  const [fullAlerts, setFullAlerts] = useState(null) // 告警弹窗完整数据(点击时拉取)
-  const [fullRisk, setFullRisk] = useState<InventoryRow[] | null>(null) // 濒临断货完整列表
   // 2026-10-28 首帧骨架: 初始即按'有无旧值'决定(曾 false → 首帧渲染空卡, 用户看到无骨架闪一下)
   const [chLoading, setChLoading] = useState(() => !useAppStore.getState().dashboard)
   const [dashErr, setDashErr] = useState('')
@@ -159,69 +156,20 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   代价是首屏 4 个重接口并发时, 这 3.9MB 把浏览器同域连接占满 → boot 从 1.2s 拖到 6.6s。
   //   排除后单跑 4.69s → 0.8s 量级; 3000/组 仍覆盖 low_stock(jd 2151 / other 5271 的 57%+),
   //   卡面 5 行与弹窗滚动都够用 —— 真要看第 3000 条以后的用户不存在。
-  const loadFullAlerts = async () => {
-    try {
-      const r = await api.get<ApiObject[]>(
-        '/api/alerts?channel=' +
-          channel +
-          '&limit=3000' +
-          '&exclude=own_overstock,own_transfer_gap,own_expiry_risk',
-        {
-          timeout: 60000,
-        },
-      )
-      const _d = r.data
-      // 只在拿到**非空数组**时覆盖 —— 请求失败/返回空时保持 null, 让卡面回落 alertsList。
-      // 曾 `catch → setFullAlerts([])`: 网络抖动一次, 卡面(fullAlerts 优先)立刻变空,
-      // 表现为"明细忽然没了", 且不会自愈(直到下次点击「更多」)。
-      if (Array.isArray(_d) && _d.length > 0) setFullAlerts(_d)
-    } catch {
-      // 静默: 保持 fullAlerts 原值(首次为 null → 卡面回落 alertsList)
-    }
+  // 2026-11-07 P2: 点击不再预拉全量 —— 弹窗自己按页取(300/页, 滚到底续拉)。
+  //   原来这里一次拉 3000 条, 只为"点开时不用等"; 代价是点击瞬间多 0.8~4.7s 的空白期,
+  //   而用户真正看的是第一屏。函数保留为 no-op, 调用点(卡面「更多」)无需改动。
+  const loadFullAlerts = function () {
+    /* 明细由 LowStockSheet / OtherAlertsSheet 内经 usePaged 按页拉取 */
   }
-  const loadFullRisk = async () => {
-    try {
-      const r = await api.get<StockRiskShim | InventoryRow[]>(
-        '/api/dashboard/stock-risk?channel=' + channel + '&full=1',
-        {
-          timeout: 60000,
-        },
-      )
-      const _m =
-        channel !== 'jd' && (hammerReplenMode || '') !== 'traditional'
-          ? 'traditional'
-          : hammerReplenMode || (channel === 'jd' ? 'bbcc' : 'traditional')
-      const _d = (r.data || {}) as StockRiskShim | InventoryRow[]
-      // bbcc→BC合计(b仓+全国c); traditional→C仓+自有/三方仓(不涉B)——取数必须与模式维度一致
-      const _lst = Array.isArray(_d)
-        ? _d
-        : _m === 'bbcc'
-          ? _d.bcItems || []
-          : (_d.cItems || []).concat(_d.ownItems || [])
-      setFullRisk(_lst)
-    } catch (e) {
-      setFullRisk([])
-    }
+  // 2026-11-07 P2: `full=1` 一次 897KB/2.19s(4656 行) 改为弹窗内 300/页。
+  //   维度内按 `ord`(重建时排好落库)切页, 与卡面 TOP N 同一序列。
+  const loadFullRisk = function () {
+    /* 明细由 RiskSheet 内经 usePaged 按页拉取 */
   }
-  const loadFullOut = async () => {
-    const _wh =
-      healthTab === 'own'
-        ? 'own'
-        : healthTab === 'bc'
-          ? 'bc'
-          : healthTab === 'platform'
-            ? 'platform'
-            : 'platform_b'
-    try {
-      const r = await api.get<InventoryRow[] | ListResponse<InventoryRow>>(
-        '/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000',
-        { timeout: 60000 },
-      )
-      const d = Array.isArray(r.data) ? r.data : (r.data && r.data.items) || []
-      setFullOut(d)
-    } catch (e) {
-      setFullOut([])
-    }
+  // 2026-11-07 P2: 点击不再拉 5000 行 —— OosSheet 内 500/页(首帧先用卡面 3 行预览)。
+  const loadFullOut = function () {
+    /* 明细由 OosSheet 内经 usePaged 按页拉取 */
   }
   // 健康卡缺货列表: 随视图维度(own/平台/bc)拉取全量——与 healthData.out_of_stock 计数口径一致
   // (曾用 stockOverview.items(全渠道LIMIT100)过滤, 维度缺货SKU在窗口外时预览/计数漏显)
@@ -236,7 +184,9 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
             : 'platform_b'
     api
       .get<InventoryRow[] | ListResponse<InventoryRow>>(
-        '/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=5000',
+        // 卡面只渲染 3 行预览(`outOfStockItems = _oosSrc.slice(0,3)`), 拉 5000 行纯属浪费 ——
+        //   `limit=3` 后这个请求从 1.2s/49KB 降到毫秒级, 计数仍取 healthData 的后端聚合值。
+        '/api/inventory/out-of-stock?channel=' + channel + '&wh=' + _wh + '&limit=3',
         {
           timeout: 60000,
         },
@@ -381,12 +331,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   原来是个 boolean ref, 只在首次挂载跑一次 —— 而切渠道时本组件**不卸载**,
   //   于是新渠道不再预拉全量告警, 卡面回落到 `/api/alerts` 的 200 条/组截断快照,
   //   表现为"标题 160、卡面只有 5 行"且明细重复。按渠道记 + 用完即弃, 既不会漏也不会重。
-  const fullAlertsChannel = useRef('')
-  useEffect(() => {
-    if (fullAlertsChannel.current === channel) return
-    fullAlertsChannel.current = channel
-    loadFullAlerts()
-  }, [channel])
+  // 2026-11-07 P2: 进入看板不再预拉 3000 条告警 —— 卡面 5 行用 boot 带回的 alertsList
+  //   (200/组)足够, 全量在弹窗里按页取; 首屏少一个 0.8~4.7s 的请求。
   // 规则/参数保存、任务完成 → 重拉(与 insights-refresh/rules-changed 联动)
   useEffect(() => {
     const h = () => {
@@ -731,12 +677,12 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   //   筛完为空时回落不过滤(历史数据仓型不规范时不能把卡面变空)。
   const lowStockAlerts = useMemo(() => {
     const types = _replMode === 'bbcc' ? ['own', 'bc'] : ['own', 'platform']
-    const raw = fullAlerts
-      ? fullAlerts.filter(x => x.alert_type === 'low_stock')
-      : alertsList.filter(x => x.alert_type === 'low_stock')
+    // 2026-11-07 P2: 卡面 5 行只读 boot 带回的 alertsList(200/组) —— 不再为"可能点开"预拉全量。
+    //   实测 200 条/组已覆盖全部仓型(低库存 2151 条里前 200 条同时含 own/bc/platform)。
+    const raw = alertsList.filter(x => x.alert_type === 'low_stock')
     const byMode = raw.filter(x => types.includes(String(x.warehouse_type || '')))
     return byMode.length ? byMode : raw
-  }, [fullAlerts, alertsList, _replMode])
+  }, [alertsList, _replMode])
   // 卡面 5 行取数(2026-11-02 改「按仓轮转 + 轮内 SKU 去重」):
   //   旧法问题: 接口 id DESC → 最新告警集中在同一仓, 5 行全是郑州仓。
   //   但**只按仓轮转还不够**: 规则引擎对各仓是同一批 SKU 顺序评估的, 每个仓的"第一条"
@@ -1114,6 +1060,7 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         rows={lowStockModalRows}
         replMode={_replMode}
         onAlert={onAlert}
+        channel={channel}
       />
 
       {/* 自有仓健康全量弹窗(2026-11-01) —— 沿用低库存/采购弹窗的 sheet 结构, 三类分组展示 */}
@@ -1145,9 +1092,10 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           setShowAllOther(false)
         }}
         otherTotal={otherTotal}
-        fullAlerts={fullAlerts}
+        fullAlerts={[]}
         replMode={_replMode}
         onAlert={onAlert}
+        channel={channel}
       />
 
       {/* 濒临断货完整列表弹窗 */}
@@ -1162,7 +1110,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         riskCritical={riskCritical}
         riskWarning={riskWarning}
         riskTabs={riskTabs}
-        fullRisk={fullRisk}
+        fullRisk={null}
+        channel={channel}
         riskData={_r}
         showOwn={_showOwn}
         onAlert={onAlert}
@@ -1174,7 +1123,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
         onClose={function () {
           setShowAllOut(false)
         }}
-        fullOut={fullOut}
+        fullOut={null}
+        channel={channel}
         oosSrc={_oosSrc}
         healthTab={healthTab}
       />

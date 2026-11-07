@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh, alertAge, whTag } from '../format'
 import { t } from '../../../locale'
+import { usePaged, atBottom } from './usePaged'
 
 /** 告警明细行: 已知字段精确声明, 动态扩展字段 unknown(索引签名兜底) */
 interface AlertRow {
@@ -23,10 +24,37 @@ interface Props {
   fullAlerts: AlertRow[]
   replMode?: string
   onAlert?: (sku?: string, whType?: string, wh?: string) => void
+  channel?: string
 }
 
 export default function OtherAlertsSheet(props: Props) {
-  const { open, onClose, otherTotal, fullAlerts, replMode, onAlert } = props
+  const { open, onClose, otherTotal, fullAlerts, replMode, onAlert, channel } = props
+  /**
+   * 2026-11-07 P2 真分页: 300/页、滚到底续拉。排除项与卡面口径一致 ——
+   *   低库存/采购/补货由各自的卡承载; 自有仓三条(7215 行, 占全量 2/3)由「自有仓健康」承载。
+   * 接口不做分组配额(分页必须是全序切页), 所以这里的 total 就是"其他告警"的真实条数。
+   */
+  const pg = usePaged<AlertRow>(
+    open,
+    function (off, lim) {
+      return (
+        '/api/alerts?channel=' +
+        encodeURIComponent(channel || 'jd') +
+        '&paged=1&limit=' +
+        lim +
+        '&offset=' +
+        off +
+        '&exclude=low_stock,replenish,purchase_need,own_overstock,own_transfer_gap,own_expiry_risk'
+      )
+    },
+    300,
+  )
+  const list = pg.rows.length
+    ? pg.rows
+    : (fullAlerts || []).filter(
+        x => !['low_stock', 'replenish', 'purchase_need'].includes(x.alert_type),
+      )
+  const _total = pg.total >= 0 ? pg.total : otherTotal
   // 原组件内的 _whTag 依赖闭包 _replMode; 这里显式绑定, JSX 体一行不用改
   const _whTag = (wt?: string | null) => whTag(wt, props.replMode)
   if (!open) return null
@@ -55,6 +83,9 @@ export default function OtherAlertsSheet(props: Props) {
           onClick={function (e) {
             e.stopPropagation()
           }}
+          onScroll={function (e) {
+            if (atBottom(e)) pg.more()
+          }}
           className="material-regular"
           style={{
             width: '100%',
@@ -76,14 +107,9 @@ export default function OtherAlertsSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            {t('oa.title_n', { n: fmtInt(otherTotal) })}
+            {t('oa.title_n', { n: fmtInt(_total) })}
           </div>
-          {(fullAlerts
-            ? fullAlerts.filter(
-                x => !['low_stock', 'replenish', 'purchase_need'].includes(x.alert_type),
-              )
-            : []
-          ).map(function (x) {
+          {list.map(function (x) {
             return (
               <div
                 key={x.id}

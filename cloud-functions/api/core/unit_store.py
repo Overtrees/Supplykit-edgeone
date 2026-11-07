@@ -211,7 +211,11 @@ def stock_overview(channel, mode=None, bc_limit=100):
                 "SELECT a.sku, a.warehouse, COALESCE(p.product_name, a.sku) AS product_name "
                 "FROM unit_alert a LEFT JOIN products p "
                 "  ON p.sku=a.sku AND p.channel=a.channel "
-                "WHERE a.channel=%s AND a.mode=%s AND a.gen=%s AND a.state=%s AND a.kind=%s "
+                # 2026-11-07 P2 修静默错误: `%s` 是**驱动占位符**, 却被 Python 当成格式化符 ——
+                #   "%s ... %s ... LIMIT %d" % (n,) 这行每次执行都抛 "not enough arguments",
+                #   被下面的 except 吞掉 → 健康卡 BC 缺货预览**一直是空**且没人发现。
+                #   要拼接的只有 LIMIT 的数字, 其余占位必须写成 %%s。
+                "WHERE a.channel=%%s AND a.mode=%%s AND a.gen=%%s AND a.state=%%s AND a.kind=%%s "
                 "ORDER BY a.sku LIMIT %d" % (int(bc_limit),),
                 [channel, _m, _g, M.ST_OUT, M.DIM_BC]) or []
     except Exception as _e:
@@ -226,7 +230,7 @@ def stock_overview(channel, mode=None, bc_limit=100):
 _RISK_DIMS = (("bc", "bcItems", "BC"), ("c", "cItems", "C"), ("own", "ownItems", "OWN"))
 
 
-def risk_of(channel, mode=None, full=0):
+def risk_of(channel, mode=None, full=0, limit=0, offset=0, level=""):
     """濒临断货三级（stock-risk）读物化 —— 返回与 `_stock_risk` **逐字段同构**的 payload
 
     `None` = 不可用（从未构建 / fp 已变 / stale / 开关未开 / 查询失败）→ 调用方退回现算。
@@ -258,45 +262,79 @@ def risk_of(channel, mode=None, full=0):
     if not _fp or str(h.get("fp") or "") != _fp:
         return None
     _g = int(h.get("gen"))
+    # 2026-11-07 P2 真分页: 弹窗一次只要 300/500 条, 卡片只要各维度 TOP 10。
+    #   原来 full=0 也要把 4656 行全查回来再 `[:10]` 切片 —— 897KB/2.2s 里绝大部分是为
+    #   "不展示的行"付的钱。现在:
+    #     · 计数用一条 GROUP BY(走 idx_risk_ord), 三维度 total/critical/warning 一次拿全;
+    #     · 明细按 `ord` 区间扫描(ord 是重建时按 risk_sort_key 排好的展示序号,
+    #       与卡面 TOP N 同一序列 → 第 1 页 + 第 2 页正好等于 TOP N, 不漏不重)。
+    # 级别过滤必须在 SQL 里做: 弹窗有"紧急/预警/关注"三个 pill, 若只过滤已取回的那一页,
+    #   会出现"标题 54 条、列表 3 条"这种自相矛盾的画面(第 1 页 300 条里只有 3 条是红色)。
+    _lv = str(level or "")
+    _lv_sql = " AND level=%s" if _lv else ""
     try:
-        rows = query(
-            "SELECT dim, sku, barcode, warehouse, product_name, avail, ds, adj_dos, level, accel "
-            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s",
-            [channel, _m, _g]) or []
+        agg = query(
+            "SELECT dim, COUNT(*) AS n, "
+            "SUM(level='red') AS crit, SUM(level='orange') AS warn, MAX(ord) AS mx "
+            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s" + _lv_sql + " GROUP BY dim",
+            [channel, _m, _g] + ([_lv] if _lv else [])) or []
     except Exception as _e:
-        try_err("unit_store", "risk 读取降级", _e)
+        try_err("unit_store", "risk 计数读取降级", _e)
         return None
-    # 排序交给 `risk_sort_key`（现算/物化唯一真源），不交给 SQL：
-    #   MySQL collation 与 Python 码位序不一致，同一批 SKU 格式不统一就会错位。
+    _cnt = {}
+    for r in agg:
+        _cnt[str(r.get("dim") or "")] = (int(r.get("n") or 0), int(r.get("crit") or 0),
+                                         int(r.get("warn") or 0), int(r.get("mx") or 0))
+    # 排序交给 `risk_sort_key`（现算/物化唯一真源）。分页读靠 ord（重建时已按它排好），
+    #   只有**旧 gen 的 ord 全 0** 才退回"全量读 + Python 排序"——过渡期宁慢不错。
     try:
         from routes.dashboard_stock_risk import risk_sort_key as _rsk
     except Exception:
         _rsk = None
-    buckets = {"bc": [], "c": [], "own": []}
-    for r in rows:
-        _d = str(r.get("dim") or "")
-        if _d not in buckets:
-            continue
-        _w = str(r.get("warehouse") or "")
-        buckets[_d].append({
-            "sku": str(r.get("sku") or ""), "barcode": str(r.get("barcode") or ""),
-            "product_name": str(r.get("product_name") or r.get("sku") or ""),
-            "warehouse": _w, "type": {"bc": "BC", "c": "C", "own": "OWN"}[_d],
-            "available_qty": int(r.get("avail") or 0),
-            "daily_sales": round(float(r.get("ds") or 0), 1),
-            "days_to_empty": round(float(r.get("adj_dos") or 0), 1),
-            "level": str(r.get("level") or ""),
-            "accel": True if int(r.get("accel") or 0) else None,
-        })
+    _lim = max(0, int(limit or 0))
+    _off = max(0, int(offset or 0))
+    _cols = "SELECT dim, sku, barcode, warehouse, product_name, avail, ds, adj_dos, level, accel "
     out = {"items": [], "total": 0, "critical": 0, "warning": 0}
     for _d, _k, _t in _RISK_DIMS:
-        _it = buckets[_d]
-        if _rsk is not None:
-            _it.sort(key=_rsk)
-        out[_k] = _it if full else _it[:10]
-        out[_d + "Total"] = len(_it)
-        out[_d + "Critical"] = sum(1 for x in _it if x["level"] == "red")
-        out[_d + "Warning"] = sum(1 for x in _it if x["level"] == "orange")
+        _n, _crit, _warn, _mx = _cnt.get(_d, (0, 0, 0, 0))
+        _items = []
+        if _n:
+            try:
+                if _mx > 0:
+                    # 分页/TOP N 都走区间扫描: full=1 且未给 limit 才是"全量"(兼容旧调用)
+                    _take = _lim if _lim else (0 if full else 10)
+                    _sql = (_cols + "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s "
+                            "AND dim=%s" + _lv_sql + " ORDER BY ord")
+                    _p = [channel, _m, _g, _d] + ([_lv] if _lv else [])
+                    if _take:
+                        _sql += " LIMIT %d OFFSET %d" % (_take, _off)
+                    _rows = query(_sql, _p) or []
+                else:
+                    # 旧 gen: ord 还没写(列默认 0) → 全量读、Python 排、再切
+                    _rows = query(_cols + "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s "
+                                  "AND dim=%s" + _lv_sql, [channel, _m, _g, _d] + ([_lv] if _lv else [])) or []
+                    _rows = sorted(_rows, key=_rsk) if _rsk else _rows
+                    _take = _lim if _lim else (0 if full else 10)
+                    _rows = _rows[_off:_off + _take] if _take else _rows[_off:]
+            except Exception as _e:
+                try_err("unit_store", "risk 明细读取降级(%s)" % _d, _e)
+                return None
+            for r in _rows:
+                _w = str(r.get("warehouse") or "")
+                _items.append({
+                    "sku": str(r.get("sku") or ""), "barcode": str(r.get("barcode") or ""),
+                    "product_name": str(r.get("product_name") or r.get("sku") or ""),
+                    "warehouse": _w, "type": {"bc": "BC", "c": "C", "own": "OWN"}[_d],
+                    "available_qty": int(r.get("avail") or 0),
+                    "daily_sales": round(float(r.get("ds") or 0), 1),
+                    "days_to_empty": round(float(r.get("adj_dos") or 0), 1),
+                    "level": str(r.get("level") or ""),
+                    "accel": True if int(r.get("accel") or 0) else None,
+                })
+        out[_k] = _items
+        out[_d + "Total"] = _n
+        out[_d + "Critical"] = _crit
+        out[_d + "Warning"] = _warn
     return out
 
 
@@ -454,9 +492,13 @@ def _risk_rows(channel, mode):
         return None
     rows = []
     for _d, _k, _t in _RISK_DIMS:
-        for it in (p.get(_k) or []):
+        # ord = 维度内展示序号: `_stock_risk` 已按 risk_sort_key 排好(见其 375 行), 这里
+        #   只把名次落库。读侧 `ORDER BY ord LIMIT/OFFSET` 切出的第 1 页 + 第 2 页,
+        #   与卡面 TOP 10 是**同一个序列** —— 不会因为 SQL collation 与 Python 码位序不同,
+        #   出现"某行在两页里各一次、另一行永远翻不到"。
+        for _i, it in enumerate(p.get(_k) or []):
             rows.append({
-                "dim": _d, "sku": str(it.get("sku") or "")[:80],
+                "dim": _d, "ord": _i, "sku": str(it.get("sku") or "")[:80],
                 "barcode": str(it.get("barcode") or "")[:40],
                 "warehouse": str(it.get("warehouse") or "")[:80],
                 "product_name": str(it.get("product_name") or "")[:255],
@@ -469,8 +511,9 @@ def _risk_rows(channel, mode):
     return rows
 
 
-def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp=""):
+def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp="", timing=""):
     """gen+1 写入 → 校验已过 → head 一步切换 → 清 N-2 及更早"""
+    _tp0 = time.time()
     h = head(channel, mode)
     gen = int((h or {}).get("gen") or 0) + 1
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
@@ -500,26 +543,27 @@ def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp=""):
         if risk:
             for i in range(0, len(risk), _CHUNK):
                 part = risk[i:i + _CHUNK]
-                vals = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(part))
+                vals = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(part))
                 _p = []
                 for a in part:
-                    _p += [channel, mode, gen, a["dim"], a["sku"], a["barcode"], a["warehouse"],
-                           a["product_name"], a["avail"], a["ds"], a["adj_dos"],
+                    _p += [channel, mode, gen, a["dim"], a.get("ord", 0), a["sku"], a["barcode"],
+                           a["warehouse"], a["product_name"], a["avail"], a["ds"], a["adj_dos"],
                            a["level"], a["accel"]]
-                execute("INSERT INTO risk_snapshot(channel,mode,gen,dim,sku,barcode,warehouse,"
+                execute("INSERT INTO risk_snapshot(channel,mode,gen,dim,ord,sku,barcode,warehouse,"
                         "product_name,avail,ds,adj_dos,level,accel) VALUES" + vals, _p)
     except Exception as _e:
         try_err("unit_store", "risk 发布失败(断货卡退回现算)", _e)
     # ── 唯一切换点 ──
     #   risk_rows: -1 = 本轮断货快照没算成 → 读侧退回现算(宁慢不错)。
+    _timing = "%s,publish=%.1f" % (str(timing or ""), time.time() - _tp0)
     execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,risk_rows,risk_fp,"
-            "stale,note,built_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
+            "timing,stale,note,built_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
             "ON DUPLICATE KEY UPDATE gen=VALUES(gen), fp=VALUES(fp), units=VALUES(units), "
             "alerts=VALUES(alerts), risk_rows=VALUES(risk_rows), risk_fp=VALUES(risk_fp), "
-            "stale=0, note='ok', built_at=VALUES(built_at)",
+            "timing=VALUES(timing), stale=0, note='ok', built_at=VALUES(built_at)",
             [channel, mode, gen, fp, n_units, len(alerts),
-             -1 if risk is None else len(risk), str(risk_fp or "")])
+             -1 if risk is None else len(risk), str(risk_fp or ""), _timing[:255]])
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
     execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen<%s",
@@ -562,7 +606,9 @@ def build(channel, mode=None, inv_rows=None, force=False):
         _mark_stale(channel, _m, "scan 异常: %s" % _e)
         try_err("unit_store", "重建扫描失败(%s/%s)" % (channel, _m), _e)
         return {"ok": False, "error": "scan"}
+    _t_scan = time.time() - _t0
     errs = _validate(channel, _m, sc)
+    _t_val = time.time() - _t0 - _t_scan
     if errs:
         _mark_stale(channel, _m, "校验未通过: " + "; ".join(errs))
         try_err("unit_store", "重建校验未通过(%s/%s), 已保留旧版本" % (channel, _m),
@@ -570,16 +616,23 @@ def build(channel, mode=None, inv_rows=None, force=False):
         return {"ok": False, "error": "validate", "detail": errs[:5]}
     # 断货三级快照: 放在校验通过之后 —— 校验不过要退回旧版本, 没必要为它白烧 4~5s。
     #   它是**同一次重建的副产品**, 不是第二个模型: 数据域/粒度/配置与判定同源, 天然同版本。
+    _t_r0 = time.time()
     _risk = _risk_rows(channel, _m)
+    _t_risk = time.time() - _t_r0
     try:
+        # 分段耗时落 head: 重建 30s+ 却只有一个总数时, "优化"只能靠猜。
+        #   scan(取数+判定) / validate(独立复核) / risk(断货快照) / publish(写库, 由 _publish 自记)
+        _timing = "scan=%.1f,validate=%.1f,risk=%.1f,units=%d,alerts=%d" % (
+            _t_scan, _t_val, _t_risk, len(sc["units"]), len(sc["alerts"]))
         gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]),
-                       risk=_risk, risk_fp=_rfp)
+                       risk=_risk, risk_fp=_rfp, timing=_timing)
     except Exception as _e:
         _mark_stale(channel, _m, "发布异常: %s" % _e)
         try_err("unit_store", "重建发布失败(%s/%s)" % (channel, _m), _e)
         return {"ok": False, "error": "publish"}
     return {"ok": True, "gen": gen, "units": len(sc["units"]), "alerts": len(sc["alerts"]),
-            "risk": len(_risk or []), "elapsed": round(time.time() - _t0, 2)}
+            "risk": len(_risk or []), "elapsed": round(time.time() - _t0, 2),
+            "timing": _timing}
 
 
 # ── 触发 ────────────────────────────────────────────────────────
@@ -638,6 +691,8 @@ def status(channel, mode=None):
             "gen": int(h.get("gen") or 0), "units": int(h.get("units") or 0),
             "alerts": int(h.get("alerts") or 0), "stale": int(h.get("stale") or 0),
             "note": h.get("note") or "", "built_at": str(h.get("built_at") or ""),
+            # 上一轮重建的分段耗时(scan/validate/risk/publish) —— 重建慢时先看这里, 再谈优化
+            "timing": str(h.get("timing") or ""),
             "fp_head": h.get("fp") or "", "fp_now": _fp,
             "fp_match": bool(_fp) and str(h.get("fp") or "") == _fp,
             "available": _t is not None, "buckets": len(_t or {}),

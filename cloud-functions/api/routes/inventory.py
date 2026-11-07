@@ -25,30 +25,61 @@ _INV_FIELDS = _INV_ALL.split(", ")
 
 @router.get("/inventory/out-of-stock")
 @traced
-def out_of_stock(channel: str = "jd", wh: str = "own", limit: int = 0):
+def out_of_stock(channel: str = "jd", wh: str = "own", limit: int = 0,
+                 offset: int = 0, paged: int = 0):
     """缺货清单(维度与看板健康卡一致): wh=own/platform/platform_b/bc
     bc = platform + platform_b 按 SKU 合计 <=0(与 dashboard aux bcOutOfStock 同口径)
-    limit>0 时截断(健康卡数据量大时防大响应, 默认全量兼容)"""
-    _lim = (" LIMIT %d" % limit) if limit > 0 else ""
+
+    ── 2026-11-07 P2 真分页 ────────────────────────────────────────────────
+    卡面预览只要 3 条, 弹窗一次也只看一屏 —— 原来两端都拉 `limit=5000`:
+      · 卡面: 5 千行搬回来只为 `.slice(0,3)`, 首屏多一个 1.2s/49KB 的请求;
+      · 弹窗: 一次渲染 5 千个 DOM 节点, 滚动明显掉帧。
+    `paged=1` 时返回 `{items,total,limit,offset}`, SQL 层 `LIMIT/OFFSET` —— 传输的是
+    "这一屏", 不是"整个清单"。`paged=0` 保持裸数组(旧调用方/导出脚本零改动)。
+    注意: 分页**不减少** COUNT 的成本, 它只让"取一页"变便宜; 真正让 COUNT 变便宜的是
+    索引与物化(见 unit_summary 的 out 计数)。
+    """
+    _off = max(0, int(offset or 0))
+    _lim = int(limit or 0)
+    _lim_sql = ((" LIMIT %d" % _lim) if _lim > 0 else "")
+    if _lim > 0 and _off > 0:
+        _lim_sql += " OFFSET %d" % _off
     if wh == "bc":
-        # bc = B仓+全国C仓按 SKU 合计(bbcc 一盘棋口径); warehouse 列给实际缺货仓集合
-        # (前端弹窗/预览按数据 warehouse 列显示实际仓名, 非硬编码 "BC")
-        # 2026-10-29 按 69码: BC 盘缺货按 (sku, 69码) 分组(原按 sku 合并, 两码库存互相抵消)
         rows = query(
             "SELECT sku, COALESCE(barcode,'') AS barcode, MAX(product_name) AS product_name, "
             "'bc' AS warehouse_type, SUM(available_qty) AS available_qty, "
             "GROUP_CONCAT(DISTINCT IF(available_qty<=0, warehouse, NULL) "
             "ORDER BY warehouse SEPARATOR ',') AS warehouse "
-            "FROM inventory "
-            "WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
-            "GROUP BY sku, COALESCE(barcode,'') HAVING SUM(available_qty) <= 0 ORDER BY sku" + _lim, [channel])
+            "FROM inventory WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
+            "GROUP BY sku, COALESCE(barcode,'') HAVING SUM(available_qty) <= 0 ORDER BY sku"
+            + _lim_sql, [channel])
         for _r in rows:
             _r["warehouse"] = str(_r.get("warehouse") or "") or "BC"
+        _total = -1
+        if paged:
+            try:
+                _c = one("SELECT COUNT(*) AS n FROM (SELECT 1 FROM inventory WHERE channel=%s "
+                         "AND warehouse_type IN ('platform','platform_b') "
+                         "GROUP BY sku, COALESCE(barcode,'') HAVING SUM(available_qty) <= 0) t",
+                         [channel]) or {}
+                _total = int(_c.get("n") or 0)
+            except Exception as _e:
+                try_err("inventory", "缺货总数(bc)统计降级", _e)
     else:
         from routes.common import INVENTORY_COLS as _IC
         rows = query(
             "SELECT " + _IC + " FROM inventory WHERE channel=%s AND warehouse_type=%s "
-            "AND available_qty<=0 ORDER BY id DESC" + _lim, [channel, wh])
+            "AND available_qty<=0 ORDER BY id DESC" + _lim_sql, [channel, wh])
+        _total = -1
+        if paged:
+            try:
+                _c = one("SELECT COUNT(*) AS n FROM inventory WHERE channel=%s "
+                         "AND warehouse_type=%s AND available_qty<=0", [channel, wh]) or {}
+                _total = int(_c.get("n") or 0)
+            except Exception as _e:
+                try_err("inventory", "缺货总数统计降级", _e)
+    if paged:
+        return ok({"items": rows or [], "total": _total, "limit": _lim, "offset": _off})
     return ok(rows)
 
 

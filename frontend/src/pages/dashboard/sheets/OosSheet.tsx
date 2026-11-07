@@ -2,17 +2,52 @@ import { createPortal } from 'react-dom'
 import { fmtInt, fmtWh } from '../format'
 import type { InventoryRow } from '../../../api/types'
 import { t } from '../../../locale'
+import { usePaged, atBottom } from './usePaged'
 
 interface Props {
   open: boolean
   onClose: () => void
+  /** 卡面已有的预览行(首帧先渲染它, 分页结果回来再替换 —— 弹窗不为"等数据"而空白) */
   fullOut: InventoryRow[] | null
   oosSrc: InventoryRow[] | null
   healthTab: string
+  channel?: string
 }
 
 export default function OosSheet(props: Props) {
-  const { open, onClose, fullOut, oosSrc: _oosSrc, healthTab } = props
+  const { open, onClose, fullOut, oosSrc: _oosSrc, healthTab, channel } = props
+  // 维度必须与健康卡当前视图一致(own/平台/B/BC 合计) —— 曾硬编码 platform, 弹窗与卡面数字对不上
+  const wh =
+    healthTab === 'own'
+      ? 'own'
+      : healthTab === 'bc'
+        ? 'bc'
+        : healthTab === 'platform'
+          ? 'platform'
+          : 'platform_b'
+  /**
+   * 2026-11-07 P2 真分页: 原来点击时拉 `limit=5000` 一次性渲染 5 千行 DOM。
+   * 现在 500/页, 滚到底续拉; 首帧用卡面已有的 oosSrc 预览行, 不等网络。
+   */
+  const pg = usePaged<InventoryRow>(
+    open,
+    function (off, lim) {
+      return (
+        '/api/inventory/out-of-stock?channel=' +
+        encodeURIComponent(channel || 'jd') +
+        '&wh=' +
+        wh +
+        '&paged=1&limit=' +
+        lim +
+        '&offset=' +
+        off
+      )
+    },
+    500,
+  )
+  const fallback = fullOut && fullOut.length ? fullOut : _oosSrc || []
+  const list = pg.rows.length ? pg.rows : fallback
+  const total = pg.total >= 0 ? pg.total : list.length
   if (!open) return null
   return createPortal(
     <>
@@ -39,6 +74,9 @@ export default function OosSheet(props: Props) {
           onClick={function (e) {
             e.stopPropagation()
           }}
+          onScroll={function (e) {
+            if (atBottom(e)) pg.more()
+          }}
           className="material-regular"
           style={{
             width: '100%',
@@ -60,9 +98,9 @@ export default function OosSheet(props: Props) {
               color: 'var(--text)',
             }}
           >
-            {t('os.title_n', { n: fmtInt((fullOut && fullOut.length ? fullOut : _oosSrc).length) })}
+            {t('os.title_n', { n: fmtInt(total) })}
           </div>
-          {(fullOut && fullOut.length ? fullOut : _oosSrc).map(function (x, i) {
+          {list.map(function (x, i) {
             return (
               <div
                 key={i}
@@ -112,6 +150,30 @@ export default function OosSheet(props: Props) {
               </div>
             )
           })}
+          {pg.busy ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: 8,
+                color: 'var(--muted)',
+                fontSize: 'var(--font-12)',
+              }}
+            >
+              {t('common.loading')}
+            </div>
+          ) : null}
+          {pg.end && list.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: 8,
+                color: 'var(--muted)',
+                fontSize: 'var(--font-12)',
+              }}
+            >
+              {t('common.empty')}
+            </div>
+          ) : null}
           <div
             onClick={function () {
               onClose()

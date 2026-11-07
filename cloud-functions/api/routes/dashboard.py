@@ -1297,7 +1297,8 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
 
 @router.get("/dashboard/stock-risk")
 @traced
-def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int = 0):
+def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int = 0,
+               limit: int = 0, offset: int = 0, level: str = ""):
     """濒临断货(30s 共享表缓存)+单独无锁路径(2026-10-11: 行锁对 stock-risk 16s/无锁 2s——无锁保留;
     瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)
     2026-10-17 修复: 曾裸 REPLACE + except 静默吞异常 → 缓存永不落库 → 每次全量冷算 2.5-14s;
@@ -1310,11 +1311,15 @@ def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int
         from routes.dashboard_stock_risk import _risk_compare
         return ok(_risk_compare(channel, full=full))
     from routes.analysis_cache import _CACHE_V as _CV
-    _key = "stock_risk|%s|%s|%s|%s" % (_CV, channel, full, legacy)
+    # limit/offset 必须进键: 否则第 1 页的响应被第 3 页命中, 弹窗翻页会看到重复行。
+    _lim = max(0, min(int(limit or 0), 2000))
+    _off = max(0, int(offset or 0))
+    _key = "stock_risk|%s|%s|%s|%s|%s|%s|%s" % (_CV, channel, full, legacy, _lim, _off, level)
 
     def _build():
         try:
-            return _stock_risk(channel, full=full, legacy=bool(legacy))
+            return _stock_risk(channel, full=full, legacy=bool(legacy), limit=_lim, offset=_off,
+                               level=level or "")
         except Exception as _e:
             try_err('dash', 'stock_risk 计算失败(重试一次)', _e)
             # 2026-11-06 P3-5: 原来这里 `return _stock_risk(...)` —— 原样再调一次就算"降级",
@@ -1323,7 +1328,8 @@ def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int
             #   现在明确两段: ① 一次重试 → 治 TiDB 瞬时抖动; ② 仍失败就返回**空结构** →
             #   断货卡数字归零(而不是整页报错), 且 try_err 明确留痕, 不会被当成"真的没有断货"。
             try:
-                return _stock_risk(channel, full=full, legacy=bool(legacy))
+                return _stock_risk(channel, full=full, legacy=bool(legacy), limit=_lim, offset=_off,
+                               level=level or "")
             except Exception as _e2:
                 try_err('dash', 'stock_risk 二次失败(返回空结构, 30s 后重算)', _e2)
                 return {"items": [], "total": 0, "critical": 0, "warning": 0,

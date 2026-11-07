@@ -1,7 +1,7 @@
 """原生 alerts 路由(方案 B): 列表(分组配额) + 精确计数"""
 from fastapi import APIRouter
 
-from db import query
+from db import query, one
 from routes.common import ok, traced, try_err
 
 router = APIRouter(tags=["alerts"])
@@ -45,15 +45,41 @@ def _attach_warehouse(alerts, channel):
 
 @router.get("/alerts")
 @traced
-def list_alerts(channel: str = "jd", limit: int = 200, exclude: str = ""):
+def list_alerts(channel: str = "jd", limit: int = 200, exclude: str = "",
+                types: str = "", offset: int = 0, paged: int = 0):
     """告警列表: 分组配额(low_stock/replenish/other 各组 limit 条, 组内 id DESC)——可见性由分组配额保证
 
     exclude: 逗号分隔的 alert_type 黑名单。**2026-11-07 加**: 看板首屏曾用 `limit=20000`
     预拉全量(3.9MB / 4.7s), 只为卡面几行明细 —— 其中 `own_overstock` 一家 7215 行(占 2/3),
     而这批货由「自有仓健康」卡专属承载, 看板的告警列表从来不显示它(aux 里也排除了)。
     首屏 4 个重接口并发时, 这 3.9MB 直接把浏览器同域连接占满, boot 从 1.2s 拖到 6.6s。
+
+    ── 2026-11-07 P2 真分页(`paged=1`) ──────────────────────────────────
+    分组配额的语义是"每类各取 N 条", 天生**不能翻页**: 第 2 页要接着第 1 页往下读,
+    而不是"每类再各取 N 条"(那会重复)。所以分页模式改成单一全序(id DESC)+ SQL LIMIT/OFFSET,
+    `types` 用来收窄到某一类(low_stock / other), 与 `exclude` 可叠加。
+    弹窗按需拉一页(300 条), 卡面只读 `/alerts/counts` 的计数 —— 两边各自最省。
     """
     _ex = [x.strip() for x in (exclude or "").split(",") if x.strip()]
+    _tp = [x.strip() for x in (types or "").split(",") if x.strip()]
+    if paged:
+        _w = " AND alert_type NOT IN (" + ",".join(["%s"] * len(_ex)) + ")" if _ex else ""
+        if _tp:
+            _w += " AND alert_type IN (" + ",".join(["%s"] * len(_tp)) + ")"
+        _p = [channel] + _ex + _tp
+        _lim = max(1, min(int(limit or 300), 1000))
+        _off = max(0, int(offset or 0))
+        rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active'" % _FIELDS
+                     + _w + " ORDER BY id DESC LIMIT %d OFFSET %d" % (_lim, _off), _p)
+        _attach_warehouse(rows, channel)
+        _total = -1
+        try:
+            _c = one("SELECT COUNT(*) AS n FROM alerts WHERE channel=%s AND status='active'" + _w,
+                     _p) or {}
+            _total = int(_c.get("n") or 0)
+        except Exception as _e:
+            try_err("alerts", "告警总数统计降级", _e)
+        return ok({"items": rows, "total": _total, "limit": _lim, "offset": _off})
     _ex_sql = ""
     if _ex:
         _ex_sql = " AND alert_type NOT IN (" + ",".join(["%s"] * len(_ex)) + ")"

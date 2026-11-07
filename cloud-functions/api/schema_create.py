@@ -414,6 +414,10 @@ _TABLES = {
         #   环境变量 UNIT_STATE_READ=0 仍可**一刀关闭**(优先于本列), 用于紧急回滚。
         "enabled TINYINT NOT NULL DEFAULT 0, "
         "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
+        # 2026-11-07 P2: 上一轮重建的分段耗时(JSON, 形如 {"scan":8.1,"validate":5.2,...})。
+        #   重建 30s+ 但只有总数、没有分解 → 优化全靠猜。落到 head 上, /dashboard/unit-state
+        #   一次就能看到钱花在哪一段, 不用为加埋点再发一版。
+        "timing VARCHAR(255) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, "
         "PRIMARY KEY (channel, mode))"
     ),
@@ -462,8 +466,14 @@ _TABLES = {
         "avail INT NOT NULL DEFAULT 0, ds DECIMAL(12,2) NOT NULL DEFAULT 0, "
         "adj_dos DECIMAL(12,2) NOT NULL DEFAULT 0, level VARCHAR(12) NOT NULL, "
         "accel TINYINT NOT NULL DEFAULT 0, "
+        # 2026-11-07 P2: ord = 维度内展示序号(重建时按 risk_sort_key 排好写入)。
+        #   弹窗分页必须按**同一个序**切页: 若读侧另用 SQL ORDER BY, MySQL collation 与
+        #   Python 码位序不一致 → 同一行在第 1 页和第 3 页各出现一次/某行永远翻不到。
+        #   把排序结果持久化成序号, 读侧 `ORDER BY ord LIMIT/OFFSET` 与卡面 TOP N 同源。
+        "ord INT NOT NULL DEFAULT 0, "
         "PRIMARY KEY (channel, mode, gen, dim, sku, barcode, warehouse), "
-        "KEY idx_risk_level (channel, mode, gen, dim, level, adj_dos))"
+        "KEY idx_risk_level (channel, mode, gen, dim, level, adj_dos), "
+        "KEY idx_risk_ord (channel, mode, gen, dim, ord))"
     ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
@@ -593,6 +603,9 @@ _ADD_INDEXES = [
     #   一份大文件几十个批次 = 上百次全表扫。补 (sku, barcode) 后变成 500 个索引区间。
     ("idx_orders_sku_bc", "orders", "(sku, barcode)"),
     ("idx_batches_sku_bc", "batches", "(sku, barcode)"),
+    # 2026-11-07 P2: 断货明细真分页(读侧 ORDER BY ord LIMIT/OFFSET) —— 没有它 TiDB 要
+    #   把该 gen 的 4 千多行取回来再排序; 有了它就是覆盖索引上的区间扫描。
+    ("idx_risk_ord", "risk_snapshot", "(channel, mode, gen, dim, ord)"),
 ]
 _DROP_INDEXES = [
     ("idx_orders_sku", "orders"),        # 被 idx_orders_sku_ordered_at 前缀覆盖
@@ -612,7 +625,10 @@ _COLUMN_ADDS = {
     "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0"),
                         ("risk_enabled", "TINYINT NOT NULL DEFAULT 0"),
                         ("risk_rows", "INT NOT NULL DEFAULT -1"),
-                        ("risk_fp", "VARCHAR(64) NOT NULL DEFAULT ''")],
+                        ("risk_fp", "VARCHAR(64) NOT NULL DEFAULT ''"),
+                        ("timing", "VARCHAR(255) NOT NULL DEFAULT ''")],
+    # 2026-11-07 P2: 断货明细分页序号(存量表补列; 新表 DDL 已含)
+    "risk_snapshot": [("ord", "INT NOT NULL DEFAULT 0")],
     # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
     "unit_summary": [("code_out", "INT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
@@ -729,7 +745,11 @@ _COLUMN_ADDS = {
 #   没有这一列, 一次 risk 计算异常会让卡片显示"0 条断货"(比慢更糟); 有了它, 异常即退回现算。
 # v22(2026-11-07 P0): unit_state_head.risk_fp —— 断货快照的独立指纹(域含 suppliers)。
 #   判定不读 OTIF, 供应商评分变化时 unit fp 不动 → 卡片会用旧的可撑天数, 且无人察觉。
-SCHEMA_VERSION = 22
+# v23(2026-11-07 P2): 明细**真分页**的两块地基 ——
+#   ① risk_snapshot.ord: 维度内展示序号(重建时按 risk_sort_key 排好)。弹窗按 ord 切页,
+#      保证"第 1 页 + 第 2 页 = 卡面 TOP N 的同一序列", 不会因 SQL 与 Python 排序差异漏行/重行;
+#   ② unit_state_head.timing: 重建分段耗时。重建 30s+ 只有总数没有分解, 优化只能猜。
+SCHEMA_VERSION = 23
 
 
 def table_ddl(name):

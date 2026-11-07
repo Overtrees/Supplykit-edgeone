@@ -632,7 +632,9 @@ check("审计: 无 IN (%s) 与 _status_cond 同段(双包裹)", not _bad2, "; ".
 _expect_keys = [
     ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
-    ("stock_risk|", ["_CV", "channel", "full", "legacy"]),   # 2026-11-07: legacy 走现算, 必须独立分键
+    # 2026-11-07 P2: 分页参数必须独立分键 —— 否则第 1 页的响应会被第 3 页命中(翻页出现重复行);
+    #   level 同理, 否则"紧急"页会读到"全部"页的内容。
+    ("stock_risk|", ["_CV", "channel", "full", "legacy", "_lim", "_off", "level"]),
     ("accel|", ["channel", "ratio", "min_qty"]),
     ("purchase|", ["channel", "mode", "days"]),
     ("repl|", ["channel", "mode", "days", "source"]),
@@ -1844,7 +1846,7 @@ try:
 
     _ds4 = open('routes/dashboard.py', encoding='utf-8').read()
     check("S2-1 断货风险键族归首(否则域级匹配不到)",
-          '"stock_risk|%s|%s|%s|%s"' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
+          '"stock_risk|' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
     _sv4 = open('biz/sales.py', encoding='utf-8').read()
     check("S2-1 日销摘要走 cache_put(令牌)", "cache_put" in _sv4 and "tok=_w_tok" in _sv4, "sales.py")
     _sp4 = open('routes/suppliers.py', encoding='utf-8').read()

@@ -92,7 +92,8 @@ def _risk_compare(channel, full: int = 0):
             "counts": {k: _now.get(k) for k in ("bcTotal", "cTotal", "ownTotal")}}
 
 
-def _stock_risk(channel, full: int = 0, legacy: bool = False):
+def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, offset: int = 0,
+                level: str = ""):
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度
 
     ── 2026-11-07 P0(最后一块) 读路径物化 ─────────────────────────────────────
@@ -109,7 +110,7 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False):
     if not legacy:
         try:
             from core import unit_store as _US
-            _mat = _US.risk_of(channel, full=full)
+            _mat = _US.risk_of(channel, full=full, limit=limit, offset=offset, level=level)
             if _mat is not None:
                 return _mat
         except Exception as _e:
@@ -379,9 +380,16 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False):
     bt, bc, bw = _stats(bc_items)
     ct, cc, cw = _stats(c_items)
     ot, oc, ow = _stats(own_items)
-    # items(B 维度)已移除: bc 合计覆盖 B 仓, 前端 bbcc 只用 bcItems / traditional 用 cItems+ownItems
+    # 2026-11-07 P2: 现算分支也要能真分页(legacy=1 只用于对账/兜底, 但契约必须一致 ——
+    #   两路返回结构不同会让前端"有时全量有时一页", 而 compare 对账时逐字段比较会误报)
+    def _slice(items):
+        if int(limit or 0) > 0:
+            _o = max(0, int(offset or 0))
+            return items[_o:_o + int(limit)]
+        return items if full else items[:10]
+
     payload = {"items": [], "total": 0, "critical": 0, "warning": 0,
-               "bcItems": bc_items if full else bc_items[:10], "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
-               "cItems": c_items if full else c_items[:10], "cTotal": ct, "cCritical": cc, "cWarning": cw,
-               "ownItems": own_items if full else own_items[:10], "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}
+               "bcItems": _slice(bc_items), "bcTotal": bt, "bcCritical": bc, "bcWarning": bw,
+               "cItems": _slice(c_items), "cTotal": ct, "cCritical": cc, "cWarning": cw,
+               "ownItems": _slice(own_items), "ownTotal": ot, "ownCritical": oc, "ownWarning": ow}
     return payload
