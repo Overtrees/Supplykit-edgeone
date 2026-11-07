@@ -125,10 +125,15 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
 @router.get("/insights/disposal-suggestions")
 @traced
 def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
-                         search: str = "", debug: int = 0):
-    """滞销处置建议(2026-10-15 修复: 拆分时函数体丢失——GET 误挂 disposals_batch 返 updated:0——滞销 tab 无数据)"""
+                         search: str = "", debug: int = 0,
+                         legacy: int = 0, state: int = 0, force: int = 0):
+    """滞销处置建议(2026-11-07 P0: 改走 list_store 域指纹物化, 见 purchase_calc.disposal_suggestions)
+
+    legacy/state/force 透传给读侧: legacy=1 强制现算(对账), state=1 四维诊断,
+    force=1 同步重建(部署后预热)。形状契约不变。
+    """
     from routes.purchase_calc import disposal_suggestions as _ds
-    return _ds(channel, page, page_size, search, debug)
+    return _ds(channel, page, page_size, search, debug, legacy, state, force)
 
 
 # ── 批量处置 ─────────────────────────────────────────────────────────────

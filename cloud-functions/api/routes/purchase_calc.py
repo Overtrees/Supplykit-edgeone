@@ -360,13 +360,18 @@ def sync_purchase_alerts(channel, result):
         try_err('purchase', '采购告警同步降级', _e)
         return {"opened": 0, "closed": 0}
 
-def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
-                         search: str = "", debug: int = 0):
-    """SKU×仓库粒度滞销处置建议(多因素)
-    ① 临期(best_before ≤ 品类临期线) → black 紧急
-    ② B仓超免费期(purchase_orders.arrival_date 起算) → 成本压力
-    ③ 滞销主判据(品类滞销线 slow-cats / 观察线) → yellow / observe
-    ④ 升级: yellow + (B仓超期 或 资金占用≥阈值) → red
+def _disposal_compute(channel="jd", debug: int = 0):
+    """滞销候选**全量计算**(唯一公式所在), 返回 (已排序全量 items, perf)。
+
+    2026-11-07 P0(本轮): 从 `disposal_suggestions` 拆出 —— 物化重建要算它、
+      现算兜底也要算它, 两处必须同一份代码(红线 9: 算法不复制)。
+      读侧 `disposal_suggestions` 只负责"读物化还是现算" + search/分页/包装。
+    · 不含 search / 分页 / ok() 包装 —— 这些归读侧, 与物化 SQL 同源(见 list_store._where)。
+    · 依赖 `now_cn()`(临期/在库/30天/14天窗口), 业务日期是确定性输入域 →
+      list_store 把日期纳入 fp, 跨天必重建, 不会静默返回昨天的 level。
+
+    判据不变: ① 临期 → black ② B仓超免费期 → 成本压力
+      ③ 滞销主判据(品类滞销线/观察线) → yellow/observe ④ yellow + 成本压力 → red
     """
     import time as _tm_d
     _T0 = _tm_d.time()
@@ -622,21 +627,61 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             "disposed_action": disposed.get((sku, _bc, wh)) or disposed.get((sku, wh), ""),
         })
     _mk("inventory_loop")
+    # 2026-11-07 P0: 排序补 (sku,barcode,warehouse) 成**全序 tie-breaker**(红线 12)。
+    #   原来 key 只有 (level, -days_zero), 同值行顺序取决于 inventory 物理返回序(TiDB 不保证)。
+    #   物化落 seq 后读侧按 seq 切, 与现算的 Python sort 会错位(§15.154 断货快照同教训)。
     items.sort(key=lambda x: ({"black": 0, "red": 1, "yellow": 2, "observe": 3}.get(x["level"], 9),
-                               -(x["days_zero"] if x["days_zero"] is not None else 1e9)))
-    if search:
-        sq = search.lower()
-        items = [x for x in items if sq in str(x.get("sku", "")).lower()
-                 or sq in str(x.get("product_name", "")).lower()
-                 or sq in str(x.get("barcode", "")).lower()]
+                               -(x["days_zero"] if x["days_zero"] is not None else 1e9),
+                               str(x.get("sku", "")), str(x.get("barcode", "")),
+                               str(x.get("warehouse", ""))))
     _mk("total")
+    return items, _PF
+
+
+def _disposal_respond(channel, page, page_size, search, debug):
+    """现算路径的响应包装: 唯一公式 _disposal_compute + 同源筛选/分页。
+
+    筛选走 `list_page.shape`(内部 filter_rows) —— 与物化读侧的 SQL `_where` 逐字等价,
+    不复制第二份筛选(红线 9)。debug 保留真实分段计时(物化命中时没有分段, 故只现算才带)。
+    """
+    from core.list_page import shape as _shape
+    items, _PF = _disposal_compute(channel, debug)
+    _it, _total = _shape(items, search=search, page=page, page_size=page_size)
     if page > 0 and page_size > 0:
-        total = len(items)
-        _out = {"items": items[(page - 1) * page_size: page * page_size],
-                "total": total, "page": page, "page_size": page_size}
+        _out = {"items": _it, "total": _total, "page": page, "page_size": page_size}
         if debug:
             _out["_perf"] = _PF
         return ok(_out)
     if debug:
-        return ok({"_perf": _PF, "items": items})
-    return ok(items)
+        return ok({"_perf": _PF, "items": _it})
+    return ok(_it)
+
+
+def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
+                         search: str = "", debug: int = 0,
+                         legacy: int = 0, state: int = 0, force: int = 0):
+    """滞销处置建议读侧: 先读物化, fp 不命中退回现算(慢但正确)+后台重建。
+
+    2026-11-07 P0 根治「每次请求全量现算 2.5s」: 与 unit_store/own_store/list_store 同骨架,
+      `_disposal_compute` 算一次落 seq, 读侧按 seq 分页; 重建由域计数 fp(含业务日期)驱动,
+      在后台, 无 TTL。判据/形状契约逐字不变:
+      · 分页 {items,total,page,page_size} · 裸调返回列表 · debug 带 _perf 分段。
+    debug / legacy 强制现算(诊断 + 线上逐字段对账); state/force 为物化四维诊断口。
+    """
+    from core import list_store as _LS
+    scope = "disposal|%s" % channel
+    if state or force:
+        if force:
+            _LS.register_scope("disposal", scope, channel, "", 0, "")
+            _rb = _LS.build("disposal", scope, force=True)
+            return ok({"rebuild": _rb, "state": _LS.status("disposal", scope)})
+        return ok(_LS.status("disposal", scope))
+    if debug or legacy:
+        return _disposal_respond(channel, page, page_size, search, debug)
+    _d = _LS.serve("disposal", scope, channel, "", 0, "",
+                   lambda: _disposal_compute(channel)[0],
+                   search=search, page=page, page_size=page_size)
+    # 无分页裸调: 旧契约 data 直接是列表(前端 `(d.items || d || [])` 兼容, 但形状要守住)
+    if page <= 0 or page_size <= 0:
+        return ok(_d["items"])
+    return ok(_d)

@@ -43,14 +43,25 @@ from routes.common import try_err
 DEPS = {
     "repl": ("orders", "inventory", "products", "config"),
     "purchase": ("orders", "inventory", "products", "config", "rules", "purchases"),
+    # disposal: 还读 alerts(pseudo 线索, rules 域) / purchase_orders + disposal_records
+    #   (b_arrival / disposed, purchases 域); 日销物化(orders) / 库存 / 商品 / 配置同源。
+    "disposal": ("orders", "inventory", "products", "config", "rules", "purchases"),
 }
 NEED_KEYS = {
     "repl": ("suggested_qty", "b_suggested"),
     "purchase": ("actual_purchase",),
+    "disposal": (),          # 滞销无 need_only 概念; need 列恒 0, 读侧不按它筛
 }
-OUT_KEY = {"repl": "items", "purchase": "suggestions"}
-# 无分页裸调的最大返回行数: repl 旧契约截断 2000; purchase 旧契约返回全量(导出/内部调用)
-UNPAGED_CAP = {"repl": 2000, "purchase": None}
+OUT_KEY = {"repl": "items", "purchase": "suggestions", "disposal": "items"}
+# 无分页裸调的最大返回行数: repl 旧契约截断 2000; purchase/disposal 旧契约返回全量
+UNPAGED_CAP = {"repl": 2000, "purchase": None, "disposal": None}
+
+# 业务日期是**确定性输入域**(不是缓存 TTL): 滞销的 days_zero / B仓在库天数 / 临期天数 /
+#   30天已处置 / 14天补货线索全部读 now_cn()。跨天不改它们 = 用户看到昨天的"未销售天数"
+#   和过时的 level → 数据四维-准确性受损。把日期纳入 fp, 跨天首请求 fp 不等 → 退回现算
+#   + 后台重建(与 §15.152「时间不参与数据新不新」不矛盾: 那里指"数据没变不该因时间流逝
+#   重算", 这里指"日期变了计算结果本身就变", 属输入变化)。repl/purchase 公式不读日期, 不加。
+DATE_AWARE = ("disposal",)
 
 _CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
@@ -83,7 +94,16 @@ def fp_now(kind, channel, mode, extra=""):
         return ""
     if not base:
         return ""
-    return hashlib.md5(("%s|%s" % (base, extra)).encode("utf-8")).hexdigest()[:32]
+    raw = "%s|%s" % (base, extra)
+    if kind in DATE_AWARE:
+        # 日期是输入, 不是保鲜期: 跨天必须重算, 否则滞销天数/B仓在库/临期 level 全是昨天的。
+        try:
+            from core.clock import today_cn
+            raw += "|d=" + today_cn()
+        except Exception as _e:
+            try_err("list_store", "业务日期计算降级(退回现算)", _e)
+            return ""
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:32]
 
 
 # ── head ────────────────────────────────────────────────────────
@@ -222,6 +242,9 @@ def _builder_of(kind, h):
     if kind == "repl":
         from routes.replenishment import _build_repl
         return lambda: _build_repl(channel, mode)
+    if kind == "disposal":
+        from routes.purchase_calc import _disposal_compute
+        return lambda: _disposal_compute(channel, 0)[0]
     from routes.purchase import _build_purchase
     return lambda: _build_purchase(channel, mode, days)
 
@@ -232,7 +255,11 @@ def build(kind, scope, force=False):
     if not h:
         return {"ok": False, "error": "scope_unregistered"}
     channel = str(h.get("channel") or "jd")
-    mode = str(h.get("mode") or "bbcc")
+    # mode 必须与 page_of / register 登记的**原始值同源**: disposal 传空串, 若这里兜底成
+    # "bbcc", 写侧 fp(mode_of("bbcc")="bbcc") 与读侧 fp(mode_of("")=渠道默认) 不等 →
+    # page_of 永远判 fp 不命中 → 物化白做、每请求仍 2.5s 现算。空串交给 mode_of 自己查
+    # 渠道默认, 读写两侧查同一份配置, 必然一致。(§15.160 抓到的读写 fp 不对称)
+    mode = str(h.get("mode") or "")
     fp = fp_now(kind, channel, mode, scope)
     if not fp:
         return {"ok": False, "error": "fp_unavailable"}

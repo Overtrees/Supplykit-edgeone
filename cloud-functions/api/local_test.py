@@ -4504,6 +4504,66 @@ try:
 except Exception as _e32:
     check("§15.159 建议行物化用例无异常", False, str(_e32)[:300])
 
+# ── §15.160 P0: 滞销处置建议物化(第三种 list_store kind) ─────────────
+try:
+    _pc19 = _rd("routes/purchase_calc.py")
+    _ls19 = _rd("core/list_store.py")
+    _pu19 = _rd("routes/purchase.py")
+
+    # 红线 9: 唯一公式 _compute, 物化重建与现算兜底都调它, 不复制
+    check("disposal 物化: 唯一公式 _disposal_compute, 重建与现算同源(红线 9)",
+          "def _disposal_compute(" in _pc19
+          and "_disposal_compute(channel, 0)[0]" in _ls19          # 重建侧
+          and "lambda: _disposal_compute(channel)[0]" in _pc19      # serve 降级
+          and "items, _PF = _disposal_compute(channel, debug)" in _pc19,  # 现算响应
+          "purchase_calc + list_store")
+    check("disposal 物化: 读侧先读物化, 未命中退回现算(有序降级)",
+          "_LS.serve(" in _pc19 and "def disposal_suggestions(" in _pc19
+          and "if debug or legacy:" in _pc19, "purchase_calc.py")
+    # 红线 12: 排序补 (sku,barcode,warehouse) 全序 tie-breaker, 否则 seq 与 Python sort 错位
+    check("disposal 物化: 排序全序 tie-breaker(不依赖 inventory 物理序)",
+          'str(x.get("sku", "")), str(x.get("barcode", "")),' in _pc19
+          and 'str(x.get("warehouse", ""))' in _pc19
+          and "ORDER BY seq" in _ls19, "purchase_calc + list_store")
+    # 数据四维-准确性: 业务日期是确定性输入域, 跨天必重建(不是 TTL)
+    check("disposal 物化: 业务日期进 fp(跨天不重建会返回昨天 level)",
+          'DATE_AWARE = ("disposal",)' in _ls19 and "today_cn()" in _ls19
+          and 'raw += "|d=" + today_cn()' in _ls19, "core/list_store.py")
+    # 依赖域覆盖 disposal_records/alerts(purchases/rules) —— 处置动作要即时反映
+    check("disposal 物化: 依赖域覆盖 purchases/rules(处置记录/伪滞销线索)",
+          '"disposal": ("orders", "inventory", "products", "config", "rules", "purchases")'
+          in _ls19 and 'invalidate("purchases")' in _pu19, "list_store + purchase")
+    # 形状契约: 分页 dict / 裸调列表 / debug 带 _perf
+    check("disposal 物化: 形状契约不变(分页dict/裸调列表/debug _perf)",
+          'return ok(_d["items"])' in _pc19 and "return ok(_d)" in _pc19
+          and '"_perf": _PF' in _pc19, "purchase_calc.py")
+    # disposal 不写 analysis_cache 表缓存, 故 _FAMILY_DEPS 无需登记(靠域计数 fp)
+    from routes.analysis_cache import _FAMILY_DEPS as _FD19
+    check("disposal 物化: 不进 _FAMILY_DEPS(走域计数 fp, 非缓存族墓碑)",
+          "disposal" not in _FD19 and '"disposal"' in _ls19, "list_store + analysis_cache")
+    check("disposal 物化: 失效链路自动覆盖(invalidate 遍历 DEPS 三 kind)",
+          "_LS.ensure_async(_kind)" in _rd("routes/analysis_cache.py")
+          and _ls19.count('": (') >= 3, "analysis_cache")
+    # §15.160 抓到的读写 fp 不对称: build 不得把登记的空 mode 兜底成 "bbcc",
+    #   否则写侧 fp ≠ 读侧 fp → 物化永不命中(每请求仍 2.5s 现算, 且白烧重建)。
+    #   锁住整条同源链: register_scope 存 serve 传入的 mode 原值 → build 读回不改写。
+    check("disposal 物化: 读写 fp 同源(register 存原值 + build 不兜底 bbcc)",
+          'mode = str(h.get("mode") or "")' in _ls19
+          and 'str(mode)[:16]' in _ls19
+          and 'page_of(kind, scope, channel, mode,' in _ls19,
+          "core/list_store.py")
+
+    # 动态: 日期变化时 fp 必变(跨天重建的根), fp 不等 → page_of 返回 None
+    import core.list_store as _LS19
+    _o19 = (_LS19.head, _LS19.fp_now)
+    try:
+        _LS19.head = lambda k, s: None
+        check("disposal 物化: 无 head → 退回现算", _LS19.page_of("disposal", "s", "jd", "", extra="s") is None)
+    finally:
+        _LS19.head, _LS19.fp_now = _o19
+except Exception as _e33:
+    check("§15.160 disposal 物化用例无异常", False, str(_e33)[:300])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()
