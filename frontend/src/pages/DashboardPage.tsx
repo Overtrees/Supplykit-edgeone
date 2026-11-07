@@ -287,28 +287,37 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     return u + '&channel=' + channel + '&mode=' + _replMode
   }
   // —— 采购&补货告警数据(与补货/采购建议页同源, 模式跟随; 补货=建议需补, 采购=建议需采) ——
+  // 2026-11-07 S0-d: `Promise.allSettled` 改**串行**。
+  //   线上真实浏览器实测(同一屏): replenishment 单跑 1.40s、purchase 单跑 0.91s,
+  //   两者同时发 → 12.2s / 16.4s。它们各自要扫全量 SKU(补货还要 3 路线程), 并发时把实例
+  //   CPU 与 TiDB RU 同时打满, 1+1 变成 30 而不是 2 —— 并行在这里是**负优化**。
+  //   串行后各跑各的, 总耗时 ≈ 2.3s。失败隔离由两段各自的 catch 保证(原来是 allSettled 的语义)。
   const loadProc = async () => {
     setProcLoading(true)
     try {
-      const [r, p] = await Promise.allSettled([
-        api.get<ProcResponse>(
+      const _rd = await api
+        .get<ProcResponse>(
           '/api/insights/replenishment?days=28&mode=' +
             _replMode +
             '&channel=' +
             channel +
             '&need_only=1',
           { timeout: 90000 },
-        ),
-        api.get<ProcResponse>(
+        )
+        .then(x => x.data)
+        .catch(() => null)
+      const _pd = await api
+        .get<ProcResponse>(
           '/api/insights/purchase?days=28&mode=' +
             _replMode +
             '&channel=' +
             channel +
             '&need_only=1&page=1&page_size=100', // 2026-11-06 服务端筛+分页(原拉 6MB 全量再前端过滤)
           { timeout: 90000 },
-        ),
-      ])
-      const repData = (r.status === 'fulfilled' ? r.value.data : null) || {}
+        )
+        .then(x => x.data)
+        .catch(() => null)
+      const repData = _rd || {}
       const repItems = Array.isArray(repData) ? repData : repData.items || []
       const repNeed = (Array.isArray(repItems) ? repItems : [])
         .filter(x => (x.suggested_qty || 0) > 0 || (x.b_suggested || 0) > 0)
@@ -321,8 +330,8 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
           days_to_empty: x.days_to_empty ?? 999, // 排序哨兵; null=无销量
           wh: x.warehouse || '',
         }))
-      // 2026-10-17 allSettled: 采购/补货单接口失败不再拖累另一卡(曾 purchase 崩 → Promise.all reject → 双卡空)
-      const purObj = (p.status === 'fulfilled' ? p.value.data : null) || {}
+      // 2026-10-17 失败隔离: 采购/补货单接口失败不拖累另一卡 —— 现由两段各自的 .catch(() => null) 保证
+      const purObj = _pd || {}
       const purItems = (purObj && purObj.suggestions) || []
       const purNeed = (Array.isArray(purItems) ? purItems : [])
         .filter(x => (x.actual_purchase || 0) > 0)
