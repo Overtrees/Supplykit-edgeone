@@ -218,6 +218,21 @@ def health_trend(channel: str = "jd", days: int = 14):
     return ok(_out)
 
 
+@router.get("/dashboard/unit-state")
+@traced
+def dashboard_unit_state(channel: str = "jd", mode: str = "", detail: str = ""):
+    """判定读模型诊断口(只读) —— 四维逐项可查, 不靠猜
+
+    字段含义见 `core/unit_store.status()`: gen/fp/units/alerts/stale/fp_match/available。
+    `detail=1` 附带异常明细前 20 行, 用于核对「卡片计数 == 列表行数」。
+    """
+    from core import unit_store as _US
+    _st = _US.status(channel, mode)
+    if detail:
+        _st["alerts_sample"] = _US.alerts_of(channel, mode, limit=20) or []
+    return ok(_st)
+
+
 @router.get("/dashboard/summary")
 @traced
 def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str = "", mode: str = "",
@@ -474,23 +489,38 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
 
     _t0 = _t.time()
     from concurrent.futures import ThreadPoolExecutor
+    # 2026-11-07 P1: 判定读模型可用时, 「库存 9 万行」与「日销切片 6 万行」**根本不取** ——
+    #   这两条是 summary 3.8s 里唯一的大头(线上 stmt max=2.07s / bundle 仅 0.88s),
+    #   取回来只为了算 10 个整数。命中时并行池只剩 bundle 一路。
+    _t_sum = None
+    _store_on = False
+    try:
+        from core import unit_store as _US
+        if _US.read_enabled():
+            _t_sum = _US.tally_of(channel, mode)
+            _store_on = _t_sum is not None
+            if not _store_on:
+                _US.ensure_async()          # 未命中: 后台补建, 本次仍走原路径(慢但正确)
+    except Exception as _eu:
+        try_err('dashboard', '判定读模型不可用, 退回现算', _eu)
     # 2026-11-06: 8 条查询/6~8 条连接 → 3 条查询/3 条连接。
     #   六个小结果集(agg/recent/brands/flows/counts/cfg)合成 _q_bundle 一条 UNION ALL;
     #   两个大结果集(库存 9 万行 / 日销切片 6 万行)各自独立并行 —— 它们才是传输大头, 不便合并。
     #   合并后: 建连次数从'6 次各自握手'变'3 次并行握手', 且任一手慢不再拖住别的结果集。
-    with ThreadPoolExecutor(max_workers=3) as _ex:
+    with ThreadPoolExecutor(max_workers=3 if not _store_on else 1) as _ex:
         _fb = _ex.submit(_wrap("bundle", _q_bundle, channel, days60, d1, _st30, today))
-        _f3 = _ex.submit(_wrap("inv", _q_inventory, channel))
-        _f4 = _ex.submit(_wrap("digest", _q_digest, channel, mode))
+        _f3 = None if _store_on else _ex.submit(_wrap("inv", _q_inventory, channel))
+        _f4 = None if _store_on else _ex.submit(_wrap("digest", _q_digest, channel, mode))
         # bundle 失败即整体降级到直查路径(外层 try 捕) —— 原 6 条里只有 agg 是硬依赖,
         #   合并后它们同一条 SQL, 要么全有要么全无; 少 5 次建连后失败概率本身也降了。
         agg, recent, _brands_raw, _flows, _counts, _cfg = _split_bundle(_fb.result())
-        _inv_rows = _f3.result()
-        _ds_map = _f4.result()
+        _inv_rows = _f3.result() if _f3 is not None else None
+        _ds_map = _f4.result() if _f4 is not None else None
     _t1 = _t.time()
     _ass = _assemble(list(agg) + list(recent), channel, _st30, today, mode,
                      _inv_rows=_inv_rows, _series=_ds_map,
-                     _counts=_counts, _flows=_flows, _brands_raw=_brands_raw, _cfg=_cfg)
+                     _counts=_counts, _flows=_flows, _brands_raw=_brands_raw, _cfg=_cfg,
+                     _t_sum=_t_sum)
     _t2 = _t.time()
     # 冷算计时(2026-11-02 S2-6 收口后保留): perf_debug 是线上冷算观测的唯一手段
     #   (本地往返数不能外推线上), 部署验收/回归都读它。写 quality_logs 限每屏一条, 成本可忽略。
@@ -589,7 +619,7 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
 
 
 def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, _ds_map=None,
-              _counts=None, _flows=None, _brands_raw=None, _cfg=None, _series=None):
+              _counts=None, _flows=None, _brands_raw=None, _cfg=None, _series=None, _t_sum=None):
     """把聚合行组装成看板结构
 
     2026-11-02 冷算收口: `_counts` / `_flows` / `_brands_raw` / `_cfg` 由调用方预取并注入
@@ -762,27 +792,31 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
     #     · 低库存:       bbcc = bc + 非平台仓的 wh(platform 行已并入 bc, 不能再数一次)
     #                     traditional = 逐仓 wh(B 仓已被 drop_platform_b 剔除)
     from core import metrics as _M
-    _t_sum = None
-    try:
-        _mode_sum = _M.mode_of(channel, mode)
-        _cfg_sum = _cfg if _cfg is not None else _q_cfg(channel)
-        _p_sum = _M.periods(_cfg_sum)
-        _rows_sum = (_inv_rows if _inv_rows is not None else
-                     query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-                           "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
-                           [channel]))
-        _ser_sum = _series
-        if _ser_sum is None:
-            _ser_sum = _M.load(channel, dims=_M.dims_needed(_rows_sum, channel, _mode_sum),
-                               fields=("ds28",))
-        _us_sum = _M.units(_rows_sum, merge_bc=False, with_bc=True,
-                           grain=_M.grain_of(channel, _mode_sum, _cfg_sum),
-                           drop_platform_b=(_mode_sum != "bbcc"))
-        _t_sum = _M.tally(_us_sum, _ser_sum, channel, _mode_sum, metric="ds28",
-                          include_transit=_M.include_transit_default(), p=_p_sum)
-    except Exception as _e:
-        try_err('dashboard', '看板判定降级(健康/低库存各自重算)', _e)
-    health = _health_index(channel, mode, _inv_rows, _ds_map, _cfg=_cfg, _series=_series,
+    _mode_sum = _M.mode_of(channel, mode)
+    if _t_sum is None:
+        try:
+            _cfg_sum = _cfg if _cfg is not None else _q_cfg(channel)
+            _p_sum = _M.periods(_cfg_sum)
+            _rows_sum = (_inv_rows if _inv_rows is not None else
+                         query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                               "available_qty, in_transit_qty, safety_qty FROM inventory WHERE channel=%s",
+                               [channel]))
+            _ser_sum = _series
+            if _ser_sum is None:
+                _ser_sum = _M.load(channel, dims=_M.dims_needed(_rows_sum, channel, _mode_sum),
+                                   fields=("ds28",))
+            _us_sum = _M.units(_rows_sum, merge_bc=False, with_bc=True,
+                               grain=_M.grain_of(channel, _mode_sum, _cfg_sum),
+                               drop_platform_b=(_mode_sum != "bbcc"))
+            _t_sum = _M.tally(_us_sum, _ser_sum, channel, _mode_sum, metric="ds28",
+                              include_transit=_M.include_transit_default(), p=_p_sum)
+        except Exception as _e:
+            try_err('dashboard', '看板判定降级(健康/低库存各自重算)', _e)
+    # 命中物化快照时, health 不能再收到 _inv_rows/_series —— 否则它照样会把 9 万行拉一遍
+    health = _health_index(channel, mode,
+                           None if _t_sum is not None else _inv_rows, _ds_map,
+                           _cfg=_cfg,
+                           _series=None if _t_sum is not None else _series,
                            _tally=_t_sum)
     # 低库存计数 —— 与健康卡/告警规则同一套判定(core.metrics), 不再自己拼安全线
     #

@@ -385,6 +385,52 @@ _TABLES = {
         "CREATE TABLE IF NOT EXISTS data_version (id TINYINT PRIMARY KEY, v BIGINT DEFAULT 0, "
         "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
     ),
+    # 2026-11-07 P1: 按**数据域**计数的版本(global data_version 粒度太粗 —— 改个供应商联系人
+    #   也会 bump, 那会把判定结果整体重建一遍)。域与 analysis_cache._FAMILY_DEPS 同名。
+    "data_version_dom": (
+        "CREATE TABLE IF NOT EXISTS data_version_dom (dom VARCHAR(24) PRIMARY KEY, "
+        "v BIGINT NOT NULL DEFAULT 0, "
+        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
+    ),
+    # 2026-11-07 P1: 判定结果物化读模型 —— 见 core/unit_store.py 的模块 docstring。
+    #   head 是**唯一切换点**: 新 gen 的行全部写完之后才 UPDATE head.gen,
+    #   中途失败 head 仍指旧 gen, 读侧不受影响(旧版本继续正确, 只是不是最新)。
+    #   保留 N 与 N-1 两个 gen: 列表带 ?fp= 钉版本时还能命中上一版,
+    #   "卡片 3823 / 点开 507"这类两张脸在跨重建瞬间不会出现。
+    "unit_state_head": (
+        "CREATE TABLE IF NOT EXISTS unit_state_head ("
+        "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
+        "gen BIGINT NOT NULL DEFAULT 0, fp VARCHAR(64) NOT NULL DEFAULT '', "
+        "units INT NOT NULL DEFAULT 0, alerts INT NOT NULL DEFAULT 0, "
+        "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
+        "built_at DATETIME(6) NULL, "
+        "PRIMARY KEY (channel, mode))"
+    ),
+    # 与 core.metrics.tally() 的返回结构一一对应: {(kind, wtype): {total/ok/low/out/idle/paused}}
+    #   —— 读侧 round-trip 回 tally 直接喂 `_health_index(_tally=...)`, 口径零翻译。
+    "unit_summary": (
+        "CREATE TABLE IF NOT EXISTS unit_summary ("
+        "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
+        "gen BIGINT NOT NULL, kind VARCHAR(8) NOT NULL, wtype VARCHAR(16) NOT NULL DEFAULT '', "
+        "total INT NOT NULL DEFAULT 0, ok INT NOT NULL DEFAULT 0, low INT NOT NULL DEFAULT 0, "
+        "`out` INT NOT NULL DEFAULT 0, idle INT NOT NULL DEFAULT 0, paused INT NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (channel, mode, gen, kind, wtype))"
+    ),
+    # 只存**非 ok** 的单元(ok/idle/paused 不进表): 卡片要的是计数(读 unit_summary 8 行),
+    #   列表要的是异常明细 —— 两者同一次重建产出、同一个 gen, 天然一致。
+    "unit_alert": (
+        "CREATE TABLE IF NOT EXISTS unit_alert ("
+        "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
+        "gen BIGINT NOT NULL, kind VARCHAR(8) NOT NULL, "
+        "sku VARCHAR(80) NOT NULL, barcode VARCHAR(40) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(80) NOT NULL DEFAULT '', state VARCHAR(12) NOT NULL, "
+        "avail INT NOT NULL DEFAULT 0, transit INT NOT NULL DEFAULT 0, "
+        "ds DECIMAL(12,3) NOT NULL DEFAULT 0, line DECIMAL(12,1) NOT NULL DEFAULT 0, "
+        "cover INT NOT NULL DEFAULT 0, gap DECIMAL(12,1) NOT NULL DEFAULT 0, "
+        "adj_dos DECIMAL(12,2) NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (channel, mode, gen, kind, sku, barcode, warehouse), "
+        "KEY idx_unit_alert_state (channel, mode, gen, state, kind))"
+    ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
     #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的
@@ -630,7 +676,9 @@ _COLUMN_ADDS = {
 #   一次解析落库, 消 O(n²) 重读重解析)
 # v17(2026-11-06 S8): products 唯一键 (sku) → (channel, sku) —— 原键让两渠道同名 SKU
 #   无法并存(第二个渠道导入 1062 静默丢行); idx_products_ch 被新键前缀覆盖一并去掉
-SCHEMA_VERSION = 17
+# v18(2026-11-07 P1): 判定结果物化读模型 unit_state_head/unit_summary/unit_alert +
+#   按域计数 data_version_dom(fp 驱动, 不用 TTL)。见 core/unit_store.py。
+SCHEMA_VERSION = 18
 
 
 def table_ddl(name):

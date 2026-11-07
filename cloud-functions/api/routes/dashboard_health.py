@@ -103,21 +103,26 @@ def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _
     """
     from core import metrics as _M
     _mode = _M.mode_of(channel, mode)
-    rows = _inv_rows if _inv_rows is not None else query(
-        "SELECT " + _INV_COLS + " FROM inventory "
-        "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
-    if _cfg is not None:
-        _cfg = dict(_cfg) if not isinstance(_cfg, dict) else _cfg
-    else:
-        _cfg = {}
-        try:
-            _cfg = {r.get("key"): r.get("value") for r in
-                    query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
-        except Exception as _e:
+    # 2026-11-07 P1: 调用方已从物化读模型拿到 `_tally` 时, **不再取库存行/日销**
+    #   —— 原来即使传了 _tally 也会先跑一遍 `SELECT ... FROM inventory`(9 万行),
+    #   等于把物化省下的传输又花回去。这里提前短路。
+    _need_rows = _tally is None
+    if _need_rows:
+        rows = _inv_rows if _inv_rows is not None else query(
+            "SELECT " + _INV_COLS + " FROM inventory "
+            "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+        if _cfg is not None:
+            _cfg = dict(_cfg) if not isinstance(_cfg, dict) else _cfg
+        else:
+            _cfg = {}
+            try:
+                _cfg = {r.get("key"): r.get("value") for r in
+                        query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''", [channel])}
+            except Exception as _e:
                 try_err('dash', '健康指数配置加载降级', _e)
-    _p = _M.periods(_cfg)
-    if _series is None:
-        _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
+        _p = _M.periods(_cfg)
+        if _series is None:
+            _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
     # 判定单元: 保留逐仓行(own/platform/platform_b 三个 tab 各看各的), **另外**追加 BC 单元
     #   传统模式下 B 仓不参与(它只是 jd 的中转仓) —— 与告警规则的 `_close_wt` 白名单同口径
     #

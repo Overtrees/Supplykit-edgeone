@@ -393,6 +393,23 @@ def invalidate(*domains):
                 fn()
             except Exception as _ec:
                     try_err('analysis_cache', '静默降级', _ec)
+        # 2026-11-07 P1: 判定读模型(unit_store)失效 —— 域级计数 + 后台重建。
+        #   ① **按域**计数, 不用全局 data_version: 改个供应商联系人也会 bump 全局值,
+        #      那会把 17 万个单元的整体判定白重建一遍(判定只依赖 orders/inventory/
+        #      products/rules/config)。
+        #   ② 起后台线程而不是同步重建: 重建要 2~3s, 不该压在导入响应上; 线程被冻结
+        #      也只是"这次没建成", head 未切换 → 下次读请求会再触发。
+        try:
+            from core import unit_store as _US
+            _udoms = (set(_US.JUDGE_DOMAINS) if _wipe
+                      else (set(_doms) & set(_US.JUDGE_DOMAINS)))
+            for _dm in sorted(_udoms):
+                _e("INSERT INTO data_version_dom(dom, v) VALUES(%s,1) "
+                   "ON DUPLICATE KEY UPDATE v=v+1", [_dm])
+            if _udoms:
+                _US.ensure_async()
+        except Exception as _du:
+            try_err('analysis_cache', '判定读模型失效降级', _du)
         # 物化追平(异步线程尽力——写操作不阻塞)
         # 2026-11-02 S2-2: 由「5 分钟限频 + 全量 90 天」改为「按业务日期增量」。
         #   旧做法两个硬伤:

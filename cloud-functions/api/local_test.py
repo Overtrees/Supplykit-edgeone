@@ -4114,6 +4114,84 @@ try:
 except Exception as _e30:
     check("S3 口径用例无异常", False, str(_e30)[:300])
 
+# ── P1: 判定结果物化读模型(core/unit_store)────────────────────────────────
+# 这一组不打库: 守的是"物化层不另立口径"这条底线, 以及"发布前校验"真的会拒绝。
+try:
+    from core import unit_store as _US
+    _API_DIR = _os.path.dirname(_os.path.abspath(__file__))
+
+    def _rd(_p):
+        return open(_os.path.join(_API_DIR, _p), encoding="utf-8").read()
+
+    _usrc = _rd("core/unit_store.py")
+    # ① 唯一真源: 分档只能走 metrics.judge(), 本文件不得自己写分档
+    check("unit_store: 分档只调 metrics.judge(不自己写 classify)",
+          ".classify(" not in _usrc and "M.judge(" in _usrc, "出现 classify( 调用 = 第二份真源")
+    check("unit_store: SQL 里没有判定公式(CASE WHEN / safety_line)",
+          "CASE WHEN" not in _usrc.upper() and "safety_line(" not in _usrc, "阈值进了 SQL")
+    check("unit_store: 状态常量引用 metrics(不写裸字符串)",
+          "M.ST_LOW" in _usrc and "M.ST_OUT" in _usrc, "裸写 'low'/'out' 迟早与 metrics 漂移")
+
+    # ② 读路径默认关(可回滚): 没设 UNIT_STATE_READ 时必须走旧路径
+    _os.environ.pop("UNIT_STATE_READ", None)
+    check("unit_store: 读开关默认关(删环境变量即回旧路径)", _US.read_enabled() is False)
+    _os.environ["UNIT_STATE_READ"] = "1"
+    check("unit_store: 设 UNIT_STATE_READ=1 才启用", _US.read_enabled() is True)
+    _os.environ.pop("UNIT_STATE_READ", None)
+
+    # ③ 低库存口径: 物化桶 → roll 必须与原实现(merge_bc 后 counts)逐项相等
+    _t_us = {
+        ("bc", "bc"): {"total": 100, "ok": 80, "low": 18, "out": 2, "idle": 0, "paused": 0},
+        ("wh", "platform"): {"total": 50, "ok": 45, "low": 5, "out": 0, "idle": 0, "paused": 0},
+        ("wh", "platform_b"): {"total": 30, "ok": 28, "low": 2, "out": 0, "idle": 0, "paused": 0},
+        ("wh", "第三方仓"): {"total": 20, "ok": 15, "low": 4, "out": 1, "idle": 0, "paused": 0},
+        ("own", "own"): {"total": 40, "ok": 30, "low": 8, "out": 2, "idle": 0, "paused": 0},
+    }
+    _orig_tally_of = _US.tally_of
+    _US.tally_of = lambda *a, **k: _t_us
+    check("unit_store: 低库存(bbcc) = bc + 非平台仓逐仓(平台行已并入 bc, 不重复数)",
+          _US.low_stock_counts("jd", "bbcc") == {"c": 22, "out": 3, "total": 120},
+          str(_US.low_stock_counts("jd", "bbcc")))
+    check("unit_store: 低库存(traditional) = 全部逐仓(不含 bc, 不会双计)",
+          _US.low_stock_counts("other", "traditional") == {"c": 11, "out": 1, "total": 100},
+          str(_US.low_stock_counts("other", "traditional")))
+    _US.tally_of = _orig_tally_of
+
+    # ④ 发布前校验: 人为让记账少一个单元 → 必须拒绝(而不是发布后对账)
+    _sc_bad = {"units": [{}, {}, {}],
+               "tally": {("bc", "bc"): {"total": 2, "ok": 2, "low": 0, "out": 0,
+                                        "idle": 0, "paused": 0}},
+               "alerts": [], "series": None, "p": {}, "inc": True}
+    _errs = _US._validate("jd", "bbcc", _sc_bad)
+    check("unit_store: 校验能抓到'单元总数不符'(3 个单元只记了 2 个)", len(_errs) > 0, str(_errs[:2]))
+    _sc_bad2 = {"units": [{}],
+                "tally": {("bc", "bc"): {"total": 1, "ok": 0, "low": 1, "out": 0,
+                                         "idle": 0, "paused": 0}},
+                "alerts": [], "series": None, "p": {}, "inc": True}
+    check("unit_store: 校验能抓到'异常明细缺行'(卡片 1 条 low, 明细 0 行)",
+          any("异常行数" in e for e in _US._validate("jd", "bbcc", _sc_bad2)),
+          str(_US._validate("jd", "bbcc", _sc_bad2)[:2]))
+
+    # ⑤ 失效驱动: 域计数 + 后台重建必须挂在中央失效点上(不挂在各写入方, 否则必漏)
+    _acsrc = _rd("routes/analysis_cache.py")
+    check("unit_store: invalidate 里按域 bump + 起后台重建",
+          "data_version_dom" in _acsrc and "ensure_async()" in _acsrc and "JUDGE_DOMAINS" in _acsrc,
+          "routes/analysis_cache.py")
+    check("unit_store: fp 依赖域只含判定输入(不含 suppliers/purchases)",
+          tuple(_US.JUDGE_DOMAINS) == ("orders", "inventory", "products", "rules", "config"),
+          str(_US.JUDGE_DOMAINS))
+
+    # ⑥ schema: 三表 + 域版本表 + 版本号已 bump
+    _sc18 = _rd("schema_create.py")
+    check("unit_store: schema 声明三表 + data_version_dom + 版本 bump 到 18",
+          all(('"%s"' % t) in _sc18 for t in
+              ("unit_state_head", "unit_summary", "unit_alert", "data_version_dom"))
+          and _re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18)
+          and int(_re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18).group(1)) >= 18,
+          "schema_create.py")
+except Exception as _e31:
+    check("P1 物化读模型用例无异常", False, str(_e31)[:300])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()
