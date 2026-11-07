@@ -183,6 +183,24 @@ def cache_peek_many(keys, ttl):
         return {}
 
 
+def cache_stale(key):
+    """读**任意年龄**的旧值(忽略 TTL)。
+
+    2026-11-07 S0 用途: 重计算名额耗尽时, 宁可返回旧快照(前端标"同步中")+ 后台稍后重建,
+    也不要让请求卡在连接池里 30~40s, 更不能返回空结构把卡片清空(完整性/可靠性双损)。
+    """
+    try:
+        from db import one
+        row = one("SELECT value FROM analysis_cache WHERE `key`=%s", [key])
+        if row and row.get("value") and row.get("value") != "__CALC__":
+            v = _loads(row.get("value") or "")
+            if v is not _FAILED:
+                return v
+    except Exception as _e:
+        try_err('analysis_cache', '旧值读取降级', _e)
+    return None
+
+
 def cache_get(key, ttl, builder, max_bytes=None):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
     2026-10-25 去悲观锁(性能根治): 原 SELECT ... FOR UPDATE 持锁重算(10-11 并发根治设计),

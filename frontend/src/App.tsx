@@ -8,6 +8,7 @@ import {
   onActiveRequests,
   abortAll,
   setView,
+  currentView,
 } from './api/client'
 import { adoptRunning, onWatchChange, watchCount } from './api/taskWatch'
 import { registerPoll, POLL_EVERY } from './api/poller'
@@ -888,10 +889,18 @@ export default function App() {
   }, [])
   // channel 切换时自动加载数据（不再依赖 page——切页由各页面挂载自拉, 避免每次切页全量 loadAll 含慢接口）
   useEffect(() => {
-    useAppStore
-      .getState()
-      .loadAll()
-      .catch(() => {})
+    // 2026-11-07 防雪崩(第 2 处): 按当前视图只拉这一页真正需要的域。
+    //   看板: 看板域(summary/aux/stock-risk)由 DashboardPage 自拉(权威、带 t= 破缓存),
+    //         这里只补订单域 + 角标; 订单页: 全量(订单是主角); 其它页: 仅角标。
+    const st = useAppStore.getState()
+    const v = currentView()
+    if (v === 'dash') {
+      st.loadOrdersChrome().catch(() => {})
+    } else if (v === 'orders') {
+      st.loadAll().catch(() => {})
+    } else {
+      st.loadChrome().catch(() => {})
+    }
   }, [channel])
 
   // 同步 html/body 背景色 + browser chrome 色

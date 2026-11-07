@@ -432,6 +432,48 @@ const initAppStore = (set, get) => ({
       pageVersion: s.pageVersion + 1,
     })),
 
+  /** 2026-11-07 按视图裁剪: 只有看板/订单页需要"看板域", 其它页(商品/供应商/规则/清洗…)
+   *  根本不用 summary/aux/stock-risk/alerts。原来这里无条件 loadAll(), 与看板页**自拉**
+   *  (DashboardPage 带 t= 破缓存的权威路径)同时发同一批重接口 —— 服务端把 summary、aux、
+   *  stock-risk 各算两遍, 两个请求就能把 10 条连接池吃满, 全站跟着卡 10~40s。
+   *  这里只留"页头角标"这一条轻查询(0.4s), 重接口回归各自的页面。
+   */
+  async loadChrome() {
+    try {
+      const r = await api.get('/api/quality-logs?scope=user')
+      set({ qualityLogs: r.data || [] })
+    } catch {
+      /* 角标失败不影响页面 */
+    }
+  },
+
+  /** 看板落地时的订单域(订单卡/顶栏)+ 角标; 看板域交给 DashboardPage 自拉, 不再重复 */
+  async loadOrdersChrome() {
+    const _seq = _seqBox
+    const _mySeq = ++_seq.v
+    const s = get().hammerSearch || ''
+    const st = get().orderStatus || ''
+    try {
+      const [o, q] = await Promise.allSettled([
+        api.get(
+          '/api/orders?page=1&page_size=30&search=' +
+            encodeURIComponent(s) +
+            '&status=' +
+            encodeURIComponent(st),
+        ),
+        api.get('/api/quality-logs?scope=user'),
+      ])
+      if (_mySeq !== _seq.v) return
+      if (o.status === 'fulfilled') {
+        const d = (o.value.data || {}) as { items?: unknown[]; total?: number }
+        set({ orders: d.items || [], orderTotal: d.total || 0, orderPage: 1 })
+      }
+      if (q.status === 'fulfilled') set({ qualityLogs: q.value.data || [] })
+    } catch {
+      /* 同上 */
+    }
+  },
+
   async loadAll(page?, opts?) {
     // 2026-11-05: 序号放在闭包对象里而不是 this 上 —— `this` 在 setState 回调/延迟执行里
     //   不一定还指向 store, 而竞态判定必须用同一个引用

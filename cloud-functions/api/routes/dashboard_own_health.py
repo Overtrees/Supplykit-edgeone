@@ -191,20 +191,16 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
             try_err("own_health", "批次效期读取降级", _e)
         return _m
 
-    try:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=3) as _ex:
-            _f_p = _ex.submit(_load_products)
-            _f_d = _ex.submit(_load_ds)
-            _f_b = _ex.submit(_load_batches)
-            pmap = _f_p.result()
-            _bc_ds, _agg_ds = _f_d.result()
-            exp_map = _f_b.result()
-    except Exception as _e:
-        try_err("own_health", "取数并行降级(退回串行)", _e)
-        pmap = _load_products()
-        _bc_ds, _agg_ds = _load_ds()
-        exp_map = _load_batches()
+    # 2026-11-07 S0 回退嵌套并行(雪崩根因):
+    #   aux 外层已开 3 路, 这里再开 3 路 → 单个 aux 请求峰值占用 3+3=6 条连接;
+    #   再叠上 summary 的 3 路 = 9, 而实例连接池上限只有 10 (DB_POOL_LIMIT)。
+    #   任何两个重接口同时进来就把池打满, 其余请求排队 20s → 全线 30~40s。
+    #   实测证据: aux 单跑 4.5s, 与 stock-risk 并发时 34s / 35.8s (quality_logs slow_request)。
+    #   单接口"并行变快"换来的是"整站不可用", 与 §15.8 四维(可靠性)冲突 —— 退回串行。
+    #   这 3 条查询单条 0.2~0.9s, 串行只多约 1s, 但不再挤占别人的连接。
+    pmap = _load_products()
+    _bc_ds, _agg_ds = _load_ds()
+    exp_map = _load_batches()
 
     # 没有管效期的 SKU 就丢掉批次结果(与原来"不查"等价, 只是这次查了才发现用不上)
     _expiry_skus = [s for s in skus

@@ -1045,8 +1045,16 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
     _key = "dash_aux|%s|%s" % (channel, mode)
     # 1MB 上限: aux 是"卡片聚合", 正常 30~80KB。超 1MB 说明又有明细列表被误塞进聚合响应,
     #   宁可这次不落缓存(也不至于把 TiDB 单条 6MB 事务打爆 / 让每个请求算两遍)。
-    _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
-                       max_bytes=1024 * 1024)
+    # 2026-11-07 S0 防雪崩: 重计算名额(全局 3) —— 拿不到就返回旧快照, 不再跟别人抢连接。
+    from db import heavy as _heavy, HeavyBusy as _HeavyBusy
+    from routes.analysis_cache import cache_stale as _cache_stale
+    try:
+        with _heavy("aux", timeout=15):
+            _data = _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
+                               max_bytes=1024 * 1024)
+    except _HeavyBusy as _eh:
+        try_err('dashboard', 'aux 并发繁忙, 返回旧快照', _eh)
+        _data = _cache_stale(_key) or {}
     # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
     #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
     #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
@@ -1305,7 +1313,21 @@ def stock_risk(channel: str = "jd", full: int = 0):
                         "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
                         "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
 
-    return ok(_cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024))
+    # 2026-11-07 S0 防雪崩: 与 aux 同一道名额(全局 3), 拿不到返回旧快照 —— 断货卡保持"有数"
+    from db import heavy as _heavy, HeavyBusy as _HeavyBusy
+    from routes.analysis_cache import cache_stale as _cache_stale
+    try:
+        with _heavy("stock-risk", timeout=15):
+            return ok(_cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024))
+    except _HeavyBusy as _eh:
+        try_err('dash', 'stock-risk 并发繁忙, 返回旧快照', _eh)
+        _st = _cache_stale(_key)
+        if _st is not None:
+            return ok(_st)
+        return ok({"items": [], "total": 0, "critical": 0, "warning": 0,
+                   "bcItems": [], "bcTotal": 0, "bcCritical": 0, "bcWarning": 0,
+                   "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
+                   "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0})
 
 
 _accel_cache = {}

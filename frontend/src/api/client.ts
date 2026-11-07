@@ -151,6 +151,10 @@ let _bgReq = 0
  */
 let _curView = ''
 const _fgByView = new Map<string, number>()
+/** 当前视图(页面 id)。store/App 用它决定"这一页到底需要哪些域的数据"。 */
+export function currentView(): string {
+  return _curView
+}
 export function setView(v: string) {
   _curView = String(v || '')
   _notifyReq()

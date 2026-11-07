@@ -16,6 +16,40 @@ _local = threading.local()
 _POOL = None
 _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每实例——TiDB serverless 连接限制保险)
 
+# ── 2026-11-07 S0: 重计算并发预算(防"整站雪崩")────────────────────────────
+# 事故: aux 单跑 4.5s, 与 stock-risk 并发时 34~35.8s, stock-risk 41.4s, purchase 31.3s,
+#   同时段 summary 仍只要 0.8~1.3s —— 慢的不是 SQL, 是**连接池排队**:
+#   每个重接口内部又 3~8 路并行, 两个接口就能把 10 条连接吃光, 其余请求在 _acquire 里
+#   阻塞 20s 才等到(甚至抛"连接池耗尽")。表现为"所有页面一起卡 10~40s"。
+# 原则(§15.8 可靠性): 连接是**全局稀缺资源**, 并发度必须由全局预算分配, 不能各接口自带。
+#   HEAVY_CONCURRENCY=3: 同时最多 3 个重计算在跑, 其余排队(排队 1~3s 好过一起卡 40s)。
+#   env 可调; 设 0 关闭闸门(紧急回滚用, 不需重新发版)。
+_HEAVY_LIMIT = int(os.environ.get("HEAVY_CONCURRENCY", "3") or 0)
+_HEAVY = threading.BoundedSemaphore(_HEAVY_LIMIT) if _HEAVY_LIMIT > 0 else None
+
+
+class HeavyBusy(RuntimeError):
+    """重计算名额耗尽(排队超时) —— 调用方应降级返回旧值/空结构, 不要拖住前端"""
+
+
+@contextmanager
+def heavy(name="", timeout=20.0):
+    """重计算名额。拿不到就抛 HeavyBusy, 让请求**快速失败**而不是阻塞在连接等待上。
+
+    用法: `with heavy("aux"):` 包住整个读路径(含其内部并行)。
+    """
+    if _HEAVY is None:
+        yield
+        return
+    ok = _HEAVY.acquire(timeout=timeout)
+    if not ok:
+        raise HeavyBusy("重计算繁忙(并发上限 %d, 已等 %.0fs): %s" % (_HEAVY_LIMIT, timeout, name))
+    try:
+        yield
+    finally:
+        _HEAVY.release()
+
+
 # 2026-11-06: 线上逐层计时(只读埋点, 不改任何执行路径)
 #   背景: 同区(新加坡2)部署后 summary 仍 3.8s, 但 perf_debug 只有"查询 2.5s / 组装 1.2s"两段,
 #   无法判断 2.5s 里是"建连握手"还是"SQL 执行"还是"结果传输"。三者优化手段完全不同:
