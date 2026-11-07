@@ -59,7 +59,7 @@ def _cf(cfg, key, default):
 
 
 def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
-               per_type: int = 0, only: str = ""):
+               per_type: int = 0, only: str = "", debug: int = 0):
     """自有仓三类告警: 调拨覆盖 / 积压 / 效期
 
     返回 {
@@ -204,6 +204,8 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     #   stock-risk 想同时进来只能等名额或返回旧值 —— 不会再出现"两个请求各吃 6 条连接"。
     #   线上实测: own-health 单独 2.07s(串行三条), 是 aux 切物化后的新天花板。
     from concurrent.futures import ThreadPoolExecutor as _TPE
+    import time as _t
+    _t0 = _t.time()
     with _TPE(max_workers=3) as _ex:
         _fp = _ex.submit(_load_products)
         _fd = _ex.submit(_load_ds)
@@ -213,16 +215,19 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
         except Exception as _e:
             try_err("own_health", "商品档案加载降级", _e)
             pmap = {}
+        _t1 = _t.time()
         try:
             _bc_ds, _agg_ds = _fd.result()
         except Exception as _e:
             try_err("own_health", "下游日销加载降级", _e)
             _bc_ds, _agg_ds = {}, {}
+        _t2 = _t.time()
         try:
             exp_map = _fb.result()
         except Exception as _e:
             try_err("own_health", "批次效期加载降级", _e)
             exp_map = {}
+        _t3 = _t.time()
 
     # 没有管效期的 SKU 就丢掉批次结果(与原来"不查"等价, 只是这次查了才发现用不上)
     _expiry_skus = [s for s in skus
@@ -328,6 +333,7 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
                 try_err("own_health", "效期判定跳过(%s)" % sku, _e)
 
     # 排序: error 先, 同级按"最紧迫"排 —— 缺口大的/到期近的/积压久的
+    _t4 = _t.time()
     def _key(x):
         lv = 0 if x.get("level") == "error" else 1
         if x["alert_type"] == "own_transfer_gap":
@@ -349,6 +355,19 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     crit = sum(1 for i in items if i.get("level") == "error")
     warn = sum(1 for i in items if i.get("level") == "warning")
     out = _page(items, full=full, limit=limit, offset=offset, per_type=per_type, only=only)
+    # 2026-11-07 P0.1 分段埋点(仅 debug=1): 串行时 2.07s、并行后仍 2.04s ——
+    #   必须先看清是"哪条查询钉住了"还是"1 万行 × 3 类判定的 Python 组装"吃掉了。
+    if debug:
+        try:
+            from db import execute as _et
+            _t5 = _t.time()
+            _et("INSERT INTO quality_logs(log_type, level, message, details, source) "
+                "VALUES('perf_debug','info',%s,%s,'own_health')",
+                ("own_health 计时: products %.2fs ds %.2fs batches %.2fs 组装 %.2fs 收尾 %.2fs"
+                 % (_t1 - _t0, _t2 - _t0, _t3 - _t0, _t4 - _t3, _t5 - _t4),
+                 "own_rows=%d items=%d full=%d" % (len(own_rows), len(items), full)))
+        except Exception:
+            pass
     return {
         "items": out,
         "total": len(items), "transferGap": tg, "overstock": os_, "expiryRisk": er,

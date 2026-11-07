@@ -1282,7 +1282,7 @@ def _build_aux(channel, mode):
 @router.get("/dashboard/own-health")
 @traced
 def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
-                         only: str = "", per_type: int = 0):
+                         only: str = "", per_type: int = 0, debug: int = 0):
     """自有仓健康**明细**(分页) —— 聚合接口 /dashboard/aux 只发前若干条卡面行
 
     2026-11-06 为什么要单独一个口: 这段明细随规模线性增长(线上实测 13,615 条 / 5.9MB),
@@ -1292,7 +1292,7 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
     from routes.dashboard_own_health import own_health as _oh
     _lim = max(1, min(int(limit or 200), 500))
     return ok(_oh(channel, full=1, limit=_lim, offset=max(0, int(offset or 0)),
-                  only=only, per_type=int(per_type or 0)))
+                  only=only, per_type=int(per_type or 0), debug=int(debug or 0)))
 
 
 @router.get("/dashboard/stock-risk")
