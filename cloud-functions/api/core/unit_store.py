@@ -62,8 +62,15 @@ _LAST = {}              # (channel, mode) -> (ts, fp)
 
 
 def read_enabled():
-    """读路径是否切到物化版本。默认关 —— 先双写观察, 再一行环境变量切换。"""
-    return str(os.environ.get("UNIT_STATE_READ", "0")).strip().lower() in _READ_ON
+    """读路径**总开关**（环境变量）。语义:
+      · 未设置 → 允许尝试（真正是否命中由 `unit_state_head.enabled` 决定）
+      · "0"    → 一刀关闭, 连 head 都不读 —— 紧急回滚用, 优先于库里的 enabled 列
+    正常切换用库里的 enabled 列(UPDATE 一行即生效, 不必重新部署)。
+    """
+    _v = os.environ.get("UNIT_STATE_READ")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() in _READ_ON
 
 
 # ── 指纹 ────────────────────────────────────────────────────────
@@ -94,7 +101,7 @@ def fp_now(channel, mode=None):
 def head(channel, mode=None):
     _m = M.mode_of(channel, mode)
     try:
-        r = one("SELECT channel, mode, gen, fp, units, alerts, stale, note, built_at "
+        r = one("SELECT channel, mode, gen, fp, units, alerts, enabled, stale, note, built_at "
                 "FROM unit_state_head WHERE channel=%s AND mode=%s", [channel, _m])
     except Exception as _e:
         try_err("unit_store", "head 读取降级", _e)
@@ -109,9 +116,13 @@ def tally_of(channel, mode=None, gen=None):
       ① 从未构建过；② fp 已变（源数据变了）；③ 上次重建校验未通过（stale=1）。
     """
     _m = M.mode_of(channel, mode)
+    if not read_enabled():
+        return None
     h = head(channel, _m)
     if not h or not int(h.get("gen") or 0) or int(h.get("stale") or 0):
         return None
+    if not int(h.get("enabled") or 0):
+        return None          # 双写观察期: 有数据但不读
     _fp = fp_now(channel, _m)
     if not _fp or str(h.get("fp") or "") != _fp:
         return None
@@ -366,9 +377,14 @@ def _channels():
 
 
 def _ensure_all(force=False):
+    """只为"已开启读"的渠道重建 —— 关闭态不必付这份算力(要建就显式 build(force=True))"""
     for _ch in _channels():
         try:
-            build(_ch, M.mode_of(_ch), force=force)
+            _m = M.mode_of(_ch)
+            _h = head(_ch, _m)
+            if not _h or not int(_h.get("enabled") or 0):
+                continue
+            build(_ch, _m, force=force)
         except Exception as _e:
             try_err("unit_store", "重建失败(%s)" % _ch, _e)
 
@@ -394,6 +410,7 @@ def status(channel, mode=None):
     _fp = fp_now(channel, _m)
     _t = tally_of(channel, _m)
     return {"channel": channel, "mode": _m, "read_enabled": read_enabled(),
+            "enabled": int(h.get("enabled") or 0),
             "gen": int(h.get("gen") or 0), "units": int(h.get("units") or 0),
             "alerts": int(h.get("alerts") or 0), "stale": int(h.get("stale") or 0),
             "note": h.get("note") or "", "built_at": str(h.get("built_at") or ""),

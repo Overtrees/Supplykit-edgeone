@@ -402,6 +402,10 @@ _TABLES = {
         "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
         "gen BIGINT NOT NULL DEFAULT 0, fp VARCHAR(64) NOT NULL DEFAULT '', "
         "units INT NOT NULL DEFAULT 0, alerts INT NOT NULL DEFAULT 0, "
+        # enabled 是**读路径开关**: 0 = 只写不读(双写观察期), 1 = 读路径可命中。
+        #   放库里的理由: 切换与回滚只需 UPDATE 一行, 不用重新部署(env 是部署时快照)。
+        #   环境变量 UNIT_STATE_READ=0 仍可**一刀关闭**(优先于本列), 用于紧急回滚。
+        "enabled TINYINT NOT NULL DEFAULT 0, "
         "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, "
         "PRIMARY KEY (channel, mode))"
@@ -572,6 +576,8 @@ _DROP_INDEXES = [
 #   由 ensure_schema 全量路径统一执行(每表一次列探测, 缺才 ALTER)。
 #   新库不需要它(_TABLES DDL 已含同名列); 它只服务存量表(CREATE IF NOT EXISTS 不改已存在表)。
 _COLUMN_ADDS = {
+    # 2026-11-07 P1: 读路径开关(建表时已含; 这里兜"表先存在、列后加"的存量实例)
+    "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
     # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
     "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),

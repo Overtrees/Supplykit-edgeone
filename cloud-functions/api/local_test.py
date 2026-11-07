@@ -4132,12 +4132,13 @@ try:
     check("unit_store: 状态常量引用 metrics(不写裸字符串)",
           "M.ST_LOW" in _usrc and "M.ST_OUT" in _usrc, "裸写 'low'/'out' 迟早与 metrics 漂移")
 
-    # ② 读路径默认关(可回滚): 没设 UNIT_STATE_READ 时必须走旧路径
+    # ② 读开关: env 是"一刀关闭"(优先), 常规切换用库里 head.enabled(不用重新部署)
+    _os.environ["UNIT_STATE_READ"] = "0"
+    check("unit_store: UNIT_STATE_READ=0 一刀关闭(紧急回滚, 连 head 都不读)",
+          _US.read_enabled() is False)
     _os.environ.pop("UNIT_STATE_READ", None)
-    check("unit_store: 读开关默认关(删环境变量即回旧路径)", _US.read_enabled() is False)
-    _os.environ["UNIT_STATE_READ"] = "1"
-    check("unit_store: 设 UNIT_STATE_READ=1 才启用", _US.read_enabled() is True)
-    _os.environ.pop("UNIT_STATE_READ", None)
+    check("unit_store: env 未设置时不阻断(是否命中由 head.enabled 决定)",
+          _US.read_enabled() is True)
 
     # ③ 低库存口径: 物化桶 → roll 必须与原实现(merge_bc 后 counts)逐项相等
     _t_us = {
