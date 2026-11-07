@@ -73,7 +73,12 @@ def dashboard_boot(channel: str = "jd", mode: str = "", page: int = 1, page_size
             _res[_name] = None
             try_err("boot", "首屏聚合项失败: " + _name, _e)
 
-    with ThreadPoolExecutor(max_workers=3) as _ex:
+    # 2026-11-07 S0.1: max_workers 必须 = 任务数(4)。原来写 3 却提交 4 个任务,
+    #   第 4 个(stock_risk)要等前一批腾出线程 —— 冷态下 aux 6.8s 先跑, stock_risk
+    #   从第 6.8s 才开始再跑 4.8s → boot 实测 11.1s(线上 slow_alert 11:46/11:48)。
+    #   并行度 4 仍远小于 DB_POOL_LIMIT=10; heavy 名额 3 由 summary(不占)/aux/stock-risk 分配,
+    #   恰好 3 个, 不会互相踢成 HeavyBusy。
+    with ThreadPoolExecutor(max_workers=4) as _ex:
         _futs = [
             _ex.submit(_one, "summary", dashboard_summary, channel=channel,
                        start_date=start_date, end_date=end_date, mode=mode, part="main"),

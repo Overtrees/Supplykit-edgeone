@@ -1169,6 +1169,19 @@ def _build_aux(channel, mode):
         粒度跟随渠道补货模式: bbcc → BC 盘 + 自有仓; traditional → 逐仓 + 自有仓。
         """
         from core import metrics as _M
+        # ── 2026-11-07 P0: 优先读判定物化(unit_summary) ────────────────────────
+        # 这段原来每次冷算都 `SELECT 7 列 × 9 万行` + 日销切片 + units + judge_units,
+        # 只为得到 6 个整数; 而**同批判定** summary 早已改读物化(组装 3.14s→0.03s)。
+        # 线上 aux 冷算因此仍是 4.1~5.5s(slow_request 自报), 是首屏 11s 的一半。
+        # 命中条件与 summary 完全一致: fp 相等 + gen 非 0 + 未 stale; 任一不满足就落到原路径。
+        from core import unit_store as _US
+        _ov = _US.stock_overview(channel, mode)
+        if _ov is not None:
+            so_items = query("SELECT " + _INV_COLS + " FROM inventory "
+                             "WHERE channel=%s AND available_qty=0 ORDER BY id DESC LIMIT 100", [channel])
+            return {"out": _ov["out"], "low": _ov["low"], "total": _ov["total"],
+                    "items": so_items, "bc_out": _ov["bc_out"],
+                    "ok": _ov["ok"], "idle": _ov["idle"], "code_out": _ov["code_out"]}
         _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
                       "available_qty, in_transit_qty, safety_qty, product_name FROM inventory "
                       "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])

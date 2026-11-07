@@ -418,6 +418,9 @@ _TABLES = {
         "gen BIGINT NOT NULL, kind VARCHAR(8) NOT NULL, wtype VARCHAR(16) NOT NULL DEFAULT '', "
         "total INT NOT NULL DEFAULT 0, ok INT NOT NULL DEFAULT 0, low INT NOT NULL DEFAULT 0, "
         "`out` INT NOT NULL DEFAULT 0, idle INT NOT NULL DEFAULT 0, paused INT NOT NULL DEFAULT 0, "
+        # 2026-11-07 P0: 码级复核计数(多码单元里"合计能卖、单码发不出"的单元数)。
+        #   原来由 aux 每次现算 9 万单元得出; 现随重建顺手落库, 读侧与 out/low 同 gen 同源。
+        "code_out INT NOT NULL DEFAULT 0, "
         "PRIMARY KEY (channel, mode, gen, kind, wtype))"
     ),
     # 只存**非 ok** 的单元(ok/idle/paused 不进表): 卡片要的是计数(读 unit_summary 8 行),
@@ -578,6 +581,8 @@ _DROP_INDEXES = [
 _COLUMN_ADDS = {
     # 2026-11-07 P1: 读路径开关(建表时已含; 这里兜"表先存在、列后加"的存量实例)
     "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0")],
+    # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
+    "unit_summary": [("code_out", "INT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
     # 2026-10-29 出入库备注(明细弹窗最右列; 原表无此列, 导入的 remark 被丢弃)
     "inbound_records": [("remark", "VARCHAR(255) DEFAULT ''"),
@@ -684,7 +689,8 @@ _COLUMN_ADDS = {
 #   无法并存(第二个渠道导入 1062 静默丢行); idx_products_ch 被新键前缀覆盖一并去掉
 # v18(2026-11-07 P1): 判定结果物化读模型 unit_state_head/unit_summary/unit_alert +
 #   按域计数 data_version_dom(fp 驱动, 不用 TTL)。见 core/unit_store.py。
-SCHEMA_VERSION = 18
+# v19(2026-11-07 P0): unit_summary 加 code_out —— aux 的码级复核改读物化, 不再现算 9 万单元。
+SCHEMA_VERSION = 19
 
 
 def table_ddl(name):
@@ -994,5 +1000,13 @@ def ensure_schema():
         _e("INSERT INTO schema_state(name, version) VALUES('main', %s) "
            "ON DUPLICATE KEY UPDATE version=GREATEST(version, VALUES(version))", [SCHEMA_VERSION])
         log_info('schema', 'schema v%d 就绪(下次实例启动零 DDL)' % SCHEMA_VERSION)
+        # ⑥ schema 版本进判定指纹域: 表结构/列语义变了, 物化结果同样失效 ——
+        #   不靠"记得手动 force 重建", 靠 fp 变化自动触发(unit_summary 新增的 code_out
+        #   在旧 gen 里恒为 0, 若 fp 不变, aux 会读到"码级断货 0 条"的错误答案)。
+        try:
+            _e("INSERT INTO data_version_dom(dom, v) VALUES('schema', 1) "
+               "ON DUPLICATE KEY UPDATE v=v+1")
+        except Exception as _e7:
+            try_err('schema', 'schema 指纹域递增降级', _e7)
     except Exception as _e6:
         try_err('schema', 'schema 版本写入降级', _e6)

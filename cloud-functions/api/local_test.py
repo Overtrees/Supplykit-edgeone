@@ -4188,13 +4188,17 @@ try:
     check("unit_store: invalidate 里按域 bump + 起后台重建",
           "data_version_dom" in _acsrc and "ensure_async()" in _acsrc and "JUDGE_DOMAINS" in _acsrc,
           "routes/analysis_cache.py")
+    # schema 在列(2026-11-07 P0): 表结构/列语义变化同样让"算完的答案"失效
+    #   (unit_summary 新增 code_out 后, 旧 gen 里该列恒 0) —— 它仍是**判定输入**的一部分,
+    #   不是 suppliers/purchases 那类"只影响文案、不影响分档"的域。
     check("unit_store: fp 依赖域只含判定输入(不含 suppliers/purchases)",
-          tuple(_US.JUDGE_DOMAINS) == ("orders", "inventory", "products", "rules", "config"),
+          tuple(_US.JUDGE_DOMAINS) == ("orders", "inventory", "products", "rules", "config",
+                                       "schema"),
           str(_US.JUDGE_DOMAINS))
 
     # ⑥ schema: 三表 + 域版本表 + 版本号已 bump
     _sc18 = _rd("schema_create.py")
-    check("unit_store: schema 声明三表 + data_version_dom + 版本 bump 到 18",
+    check("unit_store: schema 声明三表 + data_version_dom + 版本 bump 到 18+",
           all(('"%s"' % t) in _sc18 for t in
               ("unit_state_head", "unit_summary", "unit_alert", "data_version_dom"))
           and _re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18)

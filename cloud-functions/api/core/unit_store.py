@@ -51,7 +51,9 @@ from routes.common import try_err, INVENTORY_COLS
 # 影响判定结果的数据域（与 analysis_cache._FAMILY_DEPS 同名）
 #   orders 在列: 日销是 orders 的二阶物化(sku_sales_stats), "订单进了但日销还没重建"的窗口里
 #   判定依据会变 —— 宁多重算, 不拿旧日销判。
-JUDGE_DOMAINS = ("orders", "inventory", "products", "rules", "config")
+#   schema 在列(2026-11-07): 表结构变化会让"算完的答案"缺列/语义变(如新增 code_out),
+#   版本写成功时 bump 该域 → fp 变 → 自动重建, 不必依赖人工 force。
+JUDGE_DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
 _READ_ON = ("1", "true", "yes", "on")
 _COOLDOWN = 30.0        # 同一 (channel, mode) 两次重建的最小间隔(秒) —— 防一次请求风暴重建N次
@@ -127,8 +129,8 @@ def tally_of(channel, mode=None, gen=None):
     if not _fp or str(h.get("fp") or "") != _fp:
         return None
     try:
-        rows = query("SELECT kind, wtype, total, ok, low, `out`, idle, paused FROM unit_summary "
-                     "WHERE channel=%s AND mode=%s AND gen=%s",
+        rows = query("SELECT kind, wtype, total, ok, low, `out`, idle, paused, code_out "
+                     "FROM unit_summary WHERE channel=%s AND mode=%s AND gen=%s",
                      [channel, _m, int(gen or h.get("gen"))])
     except Exception as _e:
         try_err("unit_store", "summary 读取降级", _e)
@@ -138,7 +140,8 @@ def tally_of(channel, mode=None, gen=None):
     return {(str(r.get("kind")), str(r.get("wtype") or "")): {
         "total": int(r.get("total") or 0), "ok": int(r.get("ok") or 0),
         "low": int(r.get("low") or 0), "out": int(r.get("out") or 0),
-        "idle": int(r.get("idle") or 0), "paused": int(r.get("paused") or 0)} for r in rows}
+        "idle": int(r.get("idle") or 0), "paused": int(r.get("paused") or 0),
+        "code_out": int(r.get("code_out") or 0)} for r in rows}
 
 
 def low_stock_counts(channel, mode=None):
@@ -159,6 +162,46 @@ def low_stock_counts(channel, mode=None):
         c = M.roll(t, kinds=(M.DIM_WH,))
     return {"c": int(c.get("low") or 0), "out": int(c.get("out") or 0),
             "total": int(c.get("total") or 0)}
+
+
+def stock_overview(channel, mode=None, bc_limit=100):
+    """`/dashboard/aux` 的 stockOverview 三个数 —— 与 `_block_stock_low` **同口径**，从物化读
+
+    原来 aux 每次冷算都要 `SELECT 7 列 × 9 万行` + 日销切片 + `units` + `judge_units`,
+    只为得到 out / low / total / ok / idle / code_out 六个整数 —— 与 summary 在 S3 之后
+    踩的是同一个坑：**同一批判定，summary 已读物化, aux 还在现算一遍**。
+    线上实测 aux 冷算 4.1~5.5s（slow_request 自报），切到本函数后只剩两次小查询。
+
+    返回 `None` = 不可用（从未构建 / fp 已变 / 校验未过）→ 调用方退回现算。
+    """
+    t = tally_of(channel, mode)
+    if not t:
+        return None
+    _m = M.mode_of(channel, mode)
+    if _m == "bbcc":
+        c = M.roll(t, kinds=(M.DIM_BC, M.DIM_WH), wt_not_in=("platform", "platform_b"))
+    else:
+        c = M.roll(t, kinds=(M.DIM_WH,))
+    # BC 合计缺货清单(卡片只展示够用的前 N 条) —— 明细与计数同一个 gen, 不会"卡片 N 条、点开 N±1"
+    bc_out = []
+    try:
+        h = head(channel, _m)
+        _g = int((h or {}).get("gen") or 0)
+        if _g:
+            bc_out = query(
+                "SELECT a.sku, a.warehouse, COALESCE(p.product_name, a.sku) AS product_name "
+                "FROM unit_alert a LEFT JOIN products p "
+                "  ON p.sku=a.sku AND p.channel=a.channel "
+                "WHERE a.channel=%s AND a.mode=%s AND a.gen=%s AND a.state=%s AND a.kind=%s "
+                "ORDER BY a.sku LIMIT %d" % (int(bc_limit),),
+                [channel, _m, _g, M.ST_OUT, M.DIM_BC]) or []
+    except Exception as _e:
+        try_err("unit_store", "bc_out 明细读取降级", _e)
+    return {"out": int(c.get("out") or 0), "low": int(c.get("low") or 0),
+            "total": int(c.get("total") or 0), "ok": int(c.get("ok") or 0),
+            "idle": int(c.get("idle") or 0), "code_out": int(c.get("code_out") or 0),
+            "bc_out": [{"sku": r.get("sku"), "product_name": r.get("product_name"),
+                        "warehouse_type": "bc"} for r in bc_out]}
 
 
 def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=None):
@@ -214,9 +257,15 @@ def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
         _k = (str(u.get("kind")), str(u.get("warehouse_type") or ""))
         c = summ.get(_k)
         if c is None:
-            c = summ[_k] = {"total": 0, "ok": 0, "low": 0, "out": 0, "idle": 0, "paused": 0}
+            c = summ[_k] = {"total": 0, "ok": 0, "low": 0, "out": 0, "idle": 0, "paused": 0,
+                            "code_out": 0}
         c["total"] += 1
         c[v["state"]] = c.get(v["state"], 0) + 1
+        # 码级复核(2026-11-07 P0): 与 dashboard._block_stock_low 的 `_code_out` 逐字同口径 ——
+        #   只在"状态 ok/low"(合计看起来能卖)且多码单元里有码 <=0 时计 1。
+        #   out 单元整盘都断, 码级不额外计数(否则同一件事数两遍)。
+        if v["state"] in (M.ST_OK, M.ST_LOW) and M.code_risk(u)["code_out"]:
+            c["code_out"] += 1
         if v["state"] in (M.ST_LOW, M.ST_OUT):
             alerts.append({"kind": _k[0], "wtype": _k[1],
                            "sku": str(u.get("sku") or ""), "barcode": str(u.get("barcode") or ""),
@@ -248,8 +297,11 @@ def _validate(channel, mode, sc):
         ref = M.tally(us, sc["series"], channel, mode, metric="ds28",
                       include_transit=sc["inc"], p=sc["p"])
         for _k, rc in ref.items():
-            if rc != summ.get(_k):
-                errs.append("tally 复核不一致 %s: %s != %s" % (_k, rc, summ.get(_k)))
+            # code_out 是本模块在 tally 之外多记的"码级复核"计数, 不属于分档口径,
+            #   复核时只比六个分档键(其余逐项相等才算过)。
+            _mine = {kk: vv for kk, vv in (summ.get(_k) or {}).items() if kk != "code_out"}
+            if rc != _mine:
+                errs.append("tally 复核不一致 %s: %s != %s" % (_k, rc, _mine))
         if set(ref) != set(summ):
             errs.append("桶集合不一致 %s" % (set(ref) ^ set(summ),))
     except Exception as _e:
@@ -297,19 +349,22 @@ def _publish(channel, mode, fp, summ, alerts, n_units):
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
     execute("DELETE FROM unit_alert WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
     for (_kind, _wt), c in summ.items():
-        execute("INSERT INTO unit_summary(channel,mode,gen,kind,wtype,total,ok,low,`out`,idle,paused) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        execute("INSERT INTO unit_summary(channel,mode,gen,kind,wtype,total,ok,low,`out`,idle,paused,code_out) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 [channel, mode, gen, _kind, _wt, c["total"], c["ok"], c["low"],
-                 c["out"], c["idle"], c["paused"]])
+                 c["out"], c["idle"], c["paused"], c.get("code_out", 0)])
     for i in range(0, len(alerts), _CHUNK):
         part = alerts[i:i + _CHUNK]
-        vals = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(part))
+        vals = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(part))
         _p = []
         for a in part:
+            # 2026-11-07 P0 修 bug: 原来列清单漏了 adj_dos(表里有、INSERT 没写),
+            #   导致该列恒为默认 0 —— stock-risk 若改读这张表会拿到"可撑 0 天"。
             _p += [channel, mode, gen, a["kind"], a["sku"], a["barcode"], a["warehouse"],
-                   a["state"], a["avail"], a["transit"], a["ds"], a["line"], a["cover"], a["gap"]]
+                   a["state"], a["avail"], a["transit"], a["ds"], a["line"], a["cover"],
+                   a["gap"], a.get("adj_dos", 0)]
         execute("INSERT INTO unit_alert(channel,mode,gen,kind,sku,barcode,warehouse,state,"
-                "avail,transit,ds,line,cover,gap) VALUES" + vals, _p)
+                "avail,transit,ds,line,cover,gap,adj_dos) VALUES" + vals, _p)
     # ── 唯一切换点 ──
     execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,stale,note,built_at) "
             "VALUES(%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
