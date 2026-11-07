@@ -4553,6 +4553,12 @@ try:
           and 'page_of(kind, scope, channel, mode,' in _ls19,
           "core/list_store.py")
 
+    # 红线 16: 三重线上验证的入口不许被删 —— state(fp_match)/legacy(双路对账)/force(命中反证)
+    check("disposal 物化: 三重验证诊断口齐全(state/legacy/force, 红线 16)",
+          "def status(" in _ls19 and "legacy" in _pu19 and "force" in _pu19
+          and "if debug or legacy:" in _pc19 and "register_scope" in _pc19,
+          "list_store + purchase + purchase_calc")
+
     # 动态: 日期变化时 fp 必变(跨天重建的根), fp 不等 → page_of 返回 None
     import core.list_store as _LS19
     _o19 = (_LS19.head, _LS19.fp_now)

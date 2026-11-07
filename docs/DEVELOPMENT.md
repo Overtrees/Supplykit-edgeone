@@ -202,6 +202,7 @@ python3 scripts/smoke_check.py          # 线上冒烟：health 必须 JSON，�
 | 13 | **边缘网关会剥 `Accept-Encoding`**：压缩不能依赖标准协商头。显式 `X-Accept-Encoding: gzip`（X- 头可透传）触发；已压缩类型(xlsx/zip/SSE)与 <1KB 跳过 | identity/gzip/none 三种请求响应头逐字节相同；82KB 明文按 ≈130KB/s 出网要多花 0.6s |
 | 14 | **SQL 字符串里禁止混用占位符与 % 格式化**：`"A" + x + "B % _FIELDS"` 里 % 只作用于最后一段（优先级高于 +），`%%s` 会配上多余实参炸 TypeError。多段拼接一律显式 `"SELECT " + _FIELDS + " WHERE ..."`。LIMIT/OFFSET 用 `str()` 拼接，不许留 `%d`（`db._guard_fmt` 会把参数转 str 再模拟格式化） | `/api/alerts` 非分页静默 500 半天没人发现；own_store per_type 明细一直降级回现算 |
 | 15 | **后台任务状态必须带新鲜度/租约**：实例可被平台随时冻结，daemon 线程的 done/error 回写不保证执行。`status='running'` 不等于「在跑」；读侧计数、状态接口、写侧合并判定必须共用**同一个**新鲜度条件，超时由统一收尾留痕（只留痕不重跑），并让下一次调度能新建任务 | 13:21 一条僵户 running 让看板「规则重算中」挂 3 小时，且合并语义一直复用该 id → 保存规则后再不评估；S4 收尾只覆盖 `pipeline_runs` 漏了 `eval_tasks` |
+| 16 | **物化 fp 必须读写同源，且命中要有线上证据**：`page_of`(读) 与 `build`(写) 计算 fp 时的每个入参（`kind/channel/mode/extra/日期`）必须逐字一致。`register_scope` 存什么、`build` 就用什么，**不许在写侧对空值做 `or "默认值"` 兜底**（读侧不会这么做 → `mode_of` 归一不同 → fp 永不相等）。本地静态断言 + mock 回归测不出真实 `fp_of` 归一行为，故每次物化上线必须做三重线上验证：① `state=1` 的 `fp_match=true`；② `legacy=1` 现算 vs 默认逐字段对账；③ **命中反证**（默认耗时 vs 强制现算耗时，需数倍差距，否则就是每请求仍在现算）。诊断冷键/scope 不得写进生产 `list_head`（会让每次 `invalidate` 白烧重建），用完立即精确清理 | §15.160 disposal：`build` 把登记的空 `mode` 兜底成 `"bbcc"`、读侧用 `""`，本地 773 断言全绿，部署后 `page_of` 永不命中 → 物化白做、每请求仍 2.5s 现算且后台空转重建 |
 
 ## 八、代码审查
 
