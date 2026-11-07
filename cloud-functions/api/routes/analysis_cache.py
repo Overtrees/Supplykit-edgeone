@@ -18,6 +18,7 @@
 """
 from routes.common import try_err
 import json
+import threading
 
 _registry = {}
 
@@ -201,6 +202,20 @@ def cache_stale(key):
     return None
 
 
+_KEY_LOCKS = {}
+_KEY_LOCKS_LK = threading.Lock()
+
+
+def _key_lock(key):
+    """同一缓存键的进程内互斥锁(单飞用)。键数量有限(几十个), 不清理也不会涨。"""
+    with _KEY_LOCKS_LK:
+        lk = _KEY_LOCKS.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _KEY_LOCKS[key] = lk
+        return lk
+
+
 def cache_get(key, ttl, builder, max_bytes=None):
     """共享表缓存读: 命中(TTL 内)返回; 否则 builder() 重算落表
     2026-10-25 去悲观锁(性能根治): 原 SELECT ... FOR UPDATE 持锁重算(10-11 并发根治设计),
@@ -221,8 +236,37 @@ def cache_get(key, ttl, builder, max_bytes=None):
                 v = _loads(v0 or "")
                 if v is not _FAILED:
                     return v
-        _tok = _now_tok()   # 令牌必须在 builder() **之前**取: 之后取会把重建期间的新写入盖掉
-        val = builder()
+        # 2026-11-07 S0 单飞(single-flight): 同一 key 并发 miss 时**只允许一个 builder**。
+        #   线上证据: aux 单跑 4.5s, 并发窗口 34~35.8s; stock-risk 41.4s; purchase 31.3s ——
+        #   连接池没满(12 实例各 1 条连接), 并发 8 也不退化, 所以不是"连接不够";
+        #   真正发生的是**同一份结果被并发算了 N 遍**, 每个都在抢同一实例的 CPU。
+        #   原注释"并发重复算可接受"只在 build 200ms 时成立; build 4~9s 时它就是雪崩源。
+        #   现在: 拿不到锁就等(最多 12s), 等到就二次读缓存; 等不到返回旧快照快速收尾。
+        _lk = _key_lock(key)
+        _got = _lk.acquire(timeout=12)
+        if not _got:
+            _stale = cache_stale(key)
+            try_err('analysis_cache', '单飞等待超时, 返回旧快照[%s]' % str(key)[:60], None)
+            if _stale is not None:
+                return _stale
+            _lk.acquire()   # 无旧值可退: 只能等别人算完(宁可慢, 不可返回空)
+            _got = True
+        try:
+            # double-check: 等锁期间别人可能刚算完并落表
+            _r2 = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                      "FROM analysis_cache WHERE `key`=%s", [key])
+            if _r2:
+                _a2 = _r2.get("age")
+                _v2 = _r2.get("value")
+                if _v2 != "__CALC__" and _a2 is not None and int(_a2) < ttl:
+                    _vv = _loads(_v2 or "")
+                    if _vv is not _FAILED:
+                        return _vv
+            _tok = _now_tok()   # 令牌必须在 builder() **之前**取: 之后取会把重建期间的新写入盖掉
+            val = builder()
+        finally:
+            if _got:
+                _lk.release()
         _s = json.dumps(val, ensure_ascii=False, default=str)
         if max_bytes and len(_s.encode("utf-8")) > max_bytes:
             return val
