@@ -93,7 +93,7 @@ def _risk_compare(channel, full: int = 0):
 
 
 def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, offset: int = 0,
-                level: str = ""):
+                level: str = "", inv_rows=None):
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度
 
     ── 2026-11-07 P0(最后一块) 读路径物化 ─────────────────────────────────────
@@ -131,7 +131,11 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
 
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 下方 r.get("barcode") 恒 '' →
     #   bc_total/c_items 按 (sku,'') 合并, 断货卡按码从未生效
-    inv = _q("SELECT " + _INV_COLS + " FROM inventory WHERE channel=%s", [channel])
+    # 2026-11-07 P2: 重建线程会把刚读过的 inventory 全量传进来(同一份内存数据),
+    #   省掉重读 10 万行 —— 这是重建 16.2s 里 risk 段 4.6s 的主要部分。
+    #   ⚠️ 只复用**输入**, 公式仍在本函数内唯一一份(红线 D: 不复制算法)。
+    inv = inv_rows if inv_rows is not None else _q(
+        "SELECT " + _INV_COLS + " FROM inventory WHERE channel=%s", [channel])
     try:
         from routes.common import check_cols as _cc
         _cc(inv, ("barcode", "warehouse"), "risk", "断货物料")

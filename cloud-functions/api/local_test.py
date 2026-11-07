@@ -4215,7 +4215,7 @@ try:
           "risk_of(" in _sr18 and "legacy: bool = False" in _sr18,
           "dashboard_stock_risk.py")
     check("risk 物化: 重建侧直接调现算入口, 不复制公式(红线 D)",
-          "_stock_risk(channel, full=1, legacy=True)" in _us18, "core/unit_store.py")
+          "_stock_risk(channel, full=1, legacy=True" in _us18, "core/unit_store.py")
     check("risk 物化: 与 unit_alert 分表分开关(两套口径不混)",
           "risk_snapshot" in _us18 and "risk_enabled" in _us18, "core/unit_store.py")
     check("risk 物化: 排序唯一真源(现算/读回共用 risk_sort_key, 否则两路错位)",

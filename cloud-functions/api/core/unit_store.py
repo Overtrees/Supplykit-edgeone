@@ -367,20 +367,36 @@ def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=
 
 # ── 构建 ────────────────────────────────────────────────────────
 def _inv_rows(channel):
-    return query("SELECT " + INVENTORY_COLS + " FROM inventory "
-                 "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
+    """该渠道 inventory 全量 —— **一次读取, 判定与断货共用**
+
+    2026-11-07 P2: 原来 scan 读一遍(带 warehouse 非空过滤)、`_stock_risk` 又读一遍
+    (不带过滤) —— 同一次重建把 10 万行 × 22 列从 DB 搬两趟。实测重建 16.2s 里
+    risk 段 4.6s, 其中一多半是这第二趟。现在读一次全量, 空仓行由 scan 自己过滤
+    (与原 SQL `warehouse!=''` 逐字等价, 不换口径)。
+    """
+    return query("SELECT " + INVENTORY_COLS + " FROM inventory WHERE channel=%s", [channel])
 
 
 def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
     """跑一遍判定 → (tally, alerts)。**只调 metrics**, 不含任何新口径。"""
     _m = M.mode_of(channel, mode)
     _cfg = M.channel_cfg(channel) if cfg is None else (cfg or {})
+    _ta = time.time()
     rows = _inv_rows(channel) if inv_rows is None else inv_rows
+    # 空仓行不参与判定 —— 与旧 `_inv_rows` 的 `warehouse!=''` 完全等价, 只是把过滤
+    #   从 SQL 挪到内存(为了与断货计算共用同一份数据, 少读一趟 10 万行)。
+    rows = [r for r in rows if str(r.get("warehouse") or "").strip()]
+    _t_inv = time.time() - _ta
+    _tb = time.time()
     us = M.units(rows, merge_bc=False, with_bc=True,
                  grain=M.grain_of(channel, _m, _cfg),
                  drop_platform_b=(_m != "bbcc"))
+    _t_units = time.time() - _tb
+    _tc = time.time()
     if series is None:
         series = M.load(channel, dims=M.dims_needed(rows, channel, _m), fields=("ds28",))
+    _t_series = time.time() - _tc
+    _td = time.time()
     p = M.periods(_cfg)
     inc = M.include_transit_default()
     summ, alerts = {}, []
@@ -408,7 +424,10 @@ def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
                            "ds": float(v.get("ds") or 0), "line": float(v.get("line") or 0),
                            "cover": int(v.get("cover") or 0), "gap": float(v.get("gap") or 0),
                            "adj_dos": float(v.get("adj_dos") or 0)})
-    return {"units": us, "tally": summ, "alerts": alerts, "series": series, "p": p, "inc": inc}
+    return {"units": us, "tally": summ, "alerts": alerts, "series": series, "p": p, "inc": inc,
+            # 分段耗时: 重建慢时先看"是读库慢、构单元慢、还是判定循环慢", 而不是只看一个总数
+            "t": {"inv": _t_inv, "units": _t_units, "series": _t_series,
+                  "loop": time.time() - _td}}
 
 
 def _validate(channel, mode, sc):
@@ -476,7 +495,7 @@ def _stale_recent(channel, mode):
         return False
 
 
-def _risk_rows(channel, mode):
+def _risk_rows(channel, mode, inv_rows=None):
     """按 stock-risk 现有口径算一遍 → 扁平行(落 risk_snapshot)
 
     **不复制算法**: 直接调 `_stock_risk(legacy=True)` —— 它是唯一的计算入口。
@@ -486,7 +505,7 @@ def _risk_rows(channel, mode):
     """
     try:
         from routes.dashboard_stock_risk import _stock_risk
-        p = _stock_risk(channel, full=1, legacy=True)
+        p = _stock_risk(channel, full=1, legacy=True, inv_rows=inv_rows)
     except Exception as _e:
         try_err("unit_store", "risk 计算失败(%s/%s)" % (channel, mode), _e)
         return None
@@ -601,7 +620,9 @@ def build(channel, mode=None, inv_rows=None, force=False):
         _LAST[_k] = (_now, fp)
     _t0 = time.time()
     try:
-        sc = scan(channel, _m, inv_rows=inv_rows)
+        # 一次读全量(10 万行), scan 与 risk 共用 —— 少读一趟
+        _rows = inv_rows if inv_rows is not None else _inv_rows(channel)
+        sc = scan(channel, _m, inv_rows=_rows)
     except Exception as _e:
         _mark_stale(channel, _m, "scan 异常: %s" % _e)
         try_err("unit_store", "重建扫描失败(%s/%s)" % (channel, _m), _e)
@@ -617,13 +638,16 @@ def build(channel, mode=None, inv_rows=None, force=False):
     # 断货三级快照: 放在校验通过之后 —— 校验不过要退回旧版本, 没必要为它白烧 4~5s。
     #   它是**同一次重建的副产品**, 不是第二个模型: 数据域/粒度/配置与判定同源, 天然同版本。
     _t_r0 = time.time()
-    _risk = _risk_rows(channel, _m)
+    _risk = _risk_rows(channel, _m, inv_rows=_rows)
     _t_risk = time.time() - _t_r0
     try:
         # 分段耗时落 head: 重建 30s+ 却只有一个总数时, "优化"只能靠猜。
         #   scan(取数+判定) / validate(独立复核) / risk(断货快照) / publish(写库, 由 _publish 自记)
-        _timing = "scan=%.1f,validate=%.1f,risk=%.1f,units=%d,alerts=%d" % (
-            _t_scan, _t_val, _t_risk, len(sc["units"]), len(sc["alerts"]))
+        _st = sc.get("t") or {}
+        _timing = ("scan=%.1f(inv=%.1f,units=%.1f,series=%.1f,loop=%.1f),validate=%.1f,"
+                   "risk=%.1f,units=%d,alerts=%d") % (
+            _t_scan, _st.get("inv", 0), _st.get("units", 0), _st.get("series", 0),
+            _st.get("loop", 0), _t_val, _t_risk, len(sc["units"]), len(sc["alerts"]))
         gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]),
                        risk=_risk, risk_fp=_rfp, timing=_timing)
     except Exception as _e:
