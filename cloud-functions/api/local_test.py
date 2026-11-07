@@ -3438,8 +3438,11 @@ try:
     check("同步胶囊: 请求成功/失败/取消三条路径都注销(否则计数泄漏=永久转圈)",
           _cl11.count("_reqEnd(") >= 3, _cl11.count("_reqEnd("))
     _app11 = open(_os.path.join(_FE, "App.tsx"), encoding="utf-8").read()
-    check("同步胶囊: 页面声明(syncing) ∪ 真实在途(reqBusy) 取或",
-          "badgeBusy" in _app11 and "syncing > 0 || reqBusy > 0" in _app11, "App.tsx")
+    # 2026-11-07 用户定案: 胶囊只认**当前视图**的真实在途, 不再叠加全局 syncing ——
+    #   否则切页后旧页的 -1 还没执行, 新页会莫名转圈(噪音来源)。
+    check("同步胶囊: 只认当前视图真实在途(不再叠加全局 syncing)",
+          "badgeBusy" in _app11 and "const badgeBusy = reqBusy > 0" in _app11
+          and "syncing > 0 || reqBusy > 0" not in _app11, "App.tsx")
     # ④ loadAll 里 syncing 的增减必须同源(曾一边 get().syncing+1 一边 Math.max(0,-1))
     check("loadAll: syncing 增减走同一个 setSyncing(不再直接赋值)",
           "syncing: get().syncing + 1," not in _st11 and "get().setSyncing(1)" in _st11
@@ -3821,14 +3824,17 @@ try:
     #   抢不到锁的白烧 RU、进度条不动而租约一直被占。现在除 taskWatch 外一律带 probe=1。
     _cl12 = open(_os.path.join(_FE2, "api", "client.ts"), encoding="utf-8").read()
     # 后台请求不进用户可见的忙徽标(否则长任务在跑时任何页面都显示"同步中")
-    check("同步胶囊: 后台请求(看守/轮询)不计入用户可见在途数",
+    # 2026-11-07: 由"全站前台 = _activeReq - _bgReq"改为"按视图分桶", 切页后旧页请求
+    #   不再点亮新页胶囊(用户原话: 只在切换到各自页面显示)。
+    check("同步胶囊: 后台请求不计入, 且前台按视图分桶(切页即归零)",
           "markBackground" in _cl12 and "backgroundRequests" in _cl12
-          and "_activeReq - _bgReq" in _cl12, "api/client.ts")
+          and "_fgByView.get(_curView)" in _cl12 and "export function setView" in _cl12,
+          "api/client.ts")
     # 2026-11-06 S1: 全局 markBackground 会让并发请求串味(A 标了后台, B 也读成 true),
     #   改为请求级参数(apiJson 的 opts.background / axios 的 config.__bg)。
     check("同步胶囊: apiJson 支持 background 标记(按请求传参, 不用全局开关)",
           "background?: boolean" in _cl12 and "const _bg = Boolean(opts.background)" in _cl12
-          and "_reqStart(_bg)" in _cl12 and "_reqEnd(_bg)" in _cl12,
+          and "_reqStart(_bg, _v)" in _cl12 and "_reqEnd(_bg, _v)" in _cl12,
           "api/client.ts")
     check("任务看守: 驱动请求标为 background(自己不点亮忙徽标)",
           "background: true" in _tw, "api/taskWatch.ts")

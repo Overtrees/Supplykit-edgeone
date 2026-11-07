@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore, type Channel } from './store/useAppStore'
-import { clearCache, clearInflight, apiJson, activeRequests, onActiveRequests } from './api/client'
+import {
+  clearCache,
+  clearInflight,
+  apiJson,
+  activeRequests,
+  onActiveRequests,
+  abortAll,
+  setView,
+} from './api/client'
 import { adoptRunning, onWatchChange, watchCount } from './api/taskWatch'
 import { registerPoll, POLL_EVERY } from './api/poller'
 import { reportError } from './api/logger'
@@ -61,8 +69,14 @@ export default function App() {
   window.__page = page // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {
     setPage(p)
-    clearCache()
-    clearInflight()
+    // 2026-11-07 根治「切页后每页都慢」:
+    //   原来这里 clearCache() + clearInflight()。前者把**全站**缓存一次清空(切到哪页都要重新
+    //   拉全部接口, 连没离开过的页面也失效); 后者只清 Map, **一个请求都没取消** —— 旧页 4~6 个
+    //   请求继续跑完(每个 1~8s), 占着 Makers 的 DB 连接与执行槽, 新页只能排队。
+    //   现在: 真正 abort 旧页在途(浏览器断开 → 服务端连接提前释放) + 视图切到新页(胶囊归零);
+    //   缓存按 30s TTL 自然过期, 不再"切一次页全站归零"。
+    setView(p)
+    abortAll()
     const _s = useAppStore.getState()
     if (_s.prodBatch || _s.prodSelIds?.length) {
       _s.setProdBatch(false)
@@ -163,7 +177,9 @@ export default function App() {
     sync()
     return onActiveRequests(sync)
   }, [])
-  const badgeBusy = syncing > 0 || reqBusy > 0
+  // 2026-11-07: 胶囊只认「当前视图」的真实在途(reqBusy, 已按页面分桶)。
+  //   不再叠加全局 syncing —— 那是页面手工计数, 切页后旧页的 -1 还没执行, 新页会莫名转圈。
+  const badgeBusy = reqBusy > 0
   // 2026-11-05 任务看守(回答「持锁期间别的页面怎么办 / 多次切页面怎么办」):
   //   后端续跑是**前端轮询驱动**的, 每推进一窗服务端持一次租约防并发重写。
   //   租约现为 **TTL 30s + 每 10s 心跳 + lease_token 归属令牌**(旧实现是 600s 死等,
@@ -269,41 +285,43 @@ export default function App() {
     }, 30000)
     return () => clearInterval(_tid)
   }, [ops.length])
-  // 全局同步徽标(看板页/其他页 header-status 共用——任一拉新/30s 静默进行时显示, 完成自动消失)
-  // 文案按场景: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; syncOld=false(首载无旧值, 骨架)=「加载中」
-  // 仅图标旋转(animation 挂 svg, 文字不转); 字号继承渠道文本(inherit)
-  const syncBadge = badgeBusy ? (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        fontSize: 'inherit',
-        fontWeight: 'inherit',
-        color: 'var(--muted)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <svg
-        width={12}
-        height={12}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={3}
-        strokeLinecap="round"
-        style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
+  // 全局同步徽标(2026-11-07 改版: 只在**当前页**显示)
+  //   文案判断机制不变: syncOld=true(有旧值渲染, 后台拉新)=「同步中」; false(首载无旧值, 骨架)=「加载中」
+  //   变化只在"谁点亮它": 原来 = 全站在途(切页后旧页请求还亮着), 现在 = 当前视图在途(见 client._fgByView)。
+  //   页面自己的骨架/局部 loading 不受影响 —— 胶囊只是同一状态在 header 的镜像。
+  const taskNote = watching > 0 && page !== 'tasks' ? t('op.watching', { n: watching }) : ''
+  // 任务在跑时即使当前页没有取数也要显示(全局可见); 只有任务页例外(自身即进度页)
+  const syncBadge =
+    badgeBusy || taskNote ? (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          fontSize: 'inherit',
+          fontWeight: 'inherit',
+          color: 'var(--muted)',
+          whiteSpace: 'nowrap',
+        }}
       >
-        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-      </svg>
-      {syncOld ? t('op.sync_old') : t('common.loading')}
-      {/* 2026-11-05: 有任务正在被看守时补一个计数 —— 用户切换页面时也能知道"后台还有 N 个任务在跑",
-          而不是回到任务页才突然发现"跑了十分钟"。 */}
-      {watching > 0 ? (
-        <span style={{ opacity: 0.75 }}>· {t('op.watching', { n: watching })}</span>
-      ) : null}
-    </span>
-  ) : null
+        {badgeBusy ? (
+          <svg
+            width={12}
+            height={12}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={3}
+            strokeLinecap="round"
+            style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
+          >
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+        ) : null}
+        {badgeBusy ? (syncOld ? t('op.sync_old') : t('common.loading')) : taskNote}
+        {badgeBusy && taskNote ? <span style={{ opacity: 0.75 }}>· {taskNote}</span> : null}
+      </span>
+    ) : null
   // 2026-11-03 操作态优先于取数态: 后端正在算时不显示"同步中"(那是前端在取数),
   //   两者叠加会让用户以为"一直在加载"。ops 空时回落到原来的同步徽标。
   const headerPill = ops.length > 0 ? <OpPill /> : syncBadge

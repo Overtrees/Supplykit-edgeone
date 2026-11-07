@@ -1,13 +1,13 @@
 """历史数据查询出口(2026-11-02 S2-4 方案 A): daily_stats 的第一个读取方
 
-背景: /cron/archive 每天把 365 天前的订单搬进 daily_stats 并删除源行, 但此前全仓库
+背景: /cron/archive 每天把保留期(默认 180 天, 见 core.archive.ARCHIVE_KEEP_DAYS)前的订单搬进 daily_stats 并删除源行, 但此前全仓库
 **零读取方**(`grep "FROM daily_stats"` 零命中, 前端也没有接口) —— 用户查一年前的订单
 只会看到"没有数据", "归档保留年同比"是句空话。本模块就是那个出口。
 
 两张表拼成**一个查询面**, 调用方不需要知道数据在哪:
-  · orders       → 近 365 天(archive 只搬更早的)
-  · daily_stats  → 365 天以前
-两表数据互斥(archive 先写成功再删源行, 失败即中止), 所以按 365 天切线切开后
+  · orders       → 保留期内(archive 只搬更早的)
+  · daily_stats  → 保留期以外
+两表数据互斥(archive 先写成功再删源行, 失败即中止), 所以按保留期切线切开后
 UNION ALL 不会重复计 —— 这条不变量是本模块正确性的全部前提, 改 archive 时必须同步。
 
 口径(与 daily_stats 写入侧逐字一致, 否则跨切线会出现台阶):
@@ -28,8 +28,10 @@ from core.clock import now_cn
 
 router = APIRouter(tags=["history"])
 
-# 与 cron.cron_archive 的 cutoff 必须一致(见模块注释的不变量)
-_CUT_DAYS = 365
+# 与 cron.cron_archive 的 cutoff **必须一致**(见模块注释的不变量)。
+# 2026-11-07: 改为从归档模块导入共享常量 —— 原来两边各写 365, 改保留期时必然漏一边,
+#   而漏的后果不是报错, 是 180~365 天区间"两边都查不到/都查一遍"(静默错账)。
+from core.archive import ARCHIVE_KEEP_DAYS as _CUT_DAYS
 # 单次查询最大跨度: 订单侧是逐行聚合, 一年约百万行, 再长就是全表扫描
 _MAX_SPAN = 400
 
@@ -45,11 +47,11 @@ def _cutoff():
 def _archive_day():
     """一笔**今天下的订单**要等到哪天才会被归档
 
-    cron_archive 的判定是 `DATE(ordered_at) < today-365`(注意是严格小于), 所以 t 日下的
-    订单在 (t+366) 日第一次满足 —— 报"满 365 天后"是常见误读(实际第 366 天才搬)。
+    cron_archive 的判定是 `ordered_at < today-KEEP`(注意是严格小于), 所以 t 日下的
+    订单在 (t+KEEP+1) 日第一次满足 —— 报"满 KEEP 天"是常见误读。
     前端提示按这个日期算, 与 cron 的判定式逐字对齐, 不另立口径。
     """
-    return (now_cn() + timedelta(days=1)).strftime("%Y-%m-%d")
+    return (now_cn() + timedelta(days=_CUT_DAYS + 1)).strftime("%Y-%m-%d")
 
 
 def _shift(day, days):
@@ -80,7 +82,7 @@ def _range(start, end):
 
 
 def _union(channel, start, end, key=""):
-    """按 365 天切线把 [start,end] 拆成 归档段 + 订单段, 返回 (子查询 SQL, 参数)
+    """按保留期切线把 [start,end] 拆成 归档段 + 订单段, 返回 (子查询 SQL, 参数)
 
     输出列固定 (d, gmv, cnt, qty[, k]), 外层直接 GROUP BY。
     key 传 "sku"/"store" 时附带该维度(两端字段同名, 不用适配)。
@@ -149,7 +151,7 @@ def history_coverage(channel: str = ""):
                      (" AND channel=%s" if channel else ""), _p) or {}
             out["orders"] = {"rows": _int(_o.get("c")), "min": str(_o.get("mn") or "")[:10],
                              "max": str(_o.get("mx") or "")[:10]}
-            # 早于归档线但仍在 orders 里的行(2026-11-02 S2-2): 只可能是"补录了 365 天前的数据",
+            # 早于归档线但仍在 orders 里的行(2026-11-02 S2-2): 只可能是"补录了保留期之前的数据",
             # archive 还没搬走。这段区间**本页查不到**(归档段读 daily_stats, 订单段从切线起),
             # 与其让用户对着空白表格猜, 不如直接告诉他"下次归档后可见"。
             _st = one("SELECT COUNT(*) AS c FROM orders "
@@ -181,7 +183,7 @@ def history_coverage(channel: str = ""):
 def history_summary(channel: str = "jd", start: str = "", end: str = "", by: str = "day"):
     """区间汇总 + 趋势序列(按日/按月)
 
-    跨 365 天切线时两段来自不同表 —— 因为口径逐字对齐, 曲线是连续的;
+    跨保留期切线时两段来自不同表 —— 因为口径逐字对齐, 曲线是连续的;
     若哪天 archive 的写入口径改了, 这里会立刻出现台阶, 属于有意保留的"报警器"。
     """
     s, e, _clamped = _range(start, end)
@@ -243,7 +245,7 @@ def history_top(channel: str = "jd", start: str = "", end: str = "",
         if not sql:
             return {"start": s, "end": e, "by": _by, "clamped": _clamped,
                     "total_gmv": 0.0, "items": []}
-        # 占比用窗口函数一次算完: 再发一条 SUM 查询等于把整段聚合跑两遍(365 天约 2s)
+        # 占比用窗口函数一次算完: 再发一条 SUM 查询等于把整段聚合跑两遍(半年约 2s)
         rows = query(
             "SELECT k, SUM(gmv) AS gmv, SUM(cnt) AS cnt, SUM(qty) AS qty, "
             "SUM(SUM(gmv)) OVER () AS total FROM %s GROUP BY k ORDER BY gmv DESC LIMIT %d"

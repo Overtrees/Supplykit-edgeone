@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react'
 import { daysSinceCn } from '../utils/date'
-import { api, clearCache, abortScope, apiJson } from '../api/client'
+import { api, clearCache, abortScope, apiJson, isCanceled } from '../api/client'
 import { useFreshness, StaleDot } from '../components/Freshness'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
@@ -187,7 +187,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
           100 +
           '&search=' +
           encodeURIComponent(s),
-        { timeout: 90000 },
+        { timeout: 90000, scope: 'inventory' },
       )
       if (seq !== reqSeq.current) {
         // 2026-11-05 修: 竞态丢弃分支原本会 setLoading(false) —— 但"被丢弃"意味着**已经
@@ -220,6 +220,7 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
         )
       }
     } catch (e) {
+      if (isCanceled(e)) return // 切仓型/搜索/渠道时主动取消旧请求
       if (seq !== reqSeq.current) return
       if (invLenRef.current > 0) {
         // 有旧数据: 保留列表(不清空) + loadErr 作非阻塞提示; syncing 胶囊由 finally 归零
@@ -238,6 +239,8 @@ export default function InventoryPage({ highlightSku, highlightWarehouse }: Inve
     }
   }
   useEffect(() => {
+    // 2026-11-07 最新请求优先: 旧筛选的整页读还在跑就先取消(它要 1~2s, 回来只会写旧数据)
+    abortScope('inventory')
     clearCache('with-sales')
     setInvPage(1)
     loadInv(1)

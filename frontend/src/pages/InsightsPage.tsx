@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { api, abortScope } from '../api/client'
+import { api, abortScope, isCanceled } from '../api/client'
 import { registerPoll, POLL_EVERY } from '../api/poller'
 import { mutate } from '../api/mutate'
 import { useFreshness } from '../components/Freshness'
@@ -139,6 +139,15 @@ export default function InsightsPage() {
         ? 'insights_search_slow'
         : 'insights_search_' + replenMode
   const insightSearch = hammerData?.[globalChannel]?.[searchKey] || ''
+  // 2026-11-07 最新请求优先: 快速切 tab 时, 旧 tab 的补货/采购/滞销请求还在跑(每个 1~8s),
+  //   它们不但占后端连接, 回来还会把旧 tab 的 loading/错误态写到当前界面。切 tab 先全取消,
+  //   新 tab 的 effect 随后发新请求 —— 用户只等最新那一次。
+  useEffect(
+    function () {
+      abortScope('insights')
+    },
+    [tab],
+  )
   // 搜索时重置分页
   useEffect(
     function () {
@@ -318,6 +327,7 @@ export default function InsightsPage() {
         )
       }
     } catch (e) {
+      if (isCanceled(e)) return // 切 tab/切页主动取消: 静默, 不当成加载失败
       console.error('loadReplen:', e)
       if (seq === replenSeq.current) {
         if (page === 1) setReplen([])
@@ -339,13 +349,16 @@ export default function InsightsPage() {
   // 已有成功值失败 → 保留现值不覆盖(防旧 fallback 误导"已下单"角标)
   const loadOrdered = async (silent = false) => {
     try {
-      const r = await api.get<OrderedRow[]>('/api/purchase-orders?channel=' + globalChannel)
+      const r = await api.get<OrderedRow[]>('/api/purchase-orders?channel=' + globalChannel, {
+        scope: 'insights',
+      })
       const items = r.data || []
       // 存两份：orderedKeys 用于快速判断，orderedItems 用于展示详情
       setOrderedKeys(items.map(x => x.sku + '|' + x.store))
       setOrderedItems(items)
       orderedOkRef.current = true
     } catch (e) {
+      if (isCanceled(e)) return
       if (silent) return // 轮询失败: 保留现值, 下轮再试(不打断当前展示)
       if (!orderedOkRef.current) {
         try {

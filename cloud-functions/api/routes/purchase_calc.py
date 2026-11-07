@@ -423,10 +423,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             last_order_bc[(_s0, _b0)] = _m0
             if _m0 > last_order.get(_s0, ""):
                 last_order[_s0] = _m0
-    cutoff90 = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+    # 2026-11-07 P0(去重叠加): 原来这里再扫 **90 天 orders 全量**(线上 30 万行) 重算一遍
+    #   最后销售日 —— 而上面 `daily_sales_snapshot` 已经是同一批订单按天的物化聚合(同样 90 天)。
+    #   两段表达的是同一件事, 后者只是"补物化尚未追平的最近几天"(当天导入/增量重建延迟)。
+    #   现在只补最近 7 天: 数据量与订单总量解耦, 语义不变(更早的日期快照一定有)。
+    cutoff_recent = (now - timedelta(days=7)).strftime("%Y-%m-%d")
     for r in query("SELECT sku, COALESCE(barcode,'') AS bc, MAX(ordered_at) AS m FROM orders "
                    "WHERE channel=%s AND ordered_at>=%s AND (deleted_at IS NULL OR deleted_at='') "
-                   "GROUP BY sku, COALESCE(barcode,'')", [channel, cutoff90 + " 00:00:00"]):
+                   "GROUP BY sku, COALESCE(barcode,'')", [channel, cutoff_recent + " 00:00:00"]):
         _s0 = str(r.get("sku") or "")
         _b0 = str(r.get("bc") or "")
         mx = str(r.get("m") or "")[:10]

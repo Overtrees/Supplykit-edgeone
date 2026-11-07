@@ -1,6 +1,6 @@
 import { IconCheck } from '../components/Icons'
 import React, { useEffect, useState, useRef } from 'react'
-import { api } from '../api/client'
+import { api, abortScope, isCanceled } from '../api/client'
 import { useToast } from '../components/Toast'
 import EmptyState from '../components/EmptyState'
 import ErrorRetry from '../components/ErrorRetry'
@@ -95,7 +95,7 @@ export default function ProductPage() {
           globalChannel +
           '&search=' +
           encodeURIComponent(s),
-        { timeout: 90000 },
+        { timeout: 90000, scope: 'products' },
       )
       .then(r => {
         if (seq !== reqSeq.current) return
@@ -115,7 +115,8 @@ export default function ProductPage() {
         })
         useAppStore.setState({ batchStateMap: _m })
       })
-      .catch(() => {
+      .catch(e => {
+        if (isCanceled(e)) return
         if (seq === reqSeq.current) {
           setLd(false)
           setLoadingMore(false)
@@ -125,6 +126,7 @@ export default function ProductPage() {
       })
   }
   useEffect(() => {
+    abortScope('products')
     clearCache('products')
     setPg(1)
     loadProd(1)

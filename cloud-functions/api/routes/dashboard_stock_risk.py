@@ -113,53 +113,36 @@ def _stock_risk(channel, full: int = 0):
     fused_bc = {}  # 2026-10-29 按 69码 日销
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL, WH_C, rolling_predict as _rp
-        # 2026-10-30 兜底日销读 __C__(__ALL__ 已删; C 仓是唯一销售源)
-        _rws = get_sku_sales_stats(channel, wh=WH_C, days=28)
-        if _rws:
-            for _k, _r in _rws.items():
-                _sku = _r.get("sku") or ""
-                fused[_sku] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0), float(_r.get("ds28") or 0))
-                if abs(float(_r.get("sigma") or 0)) > 0:
-                    sigma[_sku] = float(_r.get("sigma") or 0)
-            _rws_c = get_sku_sales_stats(channel, wh=WH_C, days=28)
-            if _rws_c:
-                fused_c = {(str(_r.get("sku") or ""), WH_C): _rp(float(_r.get("ds7") or 0),
-                                                          float(_r.get("ds14") or 0),
-                                                          float(_r.get("ds28") or 0))
-                           for _r in _rws_c.values()}
-            _rws_wh = get_sku_sales_stats(channel, days=28)  # 全维度含逐仓行
-            if _rws_wh:
-                wh_fused = {}
-                for _k, _r in _rws_wh.items():
-                    _wh = _r.get("warehouse") or ""
-                    if _wh and _wh not in (WH_ALL, WH_C, "__BC__"):
-                        _wk = (_r.get("sku") or "", _wh)
-                        wh_fused[_wk] = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
-                                            float(_r.get("ds28") or 0))
-            # 2026-10-30 逐仓按码映射(该仓该码) —— 逐仓判定降级只降码不降维
-            wh_fused_bc = {}
-            try:
-                for _r in (get_sku_sales_stats(channel, days=28, barcode="*") or {}).values():
-                    _w2 = _r.get("warehouse") or ""
-                    _b2 = str(_r.get("barcode") or "")
-                    if _w2 and _b2 and _w2 not in (WH_ALL, WH_C, "__BC__"):
-                        wh_fused_bc[(_r.get("sku") or "", _b2, _w2)] = _rp(
-                            float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
-                            float(_r.get("ds28") or 0))
-            except Exception:
-                pass
-            # 2026-10-29 按 69码: 批量读全部按码行(一次查询), key = "sku|barcode"
-            try:
-                # 2026-10-30: BC 判定的日销读 __C__(全国 C 仓) —— B 仓不产生销售
-                _rws_bc = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*")
-                for _r in (_rws_bc or {}).values():
-                    _bc0 = str(_r.get("barcode") or "")
-                    if _bc0:
-                        fused_bc[(_r.get("sku") or "", _bc0)] = _rp(
-                            float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
-                            float(_r.get("ds28") or 0))
-            except Exception:
-                pass
+        # 2026-11-07 P0(去重叠加): 原来这里连续读了 **5 次**物化表, 其中两次参数完全相同
+        #   (`wh=WH_C` 合计行读两遍) —— 线上实测 stock-risk 7.7s, 大头是这 5 次全量传输。
+        #   改为**一次** `barcode="all"` 取回该渠道全部维度行(合计 + 按码 + __C__ + 逐仓),
+        #   在内存里按 (barcode 是否为空 × warehouse 是否聚合维) 分流成原来那 5 个映射。
+        #   语义逐项等价: 原 5 次各自筛的就是这些行的不同子集, 只是多绕了 4 趟往返。
+        #   fields 裁剪: 只取 fused/sigma 需要的 4 列(原为 11 列, 白传 7 列 × 12 万行)。
+        _rws_all = get_sku_sales_stats(channel, days=28, barcode="all",
+                                       fields=("ds7", "ds14", "ds28", "sigma"))
+        if _rws_all:
+            for _r in _rws_all.values():
+                _sku = str(_r.get("sku") or "")
+                _bc = str(_r.get("barcode") or "")
+                _wh = str(_r.get("warehouse") or "")
+                _v = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
+                         float(_r.get("ds28") or 0))
+                if _bc:
+                    if _wh == WH_C:
+                        # BC 判定的日销读 __C__(全国 C 仓) —— B 仓不产生销售
+                        fused_bc[(_sku, _bc)] = _v
+                    elif _wh and _wh not in (WH_ALL, WH_C, "__BC__"):
+                        # 逐仓按码(该仓该码) —— 逐仓判定降级只降码不降维
+                        wh_fused_bc[(_sku, _bc, _wh)] = _v
+                else:
+                    if _wh == WH_C:
+                        fused[_sku] = _v
+                        fused_c[(_sku, WH_C)] = _v
+                        if abs(float(_r.get("sigma") or 0)) > 0:
+                            sigma[_sku] = float(_r.get("sigma") or 0)
+                    elif _wh and _wh not in (WH_ALL, WH_C, "__BC__"):
+                        wh_fused[(_sku, _wh)] = _v
             _has_materialized = True
     except Exception as _e:
         from routes.common import try_err as _terr2

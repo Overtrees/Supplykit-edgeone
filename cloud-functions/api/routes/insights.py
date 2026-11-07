@@ -146,23 +146,24 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             _SENT = ("__C__", "__ALL__", "__BC__")
             _c_ds = {}   # 全国 C 仓: sku|barcode → 融合日销(own 维度消耗速度用)
             _c_agg = {}  # 全国 C 仓: sku → 合计日销(降级)
-            for _r2 in (_gss_i(channel, skus=_sk_l, days=28, barcode="*") or {}).values():
+            # 2026-11-07 P0(去重叠加): 原来分两次读 —— 先 barcode="*" 拿按码行, 再默认拿合计行。
+            #   两次是同一张表的两个子集, 每次 100 SKU × 多仓多码; 合并成一次 barcode="all"
+            #   (合计+按码一起回), 按行的 barcode 是否为空分流。少一趟往返, 行数不变。
+            for _r2 in (_gss_i(channel, skus=_sk_l, days=28, barcode="all") or {}).values():
                 _bc0 = str(_r2.get("barcode") or "")
                 _w0 = str(_r2.get("warehouse") or "")
                 _v2 = _rp_i(float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
                             float(_r2.get("ds28") or 0))
-                if _w0 == "__C__" and _bc0:
-                    _c_ds["%s|%s" % (_r2.get("sku"), _bc0)] = _v2
-                elif _bc0 and _w0 and _w0 not in _SENT:
-                    _wh_bc_ds["%s|%s|%s" % (_r2.get("sku"), _bc0, _w0)] = _v2
-            for _r2 in (_gss_i(channel, skus=_sk_l, days=28) or {}).values():
-                _w0 = str(_r2.get("warehouse") or "")
-                _v2 = _rp_i(float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
-                            float(_r2.get("ds28") or 0))
-                if _w0 == "__C__":
-                    _c_agg[str(_r2.get("sku"))] = _v2
-                elif _w0 and _w0 not in _SENT:
-                    _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _v2
+                if _bc0:
+                    if _w0 == "__C__":
+                        _c_ds["%s|%s" % (_r2.get("sku"), _bc0)] = _v2
+                    elif _w0 and _w0 not in _SENT:
+                        _wh_bc_ds["%s|%s|%s" % (_r2.get("sku"), _bc0, _w0)] = _v2
+                else:
+                    if _w0 == "__C__":
+                        _c_agg[str(_r2.get("sku"))] = _v2
+                    elif _w0 and _w0 not in _SENT:
+                        _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _v2
     except Exception as _ewh2:
         try_err('insights', '逐仓日销(按码)加载降级', _ewh2)
     # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)

@@ -140,6 +140,21 @@ let _activeReq = 0
  *   改为按请求传参: axios 走 config.__bg, apiJson 走局部变量, 不再有共享可变状态。
  */
 let _bgReq = 0
+/**
+ * 当前视图(页面)标识 + 按视图的前台在途计数(2026-11-07)
+ *
+ * 用户实测: 从一个页切到另一个页, header 胶囊仍然"加载中/同步中" —— 因为旧页面的请求
+ * 还在跑, 而徽标只认"全站在途数"。切页时旧页的骨架已经卸载, 用户看到新页 + 转圈,
+ * 会以为新页卡住。这里把前台在途按**发起请求时所在的页面**分桶:
+ *   · 徽标只显示当前页的在途 → 切到新页即刻归零(旧页请求仍在后台跑完/被 abort);
+ *   · 后台任务(看守/轮询)仍单独计数, 由 App 决定是否全局显示"n 条任务运行中"。
+ */
+let _curView = ''
+const _fgByView = new Map<string, number>()
+export function setView(v: string) {
+  _curView = String(v || '')
+  _notifyReq()
+}
 const _reqListeners = new Set<() => void>()
 function _notifyReq() {
   _reqListeners.forEach(fn => {
@@ -155,19 +170,31 @@ function _notifyReq() {
 export function markBackground(_on = true) {
   /* no-op: 全局后台标记已废弃, 见 client.ts 顶部 P1-32 注释 */
 }
-function _reqStart(isBg = false) {
+function _reqStart(isBg = false, view = '') {
   _activeReq += 1
-  if (isBg) _bgReq += 1
+  if (isBg) {
+    _bgReq += 1
+  } else {
+    const k = view || _curView
+    _fgByView.set(k, (_fgByView.get(k) || 0) + 1)
+  }
   _notifyReq()
 }
-function _reqEnd(isBg = false) {
-  if (isBg) _bgReq = Math.max(0, _bgReq - 1)
+function _reqEnd(isBg = false, view = '') {
+  if (isBg) {
+    _bgReq = Math.max(0, _bgReq - 1)
+  } else {
+    const k = view || _curView
+    const n = (_fgByView.get(k) || 0) - 1
+    if (n > 0) _fgByView.set(k, n)
+    else _fgByView.delete(k)
+  }
   _activeReq = Math.max(0, _activeReq - 1)
   _notifyReq()
 }
 /**
- * 订阅"当前有多少个**前台** HTTP 请求在途"(0 = 用户可见的取数已全部结束)
- *   后台请求(看守/轮询)不计入 —— 见 markBackground。
+ * 订阅"当前视图有多少个**前台** HTTP 请求在途"(0 = 当前页取数已全部结束)
+ *   后台请求(看守/轮询)不计入; 其它页的请求也不计入 —— 见 _fgByView。
  */
 export function onActiveRequests(fn: () => void): () => void {
   _reqListeners.add(fn)
@@ -176,7 +203,7 @@ export function onActiveRequests(fn: () => void): () => void {
   }
 }
 export function activeRequests(): number {
-  return Math.max(0, _activeReq - _bgReq)
+  return Math.max(0, _fgByView.get(_curView) || 0)
 }
 /** 后台在途数(诊断用: 胶囊不显示, 但可在 devtools 里看到看守是否真的在跑) */
 export function backgroundRequests(): number {
@@ -200,7 +227,9 @@ instance.interceptors.request.use(config => {
   // 在途登记放在拦截器里 = 所有 axios 请求自动覆盖, 页面无需逐个配对
   c.__tracked = true
   const isBg = Boolean(c.__bg)
-  _reqStart(isBg)
+  // 2026-11-07: 记录发起时所在视图 —— 切页后旧页请求不再点亮新页胶囊(见 _fgByView)
+  c.__view = _curView
+  _reqStart(isBg, _curView)
   // channel 注入与缓存键顺序(2026-11-06 P0-7): 先注入再算键, 并把键挂到 config 上。
   //   读侧(apiGet)用同一个 _withChannel 算键 → 两侧必然一致。
   config.params = _withChannel(config.params)
@@ -259,7 +288,7 @@ const INFLIGHT_TTL = 50000
 instance.interceptors.response.use(
   response => {
     const cfg = response.config as unknown as Record<string, unknown>
-    _reqEnd(Boolean(cfg.__bg))
+    _reqEnd(Boolean(cfg.__bg), String(cfg.__view || ''))
     const { method, url, params } = response.config
     // 2026-11-06 P0-7: 键由请求拦截器算好(已含注入的 channel), 这里直接用 ——
     //   原来在这里重算, 拿到的 params 已带 channel, 与 apiGet 读侧不含 channel 的键不同源。
@@ -301,7 +330,7 @@ instance.interceptors.response.use(
   },
   error => {
     const cfg0 = (error as AxiosError).config as unknown as Record<string, unknown> | undefined
-    _reqEnd(Boolean(cfg0 && cfg0.__bg))
+    _reqEnd(Boolean(cfg0 && cfg0.__bg), String((cfg0 && cfg0.__view) || ''))
     const err = error as AxiosError
     // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
     if (axios.isCancel(err)) {
@@ -416,6 +445,31 @@ export function abortScope(scope: string) {
   }
 }
 
+/**
+ * 取消**所有**在途请求(2026-11-07)
+ *
+ * 原来切页调 `clearInflight()` —— 它只清 Map, **一个请求都没取消**。旧页面的
+ * 4~6 个请求继续跑完(每个 1~8s), 占着 Makers 实例的 DB 连接与执行槽, 新页面的请求
+ * 排在它们后面, 于是"切页后每页都要等好几秒"。用户说的"全面退化"有一半是这个:
+ * 切页不是取消, 而是又叠了一层。
+ * 现在: 切页真正 abort 旧请求(浏览器断开 → 服务端连接提前释放), 再发新页的。
+ */
+export function abortAll() {
+  for (const [k, p] of inflight) {
+    try {
+      if (p && p.__ac && typeof p.__ac.abort === 'function') p.__ac.abort()
+    } catch {}
+    inflight.delete(k)
+  }
+}
+
+/** 是否为"主动取消"(页面切换/最新优先), 页面 catch 应静默忽略, 不当成加载失败 */
+export function isCanceled(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false
+  const o = e as { code?: string; name?: string }
+  return o.code === 'ERR_CANCELED' || o.name === 'CanceledError' || o.name === 'AbortError'
+}
+
 // 非 GET 请求后清空缓存（数据变了，缓存失效）
 function invalidateCache() {
   cache.clear()
@@ -463,7 +517,8 @@ export async function apiJson<T = unknown>(
   const hasBody = opts.data !== undefined
   // 2026-11-06 P1-32: 按请求传参, 不再用全局 markBackground —— 并发时全局标记会串味
   const _bg = Boolean(opts.background)
-  _reqStart(_bg)
+  const _v = _curView
+  _reqStart(_bg, _v)
   try {
     const resp = await fetch(target, {
       method,
@@ -484,7 +539,7 @@ export async function apiJson<T = unknown>(
     } catch {}
     throw e
   } finally {
-    _reqEnd(_bg)
+    _reqEnd(_bg, _v)
     clearTimeout(_tid)
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   }

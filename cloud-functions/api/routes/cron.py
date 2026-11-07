@@ -401,9 +401,12 @@ async def cron_freshness(request: Request):
 @traced
 @_pipe("archive", rows_key="archived")
 async def cron_archive(request: Request):
-    """归档 365 天前订单 → daily_stats(2026-10-06 保留期 90→365 天: 年同比价值+容量安全<5GB; 写入成功才删除)
+    """归档 180 天(滚动半年)前订单 → daily_stats
 
-    2026-11-02 S0: 全表拉取 + 逐条 INSERT, 是本项目最重的操作; 加当日一次性抢占。"""
+    2026-10-06 曾从 90 → 365 天(年同比价值); 2026-11-07 用户定案改回 **180 天**:
+      免费版 orders 已 44 万行/133MB, 明细分页与 COUNT 随行数线性涨, 而年同比读的是
+      daily_stats 的按天聚合 —— 归档只删明细、不删日汇总, 同比与历史曲线一条不少。
+    写入成功才删除(同事务), 重跑幂等。"""
     if not await _authed(request):
         return fail("未授权", 401)
     _off = _off_window("archive", force_ok=_force_ok(request))
@@ -415,8 +418,8 @@ async def cron_archive(request: Request):
         return ok({"skipped": True, "reason": "今天已归档"})
     # 2026-11-06 S6/P0-11: 逐条 INSERT(50 万次往返) → core.archive 集合式批次
     #   (每区间 1 条 INSERT...SELECT...GROUP BY + 1 条 DELETE, 同事务)
-    from core.archive import archive_orders as _arch
-    _r = _arch(cutoff_days=365)
+    from core.archive import archive_orders as _arch, ARCHIVE_KEEP_DAYS as _KEEP
+    _r = _arch(cutoff_days=_KEEP)
     if _r.get("failed_batches"):
         # 失败区间已整体回滚(账单一致), 其余区间照常；留 error 让监控能看见
         _log("error", "归档部分失败: %d 区间回滚, 已归档 %d 行, 首个错误: %s"

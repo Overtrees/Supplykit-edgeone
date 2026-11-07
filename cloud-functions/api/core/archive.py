@@ -25,6 +25,9 @@ from core.clock import now_cn
 from routes.common import try_err
 
 ARCHIVE_BATCH = int(os.environ.get("ARCHIVE_BATCH", "10000") or 10000)
+# 保留期唯一真源: cron(写侧) 与 history(读侧切线) 必须读同一个值, 否则跨切线会重复/漏算。
+#   可用环境变量覆盖(应急回滚到更长保留期, 不用改代码)。
+ARCHIVE_KEEP_DAYS = int(os.environ.get("ARCHIVE_KEEP_DAYS", "180") or 180)
 
 _INS_SQL = (
     "INSERT INTO daily_stats(`date`, channel, store, sku, order_status, gmv, order_count, quantity) "
@@ -42,8 +45,13 @@ _DEL_SQL = ("DELETE FROM orders WHERE id >= %s AND id <= %s AND ordered_at < %s 
             "  AND (deleted_at IS NULL OR deleted_at=''){ch}")
 
 
-def archive_orders(cutoff_days=365, channel=None, batch=None, dry_run=False):
+def archive_orders(cutoff_days=ARCHIVE_KEEP_DAYS, channel=None, batch=None, dry_run=False):
     """把 `cutoff_days` 天前的订单归档进 daily_stats, 归档成功才删除 orders。
+
+    2026-11-07 用户定案: 保留期 365 → **滚动半年**(180 天)。
+      理由: 免费版 orders 441k 行/133MB 且持续膨胀, 订单页/导出的分页与 COUNT 都随行数
+      线性涨; 半年前的明细已无运营价值, 而年度同比仍由 daily_stats(按天聚合)**完整保留**
+      —— 归档只删明细, 不丢日汇总, history/yoy 口径不受影响。
 
     返回 {"archived": 删除行数, "stats_rows": 写入行数(插入+更新), "batches": 区间数,
           "cutoff": 切线日期, "aborted"?: 中止原因}
