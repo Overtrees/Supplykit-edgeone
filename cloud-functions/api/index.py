@@ -12,6 +12,7 @@ if _here not in sys.path:
     sys.path.insert(0, _here)
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -41,6 +42,17 @@ from routes.common import verify_token, try_err
 from core.clock import now_cn
 
 app = FastAPI()
+
+# 2026-11-07 P2: 响应压缩(JSON 体积大的是列表页: 自有仓一页 80KB / 断货一页 114KB)。
+#   **实测这环境的瓶颈是出网带宽, 不是算力**: 同一接口 limit=1 只要 0.42s(纯往返),
+#   limit=200 变 1.04s —— 差的 0.6s 全花在 80KB 明文 JSON 上(约 130KB/s)。
+#   压过之后 80KB → 约 8KB, 体积不再是瓶颈, 这条对所有列表接口都成立, 不只自有仓。
+#   为什么现在才做: 之前几轮都在优化"算", 而这一步是"传"; 红线 11 区分了"算得慢/搬得多",
+#   压缩是"搬得多"里唯一还没动过的一格。
+#   回滚: GZIP_RESP=0 环境变量(不必发版 —— 中间件按启动时读到的值注册)。
+if str(os.environ.get("GZIP_RESP", "1")).strip().lower() not in ("0", "false", "off", "no"):
+    # minimum_size: 小于 1KB 的响应压缩反而更慢(头开销 > 省下的字节)
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 @app.exception_handler(Exception)
