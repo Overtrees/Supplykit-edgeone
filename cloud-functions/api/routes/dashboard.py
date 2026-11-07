@@ -1297,19 +1297,24 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
 
 @router.get("/dashboard/stock-risk")
 @traced
-def stock_risk(channel: str = "jd", full: int = 0):
+def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int = 0):
     """濒临断货(30s 共享表缓存)+单独无锁路径(2026-10-11: 行锁对 stock-risk 16s/无锁 2s——无锁保留;
     瞬时 84s 环境波动(无锁同)——非锁非代码——TiDB serverless 偶发)
     2026-10-17 修复: 曾裸 REPLACE + except 静默吞异常 → 缓存永不落库 → 每次全量冷算 2.5-14s;
     改为无锁缓存(命中秒回/未算写回/写入失败 try_err 留痕——不再静默)
     2026-11-02 S2-1: 手写缓存换成统一 cache_get —— 键族归一到首位(否则域级失效匹配不到),
-    并复用"写入令牌"守卫; full=1 体积大(曾 11.6MB)仍用 max_bytes 挡住不落表。"""
+    并复用"写入令牌"守卫; full=1 体积大(曾 11.6MB)仍用 max_bytes 挡住不落表。
+    2026-11-07 P0: 主体改读 risk_snapshot（重建时算好）；`legacy=1` 强制现算用于对账，
+    `compare=1` 返回两路逐字段差异（不落缓存）。"""
+    if compare:
+        from routes.dashboard_stock_risk import _risk_compare
+        return ok(_risk_compare(channel, full=full))
     from routes.analysis_cache import _CACHE_V as _CV
-    _key = "stock_risk|%s|%s|%s" % (_CV, channel, full)  # _CV 缓存版本段, 后两段为业务维度
+    _key = "stock_risk|%s|%s|%s|%s" % (_CV, channel, full, legacy)
 
     def _build():
         try:
-            return _stock_risk(channel, full=full)
+            return _stock_risk(channel, full=full, legacy=bool(legacy))
         except Exception as _e:
             try_err('dash', 'stock_risk 计算失败(重试一次)', _e)
             # 2026-11-06 P3-5: 原来这里 `return _stock_risk(...)` —— 原样再调一次就算"降级",
@@ -1318,7 +1323,7 @@ def stock_risk(channel: str = "jd", full: int = 0):
             #   现在明确两段: ① 一次重试 → 治 TiDB 瞬时抖动; ② 仍失败就返回**空结构** →
             #   断货卡数字归零(而不是整页报错), 且 try_err 明确留痕, 不会被当成"真的没有断货"。
             try:
-                return _stock_risk(channel, full=full)
+                return _stock_risk(channel, full=full, legacy=bool(legacy))
             except Exception as _e2:
                 try_err('dash', 'stock_risk 二次失败(返回空结构, 30s 后重算)', _e2)
                 return {"items": [], "total": 0, "critical": 0, "warning": 0,

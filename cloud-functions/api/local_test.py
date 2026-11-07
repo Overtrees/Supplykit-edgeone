@@ -632,7 +632,7 @@ check("审计: 无 IN (%s) 与 _status_cond 同段(双包裹)", not _bad2, "; ".
 _expect_keys = [
     ("dash_summary|", ["channel", "start_date", "end_date", "mode"]),
     ("dash_aux|", ["channel", "mode"]),
-    ("stock_risk|", ["_CV", "channel", "full"]),   # 2026-11-02 S2-1: 键族归首, 版本号进第二段
+    ("stock_risk|", ["_CV", "channel", "full", "legacy"]),   # 2026-11-07: legacy 走现算, 必须独立分键
     ("accel|", ["channel", "ratio", "min_qty"]),
     ("purchase|", ["channel", "mode", "days"]),
     ("repl|", ["channel", "mode", "days", "source"]),
@@ -1844,7 +1844,7 @@ try:
 
     _ds4 = open('routes/dashboard.py', encoding='utf-8').read()
     check("S2-1 断货风险键族归首(否则域级匹配不到)",
-          '"stock_risk|%s|%s|%s"' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
+          '"stock_risk|%s|%s|%s|%s"' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
     _sv4 = open('biz/sales.py', encoding='utf-8').read()
     check("S2-1 日销摘要走 cache_put(令牌)", "cache_put" in _sv4 and "tok=_w_tok" in _sv4, "sales.py")
     _sp4 = open('routes/suppliers.py', encoding='utf-8').read()
@@ -4198,12 +4198,24 @@ try:
 
     # ⑥ schema: 三表 + 域版本表 + 版本号已 bump
     _sc18 = _rd("schema_create.py")
-    check("unit_store: schema 声明三表 + data_version_dom + 版本 bump 到 18+",
+    check("unit_store: schema 声明四表(含断货快照) + data_version_dom + 版本 bump 到 20+",
           all(('"%s"' % t) in _sc18 for t in
-              ("unit_state_head", "unit_summary", "unit_alert", "data_version_dom"))
+              ("unit_state_head", "unit_summary", "unit_alert", "data_version_dom",
+               "risk_snapshot"))
           and _re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18)
-          and int(_re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18).group(1)) >= 18,
+          and int(_re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", _sc18).group(1)) >= 20,
           "schema_create.py")
+
+    # ⑦ 断货三级物化(2026-11-07 P0 最后一块): 独立表/独立开关 + 不复制算法
+    _sr18 = _rd("routes/dashboard_stock_risk.py")
+    _us18 = _rd("core/unit_store.py")
+    check("risk 物化: 请求路径可命中, legacy 强制现算(对账用)",
+          "risk_of(" in _sr18 and "legacy: bool = False" in _sr18,
+          "dashboard_stock_risk.py")
+    check("risk 物化: 重建侧直接调现算入口, 不复制公式(红线 D)",
+          "_stock_risk(channel, full=1, legacy=True)" in _us18, "core/unit_store.py")
+    check("risk 物化: 与 unit_alert 分表分开关(两套口径不混)",
+          "risk_snapshot" in _us18 and "risk_enabled" in _us18, "core/unit_store.py")
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 

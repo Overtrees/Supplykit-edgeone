@@ -103,8 +103,10 @@ def fp_now(channel, mode=None):
 def head(channel, mode=None):
     _m = M.mode_of(channel, mode)
     try:
-        r = one("SELECT channel, mode, gen, fp, units, alerts, enabled, stale, note, built_at "
-                "FROM unit_state_head WHERE channel=%s AND mode=%s", [channel, _m])
+        # SELECT * 而不是点名列: 本表是**纯读的控制面**, 只有十来列;
+        #   点名列会在"新列已进 DDL、存量实例还没补列"的窗口里整条查询报错 →
+        #   tally_of/risk_of 全返回 None → 所有读路径退回现算(比不加列还慢)。
+        r = one("SELECT * FROM unit_state_head WHERE channel=%s AND mode=%s", [channel, _m])
     except Exception as _e:
         try_err("unit_store", "head 读取降级", _e)
         return None
@@ -202,6 +204,63 @@ def stock_overview(channel, mode=None, bc_limit=100):
             "idle": int(c.get("idle") or 0), "code_out": int(c.get("code_out") or 0),
             "bc_out": [{"sku": r.get("sku"), "product_name": r.get("product_name"),
                         "warehouse_type": "bc"} for r in bc_out]}
+
+
+_RISK_DIMS = (("bc", "bcItems", "BC"), ("c", "cItems", "C"), ("own", "ownItems", "OWN"))
+
+
+def risk_of(channel, mode=None, full=0):
+    """濒临断货三级（stock-risk）读物化 —— 返回与 `_stock_risk` **逐字段同构**的 payload
+
+    `None` = 不可用（从未构建 / fp 已变 / stale / 开关未开 / 查询失败）→ 调用方退回现算。
+    ⚠️「真的没有断货」必须返回**合法空 payload**（全 0），不能返回 None ——
+       否则每次请求都会退回那个 4.4s 的现算，物化等于白做。
+    """
+    _m = M.mode_of(channel, mode)
+    if not read_enabled():
+        return None
+    h = head(channel, _m)
+    if not h or not int(h.get("gen") or 0) or int(h.get("stale") or 0):
+        return None
+    if not int(h.get("risk_enabled") or 0):
+        return None
+    _fp = fp_now(channel, _m)
+    if not _fp or str(h.get("fp") or "") != _fp:
+        return None
+    _g = int(h.get("gen"))
+    try:
+        rows = query(
+            "SELECT dim, sku, barcode, warehouse, product_name, avail, ds, adj_dos, level, accel "
+            "FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s "
+            "ORDER BY dim, FIELD(level,'red','orange','yellow'), adj_dos",
+            [channel, _m, _g]) or []
+    except Exception as _e:
+        try_err("unit_store", "risk 读取降级", _e)
+        return None
+    buckets = {"bc": [], "c": [], "own": []}
+    for r in rows:
+        _d = str(r.get("dim") or "")
+        if _d not in buckets:
+            continue
+        _w = str(r.get("warehouse") or "")
+        buckets[_d].append({
+            "sku": str(r.get("sku") or ""), "barcode": str(r.get("barcode") or ""),
+            "product_name": str(r.get("product_name") or r.get("sku") or ""),
+            "warehouse": _w, "type": {"bc": "BC", "c": "C", "own": "OWN"}[_d],
+            "available_qty": int(r.get("avail") or 0),
+            "daily_sales": round(float(r.get("ds") or 0), 1),
+            "days_to_empty": round(float(r.get("adj_dos") or 0), 1),
+            "level": str(r.get("level") or ""),
+            "accel": True if int(r.get("accel") or 0) else None,
+        })
+    out = {"items": [], "total": 0, "critical": 0, "warning": 0}
+    for _d, _k, _t in _RISK_DIMS:
+        _it = buckets[_d]
+        out[_k] = _it if full else _it[:10]
+        out[_d + "Total"] = len(_it)
+        out[_d + "Critical"] = sum(1 for x in _it if x["level"] == "red")
+        out[_d + "Warning"] = sum(1 for x in _it if x["level"] == "orange")
+    return out
 
 
 def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=None):
@@ -342,12 +401,44 @@ def _stale_recent(channel, mode):
         return False
 
 
-def _publish(channel, mode, fp, summ, alerts, n_units):
+def _risk_rows(channel, mode):
+    """按 stock-risk 现有口径算一遍 → 扁平行(落 risk_snapshot)
+
+    **不复制算法**: 直接调 `_stock_risk(legacy=True)` —— 它是唯一的计算入口。
+    复制一份公式到本模块, 就是 §15.153 红线 D 说的"叠加成垃圾堆":
+    以后改一处必漏另一处, 两张卡片的数会各自漂。
+    重建在后台线程, 多花 4~5s 无感; 换来请求路径从"搬 21 万行"变成"读几百行"。
+    """
+    try:
+        from routes.dashboard_stock_risk import _stock_risk
+        p = _stock_risk(channel, full=1, legacy=True)
+    except Exception as _e:
+        try_err("unit_store", "risk 计算失败(%s/%s)" % (channel, mode), _e)
+        return None
+    rows = []
+    for _d, _k, _t in _RISK_DIMS:
+        for it in (p.get(_k) or []):
+            rows.append({
+                "dim": _d, "sku": str(it.get("sku") or "")[:80],
+                "barcode": str(it.get("barcode") or "")[:40],
+                "warehouse": str(it.get("warehouse") or "")[:80],
+                "product_name": str(it.get("product_name") or "")[:255],
+                "avail": int(it.get("available_qty") or 0),
+                "ds": float(it.get("daily_sales") or 0),
+                "adj_dos": float(it.get("days_to_empty") or 0),
+                "level": str(it.get("level") or "")[:12],
+                "accel": 1 if it.get("accel") else 0,
+            })
+    return rows
+
+
+def _publish(channel, mode, fp, summ, alerts, n_units, risk=None):
     """gen+1 写入 → 校验已过 → head 一步切换 → 清 N-2 及更早"""
     h = head(channel, mode)
     gen = int((h or {}).get("gen") or 0) + 1
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
     execute("DELETE FROM unit_alert WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
+    execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s", [channel, mode, gen])
     for (_kind, _wt), c in summ.items():
         execute("INSERT INTO unit_summary(channel,mode,gen,kind,wtype,total,ok,low,`out`,idle,paused,code_out) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
@@ -365,6 +456,23 @@ def _publish(channel, mode, fp, summ, alerts, n_units):
                    a["gap"], a.get("adj_dos", 0)]
         execute("INSERT INTO unit_alert(channel,mode,gen,kind,sku,barcode,warehouse,state,"
                 "avail,transit,ds,line,cover,gap,adj_dos) VALUES" + vals, _p)
+    # ── 断货三级(risk_snapshot): 与 unit 同一个 gen 一起发布 ──
+    #   失败**只影响断货卡**(读侧 fp/gen 校验不过 → 退回现算, 正确但慢), 不阻断判定模型发布。
+    #   risk=None 表示本轮没算成: 本 gen 无行 → 读侧读不到 → 现算。绝不给错数。
+    try:
+        if risk:
+            for i in range(0, len(risk), _CHUNK):
+                part = risk[i:i + _CHUNK]
+                vals = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(part))
+                _p = []
+                for a in part:
+                    _p += [channel, mode, gen, a["dim"], a["sku"], a["barcode"], a["warehouse"],
+                           a["product_name"], a["avail"], a["ds"], a["adj_dos"],
+                           a["level"], a["accel"]]
+                execute("INSERT INTO risk_snapshot(channel,mode,gen,dim,sku,barcode,warehouse,"
+                        "product_name,avail,ds,adj_dos,level,accel) VALUES" + vals, _p)
+    except Exception as _e:
+        try_err("unit_store", "risk 发布失败(断货卡退回现算)", _e)
     # ── 唯一切换点 ──
     execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,stale,note,built_at) "
             "VALUES(%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
@@ -372,6 +480,8 @@ def _publish(channel, mode, fp, summ, alerts, n_units):
             "alerts=VALUES(alerts), stale=0, note='ok', built_at=VALUES(built_at)",
             [channel, mode, gen, fp, n_units, len(alerts)])
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen<%s",
+            [channel, mode, gen - 1])
+    execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
     execute("DELETE FROM unit_alert WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
@@ -412,14 +522,17 @@ def build(channel, mode=None, inv_rows=None, force=False):
         try_err("unit_store", "重建校验未通过(%s/%s), 已保留旧版本" % (channel, _m),
                 Exception("; ".join(errs)[:300]))
         return {"ok": False, "error": "validate", "detail": errs[:5]}
+    # 断货三级快照: 放在校验通过之后 —— 校验不过要退回旧版本, 没必要为它白烧 4~5s。
+    #   它是**同一次重建的副产品**, 不是第二个模型: 数据域/粒度/配置与判定同源, 天然同版本。
+    _risk = _risk_rows(channel, _m)
     try:
-        gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]))
+        gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]), risk=_risk)
     except Exception as _e:
         _mark_stale(channel, _m, "发布异常: %s" % _e)
         try_err("unit_store", "重建发布失败(%s/%s)" % (channel, _m), _e)
         return {"ok": False, "error": "publish"}
     return {"ok": True, "gen": gen, "units": len(sc["units"]), "alerts": len(sc["alerts"]),
-            "elapsed": round(time.time() - _t0, 2)}
+            "risk": len(_risk or []), "elapsed": round(time.time() - _t0, 2)}
 
 
 # ── 触发 ────────────────────────────────────────────────────────
@@ -464,6 +577,14 @@ def status(channel, mode=None):
     h = head(channel, _m) or {}
     _fp = fp_now(channel, _m)
     _t = tally_of(channel, _m)
+    _risk_rows = 0
+    try:
+        if int(h.get("gen") or 0):
+            _r = one("SELECT COUNT(*) AS n FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen=%s",
+                     [channel, _m, int(h.get("gen") or 0)])
+            _risk_rows = int((_r or {}).get("n") or 0)
+    except Exception:
+        _risk_rows = -1
     return {"channel": channel, "mode": _m, "read_enabled": read_enabled(),
             "enabled": int(h.get("enabled") or 0),
             "gen": int(h.get("gen") or 0), "units": int(h.get("units") or 0),
@@ -471,4 +592,6 @@ def status(channel, mode=None):
             "note": h.get("note") or "", "built_at": str(h.get("built_at") or ""),
             "fp_head": h.get("fp") or "", "fp_now": _fp,
             "fp_match": bool(_fp) and str(h.get("fp") or "") == _fp,
-            "available": _t is not None, "buckets": len(_t or {})}
+            "available": _t is not None, "buckets": len(_t or {}),
+            # 断货三级快照(独立开关/独立表): risk_rows=-1 表示查询失败, 0 表示本轮没产出
+            "risk_enabled": int(h.get("risk_enabled") or 0), "risk_rows": _risk_rows}

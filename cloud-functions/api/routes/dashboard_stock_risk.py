@@ -40,7 +40,62 @@ def _grade_risk(adj_dos, buffer, lit, orange_slack=1.0, buffer_orange=1.2, buffe
     if buffer <= buffer_yellow:
         return True, "yellow"
     return False, None
-def _stock_risk(channel, full: int = 0):
+def _risk_compare(channel, full: int = 0):
+    """双写期对账：现算(legacy) vs 物化，逐字段比 —— 切换开关前的 0 差异证明
+
+    不落缓存、不进常态路径：只在人工验证/排障时 `?compare=1` 打一次。
+    """
+    _now = _stock_risk(channel, full=full, legacy=True)
+    try:
+        from core import unit_store as _US
+        _mat = _US.risk_of(channel, full=full)
+    except Exception as _e:
+        try_err("dash_stock", "risk 对账读物化失败", _e)
+        _mat = None
+    if _mat is None:
+        return {"ok": False, "materialized": False,
+                "note": "物化不可用（未构建 / risk_enabled=0 / fp 不一致 / 查询失败）"}
+    diffs = []
+    _fields = ("sku", "barcode", "warehouse", "level", "available_qty",
+               "days_to_empty", "daily_sales", "product_name")
+    for _d, _k in (("bc", "bcItems"), ("c", "cItems"), ("own", "ownItems")):
+        a, b = (_now.get(_k) or []), (_mat.get(_k) or [])
+        if len(a) != len(b):
+            diffs.append("%s 条数 %d != %d" % (_d, len(a), len(b)))
+        for i in range(min(len(a), len(b))):
+            for f in _fields:
+                if (a[i] or {}).get(f) != (b[i] or {}).get(f):
+                    diffs.append("%s[%d].%s %r != %r" % (_d, i, f, (a[i] or {}).get(f), (b[i] or {}).get(f)))
+        for f in ("Total", "Critical", "Warning"):
+            if _now.get(_d + f) != _mat.get(_d + f):
+                diffs.append("%s%s %r != %r" % (_d, f, _now.get(_d + f), _mat.get(_d + f)))
+    return {"ok": not diffs, "materialized": True, "diff_count": len(diffs),
+            "diffs": diffs[:40],
+            "counts": {k: _now.get(k) for k in ("bcTotal", "cTotal", "ownTotal")}}
+
+
+def _stock_risk(channel, full: int = 0, legacy: bool = False):
+    """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度
+
+    ── 2026-11-07 P0(最后一块) 读路径物化 ─────────────────────────────────────
+    线上实测冷算 4.4~5.17s, 而返回体只有 3KB —— 慢的不是 SQL 也不是判定,
+    是**为了 10 条明细把 inventory 9 万行 + sku_sales_stats 12.6 万行搬进 Python**。
+
+    现在: 本函数的完整结果(三个维度的全部命中行)由重建线程算一次写进 `risk_snapshot`,
+    请求路径只读几百行(见 core/unit_store.risk_of)。`legacy=True` 强制走下面这段现算,
+    用于 ① 重建时产出快照(自己不能读自己) ② 双写期两路逐字段比对。
+
+    ⚠️ 为什么不复用 unit_alert: 那是另一套口径(state 用 period_of 安全线, 不含活动/加速/OTIF;
+       own 维日销取 __C__ 下游需求)。断货卡是自己的一套公式(见 _grade_risk), 混表必串味。
+    """
+    if not legacy:
+        try:
+            from core import unit_store as _US
+            _mat = _US.risk_of(channel, full=full)
+            if _mat is not None:
+                return _mat
+        except Exception as _e:
+            try_err("dash_stock", "risk 物化读取降级(走现算)", _e)
     from routes.dashboard import _hourly_accel  # 延迟 import(防模块级循环)
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
     from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict

@@ -438,6 +438,26 @@ _TABLES = {
         "PRIMARY KEY (channel, mode, gen, kind, sku, barcode, warehouse), "
         "KEY idx_unit_alert_state (channel, mode, gen, state, kind))"
     ),
+    # 2026-11-07 P0(最后一块): 濒临断货(三级)结果物化 —— 见 core/unit_store.py 的 risk_of。
+    #   为什么不能塞进 unit_alert: 两个口径**不是同一件事**。
+    #     · unit_alert 判 state(ok/low/out), 安全线按 `period_of(kind)` 取,**不含**活动系数/加速倍率/OTIF;
+    #     · 断货卡判 level(red/orange/yellow), 分子含"供应商在途×OTIF + B→C 调拨在途",
+    #       分母含"活动系数 × 当天小时加速", 周期用 b2c 或 lead(分维度), 且 own 维取**该仓自己**的日销。
+    #   混一张表 → 两条口径互相污染(§15.153 红线 D: 不叠加)。故独立表、独立开关、独立 gen。
+    #   只存**命中三级**的行(和黄灯也算命中): 卡片要 total/critical/warning, 明细要 TOP N。
+    "risk_snapshot": (
+        "CREATE TABLE IF NOT EXISTS risk_snapshot ("
+        "channel VARCHAR(16) NOT NULL, mode VARCHAR(16) NOT NULL DEFAULT '', "
+        "gen BIGINT NOT NULL, dim VARCHAR(8) NOT NULL, "
+        "sku VARCHAR(80) NOT NULL, barcode VARCHAR(40) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(80) NOT NULL DEFAULT '', "
+        "product_name VARCHAR(255) NOT NULL DEFAULT '', "
+        "avail INT NOT NULL DEFAULT 0, ds DECIMAL(12,2) NOT NULL DEFAULT 0, "
+        "adj_dos DECIMAL(12,2) NOT NULL DEFAULT 0, level VARCHAR(12) NOT NULL, "
+        "accel TINYINT NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (channel, mode, gen, dim, sku, barcode, warehouse), "
+        "KEY idx_risk_level (channel, mode, gen, dim, level, adj_dos))"
+    ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
     #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的
@@ -580,7 +600,10 @@ _DROP_INDEXES = [
 #   新库不需要它(_TABLES DDL 已含同名列); 它只服务存量表(CREATE IF NOT EXISTS 不改已存在表)。
 _COLUMN_ADDS = {
     # 2026-11-07 P1: 读路径开关(建表时已含; 这里兜"表先存在、列后加"的存量实例)
-    "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0")],
+    #   risk_enabled 独立于 enabled: 判定物化与断货物化是**两套口径**, 观察期/回滚必须能分开切,
+    #   否则一个表校验不过要把另一个也一起退回现算(白慢)。
+    "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0"),
+                        ("risk_enabled", "TINYINT NOT NULL DEFAULT 0")],
     # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
     "unit_summary": [("code_out", "INT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
@@ -690,7 +713,10 @@ _COLUMN_ADDS = {
 # v18(2026-11-07 P1): 判定结果物化读模型 unit_state_head/unit_summary/unit_alert +
 #   按域计数 data_version_dom(fp 驱动, 不用 TTL)。见 core/unit_store.py。
 # v19(2026-11-07 P0): unit_summary 加 code_out —— aux 的码级复核改读物化, 不再现算 9 万单元。
-SCHEMA_VERSION = 19
+# v20(2026-11-07 P0): risk_snapshot —— 濒临断货三级(red/orange/yellow)结果物化,
+#   stock-risk 冷算 4.4s 的根因是"为 10 条明细搬 inventory 9 万行 + 日销 12.6 万行"。
+#   独立表/独立开关(unit_state_head.risk_enabled), 不与 unit_alert 混口径。
+SCHEMA_VERSION = 20
 
 
 def table_ddl(name):
