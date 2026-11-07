@@ -346,9 +346,22 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
     }
     setProcLoading(false)
   }
+  // ── 2026-11-07 S0-c: 采购/补货取数**串行**到首屏主数据之后 ────────────────────
+  // 线上实测(真实浏览器, 同一屏): replenishment 单跑 **1.40s**、purchase **0.91s**,
+  //   但与 boot 同时发时分别变成 **15.9s / 15.4s**, boot 也从 2.5s 变 10.7s —— 四个重接口
+  //   (replenishment/purchase/alerts/boot) 同时抢实例 CPU 与 TiDB 连接, 每个都慢 4~10 倍。
+  //   这四条都不会被 `db.heavy` 的预算拦住(replenishment/purchase 走的是 insights 路由,
+  //   不在那 3 个名额里), 所以只能在**调用侧**错开: 主数据落地后再拉这两条。
+  // 现在: boot 先跑完(≈2.5s) → 再拉采购/补货(≈1.4s 并发) → 卡面补齐。总数不变, 峰值降一半。
+  const _procKey = useRef('')
+  const _storeLoading = useAppStore(s => s.loading)
   useEffect(() => {
+    if (_storeLoading) return // 首屏主数据还在路上, 这时候发只会互相踩
+    const k = channel + '|' + _replMode
+    if (_procKey.current === k) return
+    _procKey.current = k
     loadProc()
-  }, [channel, _replMode])
+  }, [channel, _replMode, _storeLoading])
   // 2026-11-01 根治「低库存卡明细丢失」: 进入看板即预拉全量告警(limit=20000),
   //   卡面在此之前吃的是 alertsList —— 那是 `/api/alerts` 每组 200 条的**首屏截断快照**,
   //   与后端独立 COUNT 的 lowStockTotal 天然对不上(实测 160 vs 200), 且 id DESC 的前 N 条
