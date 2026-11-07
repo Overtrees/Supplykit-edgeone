@@ -765,6 +765,7 @@ export default function App() {
   // 数据版本轮询：后端 _cache_version 变化时自动刷新
   const [, setDbVersion] = useState(0)
   const versionRef = useRef(0)
+  const _lastVerRefresh = useRef(0)
   useEffect(() => {
     // 2026-11-06 P1-22: 同上, 走统一调度器。
     //   注意这里保留"只**判断**要不要刷"的语义: 版本没变就不动, 变了才 clearCache + loadAll。
@@ -777,10 +778,19 @@ export default function App() {
         const v = d.version || 0
         if (versionRef.current !== 0 && versionRef.current !== v) {
           clearCache()
-          useAppStore
-            .getState()
-            .loadAll()
-            .catch(() => {})
+          // 2026-11-07 雪崩第 3 处: 版本一变就 `loadAll()`(summary+charts+orders+alerts+
+          //   quality-logs+stock-risk 六个)。后台导入/同步期间 version 每几秒变一次,
+          //   前端就被自己刷爆 —— 而用户可能正停在商品页/Rules 页, 这些数据他根本不需要重拉。
+          //   现在只刷**当前视图**: 看板交给它自己的 pageVersion(自拉 summary/aux/risk 并带破缓存),
+          //   订单页只刷订单, 其它页等用户回去时按 30s TTL 自然重取。
+          const _st = useAppStore.getState()
+          const _cv = currentView()
+          const _now = Date.now()
+          if (_now - _lastVerRefresh.current > 5000) {
+            _lastVerRefresh.current = _now
+            if (_cv === 'dash') _st.bumpPageVersion()
+            else if (_cv === 'orders') _st.loadOrdersOnly(1)
+          }
         }
         versionRef.current = v
         setDbVersion(v)
