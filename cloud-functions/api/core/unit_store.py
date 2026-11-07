@@ -665,15 +665,20 @@ def build(channel, mode=None, inv_rows=None, force=False):
             return {"ok": True, "skipped": "cooldown"}
         _LAST[_k] = (_now, fp)
     _t0 = time.time()
+    _t_read = 0.0
     try:
         # 一次读全量(10 万行), scan 与 risk 共用 —— 少读一趟
+        _tr = time.time()
         _rows = inv_rows if inv_rows is not None else _inv_rows(channel)
+        _t_read = time.time() - _tr
         sc = scan(channel, _m, inv_rows=_rows)
     except Exception as _e:
         _mark_stale(channel, _m, "scan 异常: %s" % _e)
         try_err("unit_store", "重建扫描失败(%s/%s)" % (channel, _m), _e)
         return {"ok": False, "error": "scan"}
-    _t_scan = time.time() - _t0
+    # scan 段不含"读库"(单列在 read): 否则细分里的 inv=0.0 会让人以为读库不要钱 ——
+    #   实测这 10 万行从 TiDB 搬进 Python 是重建里最大的一块(7s 量级)。
+    _t_scan = time.time() - _t0 - _t_read
     errs = _validate(channel, _m, sc)
     _t_val = time.time() - _t0 - _t_scan
     if errs:
@@ -690,9 +695,9 @@ def build(channel, mode=None, inv_rows=None, force=False):
         # 分段耗时落 head: 重建 30s+ 却只有一个总数时, "优化"只能靠猜。
         #   scan(取数+判定) / validate(独立复核) / risk(断货快照) / publish(写库, 由 _publish 自记)
         _st = sc.get("t") or {}
-        _timing = ("scan=%.1f(inv=%.1f,units=%.1f,series=%.1f,loop=%.1f),validate=%.1f,"
+        _timing = ("read=%.1f,scan=%.1f(units=%.1f,series=%.1f,loop=%.1f),validate=%.1f,"
                    "risk=%.1f,units=%d,alerts=%d") % (
-            _t_scan, _st.get("inv", 0), _st.get("units", 0), _st.get("series", 0),
+            _t_read, _t_scan, _st.get("units", 0), _st.get("series", 0),
             _st.get("loop", 0), _t_val, _t_risk, len(sc["units"]), len(sc["alerts"]))
         gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]),
                        risk=_risk, risk_fp=_rfp, timing=_timing)
