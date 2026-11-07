@@ -763,6 +763,8 @@ def status(channel, mode=None):
             "note": h.get("note") or "", "built_at": str(h.get("built_at") or ""),
             # 上一轮重建的分段耗时(scan/validate/risk/publish) —— 重建慢时先看这里, 再谈优化
             "timing": str(h.get("timing") or ""),
+            # 断货三维度计数(物化) —— 空 = 该 gen 没写, 读侧会退回 GROUP BY(慢但不影响正确性)
+            "risk_stat": str(h.get("risk_stat") or ""),
             "fp_head": h.get("fp") or "", "fp_now": _fp,
             "fp_match": bool(_fp) and str(h.get("fp") or "") == _fp,
             "available": _t is not None, "buckets": len(_t or {}),
