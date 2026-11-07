@@ -12,7 +12,6 @@ if _here not in sys.path:
     sys.path.insert(0, _here)
 
 from fastapi import FastAPI
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -46,13 +45,87 @@ app = FastAPI()
 # 2026-11-07 P2: 响应压缩(JSON 体积大的是列表页: 自有仓一页 80KB / 断货一页 114KB)。
 #   **实测这环境的瓶颈是出网带宽, 不是算力**: 同一接口 limit=1 只要 0.42s(纯往返),
 #   limit=200 变 1.04s —— 差的 0.6s 全花在 80KB 明文 JSON 上(约 130KB/s)。
-#   压过之后 80KB → 约 8KB, 体积不再是瓶颈, 这条对所有列表接口都成立, 不只自有仓。
-#   为什么现在才做: 之前几轮都在优化"算", 而这一步是"传"; 红线 11 区分了"算得慢/搬得多",
-#   压缩是"搬得多"里唯一还没动过的一格。
-#   回滚: GZIP_RESP=0 环境变量(不必发版 —— 中间件按启动时读到的值注册)。
+#   为什么不能用标准 GZipMiddleware: 线上实测边缘网关把 `Accept-Encoding` 整个剥掉再转发
+#   (identity/gzip/none 三种请求, 响应头逐字节相同, 连 Vary 都恒等于 2 条) —— 应用层永远
+#   看不到客户端是否接受压缩。所以约定一个显式头 `X-Accept-Encoding: gzip`(X- 自定义头
+#   可透传, X-Auth-Token 就是这么过来的): 前端 axios 默认带上; 没带的调用方照旧收明文。
+#   已压缩的文件类型(xlsx/csv/zip)直接跳过 —— 再压一遍只烧 CPU 不省字节。
+#   回滚: GZIP_RESP=0 环境变量(按启动时读到的值注册, 不必发版)。
 if str(os.environ.get("GZIP_RESP", "1")).strip().lower() not in ("0", "false", "off", "no"):
-    # minimum_size: 小于 1KB 的响应压缩反而更慢(头开销 > 省下的字节)
-    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+    _GZ_EXCLUDE = ("text/event-stream", "application/zip", "application/octet-stream",
+                   "application/vnd.ms-excel",
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    _GZ_MIN = 1024  # 小于 1KB 压缩反而更慢(头开销 > 省下的字节)
+
+    class _XGZipMiddleware:
+        """触发条件 = Accept-Encoding 或显式 X-Accept-Encoding 含 gzip。
+
+        已压缩类型(content-encoding 已设 / xlsx / zip / SSE)与 <1KB 的响应跳过。
+        JSONResponse 是单消息响应, 缓冲一整包再判大小, 无流式风险(SSE 已排除)。
+        """
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                return await self.app(scope, receive, send)
+            from starlette.datastructures import Headers as _H
+            _h = _H(scope=scope)
+            _acc = "%s,%s" % (_h.get("Accept-Encoding", ""), _h.get("X-Accept-Encoding", ""))
+            if "gzip" not in _acc:
+                return await self.app(scope, receive, send)
+            return await self.app(scope, receive, self._make_send(send))
+
+        def _make_send(self, send):
+            import gzip as _gzip
+            import io as _io
+            _buf = _io.BytesIO()
+            _gz = _gzip.GzipFile(mode="wb", fileobj=_buf, compresslevel=6)
+            _state = {"start": None, "skip": False}
+
+            async def _send(message):
+                _t = message.get("type")
+                if _t == "http.response.start":
+                    from starlette.datastructures import Headers as _H2
+                    _rh = _H2(raw=message.get("headers") or [])
+                    _ct = _rh.get("content-type", "").split(";")[0].strip()
+                    _state["skip"] = (_ct in _GZ_EXCLUDE or "content-encoding" in _rh)
+                    _state["start"] = message
+                    if _state["skip"]:
+                        _gz.close()
+                        await send(message)
+                    return
+                if _t != "http.response.body":
+                    await send(message)
+                    return
+                if _state["skip"]:
+                    await send(message)
+                    return
+                _body = message.get("body", b"") or b""
+                _more = message.get("more_body", False)
+                _gz.write(_body)
+                if _more:
+                    return          # 继续缓冲(SSE 已被排除, 正常 JSON 一包到底)
+                _gz.close()
+                _out = _buf.getvalue()
+                if len(_body) < _GZ_MIN or len(_out) >= len(_body):
+                    await send(_state["start"])
+                    await send(message)
+                    return
+                from starlette.datastructures import MutableHeaders as _MH
+                _msg = dict(_state["start"])
+                _mh = _MH(raw=_msg["headers"])
+                _mh["Content-Encoding"] = "gzip"
+                _mh["Content-Length"] = str(len(_out))
+                _mh.add_vary_header("Accept-Encoding")
+                _body_msg = dict(message, body=_out)
+                await send(_msg)
+                await send(_body_msg)
+
+            return _send
+
+    app.add_middleware(_XGZipMiddleware)
 
 
 @app.exception_handler(Exception)

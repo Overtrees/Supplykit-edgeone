@@ -243,6 +243,23 @@ from routes.common import FUNNEL_STAGES as _FS  # noqa: E402
 from routes.dashboard import _build_funnel_stages as _bfs  # noqa: E402
 
 r = client.get("/dashboard/summary?channel=jd", headers={"X-Auth-Token": TOKEN})
+# ── 响应压缩(2026-11-07 P2): 显式头 X-Accept-Encoding 触发, 与 Accept-Encoding 并行生效 ──
+#   /health 只有 143 字节(< minimum_size), 故意拿 summary(几十 KB)验。
+_r_gz = client.get("/dashboard/summary?channel=jd", headers={"X-Auth-Token": TOKEN, "X-Accept-Encoding": "gzip"})
+check("gzip: 显式头触发", _r_gz.headers.get("content-encoding") == "gzip",
+      str(dict(_r_gz.headers))[:200])
+check("gzip: 内容解压后与明文一致",
+      _r_gz.json() == client.get("/dashboard/summary?channel=jd",
+                                 headers={"X-Auth-Token": TOKEN}).json())
+# httpx 默认也发 Accept-Encoding: gzip, 双双显式 identity 才能构造"客户端不要压缩"
+_r_id = client.get("/dashboard/summary?channel=jd",
+                   headers={"X-Auth-Token": TOKEN, "Accept-Encoding": "identity",
+                            "X-Accept-Encoding": "identity"})
+check("gzip: 客户端不要压缩(identity)则不压缩", _r_id.headers.get("content-encoding") is None)
+_r_gz2 = client.get("/dashboard/summary?channel=jd", headers={"X-Auth-Token": TOKEN, "Accept-Encoding": "gzip"})
+check("gzip: 标准 Accept-Encoding 仍生效(网关透传时兼容)", _r_gz2.headers.get("content-encoding") == "gzip")
+
+
 d = r.json()
 dd = d.get("data") if isinstance(d, dict) else d
 if d.get("ok") is False:

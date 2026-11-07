@@ -254,6 +254,13 @@ instance.interceptors.request.use(config => {
     headers['X-Auth-Token'] = token
     config.headers = headers as unknown as typeof config.headers
   }
+  // 2026-11-07 P2: 响应压缩要靠显式头 —— 边缘网关会把 `Accept-Encoding` 整个剥掉再转发,
+  //   后端永远看不到浏览器本来的 gzip 请求。约定 `X-Accept-Encoding: gzip`(X- 自定义头可
+  //   透传), 后端据此决定是否压缩(80~114KB 的列表页压到 8~12KB, 实测这环境出网带宽只有
+  //   约 130KB/s, 体积就是延迟)。浏览器 fetch/XHR 自动解压, 调用方零感知。
+  const headers2 = (config.headers || {}) as unknown as Record<string, string>
+  headers2['X-Accept-Encoding'] = headers2['X-Accept-Encoding'] || 'gzip'
+  config.headers = headers2 as unknown as typeof config.headers
   return config
 })
 
@@ -530,6 +537,8 @@ export async function apiJson<T = unknown>(
       headers: {
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { 'X-Auth-Token': token } : {}),
+        // 与 axios 通道同口径: 网关剥 Accept-Encoding, 显式头告诉后端"可以压缩"
+        'X-Accept-Encoding': 'gzip',
       },
       signal: ctrl.signal,
     })
