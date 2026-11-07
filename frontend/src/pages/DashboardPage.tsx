@@ -152,11 +152,24 @@ export default function DashboardPage({ onAlert, onGoInsights }: DashboardPagePr
   const [dashErr, setDashErr] = useState('')
   const dashFailRef = useRef(0) // 兜底重试失败计数: 连续 >=2 次后提供"刷新页面"强刷兜底(WebView/实例连接异常时重连恢复)
   // 弹窗数据加载(四维完整性): 告警用大 limit 分组配额拿全量; 濒临断货用 full=1; 缺货按维度拉全量
+  // 2026-11-07 S0-b: limit 20000 → 3000 + 排除自有仓三条。
+  //   线上实测: 20000 时返回 **3.9MB / 4.69s**, 而 jd 全量告警 10884 条里 `own_overstock` 一家
+  //   7215 条(占 2/3) —— 这批货由「自有仓健康」卡专属承载, 看板的告警列表**从来不显示它**
+  //   (后端 aux 的 `_block_alerts` 也排除了 own_transfer_gap/own_overstock/own_expiry_risk)。
+  //   代价是首屏 4 个重接口并发时, 这 3.9MB 把浏览器同域连接占满 → boot 从 1.2s 拖到 6.6s。
+  //   排除后单跑 4.69s → 0.8s 量级; 3000/组 仍覆盖 low_stock(jd 2151 / other 5271 的 57%+),
+  //   卡面 5 行与弹窗滚动都够用 —— 真要看第 3000 条以后的用户不存在。
   const loadFullAlerts = async () => {
     try {
-      const r = await api.get<ApiObject[]>('/api/alerts?channel=' + channel + '&limit=20000', {
-        timeout: 60000,
-      })
+      const r = await api.get<ApiObject[]>(
+        '/api/alerts?channel=' +
+          channel +
+          '&limit=3000' +
+          '&exclude=own_overstock,own_transfer_gap,own_expiry_risk',
+        {
+          timeout: 60000,
+        },
+      )
       const _d = r.data
       // 只在拿到**非空数组**时覆盖 —— 请求失败/返回空时保持 null, 让卡面回落 alertsList。
       // 曾 `catch → setFullAlerts([])`: 网络抖动一次, 卡面(fullAlerts 优先)立刻变空,

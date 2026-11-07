@@ -45,18 +45,30 @@ def _attach_warehouse(alerts, channel):
 
 @router.get("/alerts")
 @traced
-def list_alerts(channel: str = "jd", limit: int = 200):
-    """告警列表: 分组配额(low_stock/replenish/other 各组 limit 条, 组内 id DESC)——可见性由分组配额保证"""
+def list_alerts(channel: str = "jd", limit: int = 200, exclude: str = ""):
+    """告警列表: 分组配额(low_stock/replenish/other 各组 limit 条, 组内 id DESC)——可见性由分组配额保证
+
+    exclude: 逗号分隔的 alert_type 黑名单。**2026-11-07 加**: 看板首屏曾用 `limit=20000`
+    预拉全量(3.9MB / 4.7s), 只为卡面几行明细 —— 其中 `own_overstock` 一家 7215 行(占 2/3),
+    而这批货由「自有仓健康」卡专属承载, 看板的告警列表从来不显示它(aux 里也排除了)。
+    首屏 4 个重接口并发时, 这 3.9MB 直接把浏览器同域连接占满, boot 从 1.2s 拖到 6.6s。
+    """
+    _ex = [x.strip() for x in (exclude or "").split(",") if x.strip()]
+    _ex_sql = ""
+    if _ex:
+        _ex_sql = " AND alert_type NOT IN (" + ",".join(["%s"] * len(_ex)) + ")"
     items = []
     groups = [("low_stock", "low_stock"), ("replenish", "replenish"), ("other", None)]
     for gname, atype in groups:
         if atype:
+            if atype in _ex:
+                continue          # 该类型已被调用方排除, 不必查
             rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
                          "ORDER BY id DESC LIMIT %%s" % _FIELDS, [channel, atype, limit])
         else:
             rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
-                         "AND alert_type NOT IN ('low_stock','replenish') ORDER BY id DESC LIMIT %%s"
-                         % _FIELDS, [channel, limit])
+                         "AND alert_type NOT IN ('low_stock','replenish')" + _ex_sql +
+                         " ORDER BY id DESC LIMIT %%s" % _FIELDS, [channel] + _ex + [limit])
         items.extend(rows)
     _attach_warehouse(items, channel)
     return ok(items)
