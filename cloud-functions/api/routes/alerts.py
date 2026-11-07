@@ -89,12 +89,18 @@ def list_alerts(channel: str = "jd", limit: int = 200, exclude: str = "",
         if atype:
             if atype in _ex:
                 continue          # 该类型已被调用方排除, 不必查
-            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' AND alert_type=%%s "
-                         "ORDER BY id DESC LIMIT %%s" % _FIELDS, [channel, atype, limit])
+            # ⚠ 2026-11-07 实测 500 根因(在此留痕): 旧写法
+            #   `"A" + _ex_sql + " LIMIT %%s" % _FIELDS` 里 **% 优先级高于 +**,
+            #   只格式化了最后一段 → `%%s` 配上多余实参 → "not all arguments converted"
+            #   TypeError, 非分页路径整个 500。改为显式拼接, 不再做二次 % 格式化。
+            rows = query("SELECT " + _FIELDS + " FROM alerts WHERE channel=%s "
+                         "AND status='active' AND alert_type=%s "
+                         "ORDER BY id DESC LIMIT %s", [channel, atype, limit])
         else:
-            rows = query("SELECT %s FROM alerts WHERE channel=%%s AND status='active' "
+            rows = query("SELECT " + _FIELDS + " FROM alerts WHERE channel=%s "
+                         "AND status='active' "
                          "AND alert_type NOT IN ('low_stock','replenish')" + _ex_sql +
-                         " ORDER BY id DESC LIMIT %%s" % _FIELDS, [channel] + _ex + [limit])
+                         " ORDER BY id DESC LIMIT %s", [channel] + _ex + [limit])
         items.extend(rows)
     _attach_warehouse(items, channel)
     return ok(items)

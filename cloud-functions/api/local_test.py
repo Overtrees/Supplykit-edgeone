@@ -386,6 +386,20 @@ r = client.get("/rules?include_deleted=1", headers=AH)
 check("rules include_deleted 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
 
 r = client.get("/inventory/out-of-stock?channel=jd&wh=own", headers=AH)
+# alerts 非分页路径(分组配额): 曾因 "LIMIT %%s" % _FIELDS 产生字面 %%s → pymysql TypeError(500)
+r = client.get("/alerts?channel=jd&limit=50", headers={"X-Auth-Token": ADMIN})
+check("alerts 非分页 200", r.status_code == 200 and isinstance(r.json().get("data", r.json()), list),
+      r.text[:150])
+# exclude 走 else 分支(_ex_sql 拼接) —— 2026-11-07 的 "% 优先级高于 +" 事故就发生在这条路径
+r = client.get("/alerts?channel=jd&limit=50&exclude=own_overstock,own_transfer_gap",
+               headers={"X-Auth-Token": ADMIN})
+check("alerts exclude(拼接 SQL) 200 且返回裸数组",
+      r.status_code == 200 and isinstance(r.json().get("data", r.json()), list), r.text[:150])
+r = client.get("/alerts?channel=jd&paged=1&types=low_stock&limit=10&offset=0",
+               headers={"X-Auth-Token": ADMIN})
+_d = r.json().get("data", r.json()) or {}
+check("alerts 分页 200 + items/total", r.status_code == 200 and isinstance(_d, dict)
+      and "items" in _d and "total" in _d, r.text[:150])
 check("out-of-stock 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
 r = client.delete("/inventory/1", headers=AH)
 check("inventory 删除 200", r.status_code == 200 and r.json().get("ok") is True, r.text[:120])
