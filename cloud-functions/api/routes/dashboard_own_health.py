@@ -198,9 +198,31 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     #   实测证据: aux 单跑 4.5s, 与 stock-risk 并发时 34s / 35.8s (quality_logs slow_request)。
     #   单接口"并行变快"换来的是"整站不可用", 与 §15.8 四维(可靠性)冲突 —— 退回串行。
     #   这 3 条查询单条 0.2~0.9s, 串行只多约 1s, 但不再挤占别人的连接。
-    pmap = _load_products()
-    _bc_ds, _agg_ds = _load_ds()
-    exp_map = _load_batches()
+    # 2026-11-07 P0.1: 三条取数恢复并行 —— 但这次有**全局预算**兜底。
+    #   11-07 S0 回退并行的理由是"aux 外层 3 路 + 这里 3 路 = 6 连接, 两接口并发就打满池";
+    #   现在 `db.heavy` 已把重计算全局限制在 3 个名额(HEAVY_CONCURRENCY), aux 占 1 个,
+    #   stock-risk 想同时进来只能等名额或返回旧值 —— 不会再出现"两个请求各吃 6 条连接"。
+    #   线上实测: own-health 单独 2.07s(串行三条), 是 aux 切物化后的新天花板。
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    with _TPE(max_workers=3) as _ex:
+        _fp = _ex.submit(_load_products)
+        _fd = _ex.submit(_load_ds)
+        _fb = _ex.submit(_load_batches)
+        try:
+            pmap = _fp.result()
+        except Exception as _e:
+            try_err("own_health", "商品档案加载降级", _e)
+            pmap = {}
+        try:
+            _bc_ds, _agg_ds = _fd.result()
+        except Exception as _e:
+            try_err("own_health", "下游日销加载降级", _e)
+            _bc_ds, _agg_ds = {}, {}
+        try:
+            exp_map = _fb.result()
+        except Exception as _e:
+            try_err("own_health", "批次效期加载降级", _e)
+            exp_map = {}
 
     # 没有管效期的 SKU 就丢掉批次结果(与原来"不查"等价, 只是这次查了才发现用不上)
     _expiry_skus = [s for s in skus
