@@ -1295,6 +1295,22 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
                   only=only, per_type=int(per_type or 0), debug=int(debug or 0)))
 
 
+@router.get("/dashboard/own-health/state")
+@traced
+def own_health_state(channel: str = "jd", force: int = 0):
+    """自有仓健康读模型诊断口 —— fp/gen/行数/计数/分段耗时逐项可查, 不靠猜
+
+    force=1: 立即重建一次(同步, 约 2~3s) —— 排查"为什么还在现算"时用。
+    `OWN_HEALTH_READ=0` 可整体回退到现算(不需发版)。
+    """
+    from core import own_store as _OS
+    if force:
+        _r = _OS.build(channel, force=True)
+    else:
+        _r = {"skipped": "no-force"}
+    return ok({"build": _r, "state": _OS.status(channel)})
+
+
 @router.get("/dashboard/stock-risk")
 @traced
 def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int = 0,

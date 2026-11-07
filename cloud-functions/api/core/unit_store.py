@@ -101,6 +101,11 @@ def _fp_of(domains, channel, mode=None):
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:32]
 
 
+def fp_of(domains, channel, mode=None):
+    """公开入口（供其它读模型复用同一套域计数器 → 同一份指纹语义）"""
+    return _fp_of(domains, channel, mode)
+
+
 def fp_now(channel, mode=None):
     """当前数据版本指纹。空串 = 不可用（表没建 / 查询失败）→ 调用方一律走旧路径
 

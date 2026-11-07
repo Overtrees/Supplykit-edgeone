@@ -4225,6 +4225,53 @@ try:
     check("risk 物化: 独立指纹含 suppliers(OTIF 影响可撑天数, unit fp 感知不到)",
           "RISK_DOMAINS = JUDGE_DOMAINS + (\"suppliers\",)" in _us18
           and 'fp_risk_now(channel, _m)' in _us18, "core/unit_store.py")
+    # ⑧ 自有仓健康明细物化(2026-11-07 P2)
+    _os18 = _rd("core/own_store.py")
+    _oh18 = _rd("routes/dashboard_own_health.py")
+    _sc18 = _rd("schema_create.py")
+    check("own 物化: 读侧先读物化, 未命中退回现算(不是二选一, 是有序降级)",
+          "core import own_store" in _oh18 and "d = _compute(channel" in _oh18,
+          "dashboard_own_health.py")
+    check("own 物化: 重建调 _compute, 不复制算法(红线 D)",
+          "_compute(channel)" in _os18 and "def _compute(" in _oh18, "core/own_store.py")
+    check("own 物化: 排序落 seq, 读侧 ORDER BY seq 切页(与卡面 TOP N 同序列)",
+          "ORDER BY seq" in _os18 and "seq = 全局展示序号" in _sc18, "core/own_store.py")
+    check("own 物化: 计数与明细同一次发布(否则'共 N 条'与翻到底对不上)",
+          "stat VARCHAR(255)" in _sc18 and "_stat_str(d)" in _os18, "schema_create.py")
+    check("own 物化: 发布前核对三类计数, 不过不切 head",
+          "校验未通过" in _os18 and "_mark_stale(channel" in _os18, "core/own_store.py")
+    check("own 物化: 回滚开关(OWN_HEALTH_READ=0 不必发版)",
+          "OWN_HEALTH_READ" in _os18, "core/own_store.py")
+    check("own 物化: 失效链路已接(写操作后台重建, 不等下一次请求现算)",
+          "own_store as _OS" in _rd("routes/analysis_cache.py"), "analysis_cache.py")
+
+    # 动态: 指纹不等/计数不可解析 → 必须返回 None(退回现算), 不能拿旧行当新行
+    import core.own_store as _OS
+    _oh = _OS.head
+    _ofp = _OS.fp_now
+    try:
+        _OS.head = lambda ch: {"channel": ch, "gen": 3, "fp": "AAA", "row_cnt": 2,
+                               "stat": "total:2;tg:1;os:1;er:0;crit:2;warn:0;od:90;eb:15;b2c:6",
+                               "stale": 0}
+        _OS.fp_now = lambda ch: "BBB"
+        check("own 物化: fp 不等 → page_of 返回 None(宁慢不错)", _OS.page_of("jd") is None)
+        _OS.fp_now = lambda ch: "AAA"
+        _st = _OS._parse_stat("garbage")
+        check("own 物化: 计数不可解析 → 视为不可用", _st is None)
+        _OST = _OS._stat_str({"total": 7, "transferGap": 1, "overstock": 5, "expiryRisk": 1,
+                              "critical": 2, "warning": 5,
+                              "limits": {"overstock_days": 90, "expiry_buffer_days": 15,
+                                         "b2c_days": 6}})
+        _pb = _OS._parse_stat(_OST) or {}
+        check("own 物化: stat 往返一致(出版本/读版本同一口径)",
+              _pb.get("total") == 7 and _pb.get("os") == 5 and abs(_pb.get("od") - 90) < 1e-6,
+              _OST)
+        _OS.head = lambda ch: {"channel": ch, "gen": 3, "fp": "AAA", "stale": 1,
+                               "stat": _OST}
+        check("own 物化: stale=1 → 退回现算", _OS.page_of("jd") is None)
+    finally:
+        _OS.head = _oh
+        _OS.fp_now = _ofp
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 

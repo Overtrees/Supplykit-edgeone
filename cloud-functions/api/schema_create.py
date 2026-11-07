@@ -479,6 +479,38 @@ _TABLES = {
         "KEY idx_risk_level (channel, mode, gen, dim, level, adj_dos), "
         "KEY idx_risk_ord (channel, mode, gen, dim, ord))"
     ),
+    # 2026-11-07 P2: 自有仓健康明细物化 —— 见 core/own_store.py。
+    #   为什么单开一张表而不复用 alerts: alerts 是规则引擎写的"评估那一刻"的快照, 刷新节奏
+    #   与本卡独立, 且缺 gap_qty/cover_days/days_to_expiry/批次号等卡面字段。拿它顶明细会让
+    #   "卡面数字"与"弹窗明细"来自两次不同的计算 —— 那才是真正的不一致。
+    #   seq = 全局展示序号(重建时按 _compute 的 _key 排好): 读侧 `ORDER BY seq` 切页,
+    #   与卡面 TOP N 同一序列(collation 与 Python 码位序不同, 两套排序必错位)。
+    "own_health_snapshot": (
+        "CREATE TABLE IF NOT EXISTS own_health_snapshot ("
+        "channel VARCHAR(16) NOT NULL, gen BIGINT NOT NULL, seq INT NOT NULL, "
+        "alert_type VARCHAR(32) NOT NULL, level VARCHAR(12) NOT NULL DEFAULT '', "
+        "sku VARCHAR(80) NOT NULL, barcode VARCHAR(40) NOT NULL DEFAULT '', "
+        "warehouse VARCHAR(80) NOT NULL DEFAULT '', "
+        "product_name VARCHAR(255) NOT NULL DEFAULT '', "
+        "avail INT NOT NULL DEFAULT 0, need_qty INT NOT NULL DEFAULT 0, "
+        "gap_qty INT NOT NULL DEFAULT 0, "
+        "cover_days DECIMAL(12,1) NULL, days_to_expiry INT NULL, "
+        "batch_no VARCHAR(40) NOT NULL DEFAULT '', exp_date VARCHAR(20) NOT NULL DEFAULT '', "
+        "title VARCHAR(300) NOT NULL DEFAULT '', description VARCHAR(900) NOT NULL DEFAULT '', "
+        "PRIMARY KEY (channel, gen, seq), "
+        "KEY idx_oh_type (channel, gen, alert_type, seq))"
+    ),
+    "own_health_head": (
+        "CREATE TABLE IF NOT EXISTS own_health_head ("
+        "channel VARCHAR(16) NOT NULL, gen BIGINT NOT NULL DEFAULT 0, "
+        "fp VARCHAR(64) NOT NULL DEFAULT '', row_cnt INT NOT NULL DEFAULT 0, "
+        # stat: 计数 + 生效阈值一行(格式 total:..;tg:..;os:..;er:..;crit:..;warn:..;od:..;eb:..;b2c:..)
+        #   弹窗标题"共 N 条"与三个 pill 的数字必须是**同一次发布**算出来的, 否则会出现
+        #   "标题 14019、翻到底 14017"。计数必须扫全表, 放在请求路径上就是白等(实测 0.6s)。
+        "stat VARCHAR(255) NOT NULL DEFAULT '', timing VARCHAR(255) NOT NULL DEFAULT '', "
+        "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
+        "built_at DATETIME(6) NULL, PRIMARY KEY (channel))"
+    ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
     #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的
@@ -761,7 +793,11 @@ _COLUMN_ADDS = {
 # v24(2026-11-07 P2): unit_state_head.risk_stat —— 断货三维度计数物化。
 #   计数与明细是两种读法: 明细能靠 LIMIT 只取一页, 计数却必须扫全部(实测 0.6~0.9s)。
 #   把 9 个数字在重建时算好, 弹窗标题/三个 pill 就不再触发聚合查询。
-SCHEMA_VERSION = 24
+# v25(2026-11-07 P2): own_health_snapshot / own_health_head —— 自有仓健康明细物化。
+#   /dashboard/own-health 每页 1.92s、翻第 2 页还是 1.92s: 它每页都把 1.4 万条从头算一遍。
+#   debug 分段证明慢在三次取数(库存聚合 0.9s + 下游日销 0.59s + 批次效期 0.59s), 不在 Python。
+#   物化后一页只读 200 行 + head 里的 9 个计数。
+SCHEMA_VERSION = 25
 
 
 def table_ddl(name):

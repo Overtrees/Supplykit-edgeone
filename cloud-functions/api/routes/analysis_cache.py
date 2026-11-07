@@ -477,6 +477,15 @@ def invalidate(*domains):
                 _US.ensure_async()
         except Exception as _du:
             try_err('analysis_cache', '判定读模型失效降级', _du)
+        # 2026-11-07 P2: 自有仓健康明细(own_store)同源失效 —— 与判定共用同一组域计数器,
+        #   所以 fp 已经变了(读侧不会读到旧值); 这里起线程是为了让"下一次请求"就能命中,
+        #   而不是让那一次请求自己现算 1.9s。仍是后台线程, 不压在导入响应上。
+        try:
+            from core import own_store as _OS
+            if _wipe or (set(_doms) & set(_OS.DOMAINS)):
+                _OS.ensure_async()
+        except Exception as _do:
+            try_err('analysis_cache', '自有仓读模型失效降级', _do)
         # 物化追平(异步线程尽力——写操作不阻塞)
         # 2026-11-02 S2-2: 由「5 分钟限频 + 全量 90 天」改为「按业务日期增量」。
         #   旧做法两个硬伤:

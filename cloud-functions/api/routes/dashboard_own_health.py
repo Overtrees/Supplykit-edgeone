@@ -58,9 +58,11 @@ def _cf(cfg, key, default):
         return float(default)
 
 
-def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
-               per_type: int = 0, only: str = "", debug: int = 0):
-    """自有仓三类告警: 调拨覆盖 / 积压 / 效期
+def _compute(channel, debug: int = 0):
+    """自有仓三类告警的**全量计算**(唯一公式所在)。
+
+    2026-11-07 P2: 从 `own_health()` 里拆出来 —— 物化重建要算它、现算兜底也要算它,
+    两处必须是同一份代码。读侧 `own_health()` 只负责选择"读物化还是现算"。
 
     返回 {
       items: [{sku, barcode, product_name, warehouse, alert_type, level, title, description,
@@ -354,9 +356,10 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     er = sum(1 for i in items if i["alert_type"] == "own_expiry_risk")
     crit = sum(1 for i in items if i.get("level") == "error")
     warn = sum(1 for i in items if i.get("level") == "warning")
-    out = _page(items, full=full, limit=limit, offset=offset, per_type=per_type, only=only)
     # 2026-11-07 P0.1 分段埋点(仅 debug=1): 串行时 2.07s、并行后仍 2.04s ——
     #   必须先看清是"哪条查询钉住了"还是"1 万行 × 3 类判定的 Python 组装"吃掉了。
+    #   实测(2026-11-07 P2): products 0.07 / ds 0.59 / batches 0.59 / 组装 0.11 / 收尾 0.02,
+    #   另加 own_rows 那条 GROUP BY(未埋点)约 0.9s —— 结论是**三次取数**, 不是 Python。
     if debug:
         try:
             from db import execute as _et
@@ -365,16 +368,43 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
                 "VALUES('perf_debug','info',%s,%s,'own_health')",
                 ("own_health 计时: products %.2fs ds %.2fs batches %.2fs 组装 %.2fs 收尾 %.2fs"
                  % (_t1 - _t0, _t2 - _t0, _t3 - _t0, _t4 - _t3, _t5 - _t4),
-                 "own_rows=%d items=%d full=%d" % (len(own_rows), len(items), full)))
+                 "own_rows=%d items=%d" % (len(own_rows), len(items))))
         except Exception:
             pass
     return {
-        "items": out,
+        "items": items,
         "total": len(items), "transferGap": tg, "overstock": os_, "expiryRisk": er,
         "critical": crit, "warning": warn,
         "limits": {"overstock_days": overstock_days, "expiry_buffer_days": expiry_buffer_days,
                    "b2c_days": b2c_days},
     }
+
+
+def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
+               per_type: int = 0, only: str = "", debug: int = 0):
+    """自有仓三类告警: 调拨覆盖 / 积压 / 效期（读模型优先）
+
+    2026-11-07 P2: 先读 `own_health_snapshot`（重建时算好、按 seq 排好）。
+      命中 → 一页只读 200 行 + head 里的 9 个计数, 实测 1.92s → 0.4s；
+      未命中（fp 变了/从未构建/上次校验没过）→ **现算**（今天的行为，慢但正确）并起后台重建。
+
+    为什么不在这里缓存整包: 1.4 万条 / 5.9MB 曾塞进共享表 → 超 TiDB 单事务 6MB 上限 →
+    永远写不进去 → 每个请求重算两遍。条目的"全量可见"由分页保证，不是由整包保证。
+    """
+    if not debug:
+        try:
+            from core import own_store as _OS
+            _p = _OS.page_of(channel, full=full, limit=limit, offset=offset,
+                             per_type=per_type, only=only)
+            if _p is not None:
+                return _p
+            _OS.ensure_async(channel)
+        except Exception as _e:
+            try_err("own_health", "读模型读取降级(退回现算)", _e)
+    d = _compute(channel, debug=debug)
+    d["items"] = _page(d["items"], full=full, limit=limit, offset=offset,
+                       per_type=per_type, only=only)
+    return d
 
 
 def _page(items, full=0, limit=10, offset=0, per_type=0, only=""):
