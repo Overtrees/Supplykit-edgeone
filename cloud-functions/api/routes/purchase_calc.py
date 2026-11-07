@@ -681,7 +681,9 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     _d = _LS.serve("disposal", scope, channel, "", 0, "",
                    lambda: _disposal_compute(channel)[0],
                    search=search, page=page, page_size=page_size)
+    # §15.161: __swr 放响应顶层, 无分页裸调的 data 仍是纯列表(形状契约)
+    _hd = _LS.pop_swr(_d)
     # 无分页裸调: 旧契约 data 直接是列表(前端 `(d.items || d || [])` 兼容, 但形状要守住)
     if page <= 0 or page_size <= 0:
-        return ok(_d["items"])
-    return ok(_d)
+        return ok(_d["items"], **_hd)
+    return ok(_d, **_hd)

@@ -50,11 +50,13 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
                    lambda: _build_repl(channel, mode),
                    need_only=need_only, search=search,
                    page=page, page_size=page_size, legacy=legacy)
+    # §15.161: __swr 从 data 里摘出来放响应顶层, 数组/对象两种形状都不被污染。
+    _hd = _LS.pop_swr(_d)
     if page <= 0 or page_size <= 0:
         # 无分页裸调: 形状是契约(见 §15.153 打红教训), 截断 2000 防 EdgeOne 网关 413
         _items = (_d.get("items") if isinstance(_d, dict) else None) or []
-        return ok(_items[:2000])
-    return ok(_d)
+        return ok(_items[:2000], **_hd)
+    return ok(_d, **_hd)
 
 
 def safety_line(ds, lead):

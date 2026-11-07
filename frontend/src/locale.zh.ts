@@ -177,6 +177,9 @@ export const zh: Record<string, string> = {
   'ins.showing_cols': '显示 {v}/{all} 列',
   'ins.loaded_n_of_m': '已加载 {n}/{m} 条',
   'ins.avg_turnover': '平均周转 {v} 天',
+  // §15.161 冷态 SWR 播报: 后端返回上一版完整快照时, 明确告知新鲜度, 不伪装成新值
+  'ins.data_refreshing': '数据更新中, 当前显示 {s} 秒前的完整快照',
+  'ins.data_updated': '数据已更新',
   'ins_p.banner_1': '采购闭环',
   'ins_p.banner_2': '清洗导入库存（含在途列）',
   'ins_p.banner_pre': '导出采购建议 → 内部评估执行下单 → ',

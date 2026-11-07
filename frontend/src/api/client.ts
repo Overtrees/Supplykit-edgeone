@@ -1,5 +1,7 @@
 import axios from 'axios'
 import type { AxiosError, AxiosRequestConfig } from 'axios'
+import { t } from '../locale'
+import { notify } from './notify'
 import { reportError } from './logger'
 import type { ApiResult, ApiGetConfig, CacheEntry, InflightEntry } from './types'
 
@@ -225,6 +227,96 @@ const instance = axios.create({
   timeout: 45000,
 })
 
+/**
+ * §15.161 P2 —— 冷态 SWR(Stale-While-Revalidate) 读模型状态
+ *
+ * 后端冷态(fp 不等)不再让用户等 15~30s 重建: 立即返回**上一版完整物化**,
+ * 并在响应**顶层**带 __swr 新鲜度状态(data 形状一字不变)。前端要做三件事:
+ *   ① 不把这份旧快照写进 30s 缓存 —— 否则用户会盯着 30 秒前的数字浑然不知;
+ *   ② 实时播报「当前是 X 秒前的完整快照, 正在更新」, 刷新完成后收口;
+ *   ③ 有界探测刷新: 最多 2 次、总预算 ≤3s、带 jitter。绝不 16×1.8s 盲轮询 ——
+ *      那是 timeout→retry→更多 miss 的 metastable failure 放大器(已否决)。
+ * 视图更新由既有 15s 分桶轮询(freshStamp)完成; 探测命中会把新数据写回缓存,
+ * 下一次取数即为新数据, 页面层零改动。
+ */
+const SWR_TOTAL_BUDGET = 3000
+const SWR_MAX_RETRY = 2
+let _swrActive = false
+let _swrDeadline = 0
+
+interface SwrMeta {
+  state?: string
+  freshness_s?: number
+  built_at?: string
+  fp_changed?: boolean
+  rebuild?: string
+  retry_after_ms?: number
+}
+
+function _swrOf(raw: unknown): SwrMeta | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = (raw as Record<string, unknown>).__swr
+  return m && typeof m === 'object' ? (m as SwrMeta) : null
+}
+
+function _swrAnnounce(m: SwrMeta) {
+  const age = Number(m.freshness_s ?? -1)
+  notify.info(t('ins.data_refreshing', { s: age >= 0 ? age : 0 }))
+  _swrActive = true
+  _swrDeadline = Date.now() + SWR_TOTAL_BUDGET
+  try {
+    window.dispatchEvent(new CustomEvent('insights-rebuilding', { detail: m }))
+  } catch {
+    // 非浏览器环境(单测)忽略; 播报主通道 notify 不受影响
+  }
+}
+
+function _swrFinish() {
+  if (!_swrActive) return
+  _swrActive = false
+  notify.success(t('ins.data_updated'))
+  try {
+    window.dispatchEvent(new Event('insights-refreshed'))
+  } catch {
+    // 同上
+  }
+}
+
+/** 有界探测: 变参避开 30s 缓存与在途去重; __swrProbe 防止拦截器递归调度。 */
+function _swrProbe(cfg: AxiosRequestConfig, key: string, attempt: number) {
+  if (attempt >= SWR_MAX_RETRY || Date.now() >= _swrDeadline) return
+  const delay = 500 + attempt * 400 + Math.floor(Math.random() * 300)
+  if (Date.now() + delay >= _swrDeadline) return
+  setTimeout(() => {
+    const params = {
+      ...((cfg.params as Record<string, unknown>) || {}),
+      __swr: String(attempt) + '_' + String(Date.now()),
+    }
+    const probeCfg = {
+      params,
+      __swrProbe: true,
+      __bg: true, // 后台探测, 不点亮用户可见的忙徽标
+      timeout: 10000,
+    } as unknown as AxiosRequestConfig
+    instance
+      .get(String(cfg.url || ''), probeCfg)
+      .then(r => {
+        const got = (r.config as unknown as Record<string, unknown>).__swrResult as
+          SwrMeta | undefined
+        if (!got) {
+          // 已切到新 gen: 写回原 key(解包后的新数据), 供下一次取数/轮询命中
+          cache.set(key, { data: r.data, ts: Date.now() })
+          _swrFinish()
+        } else {
+          _swrProbe(cfg, key, attempt + 1)
+        }
+      })
+      .catch(() => {
+        _swrProbe(cfg, key, attempt + 1)
+      })
+  }, delay)
+}
+
 // 请求拦截器：自动注入全局 channel 参数 + 认证 token
 instance.interceptors.request.use(config => {
   const c = config as unknown as Record<string, unknown>
@@ -304,10 +396,24 @@ instance.interceptors.response.use(
     // 2026-11-06 P0-7: 键由请求拦截器算好(已含注入的 channel), 这里直接用 ——
     //   原来在这里重算, 拿到的 params 已带 channel, 与 apiGet 读侧不含 channel 的键不同源。
     const key = String(cfg.__cacheKey || cacheKey(method || 'get', url || '', params))
-    if ((method || 'get').toLowerCase() === 'get' && cfg.__epoch === _writeEpoch) {
-      // 代次一致才写缓存: 写操作之后回来的旧响应不许回灌(见 _writeEpoch 注释)
-      cache.set(key, { data: response.data, ts: Date.now() })
-      pruneCache()
+    // §15.161: __swr 在响应顶层(不在 data 里), 解包前先摘; 旧快照绝不进 30s 缓存。
+    const swr = _swrOf(response.data)
+    const isProbe = Boolean(cfg.__swrProbe)
+    if (swr) {
+      cfg.__swrResult = swr
+      cache.delete(key)
+      if (!isProbe) {
+        _swrAnnounce(swr)
+        _swrProbe(response.config, key, 0)
+      }
+    } else {
+      const isInsight = String(url || '').includes('/insights/')
+      if (_swrActive && !isProbe && isInsight) _swrFinish()
+      if ((method || 'get').toLowerCase() === 'get' && cfg.__epoch === _writeEpoch) {
+        // 代次一致才写缓存: 写操作之后回来的旧响应不许回灌(见 _writeEpoch 注释)
+        cache.set(key, { data: response.data, ts: Date.now() })
+        pruneCache()
+      }
     }
     inflight.delete(key)
     console.debug(
@@ -341,6 +447,7 @@ instance.interceptors.response.use(
   },
   error => {
     const cfg0 = (error as AxiosError).config as unknown as Record<string, unknown> | undefined
+    const isProbe = Boolean(cfg0 && cfg0.__swrProbe)
     _reqEnd(Boolean(cfg0 && cfg0.__bg), String((cfg0 && cfg0.__view) || ''))
     const err = error as AxiosError
     // 2026-10-27 页面卸载 abort 取消: 取消不是错误——静默, 不上报不置 error
@@ -366,7 +473,7 @@ instance.interceptors.response.use(
     // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜。
     // 2026-11-05: 401/403 是预期鉴权态(见 isExpectedAuth), 有专门的 auth:may-expired
     // → /auth/check 链路处理, 不再重复上报一条 warning(匿名访问部署预览域名必然 401)。
-    if ((!status || status >= 400) && !isExpectedAuth(status)) {
+    if ((!status || status >= 400) && !isExpectedAuth(status) && !isProbe) {
       reportError(
         'api_http_error',
         ((err.message || '') + ' ' + (cfg.url || '')).slice(0, 200),

@@ -116,7 +116,8 @@ def purchase_suggestions(days: int = 28, mode: str = "bbcc", channel: str = "jd"
                    lambda: _build_purchase(channel, mode, days),
                    need_only=need_only, search=search,
                    page=page, page_size=page_size, legacy=legacy)
-    return ok(_d)
+    # §15.161: __swr 放响应顶层, data 形状契约不变
+    return ok(_d, **_LS.pop_swr(_d))
 
 
 

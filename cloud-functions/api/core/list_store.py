@@ -70,6 +70,25 @@ _LOCK = threading.Lock()
 _LAST = {}
 _READ_ON = ("1", "true", "yes", "on")
 
+# ── §15.161 P1 冷算治理: 全局预算 + 同 key 单飞 + 读侧零等待 ────────────────
+# 线上实测 2026-11-07 19:12~19:22(本报告改前基线, 全部真实链路):
+#   纯现算单跑  repl 5.99~7.79s / purchase 3.01~3.88s / disposal 2.67~3.24s
+#   同类并发 2 → 2.2~2.5×; 并发 4 → 4~6×, repl 4/4 HTTP 503(等 33s 零数据)
+#   稳态物化并发 4 仅 1.35s → 退化根因是同实例内 Python 全量循环抢 GIL, 不是连接池/网关。
+# 治理**不是**「把请求绑成一个全局单 worker」—— 那会把 3 个本可并行的 kind 串成
+#   15.54s(实测 7.04+4.13+4.37), 再叠 29s 前端轮询, 比等重建 14s 更糟(已否决)。
+# 正解(按 kind 分舱, bulkhead):
+#   ① 全局名额复用 db.heavy(HEAVY_CONCURRENCY=3), **不另造第二套闸门**(红线 2 禁止叠加);
+#   ② 同 (kind,scope,fp) 只算一次(单飞去重), 不同 kind 各自并行, 互不排队;
+#   ③ 读侧**不等待**后台重建, 立即返回上一版完整物化 + 新鲜度播报(SWR, 见 serve)。
+# 实例可被平台冻结: flight 带 t0 新鲜度, 超 _FLIGHT_TTL 判僵尸丢弃(红线 15)。
+_FLIGHT_TTL = 60.0
+_HEAVY_WAIT = 2.0     # 抢全局名额的最长等待; 抢不到 = 快速失败, 绝不排长队
+_FLIGHT_LOCK = threading.Lock()
+_FLIGHTS = {}         # key -> {"t0": float, "kind": str}
+_STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
+          "swr_served": 0, "first_legacy": 0}
+
 
 def read_enabled():
     """读路径总开关（环境变量）。未设置 = 开; "0" = 一律现算（紧急回滚, 不必发版）"""
@@ -173,11 +192,16 @@ def _where(kind, scope, gen, need_only, search):
 
 
 def page_of(kind, scope, channel, mode, need_only=0, search="", page=0, page_size=0,
-            extra="", h=None):
+            extra="", h=None, allow_stale=False):
     """读一页; `None` = 不可用（调用方退回现算 + 起后台重建）。
 
     total 与 items 同源: 无筛选直接读 head.row_cnt（物化计数, 红线 11）;
     带 need_only/search 时用**同一条 WHERE** 的 COUNT, 不会出现"标题 N 条、翻到底 N-2"。
+
+    `allow_stale=True`(§15.161 SWR): 只跳过 fp 比对, **其余完整性校验一字不减** ——
+    gen>0 / stale=0 / row_cnt 哨兵 / 坏行整页退回。当前 gen 是上一次**发布前 COUNT
+    自校验通过**的完整快照, 不是半截数据; 调用方必须带上 freshness_s 与 fp_changed
+    明确播报, 绝不静默伪装成新值(§15.8 准确/完整/可靠)。
     """
     if not read_enabled():
         return None
@@ -186,9 +210,10 @@ def page_of(kind, scope, channel, mode, need_only=0, search="", page=0, page_siz
         return None
     if int(h.get("row_cnt") or -1) < 0:      # 哨兵: 本轮没算成 ≠ 真的是 0 条（红线 8①）
         return None
-    _fp = fp_now(kind, channel, mode, extra)
-    if not _fp or str(h.get("fp") or "") != _fp:
-        return None
+    if not allow_stale:
+        _fp = fp_now(kind, channel, mode, extra)
+        if not _fp or str(h.get("fp") or "") != _fp:
+            return None
     gen = int(h["gen"])
     w, p = _where(kind, scope, gen, need_only, search)
     try:
@@ -347,22 +372,70 @@ def build(kind, scope, force=False):
             "elapsed": round(time.time() - _t0, 2)}
 
 
-# ── 触发 ────────────────────────────────────────────────────────
-def ensure_async(kind, scope=None, force=False):
-    """写侧/读侧后台重建 —— 不在响应路径上等它。
+# ── 触发 / 冷算治理(§15.161) ────────────────────────────────────
+def _flight_key(kind, scope, fp):
+    return "%s|%s|%s" % (kind, scope, fp)
 
-    · 传 scope: 重建这一个（读侧 fp 不命中时）。
-    · 不传: 遍历 list_head 里该 kind 已登记的 scope（写侧 invalidate 时）。
-    重复执行无害（幂等 + cooldown）; 实例被冻结也无害（head 未切换 = 旧版本继续生效,
-    读侧走现算兜底）。
+
+def _cold_worker(kind, scope, fp, fn, key):
+    """后台单飞: 全局名额由 db.heavy 分配, 不同 kind 可并行, 读侧不等它。
+
+    与「全局单 worker」的区别是**按 kind 分舱**: 3 个 kind 各占 1 个名额并行跑,
+    不是一条队列串行 15.54s。抢不到全局名额 = 快速失败, 不排队(红线 4/10)。
     """
-    def _run(scopes):
-        for sc in scopes:
-            try:
-                build(kind, sc, force=force)
-            except Exception as _e2:
-                try_err("list_store", "重建失败(%s/%s)" % (kind, sc), _e2)
+    try:
+        from db import heavy, HeavyBusy
+        try:
+            with heavy("list:" + kind, timeout=_HEAVY_WAIT):
+                try:
+                    fn()
+                    _STATS["done"] += 1
+                except Exception as _e:
+                    _STATS["failed"] += 1
+                    try_err("list_store", "后台重建失败(%s/%s)" % (kind, scope), _e)
+        except HeavyBusy as _hb:
+            # 全局 3 个名额已满: 快速失败并留痕, 不排队、不拖住读侧。
+            # 读侧仍返回上一版完整物化; 下一次请求会重新触发(flight 已释放)。
+            _STATS["busy"] += 1
+            try_err("list_store", "冷算全局名额已满, 本轮跳过(%s/%s)" % (kind, scope), _hb)
+    except Exception as _e2:
+        _STATS["failed"] += 1
+        try_err("list_store", "冷算调度异常(%s/%s)" % (kind, scope), _e2)
+    finally:
+        with _FLIGHT_LOCK:
+            _FLIGHTS.pop(key, None)
 
+
+def submit_background(kind, scope, fp, fn):
+    """同 (kind,scope,fp) 只算一次; 不同 kind 并行; 读侧**永不等待**。
+
+    :return: state 字符串(started / dedup / error), 只用于 __swr 状态播报。
+    """
+    key = _flight_key(kind, scope, fp)
+    with _FLIGHT_LOCK:
+        cur = _FLIGHTS.get(key)
+        if cur and time.time() - cur["t0"] < _FLIGHT_TTL:
+            _STATS["dedup"] += 1
+            return "dedup"
+        _FLIGHTS[key] = {"t0": time.time(), "kind": kind}
+    try:
+        threading.Thread(target=_cold_worker, args=(kind, scope, fp, fn, key),
+                         daemon=True, name="list-cold-" + str(kind)).start()
+        _STATS["started"] += 1
+        return "started"
+    except Exception as _e:
+        with _FLIGHT_LOCK:
+            _FLIGHTS.pop(key, None)
+        try_err("list_store", "冷算线程启动降级(%s/%s)" % (kind, scope), _e)
+        return "error"
+
+
+def ensure_async(kind, scope=None, force=False):
+    """写侧 invalidate / 读侧冷态的后台重建入口 —— 不在响应路径上等它。
+
+    §15.161: 改走 submit_background(全局预算 + 同 key 单飞)。旧版每次起裸 daemon
+    线程、3 个 kind 各起一个、无名额管理, 是并发互抢的真源(红线 4/10)。
+    """
     try:
         if scope:
             scopes = [scope]
@@ -372,38 +445,121 @@ def ensure_async(kind, scope=None, force=False):
                       if r.get("scope")]
         if not scopes:
             return False
-        threading.Thread(target=_run, args=(scopes,), daemon=True).start()
+        for sc in scopes:
+            _h = head(kind, sc) or {}
+            # mode 必须与 build/page_of 同源: 空串交给 mode_of 自己查渠道默认(红线 16)。
+            _ch = str(_h.get("channel") or "jd")
+            _md = str(_h.get("mode") or "")
+            _fp = fp_now(kind, _ch, _md, sc) or "?"
+            submit_background(kind, sc, _fp,
+                              lambda _s=sc, _f=force: build(kind, _s, force=_f))
         return True
     except Exception as _e:
-        try_err("list_store", "重建线程启动降级", _e)
+        try_err("list_store", "重建调度降级(%s)" % kind, _e)
         return False
+
+
+def _swr_meta(kind, scope, h, state):
+    """冷态 SWR 的新鲜度播报(放响应**顶层** __swr, 不进 data → 形状契约一字不变)。
+
+    freshness_s 用 DB 时间算, 不用 Python 本地时钟(DB 与实例时区可能不同)。
+    """
+    age = -1
+    try:
+        _r = one("SELECT TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s "
+                 "FROM list_head WHERE kind=%s AND scope=%s", [kind, scope])
+        _v = (_r or {}).get("age_s")
+        age = int(_v) if _v is not None else -1
+    except Exception:
+        age = -1
+    return {
+        "state": "serving_previous",
+        "freshness_s": age,
+        "built_at": str(h.get("built_at") or ""),
+        "fp_changed": True,
+        "rebuild": state,
+        "retry_after_ms": 900,
+    }
+
+
+def pop_swr(d):
+    """从 serve 结果里摘出 __swr 供路由放到响应顶层; data 形状保持不变。
+
+    放顶层而不是塞进 data: 无分页裸调的 data 是**数组**(契约), 没有地方放状态字段;
+    顶层字段对数组/对象两种形状都成立, 前端拦截器一处收口。
+    """
+    if isinstance(d, dict) and "__swr" in d:
+        return {"__swr": d.pop("__swr")}
+    return {}
 
 
 def serve(kind, scope, channel, mode, days, source, builder,
           need_only=0, search="", page=0, page_size=0, legacy=0):
-    """路由唯一入口: 读物化 or 现算降级（两者共用 list_page.shape, 同源同序）。
+    """路由唯一入口(§15.161): 稳态读物化 / 冷态 SWR 立即返回上一版 / 首次直接现算。
 
-    `legacy=1` 强制现算 —— 线上与物化逐字段对账用（对齐 §15.154 的 legacy 先例）。
+    · 稳态(fp 命中): 零额外开销、零额外字段, 形状一字不变。
+    · 冷态(有上一版但 fp 不等): 后台按 kind 分舱重建(**读侧不等待**), 立即返回上一版
+      **完整**物化 + __swr 新鲜度播报; 前端不写 30s 缓存、有界重拉(≤3s / 2 次)。
+    · 首次 / 上一版不可用(gen=0 / stale / 哨兵 / 坏行): 直接现算保证业务正确,
+      并后台建立物化; 不等待、不返回 0 条。任何请求 ≤ 单跑 p95, 绝不 15~30s。
+    · 回滚: `LIST_READ=0` 一刀退回纯现算(旧路径), 互斥不并存(红线 2)。
+    · `legacy=1`: 诊断口强制现算, 保持原样 —— 它是红线 16 三重验证的基准,
+      必须真实反映「不走物化」的耗时, 不接预算/单飞。
+
+    删掉的旧行为: 「每请求前台 builder() 全量现算 + 再起裸线程 build() 算第二遍」
+    (双算) —— 并发 4 实测 33.26s / repl 4/4 HTTP 503, 是冷算雪崩的真源(红线 2/4/10)。
     """
     h = head(kind, scope)
     if h is None:
         register_scope(kind, scope, channel, mode, days, source)
-    d = None if legacy else page_of(kind, scope, channel, mode, need_only, search,
-                                    page, page_size, extra=scope, h=h)
-    if d is None:
-        if not legacy:
-            ensure_async(kind, scope)
-        from core.list_page import shape as _shape
+        h = head(kind, scope)
+
+    from core.list_page import shape as _shape
+
+    def _live():
         items, total = _shape(builder(), need_only=need_only, search=search,
                               page=page, page_size=page_size, need_keys=NEED_KEYS[kind])
         return {OUT_KEY[kind]: items, "total": total, "page": page, "page_size": page_size}
-    return d
+
+    # 回滚开关 / 诊断口: 互斥分支, 不与新路径并存(红线 2)
+    if not read_enabled() or legacy:
+        return _live()
+
+    # ① 稳态: fp 命中 → 直接返回, 零额外开销、零额外字段
+    d = page_of(kind, scope, channel, mode, need_only, search,
+                page, page_size, extra=scope, h=h)
+    if d is not None:
+        return d
+
+    # ② 冷态: 先取「上一版完整物化」(只跳过 fp 比对, 完整性校验一字不减)
+    prev = page_of(kind, scope, channel, mode, need_only, search,
+                   page, page_size, extra=scope, h=h, allow_stale=True)
+
+    fp = fp_now(kind, channel, mode, scope) or "?"
+
+    # ③ 从未物化 / 上一版不可用(gen=0 / stale=1 / 哨兵 / 坏行): 直接现算保证业务正确,
+    #    同时后台建立物化(一次性)。与「有上一版但 fp 不等」是**互斥状态**, 不是两套并存
+    #    兜底(红线 2)。这里**不等待**后台结果: 任何请求 ≤ 单跑 p95(repl 6s / 其余 3~4s),
+    #    首帧是当前实时算出的完整数据, 绝不返回 0 条、绝不等 15~30s。
+    if prev is None:
+        _STATS["first_legacy"] += 1
+        submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
+        return _live()
+
+    # ④ 有上一版 → 后台按 kind 分舱重建 + 立即返回完整数据 + 明确新鲜度播报。
+    #    用户不等重建; 读侧**从不 wait** 后台结果(红线 6: 全量只在后台)。
+    state = submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
+    _STATS["swr_served"] += 1
+    prev["__swr"] = _swr_meta(kind, scope, h, state)
+    return prev
 
 
 def status(kind, scope):
-    """诊断口: 四维逐项可查, 不靠猜。"""
+    """诊断口: 四维逐项可查, 不靠猜; §15.161 追加冷算治理计数。"""
     h = head(kind, scope) or {}
-    ch, md = str(h.get("channel") or "jd"), str(h.get("mode") or "bbcc")
+    # mode 必须与 build/page_of 同源: 空串交给 mode_of 查渠道默认, 不兜底 "bbcc"
+    # (红线 16: 诊断口自己造一个 mode 会让 fp_now 与读写两侧不一致, 显示假的 fp 不命中)。
+    ch, md = str(h.get("channel") or "jd"), str(h.get("mode") or "")
     _fp = fp_now(kind, ch, md, scope)
     _n = 0
     if int(h.get("gen") or 0):
@@ -421,4 +577,6 @@ def status(kind, scope):
         "need_cnt": int(h.get("need_cnt") or 0), "timing": str(h.get("timing") or ""),
         "stale": int(h.get("stale") or 0), "note": str(h.get("note") or ""),
         "built_at": str(h.get("built_at") or ""),
+        # §15.161 冷算治理实时播报: 有没有真的撞车/降级, 可查可告警, 不靠猜。
+        "cold": dict(_STATS, inflight=len(_FLIGHTS)),
     }

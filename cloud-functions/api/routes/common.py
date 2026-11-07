@@ -39,7 +39,15 @@ def status_cond(col="order_status"):
     return "%s IN (%s)" % (col, ",".join(["'%s'" % s for s in _paid]))
 
 
-def ok(data):
+def ok(data, **extra):
+    """统一成功响应。
+
+    `extra` 放**顶层**诊断字段(§15.161 的 `__swr` 读模型新鲜度状态), 不进 data:
+    无分页裸调的 data 是数组(形状契约), 顶层字段对数组/对象两种形状都成立,
+    前端响应拦截器一处收口。不传时与旧实现逐字相同, 全仓调用方零感知。
+    """
+    if extra:
+        return {"ok": True, "data": data, **extra}
     return {"ok": True, "data": data}
 
 

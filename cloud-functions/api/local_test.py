@@ -4357,9 +4357,12 @@ try:
           and "shape_cached" not in _rp18 and "shape_cached" not in _pu18
           and "_REPL_TTL" not in _rp18 and "_PURCHASE_TTL" not in _pu18,
           "core/list_page.py + 两路由")
-    check("建议行物化: 读侧走 list_store.serve, 形状契约不变",
+    check("建议行物化: 读侧走 list_store.serve, 形状契约不变(§15.161 __swr 走响应顶层)",
           "_LS.serve(" in _rp18 and "_LS.serve(" in _pu18
-          and "_items[:2000]" in _rp18 and "return ok(_d)" in _pu18, "两路由")
+          and "_items[:2000]" in _rp18
+          and "return ok(_d, **_LS.pop_swr(_d))" in _pu18
+          and "_LS.pop_swr(_d)" in _rp18 and "def pop_swr" in _ls18
+          and "def ok(data, **extra)" in _rd("routes/common.py"), "两路由 + list_store + common")
 
     # ② 四维 + 红线 8: 全输入域 fp / 哨兵 / 确定性排序 / 发布自校验 / 回滚
     check("建议行物化: fp 覆盖全部输入域(含 purchases), 且失效矩阵同源 bump",
@@ -4388,7 +4391,12 @@ try:
           '"list_snapshot"' in _sc18b and '"list_head"' in _sc18b
           and "SCHEMA_VERSION = 26" in _sc18b, "schema_create.py")
     check("建议行物化: 新鲜度只由 fp 决定, 读侧无 TTL/时间判断",
-          "created_at" not in _ls18 and "TIMESTAMPDIFF" not in _ls18
+          # §15.161: TIMESTAMPDIFF 只允许出现在 _swr_meta 里算**播报用 age_s**,
+          #   绝不参与「数据新不新」的判定; allow_stale 是唯一跳过 fp 比对的路径,
+          #   stale/哨兵/坏行校验一字不减。锁住这条边界, 防止后人拿时间当新鲜度。
+          "created_at" not in _ls18
+          and "TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s" in _ls18
+          and "def _swr_meta" in _ls18 and "if not allow_stale:" in _ls18
           and 'str(h.get("fp") or "") != _fp' in _ls18, "core/list_store.py")
     check("建议行物化: 无筛选 total 直接读物化计数, 不扫全表(红线 11)",
           "if not need_only and not search:" in _ls18
@@ -4535,8 +4543,10 @@ try:
           in _ls19 and 'invalidate("purchases")' in _pu19, "list_store + purchase")
     # 形状契约: 分页 dict / 裸调列表 / debug 带 _perf
     check("disposal 物化: 形状契约不变(分页dict/裸调列表/debug _perf)",
-          'return ok(_d["items"])' in _pc19 and "return ok(_d)" in _pc19
-          and '"_perf": _PF' in _pc19, "purchase_calc.py")
+          # §15.161: __swr 摘到响应顶层, data 仍是纯列表/纯 dict, 形状一字未改
+          'return ok(_d["items"], **_hd)' in _pc19 and "return ok(_d, **_hd)" in _pc19
+          and "_hd = _LS.pop_swr(_d)" in _pc19 and '"_perf": _PF' in _pc19,
+          "purchase_calc.py")
     # disposal 不写 analysis_cache 表缓存, 故 _FAMILY_DEPS 无需登记(靠域计数 fp)
     from routes.analysis_cache import _FAMILY_DEPS as _FD19
     check("disposal 物化: 不进 _FAMILY_DEPS(走域计数 fp, 非缓存族墓碑)",
@@ -4569,6 +4579,97 @@ try:
         _LS19.head, _LS19.fp_now = _o19
 except Exception as _e33:
     check("§15.160 disposal 物化用例无异常", False, str(_e33)[:300])
+
+# ── §15.161 P1/P2: 冷算治理(全局预算/按 kind 分舱/单飞) + SWR ──────────
+try:
+    _ls20 = _rd("core/list_store.py")
+    _rp20 = _rd("routes/replenishment.py")
+    _pu20 = _rd("routes/purchase.py")
+    _pc20 = _rd("routes/purchase_calc.py")
+    _cm20 = _rd("routes/common.py")
+    import core.list_store as _LS20
+
+    # ① 全局预算复用 db.heavy, 不另造第二套闸门(红线 2/4)
+    check("§15.161 冷算治理: 复用 db.heavy 全局预算, 不新造全局队列/worker/跨 kind 租约",
+          "from db import heavy, HeavyBusy" in _ls20 and "with heavy(" in _ls20
+          and "def _cold_worker" in _ls20
+          and "queue.Queue" not in _ls20 and "lease_owner" not in _ls20,
+          "core/list_store.py")
+
+    # ② 同 key 单飞 + 按 kind 分舱 + 读侧不等待
+    check("§15.161 冷算治理: 同 (kind,scope,fp) 单飞, 不同 kind 并行, 读侧零等待",
+          "def submit_background" in _ls20 and "_FLIGHTS[key]" in _ls20
+          and "if prev is None:" in _ls20 and "ev.wait(" not in _ls20
+          and 'name="list-cold-" + str(kind)' in _ls20
+          and "threading.Thread(target=_cold_worker" in _ls20,
+          "core/list_store.py")
+
+    # ③ 任何分支都不等后台结果(回应「方案比等重建还糟」); 首次无上一版直接现算,
+    #    保证首帧是当前完整数据, 绝不返回 0 条或等 15~30s。
+    check("§15.161 冷算治理: 读侧零等待, 首次直接现算(不返回空数据)",
+          "ev.wait(" not in _ls20 and "_FIRST_WAIT" not in _ls20
+          and "building_first" not in _ls20 and "return _live()" in _ls20
+          and '"first_legacy"' in _ls20 and _LS20._HEAVY_WAIT <= 2.0,
+          "core/list_store.py")
+
+    # ④ 回滚与新鲜度(红线 15/16)
+    check("§15.161 冷算治理: 一刀回滚 + flight 带新鲜度 + 诊断口 mode 与 build 同源",
+          "if not read_enabled() or legacy:" in _ls20
+          and "_FLIGHT_TTL" in _ls20 and 'cur["t0"]' in _ls20
+          and 'ch, md = str(h.get("channel") or "jd"), str(h.get("mode") or "")' in _ls20
+          and '"cold": dict(_STATS' in _ls20,
+          "core/list_store.py")
+
+    # ⑤ __swr 只在顶层, data 形状逐字不变(分页 dict / 裸调列表)
+    check("§15.161 SWR: __swr 走响应顶层, 三路由 data 形状不变",
+          "def pop_swr" in _ls20 and '"__swr": d.pop("__swr")' in _ls20
+          and 'return ok(_items[:2000], **_hd)' in _rp20
+          and 'return ok(_d, **_LS.pop_swr(_d))' in _pu20
+          and 'return ok(_d["items"], **_hd)' in _pc20
+          and 'return ok(_d, **_hd)' in _pc20
+          and '{"ok": True, "data": data, **extra}' in _cm20,
+          "list_store + 三路由 + common")
+
+    # ⑥ 动态: allow_stale 只跳过 fp 比对, 完整性校验一字不减
+    _o20 = (_LS20.head, _LS20.fp_now, _LS20.read_enabled, _LS20.query, _LS20.one)
+    try:
+        _H20 = {"gen": 3, "fp": "OLD", "row_cnt": 1, "stale": 0,
+                "channel": "jd", "mode": "bbcc", "days": 28, "source": "",
+                "built_at": "2026-11-07 10:00:00"}
+        _LS20.head = lambda k, s: dict(_H20)
+        _LS20.fp_now = lambda k, c, m, e="": "NEW"       # fp 已变
+        _LS20.read_enabled = lambda: True
+        _LS20.query = lambda sql, p=None: [{"payload": '{"sku":"S1"}'}]
+        _LS20.one = lambda sql, p=None: {"age_s": 12}
+        _d20 = _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True)
+        check("§15.161 SWR: fp 不等仍可读上一版完整物化(用户不等重建)",
+              isinstance(_d20, dict) and _d20.get("total") == 1
+              and len(_d20.get("items") or []) == 1, str(_d20))
+        check("§15.161 SWR: 常态读(fp 不等)仍返回 None, 不静默返旧值",
+              _LS20.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        _H20["stale"] = 1
+        check("§15.161 SWR: stale=1 → 上一版也不可读(完整性不打折)",
+              _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
+        _H20["stale"] = 0
+        _H20["row_cnt"] = -1
+        check("§15.161 SWR: row_cnt=-1 哨兵 → 上一版也不可读",
+              _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
+        _H20["row_cnt"] = 1
+        _LS20.read_enabled = lambda: False
+        check("§15.161 SWR: LIST_READ=0 一刀回滚, 连上一版也不读",
+              _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
+    finally:
+        _LS20.head, _LS20.fp_now, _LS20.read_enabled, _LS20.query, _LS20.one = _o20
+
+    # ⑦ 动态: pop_swr 摘状态后 data 不留痕(形状契约)
+    _p20 = {"items": [1], "total": 1, "page": 1, "page_size": 300,
+            "__swr": {"state": "serving_previous"}}
+    _hd20 = _LS20.pop_swr(_p20)
+    check("§15.161 SWR: pop_swr 摘出状态且 data 里不留 __swr",
+          "__swr" in _hd20 and "__swr" not in _p20
+          and set(_p20) == {"items", "total", "page", "page_size"}, str(_p20))
+except Exception as _e34:
+    check("§15.161 冷算治理/SWR 用例无异常", False, str(_e34)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

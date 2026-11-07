@@ -172,6 +172,9 @@ export const en: Record<string, string> = {
   'ins.showing_cols': 'Showing {v}/{all} columns',
   'ins.loaded_n_of_m': 'Loaded {n}/{m}',
   'ins.avg_turnover': 'Avg turnover {v} days',
+  // §15.161 cold-state SWR notice
+  'ins.data_refreshing': 'Updating - showing a full snapshot from {s}s ago',
+  'ins.data_updated': 'Data updated',
   'ins_p.banner_1': 'Purchase loop',
   'ins_p.banner_2': 'Import stock via cleansing (incl. in-transit)',
   'ins_p.banner_pre': 'Export suggestions → place orders → ',
