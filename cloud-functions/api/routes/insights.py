@@ -85,8 +85,15 @@ def slow_moving(channel: str = "jd", page: int = 0, page_size: int = 0,
 @router.get("/insights/with-sales")
 @traced
 def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 0,
-                         page_size: int = 0, search: str = "", mode: str = ""):
+                         page_size: int = 0, search: str = "", mode: str = "", debug: int = 0):
     """进销存台账: 库存 + 日销 + 周转 + 当月进出(wh_type=own/platform/platform_b)"""
+    import time as _tm_w
+    _T0 = _tm_w.time()
+    _PF = {}
+
+    def _mkW(name):
+        if debug:
+            _PF[name] = round((_tm_w.time() - _T0) * 1000)
     month_start, month_end = month_bounds_cn()   # 北京时间自然月
     # 2026-11-04 表头区间(用户定案): **自然月闭合** 11-01 → 11-30, 入库/出库同一区间。
     #   不用"该月最后有流水的一天": 各 SKU 覆盖天数不同(有的只到 11-01、有的到 11-05),
@@ -134,6 +141,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
     else:
         rows = query((sel + " ORDER BY i.id ASC") % where, params)
 
+    _mkW("count_rows")
     skus = [r.get("sku") for r in rows]
     # 2026-10-30 删除直算(load_daily_sales + calc_sales_multi): 日销已全部改读物化逐仓行,
     #   原直算每次都要拉 28 天快照+算三窗口, 白耗(实测进销存 0.8-2s, 其中直算占大头)
@@ -171,6 +179,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                         _wh_ds["%s||%s" % (_r2.get("sku"), _w0)] = _v2
     except Exception as _ewh2:
         try_err('insights', '逐仓日销(按码)加载降级', _ewh2)
+    _mkW("daily_sales")
     # 批次摘要(SKU 最早过期批次 + 效期状态, 对齐 PA _get_batch_summary; 按 wh_type 主体隔离)
     batch_map = {}
     if skus:
@@ -235,6 +244,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                     batch_map[_sku] = _val
         except Exception as _e:
                 try_err('insights', '静默降级', _e)
+    _mkW("batch")
     # 当月进销: 记录表实时聚合(inbound_records/outbound_records), 回退 inventory 静态列
     # 2026-11-01 聚合键补 69码 + 仓型: 原 GROUP BY sku,warehouse → 同 SKU 同仓两个码时,
     #   两行库存各自拿到"两码合计", 经 SUM(month_inbound) 汇总后成倍放大; 且该值参与
@@ -260,6 +270,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
         for _r in _mv:
             _tgt = month_in if _r.get("k") == "in" else month_out
             _tgt[(_r.get("sku"), str(_r.get("bc") or ""), _r.get("warehouse") or "")] = int(_r.get("q") or 0)
+    _mkW("flows")
     items = []
     # 动态安全线周期(own→采购周期 / platform→补货周期按渠道默认模式)
     _cfg3 = {}
@@ -378,6 +389,7 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             "batch_status": _bm.get("st", ""), "batch_pct": _bm.get("pct", 0),
             "batch_days": _bm.get("days", 0),
         })
+    _mkW("assemble")
     if page > 0 and page_size > 0:
         # 2026-10-30 全量汇总(底部总计必须是**该维度所有 SKU**, 不是已加载行之和):
         #   仅 page<=1 且无 search 时算 + 60s 表缓存 → 翻页不重复扫。
@@ -436,9 +448,15 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
                                      params) or {}).get("c") or 0)
                 except Exception as _et:
                     try_err('insights', '进销存总数兜底降级', _et)
-        return ok({"items": items, "total": total, "page": page, "page_size": page_size,
-                   "summary": _sum, "period_days": _period_days, "month_days": _month_days,
-                   "is_open": _is_open,
-                   "month_start": month_start, "month_end": month_end,
-                   "month_in_end": month_in_end, "month_out_end": month_out_end})
+        _mkW("summary")
+        _out = {"items": items, "total": total, "page": page, "page_size": page_size,
+                "summary": _sum, "period_days": _period_days, "month_days": _month_days,
+                "is_open": _is_open,
+                "month_start": month_start, "month_end": month_end,
+                "month_in_end": month_in_end, "month_out_end": month_out_end}
+        if debug:
+            _out["_perf"] = _PF
+        return ok(_out)
+    if debug:
+        return ok({"_perf": _PF, "items": items})
     return ok(items)

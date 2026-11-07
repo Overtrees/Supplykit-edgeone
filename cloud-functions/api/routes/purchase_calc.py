@@ -438,7 +438,10 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     daily_bc = {}
     if products:
         from biz.sales import get_sku_sales_stats as _gss_d, WH_C as _WH_C_D
-        _rws_d = _gss_d(channel, skus=list(products.keys()), days=28,
+        # 2026-11-07 定位修正: 不带 wh 会把该渠道**全部仓 × 全部码** 12.6 万行拉回来(实测 2.7s) ——
+        #   而滞销只需要"全国 C 仓"这一维(销售只在 platform 仓发生, own 不产生销售)。
+        #   加 wh=__C__ 后行数降到约 2 万, 口径与页面/补货一致。
+        _rws_d = _gss_d(channel, skus=list(products.keys()), days=28, wh=_WH_C_D,
                         barcode="all", fields=("ds28", "last_sale")) or {}
         for _rd in _rws_d.values():
             _sd = str(_rd.get("sku") or "")
@@ -489,8 +492,10 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     items = []
     _mk("cfg2")
     # 2026-10-29 按 69码: 库存行已按码拆分 → 处置建议也按 (sku, barcode, 仓) 出
+    # 2026-11-07: `available_qty<=0` 原先在 Python 里跳过, 但行仍要从 DB 传回来 ——
+    #   9 万行里这类占三成, 下推到 WHERE 直接少传一批(库存为 0 本就不产生滞销建议)。
     for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
-                   "available_qty FROM inventory WHERE channel=%s", [channel]):
+                   "available_qty FROM inventory WHERE channel=%s AND available_qty>0", [channel]):
         sku = str(r.get("sku") or "")
         _bc = str(r.get("bc") or "").strip()
         wh = str(r.get("warehouse") or "")
