@@ -406,6 +406,9 @@ _TABLES = {
         #   读取侧靠它区分「真的没有断货(0)」与「这次没算出来(-1 → 退回现算)」——
         #   否则一次计算失败会让断货卡显示 0 条, 比慢更糟。
         "risk_rows INT NOT NULL DEFAULT -1, "
+        # risk_fp: 断货快照自己的指纹（域 = RISK_DOMAINS，比判定多一张 suppliers）——
+        #   判定不看 OTIF, 供应商评分变化时 unit 的 fp 不动, 只有这个指纹能感知。
+        "risk_fp VARCHAR(64) NOT NULL DEFAULT '', "
         # enabled 是**读路径开关**: 0 = 只写不读(双写观察期), 1 = 读路径可命中。
         #   放库里的理由: 切换与回滚只需 UPDATE 一行, 不用重新部署(env 是部署时快照)。
         #   环境变量 UNIT_STATE_READ=0 仍可**一刀关闭**(优先于本列), 用于紧急回滚。
@@ -608,7 +611,8 @@ _COLUMN_ADDS = {
     #   否则一个表校验不过要把另一个也一起退回现算(白慢)。
     "unit_state_head": [("enabled", "TINYINT NOT NULL DEFAULT 0"),
                         ("risk_enabled", "TINYINT NOT NULL DEFAULT 0"),
-                        ("risk_rows", "INT NOT NULL DEFAULT -1")],
+                        ("risk_rows", "INT NOT NULL DEFAULT -1"),
+                        ("risk_fp", "VARCHAR(64) NOT NULL DEFAULT ''")],
     # 2026-11-07 P0: 码级复核计数(存量表补列; 新表 DDL 已含)
     "unit_summary": [("code_out", "INT NOT NULL DEFAULT 0")],
     "cleansing_templates": [("cf_meta", "TEXT")],
@@ -723,7 +727,9 @@ _COLUMN_ADDS = {
 #   独立表/独立开关(unit_state_head.risk_enabled), 不与 unit_alert 混口径。
 # v21(2026-11-07 P0): unit_state_head.risk_rows —— 区分「真的 0 条断货」与「本轮没算成」。
 #   没有这一列, 一次 risk 计算异常会让卡片显示"0 条断货"(比慢更糟); 有了它, 异常即退回现算。
-SCHEMA_VERSION = 21
+# v22(2026-11-07 P0): unit_state_head.risk_fp —— 断货快照的独立指纹(域含 suppliers)。
+#   判定不读 OTIF, 供应商评分变化时 unit fp 不动 → 卡片会用旧的可撑天数, 且无人察觉。
+SCHEMA_VERSION = 22
 
 
 def table_ddl(name):

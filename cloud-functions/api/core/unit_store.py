@@ -55,6 +55,13 @@ from routes.common import try_err, INVENTORY_COLS
 #   版本写成功时 bump 该域 → fp 变 → 自动重建, 不必依赖人工 force。
 JUDGE_DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
+# 断货三级(risk_snapshot)的依赖域 = 判定域 + suppliers。
+#   为什么多一个 suppliers: `_stock_risk` 用 `suppliers.score/5` 算 OTIF, 在途按置信度打折,
+#   直接影响可撑天数。判定模型(judge)不看 OTIF, 所以 JUDGE_DOMAINS 里没有它 ——
+#   若 risk 共用 unit 的 fp, "改了供应商评分"会**静默不生效**(卡片还是旧的可撑天数)。
+#   这是 2026-11-07 上线时自查出来的缺口: 一致性靠指纹, 指纹漏了输入就是错。
+RISK_DOMAINS = JUDGE_DOMAINS + ("suppliers",)
+
 _READ_ON = ("1", "true", "yes", "on")
 _COOLDOWN = 30.0        # 同一 (channel, mode) 两次重建的最小间隔(秒) —— 防一次请求风暴重建N次
 _STALE_BACKOFF = 600.0  # 校验失败后的退避(秒): 别让每个读请求都再烧一次 19s 重建
@@ -76,17 +83,12 @@ def read_enabled():
 
 
 # ── 指纹 ────────────────────────────────────────────────────────
-def fp_now(channel, mode=None):
-    """当前数据版本指纹。空串 = 不可用（表没建 / 查询失败）→ 调用方一律走旧路径
-
-    取的是 `data_version_dom` 的域计数器, 不是时间: 时间驱动会误判(§15.66 踩过
-    "now-3天 判陈旧 → 数据停更后每次直算"), 而计数器只随**写入**变。
-    粒度(grain)与模式(mode)会改变判定对象, 必须进指纹 —— 只改配置不 bump 计数时也能感知。
-    """
+def _fp_of(domains, channel, mode=None):
+    """域计数器 + 粒度 + 模式 → 指纹。空串 = 不可用"""
     _m = M.mode_of(channel, mode)
     try:
         rows = query("SELECT dom, v FROM data_version_dom WHERE dom IN ("
-                     + ",".join(["%s"] * len(JUDGE_DOMAINS)) + ")", list(JUDGE_DOMAINS))
+                     + ",".join(["%s"] * len(domains)) + ")", list(domains))
     except Exception:
         return ""
     vals = {str(r.get("dom")): int(r.get("v") or 0) for r in rows}
@@ -94,9 +96,24 @@ def fp_now(channel, mode=None):
         _g = M.grain_of(channel, _m)
     except Exception:
         _g = ""
-    raw = "|".join("%s=%d" % (d, vals.get(d, 0)) for d in JUDGE_DOMAINS)
+    raw = "|".join("%s=%d" % (d, vals.get(d, 0)) for d in domains)
     raw += "|g=%s|m=%s" % (_g, _m)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def fp_now(channel, mode=None):
+    """当前数据版本指纹。空串 = 不可用（表没建 / 查询失败）→ 调用方一律走旧路径
+
+    取的是 `data_version_dom` 的域计数器, 不是时间: 时间驱动会误判(§15.66 踩过
+    "now-3天 判陈旧 → 数据停更后每次直算"), 而计数器只随**写入**变。
+    粒度(grain)与模式(mode)会改变判定对象, 必须进指纹 —— 只改配置不 bump 计数时也能感知。
+    """
+    return _fp_of(JUDGE_DOMAINS, channel, mode)
+
+
+def fp_risk_now(channel, mode=None):
+    """断货快照的指纹(域 = RISK_DOMAINS, 比判定多 suppliers) —— 见 RISK_DOMAINS 的注释"""
+    return _fp_of(RISK_DOMAINS, channel, mode)
 
 
 # ── 读 ──────────────────────────────────────────────────────────
@@ -229,6 +246,14 @@ def risk_of(channel, mode=None, full=0):
     #   "今天没有断货风险", 比慢 4 秒严重得多。0 是合法值(真的没有断货)。
     if int(h.get("risk_rows", -1)) < 0:
         return None
+    _rfp = fp_risk_now(channel, _m)
+    if not _rfp or str(h.get("risk_fp") or "") != _rfp:
+        # suppliers 等"只影响断货、不影响判定"的域变了 → 这里挡住, 退回现算(慢但新)。
+        #   注意不能拿 unit 的 fp 代替: 判定不看 OTIF, 供应商评分变化时 unit fp 是不动的。
+        return None
+    # unit 的 fp 也要对得上: risk 行与 unit 行是同一次发布写进去的, 只对 risk_fp 不够 ——
+    #   若 unit 侧因数据变更已重建、risk 还没跟上, head.gen 会指向新的 unit gen 而 risk 行是空的,
+    #   读出来就是"0 条断货"。两个指纹都要一致才认。
     _fp = fp_now(channel, _m)
     if not _fp or str(h.get("fp") or "") != _fp:
         return None
@@ -444,7 +469,7 @@ def _risk_rows(channel, mode):
     return rows
 
 
-def _publish(channel, mode, fp, summ, alerts, n_units, risk=None):
+def _publish(channel, mode, fp, summ, alerts, n_units, risk=None, risk_fp=""):
     """gen+1 写入 → 校验已过 → head 一步切换 → 清 N-2 及更早"""
     h = head(channel, mode)
     gen = int((h or {}).get("gen") or 0) + 1
@@ -487,13 +512,14 @@ def _publish(channel, mode, fp, summ, alerts, n_units, risk=None):
         try_err("unit_store", "risk 发布失败(断货卡退回现算)", _e)
     # ── 唯一切换点 ──
     #   risk_rows: -1 = 本轮断货快照没算成 → 读侧退回现算(宁慢不错)。
-    execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,risk_rows,stale,note,built_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
+    execute("INSERT INTO unit_state_head(channel,mode,gen,fp,units,alerts,risk_rows,risk_fp,"
+            "stale,note,built_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,0,'ok',NOW(6)) "
             "ON DUPLICATE KEY UPDATE gen=VALUES(gen), fp=VALUES(fp), units=VALUES(units), "
-            "alerts=VALUES(alerts), risk_rows=VALUES(risk_rows), stale=0, note='ok', "
-            "built_at=VALUES(built_at)",
+            "alerts=VALUES(alerts), risk_rows=VALUES(risk_rows), risk_fp=VALUES(risk_fp), "
+            "stale=0, note='ok', built_at=VALUES(built_at)",
             [channel, mode, gen, fp, n_units, len(alerts),
-             -1 if risk is None else len(risk)])
+             -1 if risk is None else len(risk), str(risk_fp or "")])
     execute("DELETE FROM unit_summary WHERE channel=%s AND mode=%s AND gen<%s",
             [channel, mode, gen - 1])
     execute("DELETE FROM risk_snapshot WHERE channel=%s AND mode=%s AND gen<%s",
@@ -509,8 +535,13 @@ def build(channel, mode=None, inv_rows=None, force=False):
     fp = fp_now(channel, _m)
     if not fp:
         return {"ok": False, "error": "fp_unavailable"}
+    _rfp = fp_risk_now(channel, _m)
     h = head(channel, _m)
-    if not force and h and str(h.get("fp") or "") == fp and not int(h.get("stale") or 0):
+    # 「新鲜」要两个指纹都对上: unit(fp) 与 risk(risk_fp, 多含 suppliers)。
+    #   只看 unit fp 会漏掉"供应商评分改了 → 断货卡的可撑天数该变但没变"。
+    if (not force and h and str(h.get("fp") or "") == fp
+            and str(h.get("risk_fp") or "") == _rfp
+            and not int(h.get("stale") or 0)):
         return {"ok": True, "skipped": "fresh", "gen": int(h.get("gen") or 0)}
     # 上次失败后退避 10 分钟 —— 否则校验一直不过时, 每个读请求都会再起一次重建线程
     #   比较放在 SQL 里: `built_at` 是 DB 会话时区(NOW(6)), Python 侧 datetime 是 naive,
@@ -541,7 +572,8 @@ def build(channel, mode=None, inv_rows=None, force=False):
     #   它是**同一次重建的副产品**, 不是第二个模型: 数据域/粒度/配置与判定同源, 天然同版本。
     _risk = _risk_rows(channel, _m)
     try:
-        gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]), risk=_risk)
+        gen = _publish(channel, _m, fp, sc["tally"], sc["alerts"], len(sc["units"]),
+                       risk=_risk, risk_fp=_rfp)
     except Exception as _e:
         _mark_stale(channel, _m, "发布异常: %s" % _e)
         try_err("unit_store", "重建发布失败(%s/%s)" % (channel, _m), _e)
@@ -600,6 +632,7 @@ def status(channel, mode=None):
             _risk_rows = int((_r or {}).get("n") or 0)
     except Exception:
         _risk_rows = -1
+    _rfp = fp_risk_now(channel, _m)
     return {"channel": channel, "mode": _m, "read_enabled": read_enabled(),
             "enabled": int(h.get("enabled") or 0),
             "gen": int(h.get("gen") or 0), "units": int(h.get("units") or 0),
@@ -612,4 +645,5 @@ def status(channel, mode=None):
             #   risk_rows_actual 是表里实际行数 —— 两者不等说明发布没写完(该报警)。
             "risk_enabled": int(h.get("risk_enabled") or 0),
             "risk_rows": int(h.get("risk_rows", -1)),
-            "risk_rows_actual": _risk_rows}
+            "risk_rows_actual": _risk_rows,
+            "risk_fp_match": bool(_rfp) and str(h.get("risk_fp") or "") == _rfp}

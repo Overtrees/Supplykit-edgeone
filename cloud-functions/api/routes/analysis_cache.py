@@ -463,8 +463,13 @@ def invalidate(*domains):
         #      也只是"这次没建成", head 未切换 → 下次读请求会再触发。
         try:
             from core import unit_store as _US
-            _udoms = (set(_US.JUDGE_DOMAINS) if _wipe
-                      else (set(_doms) & set(_US.JUDGE_DOMAINS)))
+            # 2026-11-07 P0: bump 范围从 JUDGE_DOMAINS 扩到 RISK_DOMAINS(多一张 suppliers)。
+            #   断货卡的在途按 `suppliers.score` 的 OTIF 打折, 判定模型不看 OTIF ——
+            #   只 bump 判定域的话,"改了供应商评分"会静默不生效(卡片还是旧的可撑天数)。
+            #   代价: 供应商评分变化会触发一次完整重建(约 30s, 后台线程, 旧 gen 继续服务);
+            #   该操作是手工维护、频率极低, 用一点点后台算力换"改了就生效"。
+            _udoms = (set(_US.RISK_DOMAINS) if _wipe
+                      else (set(_doms) & set(_US.RISK_DOMAINS)))
             for _dm in sorted(_udoms):
                 _e("INSERT INTO data_version_dom(dom, v) VALUES(%s,1) "
                    "ON DUPLICATE KEY UPDATE v=v+1", [_dm])

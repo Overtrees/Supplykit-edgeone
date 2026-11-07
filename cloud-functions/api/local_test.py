@@ -4220,6 +4220,9 @@ try:
           "def risk_sort_key(" in _sr18 and "risk_sort_key as _rsk" in _us18, "")
     check("risk 物化: 本轮没算成必须退回现算(risk_rows<0), 不能当'0 条断货'",
           'int(h.get("risk_rows", -1)) < 0' in _us18, "core/unit_store.py")
+    check("risk 物化: 独立指纹含 suppliers(OTIF 影响可撑天数, unit fp 感知不到)",
+          "RISK_DOMAINS = JUDGE_DOMAINS + (\"suppliers\",)" in _us18
+          and 'fp_risk_now(channel, _m)' in _us18, "core/unit_store.py")
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 
