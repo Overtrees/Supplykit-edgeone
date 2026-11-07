@@ -361,13 +361,20 @@ def sync_purchase_alerts(channel, result):
         return {"opened": 0, "closed": 0}
 
 def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
-                         search: str = ""):
+                         search: str = "", debug: int = 0):
     """SKU×仓库粒度滞销处置建议(多因素)
     ① 临期(best_before ≤ 品类临期线) → black 紧急
     ② B仓超免费期(purchase_orders.arrival_date 起算) → 成本压力
     ③ 滞销主判据(品类滞销线 slow-cats / 观察线) → yellow / observe
     ④ 升级: yellow + (B仓超期 或 资金占用≥阈值) → red
     """
+    import time as _tm_d
+    _T0 = _tm_d.time()
+    _PF = {}
+
+    def _mk(name):
+        if debug:
+            _PF[name] = round((_tm_d.time() - _T0) * 1000)
     from routes.common import ch_supports_b as _csb2
     _ch_b = _csb2(channel)   # 该渠道是否走 BBCC(B 仓调拨链)
     from biz.sales import calc_sales_multi
@@ -401,6 +408,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                     try_err('purchase', '静默降级', _e)
         return default
 
+    _mk("cfg")
     cat_cfg = _cfg_list("slow_cats", _DEFAULT_SLOW_CATS)
     b_free = _cfg_number("b_free_days", 15)
     fund_threshold = _cfg_number("slow_fund_threshold", 10000)
@@ -410,6 +418,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                    "FROM products WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s",
                    [channel]):
         products[r.get("sku")] = r
+    _mk("products")
     # 最后销售日(按 69码) —— 2026-11-07: 改读物化 `sku_sales_stats.last_sale`。
     #   原来这里扫两遍: `daily_sales_snapshot` 全渠道 GROUP BY(10 万行, 实测 1.28s)
     #   + 近 90 天 orders GROUP BY(30 万行, 0.73s) —— 表达的都是"这个码最后哪天卖过",
@@ -449,6 +458,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                 daily_bc["%s|%s" % (_sd, _bd)] = float(_rd.get("ds28") or 0)
             else:
                 daily_map[_sd] = float(_rd.get("ds28") or 0)
+    _mk("sales_stats")
     # B 仓入库批次(到仓日期)
     b_arrival = {}
     for r in query("SELECT sku, arrival_date FROM purchase_orders "
@@ -457,12 +467,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             b_arrival[str(r.get("sku"))] = datetime.strptime(str(r.get("arrival_date"))[:10], "%Y-%m-%d")
         except Exception as _e:
                 try_err('purchase', '静默降级', _e)
+    _mk("b_arrival")
     # 已处置(30 天内)
     disposed = {}
     cutoff30 = (now - timedelta(days=30)).strftime("%Y-%m-%d")
     for r in query("SELECT sku, warehouse, action FROM disposal_records "
                    "WHERE channel=%s AND created_at>=%s", [channel, cutoff30]):
         disposed[(str(r.get("sku")), str(r.get("warehouse") or ""))] = str(r.get("action") or "")
+    _mk("disposed")
     # 伪滞销线索(近14天补货建议)
     pseudo = set()
     c14 = (now - timedelta(days=14)).strftime("%Y-%m-%d")
@@ -471,9 +483,11 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
                    "AND related_sku IS NOT NULL AND related_sku!=''", [channel, c14]):
         pseudo.add(str(r.get("related_sku")))
 
+    _mk("pseudo")
     sug = {"black": "临期紧急处理(促销/退供)", "red": "退货供应商/清仓甩卖",
            "yellow": "补货降量/持续跟踪", "observe": "继续观察/补货降量"}
     items = []
+    _mk("cfg2")
     # 2026-10-29 按 69码: 库存行已按码拆分 → 处置建议也按 (sku, barcode, 仓) 出
     for r in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
                    "available_qty FROM inventory WHERE channel=%s", [channel]):
@@ -586,6 +600,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
             "disposed": ((sku, _bc, wh) in disposed) or ((sku, wh) in disposed),
             "disposed_action": disposed.get((sku, _bc, wh)) or disposed.get((sku, wh), ""),
         })
+    _mk("inventory_loop")
     items.sort(key=lambda x: ({"black": 0, "red": 1, "yellow": 2, "observe": 3}.get(x["level"], 9),
                                -(x["days_zero"] if x["days_zero"] is not None else 1e9)))
     if search:
@@ -593,8 +608,14 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
         items = [x for x in items if sq in str(x.get("sku", "")).lower()
                  or sq in str(x.get("product_name", "")).lower()
                  or sq in str(x.get("barcode", "")).lower()]
+    _mk("total")
     if page > 0 and page_size > 0:
         total = len(items)
-        return ok({"items": items[(page - 1) * page_size: page * page_size],
-                   "total": total, "page": page, "page_size": page_size})
+        _out = {"items": items[(page - 1) * page_size: page * page_size],
+                "total": total, "page": page, "page_size": page_size}
+        if debug:
+            _out["_perf"] = _PF
+        return ok(_out)
+    if debug:
+        return ok({"_perf": _PF, "items": items})
     return ok(items)
