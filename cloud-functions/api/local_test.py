@@ -4614,7 +4614,7 @@ try:
     #    17 个 502·503, 根因是 6 份全量互抢(GIL/连接) → calc 4.5→13.4s。
     check("§15.161/165/168: SWR 读侧零等待 + 首建单飞有界共享 + 同 kind 串行 + 不返回空数据",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
-          and "_FIRST_WAIT = 18.0" in _ls20 and "_FIRST_TTL" in _ls20
+          and "_FIRST_WAIT = 21.0" in _ls20 and "_FIRST_TTL" in _ls20
           and "return _live()" in _ls20          # 极端降级单份现算兜底, 不返回 0 条
           and '"first_legacy"' in _ls20
           and "def first_guard" in _ls20 and "_FIRST_LOCK_WAIT" in _ls20
