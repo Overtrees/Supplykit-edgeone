@@ -317,7 +317,10 @@ r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=202
 check("自定义日期 200", r.status_code == 200 and r.json().get("ok") is not False, r.text[:120])
 
 # replenishment
-r = client.get("/insights/replenishment?channel=jd&mode=bbcc", headers={"X-Auth-Token": TOKEN})
+# §15.170: 首次请求(该 scope 无物化)按设计返回 building, 由前端重试拿完整数据;
+#   本用例验的是**补货算法口径**(不是首建策略), 故走 legacy=1 现算路径。
+r = client.get("/insights/replenishment?channel=jd&mode=bbcc&legacy=1",
+               headers={"X-Auth-Token": TOKEN})
 d = r.json()
 if d.get("ok") is False:
     check("replenish 无错误", False, (d.get("detail") or "")[:200])
@@ -4612,14 +4615,12 @@ try:
     #    不是每个读请求绑后台重建 30s; 绝不返回 0 条/空结构(数据四维-完整)。
     #    §15.168 首建再加「同 kind 串行 + 全局名额」: 6 个新 scope 并发实测 p50 23.1s /
     #    17 个 502·503, 根因是 6 份全量互抢(GIL/连接) → calc 4.5→13.4s。
-    check("§15.161/169: SWR 读侧零等待 + 首建单飞 + 名额忙即 building(不排队)",
+    check("§15.170: SWR 读侧零等待 + 首建后台单飞 + 首次即 building(不排队/不长等)",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
-          and "_FIRST_WAIT = 0.6" in _ls20 and "_FIRST_TTL" in _ls20
-          and "_FIRST_SEM" in _ls20
           and "def _building(" in _ls20 and "return _live()" in _ls20
           and '"first_legacy"' in _ls20
           and "def first_guard" in _ls20
-          and "acquire(blocking=False)" in _ls20 and "raise FirstBusy" in _ls20
+          and "_FIRST_SEM" not in _ls20 and "_kind_lock" not in _ls20
           and _LS20._HEAVY_WAIT <= 2.0
           and "if prev is None:" in _ls20,
           "core/list_store.py")
@@ -5084,27 +5085,26 @@ try:
           and '_flag("FLIGHT_COALESCE")' in _ls25, "core/list_store.py")
 
     # ② 首建双算改单飞(根治 P4 停摆, 红线 6/10)
-    check("§15.165 首建单飞: 通用 first_shared(leader 一次 + follower 有界等 + 共享结果)",
+    check("§15.165/170 首建骨架: first_shared 供 dash/own; list 走后台单飞去 fp 单飞",
           "def first_shared(key, ttl, wait, leader_fn, readback_fn):" in _ls25
           and 'entry["data"] = leader_fn()' in _ls25
-          and 'entry["event"].set()' in _ls25
           and 'entry["event"].wait(wait)' in _ls25
           and 'return readback_fn(entry["data"])' in _ls25
           and "def _first_serve(" in _ls25
-          and "build(kind, scope, force=True)" in _ls25
-          and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
+          and "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls25,
           "core/list_store.py")
-    check("§15.165 三处首建共用同一骨架(不叠加机制, 红线 2): list/dash/own",
-          "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25
+    check("§15.170 三处首建共用同一骨架(不叠加机制, 红线 2): list=后台 / dash+own=first_shared",
+          "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls25
           and "_LS.first_shared(\"dmat:\"" in open(
               os.path.join(os.path.dirname(__file__), "core", "dash_store.py"),
               encoding="utf-8").read()
           and "_LS.first_shared(\"own_first|\"" in _os25,
           "list_store + dash_store + own_store")
-    check("§15.165/169 首建不再「前台 _live + 后台 build」双算, 且忙即 building",
+    check("§15.170 首建: 同 scope 共享一份 + 名额满/超时即 building(不排队/不各算)",
           "if _first_sf_on():" in _ls25
           and "_d0 = _first_serve(kind, scope, fp, builder, channel, mode," in _ls25
-          and "return _building(kind, page, page_size)" in _ls25,
+          and "return _building(kind, page, page_size)" in _ls25
+          and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
           "core/list_store.py")
 
     # ③ stale=1 完整旧 gen 冷态放行 + 顶层 prev_stale 播报(红线 8②/16, 准确维)
@@ -5322,24 +5322,6 @@ try:
             _cur28["n"] -= 1
         return {"ok": True}
 
-    _ok28 = {"n": 0}
-
-    def _run28():
-        try:
-            _LS28.first_guard("k_serial", _fn28)
-            _ok28["n"] += 1
-        except _LS28.FirstBusy:
-            pass
-
-    _t28 = _tm28.time()
-    _th28_list = [_th28.Thread(target=_run28) for _ in range(3)]
-    [_t.start() for _t in _th28_list]
-    [_t.join() for _t in _th28_list]
-    _wall28 = _tm28.time() - _t28
-    check("§15.169b 首建全局 1 席(3 并发只 1 份真算, 其余立即 FirstBusy 去 building)",
-          _cur28["max"] == 1 and _ok28["n"] == 1 and _wall28 < 0.36,
-          "max=%d ok=%d wall=%.2fs" % (_cur28["max"], _ok28["n"], _wall28))
-
     # ③ 跨 kind 并行: 两个不同 kind 各 0.15s, 总墙钟应 ≈0.15s 而不是 0.3s
     _t28b = _tm28.time()
     _ts28 = [_th28.Thread(target=lambda k=k: _LS28.first_guard(k, lambda: _tm28.sleep(0.15)))
@@ -5347,31 +5329,25 @@ try:
     [_t.start() for _t in _ts28]
     [_t.join() for _t in _ts28]
     _wall28b = _tm28.time() - _t28b
-    check("§15.168 跨 kind 首建并行(different kind 不串行: 墙钟 ≈0.15s)",
+    check("§15.170 跨 kind 首建并行(不串行: 墙钟 ≈0.15s)",
           _wall28b < 0.28, "wall=%.2fs" % _wall28b)
 
-    # ④ 排队有界: 同 kind 锁被占满时, first_guard 超时返回 None(由调用方读物化/现算兜底)
-    _LS28._KIND_LOCKS.pop("k_timeout", None)
-    _hold28 = _LS28._kind_lock("k_timeout")
-    for _ in range(_LS28._KIND_PARALLEL):
-        _hold28.acquire()
-    _raised28 = False
-    try:
-        _LS28.first_guard("k_timeout", lambda: {"ok": True})
-    except _LS28.FirstBusy:
-        _raised28 = True
-    finally:
-        for _ in range(_LS28._KIND_PARALLEL):
-            _hold28.release()
-        _LS28._KIND_LOCKS.pop("k_timeout", None)
-    check("§15.169 首建名额忙 → 立即 FirstBusy(不排队, 红线 15)",
-          _raised28, str(_raised28))
+    # ④ §15.170: 首建不进请求路径 —— _first_serve 只登记+起后台, 返回 None(调用方 building)
+    check("§15.170 撤销全局 1 席与 kind 串行锁(方案 §6.2 红线 5 已否决), 只留 db.heavy",
+          "_FIRST_SEM" not in _ls28
+          and "_kind_lock" not in _ls28
+          and "_KIND_LOCKS" not in _ls28
+          and "_FIRST_HEAVY_WAIT = 0.05" in _ls28,
+          "core/list_store.py")
+    check("§15.170 首次请求立刻 building(200 + retry_after), 不等全量",
+          "_first_serve(kind, scope, fp, builder, channel, mode," in _ls28
+          and "return _building(kind, page, page_size)" in _ls28)
 
-    # ⑤ 三处首建都收编进同一骨架(红线 2 不叠加): list/dash/own
-    check("§15.168 三处首建共用 first_guard: list / dash / own",
-          "first_guard(kind, lambda: build(kind, scope, force=True))" in _ls28
-          and "_LS.first_guard(\"own\"" in _os28
-          and "_LS.first_guard(family" in _ds28,
+    # ⑤ 三处首建都收编进同一骨架(红线 2 不叠加): list 走后台单飞, dash/own 走 first_shared
+    check("§15.170 首建骨架收口: list=后台单飞 / dash+own=first_shared",
+          "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls28
+          and "_LS.first_shared(" in _os28
+          and "_LS.first_shared(" in _ds28,
           "list_store + own_store + dash_store")
     check("§15.168 首建等待全局名额(复用 db.heavy, 不另造闸门, 红线 4)",
           "from db import heavy, HeavyBusy" in _ls28
