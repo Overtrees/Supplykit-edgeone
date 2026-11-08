@@ -665,6 +665,22 @@ def _mem_mark(kind, scope):
     _MEM_BUILD["%s|%s" % (kind, scope)] = time.time()
 
 
+def _mem_mark_once(kind, scope):
+    """原子占位: 30 个并发同时到一个**从未登记**的 scope 时, 只让 1 个去
+    register_scope(INSERT) + 首建, 其余立刻 building。
+
+    线上实测(§15.169b 复测): 30 并发同时 INSERT IGNORE 同一 list_head 行 →
+    唯一键冲突检测串行化, building 要 2~4s(和 build 本身无关)。
+    """
+    k = "%s|%s" % (kind, scope)
+    with _FLIGHT_LOCK:
+        t = _MEM_BUILD.get(k)
+        if t and time.time() - t < _MEM_TTL:
+            return False
+        _MEM_BUILD[k] = time.time()
+        return True
+
+
 def _mem_clear(kind, scope):
     _MEM_BUILD.pop("%s|%s" % (kind, scope), None)
 
@@ -872,6 +888,11 @@ def serve(kind, scope, channel, mode, days, source, builder,
 
     h = head(kind, scope)
     if h is None:
+        # §15.169b: 从未登记 → 只让 1 个请求走 INSERT+首建, 其余立即 building。
+        #   否则 30 并发同时 INSERT IGNORE 同一行, 唯一键冲突检测串行化, 2~4s。
+        if read_enabled() and not legacy and _first_sf_on() \
+                and not _mem_mark_once(kind, scope):
+            return _building(kind, page, page_size)
         register_scope(kind, scope, channel, mode, days, source)
         h = head(kind, scope)
 
