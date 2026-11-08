@@ -89,6 +89,11 @@ supplykit/
 - Python 3.10 语法（preflight 用 `ast.parse(feature_version=(3,10))` 硬门禁）
 - SQL 一律 `%s` 占位符 + `db.query/execute`；**`INTERVAL %d` 必须 Python 级内联**
   （PyMySQL 会把 int 参数转 str → `TypeError`）
+  - ⚠️ 2026-11-08 事故：为了"更规范"改成参数化 `INTERVAL %s SECOND` 并传 **float 180.0**，
+    TiDB **既不报错也不生效**，条件恒假（`rowcount` 恒 0）→ 租约永不回收 → 名额永久占满
+    → 全部后台重建停摆 7 分钟。同一语句传 int 180 时 `rowcount=1`，传 180.0 时 `=0`。
+    **结论：INTERVAL 的参数必须是 `str(int(x))` 内联，不接受任何形式的占位符传参**，
+    改完必须用"过期时间戳"做一次真库对照（不能只看 SQL 没报错）。
 - 异常必须 `try_err(src, what, exc)`，**禁止 `except: pass`**
 - 业务异常统一 `200 + {ok:false, error, detail}`；堆栈只进 `quality_logs`，不回浏览器
 
