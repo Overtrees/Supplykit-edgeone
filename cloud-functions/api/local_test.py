@@ -4679,10 +4679,14 @@ try:
     _bundle22 = _os.path.join(_API_DIR, "routes/dashboard_bundle.py")
     _ac22 = _os.path.join(_API_DIR, "routes/analysis_cache.py")
     _dsr22 = _os.path.join(_API_DIR, "routes/dashboard_stock_risk.py")
+    _ds22 = _os.path.join(_API_DIR, "core/dash_store.py")
+    _cli22 = _os.path.join(_API_DIR, "../../frontend/src/api/client.ts")
     _dashsrc = open(_dash22, encoding="utf-8").read()
     _bundlesrc = open(_bundle22, encoding="utf-8").read()
     _acsrc22 = open(_ac22, encoding="utf-8").read()
     _dsrsrc = open(_dsr22, encoding="utf-8").read()
+    _dssrc = open(_ds22, encoding="utf-8").read()
+    _clisrc = open(_cli22, encoding="utf-8").read()
 
     # ① 静态: SWR 骨架复用不叠加(红线 2/4/5)
     check("§15.162 后台重建复用 list_store 分舱单飞(db.heavy 全局预算), 不另造队列/worker",
@@ -4704,18 +4708,24 @@ try:
           and "_t_sum, _swr_tally = _store_tally(channel, mode)" in _dashsrc
           and "max_workers=3 if not _store_on else 1" in _dashsrc, "routes/dashboard.py")
 
-    # ② 静态: 等待链收敛 + 空旧值兜底修正(完整性)
-    check("§15.162 heavy 等待 15s → 2s 快速失败(aux/stock-risk 同一常量)",
-          "timeout=15" not in _dashsrc and "_DASH_HEAVY_WAIT = 2.0" in _dashsrc
-          and _dashsrc.count('timeout=_DASH_HEAVY_WAIT') == 2, "routes/dashboard.py")
-    check("§15.162 单飞等锁 12s → 2s(与 insights 系同源收敛, 等待不创造价值)",
+    # ② 静态: §15.163 P3 已把「TTL + 同步 builder + heavy + 单飞锁」整段替换掉,
+    #   等待链从「收敛到 2s」升级为「请求路径彻底不存在」。旧断言钉的是 §15.162 中间态,
+    #   这里同步为新的等价红线约束(不放松, 只是更严)。
+    check("§15.163 三接口读路径全部收敛到 dash_store.serve, 请求路径无 heavy/单飞/TTL 同步builder",
+          _dashsrc.count("_DS.serve(") == 3
+          and "timeout=_DASH_HEAVY_WAIT" not in _dashsrc
+          and "_cache_stale(_key)" not in _dashsrc
+          and "with _heavy(" not in _dashsrc, "routes/dashboard.py")
+    check("§15.162 单飞等锁 12s → 2s(analysis_cache 仍服务非看板族, 收敛保留)",
           "acquire(timeout=2)" in _acsrc22 and "acquire(timeout=12)" not in _acsrc22,
           "routes/analysis_cache.py")
-    check("§15.162 无旧值可退时排队现算, 不再返回空结构(aux or {} / 全 0 兜底已修)",
+    check("§15.163 空旧值不返空结构: 无上一版 → 现算保证完整; 旧 cache_stale or {} 兜底已删除",
           "_cache_stale(_key) or {}" not in _dashsrc
-          and "宁可排队现算保证完整数据" in _dashsrc, "routes/dashboard.py")
-    check("§15.162 cache_stale 旧值必须显式播报 __swr(不再静默返旧值)",
-          _dashsrc.count('"source": "stale_cache"') == 2, "routes/dashboard.py")
+          and "_EMPTY_RISK" not in _dashsrc
+          and "return ok(_build())" in _dashsrc, "routes/dashboard.py")
+    check("§15.163 SWR 播报统一由 dash_mat 产出(source=dash_mat), static stale_cache 兜底已删除",
+          '"source": "stale_cache"' not in _dashsrc
+          and '"source": "dash_mat"' in _dssrc, "core/dash_store.py")
 
     # ③ 静态: 播报走响应顶层, data 形状不变 + boot 冒泡
     check("§15.162 summary/aux/stock-risk 的 __swr 都 pop 到响应顶层(不进 data)",
@@ -4788,6 +4798,118 @@ try:
         _US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild = _o22
 except Exception as _e35:
     check("§15.162 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
+
+# ── §15.163 P3: 看板最终聚合结果物化 + 读侧零等待 SWR(收敛两套缓存) ────────
+try:
+    # ① 静态: 复用已上线骨架, 不叠加第二套闸门(红线 2/4/5/16)
+    check("§15.163 指纹复用 unit_store.fp_of 同一套域计数器(红线 16 fp 同源), 不另造语义",
+          "_US.fp_of(_deps(family), channel, mode)" in _dssrc
+          and "from routes.analysis_cache import _FAMILY_DEPS" in _dssrc, "core/dash_store.py")
+    check("§15.163 后台重建复用 list_store.submit_background(db.heavy 全局预算+同key单飞), 不另造队列/worker/租约",
+          "_LS.submit_background(" in _dssrc and "queue.Queue" not in _dssrc
+          and "lease_owner" not in _dssrc and "_FLIGHTS = {}" not in _dssrc,
+          "core/dash_store.py")
+    check("§15.163 载体复用 analysis_cache 表(独立 dmat| 前缀), 不新建表/DDL",
+          '_PREFIX = "dmat|"' in _dssrc and "cache_put(" in _dssrc
+          and "CREATE TABLE" not in _dssrc, "core/dash_store.py")
+    check("§15.163 DASH_SWR=0 一刀回滚纯现算(互斥不并存, 红线 2)",
+          'os.environ.get("DASH_SWR")' in _dssrc and "def read_enabled" in _dssrc
+          and "if not read_enabled():" in _dssrc, "core/dash_store.py")
+    check("§15.163 读侧零等待: serve 从不 wait 后台结果(无 ev.wait/join/.result)",
+          ".wait(" not in _dssrc and ".join()" not in _dssrc
+          and "submit_background" in _dssrc, "core/dash_store.py")
+
+    # ② 静态: 数据四维(准确/完整/可靠)与形状契约
+    check("§15.163 冷态返回上一版完整物化 + 顶层 __swr 显式播报(DB时间算 freshness, 不静默返旧值)",
+          "def _swr_meta" in _dssrc and "TIMESTAMPDIFF(SECOND, FROM_UNIXTIME" in _dssrc
+          and '"fp_changed": True' in _dssrc and '"source": "dash_mat"' in _dssrc,
+          "core/dash_store.py")
+    check("§15.163 allow_stale 只跳 fp 比对, 完整性哨兵一字不减(gen/value可解析/dict非空)",
+          "def _read(family, scope, fp=None, allow_stale=False)" in _dssrc
+          and "if not allow_stale and" in _dssrc
+          and "not int(box.get(\"gen\") or 0)" in _dssrc
+          and "not isinstance(data, dict) or not data" in _dssrc, "core/dash_store.py")
+    check("§15.163 底层判定读模型 __swr 不进最终物化(稳态不误播报) + 6MB 上限 + 发布前自校验",
+          'data.pop("__swr", None)' in _dssrc and "6 * 1024 * 1024" in _dssrc
+          and "def _write" in _dssrc, "core/dash_store.py")
+    check("§15.163 首次/上一版不可用 → 现算保证完整(绝不返回空/0条) + 同步落物化不后台双算",
+          "data = builder()" in _dssrc and "_write(family, scope, fp, data)" in _dssrc
+          and "first_legacy" in _dssrc, "core/dash_store.py")
+    check("§15.163 fp 不可用 → 纯现算降级(不用无法判定新鲜度的数据)",
+          "if not fp:" in _dssrc and "return builder(), None" in _dssrc, "core/dash_store.py")
+    check("§15.163 legacy=1 保持纯现算(红线16三重验证基准, 不接物化/预算/单飞)",
+          "if legacy:" in _dashsrc and "return ok(_build())" in _dashsrc,
+          "routes/dashboard.py")
+    check("§15.163 __swr 播报 pop 到响应顶层, data 形状不变; 顶层物化播报优先于底层判定播报",
+          _dashsrc.count("_swr = _swr_mat or _swr_low") == 3
+          and _dashsrc.count('"__swr": _swr') >= 3, "routes/dashboard.py")
+    check("§15.163 前端收口从 insights 扩到看板(常规轮询拿到新数据也结束播报), 文案零改动",
+          "isSwrPath" in _clisrc and "'/dashboard/'" in _clisrc
+          and "SWR_TOTAL_BUDGET = 3000" in _clisrc, "frontend/src/api/client.ts")
+    check("§15.163 P2 观测: unit-state 追加 dash_mat 概览(只加字段, 不改既有语义)",
+          '_st["dash_mat"] = _DS.overview()' in _dashsrc and "def overview()" in _dssrc,
+          "routes/dashboard.py")
+
+    # ③ 动态: serve 三态(mock _read/fp_now/submit_background/_write, 不碰真库)
+    from core import dash_store as _DS23
+    _o23 = (_DS23.fp_now, _DS23._read, _DS23._write, _DS23.read_enabled)
+    _calls23 = {"build": 0, "submit": 0, "write": 0}
+    try:
+        _DS23.fp_now = lambda f, c, m=None, s="": "FP1"
+        _box23 = {"v": 1, "fp": "FP1", "gen": 5, "ts": 1,
+                  "built_at": "2026-11-08 00:00:00", "data": {"summary": {"gmv": 1}}}
+        _DS23.read_enabled = lambda: True
+        _DS23._write = lambda f, s, fp, d: (_calls23.__setitem__("write", _calls23["write"] + 1)) or True
+
+        def _builder23():
+            _calls23["build"] += 1
+            return {"summary": {"gmv": 999}}
+
+        # 稳态: fp 命中 → 读物化, 零 builder、零播报
+        _DS23._read = lambda f, s, fp=None, allow_stale=False: (dict(_box23) if fp == "FP1" else None)
+        _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
+        check("§15.163 serve 稳态: fp 命中 → 完整物化, 无播报, builder 不执行",
+              _d23 and _d23["summary"]["gmv"] == 1 and _s23 is None
+              and _calls23["build"] == 0, str(_calls23))
+
+        # 冷态: 有上一版但 fp 失配 → 立即返回上一版 + __swr, builder 读侧不执行
+        _DS23._read = lambda f, s, fp=None, allow_stale=False: (
+            None if fp else dict(_box23))     # fp=FP1 时不命中; allow_stale 时给上一版
+        import core.list_store as _LS23
+        _o_sb23 = _LS23.submit_background
+        _LS23.submit_background = lambda k, s, fp, fn: (
+            _calls23.__setitem__("submit", _calls23["submit"] + 1)) or "started"
+        try:
+            _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
+        finally:
+            _LS23.submit_background = _o_sb23
+        check("§15.163 serve 冷态: 立即返回上一版完整物化 + __swr 显式播报, 读侧零 builder(全量只在后台)",
+              _d23["summary"]["gmv"] == 1 and _s23
+              and _s23.get("state") == "serving_previous" and _s23.get("fp_changed") is True
+              and _s23.get("rebuild") == "started" and _calls23["build"] == 0
+              and _calls23["submit"] == 1, str(_calls23))
+
+        # 首次/上一版不可用 → 现算保证完整 + 同步落物化, 不后台双算
+        _calls23.update(build=0, submit=0, write=0)
+        _DS23._read = lambda f, s, fp=None, allow_stale=False: None
+        _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
+        check("§15.163 serve 首次: 现算返回完整数据(非0条) + 同步落物化, 无后台双算",
+              _d23["summary"]["gmv"] == 999 and _s23 is None
+              and _calls23["build"] == 1 and _calls23["write"] == 1
+              and _calls23["submit"] == 0, str(_calls23))
+
+        # 回滚: DASH_SWR=0 → 纯现算, 不读物化/不写/不后台
+        _calls23.update(build=0, submit=0, write=0)
+        _DS23.read_enabled = lambda: False
+        _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
+        check("§15.163 一刀回滚: DASH_SWR=0 → 纯现算, 不读物化/不写物化/不后台(互斥不并存)",
+              _d23["summary"]["gmv"] == 999 and _s23 is None
+              and _calls23["build"] == 1 and _calls23["write"] == 0
+              and _calls23["submit"] == 0, str(_calls23))
+    finally:
+        _DS23.fp_now, _DS23._read, _DS23._write, _DS23.read_enabled = _o23
+except Exception as _e36:
+    check("§15.163 看板最终结果物化/SWR 用例无异常", False, str(_e36)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

@@ -228,6 +228,13 @@ def dashboard_unit_state(channel: str = "jd", mode: str = "", detail: str = ""):
     """
     from core import unit_store as _US
     _st = _US.status(channel, mode)
+    # §15.163 P2: 追加最终结果物化观测(只加字段, 不改既有形状语义), 线上可查
+    #   「物化建了没 / 冷态命中数 / 首次现算数 / 回滚开关」。
+    try:
+        from core import dash_store as _DS
+        _st["dash_mat"] = _DS.overview()
+    except Exception as _e:
+        try_err("dashboard", "dash_mat 观测降级", _e)
     if detail:
         _st["alerts_sample"] = _US.alerts_of(channel, mode, limit=20) or []
     return ok(_st)
@@ -289,10 +296,16 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                                     if isinstance(_r, dict) else None)
         return _r
 
-    _result = _cache_get(_key, _SUMMARY_TTL, _b)
-    # §15.162: SWR 播报 pop 到响应**顶层**, 不进 data 形状; 必须在 part 过滤**之前**
-    #   (part=main/charts 的白名单不认识 __swr)。缓存值内的 __swr 每次读出都被 pop, 无累积。
-    _swr = _result.pop("__swr", None) if isinstance(_result, dict) else None
+    # §15.163 P3: 收敛到建议页同款「域指纹物化 + 读侧零等待 SWR」—— 一次替换掉旧的
+    #   `cache_get(TTL) + 请求路径同步 builder + single-flight 2s`。稳态直接读物化(零 builder),
+    #   冷态立即返回上一版完整物化 + 顶层 __swr + 后台分舱重建, 首次/不可用才现算。
+    #   DASH_SWR=0 一刀回滚纯现算(互斥不并存, 红线 2/6)。_b 计算体一行不动(红线 9)。
+    from core import dash_store as _DS
+    _result, _swr_mat = _DS.serve("dash_summary", _key, channel, mode, _b)
+    # SWR 播报合并: 顶层物化播报优先, 否则用底层判定读模型塞进结果里的 __swr(§15.162)。
+    #   pop 必须在 part 过滤之前(白名单不认识 __swr), 且不进 data 形状。
+    _swr_low = _result.pop("__swr", None) if isinstance(_result, dict) else None
+    _swr = _swr_mat or _swr_low
     # 维护触发: **无论命中与否**都只做一次"要不要起后台线程"的轻判断(限频在 kick 内部),
     #   不再阻塞本次响应。放在缓存之后 → 命中路径也不会因为维护而变慢。
     try:
@@ -1063,32 +1076,15 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
     # 2026-11-07 §15.162 P1: 等待 15s → 2s 快速失败(与 insights 系同源); 旧快照带 __swr
     #   显式播报(不再静默); **无旧值可退时排队现算而不是返回 {}** —— 空结构会让卡片清零
     #   (完整性缺口, §15.162 排查实证)。
-    from db import heavy as _heavy, HeavyBusy as _HeavyBusy
-    from routes.analysis_cache import cache_stale as _cache_stale
-
-    def _aux_build():
-        return _cache_get(_key, _AUX_TTL, lambda: _build_aux(channel, mode),
-                          max_bytes=1024 * 1024)
-
-    _from_stale = False
-    try:
-        with _heavy("aux", timeout=_DASH_HEAVY_WAIT):
-            _data = _aux_build()
-    except _HeavyBusy as _eh:
-        try_err('dashboard', 'aux 并发繁忙, 返回旧快照', _eh)
-        _data = _cache_stale(_key)
-        _from_stale = True
-        if _data is None:
-            # 无旧值可退: 宁可排队现算保证完整数据(宁可慢, 不可错——绝不让卡片清零)
-            _from_stale = False
-            with _heavy("aux", timeout=20):
-                _data = _aux_build()
-    # 2026-11-03 D5: "规则重算中"标记 —— 保存规则后后端是异步评估(可能 10~30s), 前端若不等
-    #   就会"切回看板看到旧告警 → 以为没生效 → 再保存一次"。必须在缓存之外读:
-    #   进缓存会出现"一直 true"或"评估完了还显示重算中"。
-    # 2026-11-07 §15.158: 计数改带新鲜度(与状态接口/任务合并共用 eval_live_cond)。
-    #   实例被平台冻结时 daemon 线程的 done/error 回写不会发生, 裸 `status='running'`
-    #   会永远成立 → 线上出现过看板「规则重算中」挂 3 小时。
+    # §15.163 P3: 一次替换掉旧的 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
+    #   D 组改前实测并发4 墙钟 8.10s 的等待链(HeavyBusy 已等2s ×N / 单飞超时2s)就此归零:
+    #   稳态读物化零 builder, 冷态立即返回上一版完整物化 + 后台分舱重建(读侧不 wait)。
+    #   计算体 _build_aux 一行不动(红线 9); DASH_SWR=0 互斥回滚纯现算(红线 2)。
+    from core import dash_store as _DS
+    _data, _swr_mat = _DS.serve("dash_aux", _key, channel, mode,
+                                lambda: _build_aux(channel, mode))
+    # 2026-11-03 D5 / §15.158: "规则重算中"标记 —— 异步评估新鲜度, **必须在物化之外实时读**:
+    #   进物化会出现"一直 true"或"评估完了还显示重算中"(eval_live_cond 带新鲜度/租约)。
     try:
         from core.maintenance import eval_live_cond as _live
         _pend = one("SELECT COUNT(*) AS c FROM eval_tasks WHERE " + _live()) or {}
@@ -1096,12 +1092,9 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
         _data["evaluating"] = bool(int(_pend.get("c") or 0))
     except Exception as _e:
         try_err('dashboard', '重算标记读取降级(不影响主数据)', _e)
-    # §15.162: SWR 播报 pop 到响应顶层(不进 data 形状); HeavyBusy 退回的 cache_stale 旧值
-    #   无 built_at → freshness_s=-1(未知年龄), 前端按"数据更新中"播报, 不静默。
-    _swr = _data.pop("__swr", None) if isinstance(_data, dict) else None
-    if not _swr and _from_stale and isinstance(_data, dict):
-        _swr = {"state": "serving_previous", "freshness_s": -1,
-                "fp_changed": True, "source": "stale_cache"}
+    # SWR 播报 pop 到响应顶层(不进 data 形状): 顶层物化播报优先, 否则用判定读模型底层播报。
+    _swr_low = _data.pop("__swr", None) if isinstance(_data, dict) else None
+    _swr = _swr_mat or _swr_low
     return ok(_data, **({"__swr": _swr} if _swr else {}))
 
 
@@ -1397,35 +1390,16 @@ def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int
                         "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
                         "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
 
-    # 2026-11-07 S0 防雪崩: 与 aux 同一道名额(全局 3), 拿不到返回旧快照 —— 断货卡保持"有数"
-    # 2026-11-07 §15.162 P1: 等待 15s → 2s 快速失败; 旧快照带 __swr 显式播报(不再静默);
-    #   无旧值可退时排队现算而不是返回全 0 空结构(绝不让卡片清零——完整性)。
-    from db import heavy as _heavy, HeavyBusy as _HeavyBusy
-    from routes.analysis_cache import cache_stale as _cache_stale
-    _EMPTY_RISK = {"items": [], "total": 0, "critical": 0, "warning": 0,
-                   "bcItems": [], "bcTotal": 0, "bcCritical": 0, "bcWarning": 0,
-                   "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
-                   "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
-
-    def _risk_build():
-        return _cache_get(_key, _RISK_TTL, _build, max_bytes=6 * 1024 * 1024)
-
-    try:
-        with _heavy("stock-risk", timeout=_DASH_HEAVY_WAIT):
-            _r = _risk_build()
-    except _HeavyBusy as _eh:
-        try_err('dash', 'stock-risk 并发繁忙, 返回旧快照', _eh)
-        _st = _cache_stale(_key)
-        if _st is not None:
-            _swr_st = _st.pop("__swr", None) if isinstance(_st, dict) else None
-            if not _swr_st:
-                _swr_st = {"state": "serving_previous", "freshness_s": -1,
-                           "fp_changed": True, "source": "stale_cache"}
-            return ok(_st, __swr=_swr_st)
-        # 无旧值可退: 宁可排队现算保证完整数据(宁可慢, 不可错——绝不返回全 0 空结构)
-        with _heavy("stock-risk", timeout=20):
-            _r = _risk_build()
-    _swr = _r.pop("__swr", None) if isinstance(_r, dict) else None
+    # §15.163 P3: 一次替换 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
+    #   legacy=1 是红线 16 三重验证基准, 必须真实反映「不走物化」→ 该分支保持原样不加
+    #   物化/预算/单飞(读侧 serve 内部由路由层用 legacy 短路)。_build 算法一行不动(红线 9)。
+    from core import dash_store as _DS
+    if legacy:
+        return ok(_build())
+    _r, _swr_mat = _DS.serve("stock_risk", _key, channel, "", _build)
+    # SWR 播报 pop 到响应顶层(不进 data 形状): 顶层物化播报优先, 否则用判定读模型底层播报。
+    _swr_low = _r.pop("__swr", None) if isinstance(_r, dict) else None
+    _swr = _swr_mat or _swr_low
     return ok(_r, **({"__swr": _swr} if _swr else {}))
 
 

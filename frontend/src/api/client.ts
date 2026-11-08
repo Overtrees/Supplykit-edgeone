@@ -407,8 +407,11 @@ instance.interceptors.response.use(
         _swrProbe(response.config, key, 0)
       }
     } else {
-      const isInsight = String(url || '').includes('/insights/')
-      if (_swrActive && !isProbe && isInsight) _swrFinish()
+      // §15.163: 收口判定从 insights 扩到看板 —— 看板 SWR 的普通轮询拿到新数据时也结束播报
+      //   (否则只靠 ≤3s 有界探测, 后台重建超过预算时播报要等下次访问 insights 才收)。
+      const isSwrPath =
+        String(url || '').includes('/insights/') || String(url || '').includes('/dashboard/')
+      if (_swrActive && !isProbe && isSwrPath) _swrFinish()
       if ((method || 'get').toLowerCase() === 'get' && cfg.__epoch === _writeEpoch) {
         // 代次一致才写缓存: 写操作之后回来的旧响应不许回灌(见 _writeEpoch 注释)
         cache.set(key, { data: response.data, ts: Date.now() })
