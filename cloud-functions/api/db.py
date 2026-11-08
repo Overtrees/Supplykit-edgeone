@@ -25,7 +25,13 @@ _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每�
 # 原则(§15.8 可靠性): 连接是**全局稀缺资源**, 并发度必须由全局预算分配, 不能各接口自带。
 #   HEAVY_CONCURRENCY=3: 同时最多 3 个重计算在跑, 其余排队(排队 1~3s 好过一起卡 40s)。
 #   env 可调; 设 0 关闭闸门(紧急回滚用, 不需重新发版)。
-_HEAVY_LIMIT = int(os.environ.get("HEAVY_CONCURRENCY", "3") or 0)
+# §15.181: 默认由 3 降为 1 做**一次线上实验** —— 见 docs/history §15.181。
+#   核对调用点后发现: 全项目 `heavy()` 只有一处调用(core/list_store._cold_worker),
+#   即"同时最多 N 个**域**在重建", 与读请求并发无关(读路由不申请名额)。
+#   降到 1 = 重建串行, 测"GIL/连接争抢是否为 S5 读延迟的主因";
+#   HEAVY_GLOBAL=2 不变, 多实例下仍有 2 路跨实例并行。
+#   env 一键回滚: HEAVY_CONCURRENCY=3(不需改代码重发)。
+_HEAVY_LIMIT = int(os.environ.get("HEAVY_CONCURRENCY", "1") or 0)
 # §15.174: 原实现是 threading.BoundedSemaphore —— **名额会泄漏**。
 #   线上 2026-11-08 14:28~14:30 证据: 三个 kind 的冷算全部报
 #   "冷算全局名额已满, 本轮跳过(并发上限 3, 已等 2s)", 连续 10 分钟没有一次重建成功,
