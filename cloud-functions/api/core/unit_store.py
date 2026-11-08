@@ -46,7 +46,7 @@ import time
 
 from db import query, one, execute
 from core import metrics as M
-from routes.common import try_err, INVENTORY_COLS
+from routes.common import try_err
 
 # 影响判定结果的数据域（与 analysis_cache._FAMILY_DEPS 同名）
 #   orders 在列: 日销是 orders 的二阶物化(sku_sales_stats), "订单进了但日销还没重建"的窗口里
@@ -513,6 +513,24 @@ def serve_risk(channel, full=0, limit=0, offset=0, level=""):
 
 
 # ── 构建 ────────────────────────────────────────────────────────
+# §15.182 重建专用列集: 只取**真正被消费的 9 列**。
+#   消费方只有两个, 且都在本模块内(schema 无关, 不换口径):
+#     · metrics.units: sku / barcode / warehouse / warehouse_type / available_qty
+#                      / in_transit_qty / safety_qty / product_name
+#     · _stock_risk :   上述 + c_transit(278/313 行)
+#   去掉的 3 列(safety_days / locked_qty / beginning_stock)在本模块与
+#   dashboard_stock_risk 全链路**零引用**(已 grep 核对):
+#     · safety_days 只被 purchase_calc 用(那边已下推聚合)
+#     · locked_qty 只被规则引擎 core/rule_eval 用(走它自己的 INVENTORY_COLS, 不受影响)
+#     · beginning_stock 只被 core/ledger 的 UPDATE ... SET 用(不经过本函数)
+#   ⚠ 不改 routes.common.INVENTORY_COLS 本身 —— 那是共享常量, 改它会影响规则引擎
+#     (inv.locked_qty 是规则字段名, 去掉会让选中保存被拒, 见 rule_fields.py:11)。
+#   实测口径(线上 jd, 90,100 行): product_name 均长 11.4B 占 18%、3 个 int 列约 11%
+#     —— 传输量已接近下限(大头在 §15.180 之前就压掉了), 本项只作结构性收敛。
+_INV_COLS_UNIT = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                  "available_qty, in_transit_qty, c_transit, safety_qty, product_name")
+
+
 def _inv_rows(channel):
     """该渠道 inventory 全量 —— **一次读取, 判定与断货共用**
 
@@ -521,7 +539,7 @@ def _inv_rows(channel):
     risk 段 4.6s, 其中一多半是这第二趟。现在读一次全量, 空仓行由 scan 自己过滤
     (与原 SQL `warehouse!=''` 逐字等价, 不换口径)。
     """
-    return query("SELECT " + INVENTORY_COLS + " FROM inventory WHERE channel=%s", [channel])
+    return query("SELECT " + _INV_COLS_UNIT + " FROM inventory WHERE channel=%s", [channel])
 
 
 def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
