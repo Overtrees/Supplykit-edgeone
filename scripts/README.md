@@ -26,7 +26,7 @@
 | `test_inv_recalc.py` | 库存重算口径 |
 | `test_inv_idempotent.py` | 库存批量操作幂等 |
 | `test_barcode_q3.py` | 条码/两码合并 |
-| `cloud-functions/api/local_test.py` | **主回归**: 497 条用例。必须在 `cloud-functions/api/` 目录跑 |
+| `cloud-functions/api/local_test.py` | **主回归**: 860 条用例。必须在 `cloud-functions/api/` 目录跑 |
 | `cloud-functions/api/sql_smoke.py` | 真实 SQL 冒烟(表名/列名 mock 测不出), `local_test.py --sql-smoke` 顺带跑 |
 
 ## 三、前端/界面
@@ -88,3 +88,14 @@ python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale b
    build/preview/代理/登录 —— 那三处坑(见模块 docstring)重写一次就多踩一次。
 2. 视口与页面清单放脚本顶部常量, 与 `App.tsx` 的 `NAV`/`switch` 对齐。
 3. 新增脚本必须在本文件登记一行, 否则下一个人还是找不到。
+
+## 六、性能基准与压测
+
+| 脚本 | 用途 |
+|---|---|
+| `perf/run.py` | **统一入口**: `hot`(快了多少) / `storm`(会不会停摆) / `cold`(重建分段) / `first`(真首建) / `noise`(测量可信度); 判据在文件头 `TH` |
+| `perf/endpoints.py` | 页面→模块→接口→数据来源→机制的唯一真源; `run.py --list-md` 生成 `docs/PERF.md` 的表格 |
+| `perf/scenes.py` `perf/kit.py` | 场景实现 / 登录态与相位工具 |
+
+详见 [`perf/README.md`](perf/README.md) 与 [`docs/PERF.md`](../docs/PERF.md)。
+**注意**: 带写压测的 p50 不能用来判断"快了多少"（同配置轮间极差 22 倍），判延迟只用 `hot`。

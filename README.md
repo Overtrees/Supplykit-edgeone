@@ -126,6 +126,7 @@
 | 🧭 **货品供应建议** | 自有仓三口径(调拨缺口/积压/效期) / 该采该停该清 |
 | 🏷️ **商品/供应商** | CRUD / 搜索 / 批次效期 |
 | ⚠️ **异常记录** | 数据质量日志（分页加载更多）/ 断货审计 |
+| ⏱️ **任务与运维** | 任务列表与进度 / 重建聚合 / 预热 / 导出状态（维护任务租约单飞） |
 | 🎛️ **设置** | 渠道管理(启停/排序) / 回收站 / 系统信息 |
 | 🔑 **登录 / 首次引导** | JWT 登录 · 访客模式 · 欢迎页一键填充种子数据 |
 
@@ -134,12 +135,20 @@
 | 能力 | 说明 |
 |------|------|
 | 后端分页 + 前端滚动懒加载 | page/page_size + IntersectionObserver 哨兵逐页 |
+| **物化 + 域指纹** | 补货/采购/处置、看板卡片、自有仓健康、判定模型都是"算一次落快照"，读侧按 `fp` 命中，不再每请求现算全量 |
+| **SWR（过期先返上一版）** | TTL 到点不再阻塞请求：立即返旧值 + 后台重建 + 顶层 `__swr`，前端统一播报并静默重拉 |
 | 分析缓存按域失效 | 写操作只清受影响的缓存族（`invalidate("<域>")` + 依赖关系反推），不等 TTL |
+| **重建名额两级闸门** | 实例内 token 槽（3）+ 跨实例 `heavy_slot`（2，180s 租约，先全局后实例内）；一次写触发 7 个域时不会一起挤满实例 |
 | 日销/物化增量重建 | 脏日期队列（按**业务日期**，不是导入时间）+ 连续区间合并；>2000 SKU 才全量 |
-| 冷算降耗靠**减往返** | 合并同源查询，往返 22→14；线上冷算 1.45s → **0.57s**（不加缓存、不拖 TTL） |
+| 取数下推聚合 + 列裁剪 | 补货 8 万→2 万行、采购 9 万→3 万行在 SQL 里先聚合；重建取数只取 9 列 |
 | 启动零 DDL | schema 声明收敛单一真源 + 版本门禁，热路径一条 SELECT |
 | 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s |
 | 实时性 | stock-risk 独立 30s TTL；aux 60s；事件驱动全链路刷新；30s 兜底 |
+
+> **性能基准与压测**：[`docs/PERF.md`](docs/PERF.md) 按页面 → 模块给出基线与机制；
+> `scripts/perf/run.py` 是判据的可执行版本（热态 / 极端 / 冷算本体 / 首建 / 噪声校验）。
+> 记住一条：**带写压测的 p50 不能用来判断"快了多少"**（同配置轮间极差 22 倍），
+> 判延迟只用"纯读 + 锁相位"（CV 0.04）。
 
 ---
 
@@ -150,7 +159,7 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 363 项全过
+cd cloud-functions/api && python3 local_test.py        # 860 项全过
 
 # 前端
 cd frontend && npm install && npm run dev
@@ -160,6 +169,10 @@ python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), f
 
 # 一键自检（语法 / pyflakes / 回归+SQL冒烟 / eslint / prettier / tsc / vitest 七步）
 bash scripts/preflight.sh
+
+# 性能基准（改性能前后各跑一次，看末尾判据 PASS/FAIL）
+python3 scripts/perf/run.py hot --rounds 5             # 热态（唯一可判"快了多少"）
+python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的页面表
 ```
 
 环境变量（Makers 项目 env，部署时快照）：
@@ -171,11 +184,11 @@ bash scripts/preflight.sh
 | `JWT_SECRET` | 环境变量必设（无 fallback——缺失即校验全拒；多实例同值） |
 | `CRON_SECRET` | 定时任务密钥（`X-Cron-Secret` 头；配置后不带密钥的调用会记审计日志） |
 
-> 定时任务由 `edgeone.json` 的 `schedules` 声明（11 个，EdgeOne 平台调度），不依赖 GitHub Actions。
+> 定时任务由 `edgeone.json` 的 `schedules` 声明（**10 条**为平台上限；`/api/cron/*` 共 11 个端点，`ledger-close` 嵌入 `cleanup-logs` 内调用），不依赖 GitHub Actions。
 
 ---
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，§15.x 全局唯一） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，§15.x 全局唯一） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

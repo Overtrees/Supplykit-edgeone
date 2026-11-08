@@ -51,6 +51,31 @@
 | `auth` | `/api/auth` | setup/login/check |
 | `cron` | `/api/cron` | 11 端点（snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts/ping/continue-tasks/agg-sweep/reconcile） |
 
+### 性能结构（一句话版）
+
+> 完整机制、边界与按页面的基线见 [`docs/PERF.md`](PERF.md)；这里只画数据流，避免两处重复。
+
+```
+读：请求 ──► 物化快照(list_snapshot / dmat / own_health_snapshot / unit_state)
+              ├─ fp 命中 ─────────────► 直接返回（p50 十几~几十 ms）
+              ├─ 过期但有旧值(SWR) ──► 立即返上一版 + 顶层 __swr + 后台重建
+              └─ 首建/无旧值 ────────► 请求内同步算一次（绝不给空结构）
+
+写：写操作 ──► invalidate(域) ──► 后台线程（daemon，寄生在请求实例）
+                                   └─► db.heavy：**先抢跨实例 heavy_slot(2)** ─► 再抢实例内 token(3)
+                                         └─► 重建(calc → write) ─► publish(gen+1) ─► 读侧切换
+```
+
+| 表 | 作用 |
+|---|---|
+| `list_snapshot` / `list_head` | 建议类物化（repl / purchase / disposal），`head` 存 `gen`/`fp`/`timing` |
+| `unit_state` / `unit_state_head` | 判定模型（健康/断货）物化，`head.risk_stat` 承载断货计数 |
+| `own_health_snapshot` | 自有仓健康明细（seq 切页） |
+| `dmat:*` | 看板卡片物化（`dash_summary` / `dash_aux` / `stock_risk`） |
+| `analysis_cache` | 结论型缓存（history 等），支持 SWR |
+| `heavy_slot` | **跨实例**重建名额（2 槽，180s 租约）；`holder=''` 即空闲 |
+| `maint_lock` | 维护任务租约锁（600s），防连点重复提交 |
+
 ### 项目结构
 
 ```

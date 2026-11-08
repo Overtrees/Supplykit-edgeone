@@ -34,3 +34,5 @@ export_files/
 
 # 第二集群重建的审计留痕(本地留存, 不入库)
 .artifacts/supplykit_legacy_audit.json
+# 性能测量产物(每次跑都生成, 不入库)
+scripts/perf/out/

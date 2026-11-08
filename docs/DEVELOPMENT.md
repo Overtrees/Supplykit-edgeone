@@ -3,6 +3,7 @@
 > **本册只回答"怎么写代码"**：规范 / 红线 / 流程 / 门禁。
 > 变更史（某天为什么这么改、踩了什么坑、实测数据）在 [`docs/history/`](history/)，按日期分卷、§15.x 编号全局唯一。
 > UI 规则见 [`UI_DESIGN.md`](UI_DESIGN.md)；架构与数据流全景见 [`ARCHITECTURE.md`](ARCHITECTURE.md)；
+> **性能基线、机制边界与按页面的模块基准见 [`PERF.md`](PERF.md)（判据的可执行版是 `scripts/perf/run.py`）**；
 > 新会话入口读 [`../CONTEXT.md`](../CONTEXT.md)。
 >
 > 2026-11-06 重构：一~十四章原是 **SQLite + PythonAnywhere 时代**（`backend/`、WAL、VACUUM、CF Pages）的写法，

@@ -20,6 +20,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 23 个 APIRouter / 33 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
+| 性能基线与判据 | `docs/PERF.md`（页面→模块）+ `scripts/perf/run.py`（hot/storm/cold/first/noise） |
 | 回归 | `local_test.py` **681 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
 
 ```bash

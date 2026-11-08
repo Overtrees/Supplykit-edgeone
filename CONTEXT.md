@@ -18,6 +18,7 @@
 | **一屏入口(坑位/八步闭环/失败黑名单/三条红线)** | `docs/SKILL.md` |
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
 | **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 250 行） |
+| **性能基准**(按 页面→模块 查基线/机制/压测命令) | `docs/PERF.md` + `scripts/perf/run.py` |
 | 根因与变更史(按日期分卷, §15.x 编号全局唯一) | `docs/history/` — `grep -rn '15.104' docs/` |
 | 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.105 |
