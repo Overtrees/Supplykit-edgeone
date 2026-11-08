@@ -224,9 +224,15 @@ def serve(family, scope, channel, mode, builder):
         if _LS._first_sf_on():
             def _leader():
                 _STAT["first_legacy"] += 1
-                data = builder()
-                _write(family, scope, fp, data)
-                return data          # 共享给同组 follower, 不重复算
+
+                def _run():
+                    data = builder()
+                    _write(family, scope, fp, data)
+                    return data          # 共享给同组 follower, 不重复算
+
+                # §15.168: 首建同 family 串行; 不取 heavy 名额 —— 重活在被它调用的
+                #   unit 判定首建里, 外层再取会与内层嵌套抢名额(3 family 即可锁死 3 名额)
+                return _LS.first_guard(family, _run, use_heavy=False)
 
             def _readback(shared):
                 if isinstance(shared, dict) and shared:

@@ -456,11 +456,41 @@ def _swr_prev_ok(h):
                 and not int(h.get("stale") or 0) and int(h.get("enabled") or 0))
 
 
+def _first_build_tally(channel, _m):
+    """§15.168 从未构建: 同 (channel,mode) 首建单飞 → 读回 tally。
+
+    改前语义是「返回 None, 调用方自己全量现算」: summary/aux/stock_risk 三个接口
+    各自拉 9 万行库存 + 6 万行日销(15s 量级), 冷态并发 = N×15s, 且互抢连接。
+    现在三个接口共用同一个 first key, leader 只 build 一次(算完即落物化), follower
+    有界等同一份; 首建失败/回退时才返回 None 让调用方现算(绝不返回 0 条)。
+    """
+    from core import list_store as _LS
+    if not _LS._first_sf_on():
+        return None
+    # 只有「从未构建」(gen=0/无 head) 才在请求里同步首建。stale=1 表示上一次重建
+    #   校验未通过 —— 在请求里再跑一遍 15s 只会让每个用户都撞墙(红线 15: 失败留痕
+    #   不盲重试), 保持「后台按退避重试 + 调用方现算」的旧语义。
+    _h = head(channel, _m)
+    if _h and int(_h.get("gen") or 0):
+        return None
+
+    def _leader():
+        # 同渠道 unit 首建串行(不同渠道并行), 并复用 db.heavy 全局名额
+        return _LS.first_guard("unit:" + str(channel),
+                               lambda: build(channel, _m, force=False))
+
+    def _readback(shared):
+        return tally_of(channel, _m, allow_stale=True)
+
+    return _LS.first_shared("unit_first|%s|%s" % (channel, _m), _LS._FIRST_TTL,
+                            _LS._FIRST_WAIT, _leader, _readback)
+
+
 def serve_tally(channel, mode=None):
     """summary 判定读模型的 SWR 入口 → (tally, swr_meta_or_None)
 
     fp 命中 → (tally, None); 失配但有上一版 → (上一版 tally, swr) + 后台重建;
-    从未构建/上一版不可用 → (None, None) + 后台重建(调用方现算保证完整数据, first_legacy 语义)。
+    从未构建 → §15.168 首建单飞(一次 build 后读回), 失败才 (None, None) 让调用方现算。
     """
     _m = M.mode_of(channel, mode)
     t = tally_of(channel, _m)
@@ -473,6 +503,9 @@ def serve_tally(channel, mode=None):
         if t is not None:
             _SWR_SERVED["served"] += 1
             return t, swr_meta(channel, _m, h, _st)
+    t = _first_build_tally(channel, _m)
+    if t is not None:
+        return t, None
     submit_rebuild(channel, _m)
     return None, None
 
@@ -490,6 +523,11 @@ def serve_overview(channel, mode=None):
         if ov is not None:
             _SWR_SERVED["served"] += 1
             return ov, swr_meta(channel, _m, h, _st)
+    # 同一份 unit 物化: tally 的首建会一并产出 overview → 共用 first key 只算一次
+    _first_build_tally(channel, _m)
+    ov = stock_overview(channel, _m, allow_stale=True)
+    if ov is not None:
+        return ov, None
     submit_rebuild(channel, _m)
     return None, None
 
@@ -508,6 +546,12 @@ def serve_risk(channel, full=0, limit=0, offset=0, level=""):
         if p is not None:
             _SWR_SERVED["served"] += 1
             return p, swr_meta(channel, _m, h, _st)
+    # 同一份 unit 物化: 断货快照是 build 的副产品, 共用 first key
+    _first_build_tally(channel, _m)
+    p = risk_of(channel, _m, full=full, limit=limit, offset=offset, level=level,
+                allow_stale=True)
+    if p is not None:
+        return p, None
     submit_rebuild(channel, _m)
     return None, None
 
@@ -633,9 +677,15 @@ def _mark_stale(channel, mode, note):
 
 
 def _stale_recent(channel, mode):
-    """上次重建失败是否还在退避窗口内（比较由 DB 做, 避开 Python/DB 时区差）"""
+    """上次重建失败是否还在退避窗口内（比较由 DB 做, 避开 Python/DB 时区差）
+
+    红线 14: INTERVAL 一律 str() 拼接。原实现把整数留在 `%` 格式化里, 而 SQL 里还有
+    `%s` 占位符 → TypeError 被 except 吞掉 → **退避永远 False**, 重建失败后每个读
+    请求都再烧一次 15s 重建(§15.168 抓到)。
+    """
     _sql = ("SELECT 1 AS x FROM unit_state_head WHERE channel=%s AND mode=%s "
-            "AND stale=1 AND built_at > NOW(6) - INTERVAL %d SECOND" % int(_STALE_BACKOFF))
+            "AND stale=1 AND built_at > NOW(6) - INTERVAL "
+            + str(int(_STALE_BACKOFF)) + " SECOND")
     try:
         return bool(one(_sql, [channel, mode]))
     except Exception:

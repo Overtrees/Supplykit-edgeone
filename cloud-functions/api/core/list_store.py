@@ -63,7 +63,14 @@ UNPAGED_CAP = {"repl": 2000, "purchase": None, "disposal": None}
 #   重算", 这里指"日期变了计算结果本身就变", 属输入变化)。repl/purchase 公式不读日期, 不加。
 DATE_AWARE = ("disposal",)
 
-_CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
+# §15.168 冷态根治: 首建(从未物化)是请求路径上唯一还会**同步全量**的入口。
+#   线上实测(stress_168, 6 个新 scope × 5 用户并发): p50 23.1s / 17 个 502·503,
+#   同期稳态 boot p95 1.99→3.87s —— 两个真因:
+#   ① 6 个首建同时全量计算, 互相拖慢: 单跑 calc 4.5s → 并发 13.4s(红线 10);
+#   ② 首建 leader 不走 db.heavy, 6 份计算各占连接 → 稳态读被挤。
+#   治理: 同 kind 首建**串行**(并发不省时间, 只增加资源占用), 跨 kind 并行但受
+#   db.heavy 3 名额约束; 等待链全程有界, 超时优先读刚发布的物化, 不各算一遍。
+_CHUNK = 500          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload; 500×~270B≈135KB/批）
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
 _MIN_GAP = 3.0        # §15.167 距上次重建启动的硬间隔(不看 fp): 写风暴下同一 kind 最多 1 次/3s
 # §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
@@ -104,15 +111,20 @@ _BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却(起始值)
 #   被拒方主动让路, 让正在跑的算完; 读侧始终返回上一版完整物化, 语义不变(红线 15 有界不排队)。
 _BUSY_COOL_MAX = 30.0
 _BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
-_FIRST_WAIT = 20.0    # §15.165 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
+_FIRST_WAIT = 18.0    # §15.168 首建单飞: follower 有界等待(覆盖 3 个同 kind scope 串行首建)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
+_FIRST_LOCK_WAIT = 15.0   # 同 kind 首建排队上限(超过则降级单份现算, 绝不无界排队)
+_FIRST_HEAVY_WAIT = 12.0  # 首建抢全局名额上限(后台重建 2s 即让路, 正常 1~2s 可得)
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
+_KIND_LOCKS = {}      # kind -> Lock, 同 kind 首建串行(§15.168)
+_HEAVY_TL = threading.local()   # 嵌套首建标记: 已在外层 first_guard 名额内 → 不重复取
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
           "swr_served": 0, "first_legacy": 0, "first_shared": 0,
-          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0}
+          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0,
+          "first_queue_ms": 0, "first_queue_n": 0, "first_heavy_wait_ms": 0}
 
 
 def _flag(name, default=True):
@@ -314,6 +326,10 @@ def _row_vals(row, need_keys):
 
     need 复用 list_page._num（红线 9: 不复制筛选算法）; 三个检索列用与
     filter_rows **完全相同的表达式** `str(row.get(k,''))`, 避免大小写/None 漂移。
+
+    §15.168 试过 zlib+base64 存 payload: 逐行压缩率只有 ~16%(键名在每行内重复,
+    而 base64 又膨胀 33%), 10k 行编码本身要 0.3~0.5s CPU, 与 write 省下的时间基本抵消
+    —— 净收益 <5%, 不值这个格式迁就, 已回退(试过才否, 不是没想过)。
     """
     from core.list_page import _num
     return (
@@ -609,6 +625,66 @@ def pop_swr(d):
     return {}
 
 
+def _kind_lock(kind):
+    with _FLIGHT_LOCK:
+        lk = _KIND_LOCKS.get(kind)
+        if lk is None:
+            lk = threading.Lock()
+            _KIND_LOCKS[kind] = lk
+        return lk
+
+
+def first_guard(kind, fn, use_heavy=True):
+    """§15.168 首建执行体: **同 kind 串行 + 全局 heavy 名额**, 跨 kind 并行。
+
+    为什么同 kind 要串行(实测, 不是洁癖):
+      线上 stress_168 6 个新 scope 同时首建 → 单跑 calc 4.5s 变 13.4s, 总墙钟没变快
+      (3×4.5=13.5≈13.4), 但峰值连接/GIL 翻 3 倍 → 稳态 boot p95 1.99→3.87s、17/30 失败。
+      红线 10: 重计算接口并发 = 互相限速。串行是**同样的总时长、三分之一的资源**。
+
+    名额用 db.heavy(红线 4 不另造闸门); 排队有界(超时返回 None, 由调用方读回/现算),
+    绝不无界阻塞(红线 15)。返回值与 fn 相同。
+
+    `use_heavy=False`(看板三接口): 它自身只是组装, 重活在被它调用的 unit 判定首建里;
+      若外层再占一个名额, 内层嵌套取名额 → 3 个 family 并发就能把 3 个名额锁死
+      (互相等对方释放)。由内层唯一的原子计算持名额才是正确的分配层级。
+    """
+    lk = _kind_lock(kind)
+    _t0 = time.time()
+    if not lk.acquire(timeout=_FIRST_LOCK_WAIT):
+        _STATS["first_queue_ms"] = max(_STATS.get("first_queue_ms", 0),
+                                       int((time.time() - _t0) * 1000))
+        _STATS["failed"] += 1
+        return None          # 失败一律 None: 调用方的 readback 会先读物化, 再单份现算兜底
+    _tq = time.time() - _t0
+    _STATS["first_queue_n"] = int(_STATS.get("first_queue_n", 0)) + 1
+    _STATS["first_queue_ms"] = int(_STATS.get("first_queue_ms", 0)) + int(_tq * 1000)
+    try:
+        if not use_heavy or getattr(_HEAVY_TL, "n", 0) > 0:
+            return fn()
+        from db import heavy, HeavyBusy
+        _th = time.time()
+        try:
+            with heavy("first:" + str(kind), timeout=_FIRST_HEAVY_WAIT):
+                _STATS["first_heavy_wait_ms"] = max(
+                    _STATS.get("first_heavy_wait_ms", 0), int((time.time() - _th) * 1000))
+                _HEAVY_TL.n = getattr(_HEAVY_TL, "n", 0) + 1
+                try:
+                    return fn()
+                finally:
+                    _HEAVY_TL.n = getattr(_HEAVY_TL, "n", 1) - 1
+        except HeavyBusy as _hb:
+            _STATS["busy"] += 1
+            _STATS["failed"] += 1
+            try_err("list_store", "首建等待全局名额超时(%s)" % kind, _hb)
+            return None
+    finally:
+        try:
+            lk.release()
+        except Exception:
+            pass
+
+
 def first_shared(key, ttl, wait, leader_fn, readback_fn):
     """§15.165 通用首建单飞骨架(供 list_store / dash_store / own_store 复用, 红线 2 不叠加)。
 
@@ -660,12 +736,16 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
 
     def _leader():
         _STATS["first_legacy"] += 1
-        try:
-            build(kind, scope, force=True)
-        except Exception as _e:
-            try_err("list_store", "首建单飞失败(%s/%s)" % (kind, scope), _e)
+        # §15.168: 首建不再直接裸跑全量 —— 同 kind 串行 + 全局名额(见 first_guard)
+        return first_guard(kind, lambda: build(kind, scope, force=True))
 
     def _readback(shared):
+        d = page_of(kind, scope, channel, mode, need_only, search, page,
+                    page_size, extra=scope, allow_stale=True)
+        if d is not None:
+            return d
+        # leader 排队/名额超时(极端): 先让出 300ms 等它发布, 仍无才单份现算兜底
+        time.sleep(0.3)
         d = page_of(kind, scope, channel, mode, need_only, search, page,
                     page_size, extra=scope, allow_stale=True)
         if d is not None:

@@ -44,7 +44,8 @@ from routes.common import try_err
 # 依赖域（与判定模型同一组）—— 见下方 fp_now 的说明
 DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
-_CHUNK = 400          # 明细批量插入行数(400 × 17 列 = 6800 占位符, 远低于单语句上限)
+_CHUNK = 1000         # §15.168 明细批量插入行数(1000 × 17 列 = 17000 占位符, 远低于上限;
+                      #   线上首建 write 3.1s 里 36 次往返, 合并成 15 次)
 _COOLDOWN = 60.0      # 同一渠道两次重建最小间隔(秒) —— 一次导入会连调多次 invalidate
 # §15.164: 原 600s。写新 gen 撞主键后标脏 + 每次刷新 built_at 会把退避无限续期,
 # 失败不再置 stale(见 _mark_stale), 这里只作有界防御(红线 15 不靠盲重试)。
@@ -150,9 +151,16 @@ def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
 
         def _leader():
             _STAT["first_legacy"] += 1
-            build(channel, force=True)
+            # §15.168: 首建与 list_store 同一套「同 kind 串行 + 全局名额」治理
+            return _LS.first_guard("own", lambda: build(channel, force=True))
 
         def _readback(shared):
+            p = page_of(channel, full=full, limit=limit, offset=offset,
+                        per_type=per_type, only=only, allow_stale=True)
+            if isinstance(p, dict) and p:
+                return p
+            # leader 排队/名额超时(极端): 让出 300ms 等它发布, 仍无才单份现算兜底
+            time.sleep(0.3)
             p = page_of(channel, full=full, limit=limit, offset=offset,
                         per_type=per_type, only=only, allow_stale=True)
             # 极端: build 没建成 → 单份现算兜底(compute 已含分页), 绝不返回 0 条
@@ -331,11 +339,16 @@ def _mark_stale(channel, note):
 
 
 def _stale_recent(channel):
-    """stale 且最近 10 分钟内失败过 → 退避（时间比较放在 SQL 里，避免时区解释差异）"""
+    """stale 且最近 _STALE_BACKOFF 秒内失败过 → 退避（时间比较放在 SQL 里，避免时区解释差异）
+
+    红线 14: INTERVAL 一律 str() 显式拼接。原实现把整数留在参数位、SQL 里写格式化
+    占位符, db._guard_fmt 会把参数转 str 再模拟格式化 → 类型错误被这里的 except 吞掉
+    → **退避永远返回 False**(失败后每个请求都重算)。§15.168 修。
+    """
     try:
-        r = one("SELECT COUNT(*) AS n FROM own_health_head WHERE channel=%s AND stale=1 "
-                "AND built_at > DATE_SUB(NOW(6), INTERVAL %d SECOND)",
-                [channel, int(_STALE_BACKOFF)])
+        _sql = ("SELECT COUNT(*) AS n FROM own_health_head WHERE channel=%s AND stale=1 "
+                "AND built_at > DATE_SUB(NOW(6), INTERVAL " + str(int(_STALE_BACKOFF)) + " SECOND)")
+        r = one(_sql, [channel])
         return int((r or {}).get("n") or 0) > 0
     except Exception:
         return False

@@ -4610,13 +4610,17 @@ try:
     # ③ §15.161 SWR 冷态分支不等后台结果(回应「方案比等重建还糟」); §15.165 首建
     #    单飞只在「真·从未构建」时由 leader 算一次、follower 有界等同一份物化,
     #    不是每个读请求绑后台重建 30s; 绝不返回 0 条/空结构(数据四维-完整)。
-    check("§15.161/165: SWR 读侧零等待 + 首建单飞有界共享 + 不返回空数据",
+    #    §15.168 首建再加「同 kind 串行 + 全局名额」: 6 个新 scope 并发实测 p50 23.1s /
+    #    17 个 502·503, 根因是 6 份全量互抢(GIL/连接) → calc 4.5→13.4s。
+    check("§15.161/165/168: SWR 读侧零等待 + 首建单飞有界共享 + 同 kind 串行 + 不返回空数据",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
-          and "_FIRST_WAIT = 20.0" in _ls20 and "_FIRST_TTL" in _ls20
+          and "_FIRST_WAIT = 18.0" in _ls20 and "_FIRST_TTL" in _ls20
           and "return _live()" in _ls20          # 极端降级单份现算兜底, 不返回 0 条
-          and '"first_legacy"' in _ls20 and _LS20._HEAVY_WAIT <= 2.0
-          and "if prev is None:" in _ls20
-          and "lambda: build(kind, scope, force=True)" not in _ls20,  # 首建不再后台双算
+          and '"first_legacy"' in _ls20
+          and "def first_guard" in _ls20 and "_FIRST_LOCK_WAIT" in _ls20
+          and "_FIRST_HEAVY_WAIT" in _ls20 and "first_guard(kind, lambda: build(" in _ls20
+          and _LS20._HEAVY_WAIT <= 2.0
+          and "if prev is None:" in _ls20,
           "core/list_store.py")
 
     # ④ 回滚与新鲜度(红线 15/16)
@@ -4762,7 +4766,7 @@ try:
     # ④ 动态: serve_tally 三态(mock head/fp/query, 不碰真库)
     _US22 = _US
     _o22 = (_US22.head, _US22.fp_now, _US22.read_enabled, _US22.query,
-            _US22.submit_rebuild)
+            _US22.submit_rebuild, _US22.build)
     _subs22 = []
     try:
         _H22 = {"gen": 3, "fp": "OLD", "stale": 0, "enabled": 1, "channel": "jd",
@@ -4799,10 +4803,23 @@ try:
               _t22 is None and _s22 is None and len(_subs22) == 1, str(_subs22))
         _H22["stale"] = 0
         _H22["gen"] = 0
+        # §15.168: 从未构建不再「返回 None 让三接口各全量现算」, 而是同 (channel,mode)
+        # 首建单飞一次 build 后读回; 这里 mock build 为「发布 gen=3」。
+        _built22 = []
+
+        def _bld22(ch, m=None, **k):
+            _built22.append((ch, m))
+            _H22.update({"gen": 3, "fp": "NEW", "risk_fp": "NEW"})
+            return {"ok": True}
+        _US22.build = _bld22
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.162 serve_tally: 从未构建(gen=0) → (None, None) 现算, 后台首建",
-              _t22 is None and _s22 is None and len(_subs22) == 2, str(_subs22))
+        check("§15.168 serve_tally: 从未构建(gen=0) → 首建单飞 build 一次后读回完整 tally, "
+              "不再让调用方全量现算(冷态并发不再 N×15s)",
+              _t22 is not None and _t22.get(("bc", "bc"), {}).get("total") == 10
+              and len(_built22) == 1 and _s22 is None, str((_t22, _s22, _built22)))
         _H22["gen"] = 3
+        _H22["fp"] = "OLD"        # 恢复「head 旧指纹」, 后续 serve_risk 用例验失配播报
+        _H22["risk_fp"] = "OLD"
         _US22.fp_now = lambda ch, m=None: "NEW"
         _US22.fp_risk_now = lambda ch, m=None: "NEW"
         _pr22, _sr22 = _US22.serve_risk("jd")
@@ -4815,7 +4832,8 @@ try:
         check("§15.162 serve_risk: 双指纹全命中 → 正常返回, 无播报",
               _pr22 and _sr22 is None, str(_sr22))
     finally:
-        _US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild = _o22
+        (_US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild,
+         _US22.build) = _o22
 except Exception as _e35:
     check("§15.162 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
 
@@ -5268,6 +5286,107 @@ try:
     check("§15.166 冷算本体根治用例无异常", True)
 except Exception as _e39:
     check("§15.166 冷算本体根治用例无异常", False, str(_e39)[:300])
+
+# ── §15.168 冷态/冷态并发: 首建串行 + 全局名额 + payload 压缩 ──
+try:
+    import threading as _th28, time as _tm28, json as _js28
+    from core import list_store as _LS28, own_store as _OS28, dash_store as _DS28
+    _p28 = os.path.join(os.path.dirname(__file__), "core")
+    _ls28 = open(os.path.join(_p28, "list_store.py"), encoding="utf-8").read()
+    _os28 = open(os.path.join(_p28, "own_store.py"), encoding="utf-8").read()
+    _ds28 = open(os.path.join(_p28, "dash_store.py"), encoding="utf-8").read()
+
+    # ① 写入往返次数减半(200→500/批) —— 首建 write 2.3s 里 50 次往返
+    #    (试过 zlib+base64 payload 压缩: 逐行压缩率仅 ~16%, 编码 CPU 抵消写入收益, 已回退)
+    check("§15.168 首建写入批量 _CHUNK=500(50 次往返 → 20 次), payload 仍整行 JSON",
+          "_CHUNK = 500" in _ls28
+          and 'json.dumps(row, ensure_ascii=False, default=str)' in _ls28
+          and "_enc_payload" not in _ls28,
+          "core/list_store.py")
+    check("§15.168 own 明细写入 _CHUNK=1000(首建 36 次往返 → 15 次)",
+          "_CHUNK = 1000" in _os28, "core/own_store.py")
+
+    # ② 同 kind 首建串行: 并发 3 个, 最大并发度必须是 1(实测并发只互相拖慢: 4.5→13.4s)
+    _cur28 = {"n": 0, "max": 0}
+    _lk28 = _th28.Lock()
+
+    def _fn28():
+        with _lk28:
+            _cur28["n"] += 1
+            _cur28["max"] = max(_cur28["max"], _cur28["n"])
+        _tm28.sleep(0.06)
+        with _lk28:
+            _cur28["n"] -= 1
+        return {"ok": True}
+
+    _t28 = _tm28.time()
+    _th28_list = [_th28.Thread(target=lambda: _LS28.first_guard("k_serial", _fn28))
+                  for _ in range(3)]
+    [_t.start() for _t in _th28_list]
+    [_t.join() for _t in _th28_list]
+    _wall28 = _tm28.time() - _t28
+    check("§15.168 同 kind 首建串行(最大并发度=1, 不互抢 GIL/连接)",
+          _cur28["max"] == 1 and _wall28 >= 0.16,
+          "max=%d wall=%.2fs" % (_cur28["max"], _wall28))
+
+    # ③ 跨 kind 并行: 两个不同 kind 各 0.15s, 总墙钟应 ≈0.15s 而不是 0.3s
+    _t28b = _tm28.time()
+    _ts28 = [_th28.Thread(target=lambda k=k: _LS28.first_guard(k, lambda: _tm28.sleep(0.15)))
+             for k in ("k_par_a", "k_par_b")]
+    [_t.start() for _t in _ts28]
+    [_t.join() for _t in _ts28]
+    _wall28b = _tm28.time() - _t28b
+    check("§15.168 跨 kind 首建并行(different kind 不串行: 墙钟 ≈0.15s)",
+          _wall28b < 0.28, "wall=%.2fs" % _wall28b)
+
+    # ④ 排队有界: 同 kind 锁被占满时, first_guard 超时返回 None(由调用方读物化/现算兜底)
+    _hold28 = _LS28._kind_lock("k_timeout")
+    _hold28.acquire()
+    _old_wait28 = _LS28._FIRST_LOCK_WAIT
+    try:
+        _LS28._FIRST_LOCK_WAIT = 0.1
+        _r28 = _LS28.first_guard("k_timeout", lambda: {"ok": True})
+    finally:
+        _LS28._FIRST_LOCK_WAIT = _old_wait28
+        _hold28.release()
+    check("§15.168 首建排队有界: 等锁超时返回 None(不无界阻塞, 红线 15)",
+          _r28 is None, str(_r28))
+
+    # ⑤ 三处首建都收编进同一骨架(红线 2 不叠加): list/dash/own
+    check("§15.168 三处首建共用 first_guard: list / dash / own",
+          "first_guard(kind, lambda: build(kind, scope, force=True))" in _ls28
+          and "_LS.first_guard(\"own\"" in _os28
+          and "_LS.first_guard(family" in _ds28,
+          "list_store + own_store + dash_store")
+    check("§15.168 首建等待全局名额(复用 db.heavy, 不另造闸门, 红线 4)",
+          "from db import heavy, HeavyBusy" in _ls28
+          and 'with heavy("first:" + str(kind), timeout=_FIRST_HEAVY_WAIT):' in _ls28)
+
+    # ⑥ own_store 退避 SQL 不再残留 INTERVAL %d(红线 14: 会被 _guard_fmt 判死并静默吞掉)
+    _us28 = open(os.path.join(_p28, "unit_store.py"), encoding="utf-8").read()
+    check("§15.168 own_store 退避 SQL 无 INTERVAL %d(红线 14, 原实现退避恒失效)",
+          "INTERVAL %d" not in _os28 and "INTERVAL \" + str(int(_STALE_BACKOFF))" in _os28,
+          "core/own_store.py")
+    check("§15.168 unit_store 退避 SQL 无 INTERVAL %d(原实现与 %s 占位符冲突 → 退避恒失效)",
+          "INTERVAL %d" not in _us28 and "NOW(6) - INTERVAL " in _us28,
+          "core/unit_store.py")
+
+    # ⑦ 首建只在「从未构建(gen=0)」时同步; stale=1(上次校验失败)不在请求里重算(红线 15)
+    check("§15.168 unit 首建只在 gen=0 同步, stale=1 仍走后台退避(不每请求烧 15s)",
+          "_first_build_tally" in _us28
+          and "if _h and int(_h.get(\"gen\") or 0):" in _us28
+          and "unit_first|%s|%s" in _us28)
+    check("§15.168 unit 首建三接口共用同一 first key(summary/aux/risk 只算一次)",
+          _us28.count("_first_build_tally(channel, _m)") >= 3)
+    check("§15.168 看板首建不取 heavy 名额(避免与内层 unit 首建嵌套抢名额)",
+          "use_heavy=False" in _ds28 and "use_heavy=False" in _ls28)
+
+    # ⑧ 嵌套保护: 外层已持名额时内层不再取(否则 3 个 family 并发即可锁死 3 名额)
+    check("§15.168 first_guard 嵌套保护 _HEAVY_TL(同线程不重复取名额)",
+          "_HEAVY_TL" in _ls28 and "getattr(_HEAVY_TL, \"n\", 0) > 0" in _ls28)
+    check("§15.168 冷态/冷态并发根治用例无异常", True)
+except Exception as _e40:
+    check("§15.168 冷态/冷态并发根治用例无异常", False, str(_e40)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
