@@ -121,6 +121,16 @@ def heavy(name="", timeout=20.0, global_=False):
     if _HEAVY_LIMIT <= 0 and not global_:
         yield
         return
+    # 顺序很重要(§15.178): **先抢全局槽, 再抢实例内名额**。
+    #   反过来(先占实例内, 再等全局 2s)会让"抢不到全局"的重建线程白占实例内名额 2s:
+    #   线上实测 3 个 kind 重建时实例内 3 个名额全被"等待中"占满 → 读请求无名额 →
+    #   S2(6读2写) p50 从 297ms 劣化到 1717ms, 且所有接口的 max 都卡在 2.2s(=_HEAVY_WAIT)。
+    #   全局槽稀缺且慢, 就该在最外层等; 等不到直接失败, 绝不占着实例名额等。
+    gs, gh = (None, None)
+    if global_:
+        gs, gh = _gslot_claim(timeout)
+        if gs is None:
+            raise HeavyBusy("全局重建名额已满(上限 %d): %s" % (_HEAVY_GLOBAL, name))
     tok = None
     deadline = time.time() + max(float(timeout), 0.0)
     while _HEAVY_LIMIT > 0:
@@ -142,16 +152,11 @@ def heavy(name="", timeout=20.0, global_=False):
                 _HEAVY_SLOTS[tok] = (now, name)
                 break
         if now >= deadline:
+            if gs:
+                _gslot_release(gs, gh)
             raise HeavyBusy("重计算繁忙(并发上限 %d, 已等 %.1fs): %s"
                             % (_HEAVY_LIMIT, float(timeout), name))
         time.sleep(0.01)
-    gs, gh = (None, None)
-    if global_:
-        gs, gh = _gslot_claim(timeout)
-        if gs is None:
-            with _HEAVY_LK:
-                _HEAVY_SLOTS.pop(tok, None)
-            raise HeavyBusy("全局重建名额已满(上限 %d): %s" % (_HEAVY_GLOBAL, name))
     try:
         yield
     finally:
