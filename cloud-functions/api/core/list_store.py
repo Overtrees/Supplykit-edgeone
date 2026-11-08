@@ -65,6 +65,7 @@ DATE_AWARE = ("disposal",)
 
 _CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
+_MIN_GAP = 3.0        # §15.167 距上次重建启动的硬间隔(不看 fp): 写风暴下同一 kind 最多 1 次/3s
 # §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
 # 每次读请求又刷新 built_at → 退避被无限续期, repl 连续 17min 每请求全量现算 12.8s/503。
 # 失败不再置 stale(见 _mark_stale), 退避只作防御性兜底, 有界 20s 即可(红线 15 不靠盲重试)。
@@ -96,7 +97,13 @@ def _safe_rebuild():
 # 实例可被平台冻结: flight 带 t0 新鲜度, 超 _FLIGHT_TTL 判僵尸丢弃(红线 15)。
 _FLIGHT_TTL = 60.0
 _HEAVY_WAIT = 2.0     # 抢全局名额的最长等待; 抢不到 = 快速失败, 绝不排长队
-_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却, 防写风暴下每个读都重抢名额
+_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却(起始值), 防写风暴下每个读都重抢名额
+# §15.167: 固定 2s 冷却在写风暴(0.2s 一次写)下仍会被反复触发 —— 3 个名额 vs 8 类重建,
+#   每个重建 4~13s, 吞吐约 0.3 个/s, 而写侧每秒产生 5 个重建请求 → 名额被"刚失败的"
+#   反复抢占, 已拿到名额的重建反而被挤。改成**指数退避**(2→4→8→16→30s 封顶, 成功后归零):
+#   被拒方主动让路, 让正在跑的算完; 读侧始终返回上一版完整物化, 语义不变(红线 15 有界不排队)。
+_BUSY_COOL_MAX = 30.0
+_BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
 _FIRST_WAIT = 20.0    # §15.165 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FLIGHT_LOCK = threading.Lock()
@@ -357,6 +364,13 @@ def build(kind, scope, force=False):
     _key = (kind, scope)
     with _LOCK:
         _last = _LAST.get(_key)
+        # §15.167 最小间隔: 写风暴(0.2s 一次写)下 fp 每次都变, 下面那条 fp 相等的 cooldown
+        #   永远不成立 → 同一 kind 每 0.2s 重建一次, 并发把 3 个 heavy 名额全占住,
+        #   8 类重建互相挤, 谁都算不完(HeavyBusy 30 条的真正来源)。
+        #   这里加"距上次重建启动 < _MIN_GAP 就跳过"—— 数据变了不会丢: 读侧 fp 仍失配,
+        #   gap 过后第一次读会再触发, 属最终一致(红线 15: 有界退避, 不排队)。
+        if not force and _last and _now - _last[0] < _MIN_GAP:
+            return {"ok": True, "skipped": "min_gap"}
         if not force and _last and _last[1] == fp and _now - _last[0] < _COOLDOWN:
             return {"ok": True, "skipped": "cooldown"}
         _LAST[_key] = (_now, fp)
@@ -475,6 +489,8 @@ def _cold_worker(kind, scope, fp, fn, key):
                 try:
                     fn()
                     _STATS["done"] += 1
+                    with _FLIGHT_LOCK:
+                        _BUSY_BACKOFF.pop(key, None)   # §15.167 成功即复位退避
                 except Exception as _e:
                     _STATS["failed"] += 1
                     try_err("list_store", "后台重建失败(%s/%s)" % (kind, scope), _e)
@@ -484,7 +500,10 @@ def _cold_worker(kind, scope, fp, fn, key):
             _STATS["busy"] += 1
             if _coalesce_on():
                 with _FLIGHT_LOCK:
-                    _BUSY_UNTIL[key] = time.time() + _BUSY_COOL
+                    _n = _BUSY_BACKOFF.get(key, 0)
+                    _wait = min(_BUSY_COOL_MAX, _BUSY_COOL * (2 ** min(4, _n)))
+                    _BUSY_BACKOFF[key] = _n + 1
+                    _BUSY_UNTIL[key] = time.time() + _wait
                 _STATS["busy_cooled"] += 1
             try_err("list_store", "冷算全局名额已满, 本轮跳过(%s/%s)" % (kind, scope), _hb)
     except Exception as _e2:

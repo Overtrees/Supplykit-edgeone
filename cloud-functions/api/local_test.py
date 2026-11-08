@@ -5049,9 +5049,16 @@ try:
           and 'return "%s|%s" % (kind, scope)' in _ls25
           and "_BUSY_UNTIL" in _ls25 and "cooling" in _ls25,
           "core/list_store.py")
-    check("§15.165 HeavyBusy 后有界冷却(_BUSY_COOL=2s), 不排队不盲重试(红线 4/15)",
-          "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_UNTIL[key] = time.time() + _BUSY_COOL" in _ls25
+    check("§15.165/§15.167 HeavyBusy 后有界冷却(2s 起, 指数退避 30s 封顶, 成功复位), 不排队",
+          "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_COOL_MAX = 30.0" in _ls25
+          and "_BUSY_COOL * (2 ** min(4, _n))" in _ls25
+          and "_BUSY_UNTIL[key] = time.time() + _wait" in _ls25
+          and "_BUSY_BACKOFF.pop(key, None)" in _ls25
           and "return \"cooling\"" in _ls25, "core/list_store.py")
+    check("§15.167 重建硬间隔 _MIN_GAP: 写风暴下同 kind 最多 1 次/3s(fp 变了也不立刻重算)",
+          "_MIN_GAP = 3.0" in _ls25
+          and '_now - _last[0] < _MIN_GAP' in _ls25
+          and 'return {"ok": True, "skipped": "min_gap"}' in _ls25, "core/list_store.py")
     check("§15.165 FLIGHT_COALESCE=0 一刀回退到含 fp 的旧 key(红线 2 互斥不并存)",
           "if not _coalesce_on():" in _ls25
           and 'return "%s|%s|%s" % (kind, scope, fp)' in _ls25

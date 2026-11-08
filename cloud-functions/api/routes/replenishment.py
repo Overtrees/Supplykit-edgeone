@@ -27,6 +27,19 @@ def _one_read_on():
     return str(_v).strip().lower() in _ON_READ_ON
 
 
+def _inv_slim_on():
+    """§15.167 库存取数瘦身开关: 未设置=开; `INV_SLIM=0` 退回 INVENTORY_COLS 全 12 列。
+
+    只影响补货建议自己那条 `SELECT ... FROM inventory`(少取 4 个别处才用的列),
+    不改任何取数范围/过滤条件/聚合口径 —— 逐行等价。
+    """
+    import os as _os
+    _v = _os.environ.get("INV_SLIM")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() in _ON_READ_ON
+
+
 @router.get("/insights/replenishment")
 @traced
 def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = "bbcc",
@@ -555,7 +568,13 @@ def _products(channel):
 def _inventory(channel):
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 主循环 r.get("barcode") 恒 '' →
     #   agg key 退化为 (sku,'') 两码合并, 补货按码从未生效(输出 barcode 只是 products 兜底, 假象)
-    from routes.common import INVENTORY_COLS as _IC, check_cols as _cc
+    # §15.167 冷算本体: 本函数只被 `_build_repl` 消费, 实测只用 8 列 → 用 LITE 列集,
+    #   线上 90100 行 5.62s → 1.84s(-67%)。`INV_SLIM=0` 回退全列(逐列等价, 只是少取不用的)。
+    from routes.common import check_cols as _cc
+    if _inv_slim_on():
+        from routes.common import INVENTORY_COLS_LITE as _IC
+    else:
+        from routes.common import INVENTORY_COLS as _IC
     _rows = query("SELECT " + _IC + " FROM inventory WHERE channel=%s", [channel])
     _cc(_rows, ("barcode", "warehouse"), "repl", "补货物料")
     return _rows

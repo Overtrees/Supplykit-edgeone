@@ -66,6 +66,18 @@ INVENTORY_COLS = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_ty
                   "available_qty, in_transit_qty, c_transit, safety_qty, safety_days, "
                   "locked_qty, product_name, beginning_stock")
 
+# §15.167 冷算本体: 补货建议(repl)的**实际消费列**只有这 8 个 ——
+#   主循环只用 sku/barcode/warehouse_type/available_qty/in_transit_qty/c_transit/safety_qty,
+#   warehouse 供 check_cols 与逐仓分支; 而 INVENTORY_COLS 里的 product_name(VARCHAR) /
+#   beginning_stock / locked_qty / safety_days **一个都没读**(商品名走 products 表、
+#   安全天数走 cfg.safety_multiplier, 见 replenishment.py:432/492/326/455)。
+#   线上实测同一份 90100 行: 12 列 5.62s / 8 列 1.84s —— 省 3.78s(67%), 差的是解包与传输,
+#   不是扫描(字节只差 13%, 但长 VARCHAR 逐行构造成本高)。与 dashboard._q_inventory
+#   (2026-11-02 起就只取 5~7 列)是同一做法, 不是新机制。
+#   `INV_SLIM=0` 可一刀退回全列。其它消费方仍用 INVENTORY_COLS, 互不影响。
+INVENTORY_COLS_LITE = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                       "available_qty, in_transit_qty, c_transit, safety_qty")
+
 
 # 导入目标 → 库存仓型(单一真源; 2026-10-29: 原只在 cleansing.py 定义, cleanse_write.py 引用时报
 # NameError → 平台库存/B仓库存导入 100% 失败; 重构拆分时漏迁移)
