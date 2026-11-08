@@ -82,6 +82,14 @@ _LAST = {}
 _READ_ON = ("1", "true", "yes", "on")
 
 
+class FirstBusy(RuntimeError):
+    """首次构建在排队/进行中, 本次请求拿不到数据 —— 由 `traced` 转成 200+ok:false。
+
+    §15.168: 这是**明确失败**, 不是把 0 条/空数组当数据返回(红线 8① 哨兵语义)。
+    触发条件极窄: leader 排队失败或构建失败, 且 4s 轮询内没发布。前端 ErrorRetry 会重试。
+    """
+
+
 def _safe_rebuild():
     """§15.164 总开关: 未设置=开; `LIST_SAFE_REBUILD=0` 一刀回退到修复前行为
     (幂等写 / 失败保旧 gen 同时关掉), 不必发版。红线 2: 不新增机制, 只是同一路径的开关。"""
@@ -111,15 +119,21 @@ _BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却(起始值)
 #   被拒方主动让路, 让正在跑的算完; 读侧始终返回上一版完整物化, 语义不变(红线 15 有界不排队)。
 _BUSY_COOL_MAX = 30.0
 _BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
-_FIRST_WAIT = 21.0    # §15.168 首建单飞: follower 有界等待(覆盖 2 席 × 3 scope 排队 + 单次 7s)
+# §15.169 回撤「首建排队 + follower 长等」——线上 stress_168 实测它比改前更糟:
+#   6 个新 scope × 5 用户 → p50 34.4s / 19 个 503 / 稳态 p95 2.1→10.8s。
+#   根因是**把等待放回了读路径**: follower 等 21s 超时后再各算 7s(19 份并发),
+#   34s 撞网关; 首建席位(2)又让第 3 个 scope 排队 14s, 净效果是所有人更慢。
+# 正确模型(§15.161 原始原则, 这次只是把它贯彻到底): 读侧**零等待**。
+#   · leader 抢到全局名额 → 同步算这一份(唯一的 4~8s), 其余人立刻 building;
+#   · 抢不到名额 / 同 key 已有 leader → **立即**返回 building(HTTP 200 + retry_after),
+#     后台单飞补建; 前端重试命中物化。绝不 5xx、绝不让第 2 个人也等 7s。
+_FIRST_WAIT = 1.2     # follower 只给 leader 一个先手窗口, 拿不到就 building(前端重试)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
-_FIRST_LOCK_WAIT = 18.0   # 同 kind 首建排队上限(2 席下最坏排队 ≈14s; 超过才算异常)
-_FIRST_HEAVY_WAIT = 16.0  # 首建抢全局名额上限(后台重建 2s 即让路; 留足两批排队)
-# 同 kind 首建并行度: 2。实测(§15.168 线上两轮):
-#   串行  → 6 个新 scope 排队 3 批, 第 3 个用户等 20s+, 网关掐 46s;
-#   3 并行 → 单份 calc 4.5→8s, 总时长≈串行但**所有人都只等一批**, 且 3 份×2 连接仍留 4 条给稳态。
-#   2 并行是折中: 两批 ≈14s < _FIRST_WAIT, 峰值连接 4 条, 稳态 p95 不被拖过 2×。
-_KIND_PARALLEL = 2
+_FIRST_LOCK_WAIT = 0.8    # 抢首建席位上限(名额忙=立刻让路, 不排队)
+_FIRST_HEAVY_WAIT = 1.5   # 抢全局名额上限(首建不再长等后台重建让位)
+# 同 kind 首建并行度: 不限(由 db.heavy 3 名额统一约束, 红线 4 不另造闸门)。
+#   §15.168 的 2 席实测反而制造 14s 排队; 名额本身已经限制住并发与连接数。
+_KIND_PARALLEL = 4
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
@@ -659,11 +673,13 @@ def first_guard(kind, fn, use_heavy=True):
     """
     lk = _kind_lock(kind)
     _t0 = time.time()
-    if not lk.acquire(timeout=_FIRST_LOCK_WAIT):
+    # §15.169: 名额/席位一律**不排队** —— 抢不到说明已经有人在建, 让读侧立刻
+    #   building 比排队 18s 再超时好一个数量级(线上 34s/19×503 就是排队排出来的)。
+    if not lk.acquire(blocking=False):
         _STATS["first_queue_ms"] = max(_STATS.get("first_queue_ms", 0),
                                        int((time.time() - _t0) * 1000))
         _STATS["failed"] += 1
-        return None          # 失败一律 None: 调用方的 readback 会先读物化, 再单份现算兜底
+        raise FirstBusy("首建席位忙(%s)" % kind)
     _tq = time.time() - _t0
     _STATS["first_queue_n"] = int(_STATS.get("first_queue_n", 0)) + 1
     _STATS["first_queue_ms"] = int(_STATS.get("first_queue_ms", 0)) + int(_tq * 1000)
@@ -685,7 +701,7 @@ def first_guard(kind, fn, use_heavy=True):
             _STATS["busy"] += 1
             _STATS["failed"] += 1
             try_err("list_store", "首建等待全局名额超时(%s)" % kind, _hb)
-            return None
+            raise FirstBusy("首建全局名额忙(%s)" % kind)
     finally:
         try:
             lk.release()
@@ -713,6 +729,9 @@ def first_shared(key, ttl, wait, leader_fn, readback_fn):
     if leader:
         try:
             entry["data"] = leader_fn()
+        except BaseException as _le:
+            entry["err"] = _le
+            raise
         finally:
             entry["event"].set()
             with _FLIGHT_LOCK:
@@ -720,9 +739,28 @@ def first_shared(key, ttl, wait, leader_fn, readback_fn):
                 _FIRSTS.pop(key, None)
     else:
         _STATS["first_shared"] += 1
-        if not entry["event"].wait(wait):
+        entry["event"].wait(wait)
+        if entry.get("err") is not None:
+            raise FirstBusy("首次构建失败(%s)" % key)
+        if not entry["event"].is_set():
             _STATS["first_timeout"] += 1
+            # §15.168: 等不到 leader 就**明确失败**, 绝不在这里自己再算一遍全量 ——
+            #   30 个 follower 同时超时后各算 7s, 会把 leader 也拖到 50s(实测 p50 34s/19 失败)。
+            raise FirstBusy("首次构建等待超时(%s)" % key)
     return readback_fn(entry["data"])
+
+
+def _building(kind, page, page_size):
+    """§15.169 首次构建中的**明确**状态(不是"0 条"假成功)。
+
+    形状与正常分页一致(items=[]), 但 total=-1 + building=True + 顶层
+    __swr.state=building: 前端据此显示骨架并按 retry_after 重试, 后台单飞正在补建。
+    不返回 ok:false(会弹全局错误), 也不返回 0 条冒充"确实没有数据"(数据四维-准确)。
+    """
+    d = {OUT_KEY[kind]: [], "total": -1, "page": page, "page_size": page_size,
+         "building": True}
+    d["__swr"] = {"state": "building", "freshness_s": -1, "retry_after_ms": 1500}
+    return d
 
 
 def _first_serve(kind, scope, fp, builder, channel, mode,
@@ -744,21 +782,24 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
 
     def _leader():
         _STATS["first_legacy"] += 1
-        # §15.168: 首建不再直接裸跑全量 —— 同 kind 串行 + 全局名额(见 first_guard)
-        return first_guard(kind, lambda: build(kind, scope, force=True))
+        # §15.168: 首建不裸跑全量 —— 受全局名额约束(见 first_guard)
+        try:
+            return first_guard(kind, lambda: build(kind, scope, force=True))
+        except FirstBusy:
+            # §15.169: 名额/席位忙 → 交后台单飞补建, 前台**立刻** building。
+            #   绝不"排队等名额 → 超时 → 各算一遍"(线上 34s/19×503 的来源)。
+            submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
+            raise
 
     def _readback(shared):
-        d = page_of(kind, scope, channel, mode, need_only, search, page,
-                    page_size, extra=scope, allow_stale=True)
+        # §15.169: 只读一次。leader 已发布必然命中; follower 根本到不了这里
+        #   (超时/leader 失败 → FirstBusy, 由 serve 转 building)。
+        d = page_of(kind, scope, channel, mode, need_only, search,
+                    page, page_size, extra=scope, allow_stale=True)
         if d is not None:
             return d
-        # leader 排队/名额超时(极端): 先让出 1s 等它发布, 仍无才单份现算兜底
-        time.sleep(1.0)
-        d = page_of(kind, scope, channel, mode, need_only, search, page,
-                    page_size, extra=scope, allow_stale=True)
-        if d is not None:
-            return d
-        # 极端降级(build 失败/实例冻结): 单份现算兜底, 绝不返回 0 条(数据四维-完整)
+        # leader 算完但物化读不到(极端: 写失败/校验未过): 单份现算兜底, 绝不 0 条。
+        #   仅 leader 会走到这里, 不会并发 N 份。
         from core.list_page import shape as _shape
         items, total = _shape(builder(), need_only=need_only, search=search,
                               page=page, page_size=page_size, need_keys=NEED_KEYS[kind])
@@ -817,8 +858,17 @@ def serve(kind, scope, channel, mode, days, source, builder,
     #    首帧是当前实时算出的完整数据, 绝不返回 0 条、绝不等 15~30s。
     if prev is None:
         if _first_sf_on():
-            return _first_serve(kind, scope, fp, builder, channel, mode,
-                                need_only, search, page, page_size)
+            try:
+                _d0 = _first_serve(kind, scope, fp, builder, channel, mode,
+                                   need_only, search, page, page_size)
+            except FirstBusy as _fb:
+                _STATS["first_timeout"] += 1
+                _d0 = None
+            if _d0 is not None:
+                return _d0
+            # §15.169 读侧零等待: 同 key 已有 leader 在算 / 名额忙 → 立刻 building,
+            #   绝不排队等(等待已由后台单飞接管, 前端按 retry_after 重试)。
+            return _building(kind, page, page_size)
         _STATS["first_legacy"] += 1
         submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
         return _live()

@@ -151,25 +151,39 @@ def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
 
         def _leader():
             _STAT["first_legacy"] += 1
-            # §15.168: 首建与 list_store 同一套「同 kind 串行 + 全局名额」治理
-            return _LS.first_guard("own", lambda: build(channel, force=True))
+            try:
+                return _LS.first_guard("own", lambda: build(channel, force=True))
+            except _LS.FirstBusy:
+                # §15.169: 名额忙 → 后台补建, 前台立刻 building(不排队等)
+                ensure_async(channel)
+                raise
 
         def _readback(shared):
+            # §15.169: 只读一次。读不到 = 名额忙/失败 → None, 由路由转 building。
+            #   绝不在这里再算一遍全量(并发下会 30 份同时算, 拖垮连接池)。
             p = page_of(channel, full=full, limit=limit, offset=offset,
                         per_type=per_type, only=only, allow_stale=True)
             if isinstance(p, dict) and p:
                 return p
-            # leader 排队/名额超时(极端): 让出 300ms 等它发布, 仍无才单份现算兜底
-            time.sleep(1.0)
-            p = page_of(channel, full=full, limit=limit, offset=offset,
-                        per_type=per_type, only=only, allow_stale=True)
-            # 极端: build 没建成 → 单份现算兜底(compute 已含分页), 绝不返回 0 条
-            return p if isinstance(p, dict) and p else compute()
+            # leader 算完但读不到(极端写失败): 单份现算兜底; follower 到不了这里
+            return compute()
 
         if _LS._first_sf_on():
-            return _LS.first_shared("own_first|" + str(channel), _LS._FIRST_TTL,
-                                    _LS._FIRST_WAIT, _leader, _readback), None
+            try:
+                return _LS.first_shared("own_first|" + str(channel), _LS._FIRST_TTL,
+                                        _LS._FIRST_WAIT, _leader, _readback), None
+            except _LS.FirstBusy:
+                # §15.169: 首建中 → 明确 building(形状与正常一致), 前端按 retry_after 重试
+                return ({"items": [], "total": -1, "building": True}, None)
     except Exception as _e:
+        # FirstBusy 是「首次构建未完成」的明确失败, 必须穿透到路由(ok:false + 可重试);
+        # 若在这里被吞掉再 compute() 兜底, 30 个并发又会各自全量算一遍(§15.168 雪崩)。
+        try:
+            from core import list_store as _LS3
+            if isinstance(_e, _LS3.FirstBusy):
+                raise
+        except ImportError:
+            pass
         try_err("own_store", "首建单飞降级(%s)" % channel, _e)
     d = compute()
     return d, None

@@ -241,8 +241,13 @@ const instance = axios.create({
  */
 const SWR_TOTAL_BUDGET = 3000
 const SWR_MAX_RETRY = 2
+// §15.169 首次构建(state=building): 后端不再让读请求排队(线上排队 21s → 34s/503),
+//   改为立刻返回 building + 后台单飞建。前端按 retry_after 探测更久(首建 4~8s)。
+const SWR_BUILDING_BUDGET = 14000
+const SWR_BUILDING_RETRY = 7
 let _swrActive = false
 let _swrDeadline = 0
+let _swrBuilding = false
 
 interface SwrMeta {
   state?: string
@@ -260,10 +265,17 @@ function _swrOf(raw: unknown): SwrMeta | null {
 }
 
 function _swrAnnounce(m: SwrMeta) {
-  const age = Number(m.freshness_s ?? -1)
-  notify.info(t('ins.data_refreshing', { s: age >= 0 ? age : 0 }))
+  const building = m.state === 'building'
+  _swrBuilding = building
+  if (building) {
+    // 首次构建: 明说「正在首次计算」, 不冒充「X 秒前的快照」(否则 0 条会被误读成没数据)
+    notify.info(t('ins.data_building'))
+  } else {
+    const age = Number(m.freshness_s ?? -1)
+    notify.info(t('ins.data_refreshing', { s: age >= 0 ? age : 0 }))
+  }
   _swrActive = true
-  _swrDeadline = Date.now() + SWR_TOTAL_BUDGET
+  _swrDeadline = Date.now() + (building ? SWR_BUILDING_BUDGET : SWR_TOTAL_BUDGET)
   try {
     window.dispatchEvent(new CustomEvent('insights-rebuilding', { detail: m }))
   } catch {
@@ -274,6 +286,7 @@ function _swrAnnounce(m: SwrMeta) {
 function _swrFinish() {
   if (!_swrActive) return
   _swrActive = false
+  _swrBuilding = false
   notify.success(t('ins.data_updated'))
   try {
     window.dispatchEvent(new Event('insights-refreshed'))
@@ -284,7 +297,8 @@ function _swrFinish() {
 
 /** 有界探测: 变参避开 30s 缓存与在途去重; __swrProbe 防止拦截器递归调度。 */
 function _swrProbe(cfg: AxiosRequestConfig, key: string, attempt: number) {
-  if (attempt >= SWR_MAX_RETRY || Date.now() >= _swrDeadline) return
+  const maxRetry = _swrBuilding ? SWR_BUILDING_RETRY : SWR_MAX_RETRY
+  if (attempt >= maxRetry || Date.now() >= _swrDeadline) return
   const delay = 500 + attempt * 400 + Math.floor(Math.random() * 300)
   if (Date.now() + delay >= _swrDeadline) return
   setTimeout(() => {

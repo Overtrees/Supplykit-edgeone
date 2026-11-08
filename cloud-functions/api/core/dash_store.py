@@ -240,11 +240,20 @@ def serve(family, scope, channel, mode, builder):
                 box = _read(family, scope, allow_stale=True)
                 if box is not None:
                     return box["data"], None
-                return builder(), None       # 极端兜底, 单份现算不返回 0 条
+                # §15.169: follower 到不了这里(超时直接 FirstBusy); leader 算完
+                #   但读不到(极端写失败) → 单份现算兜底, 绝不返回空结构。
+                return builder(), None
 
-            return _LS.first_shared("dmat:" + family + "|" + scope,
-                                    _LS._FIRST_TTL, _LS._FIRST_WAIT,
-                                    _leader, _readback)
+            try:
+                return _LS.first_shared("dmat:" + family + "|" + scope,
+                                        _LS._FIRST_TTL, 6.0,
+                                        _leader, _readback)
+            except _LS.FirstBusy:
+                # §15.169: 首建名额忙/同组已在算 → 单份现算兜底(看板接口量小,
+                #   且这里只到一次), 绝不把 FirstBusy 冒到 traced 变成 ok:false。
+                _STAT["first_legacy"] += 1
+                return builder(), {"state": "building", "freshness_s": -1,
+                                   "retry_after_ms": 1500}
         _STAT["first_legacy"] += 1
         data = builder()
         _write(family, scope, fp, data)

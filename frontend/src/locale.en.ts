@@ -174,6 +174,7 @@ export const en: Record<string, string> = {
   'ins.avg_turnover': 'Avg turnover {v} days',
   // §15.161 cold-state SWR notice
   'ins.data_refreshing': 'Updating - showing a full snapshot from {s}s ago',
+  'ins.data_building': 'Building for the first time, please wait…',
   'ins.data_updated': 'Data updated',
   'ins_p.banner_1': 'Purchase loop',
   'ins_p.banner_2': 'Import stock via cleansing (incl. in-transit)',
