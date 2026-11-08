@@ -138,6 +138,11 @@ _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
+# §15.169 首建内存短路: 确认某个 scope 正在首建后, 后续同实例请求**零 SQL** 直接
+#   building。线上实测(30 并发): follower 虽只等 1.2s, 但进 serve 要先查 head + page_of
+#   ×2 + fp, 连接池被 leader 的 build 占住 → building 也要 4~8s。内存标记把它们省掉。
+_MEM_BUILD = {}       # "kind|scope" -> t0
+_MEM_TTL = 45.0       # 有界: build 失败/实例冻结也不会永久 building(红线 15)
 _KIND_LOCKS = {}      # kind -> Lock, 同 kind 首建串行(§15.168)
 _HEAVY_TL = threading.local()   # 嵌套首建标记: 已在外层 first_guard 名额内 → 不重复取
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
@@ -524,6 +529,7 @@ def _cold_worker(kind, scope, fp, fn, key):
                 try:
                     fn()
                     _STATS["done"] += 1
+                    _mem_clear(kind, scope)   # §15.169 已发布 → 解除 building 短路
                     with _FLIGHT_LOCK:
                         _BUSY_BACKOFF.pop(key, None)   # §15.167 成功即复位退避
                 except Exception as _e:
@@ -642,6 +648,20 @@ def pop_swr(d):
     if isinstance(d, dict) and "__swr" in d:
         return {"__swr": d.pop("__swr")}
     return {}
+
+
+def _mem_busy(kind, scope):
+    """同实例最近确认过「正在首建」→ True(零 SQL)。有界 TTL, 不永久。"""
+    t = _MEM_BUILD.get("%s|%s" % (kind, scope))
+    return bool(t and time.time() - t < _MEM_TTL)
+
+
+def _mem_mark(kind, scope):
+    _MEM_BUILD["%s|%s" % (kind, scope)] = time.time()
+
+
+def _mem_clear(kind, scope):
+    _MEM_BUILD.pop("%s|%s" % (kind, scope), None)
 
 
 def _kind_lock(kind):
@@ -784,11 +804,17 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
         _STATS["first_legacy"] += 1
         # §15.168: 首建不裸跑全量 —— 受全局名额约束(见 first_guard)
         try:
-            return first_guard(kind, lambda: build(kind, scope, force=True))
+            r = first_guard(kind, lambda: build(kind, scope, force=True))
+            _mem_clear(kind, scope)      # 已发布: 后续请求正常走物化
+            return r
         except FirstBusy:
             # §15.169: 名额/席位忙 → 交后台单飞补建, 前台**立刻** building。
             #   绝不"排队等名额 → 超时 → 各算一遍"(线上 34s/19×503 的来源)。
             submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
+            raise
+        except Exception:
+            # build 真失败: 解除短路, 让下一次请求重新尝试(否则会傻等 _MEM_TTL)
+            _mem_clear(kind, scope)
             raise
 
     def _readback(shared):
@@ -824,6 +850,11 @@ def serve(kind, scope, channel, mode, days, source, builder,
     删掉的旧行为: 「每请求前台 builder() 全量现算 + 再起裸线程 build() 算第二遍」
     (双算) —— 并发 4 实测 33.26s / repl 4/4 HTTP 503, 是冷算雪崩的真源(红线 2/4/10)。
     """
+    # §15.169 零 SQL 短路: 同实例已确认该 scope 正在首建 → 立刻 building。
+    #   必须放在 head() 之前: 冷态并发时连接池被首建占满, 连"查一下 head"都要排队 4~8s。
+    if read_enabled() and not legacy and _first_sf_on() and _mem_busy(kind, scope):
+        return _building(kind, page, page_size)
+
     h = head(kind, scope)
     if h is None:
         register_scope(kind, scope, channel, mode, days, source)
@@ -840,15 +871,18 @@ def serve(kind, scope, channel, mode, days, source, builder,
     if not read_enabled() or legacy:
         return _live()
 
-    # ① 稳态: fp 命中 → 直接返回, 零额外开销、零额外字段
-    d = page_of(kind, scope, channel, mode, need_only, search,
-                page, page_size, extra=scope, h=h)
-    if d is not None:
-        return d
-
-    # ② 冷态: 先取「上一版完整物化」(只跳过 fp 比对, 完整性校验一字不减)
-    prev = page_of(kind, scope, channel, mode, need_only, search,
-                   page, page_size, extra=scope, h=h, allow_stale=True)
+    # ①/② 稳态命中 / 上一版: gen=0 时两者都必然为空 —— 白查两次(page_of 各一次
+    #   往返), 冷态并发下这两次就是 building 要 4~8s 的一半。直接跳过。
+    _gen0 = int((h or {}).get("gen") or 0) <= 0
+    if not _gen0:
+        d = page_of(kind, scope, channel, mode, need_only, search,
+                    page, page_size, extra=scope, h=h)
+        if d is not None:
+            return d
+        prev = page_of(kind, scope, channel, mode, need_only, search,
+                       page, page_size, extra=scope, h=h, allow_stale=True)
+    else:
+        prev = None
 
     fp = fp_now(kind, channel, mode, scope) or "?"
 
@@ -858,6 +892,7 @@ def serve(kind, scope, channel, mode, days, source, builder,
     #    首帧是当前实时算出的完整数据, 绝不返回 0 条、绝不等 15~30s。
     if prev is None:
         if _first_sf_on():
+            _mem_mark(kind, scope)
             try:
                 _d0 = _first_serve(kind, scope, fp, builder, channel, mode,
                                    need_only, search, page, page_size)
