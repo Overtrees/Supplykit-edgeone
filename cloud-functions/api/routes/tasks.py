@@ -101,7 +101,8 @@ def _maint_claim(key):
         except Exception:
             pass                      # 1062: 已存在 → 走条件更新
         n = _e("UPDATE maint_lock SET ts=NOW(6), holder=%s WHERE name=%s "
-               "AND ts < DATE_SUB(NOW(6), INTERVAL %s SECOND)", [h, key, _MAINT_LEASE])
+               "AND ts < DATE_SUB(NOW(6), INTERVAL " + str(int(_MAINT_LEASE)) + " SECOND)",
+               [h, key])
         return h if int(n or 0) == 1 else None
     except Exception as _e2:
         try:

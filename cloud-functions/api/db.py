@@ -52,7 +52,7 @@ _HEAVY_SEQ = [0]
 #   把"全站同时重建的路数"从 实例数×3 压到 HEAVY_GLOBAL(默认 2)。
 # 租约 180s 与进程内同理: 实例被冻结时槽位由下一个申请者回收, 不会永久泄漏。
 _HEAVY_GLOBAL = int(os.environ.get("HEAVY_GLOBAL", "2") or 0)
-_HEAVY_GLOBAL_LEASE = float(os.environ.get("HEAVY_GLOBAL_LEASE", "180") or 180)
+_HEAVY_GLOBAL_LEASE = int(float(os.environ.get("HEAVY_GLOBAL_LEASE", "180") or 180))
 _GSLOT_DEGRADED = [False]   # 表不可用 → 降级为"只实例内", 只告警一次
 _GSLOT_INIT = [False]       # 本进程是否已确保槽位行存在
 
@@ -79,9 +79,13 @@ def _gslot_claim(wait):
     while True:
         for s in range(1, _HEAVY_GLOBAL + 1):
             try:
+                # 红线 14: INTERVAL 必须用字符串拼接。这里踩过一次 —— 传 %s + float 180.0
+                #   时 TiDB **不报错**但条件恒假(rowcount 恒 0), 于是僵死槽位永不过期,
+                #   两个 holder 把全局名额永久占满 → 全部后台重建停摆(线上 16:41~16:47 实测)。
+                #   同一语句里 int 180 传参 rowcount=1, float 180.0 传参 rowcount=0, 已对照验证。
                 n = _e("UPDATE heavy_slot SET holder=%s, ts=NOW(6) WHERE slot=%s "
-                       "AND (holder='' OR ts < DATE_SUB(NOW(6), INTERVAL %s SECOND))",
-                       [h, s, _HEAVY_GLOBAL_LEASE])
+                       "AND (holder='' OR ts < DATE_SUB(NOW(6), INTERVAL "
+                       + str(int(_HEAVY_GLOBAL_LEASE)) + " SECOND))", [h, s])
                 if int(n or 0) == 1:
                     return s, h
             except Exception as _e1:
