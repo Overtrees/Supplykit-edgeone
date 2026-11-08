@@ -78,12 +78,28 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
 
     from routes.common import ch_supports_b as _csb
     _ch_b = _csb(channel)   # 该渠道是否走 BBCC(B 仓调拨链) —— 原 `channel == "jd"`
+    # §15.176 读侧并行(不改任何算法/口径, 只消除无依赖串行): 线上 list_head.timing
+    #   (2026-11-08 14:56) purchase calc=3.0s / sql=4.0s/10 条 —— 四段取数严格串行:
+    #   配置 → 商品(1 万行) → 日销物化(2 万行) → 库存(9 万行), 每段都在等自己的往返+传输。
+    #   商品与库存两段与日销互不依赖, 先发出去并行取, 主线程照旧做日销与融合;
+    #   `_f_inv.result()` 在库存循环处才取, 不改变任何计算顺序与结果(逐字段等价见验收 triple)。
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    _ex = _TPE(max_workers=2)
+    _f_prod = _ex.submit(
+        query,
+        "SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
+        "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
+        "AND channel=%s", [channel])
+    _f_inv = _ex.submit(
+        query,
+        "SELECT sku, COALESCE(barcode,'') AS bc, warehouse_type, warehouse, "
+        "available_qty, in_transit_qty, safety_qty, safety_days "
+        "FROM inventory WHERE channel=%s", [channel])
     products = {}
-    for p in query("SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
-                   "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
-                   "AND channel=%s", [channel]):
+    for p in _f_prod.result():
         products[p.get("sku")] = p
     if not products:
+        _ex.shutdown(wait=False)
         # 2026-11-06 P1-4: 这里原来 `return ok({"suggestions": []})` —— 返回**已包装的 dict**,
         #   而本函数其余所有路径都 `return result`(list)。契约不一致的后果是连锁的:
         #     ① 调用方 `shape(rows)` 迭代 dict 得到的是 key 字符串("ok"/"data");
@@ -170,9 +186,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
     # 2026-10-29 按 69码: 库存聚合 key = (sku, barcode), 空码归入 "" 组(降级)
-    for i in query("SELECT sku, COALESCE(barcode,'') AS bc, warehouse_type, warehouse, "
-                   "available_qty, in_transit_qty, safety_qty, safety_days "
-                   "FROM inventory WHERE channel=%s", [channel]):
+    for i in _f_inv.result():
         s = (i.get("sku"), str(i.get("bc") or "").strip())
         wt = i.get("warehouse_type") or "platform"
         # 2026-10-30 配置化: B 仓参与条件 = 渠道支持 BBCC 体系 且 当前为 bbcc 模式
@@ -324,6 +338,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     #   供 core.alert_jobs 在同一进程内复用本次结果(不重算一遍)。
     if with_alerts:
         sync_purchase_alerts(channel, result)
+    _ex.shutdown(wait=True)      # §15.176: 两个预取线程已 result() 过, 这里只回收池
 
     result.sort(key=lambda x: x["days_to_empty"])
     return result
