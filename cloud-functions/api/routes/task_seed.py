@@ -270,7 +270,7 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0
             # 重置后 agg 物化表需重建(防首屏走直查慢): 后台线程重建 90 天, 完成前 summary 陈旧检测降级直查
             try:
                 import threading as _th2
-                from routes.dashboard import _rebuild_day_agg as _rda
+                from routes.dashboard_maintain import _rebuild_day_agg as _rda
                 _th2.Thread(target=_rda, args=(90,), daemon=True).start()
             except Exception as _e:
                     try_err('tasks', '静默降级', _e)

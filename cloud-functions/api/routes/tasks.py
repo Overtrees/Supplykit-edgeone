@@ -108,7 +108,7 @@ async def tasks_maintain(request: Request):
     mode = d.get("mode") or "bbcc"
     if action == "rebuild_agg":
         import threading as _th3
-        from routes.dashboard import _rebuild_day_agg as _rda3
+        from routes.dashboard_maintain import _rebuild_day_agg as _rda3
         _th3.Thread(target=_rda3, args=(90,), daemon=True).start()
         from routes.analysis_cache import invalidate
         invalidate("orders")
