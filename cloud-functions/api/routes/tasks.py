@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import random
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -74,6 +75,33 @@ def _log_task(task_id, task_type, status, channel, result=""):
 
 
 # ── 任务列表 ──────────────────────────────────────────────────────────────
+# ── 维护任务单飞(§15.177) ────────────────────────────────────────────────
+# 任务页连点「重建聚合」/「预热」时, 原来每次提交都起一个后台线程各算一遍:
+#   线上实测连提 3 次 → 3 个 90 天聚合并发 → 全站读 p95 3,404ms(单条 SELECT 也 3.2s),
+#   因为同一实例的 Python 重计算共享一个 GIL。这两个 action 本身幂等,
+#   重复提交没有任何额外收益, 只是把 CPU 再烧一遍。
+# 单飞 = 同一 (action, channel) 在租约期内只跑一个; 后到的直接返回 already_running。
+# 租约 600s: 90 天聚合线上单次最长 110s+; 线程被冻结时到期自动放行(红线 15 同理)。
+_MAINT_RUN = {}
+_MAINT_LK = threading.Lock()
+_MAINT_LEASE = 600.0
+
+
+def _maint_claim(key):
+    _now = time.time()
+    with _MAINT_LK:
+        _ts = _MAINT_RUN.get(key)
+        if _ts and _now - _ts < _MAINT_LEASE:
+            return False
+        _MAINT_RUN[key] = _now
+        return True
+
+
+def _maint_release(key):
+    with _MAINT_LK:
+        _MAINT_RUN.pop(key, None)
+
+
 @router.get("/tasks")
 def list_tasks(channel: str = "jd", limit: int = 50):
     # 2026-11-05 带 updated_at: 卡片右上角时间要表达"这个任务最近一次动是什么时候"。
@@ -107,13 +135,27 @@ async def tasks_maintain(request: Request):
     channel = d.get("channel") or "jd"
     mode = d.get("mode") or "bbcc"
     if action == "rebuild_agg":
-        import threading as _th3
         from routes.dashboard_maintain import _rebuild_day_agg as _rda3
-        _th3.Thread(target=_rda3, args=(90,), daemon=True).start()
+        _k = "rebuild_agg|%s" % channel
+        if not _maint_claim(_k):
+            return ok({"started": False, "already_running": True, "action": "rebuild_agg"})
+
+        def _bg_agg():
+            try:
+                _rda3(90)
+            except Exception as _e:
+                try_err("tasks", "重建聚合失败", _e)
+            finally:
+                _maint_release(_k)
+
+        threading.Thread(target=_bg_agg, daemon=True).start()
         from routes.analysis_cache import invalidate
         invalidate("orders")
         return ok({"started": True, "action": "rebuild_agg"})
     if action == "warmup":
+        _kw = "warmup|%s" % channel
+        if not _maint_claim(_kw):
+            return ok({"started": False, "already_running": True, "action": "warmup"})
         # 预热各缓存(后台顺序调用 builder, 填 300s 共享表缓存)——部署/重置后调用一次, 首屏不撞重算
         def _w():
             try:
@@ -127,8 +169,10 @@ async def tasks_maintain(request: Request):
                 purchase_suggestions(days=28, mode=mode, channel=channel)
             except Exception as _e:
                     try_err('tasks', '预热降级', _e)
-        import threading as _th4
-        _th4.Thread(target=_w, daemon=True).start()
+            finally:
+                _maint_release(_kw)
+
+        threading.Thread(target=_w, daemon=True).start()
         return ok({"started": True, "action": "warmup"})
     return fail("未知 action: %s" % action)
 
