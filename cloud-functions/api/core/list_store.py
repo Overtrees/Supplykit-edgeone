@@ -127,7 +127,9 @@ _BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
 #   · leader 抢到全局名额 → 同步算这一份(唯一的 4~8s), 其余人立刻 building;
 #   · 抢不到名额 / 同 key 已有 leader → **立即**返回 building(HTTP 200 + retry_after),
 #     后台单飞补建; 前端重试命中物化。绝不 5xx、绝不让第 2 个人也等 7s。
-_FIRST_WAIT = 9.5     # 同 scope follower 等同一份的上限(≤10s 红线); 超时→building, 不各算
+_FIRST_WAIT = 6.0     # 同 scope follower 等同一份的上限 = 该接口单跑 p95(repl 6.0s, 红线「任何单请求≤10s」)
+#   不是 9.5s: 9.5s 只是「没超过 10s 网关」, 不是达标 —— 判据是「首次 ≤ 单跑 p95」,
+#   repl 单跑 p95=6.0s, 等 9.5s 等于让第 2 个用户比单跑还慢 58%。
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FIRST_HEAVY_WAIT = 0.05   # 前台抢名额**不排队**: 抢不到立刻 building, 由后台去等(≤10s 红线)
 # 同 kind 首建并行度: 不限(由 db.heavy 3 名额统一约束, 红线 4 不另造闸门)。
@@ -150,6 +152,7 @@ _HEAVY_TL = threading.local()   # 嵌套首建标记: 已在外层 first_guard �
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
           "swr_served": 0, "first_legacy": 0, "first_shared": 0,
           "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0,
+          "head_timeout": 0,
           "first_queue_ms": 0, "first_queue_n": 0, "first_heavy_wait_ms": 0}
 
 
@@ -219,14 +222,20 @@ def head(kind, scope):
 
 
 _HEAD_SF = {}         # §15.169c "kind|scope" -> {"ev","v"}: head 查询单飞
+_HEAD_PENDING = object()   # §15.171 follower 没在预算内拿到 head: 调用方自己查一次, 不 building
 
 
-def head_shared(kind, scope, wait=2.5):
+def head_shared(kind, scope, wait=0.6):
     """§15.169c head() 的进程内单飞: 30 个并发只查 1 次。
 
     线上实测: 单次 DB 往返 ~450ms(新加坡区), 30 并发 × 1 次 head / 10 连接池
-    = 3 批 ≈ 1.4s, 正是 building 要 3s 的主因。合并后只 1 批。
+    = 3 批 ≈ 1.4s; 合并后只 1 批。
     只用于 serve 入口; page_of 内部的 head 仍走原函数(不改变读写同源语义)。
+
+    §15.171 等待上限 2.5s → 0.6s: 2.5s 是**把读请求绑在另一个请求的查询上等**,
+    线上 30 并发实测 building 3.1~4.6s, 其中 2.5s 就是这里白等来的(判据 ≤1.5s)。
+    超时不 building(稳态并发会被误报成 building), 而是返回 `_HEAD_PENDING` 让
+    调用方**自己查一次**(只读、450ms), 最坏 0.6+0.45≈1.05s, 仍在判据内。
     """
     k = "%s|%s" % (kind, scope)
     with _FLIGHT_LOCK:
@@ -246,6 +255,9 @@ def head_shared(kind, scope, wait=2.5):
                 _HEAD_SF.pop(k, None)
         return e["v"]
     e["ev"].wait(wait)
+    if not e["ev"].is_set():
+        _STATS["head_timeout"] += 1
+        return _HEAD_PENDING
     return e["v"]
 
 
@@ -450,7 +462,20 @@ def build(kind, scope, force=False):
 
     _t0 = time.time()
     try:
+        # §15.170c 只读埋点(红线 6): calc 里到底花在 SQL 还是 Python —— 决定下一步是
+        #   加索引/减往返, 还是优化循环。timing 里多两段: sql=秒/条数。
+        try:
+            from db import stats_reset as _sr
+            _sr()
+        except Exception:
+            _sr = None
         rows = _builder_of(kind, h)()
+        try:
+            from db import stats_snapshot as _ss
+            _q = _ss()
+            _SQL_S, _SQL_N = float(_q.get("stmt_s") or 0), int(_q.get("stmt_n") or 0)
+        except Exception:
+            _SQL_S, _SQL_N = -1.0, -1
     except Exception as _e:
         _mark_stale(kind, scope, "计算异常: %s" % _e)
         try_err("list_store", "重建计算失败(%s/%s)" % (kind, scope), _e)
@@ -507,8 +532,8 @@ def build(kind, scope, force=False):
                 Exception("; ".join(errs)[:300]))
         return {"ok": False, "error": "validate", "detail": errs[:5]}
 
-    timing = "calc=%.1f,write=%.1f,total=%.1f,rows=%d" % (
-        _t_calc, _t_write, time.time() - _t0, len(rows))
+    timing = "calc=%.1f(sql=%.1f/%d),write=%.1f,total=%.1f,rows=%d" % (
+        _t_calc, _SQL_S, _SQL_N, _t_write, time.time() - _t0, len(rows))
     try:
         # 只更新 gen/fp/计数/timing/stale/note —— 不覆盖登记时的 channel/mode/days/source。
         execute("INSERT INTO list_head(kind,scope,channel,mode,days,source,gen,fp,row_cnt,"
@@ -828,6 +853,12 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
     """
     key = _flight_key(kind, scope, fp)
 
+    # §15.171 已有人在算这一份 → 本请求**零等待** building, 不进 first_shared 的 wait。
+    #   否则 30 个并发一起进来: 1 个 leader 算 8s, 29 个在 event 上等(实测 p95 22s),
+    #   这就是「所有请求绑在一个请求上等」。读侧零等待, 计算侧由 db.heavy 分配。
+    if _mem_busy(kind, scope):
+        raise FirstBusy("同 scope 首建进行中(%s/%s)" % (kind, scope))
+
     def _run():
         # 只有**真正拿到名额开始算**的 scope 才进 building 短路: 抢不到名额的不标记,
         #   否则该 scope 会在 _MEM_TTL 内永久 building(名额一空也不会再试)。
@@ -877,6 +908,11 @@ def serve(kind, scope, channel, mode, days, source, builder,
         return _building(kind, page, page_size)
 
     h = head_shared(kind, scope)
+    if h is _HEAD_PENDING:
+        # §15.171 没在 0.6s 预算内拿到同 scope 的单飞结果(连接池被首建占住) →
+        #   自己查一次**只读** head, 不在这里 building(稳态并发会误报 building),
+        #   也不等别人(那是把读请求绑在一个查询上等)。最坏 0.6+0.45s。
+        h = head(kind, scope)
     if h is None:
         # §15.169b: 从未登记 → 只让 1 个请求走 INSERT+首建, 其余立即 building。
         #   否则 30 并发同时 INSERT IGNORE 同一行, 唯一键冲突检测串行化, 2~4s。
@@ -910,7 +946,10 @@ def serve(kind, scope, channel, mode, days, source, builder,
     else:
         prev = None
 
-    fp = fp_now(kind, channel, mode, scope) or "?"
+    # §15.170c fp 只在「有上一版/需要判新鲜」时算 —— 它是一次 config 域版本查询。
+    #   首次构建(prev is None)的 flight key 已去 fp(_flight_key), 算了也是白花一次往返:
+    #   线上 30 并发实测 building 3~4.7s 里, 一半是 head + fp 两次往返 × 排队。
+    fp = "" if (prev is None and _first_sf_on()) else (fp_now(kind, channel, mode, scope) or "?")
 
     # ③ 从未物化 / 上一版不可用(gen=0 / stale=1 / 哨兵 / 坏行): 直接现算保证业务正确,
     #    同时后台建立物化(一次性)。与「有上一版但 fp 不等」是**互斥状态**, 不是两套并存
