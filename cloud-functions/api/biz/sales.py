@@ -3,6 +3,7 @@
 三窗口滚动预测 + 3σ 异常剔除 + 近 3 天 1.5 倍加权(与旧版口径完全一致)
 """
 from datetime import datetime, timedelta
+import os
 
 from core.clock import CN_TZ, now_cn
 
@@ -394,6 +395,22 @@ def _ensure_stats_table():
 WH_C = "__C__"      # 全国 platform 合计(bbcc 补货/断货 C)
 WH_BC = "__BC__"    # platform+platform_b 合计(bbcc 断货 BC)
 WH_ALL = "__ALL__"  # 全仓合计(展示/采购兜底)
+
+
+def slim_on():
+    """§15.172 物化取数裁剪总开关: 未设置=开; `SALES_SLIM=0` 一刀回退到
+    「合计行 + 全部按码行」两次读全列(同一路径互斥开关, 红线 2 不并存)。
+
+    为什么需要: 线上分段证据(list_head.timing, 2026-11-08 13:41~13:52) ——
+    repl `calc=6.1s` 里 `sql=5.3s/8 条`(87%), 而该接口只用 `__C__` 维度的
+    3 个 cut 列; 全渠道 254268 行里它要的只有 20093 行。裁剪后 repl `calc=2.3s`,
+    真首建 e2e 11.97s → 5.27s。
+    注意: 本地只验证**口径等价**(逐字段 diff=0), 耗时一律取线上 timing/e2e(红线 7)。
+    """
+    _v = os.environ.get("SALES_SLIM")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() not in ("0", "false", "off", "no")
 
 
 def pick_ds(bc_map, agg_map, sku, barcode, dim, default=0.0):

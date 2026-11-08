@@ -19,12 +19,10 @@ _MIN_DS = 0.1
 
 
 def _slim_on():
-    """§15.172 取数裁剪开关: 未设置=开; `SALES_SLIM=0` 一刀回退到「合计行 + 全部按码行」
-    两次读全列(不删代码, 红线 2: 同一路径互斥开关, 不并存)。"""
-    _v = os.environ.get("SALES_SLIM")
-    if _v is None or str(_v).strip() == "":
-        return True
-    return str(_v).strip().lower() not in ("0", "false", "off", "no")
+    """§15.172 取数裁剪开关 —— 单一真源在 `biz.sales.slim_on()`, 这里只做委托,
+    避免两个消费方各写一份环境变量判定(红线 2)。`SALES_SLIM=0` 一刀回退。"""
+    from biz.sales import slim_on
+    return slim_on()
 
 
 @router.get("/insights/replenishment")

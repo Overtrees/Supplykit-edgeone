@@ -100,22 +100,35 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     # 曾 load_daily_sales(全 products 2000 SKU 分片拉快照)+calc_sales_multi(14/28) 每次 2s+
     fused = {}
     _rws = {}
+    _bc_stats = {}
     try:
-        from biz.sales import get_sku_sales_stats, WH_C
-        _rws = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}   # 2026-10-30 全仓→C仓(__ALL__ 已删)
-        # 2026-10-29 按码: 读按码行, key = "sku|barcode"
-        _bc_stats = {}
-        try:
-            # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
-            # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
-            # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
-            for _r2 in (get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*") or {}).values():
+        from biz.sales import get_sku_sales_stats, WH_C, slim_on
+        if slim_on():
+            # §15.172 取数裁剪(与 repl 同一做法, 单一真源 `biz.sales.slim_on`):
+            #   一次 `barcode="all"` 取「合计 + 全部按码」, 只取 ds14/ds28 两列, 按行分流。
+            #   原实现是 2 次往返、全 11 列; 线上 purchase `calc=3.5s` 里 `sql=3.3s/12 条`。
+            _all = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all",
+                                       fields=("ds14", "ds28")) or {}
+            for _k, _r2 in _all.items():
                 _bc = str(_r2.get("barcode") or "")
                 if _bc:
                     _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
-        except Exception as _ebc:
-            try_err('purchase', '按码物化读降级', _ebc)
-            _bc_stats = {}
+                else:
+                    _rws[_k] = _r2
+        else:
+            _rws = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}   # 2026-10-30 全仓→C仓(__ALL__ 已删)
+            # 2026-10-29 按码: 读按码行, key = "sku|barcode"
+            try:
+                # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
+                # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
+                # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
+                for _r2 in (get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*") or {}).values():
+                    _bc = str(_r2.get("barcode") or "")
+                    if _bc:
+                        _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
+            except Exception as _ebc:
+                try_err('purchase', '按码物化读降级', _ebc)
+                _bc_stats = {}
         for _r in (_rws or {}).values():
             _sku = str(_r.get("sku") or "")
             _d14 = float(_r.get("ds14") or 0)
