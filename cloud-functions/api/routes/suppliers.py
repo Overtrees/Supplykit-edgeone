@@ -437,8 +437,11 @@ async def put_seasons(request: Request):
         d = await request.json()
     except Exception as _e:
             try_err('suppliers', '静默降级', _e)
-    channel = d.get("channel", "jd")
-    mode = d.get("mode", "bbcc")
+    # §15.174 修既有 bug: 前端把 channel/mode 放在 **query**(`?mode=..&channel=..`)、
+    #   body 只带 items。原实现只读 body → 非 jd 渠道保存会被写到 jd 名下。
+    #   取值优先级: body → query → 默认(与读接口一致)。
+    channel = d.get("channel") or request.query_params.get("channel") or "jd"
+    mode = d.get("mode") or request.query_params.get("mode") or "bbcc"
     items = d.get("items") or []
     key = "season_config_%s" % mode
     old = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s", [key, channel])

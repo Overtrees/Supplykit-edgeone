@@ -25,7 +25,18 @@ _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每�
 #   HEAVY_CONCURRENCY=3: 同时最多 3 个重计算在跑, 其余排队(排队 1~3s 好过一起卡 40s)。
 #   env 可调; 设 0 关闭闸门(紧急回滚用, 不需重新发版)。
 _HEAVY_LIMIT = int(os.environ.get("HEAVY_CONCURRENCY", "3") or 0)
-_HEAVY = threading.BoundedSemaphore(_HEAVY_LIMIT) if _HEAVY_LIMIT > 0 else None
+# §15.174: 原实现是 threading.BoundedSemaphore —— **名额会泄漏**。
+#   线上 2026-11-08 14:28~14:30 证据: 三个 kind 的冷算全部报
+#   "冷算全局名额已满, 本轮跳过(并发上限 3, 已等 2s)", 连续 10 分钟没有一次重建成功,
+#   list_head.gen 停在 14:20 不动 → 配置改了补货也不刷新(fp 永远不等)。
+#   成因: 云函数实例会被平台冻结/回收, 线程停在 DB IO 上时 finally 可能迟迟不执行(或进程直接消失),
+#   Semaphore 计数只减不加 → 该实例此后永久认为"3 个名额都在用"。
+#   改法: 槽位 + 租约(超过 _HEAVY_MAX_HOLD 秒的槽位视为僵死, 由下一个申请者回收)。
+#   正常重建 4~6s、判定重建 ~30s, 180s 租约不会误杀; 回收动作留痕(try_err)。
+_HEAVY_MAX_HOLD = float(os.environ.get("HEAVY_MAX_HOLD", "120") or 120)
+_HEAVY_LK = threading.Lock()
+_HEAVY_SLOTS = {}      # token -> (start_ts, name)
+_HEAVY_SEQ = [0]
 
 
 class HeavyBusy(RuntimeError):
@@ -34,20 +45,42 @@ class HeavyBusy(RuntimeError):
 
 @contextmanager
 def heavy(name="", timeout=20.0):
-    """重计算名额。拿不到就抛 HeavyBusy, 让请求**快速失败**而不是阻塞在连接等待上。
+    """重计算名额(带租约)。拿不到就抛 HeavyBusy, 让请求**快速失败**而不是阻塞在连接等待上。
 
     用法: `with heavy("aux"):` 包住整个读路径(含其内部并行)。
     """
-    if _HEAVY is None:
+    if _HEAVY_LIMIT <= 0:
         yield
         return
-    ok = _HEAVY.acquire(timeout=timeout)
-    if not ok:
-        raise HeavyBusy("重计算繁忙(并发上限 %d, 已等 %.0fs): %s" % (_HEAVY_LIMIT, timeout, name))
+    tok = None
+    deadline = time.time() + max(float(timeout), 0.0)
+    while True:
+        now = time.time()
+        with _HEAVY_LK:
+            # 回收僵死槽位(实例冻结/线程未走到 finally)
+            for _k, (_t0, _n) in list(_HEAVY_SLOTS.items()):
+                if now - _t0 > _HEAVY_MAX_HOLD:
+                    _HEAVY_SLOTS.pop(_k, None)
+                    try:
+                        from routes.common import try_err as _te
+                        _te("db", "重计算名额超期回收(%.0fs): %s" % (now - _t0, _n),
+                            RuntimeError("lease_expired"))
+                    except Exception:
+                        pass
+            if len(_HEAVY_SLOTS) < _HEAVY_LIMIT:
+                _HEAVY_SEQ[0] += 1
+                tok = _HEAVY_SEQ[0]
+                _HEAVY_SLOTS[tok] = (now, name)
+                break
+        if now >= deadline:
+            raise HeavyBusy("重计算繁忙(并发上限 %d, 已等 %.1fs): %s"
+                            % (_HEAVY_LIMIT, float(timeout), name))
+        time.sleep(0.01)
     try:
         yield
     finally:
-        _HEAVY.release()
+        with _HEAVY_LK:
+            _HEAVY_SLOTS.pop(tok, None)
 
 
 # 2026-11-06: 线上逐层计时(只读埋点, 不改任何执行路径)
