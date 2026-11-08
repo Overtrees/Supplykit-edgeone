@@ -5217,6 +5217,51 @@ try:
 except Exception as _e38:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
 
+# ── §15.166 冷算本体: 少往返 + 去重复窗口计算(首建/后台重建同受益) ──
+try:
+    _src26r = open("routes/replenishment.py", encoding="utf-8").read()
+    _src26p = open("routes/purchase_calc.py", encoding="utf-8").read()
+    # ① 补货: 「合计行 + 按码行」合并为一次 barcode="all"(原两次调用 = 两次全表 + 两次存在性往返)
+    check("§15.166 补货: 物化读取合并为单次 barcode='all'(不再分两次读)",
+          'get_sku_sales_stats(channel, days=90, barcode="all")' in _src26r
+          and "if _one_read_on():" in _src26r
+          and 'get_sku_sales_stats(channel, days=90, barcode="*")' in _src26r,  # 回退分支仍在
+          "routes/replenishment.py")
+    # ② 采购: 同上, 且按行 barcode 分流(合计行 → _rws, 按码行 → _bc_stats)
+    check("§15.166 采购: 物化读取合并为单次 barcode='all' 并按行分流",
+          'get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all")' in _src26p
+          and "if _oro():" in _src26p
+          and 'if str(_r0.get("barcode") or ""):' in _src26p
+          and 'get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*")' in _src26p,
+          "routes/purchase_calc.py")
+    # ③ 重复窗口计算消除: 三组各只调一次 [7,14,28], 不再额外 [14]/[28]
+    check("§15.166 补货: 消除重复 _csm 窗口计算(9 次 → 3 次, 且保留回退分支)",
+          _src26r.count('windows=[7, 14, 28], sparse="shrink"') >= 3
+          and "_mc14 = None if _dedup else" in _src26r
+          and "_ma28 = None if _dedup else" in _src26r
+          and "_mw14 = None if _dedup else" in _src26r
+          and "_c3 = _csm({_bk: _sps(_bd)}, windows=[7, 14, 28]" in _src26r
+          and "_c7 = _csm({_bk: _sps(_bd)}, windows=[7]" in _src26r, "routes/replenishment.py")
+    # ④ 窗口独立性前提(等价性的根据): 每个 win 只取 base_vals[:win], 不含跨窗口状态
+    _src26s = open("biz/sales.py", encoding="utf-8").read()
+    check("§15.166 等价前提: calc_sales_multi 各窗口独立(vals = base_vals[:win])",
+          "for win in windows:" in _src26s and "vals = base_vals[:win]" in _src26s,
+          "biz/sales.py")
+    # ⑤ 开关默认开 + 置 0 回退
+    import importlib as _il26
+    import routes.replenishment as _R26
+    _il26.reload(_R26)
+    os.environ.pop("SALES_ONE_READ", None)
+    _on26 = _R26._one_read_on()
+    os.environ["SALES_ONE_READ"] = "0"
+    _off26 = _R26._one_read_on()
+    os.environ.pop("SALES_ONE_READ", None)
+    check("§15.166 开关: 默认单次读, SALES_ONE_READ=0 回退分两次读",
+          _on26 is True and _off26 is False, "%s/%s" % (_on26, _off26))
+    check("§15.166 冷算本体根治用例无异常", True)
+except Exception as _e39:
+    check("§15.166 冷算本体根治用例无异常", False, str(_e39)[:300])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()

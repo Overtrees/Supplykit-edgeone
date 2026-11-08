@@ -102,20 +102,36 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     _rws = {}
     try:
         from biz.sales import get_sku_sales_stats, WH_C
-        _rws = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}   # 2026-10-30 全仓→C仓(__ALL__ 已删)
-        # 2026-10-29 按码: 读按码行, key = "sku|barcode"
+        # §15.166 冷算本体: 原「合计行(无码) + 按码行」两次调用 = 两次全表 SELECT +
+        #   两次存在性往返(线上单次往返 0.5~3s)。`barcode="all"` 一次取齐再按行分流
+        #   (key=sku|barcode|warehouse, barcode 为空即合计行) → 与两次结果逐键等价。
+        #   `SALES_ONE_READ=0` 一刀回退。
+        from routes.replenishment import _one_read_on as _oro
         _bc_stats = {}
-        try:
-            # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
-            # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
-            # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
-            for _r2 in (get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*") or {}).values():
+        if _oro():
+            _allr = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all") or {}
+            for _r0 in _allr.values():
+                if str(_r0.get("barcode") or ""):
+                    continue
+                _rws["%s|%s|%s" % (_r0.get("sku") or "", "", _r0.get("warehouse") or "")] = _r0
+            for _r2 in _allr.values():
                 _bc = str(_r2.get("barcode") or "")
                 if _bc:
                     _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
-        except Exception as _ebc:
-            try_err('purchase', '按码物化读降级', _ebc)
-            _bc_stats = {}
+        else:
+            _rws = get_sku_sales_stats(channel, wh=WH_C, days=28) or {}   # 2026-10-30 全仓→C仓(__ALL__ 已删)
+            # 2026-10-29 按码: 读按码行, key = "sku|barcode"
+            try:
+                # 2026-10-29 修复(N+1): 原按 codes 逐个 get_sku_sales_stats —— 1000 码 × (CREATE IF NOT EXISTS
+                # + COUNT + SELECT) ≈ 3000 次往返 → 冷启动固定 46.00s(实测 46.0/49.5s)。
+                # 改 barcode='*' 一次取全部按码行(与断货/进销存同法), 往返 1 次。
+                for _r2 in (get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*") or {}).values():
+                    _bc = str(_r2.get("barcode") or "")
+                    if _bc:
+                        _bc_stats["%s|%s" % (str(_r2.get("sku") or ""), _bc)] = _r2
+            except Exception as _ebc:
+                try_err('purchase', '按码物化读降级', _ebc)
+                _bc_stats = {}
         for _r in (_rws or {}).values():
             _sku = str(_r.get("sku") or "")
             _d14 = float(_r.get("ds14") or 0)
