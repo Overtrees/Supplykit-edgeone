@@ -522,6 +522,10 @@ def _disposal_compute(channel="jd", debug: int = 0):
     _mk("pseudo")
     _cat_match = {}
     _ld_days = {}
+    # §15.176: best_before 只有几百个不同取值(同 SKU 多仓/多码共享同一日期), 但原实现对
+    #   **每一行库存**(9 万行)都 strptime 一次 —— 线上 debug 分段实测 inventory_loop 1.6s,
+    #   属纯 CPU 重复解析。按值缓存后同一日期只解析一次(与 _ld_days 同款, 结果逐行等价)。
+    _bb_dd = {}
     sug = {"black": "临期紧急处理(促销/退供)", "red": "退货供应商/清仓甩卖",
            "yellow": "补货降量/持续跟踪", "observe": "继续观察/补货降量"}
     items = []
@@ -596,7 +600,10 @@ def _disposal_compute(channel="jd", debug: int = 0):
         shelf_days = shelf_m * 30
         if bb:
             try:
-                dd = (datetime.strptime(bb, "%Y-%m-%d") - now).days
+                if bb in _bb_dd:
+                    dd = _bb_dd[bb]
+                else:
+                    dd = _bb_dd[bb] = (datetime.strptime(bb, "%Y-%m-%d") - now).days
                 if dd <= shelf_days:
                     level = "black"
                     reason.append("距保质期%d天(<%d月临期线)" % (dd, shelf_m) if dd >= 0
