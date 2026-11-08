@@ -1648,6 +1648,13 @@ try:
           _v == {"x": 1} and isinstance(_m, dict) and _m.get("state") == "serving_previous"
           and _m.get("freshness_s") == 999, str((_v, _m)))
 
+    # invalidate 把 created_at 打到 1970 → age 是 17 亿秒, 不允许原样播报(前端会显示"1794161692 秒前")
+    _db.one = lambda sql, params=None: {"value": '{"x": 1}', "age": 1794161692}
+    _v4, _m4 = _AC.cache_get_swr("history|swr|4", 120, _bx)
+    check("cache_get_swr 墓碑年龄(>7天)报 -1, 不播报天文数字",
+          _v4 == {"x": 1} and isinstance(_m4, dict) and _m4.get("freshness_s") == -1,
+          str((_v4, _m4)))
+
     _db.one = lambda sql, params=None: {"value": '{"x": 3}', "age": 1}
     _v2, _m2 = _AC.cache_get_swr("history|swr|2", 120, _bx)
     check("cache_get_swr 命中 → 直接返回且无 meta(零额外字段)",

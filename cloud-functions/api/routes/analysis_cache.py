@@ -382,7 +382,11 @@ def cache_get_swr(key, ttl, builder, max_bytes=None):
         return _val, None                      # ① 命中: 零额外开销、零额外字段
     if _val is not None:
         _st = _swr_rebuild(key, builder, max_bytes=max_bytes)
-        return _val, {"state": "serving_previous", "freshness_s": _age,
+        # 新鲜度只报"可解释的年龄": invalidate 把 created_at 打到 1970 时 age 是 17 亿秒,
+        # 直接播报会让前端显示"1794161692 秒前"。超过 7 天一律报 -1(=未知/刚被失效),
+        # 前端对 -1 的既有处理是"数据更新中", 比一个荒谬数字诚实。
+        return _val, {"state": "serving_previous",
+                      "freshness_s": _age if 0 <= _age <= 604800 else -1,
                       "rebuild": _st, "retry_after_ms": 900, "source": "cache_swr"}
     # ③ 首建 / 无旧值: 与 cache_get 同一条路径(同步算 + 令牌守卫落表)
     return cache_get(key, ttl, builder, max_bytes=max_bytes), None
