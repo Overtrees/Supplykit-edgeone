@@ -64,6 +64,109 @@ def _safe_rebuild():
     return str(_v).strip().lower() in _READ_ON
 
 
+def _flag(name, default=True):
+    """§15.165 开关族: 未设置=开, 置 "0" 一刀回退(不必发版), 红线 2 互斥不叠加。"""
+    _v = os.environ.get(name)
+    if _v is None or str(_v).strip() == "":
+        return default
+    return str(_v).strip().lower() in _READ_ON
+
+
+def _swr_on():
+    """own-health 读侧 SWR 总开关: `OWN_SWR=0` 回到「失配即同步 _compute 全量」旧路径。"""
+    return _flag("OWN_SWR")
+
+
+def _stale_prev_on():
+    return _flag("OWN_STALE_PREV")
+
+
+def _budget_on():
+    """后台重建是否收编进 list_store.submit_background(db.heavy 全局预算 + 单飞)。
+    `OWN_BUDGET=0` 回退到裸 daemon 线程(旧行为)。红线 4: 只复用既有闸门, 不新建。"""
+    return _flag("OWN_BUDGET")
+
+
+_STAT = {"hit": 0, "swr_served": 0, "first_legacy": 0, "rebuild_done": 0,
+         "rebuild_failed": 0}
+
+
+def swr_meta(channel, h, state):
+    """顶层 __swr 播报; freshness_s 用 **DB 时间**(实例与 DB 时区可能不同), 不静默伪装新值。"""
+    age = -1
+    try:
+        r = one("SELECT TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s "
+                "FROM own_health_head WHERE channel=%s", [channel])
+        v = (r or {}).get("age_s")
+        age = int(v) if v is not None and int(v) >= 0 else -1
+    except Exception:
+        age = -1
+    return {"state": "serving_previous", "freshness_s": age,
+            "built_at": str(h.get("built_at") or ""), "fp_changed": True,
+            "prev_stale": bool(int(h.get("stale") or 0)), "rebuild": state,
+            "source": "own_mat", "retry_after_ms": 900}
+
+
+def submit_rebuild(channel):
+    """后台补建 —— 复用 list_store 的分舱单飞 + db.heavy 全局预算(红线 4/5), 不另造闸门。"""
+    try:
+        from core import list_store as _LS
+        return _LS.submit_background("own:" + str(channel), str(channel),
+                                     fp_now(channel) or "?",
+                                     lambda: build(channel, force=False))
+    except Exception as _e:
+        try_err("own_store", "后台重建调度降级(%s)" % channel, _e)
+        return "error"
+
+
+def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
+          compute=None, legacy=0):
+    """own-health 读路径唯一入口(§15.165) → (data, swr_meta_or_None)。与 list_store /
+    unit_store / dash_store 同构: 稳态读物化 / 冷态**读侧零等待**返回上一版完整物化 +
+    顶层 __swr + 后台分舱单飞重建 / 首次单飞现算一次。
+
+    改前(线上 stress_165 P1~P3): 失配即 `_compute()` 同步全量(3 次取数 ~2s, 并发下
+    7.9→25.5s) + 起裸 daemon 线程 build 绕过 heavy 预算 → 连接池耗尽(上限 10, 等 20s),
+    违反红线 4/6。`OWN_SWR=0` 一刀回退。
+    """
+    if not read_enabled() or legacy or not _swr_on():
+        return compute(), None
+    p = page_of(channel, full=full, limit=limit, offset=offset,
+                per_type=per_type, only=only)
+    if p is not None:
+        _STAT["hit"] += 1
+        return p, None
+    h = head(channel)
+    prev = page_of(channel, full=full, limit=limit, offset=offset,
+                   per_type=per_type, only=only, allow_stale=True)
+    if prev is not None:
+        state = submit_rebuild(channel)
+        _STAT["swr_served"] += 1
+        return prev, swr_meta(channel, h or {}, state)
+    # 真·从未构建: 复用 list_store.first_shared 首建单飞 —— leader 一次 build
+    # (算+落物化), follower 有界等后读回同一份; 绝不 0 条、绝不 N 并发各算全量。
+    try:
+        from core import list_store as _LS
+
+        def _leader():
+            _STAT["first_legacy"] += 1
+            build(channel, force=True)
+
+        def _readback(shared):
+            p = page_of(channel, full=full, limit=limit, offset=offset,
+                        per_type=per_type, only=only, allow_stale=True)
+            # 极端: build 没建成 → 单份现算兜底(compute 已含分页), 绝不返回 0 条
+            return p if isinstance(p, dict) and p else compute()
+
+        if _LS._first_sf_on():
+            return _LS.first_shared("own_first|" + str(channel), _LS._FIRST_TTL,
+                                    _LS._FIRST_WAIT, _leader, _readback), None
+    except Exception as _e:
+        try_err("own_store", "首建单飞降级(%s)" % channel, _e)
+    d = compute()
+    return d, None
+
+
 _COLS = ("seq, alert_type, level, sku, barcode, warehouse, product_name, avail, need_qty, "
          "gap_qty, cover_days, days_to_expiry, batch_no, exp_date, title, description")
 
@@ -138,7 +241,8 @@ def _row_to_item(r):
     }
 
 
-def page_of(channel, full=0, limit=10, offset=0, per_type=0, only=""):
+def page_of(channel, full=0, limit=10, offset=0, per_type=0, only="",
+            allow_stale=False):
     """读一页；`None` = 不可用（调用方退回现算）。
 
     分页语义必须与 `dashboard_own_health._page` **逐字一致**（否则"卡面 3 条"和
@@ -151,11 +255,16 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only=""):
     if not read_enabled():
         return None
     h = head(channel)
-    if not h or not int(h.get("gen") or 0) or int(h.get("stale") or 0):
+    if not h or not int(h.get("gen") or 0):
         return None
-    _fp = fp_now(channel)
-    if not _fp or str(h.get("fp") or "") != _fp:
+    # §15.165: 冷态(allow_stale)放行「历史 stale=1 但 gen>0 且 stat 可解析」的完整旧
+    # 快照; 稳态仍严格硬拒(红线 8②)。`OWN_STALE_PREV=0` 回退。与 list_store 同构。
+    if int(h.get("stale") or 0) and not (allow_stale and _stale_prev_on()):
         return None
+    if not allow_stale:
+        _fp = fp_now(channel)
+        if not _fp or str(h.get("fp") or "") != _fp:
+            return None
     st = _parse_stat(h.get("stat"))
     if st is None:
         return None
@@ -354,11 +463,24 @@ def _channels():
 
 
 def ensure_async(channel=None, force=False):
-    """读未命中时后台重建 —— 不在响应路径上等它
+    """读未命中/写后失效的后台重建 —— 不在响应路径上等它。
 
-    重复执行无害（幂等 + cooldown）；实例被冻结也无害（head 未切换 = 旧版本继续生效，
-    读侧走现算兜底）。不传 channel 时遍历已开启渠道（冷启动/维护用）。
+    §15.165: 默认收编进 `list_store.submit_background`(db.heavy 全局预算 + 去 fp 单飞),
+    根治线上 stress_165 P1~P3 里「每次 invalidate 起一个裸 daemon 线程直接 build,
+    绕过 3 个 heavy 名额 → 任务风暴下 6+ 类重建同时抢 10 个连接 → 连接池耗尽
+    (上限 10, 等待 20s 无归还)」。不新建队列/worker/租约(红线 4/5), 只复用既有闸门。
+    `OWN_BUDGET=0` 一刀回退到旧裸线程行为(逐字保留, 便于对照验证)。
     """
+    _chs = [channel] if channel else _channels()
+    if _budget_on() and not force:
+        try:
+            for _c in _chs:
+                submit_rebuild(_c)
+            return True
+        except Exception as _e:
+            try_err("own_store", "分舱重建调度降级(%s)" % channel, _e)
+            return False
+
     def _run(_chs):
         for _c in _chs:
             try:
@@ -367,7 +489,6 @@ def ensure_async(channel=None, force=False):
                 try_err("own_store", "重建失败(%s)" % _c, _e2)
 
     try:
-        _chs = [channel] if channel else _channels()
         _t = threading.Thread(target=_run, args=(_chs,), daemon=True)
         _t.start()
         return True

@@ -217,6 +217,28 @@ def serve(family, scope, channel, mode, builder):
         # ③ 首次/上一版不可用 → 直接现算保证完整数据(绝不返回空结构/0 条), **同步**落物化
         #    (一次轻量 UPSERT), 不后台双算。部署后 `dmat|` 新前缀首波全是首次路径,
         #    这一刀让第二发立即命中, 且不产生 N 个各自现算的后台线程(红线 4/9/10)。
+        # §15.165: 复用 list_store.first_shared 首建单飞 —— 极端并发(线上 stress_165
+        #    P4b 看板首建混合 8/36 非200)下同 (family,scope) 只让 leader 算一次 builder,
+        #    follower 有界等后读回同一份物化, 不再 N 并发各跑一遍全量聚合抢 GIL/连接。
+        from core import list_store as _LS
+        if _LS._first_sf_on():
+            def _leader():
+                _STAT["first_legacy"] += 1
+                data = builder()
+                _write(family, scope, fp, data)
+                return data          # 共享给同组 follower, 不重复算
+
+            def _readback(shared):
+                if isinstance(shared, dict) and shared:
+                    return shared, None       # leader 产出, 或 follower 等到的同一份
+                box = _read(family, scope, allow_stale=True)
+                if box is not None:
+                    return box["data"], None
+                return builder(), None       # 极端兜底, 单份现算不返回 0 条
+
+            return _LS.first_shared("dmat:" + family + "|" + scope,
+                                    _LS._FIRST_TTL, _LS._FIRST_WAIT,
+                                    _leader, _readback)
         _STAT["first_legacy"] += 1
         data = builder()
         _write(family, scope, fp, data)

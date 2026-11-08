@@ -381,7 +381,8 @@ def _compute(channel, debug: int = 0):
 
 
 def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
-               per_type: int = 0, only: str = "", debug: int = 0):
+               per_type: int = 0, only: str = "", debug: int = 0,
+               swr_out=None):
     """自有仓三类告警: 调拨覆盖 / 积压 / 效期（读模型优先）
 
     2026-11-07 P2: 先读 `own_health_snapshot`（重建时算好、按 seq 排好）。
@@ -394,14 +395,29 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     if not debug:
         try:
             from core import own_store as _OS
-            _p = _OS.page_of(channel, full=full, limit=limit, offset=offset,
-                             per_type=per_type, only=only)
-            if _p is not None:
-                return _p
-            _OS.ensure_async(channel)
+            # §15.165: 走 SWR —— 稳态读物化 / 冷态读侧零等待返回上一版完整物化 +
+            # 顶层 __swr + 后台分舱单飞重建 / 首次单飞现算一次。失配不再同步
+            # `_compute()` 全量(线上 7.9→25.5s + 连接池耗尽), 根治红线 6 违反。
+            _d, _swr = _OS.serve(
+                channel, full=full, limit=limit, offset=offset,
+                per_type=per_type, only=only,
+                compute=lambda: _fallback_compute(channel, full, limit, offset,
+                                                  per_type, only))
+            if _swr and swr_out is not None:
+                # 只往调用方给的通道冒泡(独立 GET 端点 → 响应顶层);
+                # aux 内部(_block_own)不传 swr_out → 拿到的是**纯 data**, 形状契约一字不变,
+                # 也不会把 __swr 写进 dash_store 物化。
+                swr_out["__swr"] = _swr
+            return _d
         except Exception as _e:
-            try_err("own_health", "读模型读取降级(退回现算)", _e)
-    d = _compute(channel, debug=debug)
+            try_err("own_health", "SWR 读取降级(退回现算)", _e)
+    return _fallback_compute(channel, full, limit, offset, per_type, only)
+
+
+def _fallback_compute(channel, full, limit, offset, per_type, only):
+    """同步全量现算 + 分页(仅在 debug=1 / legacy / SWR 异常 / 真·从未构建时)。
+    与改前逐字一致, 保证「现算/读回共用同一份 _compute」(红线 9 算法不复制)。"""
+    d = _compute(channel, debug=0)
     d["items"] = _page(d["items"], full=full, limit=limit, offset=offset,
                        per_type=per_type, only=only)
     return d

@@ -235,6 +235,20 @@ def dashboard_unit_state(channel: str = "jd", mode: str = "", detail: str = ""):
         _st["dash_mat"] = _DS.overview()
     except Exception as _e:
         try_err("dashboard", "dash_mat 观测降级", _e)
+    # §15.165 P2 观测(只读): 冷算本体治理计数(去 fp 单飞 dedup / HeavyBusy 冷却 /
+    # 首建单飞共享 / stale 放行)与 own-health SWR 计数, 供线上四维验收核对, 不参与读决策。
+    try:
+        from core import list_store as _LS, own_store as _OS
+        _st["cold_guard"] = dict(_LS._STATS, inflight=len(_LS._FLIGHTS),
+                                 busy_cooling=len(_LS._BUSY_UNTIL),
+                                 first_inflight=len(_LS._FIRSTS),
+                                 coalesce=_LS._coalesce_on(),
+                                 stale_prev=_LS._stale_prev_on(),
+                                 first_sf=_LS._first_sf_on())
+        _st["own_swr"] = {"stat": dict(_OS._STAT), "enabled": _OS._swr_on(),
+                          "budget": _OS._budget_on()}
+    except Exception as _e:
+        try_err("dashboard", "cold_guard 观测降级", _e)
     if detail:
         _st["alerts_sample"] = _US.alerts_of(channel, mode, limit=20) or []
     return ok(_st)
@@ -1328,8 +1342,13 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
     """
     from routes.dashboard_own_health import own_health as _oh
     _lim = max(1, min(int(limit or 200), 500))
-    return ok(_oh(channel, full=1, limit=_lim, offset=max(0, int(offset or 0)),
-                  only=only, per_type=int(per_type or 0), debug=int(debug or 0)))
+    _swr_box = {}
+    _d = _oh(channel, full=1, limit=_lim, offset=max(0, int(offset or 0)),
+             only=only, per_type=int(per_type or 0), debug=int(debug or 0),
+             swr_out=_swr_box)
+    # §15.165: own_health 冷态 SWR 的 __swr 放**响应顶层**(ok(data, **extra)),
+    # 前端 __swrProbe 已收口 /dashboard/ 路径, 零改动; data 形状契约一字不变。
+    return ok(_d, **_swr_box)
 
 
 @router.get("/dashboard/own-health/state")

@@ -4607,12 +4607,16 @@ try:
           and "threading.Thread(target=_cold_worker" in _ls20,
           "core/list_store.py")
 
-    # ③ 任何分支都不等后台结果(回应「方案比等重建还糟」); 首次无上一版直接现算,
-    #    保证首帧是当前完整数据, 绝不返回 0 条或等 15~30s。
-    check("§15.161 冷算治理: 读侧零等待, 首次直接现算(不返回空数据)",
-          "ev.wait(" not in _ls20 and "_FIRST_WAIT" not in _ls20
-          and "building_first" not in _ls20 and "return _live()" in _ls20
-          and '"first_legacy"' in _ls20 and _LS20._HEAVY_WAIT <= 2.0,
+    # ③ §15.161 SWR 冷态分支不等后台结果(回应「方案比等重建还糟」); §15.165 首建
+    #    单飞只在「真·从未构建」时由 leader 算一次、follower 有界等同一份物化,
+    #    不是每个读请求绑后台重建 30s; 绝不返回 0 条/空结构(数据四维-完整)。
+    check("§15.161/165: SWR 读侧零等待 + 首建单飞有界共享 + 不返回空数据",
+          "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
+          and "_FIRST_WAIT = 20.0" in _ls20 and "_FIRST_TTL" in _ls20
+          and "return _live()" in _ls20          # 极端降级单份现算兜底, 不返回 0 条
+          and '"first_legacy"' in _ls20 and _LS20._HEAVY_WAIT <= 2.0
+          and "if prev is None:" in _ls20
+          and "lambda: build(kind, scope, force=True)" not in _ls20,  # 首建不再后台双算
           "core/list_store.py")
 
     # ④ 回滚与新鲜度(红线 15/16)
@@ -4651,8 +4655,21 @@ try:
         check("§15.161 SWR: 常态读(fp 不等)仍返回 None, 不静默返旧值",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
         _H20["stale"] = 1
-        check("§15.161 SWR: stale=1 → 上一版也不可读(完整性不打折)",
+        # §15.165: 默认放行「历史 stale=1 但 gen>0/row_cnt 正常」的完整旧 gen(冷态 SWR),
+        # 稳态仍严格硬拒; `LIST_STALE_PREV=0` 一刀回退到旧行为(stale=1 一律拒读)。
+        check("§15.165 SWR: stale=1 完整旧 gen 冷态可放行(不再退回首建双算停摆)",
+              isinstance(_LS20.page_of("repl", "s", "jd", "bbcc", extra="s",
+                                       allow_stale=True), dict))
+        check("§15.165 SWR: stale=1 稳态(allow_stale=False)仍严格硬拒(红线 8② 不打折)",
+              _LS20.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        _os20 = os.environ.get("LIST_STALE_PREV")
+        os.environ["LIST_STALE_PREV"] = "0"
+        check("§15.165 一刀回滚: LIST_STALE_PREV=0 → stale=1 冷态也退回拒读",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
+        if _os20 is None:
+            os.environ.pop("LIST_STALE_PREV", None)
+        else:
+            os.environ["LIST_STALE_PREV"] = _os20
         _H20["stale"] = 0
         _H20["row_cnt"] = -1
         check("§15.161 SWR: row_cnt=-1 哨兵 → 上一版也不可读",
@@ -5006,6 +5023,199 @@ try:
         _os24.environ.pop("OWN_SAFE_REBUILD", None)
 except Exception as _e37:
     check("§15.164 重建写入幂等/失败保旧 gen 用例无异常", False, str(_e37)[:300])
+
+# ── §15.165 冷算本体 + 极端并发停摆根治(2026-11-08, stress_165 线上压测坐实) ──
+# 改前基线(线上真实链路): P1 单写单条 p95 10.4s / freshness 1065s; P2 任务风暴
+# p95 22.9s / HeavyBusy 19; P3 3写+16读 p95 39.3s / 1×503 / 连接池耗尽 2 条;
+# P4 首建 4 并发 4/4 非200(2×503) / 16.9s / 4/4 零数据(停摆); P5 停写16s 仍不收敛。
+# 根因链: invalidate 每次 bump 8 域 → fp 高频变 → 含 fp 的单飞 key / 要求 fp 相同的
+# cooldown 全失效 → 6+ 类重建反复抢 3 个 heavy 名额(30 条 HeavyBusy) → repl gen 3min
+# 不涨 → 读侧永远失配吃 20min 旧值; own_health 失配即同步 _compute 全量 25.5s +
+# 裸线程绕过预算 → 连接池耗尽; page_of 在 stale=1 硬拒完整旧 gen → 首建双算停摆。
+try:
+    import ast as _ast25
+    from core import list_store as _LS25, own_store as _OS25
+    _p25 = os.path.join(os.path.dirname(__file__), "core")
+    _ls25 = open(os.path.join(_p25, "list_store.py"), encoding="utf-8").read()
+    _os25 = open(os.path.join(_p25, "own_store.py"), encoding="utf-8").read()
+    _oh25 = open(os.path.join(os.path.dirname(__file__), "routes",
+                              "dashboard_own_health.py"), encoding="utf-8").read()
+    _db25 = open(os.path.join(os.path.dirname(__file__), "routes",
+                              "dashboard.py"), encoding="utf-8").read()
+
+    # ① 单飞 key 去 fp + 有界 HeavyBusy 冷却(根治写风暴重建雪崩, 红线 4/5/15)
+    check("§15.165 单飞 key 去 fp: 同 (kind,scope) 写风暴期间只算一次(fp 不再进 key)",
+          "def _flight_key(kind, scope, fp):" in _ls25
+          and 'return "%s|%s" % (kind, scope)' in _ls25
+          and "_BUSY_UNTIL" in _ls25 and "cooling" in _ls25,
+          "core/list_store.py")
+    check("§15.165 HeavyBusy 后有界冷却(_BUSY_COOL=2s), 不排队不盲重试(红线 4/15)",
+          "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_UNTIL[key] = time.time() + _BUSY_COOL" in _ls25
+          and "return \"cooling\"" in _ls25, "core/list_store.py")
+    check("§15.165 FLIGHT_COALESCE=0 一刀回退到含 fp 的旧 key(红线 2 互斥不并存)",
+          "if not _coalesce_on():" in _ls25
+          and 'return "%s|%s|%s" % (kind, scope, fp)' in _ls25
+          and '_flag("FLIGHT_COALESCE")' in _ls25, "core/list_store.py")
+
+    # ② 首建双算改单飞(根治 P4 停摆, 红线 6/10)
+    check("§15.165 首建单飞: 通用 first_shared(leader 一次 + follower 有界等 + 共享结果)",
+          "def first_shared(key, ttl, wait, leader_fn, readback_fn):" in _ls25
+          and 'entry["data"] = leader_fn()' in _ls25
+          and 'entry["event"].set()' in _ls25
+          and 'entry["event"].wait(wait)' in _ls25
+          and 'return readback_fn(entry["data"])' in _ls25
+          and "def _first_serve(" in _ls25
+          and "build(kind, scope, force=True)" in _ls25
+          and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
+          "core/list_store.py")
+    check("§15.165 三处首建共用同一骨架(不叠加机制, 红线 2): list/dash/own",
+          "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25
+          and "_LS.first_shared(\"dmat:\"" in open(
+              os.path.join(os.path.dirname(__file__), "core", "dash_store.py"),
+              encoding="utf-8").read()
+          and "_LS.first_shared(\"own_first|\"" in _os25,
+          "list_store + dash_store + own_store")
+    check("§15.165 首建不再「前台 _live + 后台 build」双算(serve 的 prev is None 分支)",
+          "if _first_sf_on():" in _ls25
+          and "return _first_serve(kind, scope, fp, builder, channel, mode," in _ls25,
+          "core/list_store.py")
+
+    # ③ stale=1 完整旧 gen 冷态放行 + 顶层 prev_stale 播报(红线 8②/16, 准确维)
+    check("§15.165 stale=1 完整旧 gen 冷态放行, 稳态仍硬拒(哨兵一字不松)",
+          "int(h.get(\"stale\") or 0) and not (allow_stale and _stale_prev_on())" in _ls25,
+          "core/list_store.py")
+    check("§15.165 __swr 显式播报 prev_stale, 绝不静默伪装新值(数据四维-准确)",
+          '"prev_stale": bool(int(h.get("stale") or 0))' in _ls25,
+          "core/list_store.py")
+
+    # ④ own-health SWR 化(根治 25.5s 全量现算 + 连接池耗尽, 红线 6)
+    check("§15.165 own-health 失配走 SWR, 不再同步 _compute 全量(红线 6)",
+          "_d, _swr = _OS.serve(" in _oh25 and "_OS.ensure_async(channel)" not in _oh25
+          and "def serve(channel, full=0" in _os25,
+          "own_store + dashboard_own_health")
+    check("§15.165 own SWR __swr 只经 swr_out 冒泡到顶层, aux 拿纯 data 不污染物化",
+          "swr_out[\"__swr\"] = _swr" in _oh25
+          and "swr_out=_swr_box" in _db25 and "return ok(_d, **_swr_box)" in _db25
+          and "own_health(channel, full=0, per_type=3)" in _db25,
+          "dashboard + dashboard_own_health")
+    check("§15.165 own 后台重建收编进 list_store.submit_background(heavy 预算+单飞), 不再裸线程",
+          "def submit_rebuild(channel):" in _os25
+          and '_LS.submit_background("own:" + str(channel)' in _os25
+          and "if _budget_on() and not force:" in _os25
+          and "def ensure_async" in _os25,
+          "core/own_store.py")
+
+    # ⑤ 三套开关族均可一刀回退(红线 2/15)
+    check("§15.165 全开关可一刀回滚: LIST_STALE_PREV / FIRST_SINGLEFLIGHT / OWN_SWR / "
+          "OWN_STALE_PREV / OWN_BUDGET / FLIGHT_COALESCE",
+          all(x in (_ls25 + _os25) for x in
+              ("_flag(\"FIRST_SINGLEFLIGHT\")", "_flag(\"LIST_STALE_PREV\")",
+               '_flag("OWN_SWR")', '_flag("OWN_STALE_PREV")', '_flag("OWN_BUDGET")',
+               '_flag("FLIGHT_COALESCE")')),
+          "list_store + own_store")
+
+    # ⑥ 动态: 去 fp 单飞 + cooling + 开关回退 / page_of stale 放行 / own serve SWR
+    _LS25._FLIGHTS.clear(); _LS25._BUSY_UNTIL.clear(); _LS25._FIRSTS.clear()
+    for _k in ("FLIGHT_COALESCE", "LIST_STALE_PREV", "FIRST_SINGLEFLIGHT",
+               "OWN_SWR", "OWN_STALE_PREV", "OWN_BUDGET"):
+        os.environ.pop(_k, None)
+    check("§15.165 动态: 去 fp 后不同 fp 的单飞 key 相同(写风暴不再起 N 个 flight)",
+          _LS25._flight_key("repl", "s", "AAA") == _LS25._flight_key("repl", "s", "BBB"))
+    _calls25 = []
+    _OrigThread25 = _LS25.threading.Thread
+
+    class _Null25:
+        def __init__(self, *a, **kw): pass
+        def start(self): _calls25.append(1)
+
+    try:
+        _LS25.threading.Thread = _Null25          # 拦截起线程, 只测单飞判定
+        _LS25.submit_background("repl", "s", "AAA", lambda: None)
+        _r25 = _LS25.submit_background("repl", "s", "BBB", lambda: None)  # fp 变了仍 dedup
+        check("§15.165 动态: 同 scope 不同 fp 第二次 submit 直接 dedup(不新起线程)",
+              _r25 == "dedup" and len(_calls25) == 1, "%s / calls=%d" % (_r25, len(_calls25)))
+    finally:
+        _LS25.threading.Thread = _OrigThread25   # 必须恢复, 否则污染后续所有用例
+    _LS25._FLIGHTS.clear(); _LS25._BUSY_UNTIL.clear()
+    os.environ["FLIGHT_COALESCE"] = "0"
+    check("§15.165 动态: FLIGHT_COALESCE=0 回退后不同 fp 的 key 重新不同",
+          _LS25._flight_key("repl", "s", "AAA") != _LS25._flight_key("repl", "s", "BBB"))
+    os.environ.pop("FLIGHT_COALESCE", None)
+
+    # page_of stale 放行(冷态) / 硬拒(稳态) / 回退
+    _o25 = (_LS25.head, _LS25.fp_now, _LS25.read_enabled, _LS25.query, _LS25.one)
+    try:
+        _H25 = {"gen": 3, "fp": "OLD", "row_cnt": 1, "stale": 1,
+                "channel": "jd", "mode": "bbcc", "built_at": "2026-11-08 09:00:00"}
+        _LS25.head = lambda k, s: dict(_H25)
+        _LS25.fp_now = lambda k, c, m, e="": "NEW"
+        _LS25.read_enabled = lambda: True
+        _LS25.query = lambda sql, p=None: [{"payload": '{"sku":"S1"}'}]
+        _LS25.one = lambda sql, p=None: {"age_s": 12}
+        check("§15.165 动态: stale=1 完整旧 gen → 冷态放行(不再退回首建停摆)",
+              isinstance(_LS25.page_of("repl", "s", "jd", "bbcc", extra="s",
+                                       allow_stale=True), dict))
+        check("§15.165 动态: stale=1 稳态仍硬拒(红线 8②)",
+              _LS25.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
+        os.environ["LIST_STALE_PREV"] = "0"
+        check("§15.165 动态: LIST_STALE_PREV=0 回退 → stale=1 冷态也拒读",
+              _LS25.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
+        os.environ.pop("LIST_STALE_PREV", None)
+    finally:
+        _LS25.head, _LS25.fp_now, _LS25.read_enabled, _LS25.query, _LS25.one = _o25
+
+    # own serve 三态(稳态命中 / 冷态 SWR / 回退现算), mock 掉 DB
+    _oo25 = (_OS25.read_enabled, _OS25.page_of, _OS25.head, _OS25.submit_rebuild,
+             _OS25.swr_meta)
+    try:
+        _OS25.read_enabled = lambda: True
+        _OS25.head = lambda c: {"gen": 5, "fp": "OLD", "stale": 0,
+                                 "stat": "total:1;tg:0;os:0;er:0;crit:0;warn:0;od:1;eb:1;b2c:1",
+                                 "built_at": "2026-11-08 09:00:00"}
+        _seq25 = {"n": 0}
+        def _po25(c, full=0, limit=10, offset=0, per_type=0, only="", allow_stale=False):
+            _seq25["n"] += 1
+            if not allow_stale:
+                return {"items": [{"sku": "S1"}], "total": 1}
+            return {"items": [{"sku": "S1"}], "total": 1}   # 冷态上一版
+        _OS25.page_of = _po25
+        _OS25.submit_rebuild = lambda c: "started"
+        _OS25.swr_meta = lambda c, h, s: {"state": "serving_previous", "rebuild": s}
+        _d25a, _s25a = _OS25.serve("jd", compute=lambda: {"items": [], "total": 0})
+        check("§15.165 动态: own 稳态命中 → 读物化, 无 __swr, 不调 compute",
+              _d25a.get("total") == 1 and _s25a is None, str((_d25a, _s25a)))
+
+        # 真·冷态: 稳态 page_of(fp 命中) 返回 None, 冷态 allow_stale 返回上一版 →
+        # 必须返回完整上一版 + 顶层 __swr + 后台补建, **绝不调 compute 全量**(红线 6)
+        def _po25c(c, full=0, limit=10, offset=0, per_type=0, only="", allow_stale=False):
+            if not allow_stale:
+                return None                       # fp 失配
+            return {"items": [{"sku": "PREV"}], "total": 1}
+        _OS25.page_of = _po25c
+        _computed25 = {"n": 0}
+
+        def _compute25():
+            _computed25["n"] += 1
+            return {"items": [{"sku": "LIVE"}], "total": 1}
+        _d25c, _s25c = _OS25.serve("jd", compute=_compute25)
+        check("§15.165 动态: own 冷态 → 读侧零等待返回上一版完整物化 + __swr + 后台补建, "
+              "绝不同步 compute 全量(红线 6)",
+              _d25c["items"][0]["sku"] == "PREV" and _computed25["n"] == 0
+              and isinstance(_s25c, dict) and _s25c.get("rebuild") == "started",
+              str((_d25c, _s25c, _computed25)))
+        _OS25.page_of = _po25
+        os.environ["OWN_SWR"] = "0"
+        _d25b, _s25b = _OS25.serve("jd", compute=lambda: {"items": [{"sku": "LIVE"}], "total": 1})
+        check("§15.165 动态: OWN_SWR=0 一刀回退 → 直接 compute 现算, 无 swr",
+              _d25b["items"][0]["sku"] == "LIVE" and _s25b is None, str((_d25b, _s25b)))
+        os.environ.pop("OWN_SWR", None)
+    finally:
+        (_OS25.read_enabled, _OS25.page_of, _OS25.head, _OS25.submit_rebuild,
+         _OS25.swr_meta) = _oo25
+    _LS25._FLIGHTS.clear(); _LS25._BUSY_UNTIL.clear(); _LS25._FIRSTS.clear()
+    check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", True)
+except Exception as _e38:
+    check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

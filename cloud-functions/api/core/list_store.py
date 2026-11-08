@@ -96,10 +96,37 @@ def _safe_rebuild():
 # 实例可被平台冻结: flight 带 t0 新鲜度, 超 _FLIGHT_TTL 判僵尸丢弃(红线 15)。
 _FLIGHT_TTL = 60.0
 _HEAVY_WAIT = 2.0     # 抢全局名额的最长等待; 抢不到 = 快速失败, 绝不排长队
+_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却, 防写风暴下每个读都重抢名额
+_FIRST_WAIT = 20.0    # §15.165 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
+_FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
+_BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
+_FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
-          "swr_served": 0, "first_legacy": 0}
+          "swr_served": 0, "first_legacy": 0, "first_shared": 0,
+          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0}
+
+
+def _flag(name, default=True):
+    """§15.165 总开关族: 未设置=开; 置 "0" 一刀回退到本轮修复前行为(不必发版)。
+    红线 2: 不新增机制, 只是同一路径上的开关; 互斥不并存。"""
+    _v = os.environ.get(name)
+    if _v is None or str(_v).strip() == "":
+        return default
+    return str(_v).strip().lower() in _READ_ON
+
+
+def _coalesce_on():
+    return _flag("FLIGHT_COALESCE")
+
+
+def _stale_prev_on():
+    return _flag("LIST_STALE_PREV")
+
+
+def _first_sf_on():
+    return _flag("FIRST_SINGLEFLIGHT")
 
 
 def read_enabled():
@@ -232,7 +259,14 @@ def page_of(kind, scope, channel, mode, need_only=0, search="", page=0, page_siz
     if not read_enabled():
         return None
     h = h if h is not None else head(kind, scope)
-    if not h or not int(h.get("gen") or 0) or int(h.get("stale") or 0):
+    if not h or not int(h.get("gen") or 0):
+        return None
+    # §15.165: 历史/并发遗留的 stale=1, 只要 gen>0 且完整旧快照可读, 冷态(allow_stale)
+    # 下仍可作为「上一版」返回 + __swr 显式播报 stale_prev。§15.164 只修了「不再误置
+    # stale」, 没修「已 stale 的完整旧 gen 仍被 page_of 硬拒 → serve 退回首建双算 →
+    # P4 压测 4 并发 16.9s / 2×503 / 4/4 零数据(停摆)」。稳态(allow_stale=False)
+    # 仍严格硬拒 stale=1, 红线 8② 哨兵一字不松。`LIST_STALE_PREV=0` 回退。
+    if int(h.get("stale") or 0) and not (allow_stale and _stale_prev_on()):
         return None
     if int(h.get("row_cnt") or -1) < 0:      # 哨兵: 本轮没算成 ≠ 真的是 0 条（红线 8①）
         return None
@@ -408,9 +442,22 @@ def build(kind, scope, force=False):
             "elapsed": round(time.time() - _t0, 2)}
 
 
-# ── 触发 / 冷算治理(§15.161) ────────────────────────────────────
+# ── 触发 / 冷算治理(§15.161 / §15.165) ──────────────────────────
 def _flight_key(kind, scope, fp):
-    return "%s|%s|%s" % (kind, scope, fp)
+    """§15.165: fp **不进单飞 key**。
+
+    线上压测(stress_165 P2/P3)坐实: 任务页多任务每 0.2~0.3s bump 一次域计数 → fp
+    每次都变 → 旧 key(kind|scope|fp)使同 (kind,scope) 每次都是「新 flight」, 单飞
+    与 cooldown(要求 fp 相同)同时失效 → 6+ 类重建反复抢 3 个 heavy 名额, 30 条
+    HeavyBusy, repl gen 3 分钟不涨, 读侧永远吃 18~20min 旧值(卡数据)。
+
+    去 fp 后同一 (kind,scope) 在飞期间只算一次; build() 内部会**重新 fp_now()** 发布
+    当时的最新 fp(红线 16 fp 同源), 所以一次在飞即可收敛到最新, 不需要每次写各算一遍。
+    `FLIGHT_COALESCE=0` 一刀回退到含 fp 的旧 key。
+    """
+    if not _coalesce_on():
+        return "%s|%s|%s" % (kind, scope, fp)
+    return "%s|%s" % (kind, scope)
 
 
 def _cold_worker(kind, scope, fp, fn, key):
@@ -418,6 +465,8 @@ def _cold_worker(kind, scope, fp, fn, key):
 
     与「全局单 worker」的区别是**按 kind 分舱**: 3 个 kind 各占 1 个名额并行跑,
     不是一条队列串行 15.54s。抢不到全局名额 = 快速失败, 不排队(红线 4/10)。
+    §15.165: HeavyBusy 后给同 key 一个有界冷却(_BUSY_COOL), 防写风暴下每个读请求
+    都立刻重抢名额、把 3 个名额反复打满却不收敛(红线 15: 有界, 不排队)。
     """
     try:
         from db import heavy, HeavyBusy
@@ -431,8 +480,12 @@ def _cold_worker(kind, scope, fp, fn, key):
                     try_err("list_store", "后台重建失败(%s/%s)" % (kind, scope), _e)
         except HeavyBusy as _hb:
             # 全局 3 个名额已满: 快速失败并留痕, 不排队、不拖住读侧。
-            # 读侧仍返回上一版完整物化; 下一次请求会重新触发(flight 已释放)。
+            # 读侧仍返回上一版完整物化; 冷却结束后下一次请求会再触发(flight 已释放)。
             _STATS["busy"] += 1
+            if _coalesce_on():
+                with _FLIGHT_LOCK:
+                    _BUSY_UNTIL[key] = time.time() + _BUSY_COOL
+                _STATS["busy_cooled"] += 1
             try_err("list_store", "冷算全局名额已满, 本轮跳过(%s/%s)" % (kind, scope), _hb)
     except Exception as _e2:
         _STATS["failed"] += 1
@@ -443,17 +496,23 @@ def _cold_worker(kind, scope, fp, fn, key):
 
 
 def submit_background(kind, scope, fp, fn):
-    """同 (kind,scope,fp) 只算一次; 不同 kind 并行; 读侧**永不等待**。
+    """同 (kind,scope) 只算一次(§15.165 去 fp); 不同 kind 并行; 读侧**永不等待**。
 
-    :return: state 字符串(started / dedup / error), 只用于 __swr 状态播报。
+    :return: state 字符串(started / dedup / cooling / error), 只用于 __swr 状态播报。
     """
     key = _flight_key(kind, scope, fp)
+    _now = time.time()
     with _FLIGHT_LOCK:
         cur = _FLIGHTS.get(key)
-        if cur and time.time() - cur["t0"] < _FLIGHT_TTL:
+        if cur and _now - cur["t0"] < _FLIGHT_TTL:
             _STATS["dedup"] += 1
             return "dedup"
-        _FLIGHTS[key] = {"t0": time.time(), "kind": kind}
+        if _coalesce_on() and _BUSY_UNTIL.get(key, 0) > _now:
+            # 上次抢名额失败后的有界冷却, 不新起线程、不排队(红线 4/15)
+            _STATS["busy_cooled"] += 1
+            return "cooling"
+        _BUSY_UNTIL.pop(key, None)
+        _FLIGHTS[key] = {"t0": _now, "kind": kind}
     try:
         threading.Thread(target=_cold_worker, args=(kind, scope, fp, fn, key),
                          daemon=True, name="list-cold-" + str(kind)).start()
@@ -513,6 +572,8 @@ def _swr_meta(kind, scope, h, state):
         "freshness_s": age,
         "built_at": str(h.get("built_at") or ""),
         "fp_changed": True,
+        # §15.165 准确维: 放行「历史 stale=1 完整旧 gen」时显式播报, 绝不静默伪装成新值
+        "prev_stale": bool(int(h.get("stale") or 0)),
         "rebuild": state,
         "retry_after_ms": 900,
     }
@@ -527,6 +588,76 @@ def pop_swr(d):
     if isinstance(d, dict) and "__swr" in d:
         return {"__swr": d.pop("__swr")}
     return {}
+
+
+def first_shared(key, ttl, wait, leader_fn, readback_fn):
+    """§15.165 通用首建单飞骨架(供 list_store / dash_store / own_store 复用, 红线 2 不叠加)。
+
+    同 key 并发只让 leader 跑一次 `leader_fn`(算+落物化), 其返回值作为**共享结果**
+    直接交给所有人的 `readback_fn(shared)`; follower 有界等 `wait` 后读同一份,
+    绝不各算一遍全量。等待是「等 leader 算完这一份」, 不是「读请求绑后台重建 30s」。
+    `shared` 为 None(leader 没产出/异常)时由 readback_fn 自行读物化或单份现算兜底。
+    进程内单飞跨实例仍各算一次(既有边界), 但幂等写 + 去 fp 单飞保证不损数据。
+    """
+    with _FLIGHT_LOCK:
+        cur = _FIRSTS.get(key)
+        if cur and time.time() - cur["t0"] < ttl:
+            entry, leader = cur, False
+        else:
+            entry = {"t0": time.time(), "event": threading.Event(), "data": None}
+            _FIRSTS[key] = entry
+            leader = True
+    if leader:
+        try:
+            entry["data"] = leader_fn()
+        finally:
+            entry["event"].set()
+            with _FLIGHT_LOCK:
+                # 结果留在 entry 里给所有 follower 读, 不随 pop 丢; 由 TTL 下次覆盖
+                _FIRSTS.pop(key, None)
+    else:
+        _STATS["first_shared"] += 1
+        if not entry["event"].wait(wait):
+            _STATS["first_timeout"] += 1
+    return readback_fn(entry["data"])
+
+
+def _first_serve(kind, scope, fp, builder, channel, mode,
+                 need_only, search, page, page_size):
+    """§15.165 首建单飞: 仅「从未构建 / 物化全坏行」的一次性初始化入口。
+
+    改前(线上 stress_165 P4 实测): `submit_background(build)` 后台算一遍 +
+    `return _live()` 前台同步全量再算一遍 = **双算**; 4 并发 = 8 份 13s 全量 Python
+    循环抢 GIL + 抢 10 个连接 → 16.9s / 2×503 / 4/4 零数据(停摆), 违反红线 6/10。
+
+    改后: 同 (kind,scope) 单飞, **leader 只跑一次 `build(force=True)`**(算+落物化+
+    发布前 COUNT 自校验+切 head, 复用红线 8②/9 的既有写入链), follower 有界等
+    `_FIRST_WAIT` 后**读回同一份物化**(不重复全量); 全部返回完整数据, 绝不 0 条。
+    等待是「等 leader 算完这一份」, 不是「等后台重建 30s」; 且只在真·从未构建时发生
+    (§15.165 第 2 刀后, 有完整旧 gen 的 stale=1 已改走 SWR, 根本不进这里)。
+    `FIRST_SINGLEFLIGHT=0` 一刀回退到旧双算路径。
+    """
+    key = _flight_key(kind, scope, fp)
+
+    def _leader():
+        _STATS["first_legacy"] += 1
+        try:
+            build(kind, scope, force=True)
+        except Exception as _e:
+            try_err("list_store", "首建单飞失败(%s/%s)" % (kind, scope), _e)
+
+    def _readback(shared):
+        d = page_of(kind, scope, channel, mode, need_only, search, page,
+                    page_size, extra=scope, allow_stale=True)
+        if d is not None:
+            return d
+        # 极端降级(build 失败/实例冻结): 单份现算兜底, 绝不返回 0 条(数据四维-完整)
+        from core.list_page import shape as _shape
+        items, total = _shape(builder(), need_only=need_only, search=search,
+                              page=page, page_size=page_size, need_keys=NEED_KEYS[kind])
+        return {OUT_KEY[kind]: items, "total": total, "page": page, "page_size": page_size}
+
+    return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)
 
 
 def serve(kind, scope, channel, mode, days, source, builder,
@@ -578,6 +709,9 @@ def serve(kind, scope, channel, mode, days, source, builder,
     #    兜底(红线 2)。这里**不等待**后台结果: 任何请求 ≤ 单跑 p95(repl 6s / 其余 3~4s),
     #    首帧是当前实时算出的完整数据, 绝不返回 0 条、绝不等 15~30s。
     if prev is None:
+        if _first_sf_on():
+            return _first_serve(kind, scope, fp, builder, channel, mode,
+                                need_only, search, page, page_size)
         _STATS["first_legacy"] += 1
         submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
         return _live()
