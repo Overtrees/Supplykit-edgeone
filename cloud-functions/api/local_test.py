@@ -317,10 +317,7 @@ r = client.get("/dashboard/summary?channel=jd&start_date=2026-08-01&end_date=202
 check("自定义日期 200", r.status_code == 200 and r.json().get("ok") is not False, r.text[:120])
 
 # replenishment
-# §15.170: 首次请求(该 scope 无物化)按设计返回 building, 由前端重试拿完整数据;
-#   本用例验的是**补货算法口径**(不是首建策略), 故走 legacy=1 现算路径。
-r = client.get("/insights/replenishment?channel=jd&mode=bbcc&legacy=1",
-               headers={"X-Auth-Token": TOKEN})
+r = client.get("/insights/replenishment?channel=jd&mode=bbcc", headers={"X-Auth-Token": TOKEN})
 d = r.json()
 if d.get("ok") is False:
     check("replenish 无错误", False, (d.get("detail") or "")[:200])
@@ -4613,16 +4610,13 @@ try:
     # ③ §15.161 SWR 冷态分支不等后台结果(回应「方案比等重建还糟」); §15.165 首建
     #    单飞只在「真·从未构建」时由 leader 算一次、follower 有界等同一份物化,
     #    不是每个读请求绑后台重建 30s; 绝不返回 0 条/空结构(数据四维-完整)。
-    #    §15.168 首建再加「同 kind 串行 + 全局名额」: 6 个新 scope 并发实测 p50 23.1s /
-    #    17 个 502·503, 根因是 6 份全量互抢(GIL/连接) → calc 4.5→13.4s。
-    check("§15.170: SWR 读侧零等待 + 首建后台单飞 + 首次即 building(不排队/不长等)",
+    check("§15.161/165: SWR 读侧零等待 + 首建单飞有界共享 + 不返回空数据",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
-          and "def _building(" in _ls20 and "return _live()" in _ls20
-          and '"first_legacy"' in _ls20
-          and "def first_guard" in _ls20
-          and "_FIRST_SEM" not in _ls20 and "_kind_lock" not in _ls20
-          and _LS20._HEAVY_WAIT <= 2.0
-          and "if prev is None:" in _ls20,
+          and "_FIRST_WAIT = 20.0" in _ls20 and "_FIRST_TTL" in _ls20
+          and "return _live()" in _ls20          # 极端降级单份现算兜底, 不返回 0 条
+          and '"first_legacy"' in _ls20 and _LS20._HEAVY_WAIT <= 2.0
+          and "if prev is None:" in _ls20
+          and "lambda: build(kind, scope, force=True)" not in _ls20,  # 首建不再后台双算
           "core/list_store.py")
 
     # ④ 回滚与新鲜度(红线 15/16)
@@ -4768,7 +4762,7 @@ try:
     # ④ 动态: serve_tally 三态(mock head/fp/query, 不碰真库)
     _US22 = _US
     _o22 = (_US22.head, _US22.fp_now, _US22.read_enabled, _US22.query,
-            _US22.submit_rebuild, _US22.build)
+            _US22.submit_rebuild)
     _subs22 = []
     try:
         _H22 = {"gen": 3, "fp": "OLD", "stale": 0, "enabled": 1, "channel": "jd",
@@ -4805,23 +4799,10 @@ try:
               _t22 is None and _s22 is None and len(_subs22) == 1, str(_subs22))
         _H22["stale"] = 0
         _H22["gen"] = 0
-        # §15.168: 从未构建不再「返回 None 让三接口各全量现算」, 而是同 (channel,mode)
-        # 首建单飞一次 build 后读回; 这里 mock build 为「发布 gen=3」。
-        _built22 = []
-
-        def _bld22(ch, m=None, **k):
-            _built22.append((ch, m))
-            _H22.update({"gen": 3, "fp": "NEW", "risk_fp": "NEW"})
-            return {"ok": True}
-        _US22.build = _bld22
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.168 serve_tally: 从未构建(gen=0) → 首建单飞 build 一次后读回完整 tally, "
-              "不再让调用方全量现算(冷态并发不再 N×15s)",
-              _t22 is not None and _t22.get(("bc", "bc"), {}).get("total") == 10
-              and len(_built22) == 1 and _s22 is None, str((_t22, _s22, _built22)))
+        check("§15.162 serve_tally: 从未构建(gen=0) → (None, None) 现算, 后台首建",
+              _t22 is None and _s22 is None and len(_subs22) == 2, str(_subs22))
         _H22["gen"] = 3
-        _H22["fp"] = "OLD"        # 恢复「head 旧指纹」, 后续 serve_risk 用例验失配播报
-        _H22["risk_fp"] = "OLD"
         _US22.fp_now = lambda ch, m=None: "NEW"
         _US22.fp_risk_now = lambda ch, m=None: "NEW"
         _pr22, _sr22 = _US22.serve_risk("jd")
@@ -4834,8 +4815,7 @@ try:
         check("§15.162 serve_risk: 双指纹全命中 → 正常返回, 无播报",
               _pr22 and _sr22 is None, str(_sr22))
     finally:
-        (_US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild,
-         _US22.build) = _o22
+        _US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild = _o22
 except Exception as _e35:
     check("§15.162 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
 
@@ -5069,42 +5049,35 @@ try:
           and 'return "%s|%s" % (kind, scope)' in _ls25
           and "_BUSY_UNTIL" in _ls25 and "cooling" in _ls25,
           "core/list_store.py")
-    check("§15.165/§15.167 HeavyBusy 后有界冷却(2s 起, 指数退避 30s 封顶, 成功复位), 不排队",
-          "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_COOL_MAX = 30.0" in _ls25
-          and "_BUSY_COOL * (2 ** min(4, _n))" in _ls25
-          and "_BUSY_UNTIL[key] = time.time() + _wait" in _ls25
-          and "_BUSY_BACKOFF.pop(key, None)" in _ls25
+    check("§15.165 HeavyBusy 后有界冷却(_BUSY_COOL=2s), 不排队不盲重试(红线 4/15)",
+          "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_UNTIL[key] = time.time() + _BUSY_COOL" in _ls25
           and "return \"cooling\"" in _ls25, "core/list_store.py")
-    check("§15.167 重建硬间隔 _MIN_GAP: 写风暴下同 kind 最多 1 次/3s(fp 变了也不立刻重算)",
-          "_MIN_GAP = 3.0" in _ls25
-          and '_now - _last[0] < _MIN_GAP' in _ls25
-          and 'return {"ok": True, "skipped": "min_gap"}' in _ls25, "core/list_store.py")
     check("§15.165 FLIGHT_COALESCE=0 一刀回退到含 fp 的旧 key(红线 2 互斥不并存)",
           "if not _coalesce_on():" in _ls25
           and 'return "%s|%s|%s" % (kind, scope, fp)' in _ls25
           and '_flag("FLIGHT_COALESCE")' in _ls25, "core/list_store.py")
 
     # ② 首建双算改单飞(根治 P4 停摆, 红线 6/10)
-    check("§15.165/170 首建骨架: first_shared 供 dash/own; list 走后台单飞去 fp 单飞",
+    check("§15.165 首建单飞: 通用 first_shared(leader 一次 + follower 有界等 + 共享结果)",
           "def first_shared(key, ttl, wait, leader_fn, readback_fn):" in _ls25
           and 'entry["data"] = leader_fn()' in _ls25
+          and 'entry["event"].set()' in _ls25
           and 'entry["event"].wait(wait)' in _ls25
           and 'return readback_fn(entry["data"])' in _ls25
           and "def _first_serve(" in _ls25
-          and "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls25,
+          and "build(kind, scope, force=True)" in _ls25
+          and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
           "core/list_store.py")
-    check("§15.170 三处首建共用同一骨架(不叠加机制, 红线 2): list=后台 / dash+own=first_shared",
-          "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls25
+    check("§15.165 三处首建共用同一骨架(不叠加机制, 红线 2): list/dash/own",
+          "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25
           and "_LS.first_shared(\"dmat:\"" in open(
               os.path.join(os.path.dirname(__file__), "core", "dash_store.py"),
               encoding="utf-8").read()
           and "_LS.first_shared(\"own_first|\"" in _os25,
           "list_store + dash_store + own_store")
-    check("§15.170 首建: 同 scope 共享一份 + 名额满/超时即 building(不排队/不各算)",
+    check("§15.165 首建不再「前台 _live + 后台 build」双算(serve 的 prev is None 分支)",
           "if _first_sf_on():" in _ls25
-          and "_d0 = _first_serve(kind, scope, fp, builder, channel, mode," in _ls25
-          and "return _building(kind, page, page_size)" in _ls25
-          and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
+          and "return _first_serve(kind, scope, fp, builder, channel, mode," in _ls25,
           "core/list_store.py")
 
     # ③ stale=1 完整旧 gen 冷态放行 + 顶层 prev_stale 播报(红线 8②/16, 准确维)
@@ -5243,141 +5216,6 @@ try:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", True)
 except Exception as _e38:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
-
-# ── §15.166 冷算本体: 少往返 + 去重复窗口计算(首建/后台重建同受益) ──
-try:
-    _src26r = open("routes/replenishment.py", encoding="utf-8").read()
-    _src26p = open("routes/purchase_calc.py", encoding="utf-8").read()
-    # ① 补货: 「合计行 + 按码行」合并为一次 barcode="all"(原两次调用 = 两次全表 + 两次存在性往返)
-    check("§15.166 补货: 物化读取合并为单次 barcode='all'(不再分两次读)",
-          'get_sku_sales_stats(channel, days=90, barcode="all")' in _src26r
-          and "if _one_read_on():" in _src26r
-          and 'get_sku_sales_stats(channel, days=90, barcode="*")' in _src26r,  # 回退分支仍在
-          "routes/replenishment.py")
-    # ② 采购: 同上, 且按行 barcode 分流(合计行 → _rws, 按码行 → _bc_stats)
-    check("§15.166 采购: 物化读取合并为单次 barcode='all' 并按行分流",
-          'get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all")' in _src26p
-          and "if _oro():" in _src26p
-          and 'if str(_r0.get("barcode") or ""):' in _src26p
-          and 'get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="*")' in _src26p,
-          "routes/purchase_calc.py")
-    # ③ 重复窗口计算消除: 三组各只调一次 [7,14,28], 不再额外 [14]/[28]
-    check("§15.166 补货: 消除重复 _csm 窗口计算(9 次 → 3 次, 且保留回退分支)",
-          _src26r.count('windows=[7, 14, 28], sparse="shrink"') >= 3
-          and "_mc14 = None if _dedup else" in _src26r
-          and "_ma28 = None if _dedup else" in _src26r
-          and "_mw14 = None if _dedup else" in _src26r
-          and "_c3 = _csm({_bk: _sps(_bd)}, windows=[7, 14, 28]" in _src26r
-          and "_c7 = _csm({_bk: _sps(_bd)}, windows=[7]" in _src26r, "routes/replenishment.py")
-    # ④ 窗口独立性前提(等价性的根据): 每个 win 只取 base_vals[:win], 不含跨窗口状态
-    _src26s = open("biz/sales.py", encoding="utf-8").read()
-    check("§15.166 等价前提: calc_sales_multi 各窗口独立(vals = base_vals[:win])",
-          "for win in windows:" in _src26s and "vals = base_vals[:win]" in _src26s,
-          "biz/sales.py")
-    # ⑤ 开关默认开 + 置 0 回退
-    import importlib as _il26
-    import routes.replenishment as _R26
-    _il26.reload(_R26)
-    os.environ.pop("SALES_ONE_READ", None)
-    _on26 = _R26._one_read_on()
-    os.environ["SALES_ONE_READ"] = "0"
-    _off26 = _R26._one_read_on()
-    os.environ.pop("SALES_ONE_READ", None)
-    check("§15.166 开关: 默认单次读, SALES_ONE_READ=0 回退分两次读",
-          _on26 is True and _off26 is False, "%s/%s" % (_on26, _off26))
-    check("§15.166 冷算本体根治用例无异常", True)
-except Exception as _e39:
-    check("§15.166 冷算本体根治用例无异常", False, str(_e39)[:300])
-
-# ── §15.168 冷态/冷态并发: 首建串行 + 全局名额 + payload 压缩 ──
-try:
-    import threading as _th28, time as _tm28, json as _js28
-    from core import list_store as _LS28, own_store as _OS28, dash_store as _DS28
-    _p28 = os.path.join(os.path.dirname(__file__), "core")
-    _ls28 = open(os.path.join(_p28, "list_store.py"), encoding="utf-8").read()
-    _os28 = open(os.path.join(_p28, "own_store.py"), encoding="utf-8").read()
-    _ds28 = open(os.path.join(_p28, "dash_store.py"), encoding="utf-8").read()
-
-    # ① 写入往返次数减半(200→500/批) —— 首建 write 2.3s 里 50 次往返
-    #    (试过 zlib+base64 payload 压缩: 逐行压缩率仅 ~16%, 编码 CPU 抵消写入收益, 已回退)
-    check("§15.168 首建写入批量 _CHUNK=500(50 次往返 → 20 次), payload 仍整行 JSON",
-          "_CHUNK = 500" in _ls28
-          and 'json.dumps(row, ensure_ascii=False, default=str)' in _ls28
-          and "_enc_payload" not in _ls28,
-          "core/list_store.py")
-    check("§15.168 own 明细写入 _CHUNK=1000(首建 36 次往返 → 15 次)",
-          "_CHUNK = 1000" in _os28, "core/own_store.py")
-
-    # ② 同 kind 首建并行度受控(2 席): 3 个并发时最大并发度 ≤2 (实测纯并发 6 路会把
-    #    calc 从 4.5s 拖到 13.4s 并打满连接; 串行又让第 3 个用户等 20s+, 2 席是折中)
-    _cur28 = {"n": 0, "max": 0}
-    _lk28 = _th28.Lock()
-
-    def _fn28():
-        with _lk28:
-            _cur28["n"] += 1
-            _cur28["max"] = max(_cur28["max"], _cur28["n"])
-        _tm28.sleep(0.12)
-        with _lk28:
-            _cur28["n"] -= 1
-        return {"ok": True}
-
-    # ③ 跨 kind 并行: 两个不同 kind 各 0.15s, 总墙钟应 ≈0.15s 而不是 0.3s
-    _t28b = _tm28.time()
-    _ts28 = [_th28.Thread(target=lambda k=k: _LS28.first_guard(k, lambda: _tm28.sleep(0.15)))
-             for k in ("k_par_a", "k_par_b")]
-    [_t.start() for _t in _ts28]
-    [_t.join() for _t in _ts28]
-    _wall28b = _tm28.time() - _t28b
-    check("§15.170 跨 kind 首建并行(不串行: 墙钟 ≈0.15s)",
-          _wall28b < 0.28, "wall=%.2fs" % _wall28b)
-
-    # ④ §15.170: 首建不进请求路径 —— _first_serve 只登记+起后台, 返回 None(调用方 building)
-    check("§15.170 撤销全局 1 席与 kind 串行锁(方案 §6.2 红线 5 已否决), 只留 db.heavy",
-          "_FIRST_SEM" not in _ls28
-          and "_kind_lock" not in _ls28
-          and "_KIND_LOCKS" not in _ls28
-          and "_FIRST_HEAVY_WAIT = 0.05" in _ls28,
-          "core/list_store.py")
-    check("§15.170 首次请求立刻 building(200 + retry_after), 不等全量",
-          "_first_serve(kind, scope, fp, builder, channel, mode," in _ls28
-          and "return _building(kind, page, page_size)" in _ls28)
-
-    # ⑤ 三处首建都收编进同一骨架(红线 2 不叠加): list 走后台单飞, dash/own 走 first_shared
-    check("§15.170 首建骨架收口: list=后台单飞 / dash+own=first_shared",
-          "submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))" in _ls28
-          and "_LS.first_shared(" in _os28
-          and "_LS.first_shared(" in _ds28,
-          "list_store + own_store + dash_store")
-    check("§15.168 首建等待全局名额(复用 db.heavy, 不另造闸门, 红线 4)",
-          "from db import heavy, HeavyBusy" in _ls28
-          and 'with heavy("first:" + str(kind), timeout=_FIRST_HEAVY_WAIT):' in _ls28)
-
-    # ⑥ own_store 退避 SQL 不再残留 INTERVAL %d(红线 14: 会被 _guard_fmt 判死并静默吞掉)
-    _us28 = open(os.path.join(_p28, "unit_store.py"), encoding="utf-8").read()
-    check("§15.168 own_store 退避 SQL 无 INTERVAL %d(红线 14, 原实现退避恒失效)",
-          "INTERVAL %d" not in _os28 and "INTERVAL \" + str(int(_STALE_BACKOFF))" in _os28,
-          "core/own_store.py")
-    check("§15.168 unit_store 退避 SQL 无 INTERVAL %d(原实现与 %s 占位符冲突 → 退避恒失效)",
-          "INTERVAL %d" not in _us28 and "NOW(6) - INTERVAL " in _us28,
-          "core/unit_store.py")
-
-    # ⑦ 首建只在「从未构建(gen=0)」时同步; stale=1(上次校验失败)不在请求里重算(红线 15)
-    check("§15.168 unit 首建只在 gen=0 同步, stale=1 仍走后台退避(不每请求烧 15s)",
-          "_first_build_tally" in _us28
-          and "if _h and int(_h.get(\"gen\") or 0):" in _us28
-          and "unit_first|%s|%s" in _us28)
-    check("§15.168 unit 首建三接口共用同一 first key(summary/aux/risk 只算一次)",
-          _us28.count("_first_build_tally(channel, _m)") >= 3)
-    check("§15.168 看板首建不取 heavy 名额(避免与内层 unit 首建嵌套抢名额)",
-          "use_heavy=False" in _ds28 and "use_heavy=False" in _ls28)
-
-    # ⑧ 嵌套保护: 外层已持名额时内层不再取(否则 3 个 family 并发即可锁死 3 名额)
-    check("§15.168 first_guard 嵌套保护 _HEAVY_TL(同线程不重复取名额)",
-          "_HEAVY_TL" in _ls28 and "getattr(_HEAVY_TL, \"n\", 0) > 0" in _ls28)
-    check("§15.168 冷态/冷态并发根治用例无异常", True)
-except Exception as _e40:
-    check("§15.168 冷态/冷态并发根治用例无异常", False, str(_e40)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

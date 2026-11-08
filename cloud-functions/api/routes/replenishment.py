@@ -15,29 +15,6 @@ router = APIRouter(tags=["insights"])
 # 需求门控阈值: 日销低于此值(近28天不足 2.8 件)视为无实际需求——无需求时库存不会被消耗,
 # 安全线缺口不触发补货(安全线是需求波动的缓冲; 参考 bbcc 无需求不补的驱动语义)
 _MIN_DS = 0.1
-_ON_READ_ON = ("1", "true", "yes", "on")
-
-
-def _one_read_on():
-    """§15.166 冷算本体总开关: 未设置=开; `SALES_ONE_READ=0` 回退到「合计行+按码行分两次读」。"""
-    import os as _os
-    _v = _os.environ.get("SALES_ONE_READ")
-    if _v is None or str(_v).strip() == "":
-        return True
-    return str(_v).strip().lower() in _ON_READ_ON
-
-
-def _inv_slim_on():
-    """§15.167 库存取数瘦身开关: 未设置=开; `INV_SLIM=0` 退回 INVENTORY_COLS 全 12 列。
-
-    只影响补货建议自己那条 `SELECT ... FROM inventory`(少取 4 个别处才用的列),
-    不改任何取数范围/过滤条件/聚合口径 —— 逐行等价。
-    """
-    import os as _os
-    _v = _os.environ.get("INV_SLIM")
-    if _v is None or str(_v).strip() == "":
-        return True
-    return str(_v).strip().lower() in _ON_READ_ON
 
 
 @router.get("/insights/replenishment")
@@ -156,22 +133,14 @@ def _build_repl(channel, mode):
     _stats = {}
     try:
         from biz.sales import get_sku_sales_stats
-        # §15.166 冷算本体: 原「合计行 + 按码行」分两次调用 = 两次全表 SELECT + 两次存在性
-        #   往返(线上单次往返 0.5~3s, 是本接口 calc 的主要固定成本)。`barcode="all"` 的
-        #   设计目的就是一次取「合计行 + 全部按码行」(见 biz/sales.get_sku_sales_stats 注释),
-        #   返回 key = sku|barcode|warehouse, 空码即合计行 → 与两次结果**逐键等价**,
-        #   只是一次往返。`SALES_ONE_READ=0` 一刀回退到分两次读。
-        if _one_read_on():
-            _stats = get_sku_sales_stats(channel, days=90, barcode="all") or {}
-        else:
-            _stats = get_sku_sales_stats(channel, days=90) or {}
-            # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
-            #   补货建议整条链路退化为 SKU 合计值 —— 多码 SKU 的两码会显示同一份日销/库存)
-            try:
-                _stats.update(get_sku_sales_stats(channel, days=90, barcode="*") or {})
-            except Exception as _ebc:
-                from routes.common import try_err as _te2
-                _te2('repl', '补货按码行加载降级', _ebc)
+        _stats = get_sku_sales_stats(channel, days=90) or {}
+        # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
+        #   补货建议整条链路退化为 SKU 合计值 —— 多码 SKU 的两码会显示同一份日销/库存)
+        try:
+            _stats.update(get_sku_sales_stats(channel, days=90, barcode="*") or {})
+        except Exception as _ebc:
+            from routes.common import try_err as _te2
+            _te2('repl', '补货按码行加载降级', _ebc)
     except Exception as _e:
         try_err('repl', '物化读取降级', _e)
         _stats = {}
@@ -193,56 +162,37 @@ def _build_repl(channel, mode):
                         m[d] = m.get(d, 0) + q
             if not _by_c:
                 _by_c = _by
-            # §15.166 冷算本体: `calc_sales_multi` 各窗口**互相独立**(每个 win 只取
-            #   base_vals[:win], 与单窗口调用逐值相同), 原实现每组都额外再调 [14]/[28]
-            #   两次 —— 3 组 × 3 次 = 9 次全量遍历(首建/自愈时 1 万 SKU × 90 天),
-            #   纯重复计算。改为直接取多窗口结果, `SALES_ONE_READ=0` 回退旧写法。
-            _dedup = _one_read_on()
             _mc = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[7, 14, 28], sparse="shrink")
             for _k, _v in _mc.get(7, {}).items():
                 _st = _stats.setdefault("%s|__C__" % _k, {})
                 _st["ds7_cut"] = _v
-            _mc14 = None if _dedup else _csm({k: _sps(v) for k, v in _by_c.items()},
-                                            windows=[14], sparse="shrink")
-            _mc28 = None if _dedup else _csm({k: _sps(v) for k, v in _by_c.items()},
-                                            windows=[28], sparse="shrink")
+            _mc14 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[14], sparse="shrink")
+            _mc28 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[28], sparse="shrink")
             for _k in _mc.get(7, {}):
                 _st = _stats.setdefault("%s|__C__" % _k, {})
-                _st["ds14_cut"] = _mc[14].get(_k, 0) if _mc14 is None else _mc14[14].get(_k, 0)
-                _st["ds28_cut"] = _mc[28].get(_k, 0) if _mc28 is None else _mc28[28].get(_k, 0)
+                _st["ds14_cut"] = _mc14[14].get(_k, 0)
+                _st["ds28_cut"] = _mc28[28].get(_k, 0)
             _ma = _csm({k: _sps(v) for k, v in _by.items()}, windows=[7, 14, 28], sparse="shrink")
-            _ma14 = None if _dedup else _csm({k: _sps(v) for k, v in _by.items()},
-                                            windows=[14], sparse="shrink")
-            _ma28 = None if _dedup else _csm({k: _sps(v) for k, v in _by.items()},
-                                            windows=[28], sparse="shrink")
+            _ma14 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[14], sparse="shrink")
+            _ma28 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[28], sparse="shrink")
             for _k in _ma.get(7, {}):
                 _st = _stats.setdefault("%s|__C__" % _k, {})   # 2026-10-30 全仓→C仓
                 _st["ds7_cut"] = _ma[7].get(_k, 0)
-                _st["ds14_cut"] = _ma[14].get(_k, 0) if _ma14 is None else _ma14[14].get(_k, 0)
-                _st["ds28_cut"] = _ma[28].get(_k, 0) if _ma28 is None else _ma28[28].get(_k, 0)
+                _st["ds14_cut"] = _ma14[14].get(_k, 0)
+                _st["ds28_cut"] = _ma28[28].get(_k, 0)
             _mw = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[7, 14, 28], sparse="shrink")
-            _mw14 = None if _dedup else _csm({k: _sps(v) for k, v in _by_wh.items()},
-                                             windows=[14], sparse="shrink")
-            _mw28 = None if _dedup else _csm({k: _sps(v) for k, v in _by_wh.items()},
-                                             windows=[28], sparse="shrink")
+            _mw14 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[14], sparse="shrink")
+            _mw28 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[28], sparse="shrink")
             for _k in _mw.get(7, {}):
                 _st = _stats.setdefault(_k, {})
                 _st["ds7_cut"] = _mw[7].get(_k, 0)
-                _st["ds14_cut"] = _mw[14].get(_k, 0) if _mw14 is None else _mw14[14].get(_k, 0)
-                _st["ds28_cut"] = _mw[28].get(_k, 0) if _mw28 is None else _mw28[28].get(_k, 0)
+                _st["ds14_cut"] = _mw14[14].get(_k, 0)
+                _st["ds28_cut"] = _mw28[28].get(_k, 0)
             # 2026-10-29 按 69码 直算(与物化同构: key = "sku|barcode|WH_ALL")
             try:
                 for _bk, _bd in (_by_bc or {}).items():
                     _sk, _bc = _bk.rsplit("|", 1) if "|" in _bk else (_bk, "")
                     if not _bc:
-                        continue
-                    if _dedup:
-                        # §15.166: 原每码 3 次 _csm(7/14/28 各一遍) → 1 次取三窗口
-                        _c3 = _csm({_bk: _sps(_bd)}, windows=[7, 14, 28], sparse="shrink")
-                        _st = _stats.setdefault("%s|%s|__C__" % (_sk, _bc), {})
-                        _st["ds7_cut"] = _c3[7].get(_bk, 0)
-                        _st["ds14_cut"] = _c3[14].get(_bk, 0)
-                        _st["ds28_cut"] = _c3[28].get(_bk, 0)
                         continue
                     _c7 = _csm({_bk: _sps(_bd)}, windows=[7], sparse="shrink")
                     _c14 = _csm({_bk: _sps(_bd)}, windows=[14], sparse="shrink")
@@ -568,13 +518,7 @@ def _products(channel):
 def _inventory(channel):
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 主循环 r.get("barcode") 恒 '' →
     #   agg key 退化为 (sku,'') 两码合并, 补货按码从未生效(输出 barcode 只是 products 兜底, 假象)
-    # §15.167 冷算本体: 本函数只被 `_build_repl` 消费, 实测只用 8 列 → 用 LITE 列集,
-    #   线上 90100 行 5.62s → 1.84s(-67%)。`INV_SLIM=0` 回退全列(逐列等价, 只是少取不用的)。
-    from routes.common import check_cols as _cc
-    if _inv_slim_on():
-        from routes.common import INVENTORY_COLS_LITE as _IC
-    else:
-        from routes.common import INVENTORY_COLS as _IC
+    from routes.common import INVENTORY_COLS as _IC, check_cols as _cc
     _rows = query("SELECT " + _IC + " FROM inventory WHERE channel=%s", [channel])
     _cc(_rows, ("barcode", "warehouse"), "repl", "补货物料")
     return _rows

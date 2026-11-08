@@ -44,8 +44,7 @@ from routes.common import try_err
 # 依赖域（与判定模型同一组）—— 见下方 fp_now 的说明
 DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
-_CHUNK = 1000         # §15.168 明细批量插入行数(1000 × 17 列 = 17000 占位符, 远低于上限;
-                      #   线上首建 write 3.1s 里 36 次往返, 合并成 15 次)
+_CHUNK = 400          # 明细批量插入行数(400 × 17 列 = 6800 占位符, 远低于单语句上限)
 _COOLDOWN = 60.0      # 同一渠道两次重建最小间隔(秒) —— 一次导入会连调多次 invalidate
 # §15.164: 原 600s。写新 gen 撞主键后标脏 + 每次刷新 built_at 会把退避无限续期,
 # 失败不再置 stale(见 _mark_stale), 这里只作有界防御(红线 15 不靠盲重试)。
@@ -151,39 +150,18 @@ def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
 
         def _leader():
             _STAT["first_legacy"] += 1
-            try:
-                return _LS.first_guard("own", lambda: build(channel, force=True))
-            except _LS.FirstBusy:
-                # §15.169: 名额忙 → 后台补建, 前台立刻 building(不排队等)
-                ensure_async(channel)
-                raise
+            build(channel, force=True)
 
         def _readback(shared):
-            # §15.169: 只读一次。读不到 = 名额忙/失败 → None, 由路由转 building。
-            #   绝不在这里再算一遍全量(并发下会 30 份同时算, 拖垮连接池)。
             p = page_of(channel, full=full, limit=limit, offset=offset,
                         per_type=per_type, only=only, allow_stale=True)
-            if isinstance(p, dict) and p:
-                return p
-            # leader 算完但读不到(极端写失败): 单份现算兜底; follower 到不了这里
-            return compute()
+            # 极端: build 没建成 → 单份现算兜底(compute 已含分页), 绝不返回 0 条
+            return p if isinstance(p, dict) and p else compute()
 
         if _LS._first_sf_on():
-            try:
-                return _LS.first_shared("own_first|" + str(channel), _LS._FIRST_TTL,
-                                        _LS._FIRST_WAIT, _leader, _readback), None
-            except _LS.FirstBusy:
-                # §15.169: 首建中 → 明确 building(形状与正常一致), 前端按 retry_after 重试
-                return ({"items": [], "total": -1, "building": True}, None)
+            return _LS.first_shared("own_first|" + str(channel), _LS._FIRST_TTL,
+                                    _LS._FIRST_WAIT, _leader, _readback), None
     except Exception as _e:
-        # FirstBusy 是「首次构建未完成」的明确失败, 必须穿透到路由(ok:false + 可重试);
-        # 若在这里被吞掉再 compute() 兜底, 30 个并发又会各自全量算一遍(§15.168 雪崩)。
-        try:
-            from core import list_store as _LS3
-            if isinstance(_e, _LS3.FirstBusy):
-                raise
-        except ImportError:
-            pass
         try_err("own_store", "首建单飞降级(%s)" % channel, _e)
     d = compute()
     return d, None
@@ -353,16 +331,11 @@ def _mark_stale(channel, note):
 
 
 def _stale_recent(channel):
-    """stale 且最近 _STALE_BACKOFF 秒内失败过 → 退避（时间比较放在 SQL 里，避免时区解释差异）
-
-    红线 14: INTERVAL 一律 str() 显式拼接。原实现把整数留在参数位、SQL 里写格式化
-    占位符, db._guard_fmt 会把参数转 str 再模拟格式化 → 类型错误被这里的 except 吞掉
-    → **退避永远返回 False**(失败后每个请求都重算)。§15.168 修。
-    """
+    """stale 且最近 10 分钟内失败过 → 退避（时间比较放在 SQL 里，避免时区解释差异）"""
     try:
-        _sql = ("SELECT COUNT(*) AS n FROM own_health_head WHERE channel=%s AND stale=1 "
-                "AND built_at > DATE_SUB(NOW(6), INTERVAL " + str(int(_STALE_BACKOFF)) + " SECOND)")
-        r = one(_sql, [channel])
+        r = one("SELECT COUNT(*) AS n FROM own_health_head WHERE channel=%s AND stale=1 "
+                "AND built_at > DATE_SUB(NOW(6), INTERVAL %d SECOND)",
+                [channel, int(_STALE_BACKOFF)])
         return int((r or {}).get("n") or 0) > 0
     except Exception:
         return False

@@ -224,15 +224,9 @@ def serve(family, scope, channel, mode, builder):
         if _LS._first_sf_on():
             def _leader():
                 _STAT["first_legacy"] += 1
-
-                def _run():
-                    data = builder()
-                    _write(family, scope, fp, data)
-                    return data          # 共享给同组 follower, 不重复算
-
-                # §15.168: 首建同 family 串行; 不取 heavy 名额 —— 重活在被它调用的
-                #   unit 判定首建里, 外层再取会与内层嵌套抢名额(3 family 即可锁死 3 名额)
-                return _LS.first_guard(family, _run, use_heavy=False)
+                data = builder()
+                _write(family, scope, fp, data)
+                return data          # 共享给同组 follower, 不重复算
 
             def _readback(shared):
                 if isinstance(shared, dict) and shared:
@@ -240,20 +234,11 @@ def serve(family, scope, channel, mode, builder):
                 box = _read(family, scope, allow_stale=True)
                 if box is not None:
                     return box["data"], None
-                # §15.169: follower 到不了这里(超时直接 FirstBusy); leader 算完
-                #   但读不到(极端写失败) → 单份现算兜底, 绝不返回空结构。
-                return builder(), None
+                return builder(), None       # 极端兜底, 单份现算不返回 0 条
 
-            try:
-                return _LS.first_shared("dmat:" + family + "|" + scope,
-                                        _LS._FIRST_TTL, 6.0,
-                                        _leader, _readback)
-            except _LS.FirstBusy:
-                # §15.169: 首建名额忙/同组已在算 → 单份现算兜底(看板接口量小,
-                #   且这里只到一次), 绝不把 FirstBusy 冒到 traced 变成 ok:false。
-                _STAT["first_legacy"] += 1
-                return builder(), {"state": "building", "freshness_s": -1,
-                                   "retry_after_ms": 1500}
+            return _LS.first_shared("dmat:" + family + "|" + scope,
+                                    _LS._FIRST_TTL, _LS._FIRST_WAIT,
+                                    _leader, _readback)
         _STAT["first_legacy"] += 1
         data = builder()
         _write(family, scope, fp, data)

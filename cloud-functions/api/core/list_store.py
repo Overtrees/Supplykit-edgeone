@@ -63,16 +63,8 @@ UNPAGED_CAP = {"repl": 2000, "purchase": None, "disposal": None}
 #   重算", 这里指"日期变了计算结果本身就变", 属输入变化)。repl/purchase 公式不读日期, 不加。
 DATE_AWARE = ("disposal",)
 
-# §15.168 冷态根治: 首建(从未物化)是请求路径上唯一还会**同步全量**的入口。
-#   线上实测(stress_168, 6 个新 scope × 5 用户并发): p50 23.1s / 17 个 502·503,
-#   同期稳态 boot p95 1.99→3.87s —— 两个真因:
-#   ① 6 个首建同时全量计算, 互相拖慢: 单跑 calc 4.5s → 并发 13.4s(红线 10);
-#   ② 首建 leader 不走 db.heavy, 6 份计算各占连接 → 稳态读被挤。
-#   治理: 同 kind 首建**串行**(并发不省时间, 只增加资源占用), 跨 kind 并行但受
-#   db.heavy 3 名额约束; 等待链全程有界, 超时优先读刚发布的物化, 不各算一遍。
-_CHUNK = 500          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload; 500×~270B≈135KB/批）
+_CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
-_MIN_GAP = 3.0        # §15.167 距上次重建启动的硬间隔(不看 fp): 写风暴下同一 kind 最多 1 次/3s
 # §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
 # 每次读请求又刷新 built_at → 退避被无限续期, repl 连续 17min 每请求全量现算 12.8s/503。
 # 失败不再置 stale(见 _mark_stale), 退避只作防御性兜底, 有界 20s 即可(红线 15 不靠盲重试)。
@@ -80,14 +72,6 @@ _STALE_BACKOFF = 20.0
 _LOCK = threading.Lock()
 _LAST = {}
 _READ_ON = ("1", "true", "yes", "on")
-
-
-class FirstBusy(RuntimeError):
-    """首次构建在排队/进行中, 本次请求拿不到数据 —— 由 `traced` 转成 200+ok:false。
-
-    §15.168: 这是**明确失败**, 不是把 0 条/空数组当数据返回(红线 8① 哨兵语义)。
-    触发条件极窄: leader 排队失败或构建失败, 且 4s 轮询内没发布。前端 ErrorRetry 会重试。
-    """
 
 
 def _safe_rebuild():
@@ -112,48 +96,16 @@ def _safe_rebuild():
 # 实例可被平台冻结: flight 带 t0 新鲜度, 超 _FLIGHT_TTL 判僵尸丢弃(红线 15)。
 _FLIGHT_TTL = 60.0
 _HEAVY_WAIT = 2.0     # 抢全局名额的最长等待; 抢不到 = 快速失败, 绝不排长队
-_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却(起始值), 防写风暴下每个读都重抢名额
-# §15.167: 固定 2s 冷却在写风暴(0.2s 一次写)下仍会被反复触发 —— 3 个名额 vs 8 类重建,
-#   每个重建 4~13s, 吞吐约 0.3 个/s, 而写侧每秒产生 5 个重建请求 → 名额被"刚失败的"
-#   反复抢占, 已拿到名额的重建反而被挤。改成**指数退避**(2→4→8→16→30s 封顶, 成功后归零):
-#   被拒方主动让路, 让正在跑的算完; 读侧始终返回上一版完整物化, 语义不变(红线 15 有界不排队)。
-_BUSY_COOL_MAX = 30.0
-_BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
-# §15.169 回撤「首建排队 + follower 长等」——线上 stress_168 实测它比改前更糟:
-#   6 个新 scope × 5 用户 → p50 34.4s / 19 个 503 / 稳态 p95 2.1→10.8s。
-#   根因是**把等待放回了读路径**: follower 等 21s 超时后再各算 7s(19 份并发),
-#   34s 撞网关; 首建席位(2)又让第 3 个 scope 排队 14s, 净效果是所有人更慢。
-# 正确模型(§15.161 原始原则, 这次只是把它贯彻到底): 读侧**零等待**。
-#   · leader 抢到全局名额 → 同步算这一份(唯一的 4~8s), 其余人立刻 building;
-#   · 抢不到名额 / 同 key 已有 leader → **立即**返回 building(HTTP 200 + retry_after),
-#     后台单飞补建; 前端重试命中物化。绝不 5xx、绝不让第 2 个人也等 7s。
-_FIRST_WAIT = 6.0     # 同 scope follower 等同一份的上限 = 该接口单跑 p95(repl 6.0s, 红线「任何单请求≤10s」)
-#   不是 9.5s: 9.5s 只是「没超过 10s 网关」, 不是达标 —— 判据是「首次 ≤ 单跑 p95」,
-#   repl 单跑 p95=6.0s, 等 9.5s 等于让第 2 个用户比单跑还慢 58%。
+_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却, 防写风暴下每个读都重抢名额
+_FIRST_WAIT = 20.0    # §15.165 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
-_FIRST_HEAVY_WAIT = 0.05   # 前台抢名额**不排队**: 抢不到立刻 building, 由后台去等(≤10s 红线)
-# 同 kind 首建并行度: 不限(由 db.heavy 3 名额统一约束, 红线 4 不另造闸门)。
-#   §15.168 的 2 席实测反而制造 14s 排队; 名额本身已经限制住并发与连接数。
-# §15.170 撤销 §15.169b 的「全局 1 席」与 kind 串行锁。
-#   那是把 6 个 scope 的请求串成一条队 —— 2026-11-07 方案 §6.2 红线 5 已明确否决:
-#   「按 (kind,scope,fp) 单飞, 跨 kind 不串行; 并发度只由 db.heavy 分配」。
-#   现在首建一律后台(_cold_worker 已按 kind 分舱 + 3 名额), 请求路径零等待,
-#   所以既不需要排队, 也不会有 leader 长等。
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
-# §15.169 首建内存短路: 确认某个 scope 正在首建后, 后续同实例请求**零 SQL** 直接
-#   building。线上实测(30 并发): follower 虽只等 1.2s, 但进 serve 要先查 head + page_of
-#   ×2 + fp, 连接池被 leader 的 build 占住 → building 也要 4~8s。内存标记把它们省掉。
-_MEM_BUILD = {}       # "kind|scope" -> t0
-_MEM_TTL = 45.0       # 有界: build 失败/实例冻结也不会永久 building(红线 15)
-_HEAVY_TL = threading.local()   # 嵌套首建标记: 已在外层 first_guard 名额内 → 不重复取
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
           "swr_served": 0, "first_legacy": 0, "first_shared": 0,
-          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0,
-          "head_timeout": 0,
-          "first_queue_ms": 0, "first_queue_n": 0, "first_heavy_wait_ms": 0}
+          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0}
 
 
 def _flag(name, default=True):
@@ -219,46 +171,6 @@ def head(kind, scope):
     except Exception as _e:
         try_err("list_store", "head 读取降级", _e)
         return None
-
-
-_HEAD_SF = {}         # §15.169c "kind|scope" -> {"ev","v"}: head 查询单飞
-_HEAD_PENDING = object()   # §15.171 follower 没在预算内拿到 head: 调用方自己查一次, 不 building
-
-
-def head_shared(kind, scope, wait=0.6):
-    """§15.169c head() 的进程内单飞: 30 个并发只查 1 次。
-
-    线上实测: 单次 DB 往返 ~450ms(新加坡区), 30 并发 × 1 次 head / 10 连接池
-    = 3 批 ≈ 1.4s; 合并后只 1 批。
-    只用于 serve 入口; page_of 内部的 head 仍走原函数(不改变读写同源语义)。
-
-    §15.171 等待上限 2.5s → 0.6s: 2.5s 是**把读请求绑在另一个请求的查询上等**,
-    线上 30 并发实测 building 3.1~4.6s, 其中 2.5s 就是这里白等来的(判据 ≤1.5s)。
-    超时不 building(稳态并发会被误报成 building), 而是返回 `_HEAD_PENDING` 让
-    调用方**自己查一次**(只读、450ms), 最坏 0.6+0.45≈1.05s, 仍在判据内。
-    """
-    k = "%s|%s" % (kind, scope)
-    with _FLIGHT_LOCK:
-        e = _HEAD_SF.get(k)
-        if e is None:
-            e = {"ev": threading.Event(), "v": None}
-            _HEAD_SF[k] = e
-            leader = True
-        else:
-            leader = False
-    if leader:
-        try:
-            e["v"] = head(kind, scope)
-        finally:
-            e["ev"].set()
-            with _FLIGHT_LOCK:
-                _HEAD_SF.pop(k, None)
-        return e["v"]
-    e["ev"].wait(wait)
-    if not e["ev"].is_set():
-        _STATS["head_timeout"] += 1
-        return _HEAD_PENDING
-    return e["v"]
 
 
 def register_scope(kind, scope, channel, mode, days, source):
@@ -395,10 +307,6 @@ def _row_vals(row, need_keys):
 
     need 复用 list_page._num（红线 9: 不复制筛选算法）; 三个检索列用与
     filter_rows **完全相同的表达式** `str(row.get(k,''))`, 避免大小写/None 漂移。
-
-    §15.168 试过 zlib+base64 存 payload: 逐行压缩率只有 ~16%(键名在每行内重复,
-    而 base64 又膨胀 33%), 10k 行编码本身要 0.3~0.5s CPU, 与 write 省下的时间基本抵消
-    —— 净收益 <5%, 不值这个格式迁就, 已回退(试过才否, 不是没想过)。
     """
     from core.list_page import _num
     return (
@@ -449,33 +357,13 @@ def build(kind, scope, force=False):
     _key = (kind, scope)
     with _LOCK:
         _last = _LAST.get(_key)
-        # §15.167 最小间隔: 写风暴(0.2s 一次写)下 fp 每次都变, 下面那条 fp 相等的 cooldown
-        #   永远不成立 → 同一 kind 每 0.2s 重建一次, 并发把 3 个 heavy 名额全占住,
-        #   8 类重建互相挤, 谁都算不完(HeavyBusy 30 条的真正来源)。
-        #   这里加"距上次重建启动 < _MIN_GAP 就跳过"—— 数据变了不会丢: 读侧 fp 仍失配,
-        #   gap 过后第一次读会再触发, 属最终一致(红线 15: 有界退避, 不排队)。
-        if not force and _last and _now - _last[0] < _MIN_GAP:
-            return {"ok": True, "skipped": "min_gap"}
         if not force and _last and _last[1] == fp and _now - _last[0] < _COOLDOWN:
             return {"ok": True, "skipped": "cooldown"}
         _LAST[_key] = (_now, fp)
 
     _t0 = time.time()
     try:
-        # §15.170c 只读埋点(红线 6): calc 里到底花在 SQL 还是 Python —— 决定下一步是
-        #   加索引/减往返, 还是优化循环。timing 里多两段: sql=秒/条数。
-        try:
-            from db import stats_reset as _sr
-            _sr()
-        except Exception:
-            _sr = None
         rows = _builder_of(kind, h)()
-        try:
-            from db import stats_snapshot as _ss
-            _q = _ss()
-            _SQL_S, _SQL_N = float(_q.get("stmt_s") or 0), int(_q.get("stmt_n") or 0)
-        except Exception:
-            _SQL_S, _SQL_N = -1.0, -1
     except Exception as _e:
         _mark_stale(kind, scope, "计算异常: %s" % _e)
         try_err("list_store", "重建计算失败(%s/%s)" % (kind, scope), _e)
@@ -532,8 +420,8 @@ def build(kind, scope, force=False):
                 Exception("; ".join(errs)[:300]))
         return {"ok": False, "error": "validate", "detail": errs[:5]}
 
-    timing = "calc=%.1f(sql=%.1f/%d),write=%.1f,total=%.1f,rows=%d" % (
-        _t_calc, _SQL_S, _SQL_N, _t_write, time.time() - _t0, len(rows))
+    timing = "calc=%.1f,write=%.1f,total=%.1f,rows=%d" % (
+        _t_calc, _t_write, time.time() - _t0, len(rows))
     try:
         # 只更新 gen/fp/计数/timing/stale/note —— 不覆盖登记时的 channel/mode/days/source。
         execute("INSERT INTO list_head(kind,scope,channel,mode,days,source,gen,fp,row_cnt,"
@@ -587,9 +475,6 @@ def _cold_worker(kind, scope, fp, fn, key):
                 try:
                     fn()
                     _STATS["done"] += 1
-                    _mem_clear(kind, scope)   # §15.169 已发布 → 解除 building 短路
-                    with _FLIGHT_LOCK:
-                        _BUSY_BACKOFF.pop(key, None)   # §15.167 成功即复位退避
                 except Exception as _e:
                     _STATS["failed"] += 1
                     try_err("list_store", "后台重建失败(%s/%s)" % (kind, scope), _e)
@@ -599,10 +484,7 @@ def _cold_worker(kind, scope, fp, fn, key):
             _STATS["busy"] += 1
             if _coalesce_on():
                 with _FLIGHT_LOCK:
-                    _n = _BUSY_BACKOFF.get(key, 0)
-                    _wait = min(_BUSY_COOL_MAX, _BUSY_COOL * (2 ** min(4, _n)))
-                    _BUSY_BACKOFF[key] = _n + 1
-                    _BUSY_UNTIL[key] = time.time() + _wait
+                    _BUSY_UNTIL[key] = time.time() + _BUSY_COOL
                 _STATS["busy_cooled"] += 1
             try_err("list_store", "冷算全局名额已满, 本轮跳过(%s/%s)" % (kind, scope), _hb)
     except Exception as _e2:
@@ -708,73 +590,6 @@ def pop_swr(d):
     return {}
 
 
-def _mem_busy(kind, scope):
-    """同实例最近确认过「正在首建」→ True(零 SQL)。有界 TTL, 不永久。"""
-    t = _MEM_BUILD.get("%s|%s" % (kind, scope))
-    return bool(t and time.time() - t < _MEM_TTL)
-
-
-def _mem_mark(kind, scope):
-    _MEM_BUILD["%s|%s" % (kind, scope)] = time.time()
-
-
-def _mem_mark_once(kind, scope):
-    """原子占位: 30 个并发同时到一个**从未登记**的 scope 时, 只让 1 个去
-    register_scope(INSERT) + 首建, 其余立刻 building。
-
-    线上实测(§15.169b 复测): 30 并发同时 INSERT IGNORE 同一 list_head 行 →
-    唯一键冲突检测串行化, building 要 2~4s(和 build 本身无关)。
-    """
-    k = "%s|%s" % (kind, scope)
-    with _FLIGHT_LOCK:
-        t = _MEM_BUILD.get(k)
-        if t and time.time() - t < _MEM_TTL:
-            return False
-        _MEM_BUILD[k] = time.time()
-        return True
-
-
-def _mem_clear(kind, scope):
-    _MEM_BUILD.pop("%s|%s" % (kind, scope), None)
-
-
-def first_guard(kind, fn, use_heavy=True):
-    """首建执行体: **只受 db.heavy 全局名额约束**(红线 4), 不排队、不按 kind 串行。
-
-    历史教训(两版都上线过, 都错):
-      · 纯并行 6 路 → 单份 4.5s 拖到 13.4s, 连接池打满, 稳态 boot p95 1.99→3.87s;
-      · 全局 1 席/同 kind 2 席 → 请求串成一条队, 第 3 个用户白等 14s 后撞网关。
-    正确解是**把首建移出请求路径**(见 `_first_serve`), 让唯一的并发预算 `db.heavy`
-    去限速: 3 名额内最多 3 份全量, 抢不到的后台快速失败 + 指数退避, 用户侧只看到
-    building(200 + retry_after), 既不长等也不排队。
-
-    `use_heavy=False`(看板三接口): 它自身只是组装, 重活在被它调用的 unit 判定首建里;
-      若外层再占一个名额, 内层嵌套取名额 → 3 个 family 并发就能把 3 个名额锁死
-      (互相等对方释放)。由内层唯一的原子计算持名额才是正确的分配层级。
-    """
-    # §15.170: 只剩**一个**并发预算 —— db.heavy(红线 4「由全局预算分配, 不许每个
-    #   请求各开一路」)。不再有 kind 锁/全局信号量: 不同 scope 本来就不同 key,
-    #   串行只会让第 N 个用户白等(2026-11-07 §6.2 红线 5 已否决)。
-    if not use_heavy or getattr(_HEAVY_TL, "n", 0) > 0:
-        return fn()
-    from db import heavy, HeavyBusy
-    _th = time.time()
-    try:
-        with heavy("first:" + str(kind), timeout=_FIRST_HEAVY_WAIT):
-            _STATS["first_heavy_wait_ms"] = max(
-                _STATS.get("first_heavy_wait_ms", 0), int((time.time() - _th) * 1000))
-            _HEAVY_TL.n = getattr(_HEAVY_TL, "n", 0) + 1
-            try:
-                return fn()
-            finally:
-                _HEAVY_TL.n = getattr(_HEAVY_TL, "n", 1) - 1
-    except HeavyBusy as _hb:
-        _STATS["busy"] += 1
-        _STATS["failed"] += 1
-        try_err("list_store", "首建等待全局名额超时(%s)" % kind, _hb)
-        raise FirstBusy("首建全局名额忙(%s)" % kind)
-
-
 def first_shared(key, ttl, wait, leader_fn, readback_fn):
     """§15.165 通用首建单飞骨架(供 list_store / dash_store / own_store 复用, 红线 2 不叠加)。
 
@@ -795,9 +610,6 @@ def first_shared(key, ttl, wait, leader_fn, readback_fn):
     if leader:
         try:
             entry["data"] = leader_fn()
-        except BaseException as _le:
-            entry["err"] = _le
-            raise
         finally:
             entry["event"].set()
             with _FLIGHT_LOCK:
@@ -805,83 +617,45 @@ def first_shared(key, ttl, wait, leader_fn, readback_fn):
                 _FIRSTS.pop(key, None)
     else:
         _STATS["first_shared"] += 1
-        entry["event"].wait(wait)
-        if entry.get("err") is not None:
-            raise FirstBusy("首次构建失败(%s)" % key)
-        if not entry["event"].is_set():
+        if not entry["event"].wait(wait):
             _STATS["first_timeout"] += 1
-            # §15.168: 等不到 leader 就**明确失败**, 绝不在这里自己再算一遍全量 ——
-            #   30 个 follower 同时超时后各算 7s, 会把 leader 也拖到 50s(实测 p50 34s/19 失败)。
-            raise FirstBusy("首次构建等待超时(%s)" % key)
     return readback_fn(entry["data"])
-
-
-def _building(kind, page, page_size):
-    """§15.169 首次构建中的**明确**状态(不是"0 条"假成功)。
-
-    形状与正常分页一致(items=[]), 但 total=-1 + building=True + 顶层
-    __swr.state=building: 前端据此显示骨架并按 retry_after 重试, 后台单飞正在补建。
-    不返回 ok:false(会弹全局错误), 也不返回 0 条冒充"确实没有数据"(数据四维-准确)。
-    """
-    d = {OUT_KEY[kind]: [], "total": -1, "page": page, "page_size": page_size,
-         "building": True}
-    d["__swr"] = {"state": "building", "freshness_s": -1, "retry_after_ms": 1500}
-    return d
 
 
 def _first_serve(kind, scope, fp, builder, channel, mode,
                  need_only, search, page, page_size):
-    """§15.170 首次构建: 同 scope **共享一份结果**, 跨 scope 不串行, 不排队。
+    """§15.165 首建单飞: 仅「从未构建 / 物化全坏行」的一次性初始化入口。
 
-    三版实测(每版都上线过):
+    改前(线上 stress_165 P4 实测): `submit_background(build)` 后台算一遍 +
+    `return _live()` 前台同步全量再算一遍 = **双算**; 4 并发 = 8 份 13s 全量 Python
+    循环抢 GIL + 抢 10 个连接 → 16.9s / 2×503 / 4/4 零数据(停摆), 违反红线 6/10。
 
-    | 做法 | 线上实测 | 判定 |
-    |---|---|---|
-    | 前台 `_live()` + 后台 build | 4 并发 = 8 份全量 | 16.9s / 2×503 / 零数据 |
-    | follower 等 21s 超时后各自现算 | 30 并发 p50 34.4s / 19×503 | 雪崩 |
-    | 全局 1 席 + 同 kind 串行 | building 3~5s, 第 3 个 scope 排队 14s | 把请求串成一条队(方案 §6.2 已否决) |
-    | **本节: 同 scope 共享 + 跨 scope 并行 + 名额满即 building** | 见 §15.170 压测 | — |
-
-    语义:
-      · 同 (kind,scope) 的 N 个并发 = 1 份 build, 其余**等同一份结果**(不是各自算,
-        也不是排队拿号), 全部返回完整数据;
-      · 跨 scope/kind 完全并行, 唯一预算 `db.heavy` 3 名额(红线 4);
-      · 抢不到名额 → 立刻 building(200 + retry_after), 绝不排队等名额;
-      · follower 等待上限 `_FIRST_WAIT`(9.5s ≤ 红线「任何单请求 ≤10s」),
-        超时同样 building, **不再各自现算**(那是 34s 雪崩的根因);
-      · `FIRST_SINGLEFLIGHT=0` 回退到旧「前台现算 + 后台建」。
+    改后: 同 (kind,scope) 单飞, **leader 只跑一次 `build(force=True)`**(算+落物化+
+    发布前 COUNT 自校验+切 head, 复用红线 8②/9 的既有写入链), follower 有界等
+    `_FIRST_WAIT` 后**读回同一份物化**(不重复全量); 全部返回完整数据, 绝不 0 条。
+    等待是「等 leader 算完这一份」, 不是「等后台重建 30s」; 且只在真·从未构建时发生
+    (§15.165 第 2 刀后, 有完整旧 gen 的 stale=1 已改走 SWR, 根本不进这里)。
+    `FIRST_SINGLEFLIGHT=0` 一刀回退到旧双算路径。
     """
     key = _flight_key(kind, scope, fp)
-
-    # §15.171 已有人在算这一份 → 本请求**零等待** building, 不进 first_shared 的 wait。
-    #   否则 30 个并发一起进来: 1 个 leader 算 8s, 29 个在 event 上等(实测 p95 22s),
-    #   这就是「所有请求绑在一个请求上等」。读侧零等待, 计算侧由 db.heavy 分配。
-    if _mem_busy(kind, scope):
-        raise FirstBusy("同 scope 首建进行中(%s/%s)" % (kind, scope))
-
-    def _run():
-        # 只有**真正拿到名额开始算**的 scope 才进 building 短路: 抢不到名额的不标记,
-        #   否则该 scope 会在 _MEM_TTL 内永久 building(名额一空也不会再试)。
-        _mem_mark(kind, scope)
-        try:
-            return build(kind, scope, force=True)
-        finally:
-            _mem_clear(kind, scope)      # 成功/失败都解除: 成功走物化, 失败下次重试
 
     def _leader():
         _STATS["first_legacy"] += 1
         try:
-            return first_guard(kind, _run)
-        except FirstBusy:
-            # 名额满(其他 scope 在算) → 后台单飞补建, 前台立刻 building。
-            #   本 scope 不标记, 前端重试时会重新抢名额(0.05s, 可忽略)。
-            submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
-            raise
+            build(kind, scope, force=True)
+        except Exception as _e:
+            try_err("list_store", "首建单飞失败(%s/%s)" % (kind, scope), _e)
 
     def _readback(shared):
-        # leader 已发布; follower 等到了同一份 → 直接读物化(不重算)。
-        return page_of(kind, scope, channel, mode, need_only, search,
-                       page, page_size, extra=scope, allow_stale=True)
+        d = page_of(kind, scope, channel, mode, need_only, search, page,
+                    page_size, extra=scope, allow_stale=True)
+        if d is not None:
+            return d
+        # 极端降级(build 失败/实例冻结): 单份现算兜底, 绝不返回 0 条(数据四维-完整)
+        from core.list_page import shape as _shape
+        items, total = _shape(builder(), need_only=need_only, search=search,
+                              page=page, page_size=page_size, need_keys=NEED_KEYS[kind])
+        return {OUT_KEY[kind]: items, "total": total, "page": page, "page_size": page_size}
 
     return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)
 
@@ -902,25 +676,10 @@ def serve(kind, scope, channel, mode, days, source, builder,
     删掉的旧行为: 「每请求前台 builder() 全量现算 + 再起裸线程 build() 算第二遍」
     (双算) —— 并发 4 实测 33.26s / repl 4/4 HTTP 503, 是冷算雪崩的真源(红线 2/4/10)。
     """
-    # §15.169 零 SQL 短路: 同实例已确认该 scope 正在首建 → 立刻 building。
-    #   必须放在 head() 之前: 冷态并发时连接池被首建占满, 连"查一下 head"都要排队 4~8s。
-    if read_enabled() and not legacy and _first_sf_on() and _mem_busy(kind, scope):
-        return _building(kind, page, page_size)
-
-    h = head_shared(kind, scope)
-    if h is _HEAD_PENDING:
-        # §15.171 没在 0.6s 预算内拿到同 scope 的单飞结果(连接池被首建占住) →
-        #   自己查一次**只读** head, 不在这里 building(稳态并发会误报 building),
-        #   也不等别人(那是把读请求绑在一个查询上等)。最坏 0.6+0.45s。
-        h = head(kind, scope)
+    h = head(kind, scope)
     if h is None:
-        # §15.169b: 从未登记 → 只让 1 个请求走 INSERT+首建, 其余立即 building。
-        #   否则 30 并发同时 INSERT IGNORE 同一行, 唯一键冲突检测串行化, 2~4s。
-        if read_enabled() and not legacy and _first_sf_on() \
-                and not _mem_mark_once(kind, scope):
-            return _building(kind, page, page_size)
         register_scope(kind, scope, channel, mode, days, source)
-        h = head_shared(kind, scope)
+        h = head(kind, scope)
 
     from core.list_page import shape as _shape
 
@@ -933,43 +692,26 @@ def serve(kind, scope, channel, mode, days, source, builder,
     if not read_enabled() or legacy:
         return _live()
 
-    # ①/② 稳态命中 / 上一版: gen=0 时两者都必然为空 —— 白查两次(page_of 各一次
-    #   往返), 冷态并发下这两次就是 building 要 4~8s 的一半。直接跳过。
-    _gen0 = int((h or {}).get("gen") or 0) <= 0
-    if not _gen0:
-        d = page_of(kind, scope, channel, mode, need_only, search,
-                    page, page_size, extra=scope, h=h)
-        if d is not None:
-            return d
-        prev = page_of(kind, scope, channel, mode, need_only, search,
-                       page, page_size, extra=scope, h=h, allow_stale=True)
-    else:
-        prev = None
+    # ① 稳态: fp 命中 → 直接返回, 零额外开销、零额外字段
+    d = page_of(kind, scope, channel, mode, need_only, search,
+                page, page_size, extra=scope, h=h)
+    if d is not None:
+        return d
 
-    # §15.170c fp 只在「有上一版/需要判新鲜」时算 —— 它是一次 config 域版本查询。
-    #   首次构建(prev is None)的 flight key 已去 fp(_flight_key), 算了也是白花一次往返:
-    #   线上 30 并发实测 building 3~4.7s 里, 一半是 head + fp 两次往返 × 排队。
-    fp = "" if (prev is None and _first_sf_on()) else (fp_now(kind, channel, mode, scope) or "?")
+    # ② 冷态: 先取「上一版完整物化」(只跳过 fp 比对, 完整性校验一字不减)
+    prev = page_of(kind, scope, channel, mode, need_only, search,
+                   page, page_size, extra=scope, h=h, allow_stale=True)
+
+    fp = fp_now(kind, channel, mode, scope) or "?"
 
     # ③ 从未物化 / 上一版不可用(gen=0 / stale=1 / 哨兵 / 坏行): 直接现算保证业务正确,
     #    同时后台建立物化(一次性)。与「有上一版但 fp 不等」是**互斥状态**, 不是两套并存
     #    兜底(红线 2)。这里**不等待**后台结果: 任何请求 ≤ 单跑 p95(repl 6s / 其余 3~4s),
     #    首帧是当前实时算出的完整数据, 绝不返回 0 条、绝不等 15~30s。
     if prev is None:
-        # §15.170: 首次构建**不进请求路径**。唯一并发预算仍是 db.heavy(红线 4),
-        #   跨 kind 并行、不同 scope 不排队; 读侧立刻 building, 前端按 retry_after 重试。
-        #   FIRST_SINGLEFLIGHT=0 → 回到「前台现算 + 后台建」(旧兜底, 仅用于回滚比对)。
         if _first_sf_on():
-            try:
-                _d0 = _first_serve(kind, scope, fp, builder, channel, mode,
-                                   need_only, search, page, page_size)
-            except FirstBusy:
-                _STATS["first_timeout"] += 1
-                _d0 = None
-            if _d0 is not None:
-                return _d0
-            # 名额满 / 等同一份超时 → 立刻 building(不排队、不各算一遍)
-            return _building(kind, page, page_size)
+            return _first_serve(kind, scope, fp, builder, channel, mode,
+                                need_only, search, page, page_size)
         _STATS["first_legacy"] += 1
         submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
         return _live()
