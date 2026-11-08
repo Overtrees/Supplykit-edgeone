@@ -362,12 +362,28 @@ def build(kind, scope, force=False):
         _LAST[_key] = (_now, fp)
 
     _t0 = time.time()
+    # §15.172 只读分段埋点(红线 7): calc 到底贵在 SQL 往返还是 Python 循环 —— 决定
+    #   下一步是加索引/减往返, 还是向量化/下推。只写 list_head.timing, 不改执行路径。
+    #   同实例并发 build 时 STATS 会互串, 因此**只用于判断量级**(谁是大头), 不当精确值;
+    #   精确值只能靠线上 e2e 与 perf_debug(红线 7 禁止用本地计时下结论)。
+    try:
+        from db import stats_reset as _sr
+        _sr()
+    except Exception:
+        _sr = None
     try:
         rows = _builder_of(kind, h)()
     except Exception as _e:
         _mark_stale(kind, scope, "计算异常: %s" % _e)
         try_err("list_store", "重建计算失败(%s/%s)" % (kind, scope), _e)
         return {"ok": False, "error": "compute"}
+    try:
+        from db import stats_snapshot as _ss
+        _q = _ss()
+        _SQL_S = round(float(_q.get("stmt_s") or 0), 1)
+        _SQL_N = int(_q.get("stmt_n") or 0)
+    except Exception:
+        _SQL_S, _SQL_N = -1.0, -1
     if not isinstance(rows, list):
         rows = []
     _t_calc = time.time() - _t0
@@ -420,8 +436,8 @@ def build(kind, scope, force=False):
                 Exception("; ".join(errs)[:300]))
         return {"ok": False, "error": "validate", "detail": errs[:5]}
 
-    timing = "calc=%.1f,write=%.1f,total=%.1f,rows=%d" % (
-        _t_calc, _t_write, time.time() - _t0, len(rows))
+    timing = "calc=%.1f(sql=%.1f/%d),write=%.1f,total=%.1f,rows=%d" % (
+        _t_calc, _SQL_S, _SQL_N, _t_write, time.time() - _t0, len(rows))
     try:
         # 只更新 gen/fp/计数/timing/stale/note —— 不覆盖登记时的 channel/mode/days/source。
         execute("INSERT INTO list_head(kind,scope,channel,mode,days,source,gen,fp,row_cnt,"
