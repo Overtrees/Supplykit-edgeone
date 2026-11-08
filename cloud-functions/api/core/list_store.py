@@ -127,13 +127,18 @@ _BUSY_BACKOFF = {}    # key -> 连续被拒次数(成功一次即清零)
 #   · leader 抢到全局名额 → 同步算这一份(唯一的 4~8s), 其余人立刻 building;
 #   · 抢不到名额 / 同 key 已有 leader → **立即**返回 building(HTTP 200 + retry_after),
 #     后台单飞补建; 前端重试命中物化。绝不 5xx、绝不让第 2 个人也等 7s。
-_FIRST_WAIT = 1.2     # follower 只给 leader 一个先手窗口, 拿不到就 building(前端重试)
+_FIRST_WAIT = 0.6     # follower 只给 leader 一个先手窗口, 拿不到就 building(前端重试)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FIRST_LOCK_WAIT = 0.8    # 抢首建席位上限(名额忙=立刻让路, 不排队)
 _FIRST_HEAVY_WAIT = 1.5   # 抢全局名额上限(首建不再长等后台重建让位)
 # 同 kind 首建并行度: 不限(由 db.heavy 3 名额统一约束, 红线 4 不另造闸门)。
 #   §15.168 的 2 席实测反而制造 14s 排队; 名额本身已经限制住并发与连接数。
 _KIND_PARALLEL = 4
+# §15.169b 首建**全局**只跑 1 个(跨 kind)。线上实测: 3 个 leader 同时首建
+#   repl 9.45s → 27.2s(3 倍), 总吞吐没有提升(3×9.45≈28), 但 follower 的 head 查询
+#   被 build 占住连接池 → building 要 2.5~4.9s、稳态 p95 5.4s。
+#   红线 10「重计算并发 = 互相限速」在这里是**可测量的事实**, 不是原则口号。
+_FIRST_SEM = threading.BoundedSemaphore(1)
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
@@ -691,6 +696,11 @@ def first_guard(kind, fn, use_heavy=True):
       若外层再占一个名额, 内层嵌套取名额 → 3 个 family 并发就能把 3 个名额锁死
       (互相等对方释放)。由内层唯一的原子计算持名额才是正确的分配层级。
     """
+    # §15.169b: 全局首建 1 席。抢不到 = 已经有一份在全量算, 立刻 building,
+    #   等它算完(下次重试命中)比 N 份并发互相拖慢更省总时长, 也不占满连接池。
+    if not _FIRST_SEM.acquire(blocking=False):
+        _STATS["failed"] += 1
+        raise FirstBusy("首建全局席位忙")
     lk = _kind_lock(kind)
     _t0 = time.time()
     # §15.169: 名额/席位一律**不排队** —— 抢不到说明已经有人在建, 让读侧立刻
@@ -699,6 +709,7 @@ def first_guard(kind, fn, use_heavy=True):
         _STATS["first_queue_ms"] = max(_STATS.get("first_queue_ms", 0),
                                        int((time.time() - _t0) * 1000))
         _STATS["failed"] += 1
+        _FIRST_SEM.release()
         raise FirstBusy("首建席位忙(%s)" % kind)
     _tq = time.time() - _t0
     _STATS["first_queue_n"] = int(_STATS.get("first_queue_n", 0)) + 1
@@ -725,6 +736,10 @@ def first_guard(kind, fn, use_heavy=True):
     finally:
         try:
             lk.release()
+        except Exception:
+            pass
+        try:
+            _FIRST_SEM.release()
         except Exception:
             pass
 

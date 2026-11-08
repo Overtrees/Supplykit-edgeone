@@ -4614,7 +4614,8 @@ try:
     #    17 个 502·503, 根因是 6 份全量互抢(GIL/连接) → calc 4.5→13.4s。
     check("§15.161/169: SWR 读侧零等待 + 首建单飞 + 名额忙即 building(不排队)",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
-          and "_FIRST_WAIT = 1.2" in _ls20 and "_FIRST_TTL" in _ls20
+          and "_FIRST_WAIT = 0.6" in _ls20 and "_FIRST_TTL" in _ls20
+          and "_FIRST_SEM" in _ls20
           and "def _building(" in _ls20 and "return _live()" in _ls20
           and '"first_legacy"' in _ls20
           and "def first_guard" in _ls20
@@ -5321,15 +5322,23 @@ try:
             _cur28["n"] -= 1
         return {"ok": True}
 
+    _ok28 = {"n": 0}
+
+    def _run28():
+        try:
+            _LS28.first_guard("k_serial", _fn28)
+            _ok28["n"] += 1
+        except _LS28.FirstBusy:
+            pass
+
     _t28 = _tm28.time()
-    _th28_list = [_th28.Thread(target=lambda: _LS28.first_guard("k_serial", _fn28))
-                  for _ in range(3)]
+    _th28_list = [_th28.Thread(target=_run28) for _ in range(3)]
     [_t.start() for _t in _th28_list]
     [_t.join() for _t in _th28_list]
     _wall28 = _tm28.time() - _t28
-    check("§15.169 同 kind 首建不再排队(3 并发全部并行, 由 db.heavy 名额统一限流)",
-          _cur28["max"] == 3 and _wall28 < 0.36,
-          "max=%d wall=%.2fs" % (_cur28["max"], _wall28))
+    check("§15.169b 首建全局 1 席(3 并发只 1 份真算, 其余立即 FirstBusy 去 building)",
+          _cur28["max"] == 1 and _ok28["n"] == 1 and _wall28 < 0.36,
+          "max=%d ok=%d wall=%.2fs" % (_cur28["max"], _ok28["n"], _wall28))
 
     # ③ 跨 kind 并行: 两个不同 kind 各 0.15s, 总墙钟应 ≈0.15s 而不是 0.3s
     _t28b = _tm28.time()
