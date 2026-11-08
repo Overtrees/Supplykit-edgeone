@@ -58,9 +58,14 @@ def fake_query(sql, params=None):
                     {"k": "2026-10-02", "gmv": 150.0, "cnt": 3, "qty": 6, "total": 250.0}]
         return [{"gmv": 250.0, "cnt": 5, "qty": 10}]
     # health_index 查询(须在 FROM inventory WHERE 分支前, 避免被 _FAKE_INV 抢占致 total=0)
-    if "GROUP BY warehouse_type" in sql:
+    if "GROUP BY warehouse_type" in sql and "SUM(" not in sql:
         return list(_INV)
-    if "warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql:
+    # §15.180: 原来只匹配 `warehouse_type IN (...) GROUP BY sku` 前缀, 而补货/采购的
+    #   下推聚合 SQL 恰好也以这段开头(`... GROUP BY sku, barcode, warehouse_type`),
+    #   被误判成"按 SKU 的健康度计数查询" → 返回一行 healthy/warning 结构, 全表 SKU 消失。
+    #   mock 的分支必须精确到被替身的那条 SQL: 该计数查询必有 COUNT, 聚合取数没有。
+    if ("warehouse_type IN ('platform','platform_b') GROUP BY sku" in sql
+            and "COUNT(" in sql):
         return [{"healthy": 65, "warning": 10, "out_of_stock": 2, "total": 77}]
     if "FROM orders o WHERE" in sql and "COUNT" not in sql:
         # 2026-10-25 品牌子查询(barcode 优先/sku 兜底)——mock 补 brand 字段

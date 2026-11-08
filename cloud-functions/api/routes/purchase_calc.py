@@ -90,11 +90,22 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
         "SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
         "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
         "AND channel=%s", [channel])
+    # §15.180 下推聚合(纯读侧, 算法一行未动): 主循环对每个 (sku, 69码) 只做无条件累加
+    #   (available/transit/safety) + 按 warehouse_type 分桶 + safety_days 取 max +
+    #   own 首仓名, 全是可结合的聚合 —— 下推到 SQL 后线上 jd 实测 9 万行 → 3 万行。
+    #   `warehouse_type<>'platform_b' OR 1=1` 复刻「非 BBCC 渠道/非 bbcc 模式跳过 B 仓行」,
+    #   且该 continue 发生在累加之前, 故等价。
+    #   own_warehouse 由「遍历到的第一个」改为 MIN(warehouse): 多自有仓时取值口径从
+    #   "返回序首个"（本身不确定）变为"字典序最小"，单仓场景完全一致; 该字段只用于展示。
+    _inc_b = 1 if (_ch_b and mode == "bbcc") else 0
     _f_inv = _ex.submit(
         query,
-        "SELECT sku, COALESCE(barcode,'') AS bc, warehouse_type, warehouse, "
-        "available_qty, in_transit_qty, safety_qty, safety_days "
-        "FROM inventory WHERE channel=%s", [channel])
+        "SELECT sku, COALESCE(barcode,'') AS bc, warehouse_type, "
+        "SUM(available_qty) AS available_qty, SUM(in_transit_qty) AS in_transit_qty, "
+        "SUM(safety_qty) AS safety_qty, MAX(safety_days) AS safety_days, "
+        "MIN(CASE WHEN warehouse_type='own' THEN warehouse END) AS warehouse "
+        "FROM inventory WHERE channel=%s AND (warehouse_type<>'platform_b' OR %s=1) "
+        "GROUP BY sku, bc, warehouse_type", [channel, _inc_b])
     products = {}
     for p in _f_prod.result():
         products[p.get("sku")] = p

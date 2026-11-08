@@ -546,11 +546,26 @@ def _inventory(channel, mode="bbcc"):
     #   product_name/beginning_stock 共 1.5MB)。
     #   过滤条件按 mode 走: bbcc 要 platform+platform_b, traditional 只要 platform。
     from routes.common import check_cols as _cc
-    _wt = ("platform", "platform_b") if mode == "bbcc" else ("platform",)
-    _cols = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
-             "available_qty, in_transit_qty, c_transit, safety_qty")
-    _ph = ",".join(["%s"] * len(_wt))
-    _rows = query("SELECT " + _cols + " FROM inventory WHERE channel=%s "
-                  "AND warehouse_type IN (" + _ph + ")", [channel] + list(_wt))
+    if mode == "bbcc":
+        # §15.180 下推聚合(纯读侧, 算法一行未动):
+        #   bbcc 分支的循环体只有「按 (sku, 69码, 仓类型) 累加 4 个值列」——
+        #   `agg[(sku,bc)]` 与 `b_stock/b_transit[(sku,bc)]`, 无顺序依赖、无逐行副作用。
+        #   于是把 SUM 下推到 SQL: 线上 jd 实测 8 万行(platform+platform_b) → 2 万行,
+        #   而结果**逐字段等价**(整数加法结合律, SUM 忽略 NULL 与 `or 0` 同义)。
+        #   保留 warehouse_type 维度而不是合成一行, 是为守住「只有 platform 行才产生
+        #   agg 条目」这条既有语义 —— 若某 SKU 仅有 B 仓库存, 原实现不出补货建议,
+        #   合成一行会凭空造出一条全 0 建议(红线 8③ 现算/读回共用同一口径)。
+        #   traditional 分支是「一库存行一建议」, 行数即结果数, 不能聚合(红线 11)。
+        _rows = query(
+            "SELECT sku, COALESCE(barcode,'') AS barcode, warehouse_type, "
+            "SUM(available_qty) AS available_qty, SUM(in_transit_qty) AS in_transit_qty, "
+            "SUM(c_transit) AS c_transit, SUM(safety_qty) AS safety_qty "
+            "FROM inventory WHERE channel=%s AND warehouse_type IN ('platform','platform_b') "
+            "GROUP BY sku, barcode, warehouse_type", [channel])
+        _cc(_rows, ("barcode",), "repl", "补货物料")
+        return _rows
+    _rows = query("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+                  "available_qty, in_transit_qty, c_transit, safety_qty "
+                  "FROM inventory WHERE channel=%s AND warehouse_type='platform'", [channel])
     _cc(_rows, ("barcode", "warehouse"), "repl", "补货物料")
     return _rows
