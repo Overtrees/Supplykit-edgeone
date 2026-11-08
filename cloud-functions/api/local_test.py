@@ -1632,6 +1632,34 @@ try:
           (_d2.get("cur") or {}).get("start") == "2026-09-01"
           and (_d2.get("days") or 0) == 63, r2.text[:220])
 
+    # §15.180b cache_get_swr: 只把「过期但有旧值」改成「立即返旧值 + 后台重建」,
+    #   命中与首建必须与 cache_get 完全一致(命中不调 builder; 首建同步算, 绝不给空)。
+    from routes import analysis_cache as _AC
+    _old_one = _db.one
+    _nb = {"n": 0}
+
+    def _bx():
+        _nb["n"] += 1
+        return {"x": 2}
+
+    _db.one = lambda sql, params=None: {"value": '{"x": 1}', "age": 999}
+    _v, _m = _AC.cache_get_swr("history|swr|1", 120, _bx)
+    check("cache_get_swr 过期 → 立即返旧值 + __swr 播报(state/freshness)",
+          _v == {"x": 1} and isinstance(_m, dict) and _m.get("state") == "serving_previous"
+          and _m.get("freshness_s") == 999, str((_v, _m)))
+
+    _db.one = lambda sql, params=None: {"value": '{"x": 3}', "age": 1}
+    _v2, _m2 = _AC.cache_get_swr("history|swr|2", 120, _bx)
+    check("cache_get_swr 命中 → 直接返回且无 meta(零额外字段)",
+          _v2 == {"x": 3} and _m2 is None, str((_v2, _m2)))
+
+    _n0 = _nb["n"]
+    _db.one = lambda sql, params=None: None
+    _v3, _m3 = _AC.cache_get_swr("history|swr|3", 120, _bx)
+    check("cache_get_swr 首建 → 同步算一次(绝不给空)且无 meta",
+          _v3 == {"x": 2} and _m3 is None and _nb["n"] == _n0 + 1, str((_v3, _m3, _nb)))
+    _db.one = _old_one
+
     # 区间超 400 天: 与 _range 同口径, 截断到最近 400 天而不是报错
     r3 = client.get("/history/yoy?channel=jd&start=2024-01-01&end=2026-11-02", headers=_h)
     _d3 = r3.json().get("data") or {}

@@ -23,10 +23,21 @@ from fastapi import APIRouter
 
 from db import query, one
 from routes.common import ok, traced, try_err
-from routes.analysis_cache import cache_get as _cache_get
+from routes.analysis_cache import cache_get as _cache_get, cache_get_swr as _cache_get_swr
 from core.clock import now_cn
 
 router = APIRouter(tags=["history"])
+
+def _ok_cached(key, ttl, build):
+    """历史页统一读路径: 命中直接返回; 过期时**立即返回上一版** + 后台重建 + 顶层 __swr。
+
+    历史/同比/TOP 这类结论型数据晚几秒不影响决策, 而 TTL 到点后的同步重算会让
+    用户对着满屏骨架等 1~2s(线上实测冷态 4.3s e2e)。SWR 后读侧零等待, 前端拦截器
+    已有 `__swr` 的统一播报与有界重拉(client.ts), 页面零改动。
+    """
+    _d, _swr = _cache_get_swr(key, ttl, build)
+    return ok(_d, **({"__swr": _swr} if _swr else {}))
+
 
 # 与 cron.cron_archive 的 cutoff **必须一致**(见模块注释的不变量)。
 # 2026-11-07: 改为从归档模块导入共享常量 —— 原来两边各写 365, 改保留期时必然漏一边,
@@ -175,7 +186,7 @@ def history_coverage(channel: str = ""):
             out["note"] += " · 另有 %d 行早于归档线待搬移" % out["stale_orders"]
         return out
     _key = "history|coverage|%s" % (channel or "all")
-    return ok(_cache_get(_key, 300, _build))
+    return _ok_cached(_key, 300, _build)
 
 
 @router.get("/history/summary")
@@ -228,7 +239,7 @@ def history_summary(channel: str = "jd", start: str = "", end: str = "", by: str
                 "sources": {"orders": _src.get("o"), "archive": _src.get("a")}}
 
     _key = "history|summary|%s|%s|%s|%s" % (channel, s, e, _by)
-    return ok(_cache_get(_key, 120, _build))
+    return _ok_cached(_key, 120, _build)
 
 
 @router.get("/history/top")
@@ -259,7 +270,7 @@ def history_top(channel: str = "jd", start: str = "", end: str = "",
                 "total_gmv": _tot, "items": items}
 
     _key = "history|top|%s|%s|%s|%s|%d" % (channel, s, e, _by, _n)
-    return ok(_cache_get(_key, 120, _build))
+    return _ok_cached(_key, 120, _build)
 
 
 def _delta(cur, prev):
@@ -330,4 +341,4 @@ def history_yoy(channel: str = "jd", end: str = "", days: int = 30,
 
     # key 必须含 _s: 加了 start 参数后, 同一 end 配不同起点是两份不同结果
     _key = "history|yoy|%s|%s|%s|%d" % (channel, _s, _e, _n)
-    return ok(_cache_get(_key, 120, _build))
+    return _ok_cached(_key, 120, _build)

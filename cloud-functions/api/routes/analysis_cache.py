@@ -303,6 +303,91 @@ def cache_get(key, ttl, builder, max_bytes=None):
         return builder()
 
 
+def _swr_rebuild(key, builder, max_bytes=None):
+    """SWR 后台重建(同 key 进程内单飞) —— 拿不到锁 = 已有同 key 在算, 直接 dedup。
+
+    与 cache_get 共用 `_key_lock`, 所以「请求路径同步算」与「后台重算」不会同时跑
+    同一份 builder(红线 5)。跨实例仍各算一次(与 list_store 同一既有边界), 幂等写
+    不损数据。令牌在 builder **之前**取, 保证重建期间的新失效不会被旧值覆盖。
+    """
+    _lk = _key_lock(key)
+    if not _lk.acquire(blocking=False):
+        return "dedup"
+
+    def _w():
+        try:
+            _tok = _now_tok()
+            _val = builder()
+            _s = json.dumps(_val, ensure_ascii=False, default=str)
+            if max_bytes and len(_s.encode("utf-8")) > max_bytes:
+                return
+            try:
+                cache_put(key, _s, tok=_tok, raw=True)
+            except Exception as _ep:
+                try_err('analysis_cache', 'SWR 后台落表失败(下次读再算)', _ep)
+        except Exception as _e:
+            try_err('analysis_cache', 'SWR 后台重建失败(本次仍返旧值)', _e)
+        finally:
+            try:
+                _lk.release()
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_w, daemon=True, name="cache-swr").start()
+        return "started"
+    except Exception as _e:
+        try:
+            _lk.release()
+        except Exception:
+            pass
+        try_err('analysis_cache', 'SWR 后台线程启动降级', _e)
+        return "error"
+
+
+def cache_get_swr(key, ttl, builder, max_bytes=None):
+    """带 SWR 的缓存读 → (value, meta_or_None)。**只给可容忍短暂旧值得的族用**。
+
+    与 cache_get 的差别只有一条分支:「过期但有旧值」。
+      · cache_get:  同步重算(单飞等 2s + builder), 请求等结果;
+      · 本函数:     立即返回上一版完整值 + 后台重建 + 顶层 __swr 播报(前端有界重拉)。
+    命中(未过期) / 首建(无旧值)两条分支与 cache_get 完全一致 —— 首建**必须**同步算
+    一次, 绝不给空结构(数据四维-完整)。读侧从不等待后台结果(红线 6)。
+
+    载体就是 analysis_cache 本表本行, 不新建表/队列(红线 2); 与 list_store、
+    dash_store 的 SWR 语义同构, 前端拦截器已是同一套(client.ts 顶层 __swr)。
+
+    哪些族可以用: 结论型/统计型且"晚几秒不影响决策"的(history 的区间汇总、同比、
+    TOP)。订单列表(orders, TTL 5s)与看板加速(accel)不接 —— 前者写后要立刻看见。
+    """
+    _row = None
+    try:
+        from db import one
+        _row = one("SELECT value, TIMESTAMPDIFF(SECOND, created_at, NOW(6)) AS age "
+                   "FROM analysis_cache WHERE `key`=%s", [key])
+    except Exception as _e:
+        # 读不到缓存 = 无法判定新旧 → 现算(慢但正确), 不留任何"未知年龄"的数据
+        try_err('analysis_cache', 'SWR 读降级(本次现算)', _e)
+        return builder(), None
+
+    _age, _val = -1, None
+    if _row:
+        _v0 = _row.get("value")
+        _a0 = _row.get("age")
+        if _v0 and _v0 != "__CALC__" and _a0 is not None:
+            _v = _loads(_v0)
+            if _v is not _FAILED:
+                _age, _val = int(_a0), _v
+    if _val is not None and 0 <= _age <= ttl:
+        return _val, None                      # ① 命中: 零额外开销、零额外字段
+    if _val is not None:
+        _st = _swr_rebuild(key, builder, max_bytes=max_bytes)
+        return _val, {"state": "serving_previous", "freshness_s": _age,
+                      "rebuild": _st, "retry_after_ms": 900, "source": "cache_swr"}
+    # ③ 首建 / 无旧值: 与 cache_get 同一条路径(同步算 + 令牌守卫落表)
+    return cache_get(key, ttl, builder, max_bytes=max_bytes), None
+
+
 def _drain_agg_dirty(batch=40, max_rounds=6):
     """消费 agg_dirty_days: 按渠道把脏日期合成 ≤7 天区间, 精准重建「日聚合 + 日销快照 + 日销三窗口」
 
