@@ -226,6 +226,16 @@ async def slow_log_middleware(request: Request, next):
                     _thw.Thread(target=_notify, daemon=True).start()
             except Exception:
                 pass
+    # §15.175 服务端耗时自报: 验收脚本的 e2e 含沙箱→边缘 CDN 的 RTT(实测 /api/health
+    #   0.4~2.4s, 抖动大于被测量本身), 无法把「服务端变慢」与「链路抖动」分开。
+    #   这里把应用内 elapsed 写进响应头, 供线上验收按**服务端时间**逐接口判定(不改任何数据口径,
+    #   不影响缓存/物化/响应体; 红线 7 认可的线上事实来源)。
+    try:
+        _resp.headers["X-Srv-Ms"] = "%.0f" % (_el * 1000)
+        if _el > 3:
+            _resp.headers["X-Slow"] = "1"
+    except Exception:
+        pass
     return _resp
 
 
