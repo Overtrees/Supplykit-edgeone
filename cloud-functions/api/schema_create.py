@@ -524,8 +524,7 @@ _TABLES = {
         "seq INT NOT NULL, need TINYINT NOT NULL DEFAULT 0, "
         "sku VARCHAR(80) NOT NULL DEFAULT '', product_name VARCHAR(255) NOT NULL DEFAULT '', "
         "barcode VARCHAR(40) NOT NULL DEFAULT '', payload MEDIUMTEXT NOT NULL, "
-        "PRIMARY KEY (kind, scope, gen, seq), "
-        "KEY idx_list_need (kind, scope, gen, need, seq))"
+        "PRIMARY KEY (kind, scope, gen, seq))"
     ),
     "list_head": (
         "CREATE TABLE IF NOT EXISTS list_head ("
@@ -538,6 +537,14 @@ _TABLES = {
         "timing VARCHAR(255) NOT NULL DEFAULT '', "
         "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, PRIMARY KEY (kind, scope))"
+    ),
+    # 2026-11-08 §15.177 维护任务租约锁: 云函数多实例各有内存, 模块级 dict 挡不住
+    #   "同一任务被 3 个实例各跑一遍"(线上实测连提 3 次全 started, 全站读 3.4s)。
+    #   一行一把锁, 过期由下一个申请者回收 —— 与 db.heavy 的租约同一思路。
+    "maint_lock": (
+        "CREATE TABLE IF NOT EXISTS maint_lock ("
+        "name VARCHAR(80) NOT NULL, ts DATETIME(6) NOT NULL, "
+        "holder VARCHAR(80) NOT NULL DEFAULT '', PRIMARY KEY (name))"
     ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":

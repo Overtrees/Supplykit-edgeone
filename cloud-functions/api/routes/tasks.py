@@ -77,29 +77,46 @@ def _log_task(task_id, task_type, status, channel, result=""):
 # ── 任务列表 ──────────────────────────────────────────────────────────────
 # ── 维护任务单飞(§15.177) ────────────────────────────────────────────────
 # 任务页连点「重建聚合」/「预热」时, 原来每次提交都起一个后台线程各算一遍:
-#   线上实测连提 3 次 → 3 个 90 天聚合并发 → 全站读 p95 3,404ms(单条 SELECT 也 3.2s),
+#   线上实测连提 3 次 → 90 天聚合并发 → 全站读 p95 3,404ms(连 /api/health 都 3.2s),
 #   因为同一实例的 Python 重计算共享一个 GIL。这两个 action 本身幂等,
 #   重复提交没有任何额外收益, 只是把 CPU 再烧一遍。
-# 单飞 = 同一 (action, channel) 在租约期内只跑一个; 后到的直接返回 already_running。
-# 租约 600s: 90 天聚合线上单次最长 110s+; 线程被冻结时到期自动放行(红线 15 同理)。
-_MAINT_RUN = {}
-_MAINT_LK = threading.Lock()
-_MAINT_LEASE = 600.0
+#
+# **必须用 DB 锁, 不能用模块级 dict**: 云函数会为并发请求开多个实例, 每个实例各有
+#   一份内存状态 —— 线上实测内存锁下连提 3 次仍全部 started(3 个实例各抢到自己的锁)。
+#   故改为 maint_lock 表: INSERT 成功=抢到; 已存在则条件 UPDATE(ts 过期才抢),
+#   rowcount=1 才算抢到。租约 600s(90 天聚合线上单次最长 110s+), 实例被冻结时到期自动放行。
+# 锁失败一律**放行**(返回 holder): 治理手段不能变成新的不可用来源。
+_MAINT_LEASE = 600
 
 
 def _maint_claim(key):
-    _now = time.time()
-    with _MAINT_LK:
-        _ts = _MAINT_RUN.get(key)
-        if _ts and _now - _ts < _MAINT_LEASE:
-            return False
-        _MAINT_RUN[key] = _now
-        return True
+    """返回 holder 字符串(抢到) 或 None(已在跑)。"""
+    import uuid
+    h = uuid.uuid4().hex[:12]
+    try:
+        from db import execute as _e
+        try:
+            _e("INSERT INTO maint_lock(name, ts, holder) VALUES(%s, NOW(6), %s)", [key, h])
+            return h
+        except Exception:
+            pass                      # 1062: 已存在 → 走条件更新
+        n = _e("UPDATE maint_lock SET ts=NOW(6), holder=%s WHERE name=%s "
+               "AND ts < DATE_SUB(NOW(6), INTERVAL %s SECOND)", [h, key, _MAINT_LEASE])
+        return h if int(n or 0) == 1 else None
+    except Exception as _e2:
+        try:
+            try_err("tasks", "维护锁降级(放行)", _e2)
+        except Exception:
+            pass
+        return h                      # 锁表不可用 → 不阻断功能
 
 
-def _maint_release(key):
-    with _MAINT_LK:
-        _MAINT_RUN.pop(key, None)
+def _maint_release(key, holder):
+    try:
+        from db import execute as _e
+        _e("DELETE FROM maint_lock WHERE name=%s AND holder=%s", [key, holder])
+    except Exception:
+        pass
 
 
 @router.get("/tasks")
@@ -137,7 +154,8 @@ async def tasks_maintain(request: Request):
     if action == "rebuild_agg":
         from routes.dashboard_maintain import _rebuild_day_agg as _rda3
         _k = "rebuild_agg|%s" % channel
-        if not _maint_claim(_k):
+        _h = _maint_claim(_k)
+        if not _h:
             return ok({"started": False, "already_running": True, "action": "rebuild_agg"})
 
         def _bg_agg():
@@ -146,7 +164,7 @@ async def tasks_maintain(request: Request):
             except Exception as _e:
                 try_err("tasks", "重建聚合失败", _e)
             finally:
-                _maint_release(_k)
+                _maint_release(_k, _h)
 
         threading.Thread(target=_bg_agg, daemon=True).start()
         from routes.analysis_cache import invalidate
@@ -154,7 +172,8 @@ async def tasks_maintain(request: Request):
         return ok({"started": True, "action": "rebuild_agg"})
     if action == "warmup":
         _kw = "warmup|%s" % channel
-        if not _maint_claim(_kw):
+        _hw = _maint_claim(_kw)
+        if not _hw:
             return ok({"started": False, "already_running": True, "action": "warmup"})
         # 预热各缓存(后台顺序调用 builder, 填 300s 共享表缓存)——部署/重置后调用一次, 首屏不撞重算
         def _w():
@@ -170,7 +189,7 @@ async def tasks_maintain(request: Request):
             except Exception as _e:
                     try_err('tasks', '预热降级', _e)
             finally:
-                _maint_release(_kw)
+                _maint_release(_kw, _hw)
 
         threading.Thread(target=_w, daemon=True).start()
         return ok({"started": True, "action": "warmup"})
