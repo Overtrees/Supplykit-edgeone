@@ -46,12 +46,24 @@ DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
 _CHUNK = 400          # 明细批量插入行数(400 × 17 列 = 6800 占位符, 远低于单语句上限)
 _COOLDOWN = 60.0      # 同一渠道两次重建最小间隔(秒) —— 一次导入会连调多次 invalidate
-_STALE_BACKOFF = 600.0  # 校验失败后的退避, 防每个读请求都再烧一次 7s 重建
+# §15.164: 原 600s。写新 gen 撞主键后标脏 + 每次刷新 built_at 会把退避无限续期,
+# 失败不再置 stale(见 _mark_stale), 这里只作有界防御(红线 15 不靠盲重试)。
+_STALE_BACKOFF = 20.0
 _LOCK = threading.Lock()
 _LAST = {}
 _TYPES = ("own_transfer_gap", "own_overstock", "own_expiry_risk")
 
 _READ_ON = ("1", "true", "yes", "on")
+
+
+def _safe_rebuild():
+    """§15.164 总开关: 未设置=开; `OWN_SAFE_REBUILD=0` 一刀回退到修复前行为。"""
+    _v = os.environ.get("OWN_SAFE_REBUILD")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() in _READ_ON
+
+
 _COLS = ("seq, alert_type, level, sku, barcode, warehouse, product_name, avail, need_qty, "
          "gap_qty, cover_days, days_to_expiry, batch_no, exp_date, title, description")
 
@@ -193,10 +205,18 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only=""):
 
 # ── 写 ──────────────────────────────────────────────────────────
 def _mark_stale(channel, note):
+    """§15.164: 记失败原因, 但**不把完整旧 gen 标成不可用**(与 list_store 同源修订)。
+
+    线上 09:03:01 自有仓重建撞 `own_health_snapshot.PRIMARY` 1062, 旧 gen(14309 行,
+    发布前计数自校验通过过) 完整却被置 stale=1 → 读侧退回现算 3.5~4.4s。
+    默认 stale=0 让读侧继续用上一版完整物化 + 新鲜度播报; `OWN_SAFE_REBUILD=0` 回退。
+    """
+    _v = "0" if _safe_rebuild() else "1"
     try:
         execute("INSERT INTO own_health_head(channel,stale,note,built_at) "
-                "VALUES(%s,1,%s,NOW(6)) ON DUPLICATE KEY UPDATE stale=1, note=VALUES(note)",
-                [channel, str(note)[:250]])
+                "VALUES(%s,%s,%s,NOW(6)) ON DUPLICATE KEY UPDATE stale=VALUES(stale), "
+                "note=VALUES(note), built_at=VALUES(built_at)",
+                [channel, _v, str(note)[:250]])
     except Exception as _e:
         try_err("own_store", "标脏失败(%s)" % channel, _e)
 
@@ -243,7 +263,20 @@ def build(channel, force=False):
     items = d.get("items") or []
     gen = (int(h.get("gen") or 0) + 1) if h else 1
     _t_w0 = time.time()
+    _safe = _safe_rebuild()
     try:
+        if _safe:
+            # §15.164: 清掉目标 gen 中超出本轮行数的半批残留, 避免下次写同 gen 1062,
+            # 也避免残留行把发布前计数自校验算多(红线 8② 完整性)。
+            execute("DELETE FROM own_health_snapshot WHERE channel=%s AND gen=%s AND seq>=%s",
+                    [channel, gen, len(items)])
+        _upsert = (" ON DUPLICATE KEY UPDATE alert_type=VALUES(alert_type), level=VALUES(level), "
+                   "sku=VALUES(sku), barcode=VALUES(barcode), warehouse=VALUES(warehouse), "
+                   "product_name=VALUES(product_name), avail=VALUES(avail), "
+                   "need_qty=VALUES(need_qty), gap_qty=VALUES(gap_qty), "
+                   "cover_days=VALUES(cover_days), days_to_expiry=VALUES(days_to_expiry), "
+                   "batch_no=VALUES(batch_no), exp_date=VALUES(exp_date), "
+                   "title=VALUES(title), description=VALUES(description)") if _safe else ""
         if items:
             _payload = []
             for _i, it in enumerate(items):
@@ -264,7 +297,7 @@ def build(channel, force=False):
                     "INSERT INTO own_health_snapshot(channel,gen,seq,alert_type,level,sku,"
                     "barcode,warehouse,product_name,avail,need_qty,gap_qty,cover_days,"
                     "days_to_expiry,batch_no,exp_date,title,description) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)" + _upsert,
                     _payload[_i:_i + _CHUNK])
     except Exception as _e:
         _mark_stale(channel, "写入异常: %s" % _e)

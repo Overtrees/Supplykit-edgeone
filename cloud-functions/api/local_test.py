@@ -4458,7 +4458,10 @@ try:
         s = sql.strip()
         if "ON DUPLICATE KEY UPDATE gen" in s:
             _mem18["published"].append(params)
-        elif "ON DUPLICATE KEY UPDATE stale=1" in s:
+        elif "INSERT INTO list_head(kind,scope,stale,note,built_at)" in s:
+            # §15.164 同步: 标脏 SQL 改为参数化 stale(默认 0=失败保旧 gen,
+            # LIST_SAFE_REBUILD=0 回退 1=旧行为)。桩按语句特征识别, 不再依赖
+            # "stale=1" 字面; 断言强度不变 —— 仍要求「校验未过 + 未切 head + 有失败记录」。
             _mem18["stale"].append(params)
         return 0
 
@@ -4910,6 +4913,99 @@ try:
         _DS23.fp_now, _DS23._read, _DS23._write, _DS23.read_enabled = _o23
 except Exception as _e36:
     check("§15.163 看板最终结果物化/SWR 用例无异常", False, str(_e36)[:300])
+
+# ── §15.164 尾巴根治: 新 gen 写入幂等 + 失败保旧 gen(红线 6/8②/15) ──────────
+# 线上现场 2026-11-08 09:05:23: 跨实例同 gen 重复写 → 1062 Duplicate entry '?'
+# → 失败却把 head 标 stale=1 → page_of(含 allow_stale) 拒读完整旧 gen → serve
+# 走 first_legacy 同步全量现算 12.858s / HTTP 503, 且 300s 退避被每次失败刷新, 17min 不收敛。
+try:
+    import os as _os24
+    from core import list_store as _LS24, own_store as _OS24
+    _lssrc24 = open(_os24.path.join(_os24.path.dirname(__file__), "core", "list_store.py"),
+                    encoding="utf-8").read()
+    _ossrc24 = open(_os24.path.join(_os24.path.dirname(__file__), "core", "own_store.py"),
+                    encoding="utf-8").read()
+
+    check("§15.164 新 gen 写入幂等: ON DUPLICATE KEY UPDATE 覆盖同主键行, 根治 1062 Duplicate entry '?'",
+          "ON DUPLICATE KEY UPDATE need=VALUES(need)" in _lssrc24
+          and "ON DUPLICATE KEY UPDATE alert_type=VALUES(alert_type)" in _ossrc24,
+          "list_store/own_store")
+    check("§15.164 写前清目标 gen 尾部半批残留(seq>=len(rows)), 发布前 COUNT 自校验不被残留算多(红线 8②)",
+          "DELETE FROM list_snapshot WHERE kind=%s AND scope=%s AND gen=%s AND seq>=%s" in _lssrc24
+          and "DELETE FROM own_health_snapshot WHERE channel=%s AND gen=%s AND seq>=%s" in _ossrc24,
+          "list_store/own_store")
+    check("§15.164 失败不误置 stale=1: 完整旧 gen 继续可读, 读侧不退回全量现算(红线 6)",
+          "stale=VALUES(stale)" in _lssrc24 and "stale=VALUES(stale)" in _ossrc24
+          and "不再把完整旧 gen 标成不可用" in _lssrc24, "list_store/own_store")
+    check("§15.164 哨兵一字未删: page_of 的 gen>0 / stale=0 / row_cnt 校验仍保留(红线 8②), 只是不再被误置",
+          'int(h.get("stale") or 0)' in _lssrc24
+          and 'int(h.get("row_cnt") or -1) < 0' in _lssrc24, "core/list_store.py")
+    check("§15.164 退避有界 20s(原 300/600s 被每次失败刷新无限续期), 不靠盲重试(红线 15)",
+          _LS24._STALE_BACKOFF == 20.0 and _OS24._STALE_BACKOFF == 20.0,
+          "list=%s own=%s" % (_LS24._STALE_BACKOFF, _OS24._STALE_BACKOFF))
+    check("§15.164 一刀回滚开关: LIST_SAFE_REBUILD=0 / OWN_SAFE_REBUILD=0 回到修复前行为(不叠加新机制, 红线 2)",
+          'os.environ.get("LIST_SAFE_REBUILD")' in _lssrc24
+          and 'os.environ.get("OWN_SAFE_REBUILD")' in _ossrc24, "list_store/own_store")
+
+    # ② 动态: 模拟「目标 gen 已有半批残留 + 同 gen 重复写」→ 不再 1062, 一次发布成功
+    _o24 = (_LS24.head, _LS24.fp_now, _LS24._builder_of, _LS24.execute,
+            _LS24.executemany, _LS24.one, _LS24.try_err)
+    _oex24 = _OS24.execute
+    try:
+        _rows24 = [{"sku": "S%d" % i} for i in range(3)]
+        _LS24.head = lambda k, s: {"gen": 5, "fp": "OLD", "row_cnt": 10000, "stale": 0,
+                                   "channel": "jd", "mode": "bbcc", "days": 28, "source": ""}
+        _LS24.fp_now = lambda k, c, m, e="": "NEW"
+        _LS24._builder_of = lambda k, h: (lambda: list(_rows24))
+        _LS24.one = lambda sql, p=None: {"n": 3, "nd": 0}
+        _LS24.try_err = lambda *a, **k: None
+        _sql24, _em24 = [], []
+        _LS24.execute = lambda sql, p=None: (_sql24.append((sql, p)) or 1)
+        _LS24.executemany = lambda sql, seq: _em24.append((sql, len(list(seq))))
+        _r24 = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
+        check("§15.164 动态: 同 gen 已有半批残留仍一次发布成功(1062 消失), 写入 SQL 幂等 + 清尾部残留",
+              _r24.get("ok") is True and _r24.get("gen") == 6
+              and _em24 and all("ON DUPLICATE KEY UPDATE" in s for s, n in _em24)
+              and any("seq>=%s" in s and p[3] == 3 for s, p in _sql24), str(_r24))
+
+        def _boom24(sql, seq):
+            _em24.append((sql, len(list(seq))))
+            raise Exception("(1062, Duplicate entry '?' for key 'list_snapshot.PRIMARY')")
+
+        _sql24.clear(); _em24.clear()
+        _LS24.executemany = _boom24
+        _r24b = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
+        _st24 = [p for s, p in _sql24 if "list_head" in s and "stale" in s and p]
+        check("§15.164 动态: 写失败(模拟 1062)只记 note 且 stale=0 → 完整旧 gen 继续可读, 读侧不再全量现算",
+              _r24b.get("error") == "write" and bool(_st24) and str(_st24[-1][2]) == "0",
+              str(_st24[-1:]))
+
+        _os24.environ["LIST_SAFE_REBUILD"] = "0"
+        _sql24.clear(); _em24.clear()
+        _r24c = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
+        _st24c = [p for s, p in _sql24 if "list_head" in s and "stale" in s and p]
+        check("§15.164 动态: LIST_SAFE_REBUILD=0 一刀回退(写入不幂等 + 失败标 stale=1)",
+              _r24c.get("error") == "write" and bool(_st24c) and str(_st24c[-1][2]) == "1"
+              and all("ON DUPLICATE KEY UPDATE" not in s for s, n in _em24), str(_st24c[-1:]))
+        _os24.environ.pop("LIST_SAFE_REBUILD", None)
+
+        _ownsql24 = []
+        _OS24.execute = lambda sql, p=None: (_ownsql24.append((sql, p)) or 1)
+        _OS24._mark_stale("jd", "写入异常: 1062")
+        check("§15.164 动态(own): 写失败 stale=0, 旧 gen 14309 行继续可读, 不再退回现算 3.5~4.4s",
+              bool(_ownsql24) and str(_ownsql24[-1][1][1]) == "0", str(_ownsql24[-1:]))
+        _os24.environ["OWN_SAFE_REBUILD"] = "0"
+        _OS24._mark_stale("jd", "写入异常: 1062")
+        check("§15.164 动态(own): OWN_SAFE_REBUILD=0 回退到 stale=1",
+              str(_ownsql24[-1][1][1]) == "1", str(_ownsql24[-1:]))
+    finally:
+        (_LS24.head, _LS24.fp_now, _LS24._builder_of, _LS24.execute,
+         _LS24.executemany, _LS24.one, _LS24.try_err) = _o24
+        _OS24.execute = _oex24
+        _os24.environ.pop("LIST_SAFE_REBUILD", None)
+        _os24.environ.pop("OWN_SAFE_REBUILD", None)
+except Exception as _e37:
+    check("§15.164 重建写入幂等/失败保旧 gen 用例无异常", False, str(_e37)[:300])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

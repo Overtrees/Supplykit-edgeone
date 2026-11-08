@@ -65,10 +65,22 @@ DATE_AWARE = ("disposal",)
 
 _CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
-_STALE_BACKOFF = 300.0  # 校验失败后的退避, 防每个读请求都再烧一次 8s 重建
+# §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
+# 每次读请求又刷新 built_at → 退避被无限续期, repl 连续 17min 每请求全量现算 12.8s/503。
+# 失败不再置 stale(见 _mark_stale), 退避只作防御性兜底, 有界 20s 即可(红线 15 不靠盲重试)。
+_STALE_BACKOFF = 20.0
 _LOCK = threading.Lock()
 _LAST = {}
 _READ_ON = ("1", "true", "yes", "on")
+
+
+def _safe_rebuild():
+    """§15.164 总开关: 未设置=开; `LIST_SAFE_REBUILD=0` 一刀回退到修复前行为
+    (幂等写 / 失败保旧 gen 同时关掉), 不必发版。红线 2: 不新增机制, 只是同一路径的开关。"""
+    _v = os.environ.get("LIST_SAFE_REBUILD")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() in _READ_ON
 
 # ── §15.161 P1 冷算治理: 全局预算 + 同 key 单飞 + 读侧零等待 ────────────────
 # 线上实测 2026-11-07 19:12~19:22(本报告改前基线, 全部真实链路):
@@ -151,11 +163,25 @@ def register_scope(kind, scope, channel, mode, days, source):
 
 
 def _mark_stale(kind, scope, note):
+    """§15.164: 记录重建失败原因, 但**不再把完整旧 gen 标成不可用**。
+
+    线上现场(09:05:23, 90min 日志 3 条 1062): 新 gen 写一半撞主键失败, 旧 gen
+    (gen=5 / row_cnt=10000 / 发布前 COUNT 自校验通过过) 其实完整可读, 却被这里置
+    stale=1 → page_of(含 allow_stale=True) 第 209 行直接 return None → serve() 判
+    `prev is None` 走 first_legacy 同步全量现算(12.8s / HTTP 503), 违反红线 6。
+
+    因此默认路径改为 stale=0 + note 记因: 读侧继续读上一版完整物化, 并由 __swr
+    显式播报 freshness_s / fp_changed(红线 8② 的 gen/stale/row_cnt 哨兵一字未删,
+    只是不再被误置; 绝不把旧值静默伪装成新值)。`LIST_SAFE_REBUILD=0` 回退旧行为。
+    """
+    _safe = _safe_rebuild()
+    _v = "0" if _safe else "1"
     try:
         execute("INSERT INTO list_head(kind,scope,stale,note,built_at) "
-                "VALUES(%s,%s,1,%s,NOW(6)) "
-                "ON DUPLICATE KEY UPDATE stale=1, note=VALUES(note), built_at=VALUES(built_at)",
-                [kind, scope, str(note)[:250]])
+                "VALUES(%s,%s,%s,%s,NOW(6)) "
+                "ON DUPLICATE KEY UPDATE stale=VALUES(stale), note=VALUES(note), "
+                "built_at=VALUES(built_at)",
+                [kind, scope, _v, str(note)[:250]])
     except Exception as _e:
         try_err("list_store", "标脏失败(%s/%s)" % (kind, scope), _e)
 
@@ -316,16 +342,26 @@ def build(kind, scope, force=False):
     need_keys = NEED_KEYS[kind]
     _t_w0 = time.time()
     need_cnt = 0
+    _safe = _safe_rebuild()
     try:
         payload = []
         for i, row in enumerate(rows):
             need, sku, pn, bc, js = _row_vals(row, need_keys)
             need_cnt += need
             payload.append([kind, scope, gen, i, need, sku, pn, bc, js])
+        if _safe:
+            # §15.164 根治 1062: 跨实例并发领到同一 gen(或上次失败留下半批)时,
+            # 先清掉目标 gen 中**超出本轮行数**的尾部残留(线上 repl gen=6 残留 5600 行),
+            # 再用 ON DUPLICATE KEY UPDATE 幂等覆盖同名行。同 fp 结果同源, 覆盖不损数据。
+            execute("DELETE FROM list_snapshot WHERE kind=%s AND scope=%s AND gen=%s AND seq>=%s",
+                    [kind, scope, gen, len(rows)])
+        _upsert = (" ON DUPLICATE KEY UPDATE need=VALUES(need), sku=VALUES(sku), "
+                   "product_name=VALUES(product_name), barcode=VALUES(barcode), "
+                   "payload=VALUES(payload)") if _safe else ""
         for i in range(0, len(payload), _CHUNK):
             executemany(
                 "INSERT INTO list_snapshot(kind,scope,gen,seq,need,sku,product_name,barcode,payload) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)", payload[i:i + _CHUNK])
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)" + _upsert, payload[i:i + _CHUNK])
     except Exception as _e:
         _mark_stale(kind, scope, "写入异常: %s" % _e)
         try_err("list_store", "重建写入失败(%s/%s)" % (kind, scope), _e)
