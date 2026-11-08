@@ -160,7 +160,7 @@ def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
             if isinstance(p, dict) and p:
                 return p
             # leader 排队/名额超时(极端): 让出 300ms 等它发布, 仍无才单份现算兜底
-            time.sleep(0.3)
+            time.sleep(1.0)
             p = page_of(channel, full=full, limit=limit, offset=offset,
                         per_type=per_type, only=only, allow_stale=True)
             # 极端: build 没建成 → 单份现算兜底(compute 已含分页), 绝不返回 0 条

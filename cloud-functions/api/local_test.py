@@ -5306,7 +5306,8 @@ try:
     check("§15.168 own 明细写入 _CHUNK=1000(首建 36 次往返 → 15 次)",
           "_CHUNK = 1000" in _os28, "core/own_store.py")
 
-    # ② 同 kind 首建串行: 并发 3 个, 最大并发度必须是 1(实测并发只互相拖慢: 4.5→13.4s)
+    # ② 同 kind 首建并行度受控(2 席): 3 个并发时最大并发度 ≤2 (实测纯并发 6 路会把
+    #    calc 从 4.5s 拖到 13.4s 并打满连接; 串行又让第 3 个用户等 20s+, 2 席是折中)
     _cur28 = {"n": 0, "max": 0}
     _lk28 = _th28.Lock()
 
@@ -5314,7 +5315,7 @@ try:
         with _lk28:
             _cur28["n"] += 1
             _cur28["max"] = max(_cur28["max"], _cur28["n"])
-        _tm28.sleep(0.06)
+        _tm28.sleep(0.12)
         with _lk28:
             _cur28["n"] -= 1
         return {"ok": True}
@@ -5325,8 +5326,8 @@ try:
     [_t.start() for _t in _th28_list]
     [_t.join() for _t in _th28_list]
     _wall28 = _tm28.time() - _t28
-    check("§15.168 同 kind 首建串行(最大并发度=1, 不互抢 GIL/连接)",
-          _cur28["max"] == 1 and _wall28 >= 0.16,
+    check("§15.168 同 kind 首建席位=2(3 个并发最大并发度≤2, 第 3 个等一批而不是全排队)",
+          _cur28["max"] == 2 and _wall28 < 0.36,
           "max=%d wall=%.2fs" % (_cur28["max"], _wall28))
 
     # ③ 跨 kind 并行: 两个不同 kind 各 0.15s, 总墙钟应 ≈0.15s 而不是 0.3s
@@ -5342,12 +5343,14 @@ try:
     # ④ 排队有界: 同 kind 锁被占满时, first_guard 超时返回 None(由调用方读物化/现算兜底)
     _hold28 = _LS28._kind_lock("k_timeout")
     _hold28.acquire()
+    _hold28.acquire()          # 占满 2 个席位
     _old_wait28 = _LS28._FIRST_LOCK_WAIT
     try:
         _LS28._FIRST_LOCK_WAIT = 0.1
         _r28 = _LS28.first_guard("k_timeout", lambda: {"ok": True})
     finally:
         _LS28._FIRST_LOCK_WAIT = _old_wait28
+        _hold28.release()
         _hold28.release()
     check("§15.168 首建排队有界: 等锁超时返回 None(不无界阻塞, 红线 15)",
           _r28 is None, str(_r28))

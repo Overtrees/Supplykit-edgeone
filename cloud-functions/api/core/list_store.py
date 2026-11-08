@@ -115,6 +115,11 @@ _FIRST_WAIT = 18.0    # §15.168 首建单飞: follower 有界等待(覆盖 3 �
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FIRST_LOCK_WAIT = 15.0   # 同 kind 首建排队上限(超过则降级单份现算, 绝不无界排队)
 _FIRST_HEAVY_WAIT = 12.0  # 首建抢全局名额上限(后台重建 2s 即让路, 正常 1~2s 可得)
+# 同 kind 首建并行度: 2。实测(§15.168 线上两轮):
+#   串行  → 6 个新 scope 排队 3 批, 第 3 个用户等 20s+, 网关掐 46s;
+#   3 并行 → 单份 calc 4.5→8s, 总时长≈串行但**所有人都只等一批**, 且 3 份×2 连接仍留 4 条给稳态。
+#   2 并行是折中: 两批 ≈14s < _FIRST_WAIT, 峰值连接 4 条, 稳态 p95 不被拖过 2×。
+_KIND_PARALLEL = 2
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
@@ -626,10 +631,12 @@ def pop_swr(d):
 
 
 def _kind_lock(kind):
+    """同 kind 首建席位(信号量, 不是互斥锁): §15.168 实测并行 2 比串行更快让用户拿到数据,
+    又不像 6 路并发那样打满连接。名字保留 lock 是为了不惊动既有调用方。"""
     with _FLIGHT_LOCK:
         lk = _KIND_LOCKS.get(kind)
         if lk is None:
-            lk = threading.Lock()
+            lk = threading.BoundedSemaphore(_KIND_PARALLEL)
             _KIND_LOCKS[kind] = lk
         return lk
 
@@ -637,10 +644,11 @@ def _kind_lock(kind):
 def first_guard(kind, fn, use_heavy=True):
     """§15.168 首建执行体: **同 kind 串行 + 全局 heavy 名额**, 跨 kind 并行。
 
-    为什么同 kind 要串行(实测, 不是洁癖):
-      线上 stress_168 6 个新 scope 同时首建 → 单跑 calc 4.5s 变 13.4s, 总墙钟没变快
-      (3×4.5=13.5≈13.4), 但峰值连接/GIL 翻 3 倍 → 稳态 boot p95 1.99→3.87s、17/30 失败。
-      红线 10: 重计算接口并发 = 互相限速。串行是**同样的总时长、三分之一的资源**。
+    为什么同 kind 要限席(实测, 不是洁癖):
+      线上 stress_168 6 个新 scope 同时首建 → 单跑 calc 4.5s 变 13.4s(纯并发 6 路),
+      且 6 份计算各占 2 条连接 → 稳态 boot p95 1.99→3.87s、17/30 失败。
+      红线 10: 重计算接口并发 = 互相限速。限 2 席 = 两批 ≈14s < 网关 23s,
+      峰值连接 4 条, 稳态仍有余量; 纯串行则第 3 个用户要等 20s+, 被网关掐 46s。
 
     名额用 db.heavy(红线 4 不另造闸门); 排队有界(超时返回 None, 由调用方读回/现算),
     绝不无界阻塞(红线 15)。返回值与 fn 相同。
@@ -744,8 +752,8 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
                     page_size, extra=scope, allow_stale=True)
         if d is not None:
             return d
-        # leader 排队/名额超时(极端): 先让出 300ms 等它发布, 仍无才单份现算兜底
-        time.sleep(0.3)
+        # leader 排队/名额超时(极端): 先让出 1s 等它发布, 仍无才单份现算兜底
+        time.sleep(1.0)
         d = page_of(kind, scope, channel, mode, need_only, search, page,
                     page_size, extra=scope, allow_stale=True)
         if d is not None:
