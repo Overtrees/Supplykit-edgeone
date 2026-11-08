@@ -1,4 +1,5 @@
 """原生补货路由(方案 B): BBCC 两步法 + 传统逐仓(契约与旧 backend 一致)"""
+import os
 import time as _time
 from fastapi import APIRouter, Request
 
@@ -15,6 +16,15 @@ router = APIRouter(tags=["insights"])
 # 需求门控阈值: 日销低于此值(近28天不足 2.8 件)视为无实际需求——无需求时库存不会被消耗,
 # 安全线缺口不触发补货(安全线是需求波动的缓冲; 参考 bbcc 无需求不补的驱动语义)
 _MIN_DS = 0.1
+
+
+def _slim_on():
+    """§15.172 取数裁剪开关: 未设置=开; `SALES_SLIM=0` 一刀回退到「合计行 + 全部按码行」
+    两次读全列(不删代码, 红线 2: 同一路径互斥开关, 不并存)。"""
+    _v = os.environ.get("SALES_SLIM")
+    if _v is None or str(_v).strip() == "":
+        return True
+    return str(_v).strip().lower() not in ("0", "false", "off", "no")
 
 
 @router.get("/insights/replenishment")
@@ -133,14 +143,27 @@ def _build_repl(channel, mode):
     _stats = {}
     try:
         from biz.sales import get_sku_sales_stats
-        _stats = get_sku_sales_stats(channel, days=90) or {}
-        # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
-        #   补货建议整条链路退化为 SKU 合计值 —— 多码 SKU 的两码会显示同一份日销/库存)
-        try:
-            _stats.update(get_sku_sales_stats(channel, days=90, barcode="*") or {})
-        except Exception as _ebc:
-            from routes.common import try_err as _te2
-            _te2('repl', '补货按码行加载降级', _ebc)
+        if _slim_on():
+            # §15.172 取数裁剪(纯读侧, 算法一行未动): 线上分段证据(list_head.timing,
+            #   2026-11-08 13:41 repl gen=25): calc=6.1s 里 sql=5.3s/8 条, 87% 在 SQL。
+            #   而 sku_sales_stats 该渠道 254268 行里, 本接口**只用** `__C__` 维度
+            #   (20093 行; `_rd` 只查 sku|bc|__C__), 且只读 ds7_cut/ds14_cut/ds28_cut 三列
+            #   (全表 11 列)。原实现「合计行 + 全部按码行」= 2 次往返 / 127413 行 / 11 列,
+            #   仅取其中 1/6 的行、3/11 的列。
+            #   `barcode="all"` 一次取「合计 + 按码」→ 1 次往返; wh 限定维度; fields 裁列。
+            #   traditional 模式按**逐仓**取(`_rd(sku, wh)`), 故 wh 只能限 __C__, 不能限逐仓。
+            _w = "__C__" if mode == "bbcc" else None
+            _stats = get_sku_sales_stats(channel, days=90, barcode="all", wh=_w,
+                                         fields=("ds7_cut", "ds14_cut", "ds28_cut")) or {}
+        else:
+            _stats = get_sku_sales_stats(channel, days=90) or {}
+            # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
+            #   补货建议整条链路退化为 SKU 合计值 —— 多码 SKU 的两码会显示同一份日销/库存)
+            try:
+                _stats.update(get_sku_sales_stats(channel, days=90, barcode="*") or {})
+            except Exception as _ebc:
+                from routes.common import try_err as _te2
+                _te2('repl', '补货按码行加载降级', _ebc)
     except Exception as _e:
         try_err('repl', '物化读取降级', _e)
         _stats = {}
