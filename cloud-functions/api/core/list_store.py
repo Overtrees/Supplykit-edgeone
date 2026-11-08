@@ -417,10 +417,21 @@ def build(kind, scope, force=False):
         _upsert = (" ON DUPLICATE KEY UPDATE need=VALUES(need), sku=VALUES(sku), "
                    "product_name=VALUES(product_name), barcode=VALUES(barcode), "
                    "payload=VALUES(payload)") if _safe else ""
-        for i in range(0, len(payload), _CHUNK):
-            executemany(
-                "INSERT INTO list_snapshot(kind,scope,gen,seq,need,sku,product_name,barcode,payload) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)" + _upsert, payload[i:i + _CHUNK])
+        # §15.176 分批**并行**写: 线上实测 write 与行数严格线性(156µs/行), 且批量
+        #   200→1000→2000 都没有变化 —— 说明成本在 TiDB 逐行解析/索引/落盘, 不在往返。
+        #   批与批之间的 seq 段**互不重叠**(切片互斥), 并发 INSERT 不会写同一行;
+        #   跨实例同 gen 的重叠由上面的 DELETE 尾部残留 + ON DUPLICATE KEY UPDATE 兜住。
+        #   任一失败 → 整体视为写失败(不切 head, 旧 gen 继续服务), 与串行语义一致。
+        _sql = ("INSERT INTO list_snapshot(kind,scope,gen,seq,need,sku,product_name,barcode,payload) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)" + _upsert)
+        _batches = [payload[i:i + _CHUNK] for i in range(0, len(payload), _CHUNK)]
+        if len(_batches) > 1:
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=min(3, len(_batches))) as _pex:
+                list(_pex.map(lambda b: executemany(_sql, b), _batches))
+        else:
+            for b in _batches:
+                executemany(_sql, b)
     except Exception as _e:
         _mark_stale(kind, scope, "写入异常: %s" % _e)
         try_err("list_store", "重建写入失败(%s/%s)" % (kind, scope), _e)
