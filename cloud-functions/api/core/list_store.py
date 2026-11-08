@@ -63,7 +63,12 @@ UNPAGED_CAP = {"repl": 2000, "purchase": None, "disposal": None}
 #   重算", 这里指"日期变了计算结果本身就变", 属输入变化)。repl/purchase 公式不读日期, 不加。
 DATE_AWARE = ("disposal",)
 
-_CHUNK = 200          # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
+_CHUNK = 1000         # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
+# §15.174: 原 200。线上 list_head.timing(2026-11-08 14:05) 三个 kind 的 write 已超过 calc:
+#   repl 2.4s / purchase 1.9s / disposal 2.7s, 而 1 万行按 200 分 = 50 批 = 50 次往返。
+#   单批体积 = 行数 × payload 实测均值 853B(max 1128B) → 1000 行 ≈ 1.1MB,
+#   远低于 max_allowed_packet 64MB(线上已核); TiDB 解析 1MB 语句的成本低于一次跨区往返。
+#   批次数 50 → 10。**只改批量大小, 不改语义、不加闸门**(红线 4)。
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
 # §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
 # 每次读请求又刷新 built_at → 退避被无限续期, repl 连续 17min 每请求全量现算 12.8s/503。
