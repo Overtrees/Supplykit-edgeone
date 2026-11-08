@@ -828,18 +828,23 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
     """
     key = _flight_key(kind, scope, fp)
 
+    def _run():
+        # 只有**真正拿到名额开始算**的 scope 才进 building 短路: 抢不到名额的不标记,
+        #   否则该 scope 会在 _MEM_TTL 内永久 building(名额一空也不会再试)。
+        _mem_mark(kind, scope)
+        try:
+            return build(kind, scope, force=True)
+        finally:
+            _mem_clear(kind, scope)      # 成功/失败都解除: 成功走物化, 失败下次重试
+
     def _leader():
         _STATS["first_legacy"] += 1
         try:
-            r = first_guard(kind, lambda: build(kind, scope, force=True))
-            _mem_clear(kind, scope)      # 已发布: 后续请求正常走物化
-            return r
+            return first_guard(kind, _run)
         except FirstBusy:
             # 名额满(其他 scope 在算) → 后台单飞补建, 前台立刻 building。
+            #   本 scope 不标记, 前端重试时会重新抢名额(0.05s, 可忽略)。
             submit_background(kind, scope, fp, lambda: build(kind, scope, force=False))
-            raise
-        except Exception:
-            _mem_clear(kind, scope)
             raise
 
     def _readback(shared):
@@ -916,7 +921,6 @@ def serve(kind, scope, channel, mode, days, source, builder,
         #   跨 kind 并行、不同 scope 不排队; 读侧立刻 building, 前端按 retry_after 重试。
         #   FIRST_SINGLEFLIGHT=0 → 回到「前台现算 + 后台建」(旧兜底, 仅用于回滚比对)。
         if _first_sf_on():
-            _mem_mark(kind, scope)
             try:
                 _d0 = _first_serve(kind, scope, fp, builder, channel, mode,
                                    need_only, search, page, page_size)

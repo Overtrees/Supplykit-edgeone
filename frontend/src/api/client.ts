@@ -243,8 +243,9 @@ const SWR_TOTAL_BUDGET = 3000
 const SWR_MAX_RETRY = 2
 // §15.169 首次构建(state=building): 后端不再让读请求排队(线上排队 21s → 34s/503),
 //   改为立刻返回 building + 后台单飞建。前端按 retry_after 探测更久(首建 4~8s)。
-const SWR_BUILDING_BUDGET = 14000
-const SWR_BUILDING_RETRY = 7
+// §15.170 守住「任何单请求 ≤10s」判据: 首建探测 9s / 5 次封顶
+const SWR_BUILDING_BUDGET = 9000
+const SWR_BUILDING_RETRY = 5
 let _swrActive = false
 let _swrDeadline = 0
 let _swrBuilding = false
