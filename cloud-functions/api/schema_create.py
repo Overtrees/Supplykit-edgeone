@@ -546,6 +546,14 @@ _TABLES = {
         "name VARCHAR(80) NOT NULL, ts DATETIME(6) NOT NULL, "
         "holder VARCHAR(80) NOT NULL DEFAULT '', PRIMARY KEY (name))"
     ),
+    # 2026-11-08 §15.178 跨实例重建名额: 进程内 _HEAVY_SLOTS 管不到别的实例,
+    #   固定槽位 + 条件 UPDATE(租约 180s) 才能把"全局同时重建路数"压住。
+    #   槽位行由 _gslot_init() 预置(HEAVY_GLOBAL 个), 缺行 = 该槽不可用 → 天然降级。
+    "heavy_slot": (
+        "CREATE TABLE IF NOT EXISTS heavy_slot ("
+        "slot TINYINT NOT NULL, ts DATETIME(6) NOT NULL, "
+        "holder VARCHAR(80) NOT NULL DEFAULT '', PRIMARY KEY (slot))"
+    ),
     # 2026-11-05 seed 水位表: 每次 seed 写一批数据前登记 "这批落在哪个 id 之上 / 预期多少行",
     #   写完回填实际行数。作用有两个, 都不是"锦上添花":
     #   ① **可回滚**: seed 跑一半失败(90 万行量级, 单步超时/网关 504 是常态)时, 上一步写进去的

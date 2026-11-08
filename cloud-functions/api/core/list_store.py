@@ -507,7 +507,10 @@ def _cold_worker(kind, scope, fp, fn, key):
     try:
         from db import heavy, HeavyBusy
         try:
-            with heavy("list:" + kind, timeout=_HEAVY_WAIT):
+            # §15.178: global_=True → 除实例内名额, 再抢一张跨实例槽位(heavy_slot 表)。
+            #   实例内名额是进程内 dict, 多实例下管不到全局; 实测 7 kind 同时重建时
+            #   全站 p95 962ms(单 kind 只 117ms), 读侧被"同时"拖慢, 不是"重建"拖慢。
+            with heavy("list:" + kind, timeout=_HEAVY_WAIT, global_=True):
                 try:
                     fn()
                     _STATS["done"] += 1

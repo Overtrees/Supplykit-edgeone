@@ -39,23 +39,91 @@ _HEAVY_LK = threading.Lock()
 _HEAVY_SLOTS = {}      # token -> (start_ts, name)
 _HEAVY_SEQ = [0]
 
+# ── 2026-11-08 §15.178 名额分两级：实例内(读路径) + 全局(后台重建) ──────────
+# 为什么必须两级: `_HEAVY_SLOTS` 是**进程内** dict, 云函数为并发请求开多个实例,
+#   每个实例各有一份 → 线上实测"同时重建 7 个 kind"时, 全局真实并发是 实例数×3,
+#   实例内名额根本没起到"全局预算"的作用。探针实测(读并发固定 8):
+#     只 stale 1 个 kind → 全站 p95 117ms(单条 SELECT 14ms)
+#     全量失效 7 个 kind → p95 962ms, /api/health(222 字节无业务) 193ms
+#     全量失效 + 持续写   → p95 3400ms, health 3200ms
+#   即"重建本身不贵, **同时**重建才贵"; 而"同时"是跨实例的, 进程内锁管不到。
+# 所以: 读路径继续用实例内名额(零额外往返, 90ms 级的接口不能被一次抢槽拖成 180ms);
+#   只有后台重建(list_store.submit_background)额外抢一张**全局**槽位(heavy_slot 表),
+#   把"全站同时重建的路数"从 实例数×3 压到 HEAVY_GLOBAL(默认 2)。
+# 租约 180s 与进程内同理: 实例被冻结时槽位由下一个申请者回收, 不会永久泄漏。
+_HEAVY_GLOBAL = int(os.environ.get("HEAVY_GLOBAL", "2") or 0)
+_HEAVY_GLOBAL_LEASE = float(os.environ.get("HEAVY_GLOBAL_LEASE", "180") or 180)
+_GSLOT_DEGRADED = [False]   # 表不可用 → 降级为"只实例内", 只告警一次
+_GSLOT_INIT = [False]       # 本进程是否已确保槽位行存在
+
+
+def _gslot_claim(wait):
+    """抢一张全局槽位, 返回 (slot, holder); 抢不到返回 (None, None)。
+
+    锁表不可用(未建表/权限) → (-1, holder) 表示**降级放行**: 治理手段不能变成
+    新的不可用来源(红线 6 同理)。
+    """
+    import uuid
+    h = uuid.uuid4().hex[:12]
+    if _HEAVY_GLOBAL <= 0:
+        return -1, h
+    _e = execute                      # 本模块内直连(不经 import, 避免自引用)
+    if not _GSLOT_INIT[0]:
+        try:
+            for s in range(1, _HEAVY_GLOBAL + 1):
+                _e("INSERT IGNORE INTO heavy_slot(slot, ts, holder) VALUES(%s, NOW(6), '')", [s])
+            _GSLOT_INIT[0] = True
+        except Exception:
+            pass                      # 建不了表 → 下面抢槽会失败并走降级分支
+    dl = time.time() + max(float(wait), 0.0)
+    while True:
+        for s in range(1, _HEAVY_GLOBAL + 1):
+            try:
+                n = _e("UPDATE heavy_slot SET holder=%s, ts=NOW(6) WHERE slot=%s "
+                       "AND (holder='' OR ts < DATE_SUB(NOW(6), INTERVAL %s SECOND))",
+                       [h, s, _HEAVY_GLOBAL_LEASE])
+                if int(n or 0) == 1:
+                    return s, h
+            except Exception as _e1:
+                if not _GSLOT_DEGRADED[0]:
+                    _GSLOT_DEGRADED[0] = True
+                    try:
+                        from routes.common import try_err as _te
+                        _te("db", "全局名额表不可用, 降级为实例内名额", _e1)
+                    except Exception:
+                        pass
+                return -1, h
+        if time.time() >= dl:
+            return None, None
+        time.sleep(0.2)               # 槽位极少(2), 0.05s 轮询会在 2s 内打 80 次 SQL
+
+
+def _gslot_release(slot, holder):
+    if not slot or slot < 0:
+        return
+    try:
+        execute("UPDATE heavy_slot SET holder='' WHERE slot=%s AND holder=%s", [slot, holder])
+    except Exception:
+        pass                      # 释放失败靠租约回收, 不抛给调用方
+
 
 class HeavyBusy(RuntimeError):
     """重计算名额耗尽(排队超时) —— 调用方应降级返回旧值/空结构, 不要拖住前端"""
 
 
 @contextmanager
-def heavy(name="", timeout=20.0):
+def heavy(name="", timeout=20.0, global_=False):
     """重计算名额(带租约)。拿不到就抛 HeavyBusy, 让请求**快速失败**而不是阻塞在连接等待上。
 
     用法: `with heavy("aux"):` 包住整个读路径(含其内部并行)。
+    §15.178: `global_=True` 额外占一张**跨实例**槽位(heavy_slot 表), 只给后台重建用。
     """
-    if _HEAVY_LIMIT <= 0:
+    if _HEAVY_LIMIT <= 0 and not global_:
         yield
         return
     tok = None
     deadline = time.time() + max(float(timeout), 0.0)
-    while True:
+    while _HEAVY_LIMIT > 0:
         now = time.time()
         with _HEAVY_LK:
             # 回收僵死槽位(实例冻结/线程未走到 finally)
@@ -77,9 +145,18 @@ def heavy(name="", timeout=20.0):
             raise HeavyBusy("重计算繁忙(并发上限 %d, 已等 %.1fs): %s"
                             % (_HEAVY_LIMIT, float(timeout), name))
         time.sleep(0.01)
+    gs, gh = (None, None)
+    if global_:
+        gs, gh = _gslot_claim(timeout)
+        if gs is None:
+            with _HEAVY_LK:
+                _HEAVY_SLOTS.pop(tok, None)
+            raise HeavyBusy("全局重建名额已满(上限 %d): %s" % (_HEAVY_GLOBAL, name))
     try:
         yield
     finally:
+        if gs:
+            _gslot_release(gs, gh)
         with _HEAVY_LK:
             _HEAVY_SLOTS.pop(tok, None)
 
