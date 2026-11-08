@@ -221,6 +221,37 @@ def head(kind, scope):
         return None
 
 
+_HEAD_SF = {}         # §15.169c "kind|scope" -> {"ev","v"}: head 查询单飞
+
+
+def head_shared(kind, scope, wait=2.5):
+    """§15.169c head() 的进程内单飞: 30 个并发只查 1 次。
+
+    线上实测: 单次 DB 往返 ~450ms(新加坡区), 30 并发 × 1 次 head / 10 连接池
+    = 3 批 ≈ 1.4s, 正是 building 要 3s 的主因。合并后只 1 批。
+    只用于 serve 入口; page_of 内部的 head 仍走原函数(不改变读写同源语义)。
+    """
+    k = "%s|%s" % (kind, scope)
+    with _FLIGHT_LOCK:
+        e = _HEAD_SF.get(k)
+        if e is None:
+            e = {"ev": threading.Event(), "v": None}
+            _HEAD_SF[k] = e
+            leader = True
+        else:
+            leader = False
+    if leader:
+        try:
+            e["v"] = head(kind, scope)
+        finally:
+            e["ev"].set()
+            with _FLIGHT_LOCK:
+                _HEAD_SF.pop(k, None)
+        return e["v"]
+    e["ev"].wait(wait)
+    return e["v"]
+
+
 def register_scope(kind, scope, channel, mode, days, source):
     """登记 scope 的 builder 参数 —— 让 invalidate() 能在**写侧**主动后台重建。
 
@@ -886,7 +917,7 @@ def serve(kind, scope, channel, mode, days, source, builder,
     if read_enabled() and not legacy and _first_sf_on() and _mem_busy(kind, scope):
         return _building(kind, page, page_size)
 
-    h = head(kind, scope)
+    h = head_shared(kind, scope)
     if h is None:
         # §15.169b: 从未登记 → 只让 1 个请求走 INSERT+首建, 其余立即 building。
         #   否则 30 并发同时 INSERT IGNORE 同一行, 唯一键冲突检测串行化, 2~4s。
@@ -894,7 +925,7 @@ def serve(kind, scope, channel, mode, days, source, builder,
                 and not _mem_mark_once(kind, scope):
             return _building(kind, page, page_size)
         register_scope(kind, scope, channel, mode, days, source)
-        h = head(kind, scope)
+        h = head_shared(kind, scope)
 
     from core.list_page import shape as _shape
 
