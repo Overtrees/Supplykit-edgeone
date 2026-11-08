@@ -253,7 +253,7 @@ def _build_repl(channel, mode):
     with ThreadPoolExecutor(max_workers=3) as _ex:  # 2026-10-11 线程收敛(5→3——连接数降, 快照重查询仍并行)
         _fc = _ex.submit(_config, channel, mode)
         _fp = _ex.submit(_products, channel)
-        _fi = _ex.submit(_inventory, channel)
+        _fi = _ex.submit(_inventory, channel, mode)
         _fs = _ex.submit(_season_factor, channel, mode)
         cfg = _fc.result()
         products = _fp.result()
@@ -536,10 +536,21 @@ def _products(channel):
     return {r.get("sku"): r for r in rows}
 
 
-def _inventory(channel):
+def _inventory(channel, mode="bbcc"):
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 主循环 r.get("barcode") 恒 '' →
     #   agg key 退化为 (sku,'') 两码合并, 补货按码从未生效(输出 barcode 只是 products 兜底, 假象)
-    from routes.common import INVENTORY_COLS as _IC, check_cols as _cc
-    _rows = query("SELECT " + _IC + " FROM inventory WHERE channel=%s", [channel])
+    # §15.174 取数裁剪(纯读侧, 两个分支都不用 own 行):
+    #   bbcc 分支 `elif wt == "own": pass`、traditional 分支 `if wt != "platform": continue`
+    #   —— own 仓行**一条都不用**。线上 jd 库存 90100 行里 own 10100 行(11%)。
+    #   同时只取真正读到的 8 列(原 INVENTORY_COLS 12 列, 多 safety_days/locked_qty/
+    #   product_name/beginning_stock 共 1.5MB)。
+    #   过滤条件按 mode 走: bbcc 要 platform+platform_b, traditional 只要 platform。
+    from routes.common import check_cols as _cc
+    _wt = ("platform", "platform_b") if mode == "bbcc" else ("platform",)
+    _cols = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
+             "available_qty, in_transit_qty, c_transit, safety_qty")
+    _ph = ",".join(["%s"] * len(_wt))
+    _rows = query("SELECT " + _cols + " FROM inventory WHERE channel=%s "
+                  "AND warehouse_type IN (" + _ph + ")", [channel] + list(_wt))
     _cc(_rows, ("barcode", "warehouse"), "repl", "补货物料")
     return _rows

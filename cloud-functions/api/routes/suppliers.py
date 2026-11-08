@@ -442,7 +442,20 @@ async def put_seasons(request: Request):
     items = d.get("items") or []
     key = "season_config_%s" % mode
     old = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s", [key, channel])
-    _log_cfg_history(channel, key, (old or {}).get("value", ""),
+    _oldv = str((old or {}).get("value") or "")
+    # §15.174 幂等短路: 值未变 → 不写库、不记历史、不 invalidate。
+    #   为什么: 前端重复保存 / 用户点开弹窗直接确定 / 压测幂等写, 每次都会跑一遍
+    #   "写库 + 记 config_history + invalidate('config')" —— 而 invalidate 会让
+    #   repl/purchase 整域重建(calc 2.0~2.4s + write 1.4~1.7s), 纯属白烧 CPU,
+    #   并把同期读请求一起拖慢(P2 写风暴下 1 个 503 即由此放大)。
+    #   语义不变: 数据本来就一样, 跳过写不会改变任何读到的值。
+    if _oldv:
+        try:
+            if json.loads(_oldv) == items:
+                return ok({"updated": 0, "noop": True})
+        except Exception:
+            pass
+    _log_cfg_history(channel, key, _oldv,
                      json.dumps(items, ensure_ascii=False), mode)
     execute("INSERT INTO replenishment_config(`key`, value, channel) VALUES(%s,%s,%s) "
             "ON DUPLICATE KEY UPDATE value=VALUES(value)",
