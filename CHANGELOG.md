@@ -32,6 +32,7 @@
 | 新库首建 2 个 bug | ① 补索引跑在补列之前 → `idx_batches_sku_bc` 报 1072 → 版本永不写入；② 渠道种子写在建表之前 → 空库 `channels` 永远 0 行。两者**存量库测不出**，已修顺序并把 `batches.barcode` 写进 DDL |
 | 缺口一 | DB 不可用时 200 + 全 0 的静默空壳 → 统一 `X-App-Degraded` 响应头 + 前端常驻横幅 + 登录页友好文案；空壳不进 30s 缓存 |
 | 缺口二 | `list_tasks` 补 `@traced`，异常不再冒泡成 EdgeOne HTML 500 |
+| 空库自我失效循环 | 新空库上 `get_sku_sales_stats` 每请求重建 + `invalidate("orders")` → fp 永不等（实测 4 个只读 GET 让 `data_version` +4）；加空库守卫，有数据时行为不变，本地 dv 稳定 |
 | 红线 | **不导业务数据、不重跑 seed** —— 新库是干净空库，业务页面空数据为预期 |
 | 验证 | `local_test.py` 860 通过 / 0 失败；`py_compile` / `tsc` / `prettier` / `eslint` / 前端 build 全绿；降级头旧库带、新库不带 |
 

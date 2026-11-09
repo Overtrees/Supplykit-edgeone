@@ -754,14 +754,25 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None, fiel
         #   LIMIT 1 命中索引即返回, 语义等价(c<=0 ⇔ 无行)。
         _c = _o("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s LIMIT 1", [channel]) or {}
         if not _c:
-            _rebuild_sku_sales_stats(channel, 90)   # 2026-10-30 固定 90(原跟随调用方 days → 窗口不一致)
-            # 2026-11-01 自愈重建后失效聚合缓存: 表空期间可能已把"空结果"缓存进 analysis_cache(TiDB 表,
-            #   跨实例存活), 不失效会让消费方在 TTL 内继续读空 → 表现为"重建了但还是没数据"
-            try:
-                from routes.analysis_cache import invalidate as _inv
-                _inv("orders")
-            except Exception as _einv:
-                try_err('sales', '自愈重建后缓存失效降级', _einv)
+            # 2026-11-09 空库守卫(红线 18 配套): 空集群里 orders 无任何行 → 重建必然产出 0 行,
+            #   但下面 invalidate("orders") 会 bump data_version_dom → 读侧 fp 永久不等 →
+            #   **每次请求都重建 + 失效**, 形成自我失效循环(线上实测 4 个只读 GET 让
+            #   data_version +4、多张物化 gen 连涨), 新集群的 RU 会被白白烧穿。
+            #   先用一条索引点查确认底料存在: 无底料 → 直接走下面的空结果返回, 不重建不失效。
+            _src = _o("SELECT 1 AS c FROM orders WHERE channel=%s "
+                      "AND (deleted_at IS NULL OR deleted_at='') LIMIT 1", [channel]) or {}
+            if _src:
+                _rebuild_sku_sales_stats(channel, 90)   # 2026-10-30 固定 90(原跟随调用方 days → 窗口不一致)
+                # 只有重建真的产出行才失效: 有底料却建不出行(异常态)同样不能循环失效。
+                _built = _o("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s LIMIT 1", [channel]) or {}
+                if _built:
+                    # 2026-11-01 自愈重建后失效聚合缓存: 表空期间可能已把"空结果"缓存进
+                    #   analysis_cache(TiDB 表, 跨实例存活), 不失效会让消费方在 TTL 内继续读空。
+                    try:
+                        from routes.analysis_cache import invalidate as _inv
+                        _inv("orders")
+                    except Exception as _einv:
+                        try_err('sales', '自愈重建后缓存失效降级', _einv)
         where = "channel=%s"
         params = [channel]
         # 2026-10-29 按 69码: 不传 → 只读全码合计行(barcode='', 语义与改造前一致);

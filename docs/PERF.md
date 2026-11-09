@@ -396,6 +396,10 @@ python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
   `quality_logs` 里 `invalidate` / 重建日志同源限频后计数可查。
 - 高频链路保持**索引直达**（§7：多数接口 ≤51 RU/请求，与数据量解耦）；
   新接口接入前按 §6 清单做 RU 体检。
+- **空库首启必查 `data_version` 是否稳定**（红线 19）：空集群上「表空 → 自愈重建 →
+  `invalidate`」会自我失效，每请求 bump 域计数 → 物化 fp 永远追不上 → 持续烧 RU。
+  判据：发 4 个只读 GET，前后 `SELECT v FROM data_version WHERE id=1` 应不变。
+  详见 §15.186 第五节。
 
 ### 8.7 两个健壮性缺口（2026-11-09 第二批已修并验证）
 
