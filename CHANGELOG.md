@@ -37,6 +37,7 @@
 | **CI 转绿** ① | `test_audit.py` 4 条**断言过时**（11-08 起稳定红，与本次改动无关）按现状重锚且不放松：缓存 key 维度「恰好等于」→「至少包含」（缺维度仍红）；超卖「字面 SQL」→ 取 `_osql` 块断言 `FROM orders`+`GROUP BY sku`+只 `query(_osql)` 一次；`_agg` 断言改「缺省时也自汇总」；dashboard 改「summary+aux 都用 BC+WH 且不含 own」。**82 通过 / 0 失败**（原 78/4） |
 | **CI 转绿** ② | `setup-python@v5` 偶发 `504`（4/25 次）→ 升 `@v7` + `continue-on-error` + 版本断言 `>=3.10` 回落 runner python3；依赖改**装进 venv**（避开 PEP 668）；`secrets` job 只用标准库 → 去掉 setup-python |
 | 红线 / RU | 只跑一轮、未重跑 seed、未导数据、未跑已通过场景、未跑第二轮；观察写 58 次（季节系数，零业务影响）；取证零 RU 或只读 |
+| 推送/CI/部署 | 远端 `48215ea` → `983a95b`；**CI 两次全绿**（`42582892593` / `42583357529`，含真实 SQL 冒烟）；部署 `dpkricfmicgl` Success+Prod=yes；线上 bundle 已含新种子文案、旧串命中 0 |
 
 ---
 
