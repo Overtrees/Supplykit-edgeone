@@ -20,6 +20,9 @@
 | `pipeline_probe.py` | **零 RU** 全链路结构/代码验证：`check` 链路节点与机制常量、`coverage` 基准覆盖矩阵、`findings` 优化点→业务映射、`simulate` 集中导入结构推演、`predict` 100 万单复核、`selftest` 反证。见 `docs/PERF.md` §10 |
 | `import_smoke.py` | **线上小批量拟真冒烟**：走前端导入链路（同步 + 异步），CSV 按 `spec()` 中文表头从线上真实行取样原样回导（零业务数据变化）；`plan` 零写 / `run` 只跑一次 / `verify` 只读取证 + **第四类作业/联动判据** `judge_evidence`（纯函数，可喂历史 json 反证）。见 `docs/PERF.md` §10.7 / §11 |
 | `converge_probe.py` | **优化后结构/代码验证**（§15.189）：零 RU、不重跑 seed、不连线上；`check` 用 AST 判 P0 补建自愈 / P1 合并失效 / 4 维不退化 / 红线合规，`selftest` 反证，`evidence` 把 13:17 历史取喂进第四类判据（应报红 `materialize_gen_ok`）。见 `docs/PERF.md` §11 |
+| `suite_once.py` | **部署后一轮全套压测编排**（§15.190）：`probe` 零写取证（等 `drain_pending` 收敛 + 四维/联动快照 + 第四类判据）/ `run` 一轮 8 场景（hot 多并发+单条、storm S2/S4/S5、cold、first、noise；30 分钟防重锁）/ `report` 汇总；判据直接 import `run.py` 的 `TH`。见 `docs/PERF.md` §12 |
+| `suite_p6.py` | **只跑未达标项的稳态复验**（§15.191/§13.7）：从 `suite_once.SCENE_PLAN` 筛场景，`--only a,b,c` 精确指定（**通过项不跑**），默认 5 个 P6 项；每场景前 `wait_quiet(≤90s)`、场景间 `--gap` 秒，让上一场景的写触发重建收敛；判据真源仍是 `run.py TH`，**一字未改、不改判据转绿**；独立 30 分钟防重锁（只一轮）；额外落 hot 逐接口空壳明细、cold 前后 `list_head` gen、跑前/跑后零写四维快照、**503 逐条归因**（`app_headers`/`body`/`writes.codes`）。见 `docs/PERF.md` §13 |
+| `docs_probe.py` | **文档一致性门禁**（§15.191，零 RU 纯静态）：从代码/配置现读真源（`ARCHIVE_KEEP_DAYS` / preflight 步数 / cron 端点 / 路由数 / 分卷数 / §15.x 重号数），核对活文档 `check` 30 项、`selftest` 反证、`matrix` 真源→文档对照；历史卷与 CHANGELOG 历史批次按红线不检查。见 `docs/PERF.md` §13.5 |
 | `out/` | 每次运行的 json（不入库） |
 
 ## 用法

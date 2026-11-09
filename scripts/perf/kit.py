@@ -113,10 +113,19 @@ def hit(key, path=None, timeout=90):
             jj = {}
         d = jj.get("data")
         swr = jj.get("__swr") if isinstance(jj.get("__swr"), dict) else None
-        return {"ep": key, "srv": srv_ms(r), "e2e": round(time.time() - t0, 3),
-                "status": r.status_code, "rows": _rows(d),
-                "swr": bool(swr), "fresh": (swr or {}).get("freshness_s", -1),
-                "complete": complete(key, d), "kb": len(r.content) // 1024}
+        srv = srv_ms(r)
+        rec = {"ep": key, "srv": srv, "e2e": round(time.time() - t0, 3),
+               "status": r.status_code, "rows": _rows(d),
+               "swr": bool(swr), "fresh": (swr or {}).get("freshness_s", -1),
+               "complete": complete(key, d), "kb": len(r.content) // 1024}
+        # 非 200 必须留证：`srv=-1` 表示响应里没有 X-Srv-Ms —— 即**应用层没参与**，
+        #   503 是边缘/网关给的白页(实例并发或跨境链路)，不是函数自己返回的。
+        #   截 400 字够看到 <title>Tencent ... 的错误标题，又不把整页 HTML 塞进取证 json。
+        if r.status_code != 200:
+            rec["app_headers"] = bool(srv >= 0)
+            rec["server"] = r.headers.get("Server") or r.headers.get("server") or ""
+            rec["body"] = (r.text or "")[:400]
+        return rec
     except Exception as e:
         return {"ep": key, "srv": -1, "e2e": round(time.time() - t0, 3), "status": -1,
                 "rows": -1, "swr": False, "fresh": -1, "complete": False, "err": str(e)[:80]}

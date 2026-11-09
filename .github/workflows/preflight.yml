@@ -36,10 +36,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # setup-python 偶发 "Unexpected HTTP response: 504"（GitHub 侧拉 Python 版本清单
+      # 超时；2026-11-08~09 的红有近一半是它，跟代码无关）。两条保险：
+      #   ① 升 v7（原生 node24，不再被强制迁移，消掉那条 deprecation 注解）；
+      #   ② `continue-on-error` + 下一步的版本断言 —— 拉不到 3.10 就回落 runner 预装的
+      #      python3(≥3.12)，**不允许静默降到 3.10 以下**（本地 preflight 已按 3.10 语法校验）。
+      - id: py
+        uses: actions/setup-python@v7
+        continue-on-error: true
         with:
           python-version: '3.10'
-      - run: pip install -r cloud-functions/requirements.txt
+      # 依赖装进 venv：既避开 PEP 668(externally-managed-environment)，也让"回落系统
+      # python"时 pip 仍然可用；后续步骤的 python3 从 PATH 里拿 venv 那一份。
+      - name: 安装后端依赖(venv 隔离, 兼容 setup-python 失败回落)
+        run: |
+          python3 -V
+          python3 -c "import sys; assert sys.version_info >= (3, 10), 'needs Python >= 3.10'"
+          echo "setup-python outcome = ${{ steps.py.outcome }}"
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -q --upgrade pip
+          .venv/bin/pip install -q -r cloud-functions/requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       # 校验器自身的正负例(不需要库): 防止有人改坏 explain_sql/classify_error 后
       # 冒烟"什么都验不出"却仍然报绿
       - run: cd cloud-functions/api && python3 sql_smoke.py --self-test
@@ -80,9 +97,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      # 这个 job 只用标准库(re + subprocess + git)，不需要 setup-python ——
+      # 去掉一次"下载 Python 版本清单"就少一个 504 的失败面(2026-11-08 红过一次)。
+      - name: 确认 python3 可用(≥3.10, runner 预装)
+        run: |
+          python3 -V
+          python3 -c "import sys; assert sys.version_info >= (3, 10), 'needs Python >= 3.10'"
       - name: 检测规则自检(正负例 —— 防止改模式后"什么都抓不到"或"天天误报")
         run: python3 scripts/audit_secrets.py --selftest
       - name: 跑审计(硬编码 / .env 跟踪 / .gitignore / 历史 blob + commit message + reflog)

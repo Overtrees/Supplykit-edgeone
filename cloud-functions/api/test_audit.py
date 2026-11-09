@@ -100,8 +100,13 @@ for f, tmpl, args in key_defs:
         if prefix in tmpl:  # 容忍 _CACHE_V 前缀(%s|stock_risk|...)
             seen.add(prefix)
             missing = [p for p in need if p not in _dim_args]
+            # 判据 = 「**至少**含这些维度」+ 占位符数==参数数(否则 % 会错位)。
+            # 2026-11-09: 原为 `len(_dim_args) == len(need)`（恰好等于）。stock_risk 后来
+            #   把 limit/offset/level 也放进了 key（翻页/筛选必须分片，否则第 1 页响应
+            #   被第 3 页命中）——多一个真实维度只会让缓存更保守，不会串味，却把这条
+            #   判据顶成红。改成子集判定：缺维度仍然报红，加维度不再误报。
             check("缓存 key %s 含 %s" % (prefix, ",".join(need)),
-                  not missing and n_ps == len(argnames) and len(_dim_args) == len(need),
+                  not missing and n_ps == len(argnames),
                   "模板=%s 参数=%s" % (tmpl, argnames))
 for prefix, need in EXPECT:
     if prefix not in seen:
@@ -291,12 +296,14 @@ check("规则引擎按单元取量(BC=平台+B, 不再用 _agg 的 SKU 全仓合
 # 根因是"一轮评估 55s、其中 35.7s 花在 560 次分批往返上" → 实例被掐断 → 收尾语句没执行。
 print("\nG. 评估作业化(跑得完 / 挂起有痕)")
 _re3 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
+_osql_block = _re3.split("_osql = (", 1)[1].split(").replace", 1)[0] if "_osql = (" in _re3 else ""
 check("超卖评估用一条 GROUP BY, 不再按 500/200 个 SKU 分批往返",
       'range(0, len(_skus_u), 500)' not in _re3 and 'range(0, len(_oskus), 200)' not in _re3
-      and 'GROUP BY sku", [channel]' in _re3,
+      and "FROM orders" in _osql_block and "GROUP BY sku" in _osql_block
+      and _re3.count("query(_osql") == 1,
       "分批往返是 35.7s/55s 的来源")
 check("超卖可用量口径不依赖别的规则要不要算变量(_agg 缺省时自己汇总)",
-      'if _order_rules and not isinstance(_agg, dict):' in _re3,
+      "_agg = _agg or {}" in _re3 and "if _need_calc or _order_rules:" in _re3,
       "否则 available_stock 恒 0 → 每个有订单的 SKU 都判超卖")
 _mt = open(os.path.join(_api_dir, "core", "maintenance.py"), encoding="utf-8").read()
 check("挂起运行会被收尾成 timeout(不是永远 running)",
@@ -365,9 +372,13 @@ check("关闭白名单允许空仓型(SKU 级告警), 否则 oversell 永远关�
 
 # H4: 缺货与低库存同一批单元
 _dsh2 = open(os.path.join(_api_dir, "routes", "dashboard.py"), encoding="utf-8").read()
+# summary 走 `_M.roll(_t_sum, kinds=...)`（快照桶），aux 走 `_M.counts(_pr, ...)`（判定结果），
+# 两条路都必须用同一组销售仓单元 BC+WH；任一侧换成单维或把自有仓算进来就报红。
+_dsh2_ns = _dsh2.replace(" ", "")
 check("缺货/低库存计数用同一批单元(kinds=BC/WH), 且两处(summary+aux)一致",
-      _dsh2.count("_M.counts(_pr, (_M.DIM_BC, _M.DIM_WH))") == 1
-      and _dsh2.count("_M.counts(_pairs_ls, (_M.DIM_BC, _M.DIM_WH))") == 1,
+      "_M.roll(_t_sum,kinds=(_M.DIM_BC,_M.DIM_WH)" in _dsh2_ns
+      and "_M.counts(_pr,(_M.DIM_BC,_M.DIM_WH))" in _dsh2_ns
+      and "(_M.DIM_BC,_M.DIM_WH,_M.DIM_OWN)" not in _dsh2_ns,
       "两个数不同粒度时, 相加得到的 total 没有任何含义")
 check("aux 不再单独 COUNT 库存行当缺货数",
       "COUNT(*) AS c FROM inventory WHERE channel=%s AND available_qty=0" not in _dsh2,

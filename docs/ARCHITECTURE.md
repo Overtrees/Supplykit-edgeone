@@ -28,7 +28,7 @@
 └──────────────────────────────────────────────┘
 ```
 
-### 后端路由一览（API 分组 · 22 个 router / 31 个模块——其中 9 个是支撑模块, 属代码组织非路由）
+### 后端路由一览（API 分组 · 24 个 APIRouter / 34 个路由文件——其中支撑模块属代码组织非路由）
 
 | 路由 | 前缀 | 功能 |
 |------|------|------|
@@ -47,9 +47,9 @@
 | `misc` | `/api/*` | quality-logs(分页)/monitor/db/diag |
 | `batches` | `/api/batches` | 批次明细 |
 | `channels` | `/api/channels` | 渠道 CRUD(启停/排序) |
-| `history` | `/api/history` | 归档查询面(coverage/summary/top/yoy), 365 天切线拼 orders + daily_stats; summary/yoy 同收 `[start,end]` 与 400 天截断 |
+| `history` | `/api/history` | 归档查询面(coverage/summary/top/yoy), **180 天切线**(`ARCHIVE_KEEP_DAYS`, 写侧 cron / 读侧 history 共用常量)拼 orders + daily_stats; summary/yoy 同收 `[start,end]` 与 400 天截断 |
 | `auth` | `/api/auth` | setup/login/check |
-| `cron` | `/api/cron` | 11 端点（snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts/ping/continue-tasks/agg-sweep/reconcile） |
+| `cron` | `/api/cron` | 12 端点（snapshot/freshness/archive/cleanup-logs/daily-rules/recycle/push-alerts/ping/continue-tasks/agg-sweep/reconcile/ledger-close） |
 
 ### 性能结构（一句话版）
 
@@ -165,8 +165,8 @@ git push edgeone feat/edgeone
 # 构建状态查询 + 部署后冒烟 /api/health（部署确认/细粒度指纹方法见 docs/DEVELOPMENT）
 ```
 
-> **定时任务**：cron 11 个端点中 10 个由 edgeone.json schedules 调度（**maxItems 上限 10，已占满**，最小间隔一天）；
-> 第 11 个（账期月结 `/cron/ledger-close`）嵌入 `cleanup-logs` 调用，不新增调度条数。详见 `docs/decisions/0002-账期月结.md`。
+> **定时任务**：cron 12 个端点中 10 个由 edgeone.json schedules 调度（**maxItems 上限 10，已占满**，最小间隔一天）；
+> `ledger-close`（账期月结）与 `agg-sweep` 不单独挂调度 —— 月结嵌入 `cleanup-logs` 调用，不新增调度条数。详见 `docs/decisions/0002-账期月结.md`。
 > **自愈**：index.py 启动幂等（补索引/补列/内置规则补种与退役）；cron freshness 守护快照。
 
 ---

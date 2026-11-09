@@ -99,7 +99,7 @@
 
 ### 🗂️ 历史归档，跨年数据仍可查
 
-订单满 365 天后自动搬入归档表（`daily_stats`），历史页把两段拼成一个查询面（汇总 / 趋势 / Top 20 / 同比）。
+订单满 180 天（滚动半年，`ARCHIVE_KEEP_DAYS`）后自动搬入归档表（`daily_stats`）——判定是**严格小于** `today-180`，故第 181 天才搬；历史页把两段拼成一个查询面（汇总 / 趋势 / Top 20 / 同比）。
 区间与粒度收进锤子菜单，归档状态（暂无归档 / 已归档）也在菜单底部，一句话说清"哪天起自动归档"。
 
 ### 📱 PWA + 首次引导
@@ -121,7 +121,7 @@
 | 🧹 **数据清洗** | 9 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
 | ⚙️ **规则引擎** | 计算参数融合(断货/健康) / 计算变量字段 / or 多组 / 类型模板 / 告警开关 / 立即运行 / 审计 |
 | 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / 软删撤销+回收站 |
-| 🗂️ **历史归档** | 汇总/趋势/Top20/同比 / 365 天切线双表拼接 / 区间粒度收进锤子菜单 / 同比与汇总同一区间口径 / 归档状态可查 |
+| 🗂️ **历史归档** | 汇总/趋势/Top20/同比 / 180 天切线双表拼接 / 区间粒度收进锤子菜单 / 同比与汇总同一区间口径 / 归档状态可查 |
 | 📦 **进销存台账** | 自有/平台/B仓三视图(模式跟随) / 批次效期 / 当月进出 / 删除可恢复 / 告警跳转定位 |
 | 🧭 **货品供应建议** | 自有仓三口径(调拨缺口/积压/效期) / 该采该停该清 |
 | 🏷️ **商品/供应商** | CRUD / 搜索 / 批次效期 |
@@ -148,7 +148,7 @@
 > **性能基准与压测**：[`docs/PERF.md`](docs/PERF.md) 按页面 → 模块给出基线与机制；
 > `scripts/perf/run.py` 是判据的可执行版本（热态 / 极端 / 冷算本体 / 首建 / 噪声校验）。
 > 记住一条：**带写压测的 p50 不能用来判断"快了多少"**（同配置轮间极差 22 倍），
-> 判延迟只用"纯读 + 锁相位"（CV 0.04）。
+> 判延迟只用"纯读 + 锁相位"（判据与当轮 CV 见 `docs/PERF.md` §3 基线）。
 
 ---
 
@@ -167,7 +167,7 @@ cd frontend && npm install && npm run dev
 # 3.10 语法门禁（部署前）
 python3 -c "import ast; ast.parse(open('cloud-functions/api/index.py').read(), feature_version=(3,10))"
 
-# 一键自检（语法 / pyflakes / 回归+SQL冒烟 / eslint / prettier / tsc / vitest 七步）
+# 一键自检（语法 / pyflakes / 回归+SQL冒烟 / eslint / prettier / tsc / vitest / i18n 八步）
 bash scripts/preflight.sh
 
 # 性能基准（改性能前后各跑一次，看末尾判据 PASS/FAIL）
@@ -184,11 +184,11 @@ python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的
 | `JWT_SECRET` | 环境变量必设（无 fallback——缺失即校验全拒；多实例同值） |
 | `CRON_SECRET` | 定时任务密钥（`X-Cron-Secret` 头；配置后不带密钥的调用会记审计日志） |
 
-> 定时任务由 `edgeone.json` 的 `schedules` 声明（**10 条**为平台上限；`/api/cron/*` 共 11 个端点，`ledger-close` 嵌入 `cleanup-logs` 内调用），不依赖 GitHub Actions。
+> 定时任务由 `edgeone.json` 的 `schedules` 声明（**10 条**为平台上限，已占满；`/api/cron/*` 共 12 个端点，其中 `ledger-close` 与 `agg-sweep` 不单独挂调度 —— 月结 `ledger-close` 嵌入 `cleanup-logs` 内调用），不依赖 GitHub Actions。
 
 ---
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，§15.x 全局唯一） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，14 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

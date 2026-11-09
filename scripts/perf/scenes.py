@@ -21,10 +21,24 @@ from endpoints import CORE, ENDPOINTS
 
 
 def _by_ep(hits):
+    """逐接口汇总。除延迟外**必须带状态归因** —— 否则 503 只能看到总数、点不出接口。
+
+    `n` = 该接口被打了多少次（含失败的）；`n_srv` = 拿到 X-Srv-Ms 的次数。
+    `n > n_srv` 说明响应里没有应用层头（边缘白页 / 连接层失败），这是判
+    「503 是应用返回还是网关返回」的关键证据（§13.x 203 复验）。
+    """
     by = {}
     for h in hits:
-        by.setdefault(h["ep"], []).append(h["srv"])
-    return {k: K.stat(v) for k, v in by.items()}
+        by.setdefault(h["ep"], []).append(h)
+    out = {}
+    for k, hs in by.items():
+        d = K.stat([h["srv"] for h in hs])
+        d.update({"n": len(hs), "n_srv": sum(1 for h in hs if h.get("srv", -1) >= 0),
+                  "s503": sum(1 for h in hs if h.get("status") == 503),
+                  "non200": sum(1 for h in hs if h.get("status") != 200),
+                  "inc": sum(1 for h in hs if not h.get("complete"))})
+        out[k] = d
+    return out
 
 
 def _summary(hits, wall=None):
@@ -39,6 +53,12 @@ def _summary(hits, wall=None):
         "gt1500": sum(1 for h in srv if h > 1500),
         "gt10000": sum(1 for h in srv if h > 10000),
         "swr": sum(1 for h in hits if h["swr"]),
+        # 非 200 逐条留证（接口 + 是否带应用层头 + 响应片段）——
+        #   503 只报个总数时无法判断"读还是写、应用还是网关、哪个接口"（§13 的坑）。
+        "bad": [{"ep": h["ep"], "status": h["status"], "srv": h["srv"],
+                 "app_headers": h.get("app_headers"), "err": h.get("err"),
+                 "body": (h.get("body") or "")[:140]}
+                for h in hits if h["status"] != 200][:10],
         "eps": _by_ep(hits),
         "worst": sorted([{"ep": h["ep"], "srv": h["srv"], "status": h["status"], "rows": h["rows"]}
                          for h in hits], key=lambda x: -x["srv"])[:8],
@@ -185,6 +205,10 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
            "writes": {"n": len(wlog),
                       "fail": sum(1 for w in wlog if w.get("status") != 200),
                       "expect_min": int(writers * secs / write_gap * 0.5),
+                      # 状态码直方图：写失败到底是 503(边缘) / 403(只读账号) / -1(网络)
+                      #   —— 只报 fail 次数时无从判断，§13.3 就卡在这里。
+                      "codes": {str(c): sum(1 for w in wlog if w.get("status") == c)
+                                for c in sorted({w.get("status") for w in wlog})},
                       "err": next((w.get("err") for w in wlog if w.get("err")), "")}}
     out.update(_summary(hits, wall=round(time.time() - t0, 1)))
     print("[storm %s] p50=%s p95=%s max=%s 503=%s inc=%s writes=%s busy=%s"

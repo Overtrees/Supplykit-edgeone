@@ -1,12 +1,13 @@
 ---
 name: supplykit
-description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条业务口径、22 个路由的架构事实、Makers 框架坑位、七步交付闭环(preflight → 回归 → push_api → 部署判据 → 冒烟)、缓存/切线与 schema 版本铁律、UI 规范要点、失败模式黑名单。当用户提到 SupplyKit、补货建议、采购建议、数据清洗、规则引擎、看板、BBCC/传统补货、滞销、进销存、告警、GMV、TiDB、EdgeOne Makers、supplykit.top 时触发。"
+description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条业务口径、24 个 APIRouter / 34 路由文件的架构事实、Makers 框架坑位、七步交付闭环(preflight 八步门禁 → 回归 → push_api → 部署判据 → 冒烟)、缓存/切线与 schema 版本铁律、UI 规范要点、失败模式黑名单。当用户提到 SupplyKit、补货建议、采购建议、数据清洗、规则引擎、看板、BBCC/传统补货、滞销、进销存、告警、GMV、TiDB、EdgeOne Makers、supplykit.top 时触发。"
 ---
 
 # SupplyKit 开发手册
 
 > 这是**入口索引**, 不是全量文档。每条只给判据、命令、禁止项; 根因与实测数据在
-> `docs/DEVELOPMENT.md §15.x`, 改动前按第 8 节索引精读对应章节。
+> `docs/history/`（按日期分卷，索引见 `DEVELOPMENT.md` §12；编号有跨卷重号，
+> 用 `grep -rn` 按命中文件 + 日期定位），改动前精读对应章节。
 > 冲突时以**代码 + 用户最新指令**为准, 本文与 `CONTEXT.md` 同步维护。
 
 ## 0. 一屏速览
@@ -72,10 +73,10 @@ cloud-functions/api/
 **鉴权**: 只认 `X-Auth-Token`(网关把 `Authorization` 改写成 `q-sign`, 用 Bearer 会登录成功但全接口 401)。
 `auth` / `health` / `debug` / `insights/ping` / `cron` / `logs/frontend` 免鉴权; demo 用户写操作返回 403。
 
-**cron**: `routes/cron.py` 11 端点, 由 `edgeone.json` 的 `schedules` 驱动(**仅 10 条, maxItems 上限**:
+**cron**: `routes/cron.py` 12 端点, 由 `edgeone.json` 的 `schedules` 驱动(**仅 10 条, maxItems 上限**:
 archive 01:05 / cleanup 03:05 / freshness 03:10 / snapshot 03:35 / daily-rules 04:05 / reconcile 04:10 /
-recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— 第 11 个端点
-`/cron/ledger-close`(账期月结)**不单独挂调度**, 嵌入 `cleanup-logs` 内调用(见 `docs/decisions/0002`)。
+recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— `ledger-close`(账期月结)
+与 `agg-sweep` **不单独挂调度**, 月结嵌入 `cleanup-logs` 内调用(见 `docs/decisions/0002`)。
 **新增定时任务前必须先腾条数**: 加到 11 条会导致整组 schedules 路由丢失。
 平台 schedules **无法注入 header**(schema 只有 name/cron/timezone/method/path/payload, 且 `edgeone.json`
 进公开仓库, 用 payload 传密钥等于公开) → **"鉴权"根治不了**, 所以守的是"危害":
@@ -179,8 +180,9 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
   共用结果, **只在命中缓存时复现**, 本地几乎抓不到
 - **缓存按域失效**: 写入口用 `invalidate("<域>")`, `analysis_cache._FAMILY_DEPS` 反推要清的族。
   未登记域名 → 全清(兜底); 失效是**打墓碑**(`created_at=1970` + `tok`), 防"重建期间被失效 → 旧值覆盖"
-- **归档切线 365 天严格小于**: cron 判定 `< today-365`, 所以 t 日订单第 366 天才搬。
-  `history._CUT_DAYS` 与 archive cutoff **必须同步改**, 两表互斥是不变量
+- **归档切线 180 天严格小于**: `ARCHIVE_KEEP_DAYS=180`(2026-11-07 由 365 改回),
+  cron 判定 `< today-180`, 所以 t 日订单第 181 天才搬。写侧 `core/archive.py` 与读侧
+  `history.py` **import 同一常量**(不再各写一份), 两表互斥是不变量
 - **改 schema 必 bump `SCHEMA_VERSION`**, 否则存量实例不执行新声明(加表/索引 = 改声明 + bump, 不写迁移)
 - **增量重建按业务日期**: 数据入口是文件导入(可横跨任意日期), 重建范围只能由 `ordered_at` 决定,
   不能由导入时间推导。删单后日销孤儿行按"日销表 SKU − 快照窗口 − 订单窗口"差集清
@@ -209,7 +211,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 | 从截断样本推断全量 | `ORDER BY id DESC LIMIT 300` 里 id 小的行被整体挤出 → 曾误判"库里没有这些行" |
 | 前端自己算时间窗口 | 后端一截断(>400 天)标题就显示假窗口; 一律取接口 `cur.start/end` |
 | 同页并存两个时间口径 | 90 天汇总 vs 写死 30 天同比, 用户会拿去直接比 |
-| 写死"满 365 天归档" | cron 是严格小于, 差一天; 用后端 `archive_day` |
+| 写死"满 N 天归档" | cron 是严格小于, 差一天(当前 N=180 → 第 181 天); 用后端 `archive_day` |
 | `except: pass` | 静默吞异常 = 事故源; 一律 `try_err(src, what, exc)`(10s 同源限频) |
 | `t = Date.now()` 全局替换 | 只替换**出现在 URL 查询串里**的; 日期差/唯一 id/React key 必须原样(误伤过 3 处) |
 | 反复大批量导入验证性能 | 单月烧 60M RU 的教训; 用 `ru_diag.sh`(只读 EXPLAIN + GET) + 3~10 行小文件冒烟 |

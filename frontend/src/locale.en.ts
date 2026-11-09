@@ -1290,12 +1290,12 @@ export const en: Record<string, string> = {
   'dev.log_analysis_sub': "Daily log files · tap to preview today's detail",
   'dev.seed': 'Seed data',
   'dev.seed_fill': 'Fill demo data',
-  'dev.seed_fill_sub': 'Generate 2,000 SKUs × 60 days × 100k simulated rows',
+  'dev.seed_fill_sub': 'Generate 20,000 SKUs × 90 days × ~450k simulated orders (two channels)',
   'dev.seed_reset': 'Reset all',
   'dev.seed_reset_sub': 'Clear all data and restore the initial state',
   'dev.confirm_fill_title': 'Generate seed data?',
   'dev.confirm_fill_desc':
-    'This creates 160 products, 60 days of orders and 9 warehouses of inventory, overwriting existing data.',
+    'This creates 20,000 products, 90 days of orders (~450k rows) and 10 warehouses of inventory, overwriting existing data.',
   'dev.confirm_fill_ok': 'Generate',
   'dev.confirm_reset_title': 'Reset all data?',
   'dev.confirm_reset_desc':

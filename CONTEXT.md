@@ -19,7 +19,7 @@
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
 | **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 250 行） |
 | **性能基准**(按 页面→模块 查基线/机制/压测命令) | `docs/PERF.md` + `scripts/perf/run.py` |
-| 根因与变更史(按日期分卷, §15.x 编号全局唯一) | `docs/history/` — `grep -rn '15.104' docs/` |
+| 根因与变更史(按日期分卷；各卷范围/节数以 `DEVELOPMENT.md` §12 当前表为准，编号有跨卷重号，不假定唯一) | `docs/history/` — `grep -rn '<编号或关键词>' docs/history/` 按命中文件+日期判断 |
 | 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.105 |
 | 低库存卡明细丢失三层根因(最顽固 bug) | `docs/history/` §15.104 第五节 |
@@ -124,6 +124,12 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 ```
 
 ## 已知遗留(截至 2026-11-06)
+
+> ⚠️ **归档切线勘误（2026-11-07 起生效）**：本节下文若出现「365 天切线 / 第 366 天 /
+> `today-365`」等表述，均为 **2026-11-06 及之前的历史定案**，按「历史记录不改写」保留原文；
+> 现值已由用户定案改回 **180 天**（`core/archive.py` 的 `ARCHIVE_KEEP_DAYS=180`，写侧 cron /
+> 读侧 history import 同一常量，判定严格小于 `today-180` → 第 181 天才搬）。
+> 当前行为一律以 `docs/ARCHITECTURE.md` / `docs/DEVELOPMENT.md` / `docs/SKILL.md` 为准。
 
 - ~~字典死键 483~~ **已清零(2026-11-06)**: 最后 3 条是 `inv.exp.*_icon` 的**后缀拼接**误报
   (`t(key + '_icon')` 审计只认前缀拼接) —— 已把 `inv.exp` 登记为动态前缀命名空间、产键函数改前缀拼接,
