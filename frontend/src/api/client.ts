@@ -20,6 +20,34 @@ const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
  */
 const isExpectedAuth = (status?: number) => status === 401 || status === 403
 
+/**
+ * §14（2026-11-09）网关白页根治：**有界**退避重试
+ *
+ * 背景（线上实测 S4：4 读 4 写，静默 43 分钟后开跑）：
+ *   实例被 Makers 冻结 → 冷启动窗口 + 8 并发涌入 → 边缘保护性 503，响应是
+ *   Tencent HTML 白页、无 `X-Srv-Ms`（请求根本没进应用）。用户端表现就是**白屏**。
+ *
+ * 这不该由用户承担：503/502/504 是**瞬时、可重试**的（冷启动窗口通常 <1s），
+ * 所以只对 **GET（幂等）** 做 ≤2 次指数退避，总预算 ≤2s。
+ * 红线（老债，别踩）：
+ *   · 超时（ECONNABORTED）**不重试** —— 那是 timeout→retry→更多 miss 的
+ *     metastable failure 放大器（§15.161 已否决；见 SWR 那段注释）；
+ *   · 写请求（POST/PUT/DELETE）不重试 —— 非幂等，重复提交比失败更糟；
+ *   · 401/403/主动取消不重试（各自有专门链路）；
+ *   · `__swr` 有界探测不重试（它本身就在预算里，重试会双层放大）。
+ * 重试期间走 `__bg`：不点亮用户可见的忙徽标，避免"转圈闪两下"。
+ */
+const GW_RETRY_MAX = 2
+const GW_RETRY_BUDGET = 2000 // ms，含所有重试的等待与请求本身（503 是快返回，实测 <100ms/次）
+
+function isGatewayRetryable(err: AxiosError): boolean {
+  const st = err.response?.status
+  if (st === 502 || st === 503 || st === 504) return true
+  // 无响应 + 非取消 + 非超时 = 连接被边缘直接掐断（白页/连接重置/冷启动拒绝）
+  if (!st && !axios.isCancel(err) && (err as { code?: string }).code !== 'ECONNABORTED') return true
+  return false
+}
+
 // 响应缓存（内存）
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL = 30_000 // 30s 内复用缓存
@@ -488,6 +516,32 @@ instance.interceptors.response.use(
       try {
         window.dispatchEvent(new Event('auth:may-expired'))
       } catch {}
+    }
+    // §14: 网关/冷启动瞬时 503 → 有界退避重试（GET 幂等；超时/写/探测/取消都不碰）
+    const _gwCfg = cfg as unknown as Record<string, unknown>
+    const _gwN = Number(_gwCfg.__gwRetry || 0)
+    const _gwT0 = Number(_gwCfg.__gwT0 || 0) || Date.now()
+    if (
+      !isProbe &&
+      isGatewayRetryable(err) &&
+      String(cfg.method || 'get').toLowerCase() === 'get' &&
+      _gwN < GW_RETRY_MAX &&
+      Date.now() - _gwT0 < GW_RETRY_BUDGET
+    ) {
+      // 300ms / 600ms + jitter：覆盖"实例刚拉起"的窗口，又不把用户按在首屏
+      const _delay = 300 * Math.pow(2, _gwN) + Math.floor(Math.random() * 200)
+      const _nextCfg = {
+        ...cfg,
+        __gwRetry: _gwN + 1,
+        __gwT0: _gwT0,
+        __bg: true, // 后台重试：不点亮/熄灭用户的忙徽标
+      } as unknown as AxiosRequestConfig
+      console.debug(
+        `[API] ${String(cfg.method || 'get').toUpperCase()} ${cfg.url} → gateway ${status || 'network'}, retry in ${_delay}ms (${_gwN + 1}/${GW_RETRY_MAX})`,
+      )
+      return new Promise<void>(resolve => setTimeout(resolve, _delay)).then(() =>
+        instance.request(_nextCfg),
+      )
     }
     // 收口: 网络错误 + 5xx(error) + 4xx 校验/业务错误(warning)——422/400 不再靠猜。
     // 2026-11-05: 401/403 是预期鉴权态(见 isExpectedAuth), 有专门的 auth:may-expired

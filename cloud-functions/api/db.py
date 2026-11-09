@@ -16,6 +16,12 @@ import pymysql
 _local = threading.local()
 _POOL = None
 _POOL_LIMIT = int(os.environ.get("DB_POOL_LIMIT", "10"))  # 连接池上限(每实例——TiDB serverless 连接限制保险)
+# 2026-11-09 §14: 池排队上限必须 **< 网关单请求阈值**（基准 §1.3：单请求 <10s）。
+#   原来固定等 20s：并发打满时 8 个请求一起挂 20s，把实例执行槽全占住，新请求只能被
+#   边缘保护性 503（白页）。改成 6s 快速失败 → 槽位立刻释放，调用方拿到**可重试**的
+#   503 + Retry-After，而不是"挂 20s 后白页"。守「治理手段不变成新的不可用来源」：
+#   池耗尽本身是极端态，6s 内等不到归还说明确实过载，早失败比晚挂死对用户更有利。
+_POOL_WAIT = float(os.environ.get("DB_POOL_WAIT", "6"))
 
 # ── 2026-11-07 S0: 重计算并发预算(防"整站雪崩")────────────────────────────
 # 事故: aux 单跑 4.5s, 与 stock-risk 并发时 34~35.8s, stock-risk 41.4s, purchase 31.3s,
@@ -234,6 +240,18 @@ class _PoolFull(Exception):
     """名额耗尽 —— 调用方应等待池中连接归还, 而不是继续新建"""
 
 
+class PoolBusy(RuntimeError):
+    """池内名额在 `_POOL_WAIT` 内等不到归还 —— 明确的**过载**信号。
+
+    与普通 RuntimeError 分开, 是为了让全局异常处理器能把它翻成
+    `503 + Retry-After`（JSON，前端可退避重试），而不是 500 或挂死到网关白页。
+    """
+
+    def __init__(self, msg, retry_after_ms=800):
+        super().__init__(msg)
+        self.retry_after_ms = int(retry_after_ms)
+
+
 def _close_conn(c):
     """关闭连接并归还名额。**所有真正的 close 必须走这里**, 否则名额泄漏 → 池永久少一条。"""
     if c is None:
@@ -337,12 +355,14 @@ def _acquire():
         try:
             c = _new_conn()
         except _PoolFull:
-            # 存活连接已达上限 —— 阻塞等池中归还(20s), 不再无脑新建
+            # 存活连接已达上限 —— 阻塞等池中归还(**有界**: 必须 < 网关阈值), 不再无脑新建
             try:
-                c = q.get(timeout=20)
+                c = q.get(timeout=_POOL_WAIT)
             except queue.Empty:
-                raise RuntimeError(
-                    "数据库连接池耗尽(上限 %d, 等待 20s 无归还) —— 检查是否有长事务/未释放连接" % _POOL_LIMIT)
+                raise PoolBusy(
+                    "数据库连接池耗尽(上限 %d, 等待 %.0fs 无归还) —— 检查是否有长事务/未释放连接"
+                    % (_POOL_LIMIT, _POOL_WAIT),
+                    retry_after_ms=800)
     try:
         c.ping(reconnect=True)
     except Exception:

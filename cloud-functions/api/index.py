@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from db import one
+from db import one, PoolBusy
 from routes.auth import router as auth_router
 from routes.dashboard import router as dashboard_router
 from routes.dashboard_bundle import router as dashboard_boot_router
@@ -126,6 +126,40 @@ if str(os.environ.get("GZIP_RESP", "1")).strip().lower() not in ("0", "false", "
             return _send
 
     app.add_middleware(_XGZipMiddleware)
+
+
+@app.exception_handler(PoolBusy)
+async def _pool_busy(request: Request, exc: PoolBusy):
+    """过载态：**明确 503 + Retry-After**，不让请求挂死到网关白页。
+
+    2026-11-09 §14 根治白页：原来连接池名额耗尽要等 20s，8 个并发一起挂 20s
+    把实例执行槽占满，后续请求被边缘保护性 503（Tencent HTML 白页，无 X-Srv-Ms）。
+    现在 6s 内等不到就快速失败，由本处理器返回**带应用层头的 JSON 503**：
+      · `X-Retryable: 1` + `Retry-After` → 前端有界退避重试（client.ts 已认）；
+      · 有 `X-Srv-Ms` → 压测/运维能区分「应用层过载」与「边缘白页」；
+      · 不写业务数据、不改任何读模型，数据四维不参与。
+    """
+    try:
+        _ra = max(1, int(round(float(getattr(exc, "retry_after_ms", 800)) / 1000.0)))
+    except Exception:
+        _ra = 1
+    rid = ""
+    try:
+        import uuid as _uuid
+        rid = _uuid.uuid4().hex[:12]
+    except Exception:
+        pass
+    try:
+        from routes.common import try_err
+        try_err("index", "连接池过载(%s %s)" % (request.method, request.url.path), exc)
+    except Exception:
+        pass
+    return JSONResponse(
+        {"ok": False, "error": "服务繁忙，请稍后重试", "retryable": True,
+         "retry_after_ms": int(getattr(exc, "retry_after_ms", 800)), "request_id": rid},
+        status_code=503,
+        headers={"Retry-After": str(_ra), "X-Retryable": "1"},
+    )
 
 
 @app.exception_handler(Exception)

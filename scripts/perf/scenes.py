@@ -55,7 +55,7 @@ def _summary(hits, wall=None):
         "swr": sum(1 for h in hits if h["swr"]),
         # 非 200 逐条留证（接口 + 是否带应用层头 + 响应片段）——
         #   503 只报个总数时无法判断"读还是写、应用还是网关、哪个接口"（§13 的坑）。
-        "bad": [{"ep": h["ep"], "status": h["status"], "srv": h["srv"],
+        "bad": [{"ep": h["ep"], "status": h["status"], "srv": h["srv"], "t": h.get("t"),
                  "app_headers": h.get("app_headers"), "err": h.get("err"),
                  "body": (h.get("body") or "")[:140]}
                 for h in hits if h["status"] != 200][:10],
@@ -156,6 +156,10 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
     hits, wlog = [], []
     lock = threading.Lock()
     busy = [0, 0]
+    # §14 取证（零 RU）：每次都记**相对开跑的秒数**。
+    #   没有时间轴时，「4 个 503 是集中在冷启动窗口，还是全程随机」无法区分，
+    #   §13.7 只能靠"静默 2573s"间接推断。有了 t，下一轮直接看分布。
+    t0 = time.time()
 
     def _reader(seq):
         while not stop.is_set():
@@ -163,6 +167,7 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
                 if stop.is_set():
                     break
                 h = K.hit(k)
+                h["t"] = round(time.time() - t0, 2)
                 with lock:
                     hits.append(h)
                 time.sleep(0.05)
@@ -174,6 +179,7 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
             except Exception as e:
                 # 写失败必须留痕：账号只读/403 时若静默，压测会退化成"纯读"却报 PASS
                 w = {"status": -1, "err": str(e)[:140]}
+            w["t"] = round(time.time() - t0, 2)
             with lock:
                 wlog.append(w)
             time.sleep(write_gap)
@@ -190,7 +196,6 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
            for j in range(readers)]
     ths += [threading.Thread(target=_writer, daemon=True) for _ in range(writers)]
     ths.append(threading.Thread(target=_probe, daemon=True))
-    t0 = time.time()
     for t in ths:
         t.start()
     time.sleep(secs)
@@ -209,6 +214,9 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
                       #   —— 只报 fail 次数时无从判断，§13.3 就卡在这里。
                       "codes": {str(c): sum(1 for w in wlog if w.get("status") == c)
                                 for c in sorted({w.get("status") for w in wlog})},
+                      # 失败发生的相对秒数（与读 503 的 bad[].t 同一时间轴）——
+                      #   能直接看出"写失败和读 503 是不是同一窗口"
+                      "fail_at": [w.get("t") for w in wlog if w.get("status") != 200],
                       "err": next((w.get("err") for w in wlog if w.get("err")), "")}}
     out.update(_summary(hits, wall=round(time.time() - t0, 1)))
     print("[storm %s] p50=%s p95=%s max=%s 503=%s inc=%s writes=%s busy=%s"
