@@ -20,6 +20,21 @@
 
 ---
 
+## 2026-11-09（第十批 · 线上 admin 登录不上修复：账号引导 + 账号对账门禁）
+
+> 线上 `admin` 登录恒「用户名或密码错误」——**不是密码错，是 `users` 表 0 行**（新集群只跑了建表，
+> 唯一会建账号的 `bootstrap()` 没跑；`/auth/setup` 未配 `SETUP_TOKEN` 时一律 403）。
+
+| 项 | 内容 |
+|---|---|
+| 新增 | `scripts/bootstrap_admin.py`：`--check`（退出码 2=无账号）/`--create`/`--reset`，口令走 `ADMIN_PASSWORD`，不回显明文、拒弱口令 |
+| 修复 | 线上执行 `--create` → `users` 0→1（role=admin）；实测登录 `ok=True role=admin`、`auth/check` 通过、`dashboard/summary` 200、**写 200 `{"updated":3}`**（demo 下为 403） |
+| 门禁 | `sql_smoke.report_schema()` 新增「运行必备账号」对账：`role='admin'` 计数为 0 即报红并给修复命令；跑在 `local_test --sql-smoke`（preflight 第 3 步 + CI，凭据=线上同库）→ 这类故障下次红在 CI |
+| 反证 | 打桩 `auth_ready=(0,0)` → `report_schema` 返回 1；真实库返回 0（断言不空转） |
+| 其他 | `rebuild_supplykit.py` 支持 `ADMIN_PASSWORD` 注入；`DEVELOPMENT` §11、`scripts/README`、`CONTEXT` 同步 |
+| 欠账 | `admin123` 为仓库公开约定弱口令（多脚本依赖），轮换需同步改脚本，本次不动 |
+| 详情 | `docs/history/2026-11-09.md` §15.198 |
+
 ## 2026-11-09（第九批 · 冷启动白页根治：前端有界重试 + 连接池排队封顶）
 
 > 详情见 `docs/history/2026-11-09.md` §15.193、§15.194（线上复验）、§15.195（昨晚对比）、

@@ -148,10 +148,14 @@ def bootstrap(cur, env):
     cur.execute("SELECT COUNT(*) c FROM channels")
     print("   channels =", cur.fetchone()["c"])
     # ② admin 账号(与线上同一套口令哈希)
+    #   2026-11-09 P0: 这一步**曾经只在这个脚本里**, 而"新集群只跑 ensure_schema 建表"的路径
+    #   不经过这里 → users 表 0 行 → 线上 admin 登录恒 401「用户名或密码错误」、写全 403。
+    #   现在口令可外部注入(ADMIN_PASSWORD), 单独补账号用 scripts/bootstrap_admin.py --create。
     sys.path.insert(0, os.path.join(ROOT, "cloud-functions", "api"))
     from routes.common import hash_password
+    _admin_pwd = os.environ.get("ADMIN_PASSWORD") or "admin123"
     cur.execute("INSERT IGNORE INTO users(username,password_hash,role) VALUES(%s,%s,%s)",
-                ["admin", hash_password("admin123"), "admin"])
+                ["admin", hash_password(_admin_pwd), "admin"])
     cur.execute("SELECT COUNT(*) c FROM users")
     print("   users =", cur.fetchone()["c"])
     # ③ 补货参数 + 内置规则: 直接复用 seed_fill._seed_config(与线上同一份定义, 不维护副本)

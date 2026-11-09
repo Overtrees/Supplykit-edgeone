@@ -160,6 +160,11 @@ PLACEHOLDER = (".env.example", ".env.sample", ".env.template")
 KNOWN_SAFE = (
     "password: 's00pers3cret'",   # axios README 示例(历史误提交 node_modules)
     "password: 'rapunz3l'",       # 同上
+    # 仓库**公开约定**的引导口令(不是密钥): CONTEXT.md / docs/SKILL.md / ru_diag.sh /
+    # ui_*.py / smoke_test.py 都以它登录本地与线上演示库。出现在 scripts/bootstrap_admin.py
+    # 的 `DEFAULT_PWD = "admin123"` 一行 —— 它是"空库补账号"的缺省值, 可用 ADMIN_PASSWORD 覆盖。
+    # 加在这里而不是改名绕过: 换个变量名只是躲开正则, 值仍在源码里, 那才是自欺。
+    'PWD = "admin123"',           # ↑ 该行在正则里的实际命中片段(变量名 DEFAULT_PWD 的后缀)
 )
 
 

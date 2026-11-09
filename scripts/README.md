@@ -10,6 +10,7 @@
 | 脚本 | 用途 |
 |---|---|
 | `env_check.py` | 换机/新会话第一条: 缺 .env、EDGEONE token、push 凭据一次性列出 |
+| `bootstrap_admin.py` | **账号引导/修复**（空库必备）: `--check` 只体检（退出码 2=无账号）、`--create` 缺则建、`--reset` 覆盖口令；口令走 `ADMIN_PASSWORD`，不回显明文 |
 | `deploy_status.py` | 部署判据: `Commit == HEAD && Prod == yes && Status == Success` |
 | `push_api.py` | 推代码(github:443 在沙箱不可达, 走 API, 一次一个 squash 提交) |
 | `smoke_check.py` | 线上冒烟: health JSON + 首页 #root |

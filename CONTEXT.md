@@ -8,6 +8,9 @@
 供应链管理系统(进销存 + 看板 + 规则引擎 + 数据清洗导入), 部署在 EdgeOne Makers:
 
 - 线上地址: https://supplykit.top (登录 admin/admin123)
+  · **账号不在代码里, 在 `users` 表**。空库/新集群只跑建表 → 表 0 行 → 登录恒「用户名或密码错误」、写全 403;
+    补账号: `python3 scripts/bootstrap_admin.py --create`(`--check` 退出码 2 = 无账号)。
+    `/auth/setup` 只在配了 `SETUP_TOKEN` 时可用, 生产默认关闭 —— 这不是密码问题（2026-11-09 §15.198）。
 - 仓库: https://github.com/Overtrees/Supplykit-edgeone.git (分支 `feat/edgeone`)
 - 本地路径: `/workspace/supplykit` (前端 `frontend/`, 云函数 `cloud-functions/api/`)
 

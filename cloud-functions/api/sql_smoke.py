@@ -610,6 +610,27 @@ def schema_diff(conn):
     return missing_cols, extra_cols, missing_idx, len(tables), sum(len(v) for v in tables.values())
 
 
+def auth_ready(conn):
+    """运行必备账号对账（2026-11-09 P0）: `users` 表为空 → 除内置 demo(只读) 外无人能登录。
+
+    这条缺口属于「结构全绿、功能全死」: 64 张表 / 591 列 / 18 索引全在, EXPLAIN 全过,
+    但账号表 0 行 —— 线上 `/auth/login` 返回「用户名或密码错误」(401 语义),
+    所有写操作 403(访客只读), 而日志里只有一句"密码错误", 极难定位。
+
+    只读两条 COUNT(零 RU 量级), 不改任何数据。
+    修复: `python3 scripts/bootstrap_admin.py --create`。
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) AS c FROM users")
+        n_all = int((cur.fetchone() or {}).get("c") or 0)
+        cur.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin'")
+        n_adm = int((cur.fetchone() or {}).get("c") or 0)
+    finally:
+        cur.close()
+    return n_all, n_adm
+
+
 def report_schema(conn):
     db, n = probe_db(conn)
     if n < len(_CORE_TABLES):
@@ -637,7 +658,22 @@ def report_schema(conn):
     if extra_cols:
         print("  ⚠ 库里多出 %d 列(代码未声明, 不影响执行): %s"
               % (len(extra_cols), ", ".join("%s.%s" % x for x in extra_cols[:8])))
-    return len(missing_cols) + len(missing_idx)
+    # 运行必备账号（结构对账管不到的维度; 空表 = 谁都登不上, 但表/列/索引全绿）
+    try:
+        u_all, u_adm = auth_ready(conn)
+        if u_adm <= 0:
+            print("  ✗ users 表 %d 行 / admin 角色 %d 个 —— 除内置 demo(只读)外无人能登录"
+                  % (u_all, u_adm))
+            print("     线上表现: /auth/login 回「用户名或密码错误」, 所有写操作 403")
+            print("     修复: python3 scripts/bootstrap_admin.py --create")
+            n_auth = 1
+        else:
+            print("  ✓ users 表 %d 行 / admin 角色 %d 个" % (u_all, u_adm))
+            n_auth = 0
+    except Exception as e:
+        print("  ⚠ 账号对账未执行: %s" % str(e)[:120])
+        n_auth = 0
+    return len(missing_cols) + len(missing_idx) + n_auth
 
 
 # ── 自检(锁住校验器能力: 改代码后不能悄悄变成"什么都验不出") ─────────
