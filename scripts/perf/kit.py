@@ -87,8 +87,28 @@ def srv_ms(r):
 
 
 def pct(v, q):
+    # P6-7：这里铁定剔除 srv<0（边缘白页/无响应）→ **p50/p95 是"成功请求的"分位数**。
+    #   一次 10% 请求被白页的故障，剩下 90% 的 p95 照样漂亮。引用数字时必须带
+    #   `_summary()["srv_failed"]`（被剔除条数）一起读，别把幸存者偏差当性能结论。
     v = sorted(x for x in v if x >= 0)
     return v[min(len(v) - 1, int(len(v) * q))] if v else -1
+
+
+def _classify(status, srv, body):
+    """非 200 响应的来源归类（P6-6）。
+
+    **不能只看 `app_headers`**：`@app.exception_handler(Exception)` 注册在 Starlette 的
+    ServerErrorMiddleware（http 中间件之外），它的响应不经过 `@app.middleware("http")`，
+    所以**应用未捕获的 500 同样没有 `X-Srv-Ms`**（§15.196 已用 TestClient 最小复现）。
+    判来源必须看 body 形态：边缘/网关白页是 HTML（`<!doctype html>…Tencent…`），
+    应用自己返回的是 JSON。
+    """
+    if status is None or status < 0:
+        return "net"                       # 没拿到 HTTP 响应（连接失败/超时）
+    if srv is not None and srv >= 0:
+        return "app"                       # 应用耗时中间件参与了 → 应用自己返回的
+    head = (body or "").lstrip()[:1]
+    return "edge" if head == "<" else "app_uncaught"
 
 
 def stat(v):
@@ -114,21 +134,30 @@ def hit(key, path=None, timeout=90):
         d = jj.get("data")
         swr = jj.get("__swr") if isinstance(jj.get("__swr"), dict) else None
         srv = srv_ms(r)
+        # 红线 8①「没算成 与 真的是 0 必须可分」：`complete()` 只吃 data、吃不到状态码，
+        #   而白名单 `KNOWN_EMPTY={alerts}` 会把「HTTP 500 + {"data":[]}」判成"完整"
+        #   → 该接口对一切空响应免疫，三条 storm 判据全过（§15.196 实测的真实假 PASS 路径）。
+        #   非 200 一律不算完整，白名单只在 200 时才允许"空即合法"。
         rec = {"ep": key, "srv": srv, "e2e": round(time.time() - t0, 3),
                "status": r.status_code, "rows": _rows(d),
                "swr": bool(swr), "fresh": (swr or {}).get("freshness_s", -1),
-               "complete": complete(key, d), "kb": len(r.content) // 1024}
-        # 非 200 必须留证：`srv=-1` 表示响应里没有 X-Srv-Ms —— 即**应用层没参与**，
-        #   503 是边缘/网关给的白页(实例并发或跨境链路)，不是函数自己返回的。
+               "complete": (r.status_code == 200) and complete(key, d),
+               "kb": len(r.content) // 1024}
+        # 非 200 必须留证：`srv=-1` 表示响应里没有 `X-Srv-Ms` —— 即**没经过应用的耗时中间件**。
+        #   注意这句话**不能**升级成"响应由边缘生成"：应用未捕获的 500（ServerErrorMiddleware）
+        #   同样不带这个头（§15.196）。来源归类用 `src`（见 `_classify`），`app_headers` 只作旁证。
         #   截 400 字够看到 <title>Tencent ... 的错误标题，又不把整页 HTML 塞进取证 json。
         if r.status_code != 200:
+            body = r.text or ""
             rec["app_headers"] = bool(srv >= 0)
             rec["server"] = r.headers.get("Server") or r.headers.get("server") or ""
-            rec["body"] = (r.text or "")[:400]
+            rec["body"] = body[:400]
+            rec["src"] = _classify(r.status_code, srv, body)
         return rec
     except Exception as e:
         return {"ep": key, "srv": -1, "e2e": round(time.time() - t0, 3), "status": -1,
-                "rows": -1, "swr": False, "fresh": -1, "complete": False, "err": str(e)[:80]}
+                "rows": -1, "swr": False, "fresh": -1, "complete": False,
+                "err": str(e)[:80], "src": "net"}
 
 
 # ── 写操作（模拟真实用户写入，触发 invalidate） ──────────────────

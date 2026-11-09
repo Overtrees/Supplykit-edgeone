@@ -24,8 +24,9 @@ def _by_ep(hits):
     """逐接口汇总。除延迟外**必须带状态归因** —— 否则 503 只能看到总数、点不出接口。
 
     `n` = 该接口被打了多少次（含失败的）；`n_srv` = 拿到 X-Srv-Ms 的次数。
-    `n > n_srv` 说明响应里没有应用层头（边缘白页 / 连接层失败），这是判
-    「503 是应用返回还是网关返回」的关键证据（§13.x 203 复验）。
+    `n > n_srv` 说明响应里没有应用层头（边缘白页 / 应用未捕获 500 / 连接层失败）——
+    这是判「503 是应用返回还是网关返回」的**旁证**；确切来源看 `src`（P6-6：
+    应用未捕获的 500 绕开 http 中间件，同样没有这个头，别只看头就下结论）。
     """
     by = {}
     for h in hits:
@@ -43,6 +44,10 @@ def _by_ep(hits):
 
 def _summary(hits, wall=None):
     srv = [h["srv"] for h in hits]
+    bads = [h for h in hits if h["status"] != 200]
+    # P6-6：非 200 按**来源**分层（edge=HTML 白页 / app=应用自己返回 / app_uncaught=应用未捕获
+    #   500 / net=没拿到响应）。只报 503 一个总数时，"边缘 500 白页"会混进 inc 被读成"数据不完整"。
+    srcs = sorted({h.get("src") for h in bads if h.get("src")})
     return {
         "n": len(hits), "wall_s": wall,
         "srv_p50": K.pct(srv, 0.5), "srv_p95": K.pct(srv, 0.95),
@@ -53,12 +58,16 @@ def _summary(hits, wall=None):
         "gt1500": sum(1 for h in srv if h > 1500),
         "gt10000": sum(1 for h in srv if h > 10000),
         "swr": sum(1 for h in hits if h["swr"]),
-        # 非 200 逐条留证（接口 + 是否带应用层头 + 响应片段）——
-        #   503 只报个总数时无法判断"读还是写、应用还是网关、哪个接口"（§13 的坑）。
+        # P6-7：`K.pct/stat` 剔除 srv<0 → p50/p95 的分母是"成功请求"。这里显式报出被剔除条数，
+        #   任何引用这些分位数的地方都要带着它读（否则白页故障会被"漂亮的分位数"掩盖）。
+        "srv_failed": sum(1 for x in srv if x < 0),
+        "bad_src": {s: sum(1 for h in bads if h.get("src") == s) for s in srcs},
+        # 非 200 逐条留证（接口 + 来源 + 是否带应用层头 + 相对秒数 + 响应片段）——
+        #   只报总数时无法判断"读还是写、应用还是边缘、哪个接口、哪个时间窗"（§13 的坑）。
         "bad": [{"ep": h["ep"], "status": h["status"], "srv": h["srv"], "t": h.get("t"),
-                 "app_headers": h.get("app_headers"), "err": h.get("err"),
-                 "body": (h.get("body") or "")[:140]}
-                for h in hits if h["status"] != 200][:10],
+                 "src": h.get("src"), "app_headers": h.get("app_headers"),
+                 "err": h.get("err"), "body": (h.get("body") or "")[:140]}
+                for h in bads][:10],
         "eps": _by_ep(hits),
         "worst": sorted([{"ep": h["ep"], "srv": h["srv"], "status": h["status"], "rows": h["rows"]}
                          for h in hits], key=lambda x: -x["srv"])[:8],
@@ -113,9 +122,9 @@ def hot(keys=None, readers=8, secs=15, rounds=5, gap=15.0, quiet=True):
         r = {"round": i, "phase": ph, "wall_s": round(time.time() - t0, 1)}
         r.update(_summary(hits))
         out["rounds"].append(r)
-        print("[hot %d/%d] phase=%s p50=%s p95=%s 503=%s inc=%s"
+        print("[hot %d/%d] phase=%s p50=%s p95=%s 503=%s inc=%s sfail=%s"
               % (i, rounds, ph.get("ok"), r["srv_p50"], r["srv_p95"],
-                 r["status503"], r["incomplete"]), flush=True)
+                 r["status503"], r["incomplete"], r["srv_failed"]), flush=True)
         if i < rounds:
             time.sleep(gap)
 
@@ -219,9 +228,10 @@ def storm(scene="S2", keys=None, readers=None, writers=None, secs=None, write_ga
                       "fail_at": [w.get("t") for w in wlog if w.get("status") != 200],
                       "err": next((w.get("err") for w in wlog if w.get("err")), "")}}
     out.update(_summary(hits, wall=round(time.time() - t0, 1)))
-    print("[storm %s] p50=%s p95=%s max=%s 503=%s inc=%s writes=%s busy=%s"
+    print("[storm %s] p50=%s p95=%s max=%s 503=%s inc=%s bad=%s writes=%s busy=%s"
           % (scene, out["srv_p50"], out["srv_p95"], out["srv_max"], out["status503"],
-             out["incomplete"], out["writes"]["n"], out["busy_share"]), flush=True)
+             out["incomplete"], out["bad_src"], out["writes"]["n"], out["busy_share"]),
+          flush=True)
     return out
 
 
