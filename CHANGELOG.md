@@ -33,6 +33,7 @@
 | 反证 | 打桩 `auth_ready=(0,0)` → `report_schema` 返回 1；真实库返回 0（断言不空转） |
 | 其他 | `rebuild_supplykit.py` 支持 `ADMIN_PASSWORD` 注入；`DEVELOPMENT` §11、`scripts/README`、`CONTEXT` 同步 |
 | 欠账 | `admin123` 为仓库公开约定弱口令（多脚本依赖），轮换需同步改脚本，本次不动 |
+| 发布 | `3edd790` → 远端 **`534638b`**；CI `42593251551` **success**；部署 **`dpnvxn65w8ck` Success+Prod=yes**；部署后复验登录 `ok=True role=admin`、`auth/check` 通过、`summary` 200 |
 | 详情 | `docs/history/2026-11-09.md` §15.198 |
 
 ## 2026-11-09（第九批 · 冷启动白页根治：前端有界重试 + 连接池排队封顶）
