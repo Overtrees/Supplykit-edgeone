@@ -294,6 +294,16 @@ async def auth_middleware(request: Request, next):
                     continue_tasks()
                 except Exception as _e:
                     try_err('index', '请求驱动续跑线程异常', _e)
+                # §15.189 P0: 有界物化补建自愈 —— 与续跑**共用同一个 60s 请求驱动**
+                #   (不新增调度源/不新增表)。head.fp 落后是 DB 持久事实, 实例冻结或
+                #   重启都不丢; HeavyBusy 跳过的 kind 不再靠「下一次读该页面」才补建
+                #   (§10.9 确定性实证的尾巴)。仍是 daemon 线程、不阻塞响应,
+                #   异常只留痕, drain_pending 自带全局间隔/单 scope 冷却/单轮上限。
+                try:
+                    from core import list_store as _ls
+                    _ls.drain_pending()
+                except Exception as _e2:
+                    try_err('index', '物化补建自愈降级', _e2)
             _thc.Thread(target=_cont, daemon=True).start()
     except Exception as _e:
         try_err('index', '请求驱动续跑调度异常', _e)

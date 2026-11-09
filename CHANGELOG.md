@@ -19,6 +19,68 @@
 
 ---
 
+## 2026-11-09（第五批 · 尾巴根治收敛 + 优化后结构/代码验证）
+
+> 详情见 `docs/history/2026-11-09.md` §15.189 与 `docs/PERF.md` §11。
+> 用户要求「对测试出来的尾巴、可优化点做次根治收敛，注意优化原则含数据 4 维，
+> 红线依旧；**seed 优化完也不重跑，但可以写脚本测试优化后的结构/代码**」。
+> **改了业务逻辑，但没重跑、没导数据、没连线上压测、没部署**；仅本地提交、未推送。
+
+| 项 | 内容 |
+|---|---|
+| P0 物化补建自愈 | 新增 `list_store.drain_pending()`：以 `list_head.fp` 落后为 **DB 持久**待补建真源，有界（`8s` 全局 / `12s` 单 scope / 单轮 `3` 个）补建，投进**同一个** `submit_background` → `heavy(global_)` → `build`；挂 `index.py` 已有 60s 请求驱动线程；`status()` 暴露 `drain` 参数与 `fp_match` |
+| P1 合并失效 | `analysis_cache.mark_progress()` 只 bump `data_version`；seed 中间窗口不再 `invalidate("all")`，**完成步仍全量失效** → 全链路联动轮数 **37→1**（整数结构计数，非耗时） |
+| P3 第四类判据 | `import_smoke.judge_evidence`（纯函数、独立不进 `TH`）6 项作业/联动判据；`pipeline_probe.coverage` 判据层扩到 `run.py + import_smoke + endpoints` → **0/6 未覆盖（拦得住，第四批为 6/6 拦不住）** |
+| P5 判据缺口 | `endpoints.KNOWN_EMPTY={alerts}` 白名单（只对合法空形状豁免，形状不对仍判失败）；`scenes.hot` 相位未静默跳轮 + `skipped_rounds` 留痕；`run._judge_hot` 对空有效轮判 FAIL |
+| 优化后验证脚本 | 新增 `converge_probe.py`：`check` 77 项 / `selftest` 8 项 / `evidence` 历史取证反证 / `all` **85 项 PASS**；AST 级断言逐条核 4 维不退化与红线 1/2/4/5/6/7/14/15/17/19 |
+| 历史取证反证 | 13:17 唯一一次取证喂第四类判据：`materialize_gen_ok` **报红**（repl 40→40）、其余 5 项 PASS → 判据真能拦住 §15.188 缺口；顺带修掉 `import_equivalent` 把派生表 `alerts` 当源表的假 FAIL |
+| 门禁 | `preflight.sh --skip-sql-smoke` 八步全绿（`local_test.py` **860/0** / vitest **46/46** / i18n 1442/1442）；`pipeline_probe.check` **40 项 PASS**、`selftest` PASS、`coverage` 0/6 |
+| 如实收口 | P2 评估链、`gmv_flow` 无 upsert、`available_balanced` 生成逻辑**未改**（幂等 upsert 非脏数据 / 改 upsert 会掩盖重复流水 / 不重跑无法验证）；线上**未部署**、无线上同口径复测（红线 7），不下「快了多少」结论 |
+| 红线 | 未重跑 seed、未导数据、未跑 `storm`/`cold`/`first`/`hot`、未连线上压测；验证全部零 RU；**仅本地提交、未推送** |
+
+---
+
+## 2026-11-09（第四批 · 集中导入全链路验证 + 线上小批量拟真冒烟）
+
+> 详情见 `docs/history/2026-11-09.md` §15.188 与 `docs/PERF.md` §10。
+> 先做零 RU 结构/代码验证并形成全面方案，再**只跑一次**线上小批量拟真冒烟；红线依旧。
+> ⚠ 本批「拦不住 / 只验证不改业务逻辑」的结论已于**第五批（§15.189 / §11）根治收敛**时
+> 反转，原文保留供追溯。
+
+| 项 | 内容 |
+|---|---|
+| 优化点复盘 | 一次全程暴露 **7 项**：自有仓两段 671.3s / 59.7%、每窗口 `invalidate("all")` ×36 引发全链路联动、完成阶段 `HeavyBusy` 跳过物化且无重试、`_MAT_WINDOW=3s` 合并不了跨窗口、双驱动空转、既有 `available_balanced` 差额与 `alerts` 恒 0、基准自身缺「空接口白名单/相前置」 |
+| 现实业务映射 | **机理同源**：一次写 → 一次全链路联动，连续 N 批 = 连续 N 轮，瓶颈是「联动轮数 × 每轮 6 类重建」；现实前端导入域级失效更省、单批行数小，但多出 eval/purchase/freshness 三条链，全局名额争抢风险不比 seed 小 |
+| 基准能否拦住 | **拦不住**：`pipeline_probe.py coverage` 实测 **6/6 联动节点无判据**（2 `NOT_JUDGED` / 4 `GAP`）；`storm` 的写只改季节系数，不走 CSV 导入链路 |
+| 物化 / 评估达标 | 物化 build 2.1~3.0s ≤6s 达标，但**非自保证**：线上实测 11 条 `HeavyBusy`、`repl` gen 40→40 未推进、`unit_gen` 14 未变；评估联动**达标**（8 条任务全 done、无僵死 running，生成告警） |
+| 100 万单 / 10000 SKU | **读接口站得住**（目标 SKU = 当前实测单渠道 SKU，物化行数不放大）、**单次长作业站不住**（日销全量重建 ≈334s > 180s 函数上限）、**分段续跑架构站得住**；瓶颈是长作业与联动轮数，不是读接口 |
+| 结构验证 | 新增 `scripts/perf/pipeline_probe.py`：`check` 31 项 / `check --db` 32 项 / `selftest` 全 PASS；`local_test.py` 860/0、vitest 46/46、preflight 八步全绿；修掉一次「宽松关键字命中 `import threading`」的门禁假 PASS |
+| 线上拟真冒烟 | 新增 `scripts/perf/import_smoke.py`；6 批 / **1025 行** / 2 渠道 / 5 类型，同步 5×5 + 异步 1×1000（1 次接力 `done`）；CSV 按 `spec()` 中文表头从线上真实行原样回导 |
+| 四维结果 | **5 张源表行数变化全 0**（零业务数据变化）、`dv` 78→88 跑完 **88→88 稳定**、0×5xx / 0×503 / 无降级头 / `health db:ok`；告警由 0 生成且收敛期持续增长（1419→5258→10230→13:26 的 22072，不能取瞬时值）；**13:26 终态 `repl` 物化 gen 仍为 40 未补建**（物化非自保证的确定性实证） |
+| 如实保留 | `gmv_flow` 5 行 1062（该 target 无 upsert，首跑 `force_new=1` 绕过前端 dup-check 才暴露，行数不变；已修 PLAN 参数、**不重跑**）；告警重复评估属联动轮数成本，本轮只验证不改业务逻辑 |
+| 红线 | 只跑一次 `run`（30 分钟防重）；未重跑 seed、未导大批量、未跑 `storm`/`cold`/`first`/多轮 `hot`；取证只读取证；**仅本地提交、未推送** |
+
+---
+
+## 2026-11-09（第三批 · 修复后首次端到端 seed 全程实测）
+
+> 详情见 `docs/history/2026-11-09.md` §15.187 与 `docs/PERF.md` §9.7。
+> 用户授权「只跑一次全程」，先完成零 RU 结构门禁再单次执行，**没有第 2 次全量重灌**。
+
+| 项 | 内容 |
+|---|---|
+| 前置门禁 | `seed_preflight.py --db` **26 项 PASS**；`local_test.py` 860/0；线上 `db:ok`、空库无残留任务 |
+| 触发 | `POST /api/seed/fill` → `seed_1794197679_6669`；admin token 用线上 `JWT_SECRET` 本地签发（HS256/720h、`verify_token` 只验签名），**零 RU、不写 users 表** |
+| 结果 | `status=done`，20 段 / **36 窗口** / 50 次驱动；**墙钟 21.1 分钟**（纯执行 18.7 分钟），0 个 503、无 1105 |
+| 数据四维 | 69码空码 0 行、订单/库存四维键重复组 0、渠道 GMV 双渠道各约 1.05 亿；`data_version` 跑完 **78→78→78 稳定**（红线19 在有数据后同样成立） |
+| 水位 | inventory 16 条 `short` 定性为**分片口径错配非丢行**（actual 合计 170,200 = 表行数）；`collect` 判据改为行数对账，复跑 5 项全 OK |
+| 基准复用 | `hot --rounds 5` 稳态中位 **p50 42ms / p95 449ms**，与 §3 基线 32/509 同量级 → 框架与稳态数字可复用；两项判据 FAIL 来自 `alerts` 恒空与导入后冷算相位，非性能退化 |
+| 脚本 | 修 `scripts/seed_drive.py` 3 处 `/workspace/supplykit` 旧沙箱绝对路径（换机器会「任务在跑但一步没走」）；新增 `scripts/perf/seed_preflight.py` 门禁/取证 |
+| 已知缺口（未修） | `_assert_available_balanced` 终态 jd 10057 / other 10062 行差额；`alerts` 恒 0；完成阶段 `HeavyBusy` 跳过部分物化重建；每窗口 `invalidate("all")` |
+| 红线 | 只跑一次；不跑 `storm`/`cold`/`first`；**仅本地提交、未推送**（避免重新部署打断稳态 / 额外冷算 RU） |
+
+---
+
 ## 2026-11-09（第二批 · 新集群迁移 + 两个健壮性缺口修复）
 
 > 详情见 `docs/history/2026-11-09.md` §15.186。用附件提供的 TiDB Cloud API 凭据新建集群，

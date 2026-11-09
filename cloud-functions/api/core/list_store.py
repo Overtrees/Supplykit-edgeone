@@ -112,9 +112,30 @@ _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
+
+# ── §15.189 P0 根治: 物化有界补建自愈 ──────────────────────────────────
+# 起因(§10.9 确定性实证): HeavyBusy 跳过的 kind 只留痕 + 2s 冷却, 补建完全靠
+#   「下一次读该页面」—— 集中导入跑完 9 分钟后 repl gen 仍停在 40、unit gen 14 未变。
+# 根治**不新增第二套重建机制**(红线 2): 把「待补建」的真源定义为 DB 持久事实 ——
+#   list_head 里 fp 已落后于当前数据版本、且 gen>0(有旧物化可服务) 的 head 行。
+#   drain_pending() 扫这些行, 把补建投进**同一个** submit_background →
+#   heavy(global_=True) → build(), 与读侧冷态 / 写侧 invalidate 逐字同路径。
+# 不依赖进程内状态(实例冻结/重启/跨实例都不丢), 不加表、不加队列;
+#   不调 invalidate(红线 19), 不在读请求路径(红线 6), 由 index.py 已有的
+#   「请求驱动续跑」60s 线程统一驱动(不新增调度源)。
+# 有界(红线 15): 全局最小间隔 + 单 scope 冷却 + 单轮上限 + submit_background
+#   自带 _FLIGHT_TTL/_BUSY_UNTIL 单飞; 抢不到名额只留痕不重试, 绝不自旋烧 RU。
+_DRAIN_GAP = 8.0           # 两次 drain 的全局最小间隔(仅用于限流, 丢失不影响正确性)
+_DRAIN_SCOPE_COOL = 12.0   # 同一 (kind,scope) 重复投递的最小间隔
+_DRAIN_LIMIT = 3           # 单轮最多投递几个 list scope
+_DRAIN_AUX_COOL = 30.0     # 顺带触发 unit/own ensure_async 的最小间隔
+_DRAIN_STATE = {"last": 0.0, "scope": {}, "aux": 0.0}
+
 _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
           "swr_served": 0, "first_legacy": 0, "first_shared": 0,
-          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0}
+          "first_timeout": 0, "stale_prev_served": 0, "busy_cooled": 0,
+          "drain_scanned": 0, "drain_pending": 0, "drain_submitted": 0,
+          "drain_cooled": 0, "drain_unit": 0, "drain_own": 0, "drain_errors": 0}
 
 
 def _flag(name, default=True):
@@ -518,8 +539,11 @@ def _cold_worker(kind, scope, fp, fn, key):
                     _STATS["failed"] += 1
                     try_err("list_store", "后台重建失败(%s/%s)" % (kind, scope), _e)
         except HeavyBusy as _hb:
-            # 全局 3 个名额已满: 快速失败并留痕, 不排队、不拖住读侧。
-            # 读侧仍返回上一版完整物化; 冷却结束后下一次请求会再触发(flight 已释放)。
+            # 全局名额已满: 快速失败并留痕, 不排队、不拖住读侧(红线 4/15)。
+            # 读侧仍返回上一版完整物化(数据四维-准确/完整不退化)。
+            # §15.189 P0: 本轮跳过**不再等于永久丢失** —— head.fp 落后是 DB 持久
+            #   事实, drain_pending() 会在下一次 60s 请求驱动里补建, 不再靠
+            #   「下一次读该页面」(§10.9 跑完 9 分钟 repl gen 仍为 40 的根因)。
             _STATS["busy"] += 1
             if _coalesce_on():
                 with _FLIGHT_LOCK:
@@ -591,6 +615,87 @@ def ensure_async(kind, scope=None, force=False):
     except Exception as _e:
         try_err("list_store", "重建调度降级(%s)" % kind, _e)
         return False
+
+
+def drain_pending(limit=None):
+    """§15.189 P0 根治: 有界物化补建自愈 —— 不再依赖「下一次读该页面」。
+
+    「待补建」= list_head 里 **fp 已落后于当前数据版本、且 gen>0**(有旧物化可服务)
+    的 head 行。这是 DB 持久事实: 实例冻结 / 重启 / 跨实例都不丢, 无需新表、
+    无需进程内队列, 也不受 §10.9 里「HeavyBusy 只留痕不重试」的影响。
+
+    补建仍走 submit_background → heavy(global_=True) → build(), 与读侧冷态、
+    写侧 invalidate 是**同一条代码路径**(红线 2 不叠加); build() 发布前 COUNT
+    自校验 + fp 读写同源, 因此不会引入第二套算法、不会脏读。旧 gen 在补建完成前
+    继续完整服务(数据四维-准确/完整不退化), 补建后 fp 追平(实时维改善)。
+
+    有界(红线 15): 全局 _DRAIN_GAP + 单 scope _DRAIN_SCOPE_COOL + 单轮
+    _DRAIN_LIMIT + submit_background 自带 _FLIGHT_TTL/_BUSY_UNTIL 单飞;
+    抢不到名额只留痕不重试, 绝不自旋烧 RU。不调 invalidate(红线 19),
+    不在读请求路径(红线 6), 由 index.py 已有的 60s 请求驱动线程统一驱动。
+    任一异常降级放行并留痕 —— 治理手段不能变成新的不可用来源(红线 6 同理)。
+    """
+    _now = time.time()
+    with _FLIGHT_LOCK:
+        if _now - _DRAIN_STATE["last"] < _DRAIN_GAP:
+            return {"ok": True, "skipped": "gap"}
+        _DRAIN_STATE["last"] = _now
+    lim = max(1, int(limit or _DRAIN_LIMIT))
+    out = {"ok": True, "scanned": 0, "pending": 0, "submitted": 0,
+           "cooled": 0, "unit": 0, "own": 0, "errors": []}
+    try:
+        rows = query("SELECT kind, scope, channel, mode, fp, gen FROM list_head", []) or []
+    except Exception as _e:
+        try_err("list_store", "补建扫描降级(list_head)", _e)
+        _STATS["drain_errors"] += 1
+        return out
+    for r in rows:
+        if int(r.get("gen") or 0) <= 0:
+            continue                       # 从未建过 → 读侧首建单飞负责, 不在这抢名额
+        _k, _s = str(r.get("kind") or ""), str(r.get("scope") or "")
+        # mode 与 build/page_of 同源: 空串交给 mode_of 查渠道默认, 不兜底(红线 16)
+        _ch, _md = str(r.get("channel") or "jd"), str(r.get("mode") or "")
+        _fp = fp_now(_k, _ch, _md, _s)
+        out["scanned"] += 1
+        _STATS["drain_scanned"] += 1
+        if not _fp or _fp == str(r.get("fp") or ""):
+            continue                       # fp 不可用 / 已追平 → 不需补建
+        out["pending"] += 1
+        _STATS["drain_pending"] += 1
+        _key = "%s|%s" % (_k, _s)
+        with _FLIGHT_LOCK:
+            if _now - _DRAIN_STATE["scope"].get(_key, 0.0) < _DRAIN_SCOPE_COOL:
+                out["cooled"] += 1
+                _STATS["drain_cooled"] += 1
+                continue
+            _DRAIN_STATE["scope"][_key] = _now
+        if out["submitted"] >= lim:
+            continue                       # 超单轮上限: 留待下一轮, 不排队(红线 15)
+        submit_background(_k, _s, _fp,
+                          lambda k=_k, s=_s: build(k, s, force=False))
+        out["submitted"] += 1
+        _STATS["drain_submitted"] += 1
+    # 判定读模型 / 自有仓已收编进同一个 submit_background(§15.165)。这里**不自己算
+    # 它们的 fp**(避免 mode 归一漂移, 红线 16), 只在「确有物化落后」且有界冷却后
+    # 顺带触发一次各自 ensure_async()(内部按 head.fp 判 fresh + 单飞去重, 不白算全量)。
+    if (out["pending"] or out["submitted"]) and \
+            _now - _DRAIN_STATE["aux"] >= _DRAIN_AUX_COOL:
+        _DRAIN_STATE["aux"] = _now
+        try:
+            from importlib import import_module as _imp
+        except Exception:
+            _imp = None
+        if _imp:
+            for _tag, _path in (("unit", "core.unit_store"), ("own", "core.own_store")):
+                try:
+                    _imp(_path).ensure_async()
+                    out[_tag] = 1
+                    _STATS["drain_" + _tag] += 1
+                except Exception as _e2:
+                    out["errors"].append("%s: %s" % (_tag, str(_e2)[:80]))
+                    _STATS["drain_errors"] += 1
+                    try_err("list_store", "补建降级(%s)" % _tag, _e2)
+    return out
 
 
 def _swr_meta(kind, scope, h, state):
@@ -788,4 +893,10 @@ def status(kind, scope):
         "built_at": str(h.get("built_at") or ""),
         # §15.161 冷算治理实时播报: 有没有真的撞车/降级, 可查可告警, 不靠猜。
         "cold": dict(_STATS, inflight=len(_FLIGHTS)),
+        # §15.189 P0 补建自愈: 扫了几个 head / 几个落后 / 投了几个 / 有界拦截了多少,
+        # 以及有界参数, 全部可查(作业级达标不再靠「打开页面看看」)。
+        "drain": {"gap_s": _DRAIN_GAP, "scope_cool_s": _DRAIN_SCOPE_COOL,
+                  "limit": _DRAIN_LIMIT, "aux_cool_s": _DRAIN_AUX_COOL,
+                  "last": _DRAIN_STATE["last"],
+                  "tracked_scopes": len(_DRAIN_STATE["scope"])},
     }

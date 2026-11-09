@@ -16,6 +16,10 @@
 | `kit.py` | 登录态会话、`X-Srv-Ms` 读取、百分位、相位查询（`heavy_slot` + `built_at`）、真实写操作 |
 | `scenes.py` | 五类场景：`hot` / `storm` / `cold` / `first` / `noise` |
 | `run.py` | CLI + **判据（阈值只在这里）** |
+| `seed_preflight.py` | **seed 一次性作业**的开跑门禁（零 RU 静态检查）/ 只读 DB 前置 / 跑完取证；判据独立，不进 `run.py` 的 `TH`。见 `docs/PERF.md` §9 |
+| `pipeline_probe.py` | **零 RU** 全链路结构/代码验证：`check` 链路节点与机制常量、`coverage` 基准覆盖矩阵、`findings` 优化点→业务映射、`simulate` 集中导入结构推演、`predict` 100 万单复核、`selftest` 反证。见 `docs/PERF.md` §10 |
+| `import_smoke.py` | **线上小批量拟真冒烟**：走前端导入链路（同步 + 异步），CSV 按 `spec()` 中文表头从线上真实行取样原样回导（零业务数据变化）；`plan` 零写 / `run` 只跑一次 / `verify` 只读取证 + **第四类作业/联动判据** `judge_evidence`（纯函数，可喂历史 json 反证）。见 `docs/PERF.md` §10.7 / §11 |
+| `converge_probe.py` | **优化后结构/代码验证**（§15.189）：零 RU、不重跑 seed、不连线上；`check` 用 AST 判 P0 补建自愈 / P1 合并失效 / 4 维不退化 / 红线合规，`selftest` 反证，`evidence` 把 13:17 历史取喂进第四类判据（应报红 `materialize_gen_ok`）。见 `docs/PERF.md` §11 |
 | `out/` | 每次运行的 json（不入库） |
 
 ## 用法
@@ -83,6 +87,18 @@ python3 scripts/perf/smoke.py --base https://xxx
 
 > 别和仓库根目录的 `scripts/smoke_check.py` 混淆：那个只验 `health` JSON + 首页 `#root`
 > 是否可访问（部署后冒烟）；本脚本逐接口判数据有效性，用于**故障定位**。
+
+## seed 作业门禁（不测速度，只管「能不能只跑一次」）
+
+```bash
+python3 scripts/perf/seed_preflight.py             # 零 RU 静态门禁（段表/规格/基准/路径）
+python3 scripts/perf/seed_preflight.py --db        # 追加只读 DB 前置（约 8 条 SELECT，<10 RU）
+python3 scripts/perf/seed_preflight.py collect --task-id <id>   # 跑完只读取证，落 out/
+```
+
+`run.py` 判的是**接口稳态**；seed 是 20 段 / ≈37 窗口的一次性作业，拿 `storm_max<10s`
+判必然 FAIL，所以判据单独放这里。**本脚本永不执行导入**，真导入由
+`POST /api/seed/fill` + `scripts/seed_drive.py` 单驱动完成，完整规范见 `docs/PERF.md` §9。
 
 与 `run.py` 的区别：`run.py` 测「快不快 / 停不停摆」，需要 DB 正常、多轮、带判据；
 `smoke.py` 测「正不正常」，只发一轮 GET，**额度耗尽时用来判定失败面**。

@@ -507,6 +507,34 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
     return out
 
 
+def mark_progress():
+    """§15.189 P1: 批量导入**中间态**的进度打点 —— 只 bump data_version, 零失效。
+
+    起因(§9.7 / §10.2 线上实数): seed 每窗口调一次 invalidate("all"), 36 窗口
+      = 36 轮「打全量墓碑 + bump 全部 8 个域计数 + 起 6 类 ensure_async 重建」。
+      而下一窗口数据又变 → 上一轮刚建的物化立刻过期(缓存恒冷), 几乎全是白算;
+      data_version 40→78 也几乎全是中间态, 并把 HeavyBusy 名额争抢放大 36 倍。
+
+    根治: seed 是**离线批量灌数**, 中间态不是可查询状态 —— 不该让读侧看到半成品,
+      更不该为半成品重建物化。中间步只记「数据在变」(data_version +1, 供 /health
+      与前端感知进度), 不碰缓存墓碑、不 bump 域计数、不触发任何重建;
+      **完成时**照旧调一次 invalidate("all") 做最终全量失效 → 一轮全链路重建。
+
+    数据四维: 准确(中间态不对外发布, 比原来更正确) / 完整(不变) /
+      实时(完成即失效, 不退化; 中间态本无实时性承诺) /
+      可靠(少 35 轮重建, RU 与名额争抢大幅下降)。
+    红线 19: 只在**写侧**调用, 不进读路径, 不触发数据域失效。
+    红线 2: 不是新失效机制, 只是把「中间态」从 invalidate 里剥离出来。
+    """
+    try:
+        from db import execute as _e
+        _e("INSERT INTO data_version(id, v) VALUES(1,1) ON DUPLICATE KEY UPDATE v=v+1")
+        return True
+    except Exception as _e2:
+        try_err('analysis_cache', '批量进度打点降级', _e2)
+        return False
+
+
 def invalidate(*domains):
     """数据变更后按**域**失效: 只清依赖这些域的缓存族(其余族继续复用)
 

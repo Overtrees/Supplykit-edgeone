@@ -47,8 +47,17 @@ TH = {
 
 def _judge_hot(r):
     res = []
+    rounds = r["rounds"]
+    # §15.189 P5: 相位未静默跳过的轮次显式计入判据 —— 全跳 = 没有有效纯读样本,
+    #   既不能判 PASS 也不能崩, 如实 FAIL 并说明原因(红线 17 的锁相位前置)。
+    #   skipped_rounds 字段本身也是结构门禁(可反证), 防止脚本改了却没留痕。
+    skipped = len(r.get("skipped_rounds") or [])
+    res.append(("跳轮有留痕（skipped_rounds 字段存在）", "skipped_rounds" in r))
+    if not rounds:
+        res.append(("有效纯读轮数 ≥2（实测 0，%d 轮因相位未静默跳过）" % skipped, False))
+        return res
     for f, lim in (("srv_p95", TH["hot_p95"]), ("srv_p50", TH["hot_p50"])):
-        v = [x[f] for x in r["rounds"]]
+        v = [x[f] for x in rounds]
         med = sorted(v)[len(v) // 2]
         res.append(("%s 中位 %d ≤ %d" % (f, med, lim), med <= lim))
     for f in ("srv_p50", "srv_p95"):
@@ -60,10 +69,10 @@ def _judge_hot(r):
         lim = TH["hot_jitter_ms"][f]
         res.append(("离散度 %s：CV %.3f ≤ %.2f 或极差 %dms ≤ %dms"
                     % (f, c, TH["hot_cv"], jit, lim), c <= TH["hot_cv"] or jit <= lim))
-    if len(r["rounds"]) < 2:
+    if len(rounds) < 2:
         res.append(("轮数 ≥2（单轮只能看数、不能判离散度）", False))
-    bad = sum(x["status503"] + x["incomplete"] for x in r["rounds"])
-    res.append(("0 个 503 / 0 条不完整（实测 %d）" % bad, bad == 0))
+    bad = sum(x["status503"] + x["incomplete"] for x in rounds)
+    res.append(("0 个 503 / 0 条不完整（实测 %d，已知空接口已白名单）" % bad, bad == 0))
     return res
 
 

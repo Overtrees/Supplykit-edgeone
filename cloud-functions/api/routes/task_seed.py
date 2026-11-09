@@ -278,8 +278,12 @@ def seed_fill_status(task_id: str = "", driver: str = "frontend", probe: int = 0
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW(), lease_until=NULL, "
                 "lease_token='' WHERE task_id=%s",
                 (new_params, task_id))
-        from routes.analysis_cache import invalidate
-        invalidate("all")  # 每步数据变化 → 缓存失效
+        # §15.189 P1: 中间窗口只记进度, **不做全量失效**(见 analysis_cache.mark_progress
+        #   设计说明) —— 避免 36 窗口 = 36 轮全链路重建 / 缓存恒冷 / 名额争抢。
+        #   完成步(上面 nxt>=SEED_DONE 分支)仍走一次全量失效做最终一致,
+        #   保证最终一致; 回滚 / reset / 月汇总修复等一次性操作也照旧全量失效。
+        from routes.analysis_cache import mark_progress
+        mark_progress()
         return {"data": {"status": "running", "step": nxt, "offset": _nxt_off, "part": part,
                          "total_step": SEED_DONE, "elapsed": _sq, "stalled_s": 0,
                          "now_ts": int(_tt.time()), "lease_held": False}}

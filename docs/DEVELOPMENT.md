@@ -27,7 +27,7 @@ SupplyKit 是**电商供应链数据清洗 + 补货决策看板**，定位为 ER
 | 层 | 技术 | 说明 |
 |---|---|---|
 | 前端 | React 18 + TypeScript + Vite | 16 页面；图表 ECharts **按需引入**；状态 Zustand |
-| 后端 | FastAPI（Python 3.10 语法门禁） | 23 个 APIRouter / 33 个路由文件；入口 `cloud-functions/api/index.py` |
+| 后端 | FastAPI（Python 3.10 语法门禁） | 24 个 APIRouter / 34 个路由文件；入口 `cloud-functions/api/index.py` |
 | 数据层 | pymysql + TiDB Cloud Serverless | `db.py` 原生数据层（无 ORM）；连接池用 `BoundedSemaphore` 名额 |
 | 部署 | EdgeOne Makers | Provider=Github → **只有 push 触发构建**，约 2~2.5 分钟 |
 | 定时 | `edgeone.json` schedules | **10 条硬上限**，`Asia/Shanghai` 显式时区 |
@@ -47,12 +47,12 @@ supplykit/
 │   ├── core/                     # 纯逻辑：metrics / rule_eval / alert_lifecycle / archive / task_lease ...
 │   ├── biz/                      # 业务计算：sales（三窗口日销）
 │   ├── routes/                   # HTTP 层：每个域一个文件
-│   └── local_test.py             # 回归 681 条；--sql-smoke 真实 SQL 冒烟
+│   └── local_test.py             # 回归 860 条；--sql-smoke 真实 SQL 冒烟
 ├── frontend/src/
 │   ├── pages/                    # 16 页；页面私有块放 pages/<页>/
 │   ├── components/               # 跨页复用；hammer/ 是筛选面板（与侧边栏 .menu-btn 不是一回事）
 │   ├── api/                      # client.ts（缓存/在途去重）/ mutate.ts（写操作统一入口）
-│   ├── locale.zh.ts / locale.en.ts  # 中英双份字典，键集合必须严格相等（1437 键）
+│   ├── locale.zh.ts / locale.en.ts  # 中英双份字典，键集合必须严格相等（1442 键）
 │   └── tests/                    # vitest
 ├── scripts/                      # 运维与门禁：preflight / push_api / deploy_status / local_api / i18n_audit ...
 └── docs/                         # 规范 / 架构 / 决策 / 历史（history/）
@@ -163,7 +163,7 @@ python3 scripts/smoke_check.py          # 线上冒烟：health 必须 JSON，�
 |---|---|---|
 | 1 | Python 3.10 语法 | 全部 `.py` 可解析 |
 | 2 | pyflakes | 无 undefined name / 重定义 / 先使用后定义 |
-| 3 | `local_test.py` 回归 | **681 通过 / 0 失败**；有 TIDB 凭据时顺带 SQL 冒烟 |
+| 3 | `local_test.py` 回归 | **860 通过 / 0 失败**；有 TIDB 凭据时顺带 SQL 冒烟 |
 | 4 | ESLint | `--max-warnings 0`，含红线 C 禁 any |
 | 5 | Prettier | 格式合规 |
 | 6 | `tsc --noEmit` | 0 error |
@@ -214,6 +214,8 @@ python3 scripts/smoke_check.py          # 线上冒烟：health 必须 JSON，�
 | 18 | **新库首建必须自举可证**：顺序固定为 建表 → **补列** → 建索引 → 种子/初始行 → 迁移 → 写版本。被索引引用的列必须**在 DDL 里就存在**，不能只靠 `_COLUMN_ADDS` 兜存量表；种子与初始行必须在全表建完之后写（空库里 `try_err` 想写的 `quality_logs` 也还不存在 → 双重静默）。验收必须查 `schema_state` 已写版本、`channels`/`data_version` 有初始行、被引用索引存在 —— 否则每次冷启动都会重跑全量 DDL。**存量库因为列/表早已齐全，永远测不出这类缺口**，只能用空集群验证 | 2026-11-09 `supplykit-1109` 首建：`idx_batches_sku_bc(sku,barcode)` 因 `batches.barcode` 只在补列声明里、且补列跑在建索引之后 → 1072 → 版本永不写入（每次冷启动 86s）；渠道种子写在建表循环之前 → 空库 `channels` 0 行，只能靠 `ch_list` 硬编码兜底 |
 
 | 19 | **读路径禁止触发数据域失效**：`invalidate()` 只允许出现在写操作，或自愈重建**确实产出行**之后。读侧「表空 → 重建 → 失效」在空库上是自我失效循环：重建产出 0 行 → bump 域计数 → 读侧 fp 必变 → 下个请求又重建。空库必须先用一条索引点查确认底料存在，无底料直接返回空结果 | 2026-11-09 新空库 `get_sku_sales_stats` 每请求 `invalidate("orders")`，4 个只读 GET 让 `data_version` 22→26、多张物化 gen 连涨；刚换的新集群额度被白烧 |
+| 20 | **后台重建「本轮跳过」必须自保证**：`HeavyBusy` / 名额抢不到而跳过时，不能靠「下一次读该页面」才补建 —— 那会让物化停在导入前版本直到有人打开页面（§10.9 跑完 9 分钟 `repl` gen 仍为 40）。待补建真源必须是 **DB 持久事实**（如 head 表 fp 落后），由已有后台驱动**有界**补建：全局间隔 + 单 scope 冷却 + 单轮上限 + 单飞，且补建仍走**同一个** `submit_background → build`（红线 2），不新建表 / 队列 / 调度线程，不调 `invalidate`（红线 19） | 2026-11-09 §15.189：`list_store.drain_pending()` 根治；旧 gen 仍完整可读，故数据 4 维不退化 |
+| 21 | **批量导入中间态不得触发全链路联动失效**：seed / 集中导入每个中间窗口调 `invalidate("all")` 会产生「N 窗口 = N 轮 6 类重建」，且上一轮刚建的物化下一窗口立刻过期（缓存恒冷），几乎全是白算。中间态只记进度（bump `data_version`），**完成步**才做一次全量失效保证最终一致。中间态不是可查询状态，不发布比发布更正确 | 2026-11-09 §15.189：36 窗口全清 → `mark_progress()`，结构轮数 37→1；`invalidate()` 中央语义一字未改，前端域级导入零回归 |
 
 > **红线 7 的机理**（2026-11-08 违规复盘）：本地直连与线上真实链路差的不是"网速"，是四层叠加 ——
 > ① EdgeOne 入口与鉴权（每请求 ~0.9~2s，本地为 0）；② 跨区 DB 往返（新加坡区单次 ~450ms，

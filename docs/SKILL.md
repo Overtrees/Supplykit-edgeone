@@ -19,9 +19,9 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 平台 | EdgeOne Makers, ProjectId `makers-8gstkvheqm2c`(名 supplykit, Area=overseas 免备案) |
 | 部署 | **Provider=Github → 只有 push 能触发构建**, `makers deploy` 被拒; 约 2~2.5 分钟 |
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
-| 规模 | 23 个 APIRouter / 33 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
+| 规模 | 24 个 APIRouter / 34 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
 | 性能基线与判据 | `docs/PERF.md`（页面→模块）+ `scripts/perf/run.py`（hot/storm/cold/first/noise） |
-| 回归 | `local_test.py` **681 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
+| 回归 | `local_test.py` **860 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
@@ -63,7 +63,7 @@ cloud-functions/api/
   migrations/       有序迁移框架: steps/*.py 单步事务 + schema_migrations 记账(只跑未应用的)
   biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判)
   routes/common.py  @traced(异常统一 200 + ok:false) / try_err / 日志落库
-  routes/*.py       23 个 APIRouter: auth dashboard orders products inventory replenishment ledger
+  routes/*.py       24 个 APIRouter: auth dashboard orders products inventory replenishment ledger
                     purchase alerts insights history cleansing channels rules suppliers tasks
                     batches ops misc debug cron task_seed task_export
   local_test.py     回归; test_audit.py 静态审计(CI 也跑)
@@ -123,7 +123,7 @@ recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— �
 ```bash
 bash scripts/preflight.sh
 # [1/8] 后端 Python 3.10 语法   [2/8] pyflakes(undefined name / 重定义)
-# [3/8] local_test 回归 681 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
+# [3/8] local_test 回归 860 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
 # [5/8] Prettier  [6/8] tsc  [7/8] vitest 单测
 # [8/8] i18n 门禁(红线 B: 中文硬编码为 0 + zh/en 键集相等 + 无死引用)
 ```
@@ -339,7 +339,7 @@ summary/stock-risk/alerts 各算两遍。局部更快, 整站不可用。
 - 判定自检: `python3 scripts/i18n_audit.py --selftest`(18 条正负例)。改扫描规则必先过它 ——
   这条命令也进了 preflight [8/8] 与 CI, 自检红说明规则坏了, 后面的 PASS 不可信。
 
-**为什么较真**: 项目已有中英双份字典(1437 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
+**为什么较真**: 项目已有中英双份字典(1442 键), 但页面里仍散着大量中文字面量 —— 切到 EN 就是半中半英。新代码再堆硬编码, 这件事永远收不了口。
 
 ### 红线 C: 禁用显式 any, 按 TS 原生类型写
 

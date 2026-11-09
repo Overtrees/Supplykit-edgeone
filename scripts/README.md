@@ -97,6 +97,8 @@ python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale b
 | `perf/endpoints.py` | 页面→模块→接口→数据来源→机制的唯一真源; `run.py --list-md` 生成 `docs/PERF.md` 的表格 |
 | `perf/smoke.py` | **只读冒烟**：DB 额度耗尽/接口异常时判定失败面（含 200+全 0 的静默空壳）；后端降级时打 `[DEGRADED]`（`X-App-Degraded` 头）；见 `docs/PERF.md` §8 |
 | `perf/scenes.py` `perf/kit.py` | 场景实现 / 登录态与相位工具 |
+| `perf/seed_preflight.py` | **seed 一次性作业**：零 RU 开跑门禁 + 只读 DB 前置 + 跑完取证；判据独立于接口基准，见 `docs/PERF.md` §9 |
+| `seed_drive.py` | seed 单驱动（路径从脚本位置推导仓库根，`SK_REPO` 可覆盖）；配合 `perf/seed_preflight.py` 保证「只跑一次全程」 |
 
 详见 [`perf/README.md`](perf/README.md) 与 [`docs/PERF.md`](../docs/PERF.md)。
 **注意**: 带写压测的 p50 不能用来判断"快了多少"（同配置轮间极差 22 倍），判延迟只用 `hot`。

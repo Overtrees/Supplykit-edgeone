@@ -13,14 +13,21 @@ import time
 import urllib.request
 
 API = os.environ.get('SK_API', 'https://supplykit.top')
-TASK = sys.argv[1]
 REQ_TIMEOUT = int(os.environ.get('SK_REQ_TIMEOUT', '115'))
+TASK = ''   # main() 里取, 模块可被静态导入而不炸
 
-sys.path.insert(0, '/workspace/supplykit/cloud-functions/api')
-os.chdir('/workspace/supplykit/cloud-functions/api')
+# 路径一律从脚本位置推导仓库根(2026-11-09): 原先写死的是旧沙箱绝对路径,
+#   换机器后 sys.path/chdir/load_dotenv 全落空 → 驱动脚本读不到 .env,
+#   表现为「任务在跑但一步没走」。SK_REPO 可显式覆盖。
+# 本文件位于 <repo>/scripts/, 两层 dirname 即仓库根。
+REPO = os.environ.get('SK_REPO') or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
+API_DIR = os.path.join(REPO, 'cloud-functions', 'api')
+sys.path.insert(0, API_DIR)
+os.chdir(API_DIR)
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv('/workspace/supplykit/.env')
+load_dotenv(os.path.join(REPO, '.env'))
 from db import query as _q  # noqa: E402
 
 
@@ -56,6 +63,11 @@ def drive():
 
 
 def main():
+    global TASK
+    if len(sys.argv) < 2:
+        print('用法: python3 scripts/seed_drive.py <task_id>   (task_id 来自 POST /api/seed/fill)', flush=True)
+        return 2
+    TASK = sys.argv[1]
     n = 0
     while True:
         row = task_row()

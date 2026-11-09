@@ -418,3 +418,455 @@ python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
 > **空库注意**：新集群按红线**不导业务数据、不重跑 seed**，业务接口返回空数据是预期。
 > 此时 `smoke.py` 的 `E` 类可能与「DB 挂掉的空壳」混淆 —— 用 `X-App-Degraded` 区分：
 > **带头 = 降级，不带头 = 新库确实没数据**。恢复当天仍不跑 `storm`/`cold`/`first`（§8.6）。
+
+---
+
+## 9. seed 一次性作业：基准复用与「只跑一次」规范（2026-11-09 评估，**未执行导入**）
+
+> 用户口径：本地与线上端到端速度不一致（§15.96 已证伪「用本地秒数推线上」），
+> 所以**不做端到端速度测试**，只做结构/代码测试；基于 §1~§8 的统一基准评估能否复用到 seed；
+> 考虑 RU 成本，**只跑一次全程**，清楚前不跑。本节是「弄清楚」的产物，待确认后才执行。
+
+### 9.1 seed 不是接口稳态，判据必须分开
+
+当前实现：`SEED_DONE=20`（**20 段**，不是历史注释里的 27 段），窗口接力后
+一次全程 ≈ **37 个驱动请求**（商品 1 + 订单 6 + 库存 16 + 流水 4 + 落账 4 + 月汇总 1 + 尾 5），
+单窗口预算 `SEED_WINDOW_BUDGET_S=75s`（网关硬限 120s）。规模 1 万 SKU/渠道 × 2、90 天、≈44 万订单行。
+
+**它是「一次性 ETL 作业」，不是 GET 读接口**：拿 `storm_max<10s` 判必然 FAIL；
+拿「0 条空数据」判空库首灌也是错的（空数据是预期）。红线 17 的三种口径之外，
+seed 属第四类 **「作业是否完成且等价」**，判据单独放在 `scripts/perf/seed_preflight.py`，
+**不进 `run.py` 的 `TH`**。
+
+### 9.2 基准能复用什么、不能复用什么
+
+| 层 | 复用 | 说明 |
+|---|---|---|
+| 框架 | ✅ | `kit.py` 的 `login/sess/srv_ms/stat/init_db`、直连只读状态；`run.py` 的「判据集中一处 + 统一打印 + `out/*.json` 归档」；`endpoints.py` 的「唯一真源 + `--list-md` 生成文档」纪律；红线 17 的口径分离原则 |
+| 接口判据 `TH` | ❌ | `hot`/`storm`/`cold`/`first` 的 p50/p95/503/空数据对 37 窗口作业无意义 |
+| 接口登记 | ❌ | seed 不是 GET 读接口，**不进** `ENDPOINTS`（会污染页面表与 `complete()` 判据）；门禁实测 `--list-md` 不含 seed |
+| **导入后稳态** | ✅ **真正复用数字** | 导入完成后跑 `hot --rounds 5`，与 §3 基线（25 接口 / 13 页面，5 轮 p50 32ms / p95 509ms）**同口径**对比。导入前空库不可比（空数据 p50 虚低），必须完成后才跑 |
+| 新增 | ✅ | `seed_preflight.py` 的 `check`（零 RU 静态门禁）/ `collect`（跑完只读取证） |
+
+### 9.3 seed 专用判据（不与接口判据混用）
+
+| 项 | 判据 | 证据来源 |
+|---|---|---|
+| 终态 | `sync_tasks.status = done`（非 error / 非卡 running） | `collect` |
+| 行数对账 | `seed_watermark` 的 `short = 0`（expected vs actual） | `wm_report` |
+| 单窗口 | `steps[].elapsed ≤ 90s` 且 **0 次 504** | `sync_tasks.params.steps` |
+| 不重复 | `win_total` 与驱动次数自洽；**0 次 reset、0 次整库重灌** | `params` + 人工纪律 |
+| 数据四维 | 69 码空码 0 行、订单/库存四维键重复组 0、`_assert_available_balanced` 无差额、渠道 GMV 可核 | `collect` 的 `evidence` |
+| 收敛 | 跑完 4 个只读 GET 前后 `data_version` 不变（红线 19） | `collect` + §8.6 |
+| RU | ≤ 5 万（见 9.4），且期间**无压测/冷算矩阵** | 控制台前后差 |
+
+### 9.4 RU 预算：一次很便宜，反复才致命
+
+§15.157 全量重灌粗估 **≈24,300 RU**（订单写入 10,250 / 流水 8,170 / 库存 2,720 /
+批次 1,900 / own 重算 239 / 快照 880 / stats 88）。该表是 11-05 的估算，当时 §15.163
+三处缺陷（360 次全表扫、月汇总 3 遍写、缓存写不进导致每请求重算两遍）**仍在**，
+修复后实际应更低，是偏保守的上界。
+
+表外还有：37 次 `invalidate("all")`（`task_seed.py:282`，每窗口一次）、完成时
+`_rebuild_day_agg(90)` 后台线程、`_align_order_keys` ≈221 次预读（§15.164 折算 ≈13s）。
+**保守上界：一次全程 ≤ 5 万 RU ≈ 新集群月额度 5000 万的 0.1%。**
+
+> 11-09 打穿 5000 万 RU 的主因不是单次导入，而是 9 天内 40 个提交 + 反复大批量导入验证
+> + 冷算矩阵反复首建 + 10 轮噪声实验 + 25 接口 5 轮基线（§8.6），叠加空库自我失效循环
+> （红线 19，已修）。所以「只跑一次」的约束针对的是**重复全量重灌**与**期间并发压测**。
+
+### 9.5 一次全程的执行顺序（2026-11-09 已执行，结果见 §9.7）
+
+```text
+0. python3 scripts/perf/seed_preflight.py --db     # 门禁 PASS（本轮已验 25 项 / 0 FAIL）
+1. 单一驱动源：跑期间不开前端页面（taskWatch 看守会抢驱动、看板请求会重算烧 RU）
+2. POST /api/seed/fill（admin token）→ 拿 task_id
+3. python3 scripts/seed_drive.py <task_id>          # 单驱动推进到 done
+   期间：不跑 storm / cold / first / 多轮 hot
+4. 失败处置（严禁第 2 次全程）：
+   同窗口幂等重跑（offset 不变 → random.seed(42+off) 不变 → 生成行一致）
+   → /api/seed/step 局部重跑 → /api/seed/rollback 只删本轮新增（水位）
+   **绝不 reset + 全量重灌**
+5. python3 scripts/perf/seed_preflight.py collect --task-id <id>   # 只读取证落 out/
+6. 立刻验 data_version 稳定（红线 19）
+7. 才跑 hot --rounds 5 与 §3 基线同口径对比（复用基准数字的落点）
+8. 把修复后首个真实耗时/RU 实数写回 §9.7（已补，不拿换算当实测）
+```
+
+### 9.6 未解项与风险（如实）
+
+| 项 | 现状 | 缓解 |
+|---|---|---|
+| 每窗口 `invalidate("all")` | §15.163 明列**未修**（刷新策略变更需定口径）→ 37 次失效 + 任务期间缓存恒冷 | 跑期间不开页面；不在导入期做延迟结论 |
+| `alerts` 段恒产 0 条 | seed 的 `safety_qty` 恒 0（静态安全线已退役）→ 看板告警卡恒空，数据四维-完整的真实退化 | 口径变更待定案，本次不修 |
+| ~~修复后无端到端实数~~ | **已补**：2026-11-09 一次全程实测 21.1 分钟，见 §9.7 | 不拿换算当实测 |
+| 本地/线上速度不一致 | §15.96：本地 RTT 221~423ms，线上快一个数量级 | 只认线上 `X-Srv-Ms` / `params.steps.elapsed`，不采信本地秒数 |
+
+**本轮状态**：零 RU 静态门禁、`local_test.py` 860/0（mock，不连库）、只读 DB 前置
+26 项 PASS；修了 `seed_drive.py` 的过期绝对路径与模块级参数取值；随后按 §9.5
+**只跑了一次全程**，实测结果见 §9.7。
+
+### 9.7 一次全程实测（2026-11-09，修复后首个真实实数）
+
+**执行**：`task_id=seed_1794197679_6669`，12:14:39 `POST /api/seed/fill`（HTTP 200 / 3.5s，
+步骤 0 商品·供应商同步完成）→ 12:36:07 `status=done`。**墙钟 1265.0s ≈ 21.1 分钟**，
+纯执行（`params.steps[].elapsed` 之和）**1123.6s**；20 段 / **36 窗口** / 50 次驱动请求
+（`seed_drive.py` 单驱动），全程 0 个 503、无 1105、未触发任何 rollback / 第 2 次全量重灌。
+
+**各阶段耗时**（业务阶段合并后，取自线上 `params.steps`）：
+
+| 阶段 | 耗时 | 窗口 | 行数 |
+|---|---:|---:|---:|
+| 库存·JD·自有仓 | 375.8s | 4 | 120,100 |
+| 库存·OTHER·自有仓 | 295.5s | 4 | 110,100 |
+| 订单 | 262.7s | 6 | 447,517 |
+| 物化·JD / OTHER | 40.0 + 39.5s | 2 | 256,512 |
+| 其余 14 阶段 | ≈110s | 20 | — |
+| **合计** | **1123.6s** | **36** | — |
+
+自有仓两段合计 **671.3s（59.7%）** 仍是最大头（历史 §15.163 修复前 790.8s / 48.5%）；
+单窗口 72~79s，与 75s 预算贴线。订单段 6 窗口 262.7s。
+驱动日志 req#12~25 是 0.8~1.9s 的**抢不到锁空转**（`continue_tasks` 双驱动），
+租约锁 + 段级幂等保证无重复写入 —— 印证 §9.6 的单驱动约束不靠「不开页面」硬扛。
+
+**数据四维核验**（`collect --task-id` 取证 + 直连复核）：
+
+| 维 | 结果 |
+|---|---|
+| 准确 | 69码空码订单 **0 行**；订单四维键重复组 **0**；库存唯一键重复组 **0**；渠道 GMV jd 1.048 亿 / other 1.049 亿 ✅ ⚠️ `_assert_available_balanced` 终态仍报 jd **10057** / other **10062** 行「可用≠期初+Σ流水」（max_diff 1312/1355，`quality_logs` 90222 留痕）—— **既有缺口，非本轮引入，未修** |
+| 完整 | orders 446,974 / products 20,000 / inventory 170,200 / inbound 40,424 / outbound 143,032 / batches 182,174 / snapshot 206,461 / sku_sales_stats 256,512 / orders_day_agg 5,400。订单水位 6 条全 ok；**inventory 16 条 `short` 是口径错配非丢行**：expected 合计 340,400 = 170,200×2（两个仓型 step 各记一次整片），actual 合计 170,200 = 表实际行数 → `collect` 判据已改为「actual 之和 == 表行数」，复跑 5 项全 OK。⚠️ `alerts` 恒 0（`safety_qty` 恒 0） |
+| 实时 | `data_version` 40→78（+38 = 36 窗口 + 完成 `invalidate("all")` 等）；跑完 6+3 个只读 GET 后 **78→78→78 稳定**（红线 19 在**有数据**的库上同样成立）。每窗口 `invalidate("all")` 仍未修 |
+| 可靠 | 终态 done、无 5xx、单驱动、无重灌；seed 完成阶段物化集中重建触发 **`HeavyBusy`（全局名额 2）**，`repl/purchase/disposal` 部分重建被跳过，另有 2 次 `/seed/fill/status` 内嵌 40s 严重慢请求 |
+
+**基准复用对比**（`hot --rounds 5`，8 并发纯读 / 12 CORE 接口，与 §3 同口径）：
+
+| 轮 | p50 | p95 | 503 | incomplete | 相位 |
+|---|---:|---:|---:|---:|---|
+| 1 | 42 | 444 | 0 | 4 | `wait_quiet` 超时（busy=2，等 61.5s） |
+| 2 | 89 | 913 | 0 | 5 | 同上 |
+| 3 | 87 | **1703** | 0 | 4 | ok |
+| 4 | 38 | 436 | 0 | 5 | ok |
+| 5 | 38 | 449 | 0 | 4 | ok |
+
+**稳态中位 p50 42ms / p95 449ms**，与 §3 空库基线（32ms / 509ms）同量级，p95 甚至略低
+→ **性能基准的框架与稳态数字可复用**。判据 FAIL 两项均非性能退化：
+① 22 条 `incomplete` **全部来自 `alerts` 恒空**（逐接口诊断 11/12 OK、连打 3 轮只 `alerts` 一条，
+`kb=0`），而 `TH["storm_incomplete"]=0` 是 storm 判据被 hot 复用；
+② `srv_p95` 离散 CV 1.096 / 极差 1267ms 来自第 3 轮 1703ms —— 导入刚结束的**冷算相位**
+（前两轮 `wait_quiet` 超时 `busy=2`，物化集中重建未完成 + `HeavyBusy` 跳过）。
+**结论**：导入完成后应先等冷算相位安静（`phase_now().busy==0`，实测 151s 后稳定）再跑 hot，
+且 `alerts` 这类已知空数据接口需在判据里标注，不能把「导入刚结束的 5 轮」直接判成性能 FAIL。
+
+**与历史耗时对照**（回答「5 分钟 → 近 1 小时」）：
+
+| 版本 | 规模 | 墙钟 |
+|---|---|---|
+| 改前直写（10-31） | 1000 SKU/渠道 × 60 天 ≈19 万单 | 5 分钟 |
+| 真导入·修复前（11-05） | 1 万 SKU × 90 天 ≈44.1 万单 / 17 万库存行 | 27 分钟纯执行（墙钟近 1 小时） |
+| **真导入·修复后（本次）** | 同上规模 | **21.1 分钟墙钟 / 18.7 分钟纯执行** |
+
+三处缺陷修复后比修复前快约 6 分钟（≈22%），但规模是改前的 **10 倍**，
+所以「慢几十倍」主要来自规模放大 + 每批固定查库成本 + 分段驱动，不是导入链路本身慢
+（CSV 序列化/解析/清洗仅约 8s / 2.6%，见 §15.163）。
+
+**RU**：无额度告警，`health` 全程 `db:ok`；恢复当天只跑这一次全程 + 一次 `hot 5 轮`，
+未跑 `storm`/`cold`/`first`/多轮重复（§8.6 止血）。文档与脚本改动**仅本地提交、未推送**，
+避免触发重新部署打断稳态 / 引入额外冷算 RU。
+
+---
+
+## 10. 集中导入与联动任务：第四类判据（2026-11-09，§15.188）
+
+> ⚠ **本章是 13:17 的诊断记录，保留原文供追溯**。其中「按目前基准**拦不住**」
+> 「完成阶段 `HeavyBusy` 无后台重试 / 补建靠下一次读请求」「本轮只给方案、未改
+> 业务逻辑」等结论，已于 **§11（§15.189）根治收敛时反转**。**当前状态一律以 §11 为准**。
+
+> 起因：一次全程跑完之后追问「发现了什么优化点、能否映射到现实**集中导入不同渠道/
+> 不同类型数据**；物化重建 / 评估联动等任务是否达标；按目前性能基准是否拦得住；
+> 100 万单 / 10000 SKU 预测是否站得住脚」。
+>
+> 结论由两个可复跑脚本固化，不再翻历史：
+> `scripts/perf/pipeline_probe.py`（**零 RU** 结构/代码验证 + 覆盖矩阵 + 预测复核）、
+> `scripts/perf/import_smoke.py`（**线上小批量拟真冒烟**，只跑一次）。
+> 红线 7：本地脚本只做结构判定，所有时间/行数系数只引用线上实测（§9.7 / §3 /
+> `predict_scale.json`），不产出任何本地 Xms/Xs 结论。
+
+### 10.1 结论速览
+
+| 问题 | 结论 |
+|---|---|
+| 一次全程有优化点吗 | **有 7 项**，最大头是自有仓两段 671.3s / 59.7%，以及每窗口 `invalidate("all")` 引发的 36 轮全链路联动 |
+| 映射到现实集中导入 | **机理同源**：一次写 → 一次全链路联动；连续 N 批 = 连续 N 轮，瓶颈是「联动轮数 × 每轮 6 类重建」，不是单批数据量。现实更优（域级失效、单批行数小）但**多出 eval/purchase/freshness 三条联动链**，全局名额争抢风险不比 seed 小 |
+| 物化重建 / 评估联动达标吗 | **能达标，但不是自保证**：物化 build 2.1~3.0s ≤ `cold_total` 6s；评估有事件驱动 + 60s 兜底不丢。但完成阶段 `HeavyBusy` 会**跳过**部分物化且**无后台重试**（要等下次读请求补建），评估任务多批时单线程排队 |
+| 按目前基准拦得住吗 | **当时拦不住**：`pipeline_probe.py coverage` 实测 **6/6 个联动节点都无判据**（2 个 `NOT_JUDGED` / 4 个 `GAP`）；`storm` 的写只是改季节系数，压根不走 CSV 导入链路。**§11 已根治为 0/6 未覆盖（拦得住）** |
+| 100 万单 / 10000 SKU | **读接口站得住、单次长作业站不住、架构站得住**：目标 SKU == 当前实测单渠道 SKU，物化行数不放大；日销三窗口全量重建外推 ≈334s（11-08 预测 444s）仍 > 180s 函数上限，只能续跑 |
+
+### 10.2 一次全程暴露的优化点 → 现实集中导入映射
+
+证据全部来自 §9.7 线上实数；「代码」列是结构性验证的锚点（当时 `check` 31 项 PASS，
+§11 后扩为 **40 项 PASS**）。
+
+| # | 优化点（一次全程实数） | 代码锚点 | 现实集中导入是否同样 |
+|---|---|---|---|
+| 1 | 自有仓两段 **671.3s / 59.7%**，单窗 72~79s 贴 75s 预算 | `core/list_store.py` M7 分批并行写 | 是。多渠道 × 多仓型按 SKU 分片线性叠加 |
+| 2 | 每窗口 `invalidate("all")` × 36 → 8 域 + 3 kind + unit/own + agg 全链路重建 | `routes/task_seed.py:282` / `analysis_cache.invalidate()` | 部分。前端导入是**域级**失效（更省），但每完成一批仍触发 1 轮全链路；连续多批 = 连续多轮 |
+| 3 | 完成阶段 `HeavyBusy` 跳过部分物化重建，**无后台重试** | `core/list_store.py:520` / `db.heavy(global_=True)` 名额 2 | 是且更严重。6 类重建争 2 个全局名额，被跳过的 kind 不打开页面就停在旧 gen |
+| 4 | `_MAT_WINDOW=3s` 合并不了 30~80s 间隔的窗口 → 缓存恒冷 | `routes/analysis_cache.py:32` | 是。批次间隔通常 >3s，合并窗口同样失效 |
+| 5 | 双驱动抢锁空转 14 次、2 次 `status` 内嵌 40s 慢请求 | `scripts/seed_drive.py` / `sync_tasks` 租约 | 是。前端轮询 + 中间件 `continue_tasks` 同构 |
+| 6 | 既有未修：`available_balanced` 终态差额、`alerts` 恒 0 | `seed_fill` / `safety_qty=0` | 拟真数据若 `safety_qty` 有值则 alerts 不恒 0；差额类缺口随集中导入放大 |
+| 7 | `hot` 判据把 `alerts` 恒空算 `incomplete`、把导入后冷算相位算性能 FAIL | `run.py _judge_hot` / `kit.wait_quiet` | **基准自身缺口**：缺「已知空接口白名单」与「相位安静」前置 |
+
+### 10.3 「拦不住」：基准覆盖矩阵（§11 已反转为「拦得住」）
+
+`pipeline_probe.py coverage` 从 `run.py` 的 `TH` 字面量与 `_judge_*` 断言行提取判据层，
+从 `scenes.py` 提取采集层；**只有两层都有才算「拦得住」**。结果：
+
+| 联动节点 | 判据层 | 采集层 | 结论 |
+|---|---|---|---|
+| 物化集中重建是否全部建成 | 无 | 有（`cold` 读 `list_head.timing`） | `NOT_JUDGED` |
+| 评估联动任务是否完成 | 无 | 无 | `GAP` |
+| 告警是否真的生成 | 无 | 无 | `GAP` |
+| 集中导入作业是否完成且等价 | 无 | 无 | `GAP` |
+| 导入后冷算相位是否安静 | 无 | 有（`hot` 轮前 `wait_quiet`） | `NOT_JUDGED` |
+| 已知空数据接口是否标注 | 无 | 无 | `GAP` |
+
+**逐项原因**：`cold` 只判单个 kind 的 `total≤6s`，不判「完成阶段是否全部建成 / HeavyBusy 跳过」；
+`storm` 的 `real_write()` 改的是季节系数（`invalidate('config')`），**不触发 CSV 导入 / eval_kick /
+purchase_alerts / data_freshness**；seed 的作业判据在 `seed_preflight.py`，按 §9.2 明确不进 `TH`；
+`hot` 的 `wait_quiet` 超时既不判 FAIL 也不跳轮，正是 §9.7 第 3 轮 1703ms 被误判的来源。
+
+> `selftest` 已反证：注入一个 `materialize_gen_ok` 判据键后覆盖态真的从 GAP 变为有判据
+> （不是恒 GAP），且 `chk(False)` 确实计红。**门禁本身可信**。
+
+### 10.4 物化重建 / 评估联动：能达标，但不是自保证
+
+| 任务 | 机制 | 达标证据 | 缺口 |
+|---|---|---|---|
+| 物化重建（repl/purchase/disposal） | M1+M3+M4：`ensure_async` → `submit_background` 单飞 → `heavy(global_=True)` | §3 冷算本体 `total` 2.1/2.1/3.0s ≤ `cold_total` 6s；真首建 2.3~2.6s ≤ 8s | **当时**全局名额 2，抢不到 → `HeavyBusy` 本轮跳过 + 2s 冷却，不排队、不自动重试，补建靠「下一次读请求」；不打开页面就停在旧 gen。**§11 P0 已改为 `drain_pending()` 有界补建自愈** |
+| 判定模型 / 自有仓 | `unit_store` / `own_store` 同源域计数 + 后台重建 | `unit_store` 25.9s / 17 万单元，旧 gen 继续服务 | 同一轮联动里也要抢名额，是 RU 大头（§8.6） |
+| 评估联动 | `kick_eval_task` 事件驱动 + `_KICK_LOCK` 单线程 + `_MAX_SEGMENTS=60` + `continue_tasks` 60s 兜底 | 导入 done 即联动，冻结也不丢任务 | 多批导入 `_eval` 任务**串行排队**；实例冻结时靠 60s 兜底，可能延迟而非即时 |
+| 采购需求 / 新鲜度 | `kick_purchase_alerts` / `data_freshness` upsert | done 分支写，只有真写完才记账 | 三条链各自起线程，集中导入时叠加 |
+
+**结论**：单次冷算耗时与读接口稳态**达标**；「完成阶段是否全部建成 / 评估是否跑完」这类
+**作业级达标当前无判据、也无自保证**，靠兜底与下一次读请求收敛。
+
+### 10.5 补齐方案：第四类「作业/联动」判据（不进 `run.py` 的 `TH`）
+
+沿用 §9.2 纪律：接口稳态判据留在 `TH`；**作业与联动判据独立**，不污染页面表与 `complete()`。
+
+| 判据 | 阈值 | 取证 | 落地 |
+|---|---|---|---|
+| 集中导入作业完成且等价 | `status=done`、行数对账、四维键重复组 0、0 次重灌 | `sync_tasks` + 索引点查键集合 | `import_smoke.py verify` |
+| 物化集中重建全部建成 | 所有 kind 的 `head.gen` 推进、`fp_match=true`、`HeavyBusy` 跳过数可核 | `list_head` / `unit_state_head` / `quality_logs` 最近 500 行 | `import_smoke.py verify` |
+| 评估联动完成 | `_eval` 任务非 running（done / 兜底接上），新鲜度/租约未僵死（红线 15） | `sync_tasks` 最近 12 条 | `import_smoke.py run` 末尾轮询 |
+| 告警生成增量 | 已知恒空接口显式白名单，不算 `incomplete` | `alerts` 计数 | `import_smoke.py verify` + 建议给 `_judge_hot` 加白名单 |
+| 相位安静前置 | `hot` 前 `phase_now().busy==0`（§9.7 实测 151s），超时跳轮而非判 FAIL | `heavy_slot` | **§11 已落地**：`scenes.hot` 跳轮 + `skipped_rounds` 留痕 |
+| 已知空接口白名单 | `alerts` 恒空在判据里标注，不混入 `storm_incomplete` | `endpoints.py` | **§11 已落地**：`KNOWN_EMPTY` 唯一真源 + `complete()` 只对合法空形状豁免 |
+
+**新增场景 S6（集中导入）暂不跑**：`storm` 的轻写不能替代 CSV 导入；真要纳入基准，
+应复用 `import_smoke.py` 的小批量拟真批次，判「0×503 / 0 条不完整 / 单请求 <10s」，
+**不判 p50**（红线 17）。
+
+### 10.6 100 万单 / 10000 SKU 复核（只用线上实测系数）
+
+`pipeline_probe.py predict` 用 §9.7 的 `orders=446,974 / 10000 SKU·渠道 / 90 天` 外推，
+对照 11-08 的 `predict_scale.json`（5000 SKU / 100 万单）：
+
+| 项 | 当前实测 | 100 万单 / 10000 SKU | 判据 |
+|---|---|---|---|
+| 订单 / SKU·天 λ | 0.497 | 1.111 | 泊松覆盖率 0.111 → 0.671 |
+| 日销快照行数 | ≈20 万（两渠道） | ≈603,726（×3.02） | — |
+| 日销三窗口全量重建 | `agg_incremental` 110.6s | **≈334s**（11-08 预测 444s） | > 180s 函数上限 → **单次站不住** |
+| seed 订单段 / 全程 | 262.7s / 21.1 分钟 | ≈588s / 上界 ≈1631s | 靠 20 段 / 36 窗口接力 → **架构站得住** |
+| repl/purchase/disposal build | 2.1 / 2.1 / 3.0s | SKU 不放大（=10000） | ≤ `cold_total` 6s → **读接口站得住** |
+| `hot` 稳态 | p50 42ms / p95 449ms | 与 SKU 量级线性 | ≤ 800/1500ms → **站得住** |
+
+**结论**：昨天的预测结论仍成立且更精确 —— 瓶颈是**长作业与联动轮数**，不是读接口；
+100 万单 / 10000 SKU 不会击穿 §3 稳态基准，但会击穿「单次全量重建」的调用上限。
+前提是**别把续跑改成单次全量**。
+
+### 10.7 线上小批量拟真冒烟规范（只跑一次）
+
+- **数据拟真**：CSV 按 `routes/seed_import.py spec()` 的中文表头，从线上**真实业务行**取样后
+  **原样回导**（`conflict=overwrite` / 四维键 upsert 幂等）→ 走完整前端导入链路但
+  **零业务数据变化**；不凭空造数、不导大批量、不累加流水（避开 inbound/outbound 的 sum）。
+- **批次**：同步 5 类 × 5 行（order / inventory / product / supplier / gmv_flow，覆盖 jd + other）
+  + 异步 1 类 × 1000 行（order / other，走 `/cleansing/status` 接力）= **6 批 / 1025 行**。
+- **鉴权**：新空库 `users` 0 行，admin 登录不可用 → 从 EdgeOne Production env 现取
+  `JWT_SECRET`（不落盘/不回显），`routes.common.create_token("admin")` 本地签发（零 RU）。
+- **RU 纪律**：总行数 ≤1500、批数 ≤6、串行提交；跑前跑后只读取证，不跑
+  `storm`/`cold`/`first`/多轮 `hot`；`out/import_smoke_last.json` 30 分钟防重（红线：只跑一次）。
+- **判据**：四维（准确=键重复组 0 / 完整=行数对账 / 实时=dv 收敛 / 可靠=0×5xx、无降级头）
+  + 联动（物化 gen、评估任务状态、HeavyBusy 留痕、alerts 增量）。
+
+### 10.8 复跑命令
+
+```bash
+# 零 RU 结构/代码验证（可反复）
+python3 scripts/perf/pipeline_probe.py check            # 40 项链路/机制门禁（§11 后）
+python3 scripts/perf/pipeline_probe.py coverage       # 0/6 未覆盖（§11 后拦得住）
+python3 scripts/perf/pipeline_probe.py findings       # 7 项优化点 → 业务映射
+python3 scripts/perf/pipeline_probe.py simulate --batches 8 --types 4
+python3 scripts/perf/pipeline_probe.py predict       # 100 万单复核
+python3 scripts/perf/pipeline_probe.py selftest      # 反证：门禁能报红
+python3 scripts/perf/pipeline_probe.py check --db    # 追加只读 DB 状态（约 10 SELECT）
+
+# 线上小批量拟真冒烟（**只跑一次**，plan 零写可反复）
+python3 scripts/perf/import_smoke.py plan
+python3 scripts/perf/import_smoke.py run
+python3 scripts/perf/import_smoke.py verify
+
+# 优化后结构/代码验证（§11，零 RU、不重跑 seed、不连线上）
+python3 scripts/perf/converge_probe.py all            # 85 项 + 反证 + 历史取证
+```
+
+### 10.9 线上小批量拟真冒烟实测（2026-11-09 13:17，只跑一次）
+
+**执行**：6 批 / **1025 行** / 2 渠道（jd + other）/ 5 类型。CSV 按 `spec()` 中文表头从线上
+真实业务行取样后原样回导（`conflict=overwrite`）。**未重跑 seed、未跑 storm/cold/first、
+未导第二次数据**；admin token 用线上 `JWT_SECRET` 本地签发（零 RU、不写 users）。
+
+| 批 | 类型 / 渠道 | 行数 | 模式 | 结果 |
+|---|---|---:|---|---|
+| 1 | order / jd | 5 | 同步 | HTTP 200 · success 5 / failed 0 |
+| 2 | inventory / jd | 5 | 同步 | HTTP 200 · success 5 / failed 0 |
+| 3 | product / other | 5 | 同步 | HTTP 200 · success 5 / failed 0 |
+| 4 | supplier / other | 5 | 同步 | HTTP 200 · success 5 / failed 0 |
+| 5 | gmv_flow / jd | 5 | 同步 | HTTP 200 · **success 0 / failed 5（1062，见下）** |
+| 6 | order / other | 1000 | **异步接力** | HTTP 200 → 1 次 `status` 调用即 `done` · success 1000 / failed 0 |
+
+**数据四维**：
+
+| 维 | 结果 |
+|---|---|
+| 准确 | 5 张源表（orders 446,974 / inventory 170,200 / products 20,000 / suppliers 20 / gmv_flows 885）**行数变化全为 0** —— 原样回导幂等，零业务数据变化；告警重复组最大 c=2 且分属 `__BC__`/`集货仓` 两仓，**合法**非重复缺陷 |
+| 完整 | 异步 1000 行 `success=1000`；评估任务 8 条（4 cleansing + 4 cleansing_eval）**全部 done**，无僵死 running（红线 15） |
+| 实时 | `data_version` 78→88（6 批失效 + 联动），跑完 4 个只读 GET **88→88 稳定**（红线 19 在集中导入后同样成立） |
+| 可靠 | 0 个 5xx / 0 个 503 / `X-App-Degraded` 全程缺席 / `health db:ok` |
+
+**联动实证（本节最关键，回答「基准拦不拦得住」）**：
+
+- `quality_logs` 近期 **11 条 `HeavyBusy`**（13:16:26~13:18:14），被跳过的类别逐一可点名：
+  `list:repl` / `list:purchase` / `list:disposal` / `list:dmat:dash_aux`，且带
+  「同源 10s 内 ×2/×3/×4 次」合并留痕 —— **6 类重建争 2 个全局名额**在真实导入中复现。
+- `list_head` gen：disposal 27→**28**、purchase 43→**44**、**repl 40→40 未推进**
+  （`built_at` 停在 12:43:25，即导入前）；`unit_state_head` gen **14 未变**（built 12:43:26）。
+  → 部分物化确实**没有被补建**，读侧要靠「下一次读请求」才触发（不脏，但退化为现算）。
+- `heavy_slot` 跑完瞬间 2 张全占，13:18:12 后全部释放（租约回收生效）。
+- **评估联动达标**：`kick_eval_task` 事件驱动 + 兜底把任务推到 done，`alerts` 由 0 生成，
+  类型分布 `low_stock 1976 / purchase_need 1374 / own_overstock 1001 / own_transfer_gap 845 /
+  own_expiry_risk 69 / oversell 45`。
+- ⚠️ **告警在收敛期持续增长**：13:18:20 取数 1419 → 13:19+ 5258 → 13:20+ 10230
+  → 13:26 **22072**。说明「N 批导入 = N 轮全量评估」的成本是真实的，且
+  **告警生成增量不能取瞬时值**。587 组按 `(channel,sku,barcode,alert_type)` 聚合的
+  多行经抽样是不同仓，判为合法。这一项在现有 `TH` 里**完全没有判据**（覆盖矩阵 `GAP`）。
+- **13:26 终态（跑完约 9 分钟）**：`health db:ok`、`dv=88` 稳定、`running_tasks=0`，
+  但 **`repl` 物化 gen 仍为 40（始终未补建）**、`heavy_slot` 仍有 1 张占用、
+  `alerts=22072`。→ 「物化补建靠下一次读请求、不是自保证」由推演变为**确定性实证**：
+  不停摆、不脏读，但物化会停在导入前版本直到有人打开补货建议页。联动收敛时间明显
+  长于导入本身，是集中导入的真实 RU 成本（对应 §10.5 的 P0 / P2）。
+  本轮按红线**未做任何清理、删除或业务逻辑改动**。
+
+**两处如实保留的观察项（非本轮引入）**：
+
+1. `gmv_flow` 5 行 `(1062, Duplicate entry '?' for key 'gmv_flows.uq_platform_flow_ch')`：
+   该 target 写入层**无 upsert**（§15.187 已记「保留 dup-check 拦截」）。首跑脚本带了
+   `force_new=1` 绕过前端 dup-check，才暴露同键回导 1062；5 行全失败、行数不变。
+   已修 `import_smoke.py` 的 PLAN 去掉该参数，使后续复跑与前端一致（**本次不重跑**）。
+2. 告警在评估收敛期的持续增长与重复评估，属「联动轮数」成本；建议后续在评估侧做
+   按批合并 / 幂等去重，**本轮按红线只验证、不改业务逻辑**。
+
+**结论与 100 万单预测的对应**：小批量导入单批（≤1000 行）在同步秒级 / 异步 1 次接力内完成，
+读接口稳态未被击穿（0×5xx、`dv` 收敛）；**真正出问题的是联动层**（名额争抢、物化未补建、
+评估重复轮次），与 §10.6 外推一致 —— 规模放大到 100 万单不会先压垮读接口，
+而会先放大「联动轮数 × 每轮 6 类重建」与「单次全量长作业」。
+
+---
+
+## 11. 尾巴根治收敛（2026-11-09，§15.189）
+
+> 起因：§10 把一次全程 + 小批量拟真冒烟暴露的尾巴整理成了方案，但按红线
+> **只验证、未改业务逻辑**。本轮用户要求「对测试出来的尾巴、可优化点做次根治收敛，
+> 注意优化原则含数据 4 维，红线依旧；**seed 优化完也不重跑，但可以写脚本测试
+> 优化后的结构/代码**」。
+>
+> 结论：**改了业务逻辑，但一次都没重跑 seed、没导数据、没连线上压测、没部署**。
+> 达标性由 `scripts/perf/converge_probe.py`（零 RU、85 项 + 反证）与既有门禁证明。
+> 仅本地提交、未推送（§8.6 止血纪律：推送会触发重新部署打断稳态 / 引入额外冷算 RU）。
+
+### 11.1 逐条尾巴 → 根治 / 如实收口
+
+| # | 尾巴（§10 实证） | 本轮动作 | 数据四维 | 红线 |
+|---|---|---|---|---|
+| **P0-1** | `HeavyBusy` 跳过后**无后台重试**，`repl` gen 停在 40 直到有人打开补货建议页（13:26 终态确定性实证） | **根治**：`list_store.drain_pending()` 以 `list_head.fp` 落后这一 **DB 持久事实**为「待补建」真源，有界补建，投进**同一个** `submit_background`；挂 `index.py` 已有的 60s 请求驱动线程 | 准确/完整不退化（旧 gen 完整可读、`build` 同源 + 发布前 COUNT 自校验）；实时改善（主动追平 fp）；可靠（有界 + 留痕 + 降级放行） | 2/4/5/6/15/19 |
+| **P0-2** | 作业级「是否全部建成」无判据 | **根治**：`import_smoke.judge_evidence` 判 `materialize_gen_ok`（所有 kind gen 推进）；`list_store.status()` 暴露 `drain` 有界参数与 `fp_match` | — | 17（不判 p50） |
+| **P1** | seed 每窗口 `invalidate("all")` ×36 → 36 轮全链路重建、缓存恒冷 | **根治**：中间步改 `analysis_cache.mark_progress()`（只 bump `data_version`，零墓碑 / 零域计数 / 零重建），**完成步仍全量失效** | 准确（中间态不发布更正确）；完整不变；实时（完成即失效）；可靠（少 35 轮 RU） | 2/19 |
+| **P3** | `coverage` 6/6 联动节点无判据 → 拦不住 | **根治**：第四类「作业/联动」判据独立落地（**不进 `TH`**，§9.2 纪律）；覆盖矩阵判据层扩到 `run.py + import_smoke + endpoints`，实测 **0/6 未覆盖（拦得住）** | — | 17 |
+| **P5-1** | `alerts` 恒空被算 `incomplete`（§9.7 22 条误报） | **根治**：`endpoints.KNOWN_EMPTY = {alerts}`，`complete()` 只对**合法空形状**豁免；响应形状不对仍判失败 | 完整（「真的是 0」与「没算成」可分） | 8① |
+| **P5-2** | 导入后冷算相位把 hot 第 3 轮 p95 1703ms 误判成性能退化 | **根治**：`scenes.hot` 相位未静默 → **跳轮** + `skipped_rounds` 留痕；`run._judge_hot` 对空有效轮判 FAIL，空 rounds 有 dispersion 保护 | — | 17 |
+| **P2** | 告警 1419→5258→10230→22072、N 批 = N 轮全量评估 | **判据收敛**：`alert_delta_ok` 只判「已生成」，**不取瞬时值**（收敛期增长是评估分片续跑，写入是幂等 upsert）。业务侧评估链**不改**，理由见 §11.5 | 准确（幂等 upsert，非脏数据） | 1 |
+| gmv_flow | 5 行 `1062`（无 upsert 撞 `uq_platform_flow_ch`） | **如实收口**：后端无 upsert 是「流水不可重复」的刻意保护，前端 dup-check 拦截；改 upsert 会静默掩盖重复流水（损准确维）。脚本已去掉 `force_new=1`，与前端一致 | 准确 | 1 |
+| available_balanced | seed 终态差额 jd 10057 / other 10062 行 | **如实收口**：数据质量断言的边界，非接口/联动缺陷；因不重跑 seed 不改生成逻辑，判据里显式标注 | — | 7 |
+
+### 11.2 P0 设计：为什么不会退化 4 维、不会叠加
+
+「待补建」不新增表、不新增进程内队列，而是复用 **`list_head` 里 fp 已落后于当前
+数据版本、且 `gen>0` 的 head 行** —— 这是 DB 持久事实，实例冻结 / 重启 / 跨实例
+都不丢，正好绕开 §10.9「HeavyBusy 只留痕不重试」的死胡同。
+
+- **替换而非叠加**（红线 2）：`drain_pending()` 只是 `submit_background` 的**新触发入口**，
+  最终仍走 `heavy(global_=True)` → `build()`，与读侧冷态、写侧 `invalidate` 逐字同路径；
+  原 `ensure_async` / `serve` / `_cold_worker` 一字未删。不自建名额、不新起调度线程。
+- **读路径不做全量**（红线 6）：补建挂在 `index.py` 已有的 60s 请求驱动 daemon 线程，
+  `serve()` 里没有 `drain_pending`；读请求仍立即返回上一版完整物化 + `__swr`。
+- **不自我失效**（红线 19）：`build()` 只写物化快照、切 head，不调 `invalidate`。
+- **有界**（红线 15）：`_DRAIN_GAP=8s` 全局间隔 + `_DRAIN_SCOPE_COOL=12s` 单 scope 冷却
+  + `_DRAIN_LIMIT=3` 单轮上限 + `submit_background` 自带 `_FLIGHT_TTL`/`_BUSY_UNTIL` 单飞；
+  抢不到名额只留痕不重试，绝不自旋烧 RU。扫描异常降级放行并 `try_err`，治理手段
+  不变成新的不可用来源。
+- **4 维**：旧 gen 在补建完成前完整服务（准确 / 完整不退化），`build()` 发布前 COUNT
+  自校验 + fp 读写同源（不引入第二套算法），补建后 fp 追平（实时改善）。
+- `unit_state_head` / `own_health_head` 同源收编：确有物化落后时，有界触发各自
+  `ensure_async()`（内部按 `head.fp` 判 fresh + 单飞去重，不白算全量），不自己算 fp
+  以避开 mode 归一漂移（红线 16）。
+
+### 11.3 验证（全部零 RU / 不重跑）
+
+| 脚本 / 门禁 | 结果 |
+|---|---|
+| `converge_probe.py check` | **77 项 PASS**：AST 判 P0 补建自愈、P1 合并失效、P3/P5 判据、4 维不退化、红线 1/2/4/5/6/7/14/15/17/19 |
+| `converge_probe.py selftest` | **8 项 PASS**：`chk(False)` 计红、移除 `drain_pending` 后 AST 找不到、AST 不数注释里的 `invalidate("all")`、判据「repl 未推进→FAIL / 推进→PASS」双向反证、白名单不放宽其它接口 |
+| `converge_probe.py evidence` | 用 **13:17 唯一一次**历史取证喂第四类判据：`materialize_gen_ok` **报红**（repl 40→40），其余 5 项 PASS → 反证判据真能拦住 §10.9 的缺口；**未重跑导入** |
+| `pipeline_probe.py check / selftest / coverage` | **40 项 PASS** / 反证 PASS / **0/6 未覆盖（拦得住）** |
+| `preflight.sh --skip-sql-smoke` | **八步全绿**：Python 3.10 语法、pyflakes、`local_test.py` **860/0**、ESLint、Prettier、tsc、vitest **46/46**、i18n（1442/1442 键） |
+| 结构推演 | 全链路联动轮数 **37 → 1**（整数计数，红线 7 不产任何 Xms/Xs 结论） |
+
+**判据自身的一处真实修正**：`import_equivalent` 初版把 `alerts` 也算进「源表」对账，
+历史取证反证立刻报红 —— 告警是评估派生表，收敛期必然增长。已改为只对
+`orders/inventory/products/suppliers/gmv_flows` 五张源表判等价，历史取证随之转 PASS。
+这正是「反证」的价值：门禁不是恒绿。
+
+### 11.4 复跑命令（零 RU，可反复）
+
+```bash
+python3 scripts/perf/converge_probe.py all          # 85 项 + 反证 + 历史取证
+python3 scripts/perf/converge_probe.py check        # 优化后结构/代码门禁
+python3 scripts/perf/converge_probe.py evidence     # 历史取证 → 第四类判据（不重跑）
+python3 scripts/perf/pipeline_probe.py check        # 40 项链路门禁
+python3 scripts/perf/pipeline_probe.py coverage     # 0/6 未覆盖
+python3 scripts/perf/pipeline_probe.py selftest     # 反证
+```
+
+### 11.5 边界（如实，不掩饰）
+
+- **线上未部署**：本轮全部是本地代码 + 本地验证，**没有线上同口径复测**（红线 7）。
+  因此不下「快了多少」的结论，也不声称线上已生效；要生效需另行走 `push_api.py` 部署并
+  按 §8.5 顺序验证。
+- **serverless 固有边界**：站点完全无流量时没有请求驱动，补建不推进；只要有任意请求
+  （含 `/health` 保活），每 60s 就驱动一次。此时也没人在看数据，不算退化。
+- **P2 业务侧未改**：评估链涉及库存重算、告警生命周期、任务租约与分片，是核心业务；
+  告警写入 `alert_lifecycle.open_or_reopen` 是**幂等 upsert**（`uq_alerts_dim`），
+  收敛期增长 ≠ 脏数据。按红线 1「不理解就动 = 叠加」与 4 维约束，本轮只在判据侧根治
+  「不取瞬时值」；按批合并 `eval_queue` 的方案保留为可选项，未实施。
+- **gmv_flow / available_balanced 未改**：理由见 §11.1；前者改 upsert 会掩盖重复流水，
+  后者需重跑 seed 才能验证，均超出本轮「不重跑」的授权边界。

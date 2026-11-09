@@ -53,9 +53,20 @@ def hot(keys=None, readers=8, secs=15, rounds=5, gap=15.0, quiet=True):
     """
     keys = keys or CORE
     out = {"mode": "hot", "readers": readers, "secs": secs, "rounds": [],
-           "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+           "skipped_rounds": [], "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
     for i in range(1, rounds + 1):
         ph = K.wait_quiet(60) if quiet else K.phase_now()
+        # §15.189 P5: 相位未静默(仍有重建在跑) → **跳轮**, 不把导入后冷算相位
+        #   混进纯读判据。§9.7 第 3 轮 p95 1703ms 正是冷算相位被误判成性能退化;
+        #   红线 17 要求「快了多少」只能用纯读 + 静默相位。跳轮显式留痕, 不静默丢弃。
+        if quiet and not ph.get("ok"):
+            out["skipped_rounds"].append(
+                {"round": i, "reason": "phase_not_quiet", "phase": ph})
+            print("[hot %d/%d] 跳过: 相位未静默(busy=%s age=%s), 本轮不计入判据"
+                  % (i, rounds, ph.get("busy"), ph.get("age")), flush=True)
+            if i < rounds:
+                time.sleep(gap)
+            continue
         stop = threading.Event()
         hits = []
         lock = threading.Lock()
@@ -90,6 +101,11 @@ def hot(keys=None, readers=8, secs=15, rounds=5, gap=15.0, quiet=True):
 
     for f in ("srv_p50", "srv_p95"):
         vals = [r[f] for r in out["rounds"]]
+        # §15.189 P5: 全部跳轮时 vals 为空 —— 不能 IndexError, 也不能伪造 dispersion
+        if not vals:
+            out.setdefault("dispersion", {})[f] = {
+                "vals": [], "median": None, "cv": None, "range_ratio": None}
+            continue
         out.setdefault("dispersion", {})[f] = {
             "vals": vals, "median": sorted(vals)[len(vals) // 2],
             "cv": K.cv(vals), "range_ratio": round(max(vals) / min(vals), 2) if min(vals) else None}

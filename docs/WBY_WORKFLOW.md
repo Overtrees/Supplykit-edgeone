@@ -33,7 +33,7 @@
    不同，SHA 必然不同，这是预期不是失败。
 3. **`deploy_status.py` 只需要 `EDGEONE_PAGES_API_TOKEN` + ProjectId**，不需要腾讯云 SecretId/SecretKey
    （这一点曾误判，已纠正）。构建 2~2.5 分钟；连不上先跑 `scripts/env_check.py`。
-4. **门禁是 `bash scripts/preflight.sh` 八步**（回归 681 / SQL 冒烟 / lint / tsc / vitest / i18n），
+4. **门禁是 `bash scripts/preflight.sh` 八步**（回归 860 / SQL 冒烟 / lint / tsc / vitest / i18n），
    不是本文旧版列的三条手工命令 —— 手工命令只用于门禁没覆盖的临时脚本。
 
 ---
