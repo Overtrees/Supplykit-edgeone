@@ -2848,3 +2848,35 @@ button:focus-visible:active,
     outline: 3px solid Highlight !important;
   }
 }
+
+/* 服务降级全局横幅(2026-11-09): DB 不可用时业务接口仍返回 200 + 全 0 空壳,
+   用常驻横幅把「降级」与「没有数据」区分开。作为文档流首块自然下推内容,
+   不用 fixed 遮挡 header; 高对比度模式下跟随系统色, 不依赖项目主题变量。 */
+.app-degraded-banner {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 18px;
+  background: #b42318;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.app-degraded-banner strong {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.app-degraded-banner span {
+  opacity: 0.94;
+}
+@media (forced-colors: active) {
+  .app-degraded-banner {
+    background: Canvas;
+    color: CanvasText;
+    border-bottom: 2px solid Highlight;
+  }
+}

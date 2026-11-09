@@ -1503,4 +1503,8 @@ export const zh: Record<string, string> = {
   'task.win_clean': '清洗写入窗口 {n}/{m}',
   'task.eval_prep': '评估联动准备',
   'task.eval_seg': '评估分片 {n}/{m}',
+  // ---- 服务降级横幅(2026-11-09, DB 不可用时替代「静默全 0 空壳」) ----
+  'app.degraded_title': '服务降级',
+  'app.degraded_desc': '数据库暂时不可用，当前展示的数字可能不是真实数据，请稍后刷新或联系管理员。',
+  'login.db_unavailable': '服务暂时不可用，请稍后重试',
 }

@@ -166,6 +166,10 @@ _TABLES = {
         "warehouse VARCHAR(64) DEFAULT '', warehouse_type VARCHAR(20) DEFAULT '', "
         "channel VARCHAR(20) DEFAULT 'jd', prod_date VARCHAR(32) DEFAULT '', "
         "exp_date VARCHAR(32) DEFAULT '', qty INT DEFAULT 0, "
+        # 2026-11-09: 新库 DDL 直接含 barcode —— _COLUMN_ADDS 里的同名列只服务存量表,
+        #   而 _ADD_INDEXES 的 idx_batches_sku_bc(sku,barcode) 依赖它。声明自洽,
+        #   不再靠"补列恰好先跑"来兜底(存量表 CREATE IF NOT EXISTS 不受影响)。
+        "barcode VARCHAR(64) DEFAULT '', "
         "KEY idx_batches_sku (sku), KEY idx_batches_wh (warehouse_type, sku))"
     ),
     "data_freshness": (
@@ -857,12 +861,6 @@ def table_ddl(name):
 def create_all_tables():
     """幂等建全表(新集群空库引导; 失败单表降级不阻塞)"""
     from routes.common import try_err, log_info
-    # 2026-10-30 渠道种子(幂等): 存量库补登记 jd/other, 语义与旧硬编码完全一致
-    try:
-        execute("INSERT IGNORE INTO channels(code,name,enabled,supports_b,default_mode,sort) VALUES"
-                "('jd','京东渠道',1,1,'bbcc',1),('other','其他渠道',1,0,'traditional',2)")
-    except Exception as _ec:
-        try_err('schema', '渠道种子写入降级', _ec)
     ok_n = 0
     _failed = []
     for name, ddl in _TABLES.items():
@@ -872,6 +870,16 @@ def create_all_tables():
         except Exception as e:
             try_err('schema', '建表失败 %s' % name, e)
             _failed.append(name)
+    # 2026-10-30 渠道种子(幂等): 存量库补登记 jd/other, 语义与旧硬编码完全一致
+    # 2026-11-09 新库首建修复: 必须放在 **全表建完之后**。原位置在 _TABLES 循环之前 ——
+    #   空库里 channels 表尚不存在, INSERT 直接失败; 而 try_err 想写的 quality_logs 也还没建,
+    #   于是「双重静默」: 新集群渠道配置永远为空, 只能靠 common.ch_list 的硬编码兜底,
+    #   用户在渠道页看到的是兜底值而不是库里真实配置(改配置也无法持久化)。
+    try:
+        execute("INSERT IGNORE INTO channels(code,name,enabled,supports_b,default_mode,sort) VALUES"
+                "('jd','京东渠道',1,1,'bbcc',1),('other','其他渠道',1,0,'traditional',2)")
+    except Exception as _ec:
+        try_err('schema', '渠道种子写入降级', _ec)
     # 2026-11-02 S2-5 订单业务键: 旧键 uq_orders_no_sku(order_no, sku) → 新键
     #   uq_orders_biz(channel, order_no, sku, barcode) —— 四维, 与写入层 upsert / 查重口径同一套。
     #
@@ -1099,24 +1107,11 @@ def ensure_schema():
     except Exception as _e1:
         _errors.append("create_all_tables 异常: %s" % _e1)
         try_err('schema', 'create_all_tables 降级', _e1)
-    for _iname, _tbl, _cols in _INDEXES:
-        try:
-            _e("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
-        except Exception as _e2:
-            _errors.append("索引 %s: %s" % (_iname, _e2))
-            try_err('schema', '索引降级 %s' % _iname, _e2)
-    for _iname2, _itbl2, _icols2 in _ADD_INDEXES:
-        try:
-            _e("ALTER TABLE `%s` ADD INDEX `%s` %s" % (_itbl2, _iname2, _icols2))
-        except Exception as _e3:
-            # 已存在(重复报错)不算失败 —— 与旧启动"忽略重复"语义一致
-            if "Duplicate key name" not in str(_e3):
-                _errors.append("补索引 %s: %s" % (_iname2, _e3))
-    for _iname3, _itbl3 in _DROP_INDEXES:
-        try:
-            _e("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname3, _itbl3))
-        except Exception as _e4:
-            _errors.append("删索引 %s: %s" % (_iname3, _e4))
+    # 2026-11-09 新库首建修复(顺序): **补列必须先于建索引**。
+    #   原顺序是「建表 → 建索引 → 补列」, 而 _ADD_INDEXES 的 idx_batches_sku_bc(sku,barcode)
+    #   引用 _COLUMN_ADDS 补出来的 batches.barcode —— 存量库早有该列所以从没暴露;
+    #   空库首建时列还没补, ALTER 报 1072 column does not exist → 记进 _errors →
+    #   schema 版本永不写入 → 每次冷启动重跑全量 DDL(实测 86s)。
     # 补列(统一声明 _COLUMN_ADDS): 每表一次 SHOW COLUMNS, 缺才 ALTER
     try:
         from db import query as _qc9
@@ -1136,6 +1131,31 @@ def ensure_schema():
                         _errors.append("补列 %s.%s: %s" % (_t, _c, _e9))
     except Exception as _e9b:
         try_err('schema', '补列统一执行降级', _e9b)
+    # 2026-11-09 联动自举: 全局数据版本行。空表时写路径 UPDATE ... WHERE id=1 影响 0 行,
+    #   数据版本永不递增 → 失效机制瘫痪。INSERT IGNORE 幂等, 存量库不受影响。
+    try:
+        _e("INSERT IGNORE INTO data_version(id, v) VALUES(1, 0)")
+    except Exception as _edv:
+        _errors.append("data_version 初始行: %s" % _edv)
+    for _iname, _tbl, _cols in _INDEXES:
+        try:
+            _e("CREATE INDEX IF NOT EXISTS `%s` ON `%s` (%s)" % (_iname, _tbl, _cols))
+        except Exception as _e2:
+            _errors.append("索引 %s: %s" % (_iname, _e2))
+            try_err('schema', '索引降级 %s' % _iname, _e2)
+    for _iname2, _itbl2, _icols2 in _ADD_INDEXES:
+        try:
+            _e("ALTER TABLE `%s` ADD INDEX `%s` %s" % (_itbl2, _iname2, _icols2))
+        except Exception as _e3:
+            # 已存在(重复报错)不算失败 —— 与旧启动"忽略重复"语义一致
+            if "Duplicate key name" not in str(_e3):
+                _errors.append("补索引 %s: %s" % (_iname2, _e3))
+    for _iname3, _itbl3 in _DROP_INDEXES:
+        try:
+            _e("DROP INDEX IF EXISTS `%s` ON `%s`" % (_iname3, _itbl3))
+        except Exception as _e4:
+            _errors.append("删索引 %s: %s" % (_iname3, _e4))
+    # 补列已前移到建索引之前(2026-11-09 新库首建修复), 见上方 _COLUMN_ADDS 段。
     # ④ 存量数据类步骤(有序, 只跑未登记的): 2026-11-04 S3-5 从本函数的内联段迁出。
     #    失败不阻断后续, 也不写版本 → 下次冷启动重试。见 migrations/runner.py
     try:

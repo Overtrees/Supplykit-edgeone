@@ -24,6 +24,9 @@ python3 scripts/perf/run.py hot --pages dash --rounds 5      # 改后
 
 # 我要确认没把系统压挂（含写）
 SUPPLY_USER=admin SUPPLY_PASS=*** python3 scripts/perf/run.py storm --scene S5
+
+# 接口报异常 / 登录报 OperationalError / 怀疑 DB 挂了 → 只读冒烟判失败面
+python3 scripts/perf/smoke.py                       # 见 §8
 ```
 
 三个数字就能定位问题：**p50 高 → 读侧没走物化/SWR**；**p95 高 → 撞重建窗口或 TiDB 排队**；
@@ -283,3 +286,131 @@ p50 与 p95 几乎相等（1,093/1,093）说明是稳定的计算成本，不是
 | 极端场景 p95 超 1.5s | 容量问题，非缺陷 | 用户感知慢 | 减重算量（唯一解） |
 | 100 万订单 | 日销三窗口 222~444s > 120s 函数上限 | 只能靠续跑 | 预聚合 / 下推 |
 | TiDB 侧争抢 | 7 个域重建打同一个库 | 尾部延迟由 DB 决定 | 域依赖图，只重建受影响域 |
+
+---
+
+## 8. 故障排查：TiDB Starter 额度耗尽（`1105`）
+
+> 这是**基础设施故障**，不是性能退化。判据 §1 与压测脚本在这里全部不适用：
+> 不要跑 `hot` / `storm`，不要下任何延迟结论。目标是**判定失败面 + 恢复**。
+
+### 8.1 根因与规则（TiDB Cloud Starter 官方口径）
+
+| 项 | 规则 |
+|---|---|
+| 免费额度 | 每集群每月 **5000 万 RU** + 行存 5 GiB + 列存 5 GiB，**按集群独立**（不按组织/项目共享） |
+| 触顶行为 | **立即拒绝所有新连接**，已建立的连接保留但被限流 |
+| 报错 | `(1105, "Due to the usage quota being exhausted, access to the cluster '<id>' has been restricted...")` |
+| 解除 | ① 提高 spending limit（立即）；② **自然月初自动重置**（不是滚动 30 天） |
+| 顺带 | 设 spending limit > 0 后并发连接上限 400 → 5000 |
+
+官方：[Usage quota](https://docs.pingcap.com/tidbcloud/serverless-limitations#usage-quota) ·
+[Set Spending Limit](https://docs.pingcap.com/tidbcloud/manage-serverless-spend-limit/#update-spending-limit)
+
+### 8.2 30 秒判定（两条命令）
+
+```bash
+# ① 线上探针：status=degraded 且 db 里有 1105 → 额度耗尽
+curl -s https://supplykit.top/api/health | python3 -m json.tool
+
+# ② 直连复核（只发 SELECT 1，≈1 RU）
+python3 -c "import sys;sys.path.insert(0,'cloud-functions/api');\
+from dotenv import load_dotenv;load_dotenv('.env');import db;print(db.one('SELECT 1'))"
+```
+
+**典型症状链**（本次 2026-11-09 实测）：
+
+```
+登录 POST /api/auth/login → HTTP 200 + {"ok":false,"detail":"OperationalError"}
+  （admin 分支要查 users 表；demo 是内置硬编码，不查库，仍可登录）
+→ 拿不到 token → 所有业务接口级联 401「未登录」
+→ health 独立放行，返回 200 + status:degraded + 1105 全文
+```
+
+> **别被 401 骗了**：那不是鉴权坏了，是登录失败的级联。用 `demo/demo123` 拿 token
+> 才能看到接口本身的失败形态。
+
+### 8.3 冒烟：判定失败面
+
+```bash
+python3 scripts/perf/smoke.py            # 只读、串行、零写，DB 挂掉时也能跑
+python3 scripts/perf/smoke.py --base https://xxx   # 换环境
+```
+
+接口清单来自 `endpoints.py`（唯一真源）+ 3 个探活端点。输出分五类：
+
+| 类别 | 含义 | 危险度 |
+|---|---|---|
+| `A:可用` | 不查库（health/ping/auth_check），或确实返回了有效数据 | — |
+| `C:DB失败` | 响应体含 `OperationalError`/`1105`/`quota`（含 `boot` 的嵌套子块） | 明确，易识别 |
+| **`E:静默空壳`** | **HTTP 200 + 业务数据全 0/空**，前端显示「暂无数据」 | **最危险**：用户会以为数据丢了 |
+| `5xx` | 网关/平台错误页（如 `tasks` 未套 `@traced`，异常直接冒泡） | 明确 |
+| `401/403` | 鉴权或访客只读 | — |
+
+**2026-11-09 10:22 实测（28 个接口）**：`A 3 / C 20 / E 4 / 5xx 1`。
+除 3 个探活端点外**全部不可用，且同根因**。
+`E` 四个是 `aux` / `stock_risk` / `unit_state` / `hist_coverage`；
+其中 `hist_coverage` 返回「暂无归档：订单自 - 起」——**DB 查不到被包装成「没有数据」**。
+
+### 8.4 恢复（需要账号权限，代码侧无法代做）
+
+| 优先级 | 做法 | 时效 | 代价 |
+|---|---|---|---|
+| **① 推荐** | TiDB Cloud 控制台 → **My TiDB** → 目标集群 Overview → **Capacity used this month** → **Set Spending Limit / Edit** → 填月度上限 → **Update**（未绑卡需先加信用卡） | **立即** | 按量付费 |
+| ② 等重置 | 什么都不做，等自然月 1 号免费额度归零重计 | 最久 31 天 | 服务不可用 |
+| ③ 换集群 | 新建 Starter 集群（额度独立）→ 改 `.env` **与 EdgeOne 项目 Production env** → **重新部署**（env 是部署时快照）→ `schema_create.ensure_schema()` 建表自举 → 按需导数据 | 小时级 | 新库无业务数据；新集群同样 5000 万 RU/月，会重演 |
+
+上次（2026-10-17）走的是 ③，见 `docs/history/2026-10-06~30.md` §15.63
+（含 `serverless.tidbapi.com/v1beta1` 建集群 API、DoH 绕 DNS 劫持、env 快照等踩坑）。
+
+**2026-11-09 第二批也走了 ③**：附件补齐了可用的 TiDB Cloud API 凭据，新建
+`supplykit-1109`（`10406157977958137320`），改 Production env 并重新部署。
+`ensure_schema()` 在空库上建出 **61 张表** / 索引 / 7 条迁移 / 渠道种子 /
+`data_version` 初始行 / `data_version_dom('schema')` / `schema_state=v26`。
+**按红线不导业务数据、不重跑 seed** —— 新库是干净空库，业务页面空数据为预期，
+要恢复历史数据须你另行导入。空库首建踩到的 2 个 bug 与修法见 §15.186 / 红线 18。
+
+### 8.5 恢复后的验证顺序（别一上来就压测）
+
+```bash
+# 1) 探针转 ok
+curl -s https://supplykit.top/api/health | grep -o '"db":"[^"]*"'
+# 2) 冒烟：A 应≈全部，E/C/5xx 应为 0
+python3 scripts/perf/smoke.py
+# 3) 只读热态 1 轮（确认物化/SWR 已回填，不做延迟结论）
+python3 scripts/perf/run.py hot --rounds 1 --secs 10
+# 4) 需要判「快了多少」时，才跑 5 轮纯读锁相位
+python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
+```
+
+> 部署后 **≥3 分钟**再压测（§15.181：部署完成 2 分钟就打 19 并发出现过 12 个 503）。
+
+### 8.6 止血与预防（避免恢复后秒穿）
+
+- **立刻停**所有压测 / 冷算矩阵 / 反复首建；恢复当天不跑 `storm` / `cold` / `first`。
+- 一次写会触发 **7 个域**重建，`unit_store` 单次约 25.9s / 10 万单元，每次全表扫描 + 写快照，
+  是 RU 大头。历史教训：`docs/SKILL.md`「反复大批量导入验证性能 → 单月烧 60M RU」。
+- 验证用**只读栈**：`scripts/ru_diag.sh`（EXPLAIN ANALYZE，一次 <300 RU）+ 3~10 行小文件冒烟，
+  替代反复大批量导入（3 行 ≈50 RU vs 5000 行 ≈2.5 万 RU）。
+- 控制台看 **Capacity used this month / Top RU**，确认是否有异常高频重建；
+  `quality_logs` 里 `invalidate` / 重建日志同源限频后计数可查。
+- 高频链路保持**索引直达**（§7：多数接口 ≤51 RU/请求，与数据量解耦）；
+  新接口接入前按 §6 清单做 RU 体检。
+
+### 8.7 两个健壮性缺口（2026-11-09 第二批已修并验证）
+
+两者都不是性能问题，属「故障时可观测性」，随新集群迁移一起修完（详见 §15.186）：
+
+| 缺口 | 修法 | 验证 |
+|---|---|---|
+| `E` 静默空壳 | `db.py` 记最近一次**连接/配额类** `OperationalError`（1105/1040/2003…），`index.py` 中间件给该进程后续响应统一打 **`X-App-Degraded: 1`** 头（零额外 RU、不回传异常正文）；前端 `client.ts` 的 axios 通道与 `apiJson` 裸 fetch 通道都读头 → 派发 `app:degraded` → `App.tsx` 常驻横幅，**空壳不写进 30s 缓存**；登录页把 `OperationalError` 换成「服务暂时不可用」 | 旧库（1105）对照：`/auth/login` 与 `/health` 均带 `X-App-Degraded: 1`；新库（正常）均不带 |
+| `tasks` 无 `@traced` | `list_tasks` 补 `@traced`，异常统一走 200 + `request_id`，不再冒泡成 EdgeOne HTML 500 | `local_test.py` 860 通过 / 0 失败；`tsc`/`prettier`/`eslint`/前端 build 全绿 |
+
+> **为什么只走响应头**：`@app.middleware("http")` 是 Starlette `BaseHTTPMiddleware`，
+> `call_next` 返回 `_StreamingResponse`（实测 `media_type=None` / 无 `body` 属性），
+> 响应体不可写；头可写且不碰 `content-length`。语义与 §15.161 的顶层 `__swr` 同款，
+> 前端一处收口。`scripts/perf/smoke.py` 会打 `[DEGRADED]` 标注，**分类判据不变**。
+>
+> **空库注意**：新集群按红线**不导业务数据、不重跑 seed**，业务接口返回空数据是预期。
+> 此时 `smoke.py` 的 `E` 类可能与「DB 挂掉的空壳」混淆 —— 用 `X-App-Degraded` 区分：
+> **带头 = 降级，不带头 = 新库确实没数据**。恢复当天仍不跑 `storm`/`cold`/`first`（§8.6）。

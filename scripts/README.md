@@ -95,6 +95,7 @@ python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale b
 |---|---|
 | `perf/run.py` | **统一入口**: `hot`(快了多少) / `storm`(会不会停摆) / `cold`(重建分段) / `first`(真首建) / `noise`(测量可信度); 判据在文件头 `TH` |
 | `perf/endpoints.py` | 页面→模块→接口→数据来源→机制的唯一真源; `run.py --list-md` 生成 `docs/PERF.md` 的表格 |
+| `perf/smoke.py` | **只读冒烟**：DB 额度耗尽/接口异常时判定失败面（含 200+全 0 的静默空壳）；后端降级时打 `[DEGRADED]`（`X-App-Degraded` 头）；见 `docs/PERF.md` §8 |
 | `perf/scenes.py` `perf/kit.py` | 场景实现 / 登录态与相位工具 |
 
 详见 [`perf/README.md`](perf/README.md) 与 [`docs/PERF.md`](../docs/PERF.md)。

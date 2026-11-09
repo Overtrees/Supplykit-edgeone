@@ -366,7 +366,11 @@ def conn():
     """取连接: 事务内返回事务连接(同事务共享); 否则池取"""
     if getattr(_local, "txn", None) is not None:
         return _local.txn
-    return _acquire()
+    try:
+        return _acquire()
+    except Exception as _ce:
+        mark_db_fail(_ce)
+        raise
 
 
 @contextmanager
@@ -392,6 +396,38 @@ def transaction():
         except Exception:
             pass  # 连接可能已坏 —— 仍要归还名额, 下次 _acquire 的 ping 会重建
         _release(c)
+
+
+# 2026-11-09 统一降级态(缺口一): DB 不可用时业务接口仍返回 200 + 全 0 的「静默空壳」,
+#   用户会误判成「没有数据」而去做无谓的数据恢复。这里记录**最近一次 DB 连接/配额类失败**,
+#   由 index.py 响应中间件给该进程后续响应统一打 __degraded 顶层标记(不查库、零额外 RU)。
+#   只认连接/配额类 OperationalError, 业务 SQL 错误(列不存在/重复键)不算降级, 避免误报横幅。
+_DB_DEGRADED = {"ts": 0.0}
+_DB_DEGRADED_TTL = 120.0
+
+
+def mark_db_fail(exc):
+    try:
+        import pymysql.err as _pe
+        if not isinstance(exc, _pe.OperationalError):
+            return
+        try:
+            code = int(exc.args[0]) if getattr(exc, "args", None) else 0
+        except Exception:
+            code = 0
+        msg = str(exc).lower()
+        if code not in (1105, 1040, 1203, 2002, 2003, 2006, 2013, 9001) \
+                and not any(k in msg for k in ("quota", "restricted", "connection", "timeout")):
+            return
+        import time as _t
+        _DB_DEGRADED["ts"] = _t.time()
+    except Exception:
+        pass
+
+
+def db_degraded():
+    import time as _t
+    return (_t.time() - _DB_DEGRADED["ts"]) < _DB_DEGRADED_TTL
 
 
 def _guard_fmt(sql, params):
@@ -427,6 +463,9 @@ def query(sql, params=None):
         rows = cur.fetchall()
         stats_add("stmt", _t.time() - _ts)
         return rows
+    except Exception as _qe:
+        mark_db_fail(_qe)   # 1105 配额/连接拒绝常发生在 execute 阶段, 不只建连
+        raise
     finally:
         cur.close()
         _release(c)
@@ -445,6 +484,9 @@ def execute(sql, params=None):
     try:
         cur.execute(sql, params or ())
         return cur.rowcount or 0
+    except Exception as _xe:
+        mark_db_fail(_xe)
+        raise
     finally:
         cur.close()
         _release(c)

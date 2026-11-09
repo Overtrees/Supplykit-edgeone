@@ -236,6 +236,17 @@ async def slow_log_middleware(request: Request, next):
             _resp.headers["X-Slow"] = "1"
     except Exception:
         pass
+    # 2026-11-09 统一降级态(缺口一): 近期有 DB 连接/配额失败时, 给所有响应打
+    #   X-App-Degraded 头。**只走响应头** —— BaseHTTPMiddleware 的 call_next 返回的是
+    #   _StreamingResponse(实测 media_type=None / 无 body 属性), 改响应体不可行;
+    #   而头可写, 且不碰 content-length。前端 client.ts / apiJson 两通道一处收口。
+    #   只读进程内时间戳, 不查库、零额外 RU; 不回传异常正文(防泄漏表名/凭据)。
+    try:
+        from db import db_degraded
+        if db_degraded():
+            _resp.headers["X-App-Degraded"] = "1"
+    except Exception:
+        pass
     return _resp
 
 

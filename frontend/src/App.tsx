@@ -66,6 +66,20 @@ export const NAV = [
 export default function App() {
   useLightTracker()
   useGlassRefraction()
+  // 2026-11-09 统一降级态横幅: DB 不可用时后端在响应顶层带 __degraded, client.ts
+  //   派发 app:degraded / app:degraded-clear。这里常驻显示直到下一次正常响应,
+  //   登录页(在 ToastProvider 外)也能看到 —— 避免把「服务挂了」误读成「账号密码错」。
+  const [degraded, setDegraded] = useState(false)
+  useEffect(() => {
+    const on = () => setDegraded(true)
+    const off = () => setDegraded(false)
+    window.addEventListener('app:degraded', on)
+    window.addEventListener('app:degraded-clear', off)
+    return () => {
+      window.removeEventListener('app:degraded', on)
+      window.removeEventListener('app:degraded-clear', off)
+    }
+  }, [])
   const [page, setPage] = useState('dash')
   window.__page = page // 渲染时同步当前页(首次加载即正确——ErrorBoundary 隐藏'回到看板'判定)
   const navigateTo = (p: string) => {
@@ -1036,6 +1050,12 @@ export default function App() {
 
   return (
     <>
+      {degraded && (
+        <div className="app-degraded-banner" role="alert">
+          <strong>{t('app.degraded_title')}</strong>
+          <span>{t('app.degraded_desc')}</span>
+        </div>
+      )}
       {!loggedIn ? (
         <LoginPage
           onLogin={() => {

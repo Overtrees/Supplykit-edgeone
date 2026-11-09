@@ -38,6 +38,10 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
           localStorage.setItem('c_user', d.user || username)
         } catch {}
         onLogin()
+      } else if ((d as unknown as Record<string, unknown>).__degraded) {
+        // 2026-11-09: DB 挂掉时 @traced 只回传异常类型名("OperationalError"), 用户
+        //   完全不知道是服务不可用。后端现在会带顶层 __degraded, 这里显示可行动的文案。
+        setError(t('login.db_unavailable'))
       } else {
         setError(d.detail || t('login.bad_cred'))
       }

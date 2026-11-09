@@ -121,6 +121,8 @@ def _maint_release(key, holder):
 
 
 @router.get("/tasks")
+@traced   # 2026-11-09 缺口二: 异常必须走统一 traced 出口(200 + request_id), 否则冒泡到
+          #   平台返回 EdgeOne HTML 500 页, 与其他接口形态不一致(§15.185 稳定复现 3 次)
 def list_tasks(channel: str = "jd", limit: int = 50):
     # 2026-11-05 带 updated_at: 卡片右上角时间要表达"这个任务最近一次动是什么时候"。
     #   只返回 created_at 的话, seed 这种分步长跑(10~30 分钟)会一直显示"刚刚" ——

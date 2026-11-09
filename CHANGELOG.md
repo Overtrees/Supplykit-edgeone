@@ -19,6 +19,43 @@
 
 ---
 
+## 2026-11-09（第二批 · 新集群迁移 + 两个健壮性缺口修复）
+
+> 详情见 `docs/history/2026-11-09.md` §15.186。用附件提供的 TiDB Cloud API 凭据新建集群，
+> 在空库上完成全链路建表自举；随批修完 §15.185 留下的两个缺口。
+
+| 项 | 内容 |
+|---|---|
+| 新集群 | `supplykit-1109` / `10406157977958137320`（Starter，新加坡，**额度按集群独立**） |
+| 连接切换 | 本地 `.env`/`.env.local` + EdgeOne 项目 **Production env** 的 `TIDB_USER`/`TIDB_PASSWORD`；改完重新部署（env 是部署时快照） |
+| 建表自举 | `ensure_schema()` → **61 张表** + 索引 + 7 条迁移 + 渠道种子 2 行 + `data_version` 初始行 + `data_version_dom('schema')` + `schema_state=v26` |
+| 新库首建 2 个 bug | ① 补索引跑在补列之前 → `idx_batches_sku_bc` 报 1072 → 版本永不写入；② 渠道种子写在建表之前 → 空库 `channels` 永远 0 行。两者**存量库测不出**，已修顺序并把 `batches.barcode` 写进 DDL |
+| 缺口一 | DB 不可用时 200 + 全 0 的静默空壳 → 统一 `X-App-Degraded` 响应头 + 前端常驻横幅 + 登录页友好文案；空壳不进 30s 缓存 |
+| 缺口二 | `list_tasks` 补 `@traced`，异常不再冒泡成 EdgeOne HTML 500 |
+| 红线 | **不导业务数据、不重跑 seed** —— 新库是干净空库，业务页面空数据为预期 |
+| 验证 | `local_test.py` 860 通过 / 0 失败；`py_compile` / `tsc` / `prettier` / `eslint` / 前端 build 全绿；降级头旧库带、新库不带 |
+
+---
+
+## 2026-11-09（TiDB Starter 额度再次耗尽 · 全接口冒烟 · 处置 runbook）
+
+> 详情见 `docs/history/2026-11-09.md` §15.185；处置流程已固化到 [`docs/PERF.md`](docs/PERF.md) §8。
+> **不是代码故障**：线上仍是 `74936f9`，纯基础设施额度触顶。
+
+| 项 | 内容 |
+|---|---|
+| 根因 | Starter 每集群每月 **5000 万 RU** 触顶 → `1105` 立即拒绝新连接；11 月 9 天打穿 |
+| 症状 | 登录 200 + `detail:"OperationalError"` → 拿不到 token → 业务接口级联 401；`health` 返回 `degraded` |
+| 冒烟 | 28 接口只读串行：**A 3 / C 20 / E 4 / 5xx 1**，除 3 个探活端点外全部不可用，同根因 |
+| 新发现 | 4 个接口返回 **200 + 全 0 空壳**（`hist_coverage` 甚至输出「暂无归档」误导文案）；`tasks` 无 `@traced` → 500 HTML |
+| 恢复 | 控制台 Set/Edit Spending Limit（立即）／自然月初重置／新建集群（上次 10-17 走此路） |
+| 新增 | `scripts/perf/smoke.py`（只读冒烟，接 `endpoints.py` 唯一真源）、`docs/PERF.md` §8 runbook |
+
+**未改业务代码、未部署**（DB 不可用，改了也无法验证）。两个健壮性缺口待 DB 恢复后决策：
+静默空壳改可识别降级态、`list_tasks` 补 `@traced`。
+
+---
+
 ## 2026-11-08 全天（冷算本体根治 · 名额治理 · 传输下推 · 判据分层）
 
 > 详情见 `docs/history/2026-11-08.md` §15.163~§15.183；基准数据见 [`docs/PERF.md`](docs/PERF.md)。

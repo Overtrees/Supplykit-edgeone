@@ -74,6 +74,28 @@ python3 scripts/perf/run.py noise --rounds 3
 | `phase.ok=False`（等 60s 仍不静默） | 场景内持续写，窗口刚关又开 | 正常。带写场景**不存在**静默相位，改用 `storm` 只判不停摆 |
 | `hot` 的 CV > 0.2 | 期间有别的写/定时任务在跑 | 换时段重跑，或先 `cold` 确认无重建 |
 
+## 冒烟（DB 不可用时也能跑）
+
+```bash
+python3 scripts/perf/smoke.py                 # 只读、串行、零写，一轮 ~20s
+python3 scripts/perf/smoke.py --base https://xxx
+```
+
+> 别和仓库根目录的 `scripts/smoke_check.py` 混淆：那个只验 `health` JSON + 首页 `#root`
+> 是否可访问（部署后冒烟）；本脚本逐接口判数据有效性，用于**故障定位**。
+
+与 `run.py` 的区别：`run.py` 测「快不快 / 停不停摆」，需要 DB 正常、多轮、带判据；
+`smoke.py` 测「正不正常」，只发一轮 GET，**额度耗尽时用来判定失败面**。
+接口清单同样来自 `endpoints.py`。
+
+用 `demo/demo123` 登录（内置硬编码不查库）：admin 登录在 DB 挂掉时拿不到 token，
+看到的全是级联 401，接口本身什么形态根本测不到。
+
+输出五类：`A:可用` / `C:DB失败` / **`E:静默空壳`**（HTTP 200 但业务数据全 0，
+前端显示「暂无数据」——最危险）/ `5xx` / `401`。
+2026-11-09 额度耗尽实测 `A 3 / C 20 / E 4 / 5xx 1`。
+完整处置见 [`docs/PERF.md` §8](../../docs/PERF.md)。
+
 ## 与文档的关系
 
 - `docs/PERF.md`：**人读的基准手册**（按页面 → 模块，含基线数字与机制）

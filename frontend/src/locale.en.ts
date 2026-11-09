@@ -1515,4 +1515,9 @@ export const en: Record<string, string> = {
   'task.win_clean': 'Clean-write window {n}/{m}',
   'task.eval_prep': 'Eval prep',
   'task.eval_seg': 'Eval shard {n}/{m}',
+  // ---- service degraded banner (2026-11-09) ----
+  'app.degraded_title': 'Service degraded',
+  'app.degraded_desc':
+    'Database is temporarily unavailable. Numbers shown may be stale — please retry later.',
+  'login.db_unavailable': 'Service temporarily unavailable, please retry later',
 }

@@ -399,6 +399,22 @@ instance.interceptors.response.use(
     // §15.161: __swr 在响应顶层(不在 data 里), 解包前先摘; 旧快照绝不进 30s 缓存。
     const swr = _swrOf(response.data)
     const isProbe = Boolean(cfg.__swrProbe)
+    // 2026-11-09 统一降级态: 顶层 __degraded(与 __swr 同款) —— DB 不可用时后端
+    //   仍返回 200 + 全 0 空壳, 不标记的话用户会误判成「没数据」。这里一处收口:
+    //   不写 30s 缓存(空壳不能驻留), 并派发全局事件让 App 显示常驻横幅。
+    const degHeader =
+      response.headers?.['X-App-Degraded'] === '1' || response.headers?.['x-app-degraded'] === '1'
+    const deg = degHeader || (response.data as Record<string, unknown> | undefined)?.__degraded
+    if (deg) {
+      cache.delete(key)
+      try {
+        window.dispatchEvent(new CustomEvent('app:degraded', { detail: deg }))
+      } catch {}
+    } else if (!isProbe) {
+      try {
+        window.dispatchEvent(new Event('app:degraded-clear'))
+      } catch {}
+    }
     if (swr) {
       cfg.__swrResult = swr
       cache.delete(key)
@@ -654,7 +670,24 @@ export async function apiJson<T = unknown>(
     })
     // 2026-11-06 P0-7: 写操作也要失效缓存 —— 本通道不吃缓存, 但它改的数据被 axios 缓存着
     if (method !== 'GET') invalidateCache()
-    return (opts.raw ? resp : await resp.json()) as T
+    const isDeg = resp.headers.get('X-App-Degraded') === '1'
+    const parsed = (opts.raw ? resp : await resp.json()) as T
+    // 裸 fetch 通道(登录 / health / 轮询)也要识别降级标记, 否则登录页只会看到
+    //   @traced 回传的 "OperationalError" 这类异常类型名, 用户完全不知道是服务降级。
+    //   后端只给响应头(BaseHTTPMiddleware body 不可写), 这里把同样的 __degraded 注入
+    //   解析后的对象, LoginPage 与 axios 通道共用一套判定。
+    if (!opts.raw && parsed && typeof parsed === 'object') {
+      const body = parsed as Record<string, unknown>
+      if (isDeg && !body.__degraded) body.__degraded = { state: 'db_unavailable' }
+      try {
+        if (body.__degraded) {
+          window.dispatchEvent(new CustomEvent('app:degraded', { detail: body.__degraded }))
+        } else if (method === 'GET') {
+          window.dispatchEvent(new Event('app:degraded-clear'))
+        }
+      } catch {}
+    }
+    return parsed
   } catch (e: unknown) {
     try {
       const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : ''
