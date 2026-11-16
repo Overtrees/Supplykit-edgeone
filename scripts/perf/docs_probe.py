@@ -174,7 +174,10 @@ def check(T):
     #   下一批做完这条判据还在查旧批次，会给出「已记录」的假绿（2026-11-09 §15.192 就撞到了）。
     #   改从真源取：history 里最大的 §15.x = 本轮新增的那一节，再要求 CHANGELOG 顶部引用它。
     _sec = "§15.%s" % T["max_section"]
-    _hist = text("docs/history/2026-11-09.md")
+    # 不写死某一卷：按日期卷合并（新增日期的卷不必再改这里）
+    import glob as _g
+    _hist = "\n".join(open(_p, encoding="utf-8").read()
+                       for _p in sorted(_g.glob(os.path.join(ROOT, "docs/history/2026-*.md"))))
     _cl_head = "\n".join(text("CHANGELOG.md").splitlines()[:60])
     chk(_sec in _hist, "history 最新节 %s 存在（本轮记录已落档）" % _sec)
     chk(_sec in _cl_head, "CHANGELOG 顶部批次引用最新节 %s" % _sec)

@@ -20,6 +20,52 @@
 
 ---
 
+## 2026-11-16（第十二批 · 评估改接力 + 导出全量 + 8 个"报成功没做事"端点根治）
+
+> 用户定案：①「每日评估从同步改为接力，用目前已有机制」②「补货导出改为全量，超时同样用异步机制」
+> ③「剩余其他同样需要根治」。批次对账按用户指令**不动**（判定为 seed 造数问题，见下方"更正"）。
+> 性能判据 `run.py TH` 六条一字未动；新判据在 `scripts/perf/relay_selftest.py`（36 条，零网络）。
+
+| 项 | 内容 |
+|---|---|
+| 根治① | **每日评估改接力**：`core/rule_eval_task.py` 四阶段（prep / eval 按 SKU 游标分片 / post / kick），落 `sync_tasks(task_type='rule_eval')`，cron 推首片 + `continue_tasks` 续跑 + `task_lease` 45s 租约。旧"同步跑完 100s"路径删除 |
+| 为什么① | `daily_rules` 11-10~11-16 **连续 7 天 100% timeout**（单渠道 83~117s > Makers 请求生命周期），`maintenance_log` 停 `#run#` → 当天不再评、告警长期不刷新 |
+| 不改算法 | 分片走 `evaluate_stock_skus(skus=batch)` 增量入口 —— 该入口本来就"只关本批 SKU 的告警"（`_only` 集合），分片不互相误关；公式零改动 |
+| 三处联动 | cron 端点不再提前 `settle_rules`；看板兜底只推首片（8s）不再跑满 100s；`_drain_eval_tasks` 不再抢着把 `eval_tasks` 置 done |
+| 根治② | **导出全量**：列表型导出（补货/采购/滞销）改分页接力（每片 2000 行 CSV），去掉 `UNPAGED_CAP` 的 2000 行截断；`create_export` 不再用"真跑一遍导出"判类型 |
+| 修 BOM | 多分片合并时每片都补 BOM → 文件中段出现 `\ufeff`（Excel 一行乱码）；改为只在第一片，后续片剥掉（兼容旧分片） |
+| 根治③ | **8 个端点"报成功但 0 行"**：orders ×3、rules ×3、suppliers、cleansing/templates —— 按 `rowcount` 回 `ok:false`；`restore_rule` 不再对不存在的 id 拉起全渠道评估 |
+| 踩坑 | `rules.deleted_at` 空值是**空串不是 NULL**（线上 14 行全 `''`），初版 `IS NULL` 会让删除永不生效 → 改 `IFNULL(deleted_at,'')=''`，由 `relay_selftest` 守 |
+| 根治④ | **仓型映射收敛**：`aux.alertCounts.by_warehouse.bc` 恒 0（dashboard 自写 `"bc": b+c`）vs `/alerts/counts` 554 → 提为 `routes.alerts.wh_map()` 唯一实现 |
+| 根治⑤ | `/cron/agg-sweep` 补窗口 (3,0,5,30) + 600s 限频（原来**既无窗口也无抢占**，而 cron 鉴权按设计对匿名放行） |
+| 根治⑥ | 未登录首屏 5 个 401 → `loadAll` 开头判 token（只判有无，不判有效性） |
+| 更正 | 上一轮"批次四维对账缺的是出库按批次扣减链路"**是错的**：`Σ批次` 与 `期初+入−出` 在 jd 自有仓 10100 行里 10097 行严格相等，`available_qty` 恒等于 `beginning_stock` → seed 把库存数与流水当两套数据生成。**按用户定案不动** |
+| 门禁 | preflight 8/8；回归 **861/0**；真实 SQL 冒烟 **309/0**（5 条新 SQL 另做 EXPLAIN，SKU 游标分页为 `IndexRangeScan + StreamAgg`，无临时表）；`test_audit` **82/0**；`relay_selftest` **36/36** |
+| 门禁改动 | `local_test` 三条断言随代码搬家改指（cron 窗口 9→10 / 评估后失效移到接力收尾 / 浅档跳过改为阶段机）；`test_audit` 四条同理。**语义未放宽** |
+| 详情 | `docs/PERF.md` §19、`docs/history/2026-11-16.md` §15.200~§15.202 |
+
+## 2026-11-16（第十一批 · 全链路消费方验收：124 路径 × 三身份 × 16 页 + 6 个发现）
+
+> 用户要求「跑一遍所有功能、模块、页面链路 + 不同消费方联动是否达标」。**不改业务代码、不改判据**，
+> 新增两个可复跑脚本，线上实测。性能判据 `run.py TH` 六条一字未动。
+
+| 项 | 内容 |
+|---|---|
+| 新增 | `scripts/perf/e2e_chain.py`：`inventory` 零网络矩阵 / `run` 三身份 × 全量 GET + 安全写闭环 + 一致性 / `checks` / `selftest` 11/11 |
+| 新增 | `scripts/perf/pages_probe.py`：16 页浏览器实测（未捕获异常 / 4xx5xx / 白屏 / 错误边界） |
+| 矩阵 | 路由从 `app.routes` 现读：**124 路径 / 135 method-path（GET 69、写 66）**；前端 64 条路径、16 页，**0 条对不上后端** |
+| 只读 | admin **67/67=200**（p50 46ms / p95 621ms / max 1161ms）；demo **53/53=200**；anon 业务 **6/6=401**、白名单 4/4=200 |
+| 页面 | **16/16 通过**（含未登录首屏） |
+| 联动 | 11 项一致性：9 PASS + 1 DEGRADED（评估在写）；季节系数写→读回→还原，`repl.gen` **72→73** 证明写→失效→重建→读侧切换 |
+| 发现① | **`daily_rules` cron 连续 7 天 100% timeout**（评估 83~117s 超实例生命周期）；兜底线程同受冻结，`maintenance_log` 长期停 `#run#`，看板常驻"Rules are recalculating" |
+| 发现② | 批次四维对账：**jd own 9968 / other own 9988 行偏差**，每日告警。~~出库未按批次扣减~~ → **§15.202 更正：链路是好的，偏差来自 seed 造数（库存数与流水不同源），不动** |
+| 发现③ | `aux.alertCounts.by_warehouse.bc` 恒 0（`_wmap` 用 b+c），与 `/alerts/counts` 的 554 不一致 |
+| 发现④ | 7 个删除/恢复端点对不存在 id 返回 `{ok:true}`（"报成功但 0 行"） |
+| 发现⑤ | 补货导出 xlsx 上限 2000 行（`UNPAGED_CAP` 契约）vs 接口 total 10000；`/cron/agg-sweep` 无窗口可匿名触发；未登录首屏 5 个 401 |
+| 附带修 | `docs_probe.py` 的「最新节落档」判据原写死 `history/2026-11-09.md`（新增日期卷就假红）→ 改为合并全部 `2026-*.md`；`selftest` 5/5、`check` 30/30 仍 PASS |
+| 未做 | 不在本轮修业务代码；评估改接力式任务需授权（方案见 docs/PERF.md §18.4） |
+| 详情 | `docs/history/2026-11-16.md` §15.199、`docs/PERF.md` §18 |
+
 ## 2026-11-09（第十批 · 线上 admin 登录不上修复：账号引导 + 账号对账门禁）
 
 > 线上 `admin` 登录恒「用户名或密码错误」——**不是密码错，是 `users` 表 0 行**（新集群只跑了建表，

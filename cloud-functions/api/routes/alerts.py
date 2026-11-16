@@ -106,6 +106,18 @@ def list_alerts(channel: str = "jd", limit: int = 200, exclude: str = "",
     return ok(items)
 
 
+def wh_map(m):
+    """warehouse_type 分组 → 前端 4 个仓型桶。
+
+    **本项目唯一实现**(红线 2): 看板 `dashboard._build_aux` 曾自己写了一份
+    `"bc": b + c`, 把 bbcc 模式下真正的 `warehouse_type='bc'`(B+C 合计行)整类丢弃 ——
+    结果 `aux.alertCounts.by_warehouse.bc` 恒 0, 而 `/alerts/counts` 同日 554 条
+    (前端低库存 BC 分组计数直接丢失, §15.202)。两份映射必然漂移, 所以收敛到这里。
+    """
+    return {"b": m.get("platform_b", 0), "c": m.get("platform", 0),
+            "own": m.get("own", 0), "bc": m.get("bc", 0), "unknown": m.get("", 0)}
+
+
 @router.get("/alerts/counts")
 @traced
 def alert_counts(channel: str = "jd"):
@@ -129,17 +141,8 @@ def alert_counts(channel: str = "jd"):
         tgt = by_wh_rp if at == "replenish" else (by_wh_slow if at == "slow_moving" else by_wh_ls)
         tgt[wt] = tgt.get(wt, 0) + c
 
-    def _wmap(m):
-        b = m.get("platform_b", 0)
-        c = m.get("platform", 0)
-        o = m.get("own", 0)
-        # 2026-10-30 补 bc 维度: BBCC 合计行的 warehouse_type='bc', 原映射只认
-        #   platform/platform_b/own/'' → bc 类型被整类丢弃(ls_warehouse.bc 恒 0, 140 条 low_stock 失踪)
-        # 只透传: bc 仅 bbcc 模式产生; traditional 无 bc 类型(b 恒 0, 前端 traditional 也不读 bc)
-        return {"b": b, "c": c, "own": o, "bc": m.get("bc", 0), "unknown": m.get("", 0)}
-
     rp = by_type.get("replenish", 0)
     return ok({"total": total, "by_type": by_type, "by_severity": by_severity,
                "replenish": rp, "non_replenish": total - rp,
-               "by_warehouse": _wmap(by_wh), "ls_warehouse": _wmap(by_wh_ls),
-               "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)})
+               "by_warehouse": wh_map(by_wh), "ls_warehouse": wh_map(by_wh_ls),
+               "slow_warehouse": wh_map(by_wh_slow), "rp_warehouse": wh_map(by_wh_rp)})

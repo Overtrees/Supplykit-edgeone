@@ -26,7 +26,6 @@ from routes.common import pipeline_run as _pipe  # 2026-11-02 S1-2: 运行流水
 from routes.common import ch_codes as _CHANNELS  # 2026-11-02 S1-5: 渠道数据驱动(原各处硬编码 ("jd","other"))
 from routes.common import ch_conf as _CH_CONF
 from routes.common import SALES_SQL as _PAID_SQL  # 2026-10-29 销量池单一真源(原硬编码 已完成)
-from core.alert_lifecycle import close as _close_alerts  # 2026-11-03 D8: 关闭统一入口
 from core.clock import now_cn
 
 router = APIRouter(tags=["cron"])
@@ -48,9 +47,10 @@ def continue_tasks(request: Request = None):
         return fail("unauthorized", 401)
     if not _throttle("continue-tasks", 30):
         return ok({"skipped": True, "reason": "30 秒内已推进过"})
-    from db import query as _qc, execute as _ec, one as _oc
-    from datetime import datetime, timedelta as _td2, timezone as _tz2
-    done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "timeout": 0, "skipped": 0}
+    from db import query as _qc, execute as _ec
+    from datetime import timedelta as _td2
+    done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "rule_eval": 0,
+            "timeout": 0, "skipped": 0}
     try:
         rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
         _cutoff = (now_cn() - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
@@ -89,6 +89,13 @@ def continue_tasks(request: Request = None):
                     from .task_seed import seed_fill_status
                     seed_fill_status(tid, driver="backend")
                     done["seed"] += 1
+                elif tt == "rule_eval":
+                    # 2026-11-16 §15.200: 每日评估已接力的推进点。单片预算 40s —— 一轮
+                    #   continue 能把"取 SKU 片 + 评一片"推到接近请求边界, 又不至于被掐断;
+                    #   剩下的下一轮继续。任务自身带租约(45s)与每片 updated_at 刷新。
+                    from core import rule_eval_task as _rt
+                    _rt.step(tid, budget=40.0, driver="backend")
+                    done["rule_eval"] += 1
                 elif tt == "export":
                     from .task_export import export_status
                     _row2 = _qc("SELECT params FROM sync_tasks WHERE task_id=%s", [tid])
@@ -184,6 +191,10 @@ _WINDOWS = {
     "push_alerts":  (8, 0, 10, 0),
     # 账期结账: 平台每月 1 号 00:40 CST 调度, 窗口给到 03:00(排队/取整余量)
     "ledger_close": (0, 30, 3, 0),
+    # 2026-11-16 §15.202: agg-sweep 原来**既无窗口也无抢占** —— 而 cron 鉴权按设计对
+    #   匿名放行(平台调度无法注入请求头, 见 _authed), 等于任何人都能让服务端扫 48h 脏日期
+    #   并触发物化重建。补窗口(每天 03:00~05:30, 与 snapshot/freshness 同档) + 限频。
+    "agg_sweep":    (3, 0, 5, 30),
 }
 # 不设窗的两个:
 #   ping            —— 保活用, 全天触发无害, 且 UptimeRobot 也在打
@@ -472,177 +483,68 @@ async def cron_cleanup_logs(request: Request):
 
 
 def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
-    """规则评估 —— 两档(2026-11-03 D4: 改一条规则不该等于跑一整套每日任务)
+    """规则评估入口 —— 只做编排: 建接力任务并推首片(§15.200, 2026-11-16 根治)
 
-    deep=True  每日任务口径: 孤儿全表清理 + 旧 SKU 级清理 + 无需求兜底 + 全渠道评估
-               + 批次对账 + 健康快照。(cron/daily-rules、应用层兜底走这档)
-    deep=False 规则变更口径: 只评指定渠道 + 该渠道孤儿清理; 跳过三条全表 UPDATE、
-               批次对账与健康快照 —— 后者与"改了一条规则"毫无关系, 却占了几乎全部成本。
-    channels   None=全渠道
-    alert_types 只评这些 alert_type(规则变更时精确到受影响规则; None=全部规则)
+    ## 为什么不再是"同步跑完"
 
-    证据: 规则保存原来无条件调本函数, 一次文案修改 = 3 条全表 UPDATE(孤儿清理)
-            + 10 万行 × N 渠道评估 + 全表 HAVING 对账 + 健康快照。
+    原实现在**一次请求内**顺序做完: 孤儿清理 + 旧 SKU 级清理 + 无需求兜底 + 全渠道
+    9 万行评估 + 批次对账 + 健康快照。单渠道实测 83~117s, **超过 Makers 请求生命周期**:
+    cron 04:04 触发 → 实例被冻结 → 收尾语句不执行 → `pipeline_runs` 停 running、
+    `maintenance_log` 停在 `#run#...` → 当天既不重跑也不再评估。线上实证 `daily_rules`
+    11-10~11-16 连续 7 天 100% timeout, 告警长期不刷新、看板常驻「规则重算中」。
+
+    ## 现在
+
+    四阶段(prep / eval 按 SKU 游标分片 / post / kick)落 `sync_tasks(task_type='rule_eval')`,
+    本函数只建任务 + 推首片(秒级返回), 其余由 `continue_tasks` 与下一次 cron 续跑。
+    **评估算法一行未改** —— 仍调 `core.rule_eval.evaluate_stock_skus`, 增量入口
+    `skus=` 本来就"只关本批 SKU 的告警", 分片不会互相误关(见 core/rule_eval_task 注释)。
+
+    ## 返回形状变了
+
+    不再回 `{orphan_cleaned, rules_triggered, ...}` 的最终结果, 而是
+    `{task_id, status, stage, progress}`; 最终结果在任务 `result` 里
+    (`core.rule_eval_task.stat(task_id)` 可读)。调用方若只打日志, 打 task_id 即可。
+
+    deep=True  每日口径: 含三条全表 UPDATE、批次对账、健康快照
+    deep=False 规则变更口径: 只评指定渠道 + 该渠道孤儿清理, 跳过三张全表与健康快照
+    channels    None=全渠道
+    alert_types 只评这些 alert_type; None=全部规则
     """
-    # 2026-11-06 S4: 评估开始前先把挂住的 running 收尾 —— 上一次被平台掐断时收尾语句不会执行,
-    #   留着"running"会让 /health 与排障永远看到"有任务在跑"(线上实证停了 5 小时)。
+    # 评估开始前先把挂住的 running 收尾 —— 上一次被掐断时收尾语句不会执行(线上停过 5 小时)
     try:
         from core.maintenance import close_stale_runs as _csr
         _csr()
     except Exception as _e_csr:
         try_err('cron', '挂起运行收尾降级', _e_csr)
-    _chs = [c for c in (channels or _CHANNELS()) if c] or list(_CHANNELS())
+    from core import rule_eval_task as _RT
+    _chs = [str(c) for c in (channels or _CHANNELS()) if c] or [str(c) for c in _CHANNELS()]
     _ats = [str(a) for a in (alert_types or []) if a]
-    _in_ch = "(" + ",".join(["%s"] * len(_chs)) + ")"
-    # 1. 孤儿告警清理: active 且 source in (rules_engine,event_bus) 的 alert_type 已无 active 规则 → inactive
-    cleaned = 0
-    _orphan_rows = query(
-        "SELECT DISTINCT alert_type, channel FROM alerts "
-        "WHERE status='active' AND source IN ('rules_engine','event_bus')"
-        + ("" if deep else " AND channel IN " + _in_ch),
-        [] if deep else _chs)
-    for r in _orphan_rows:
-        at = r.get("alert_type")
-        ch = r.get("channel") or "jd"
-        has = one("SELECT COUNT(*) AS c FROM rules WHERE alert_type=%s AND channel=%s AND is_active=1 "
-                  "AND (deleted_at IS NULL OR deleted_at='')", [at, ch]) or {}
-        if not int(has.get("c") or 0):
-            cleaned += int(_close_alerts(
-                "alert_type=%s AND channel=%s AND source IN ('rules_engine','event_bus')",
-                [at, ch], "orphan_rule_missing") or 0)
-    if deep:
-        # 1.5 旧 SKU 级规则告警(warehouse 为空)清理 —— 告警已逐仓化(SKU×仓), 旧的 SKU 聚合
-        #     告警由下方全量评估重新生成逐仓版, 先关闭避免新旧混杂致看板计数翻倍
-        #     (迁移性清理: 一次即可, 不该在每次保存规则时重跑)
-        try:
-            cleaned += int(_close_alerts(
-                "source IN ('rules_engine','event_bus') AND (warehouse IS NULL OR warehouse='')",
-                [], "legacy_sku_level") or 0)
-        except Exception as _e:
-            try_err('cron', '静默降级', _e)
-        # 1.6 无需求告警兜底(2026-10-15): 无未删订单 且 无在档(products/inventory 均无) 的 active
-        #     rules_engine 告警 → inactive —— SKU 只有订单页有(订单删了=无需求)——告警孤儿
-        #     注: 去掉表别名, 让 SET 侧(close 统一实现)与子查询同时成立
-        try:
-            cleaned += int(_close_alerts(
-                "source='rules_engine' "
-                "AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.sku=alerts.related_sku AND o.channel=alerts.channel "
-                "AND (o.deleted_at IS NULL OR o.deleted_at='')) "
-                "AND NOT EXISTS (SELECT 1 FROM products p WHERE p.sku=alerts.related_sku AND p.channel=alerts.channel "
-                "AND (p.deleted_at IS NULL OR p.deleted_at='')) "
-                "AND NOT EXISTS (SELECT 1 FROM inventory i WHERE i.sku=alerts.related_sku AND i.channel=alerts.channel)",
-                [], "no_demand") or 0)
-        except Exception as _e:
-            try_err('cron', '静默降级', _e)
-    # 2. 全量规则评估(替代简化滞销逻辑): inventory.changed + scheduled.daily 遍历库存行
-    #    双渠道逐仓(其他渠道此前完全无每日规则评估 —— 完整性修复); 全量行(含 SKU×仓)
-    from core.rules import evaluate_stock_skus
-    triggered = []
-    from routes.common import track_run as _tr
-    for _ch in _chs:
-        # 2026-11-02 S1-2: 逐渠道留一条运行记录(scope=渠道) —— 出问题时一眼看出哪个渠道没评估到
-        with _tr("rule_eval", _ch) as _rec:
-            _hits = evaluate_stock_skus(_ch, only_ats=_ats or None)
-            _rec.rows = len(_hits or [])
-            _rec.detail = {"triggered": len(_hits or []), "deep": bool(deep), "ats": _ats}
-        triggered.extend(_hits or [])
-    # 2026-10-29 批次对账(四维逐一, 用户定案): 
-    #   对每个 (仓库类型, SKU, 69码, 仓库) 校验 Σ(batches.qty) ≡ inventory.available_qty
-    #   **不能按 SKU 汇总核对** —— 不同仓/不同码的偏差会互相抵消(A 多 100 与 B 少 100 汇总后为 0),
-    #   掩盖真实错配。四维逐一比对才能定位到具体仓/具体码。
-    #   偏差只告警不自动修(自动修会掩盖导入遗漏/仓名错/批次未填等根因)
-    #   D4: 这是全表 HAVING, 只在每日档跑 —— 规则变更不影响批次与库存的一致性
     try:
-        from routes.cleanse_write import SELF_WAREHOUSE_TYPES as _SELF
-        _ph = ",".join(["%s"] * len(_SELF))
-        for _ch in (_chs if deep else []):
-            # 2026-11-06 S6/P1-31: 相关子查询(每行 inventory 跑一次 SUM batches, 18 万批次
-            #   × 每行一次) → LEFT JOIN 聚合子查询(整批只算一遍) + WHERE 过滤。
-            #   原来的 `HAVING ABS(qty-bq)>1` 无 GROUP BY 是 MySQL 扩展写法, 语义等价但
-            #   不直观; 改 WHERE 后与常规聚合查询同形, 也便于 EXPLAIN 判断。
-            _bad = query(
-                "SELECT i.sku, COALESCE(i.barcode,'') AS bc, i.warehouse, "
-                "  i.available_qty AS qty, COALESCE(b.bq, 0) AS bq "
-                "FROM inventory i "
-                "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, "
-                "                  SUM(qty) AS bq FROM batches WHERE channel=%%s "
-                "           GROUP BY sku, COALESCE(barcode,''), warehouse, warehouse_type) b "
-                "  ON b.sku=i.sku AND b.bc=COALESCE(i.barcode,'') "
-                " AND b.warehouse=i.warehouse AND b.warehouse_type=i.warehouse_type "
-                "WHERE i.channel=%%s AND i.warehouse_type IN (%s) "
-                "  AND ABS(i.available_qty - COALESCE(b.bq, 0)) > 1" % _ph,
-                [_ch, _ch] + list(_SELF))
-            if _bad:
-                _log("warning", "批次对账偏差 %s: %d 项 (Σ批次 ≠ 可用, 按仓库类型+SKU+69码+仓逐一比对)"
-                     % (_ch, len(_bad)))
-                _s0 = _bad[0]
-                execute("INSERT INTO quality_logs(log_type, level, message, source) "
-                        "VALUES('quiet_error','warning',%s,'cron')",
-                        ("批次对账 %s: %d 项偏差, 例 sku=%s 69码=%s 仓=%s 可用=%s 批次=%s "
-                         "(需补全入库/出库的批次信息后重建)"
-                         % (_ch, len(_bad), _s0.get("sku"), _s0.get("bc") or "-",
-                            _s0.get("warehouse"), _s0.get("qty"), _s0.get("bq")),))
-    except Exception as _e_rc:
-        try_err('cron', '批次对账降级', _e_rc)
-    # 2026-11-06 S2-1: 评估跑完 → 采购需求重判(purchase_need 告警)。
-    #   采购告警原来由 `_build_purchase` 顺手写, 于是"有没有人打开采购页"决定了它更不更新;
-    #   现在写入收敛到 core.alert_jobs, 这里是四个写侧触发源之一(评估会关闭一批告警,
-    #   采购需求必须跟着重判)。异步 + 每渠道 120s 限频, 不拖慢评估本身。
-    try:
-        from core.alert_jobs import kick_purchase_alerts as _kick_pa
-        for _ch in _chs:
-            _kick_pa(_ch)
-    except Exception as _e_pa:
-        try_err('cron', '采购告警同步调度降级', _e_pa)
-    _log("info", "规则评估[%s]: 渠道 %s, 孤儿告警清理 %d, 规则触发 %d 个(%s)" % (
-        "每日" if deep else "变更", ",".join(_chs), cleaned, len(triggered),
-        ",".join(str(t)[:20] for t in triggered[:8])))
-    # P2 回溯校验 Lite: 濒临断货判定摘要写入 quality_logs(审计/漏报误报分析基础)
-    # D4: 健康快照按天唯一(ON DUPLICATE), 每日写一次即可 —— 规则变更档不重复写
-    try:
-        from routes.dashboard import _stock_risk, _health_index
-        from routes.common import ch_default_mode as _cdm
-        for _ch in (_chs if deep else []):
-            _rk = _stock_risk(_ch)
-            # 2026-11-06 S3: 原 `_health_index(_ch)` 用签名默认 mode="bbcc" → other 渠道按
-            #   jd 的 12 天周期算安全线(判出来的"健康"是假的); 且下面又调了第二次
-            #   (`_hix`) 只为拿同一个对象 —— 同一个渠道同一次评估算两遍健康分。
-            _hi = _health_index(_ch, _cdm(_ch))
-            _t = (_rk.get("bcTotal", 0) or 0) + (_rk.get("cTotal", 0) or 0) + (_rk.get("ownTotal", 0) or 0)
-            _r = (_rk.get("bcCritical", 0) or 0) + (_rk.get("cCritical", 0) or 0) + (_rk.get("ownCritical", 0) or 0)
-            _o = (_rk.get("bcWarning", 0) or 0) + (_rk.get("cWarning", 0) or 0) + (_rk.get("ownWarning", 0) or 0)
-            _hs = str(_hi.get("score") if _hi else "-")
-            _ho = str((_hi or {}).get("own", {}).get("score") if _hi else "-")
-            _hp = str((_hi or {}).get("platform", {}).get("score") if _hi else "-")
-            _hb = str((_hi or {}).get("bc", {}).get("score") if _hi else "-")
-            try:
-                _sc2 = _hi.get("score") if _hi else None
-                from db import execute as _exH
-                _d0 = now_cn().strftime("%Y-%m-%d")
-                _exH("INSERT INTO health_snapshot(date, channel, score, own_score, platform_score, bc_score) "
-                     "VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE score=VALUES(score), own_score=VALUES(own_score), "
-                     "platform_score=VALUES(platform_score), bc_score=VALUES(bc_score)",
-                     [_d0, _ch, int(_sc2) if _sc2 is not None else -1,
-                      int((_hi.get("own") or {}).get("score") or -1),
-                      int((_hi.get("platform") or {}).get("score") or -1),
-                      int((_hi.get("bc") or {}).get("score") or -1)])
-            except Exception as _e:
-                    try_err('cron', '静默降级', _e)
-            _msg = "[%s] 濒临断货: 共%d(红%d/橙%d/黄%d), BC=%d C=%d OWN=%d | 健康: %s分(own%s/platform%s/bc%s)" % (
-                _ch, _t, _r, _o, max(_t - _r - _o, 0),
-                _rk.get("bcTotal", 0) or 0, _rk.get("cTotal", 0) or 0, _rk.get("ownTotal", 0) or 0,
-                _hs, _ho, _hp, _hb)
-            execute("INSERT INTO quality_logs(log_type, level, message, source) "
-                    "VALUES('risk_summary','info',%s,'cron')", (_msg,))
+        _tid, _created = _RT.enqueue(_chs, deep=bool(deep), ats=_ats)
+        # 首片预算 8s: 让本请求(或看板后台线程)快速返回, 剩下的交给续跑
+        _r = _RT.step(_tid, budget=8.0, driver="frontend" if _created else "backend")
+        _log("info", "规则评估接力: task=%s %s channels=%s deep=%s ats=%s"
+             % (_tid, "新建" if _created else "复用", ",".join(_chs), bool(deep),
+                ",".join(_ats[:6])))
+        return {"task_id": _tid, "created": _created, "status": _r.get("status"),
+                "stage": _r.get("stage"), "progress": _r.get("progress"),
+                "scope": "deep" if deep else "light", "channels": _chs, "ats": _ats}
     except Exception as _e:
-            try_err('cron', '静默降级', _e)
-    return {"orphan_cleaned": cleaned, "rules_triggered": triggered,
-            "scope": "deep" if deep else "light", "channels": _chs, "ats": _ats}
+        try_err('cron', '规则评估接力调度失败(回退为同步浅档)', _e)
+        # 兜底不再"重跑全量": 只做浅档(prep 的孤儿清理), 让告警不至于停在孤儿态;
+        # 评估本体等下一次 continue_tasks / cron 重试 —— 宁可晚一点, 也不在请求路径上跑 100s
+        try:
+            _c = _RT._prep({"channels": _chs, "ats": _ats, "deep": bool(deep)})
+        except Exception:
+            _c = 0
+        return {"task_id": "", "created": False, "status": "degraded",
+                "orphan_cleaned": _c, "scope": "deep" if deep else "light",
+                "channels": _chs, "ats": _ats, "error": str(_e)[:200]}
 
 
 @router.api_route("/cron/daily-rules", methods=["GET","POST"])
 @traced
-@_pipe("daily_rules", rows_key="orphan_cleaned")
 async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
                            alert_types: str = ""):
     """每日规则(EdgeOne schedules 触发路径): 校验后调用共享 run_daily_rules()
@@ -671,28 +573,25 @@ async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
         # 原实现用 `_claim` 只 INSERT 空 details, 于是 cron 跑完 details 仍为空,
         # 用户随后打开看板时兜底路径判定"依据已变"又整跑一遍; 反过来 cron 被冻结时
         # 留下的空 details 也看不出"有实例在跑"还是"该重跑"。
-        from core.maintenance import inventory_fingerprint, claim_rules, settle_rules
+        from core.maintenance import inventory_fingerprint, claim_rules
         _fp = inventory_fingerprint()
         if not _fp:
             # 指纹查不到(库存表异常) → 退回无指纹的原抢占: 调度该跑的仍要跑
             if not _claim("daily_rules"):
                 return ok({"skipped": True, "reason": "今天已评估"})
             try:
-                _r = run_daily_rules()
+                return ok(run_daily_rules())
             except Exception:
                 _unclaim("daily_rules")
                 raise
-            return ok(_r)
         _claimed, _token = claim_rules(_fp)
         if not _claimed:
             return ok({"skipped": True, "reason": "今天已按当前库存依据评估, 或另一实例正在评估"})
-        try:
-            _r = run_daily_rules()
-        except Exception:
-            settle_rules(_token, _fp, ok=False)   # 回滚成待跑, 下次可重试
-            raise
-        settle_rules(_token, _fp, ok=True)
-        return ok(_r)
+        # 2026-11-16 §15.200: 这里**不再** settle —— 评估已改接力(sync_tasks), 本请求只推首片。
+        #   落指纹交给 core.rule_eval_task: 全部阶段跑完才 settle_rules(ok=True),
+        #   中途失败则 settle_rules(ok=False) 回滚成待跑。若在此处 settle, 就变成
+        #   "请求返回即宣告评估完成", 而那正是线上 7 天 timeout 时最误导的信号。
+        return ok(run_daily_rules())
     _chs = [c.strip() for c in (channels or "").split(",") if c.strip()] or None
     _ats = [a.strip() for a in (alert_types or "").split(",") if a.strip()] or None
     return ok(run_daily_rules(channels=_chs, deep=True, alert_types=_ats))
@@ -1009,6 +908,11 @@ async def cron_agg_sweep(request: Request, hours: int = 48):
     """
     if not await _authed(request):
         return fail("未授权", 401)
+    _off = _off_window("agg_sweep", force_ok=_force_ok(request))
+    if _off:
+        return ok(_off)
+    if not _throttle("agg_sweep", 600):
+        return ok({"skipped": True, "reason": "10 分钟内已扫过"})
     return ok(run_agg_sweep(hours))
 
 

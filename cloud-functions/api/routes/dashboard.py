@@ -160,7 +160,7 @@ def _daily_rules_guard():
                 return  # 数据未就绪——不占位, 下次 summary 重试
         except Exception:
             pass  # 查表失败不阻塞(继续尝试)
-        from core.maintenance import inventory_fingerprint, claim_rules, settle_rules
+        from core.maintenance import inventory_fingerprint, claim_rules
         # 库存指纹: 行数 + 正可用行数 + 可用量总和 —— 任一变化即视为"评估依据已变"
         _fp = inventory_fingerprint()
         if not _fp:
@@ -170,19 +170,20 @@ def _daily_rules_guard():
             return  # 今天已按此依据评估完成 / 另一实例正持有 / 已被别人抢到
 
         def _run():
+            # 2026-11-16 §15.200: 只推**首片**(预算 8s), 不再在这个后台线程里跑完 100s ——
+            #   daemon 线程随实例冻结而中断, 那正是"评估永远跑不完"的机制。
+            #   落指纹(settle_rules)交给 core.rule_eval_task: 全阶段跑完才算完成。
             try:
                 from routes.cron import run_daily_rules
                 _r = run_daily_rules()
-                # 成功才把指纹落地(失败或冻结时它停留在 #run#, 超时后会被下次请求抢回重跑)
-                settle_rules(_token, _fp, ok=True)
                 execute("INSERT INTO quality_logs(log_type, level, message, source) "
                         "VALUES('maint','info',%s,'dash')",
-                        ("应用层兜底 daily-rules 完成: 孤儿清理 %d, 规则触发 %d"
-                         % (_r.get("orphan_cleaned") or 0, len(_r.get("rules_triggered") or [])),))
+                        ("应用层兜底: 已排入规则评估接力任务 %s(阶段 %s)"
+                         % (_r.get("task_id") or "-", _r.get("stage") or "-"),))
             except Exception as _e:
                 try:
-                    # 失败 → 改回"待跑"(不是删行: 保留当日痕迹, 且 CAS 语义统一)
-                    settle_rules(_token, _fp, ok=False)
+                    from core.maintenance import settle_rules as _sr2
+                    _sr2(_token, _fp, ok=False)   # 失败 → 改回"待跑", 下次请求可重试
                     execute("INSERT INTO quality_logs(log_type, level, message, details, source) "
                             "VALUES('maint','error',%s,%s,'dash')",
                             ("daily_rules 应用层兜底失败", str(_e)[:200]))
@@ -1189,17 +1190,13 @@ def _build_aux(channel, mode):
             tgt = by_wh_rp if at == "replenish" else (by_wh_slow if at == "slow_moving" else by_wh_ls)
             tgt[wt] = tgt.get(wt, 0) + c
 
-        def _wmap(m):
-            b = m.get("platform_b", 0)
-            c = m.get("platform", 0)
-            o = m.get("own", 0)
-            return {"b": b, "c": c, "own": o, "bc": b + c, "unknown": m.get("", 0)}
-
+        from routes.alerts import wh_map as _wm      # 仓型映射唯一实现(红线 2)
         _rp = by_type.get("replenish", 0)
         full = {"total": total, "by_type": by_type, "by_severity": by_sev,
                 "replenish": _rp, "non_replenish": total - _rp,
-                "by_warehouse": _wmap(by_wh), "ls_warehouse": _wmap(by_wh_ls),
-                "slow_warehouse": _wmap(by_wh_slow), "rp_warehouse": _wmap(by_wh_rp)}
+                # 映射收敛到 routes.alerts.wh_map(唯一实现) —— 本地不再写第二份
+                "by_warehouse": _wm(by_wh), "ls_warehouse": _wm(by_wh_ls),
+                "slow_warehouse": _wm(by_wh_slow), "rp_warehouse": _wm(by_wh_rp)}
         return alerts, full
 
     def _block_stock_low():

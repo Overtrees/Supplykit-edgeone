@@ -499,6 +499,14 @@ const initAppStore = (set, get) => ({
   },
 
   async loadAll(page?, opts?) {
+    // 2026-11-16 §15.202: 未登录时不发业务请求。
+    //   App 顶层挂载即 `loadAll()`, 而 summary/aux/stock-risk/alerts/orders 都会带 token 去请求 ——
+    //   没有 token 时 5 条齐发、全 401: 控制台 5 条红字, 服务端白跑 5 次鉴权。
+    //   只判"有没有 token", 不判有效性: 过期 token 仍让接口如实回 401, 由拦截器统一去登录页。
+    if (!safeGet('c_token')) {
+      set({ loading: false, orderLoading: false })
+      return
+    }
     // 2026-11-05: 序号放在闭包对象里而不是 this 上 —— `this` 在 setState 回调/延迟执行里
     //   不一定还指向 store, 而竞态判定必须用同一个引用
     const _seq = _seqBox

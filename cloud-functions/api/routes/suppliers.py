@@ -81,7 +81,10 @@ async def update_supplier(sid: int, request: Request):
 @router.delete("/suppliers/{sid}")
 @traced
 def delete_supplier(sid: int):
-    execute("DELETE FROM suppliers WHERE id=%s", [sid])
+    _n = execute("DELETE FROM suppliers WHERE id=%s", [sid])
+    if not _n:
+        # 2026-11-16 §15.202: 不存在 → 如实回失败, 不再"删除成功但 0 行"
+        return fail("供应商不存在")
     from routes.analysis_cache import invalidate
     invalidate("suppliers")
     return ok({})

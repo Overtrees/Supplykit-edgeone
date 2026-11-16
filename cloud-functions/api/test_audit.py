@@ -220,7 +220,8 @@ check("采购读路由不调用 alert_jobs / sync_purchase_alerts",
 
 # 触发源必须存在(四个写侧入口), 否则"零副作用"退化成"永不更新"
 _trig = 0
-for _rel in ("routes/cleansing.py", "routes/cron.py", "routes/suppliers.py"):
+# 2026-11-16 §15.200: "评估完成"那一源随评估本体搬到 core/rule_eval_task.py
+for _rel in ("routes/cleansing.py", "core/rule_eval_task.py", "routes/suppliers.py"):
     _src = open(os.path.join(_api_dir, *_rel.split("/")), encoding="utf-8").read()
     if "kick_purchase_alerts" in _src:
         _trig += 1
@@ -280,10 +281,11 @@ check("看板低库存两处计数都走 metrics(不再出现 _mcl/_mc2 自拼�
 
 # F4: cron 不得重复计算健康分, 且必须传渠道模式
 _cr = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
-_hi_calls = len(re.findall(r"_h?i?x?\w*\(_ch\)", _cr.split("from routes.dashboard import _stock_risk, _health_index")[-1][:2500]))
-check("cron 每渠道只算一次健康分, 且按渠道默认模式传入",
-      "_health_index(_ch, _cdm(_ch))" in _cr and "_hix(" not in _cr,
-      "重复调用=%d" % _hi_calls)
+# 2026-11-16 §15.200: 健康快照段随评估本体搬到 core/rule_eval_task.py
+_rt_f = open(os.path.join(_api_dir, "core", "rule_eval_task.py"), encoding="utf-8").read()
+check("评估每渠道只算一次健康分, 且按渠道默认模式传入",
+      "_health_index(channel, _cdm(channel))" in _rt_f and "_hix(" not in _rt_f,
+      "重复调用=0")
 
 # F5: 规则引擎的量取"本单元", 不是 SKU 全仓汇总(否则 BC 可撑天数混入自有仓库存)
 _re2 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
@@ -314,8 +316,9 @@ check("收尾只动 pipeline_runs(观测表), 不 UPDATE sync_tasks 状态机",
       "UPDATE pipeline_runs" in _csr_body and "UPDATE sync_tasks" not in _csr_body,
       "改 sync_tasks 会让前端把失败当进行中")
 _cr2 = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
-check("每日评估开始前先收尾挂起运行",
-      _cr2.find("close_stale_runs") < _cr2.find("evaluate_stock_skus(_ch"),
+# 2026-11-16 §15.200: 评估已接力, 入口里"先收尾 → 再排任务"的顺序仍必须成立
+check("每日评估开始前先收尾挂起运行(再排接力任务)",
+      0 <= _cr2.find("close_stale_runs") < _cr2.find("import rule_eval_task as _RT"),
       "顺序反了等于这轮还是被上一次的 running 误导")
 
 # ── H. 超卖口径 + 缺货粒度(2026-11-06 用户定案)──────────────────────────
@@ -545,8 +548,8 @@ check("重建按 SKU 分片、每片一个事务(DELETE 与 INSERT 原子)",
       and "_groups.setdefault(str(r[\"sku\"])" in _sl6,
       "整渠道 DELETE 后分批 INSERT 有真空窗: 并发读会拿到空表/半量")
 check("批次对账改 LEFT JOIN 聚合子查询(去相关子查询与裸 HAVING)",
-      "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc" in _cr6
-      and "(SELECT SUM(b.qty) FROM batches b" not in _cr6,
+      "LEFT JOIN (SELECT sku, COALESCE(barcode,'') AS bc" in _rt_f
+      and "(SELECT SUM(b.qty) FROM batches b" not in _rt_f,
       "相关子查询对 inventory 每行跑一次 SUM(18 万批次)")
 check("quality_logs 按级别保留(error 30 / warning 14 / 其余 3 天)+ 字节上限",
       "QUALITY_LOG_KEEP_BY_LEVEL" in _cm6 and "QUALITY_LOG_TARGET_BYTES" in _cm6,

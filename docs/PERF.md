@@ -1506,3 +1506,285 @@ def pct(v, q):
 | "不许改判据转绿" | 方案 1/5 都是**加严**，判定结果不变 |
 | 数据 4 维 | 纯观测，零写入 |
 | 20/21（补建有界、读路径不重建） | 无关 |
+
+---
+
+## 18. 全链路消费方验收（2026-11-16，§15.199）
+
+> 这节回答的不是"快不快"，而是**"每条链路通不通、不同消费方读到的是不是同一份数"**。
+> 性能判据仍只在 `run.py` 的 `TH`；本节判据在 `e2e_chain.py`，两者互不替代。
+
+### 18.1 一条命令
+
+```bash
+python3 scripts/perf/e2e_chain.py inventory   # 零网络：路由/页面/消费方矩阵 + 缺口
+python3 scripts/perf/e2e_chain.py run         # 线上：三身份 × 全量 GET + 安全写闭环 + 一致性
+python3 scripts/perf/e2e_chain.py checks      # 只复跑一致性判据（评估静默期用）
+python3 scripts/perf/e2e_chain.py selftest    # 判据反证（11 条，不发请求）
+python3 scripts/perf/pages_probe.py           # 16 页浏览器实测（console/失败请求/白屏）
+```
+
+### 18.2 覆盖矩阵（真源现读，不手抄）
+
+| 层 | 规模 | 来源 |
+|---|---|---|
+| 后端路由 | **124 个路径**（135 个 method-path：GET 69 / 写 66） | `from index import app; app.routes`（含函数式注册与嵌套 include） |
+| 前端调用 | 64 条独立 `/api/*` 路径、16 个页面 | `frontend/src/**/*.ts*` 静态扫描 |
+| 前端→后端缺口 | **0 条**（前端调的每条路径都能匹配到后端模板） | `inventory` 的 `fe_unmatched` |
+| 后端无前端直调 | 29 条（cron/管理口/别名），不是断链 | `inventory` 的 `uncovered` |
+| 身份 | anon / demo / admin | `/auth/login` + 中间件 |
+
+`inventory` 只解决"有没有接上"；`run` 解决"接上了能不能用"。
+
+### 18.3 本轮实测结果（2026-11-16 11:54，`out/20261116_115409_e2e.json`）
+
+**只读**：67 条有效 GET，admin **67/67 = 200**，`X-Srv-Ms` p50 **46ms** / p95 **621ms** /
+max **1161ms**（`ledger/preview`）。最慢五条：`ledger/preview` 1161 / `purchase` 906 /
+`own-health/state` 773 / `with-sales` 706 / `batches` 621。
+
+> ⚠️ `with-sales` 用默认 `page=0&page_size=0` 时是**全量导出型口径**，实测 31s；
+> 前端真实参数是 `page=1&page_size=100` → 706ms。探测脚本已按前端参数覆盖
+> （`PARAM_OVERRIDE`），**不要**拿全量口径的数字判页面慢。
+
+**身份**：demo **53/53 = 200**（重接口跳过，鉴权与接口无关）；anon 白名单 4 个 200
+（`/health` `/insights/ping` `/auth/check` `/cron/ping`），业务接口 **6/6 = 401**。
+
+**页面**：16/16 通过（含未登录首屏）。判据 = 无未捕获异常 + 无 4xx/5xx + 正文 ≥40 字 +
+无错误边界文案；切页主动 abort 的 `ERR_ABORTED` 不计失败。
+
+**一致性 11 项**：9 PASS、1 DEGRADED（评估运行中）、1 条瞬时漂移已按分层判据处理。
+
+| 判据 | 结果 |
+|---|---|
+| `boot.summary == summary` / `boot.aux == aux` / `boot.risk == stock-risk` | PASS（同一物化，三条全等） |
+| `summary.low == aux.stockOverview.low`（557）/ `summary.out == aux.stockOverview.out`（0） | PASS |
+| `stock-risk(bc+c) == unit_state.risk_rows`（4994 = 4994） | PASS（同 gen 发布） |
+| `jd/other` 渠道隔离（83,852,730 vs 84,081,977） | PASS |
+| demo 写 = 403 / anon 读 = 401 | PASS |
+| `summary.active_alerts` vs `alerts/counts` | **DEGRADED**：评估在写 alerts，两边不可比（见 18.4） |
+| `repl.total(10000) >= 本页行数` | PASS |
+
+**写链路 5 条闭环**（都可回滚/只读）：
+
+| 链路 | 证据 |
+|---|---|
+| 前端上报 → `quality_logs` 可查 | 写 200，回读命中 `e2e-chain smoke` |
+| 补货接口 → 导出任务 → 下载 xlsx | 任务 `done`，2000 行，下载 200 |
+| 规则试算（不落库） | 200，`triggered:false` + detail |
+| 导入查重（只读 CSV） | 200，`duplicate/overlap/new` 全 0 |
+| **季节系数写 → 读回 → 还原** | 1.5001→1.5002→1.5001；`list_head.repl.gen` **72→73**，证明"写→失效→后台重建→读侧切换"整条链路通 |
+
+### 18.4 三个必须记住的结论
+
+**① 每日评估的 cron 主路径 7/7 天失败（100%）。**
+`pipeline_runs` 里 `daily_rules` 从 11-10 到 11-16 每天 04:04 一条，状态全 `timeout`，
+error 一律「挂起超时: running 超过 10 分钟(实例被冻结/掐断, 收尾语句未执行)」，且
+`finished_at` 比 `started_at` 晚 5~7 小时（例如 04:04 发起、10:59 才被收尾）。
+根因不是评估算错：`run_daily_rules` 单渠道实测 83~117s，**超过 Makers 请求生命周期**；
+cron 触发后实例被冻结，收尾语句不执行。
+
+兜底路径（看板 `dashboard.summary` 里 `claim_rules` + 后台线程）能跑完 61 次，但**同样受冻结约束**：
+`maintenance_log.details` 长期停在 `#run#170200|166420|45505475#<token>`（未落指纹），
+20 分钟后被抢、再冻结。线上表现：前端看板常驻「Rules are recalculating — alerts will refresh automatically」，
+`/health.last_runs` 里 `rule_eval` 反复 `running`。**这是"评估看起来一直在跑、告警却是旧的"的机制。**
+
+**② 批次四维对账有偏差 —— 但结论在 §19.7 被推翻：这是造数问题，不是链路缺失。**
+
+~~按 `(仓库类型, SKU, 69码, 仓)` 逐维核对 `Σbatches.qty` vs `inventory.available_qty`（容差 >1）：
+`jd own 9968 行` / `other own 9988 行` …… **缺的是"出库按批次扣减"这条链路**。~~
+
+**2026-11-16 §19.7 更正**：上段"缺的是出库按批次扣减"是**错的**。实测 `Σbatches`
+与 `期初 + Σ入库 − Σ出库` 在 jd 自有仓 **10100 行里 10097 行（99.97%）严格相等**，
+而 `inventory.available_qty` 恒等于 `beginning_stock` —— 说明批次扣减链路
+（`_allocate_to_batches`：精确优先 + FEFO 降级）实现完整且在跑，偏差来自
+**seed 把"库存数"与"出入库流水"当两套独立数据生成**。按用户定案：不动。
+
+**③ 物化与实时计数在评估窗口内必然不同。**
+`summary.active_alerts`（物化）与 `alerts/counts`（实时 COUNT）同一条 SQL 口径，
+静默期应严格相等；本轮观测到 9408 vs 9466/9414，差值随评估收敛。
+判据因此分三层：评估 `running` → **DEGRADED（不判 PASS/FAIL）**；采样失败 → DEGRADED；
+静默期 → **严格相等**。`p66_selftest` 的教训同样适用：**不许为了让判据变绿而放宽阈值**。
+
+### 18.5 顺带发现（未修，均为"报成功但没做事"或口径漂移）
+
+| # | 现象 | 影响 | 建议 |
+|---|---|---|---|
+| 1 | `DELETE /orders/{id}`、`/orders/{id}/permanent-delete`、`/orders/{id}/restore`、`DELETE /rules/{id}`、`/rules/{id}/restore`、`DELETE /suppliers/{id}`、`DELETE /cleansing/templates/{id}` 对**不存在的 id** 返回 `{ok:true}` | 前端提示"删除成功"，实际 0 行；`restore` 还会触发一次全渠道评估 | 检查 `rowcount`，返回 `ok:false` 或 `{deleted:0}` |
+| 2 | `aux.alertCounts.by_warehouse.bc` 恒 0，而 `/alerts/counts` 同日为 **554** | 前端低库存 BC 分组计数丢失（`_whView` 的 `w.bc \|\| b+c` 兜底也救不了，因为 b/c 同为 0） | `routes/dashboard.py` 的 `_wmap` 与 `routes/alerts.py` 不同源：前者用 `b+c`、后者用字面 `bc`。**复用 alerts 的实现**，不要第三份 |
+| 3 | 补货导出 xlsx **2000 行**，接口 `total=10000` | 用户以为导了全量 | 这是 `UNPAGED_CAP["repl"]=2000` 的**既有契约**（防网关 413）；需在导出完成提示里写明"前 2000 条"或改接力分页 |
+| 4 | `/cron/agg-sweep` 无 `_off_window`，匿名（无 token）即可触发，实测跑到 `rows:0 marked:0` | 匿名可让服务端扫 48h 脏日期 | 补窗口或 `CRON_SECRET`（其余 cron 已有窗口，唯独它嵌在 cleanup 里没接） |
+| 5 | 未登录首屏仍发 5 个业务请求全 401 | 无功能影响，控制台噪音 | `App` 顶层 `loadAll` 前判 token |
+
+### 18.6 未实测项（如实标注，不假装测过）
+
+`seed/*`（重灌）、`cleansing/execute-async`（真实导入，归 `import_smoke.py`）、
+`rules/evaluate`（100s+ 全量评估）、`ledger/close|reclose`（不可逆）、
+`orders|products|inventory|rules/disposals/flow-records` 批量写（改业务数据）、
+`channels|suppliers|purchase-orders` 新建（改配置/在途）。
+这些端点的**读路径/鉴权/错误语义**已覆盖（guarded 21 条全 200、无 5xx：8 条 `ok:false` +
+明确原因，13 条 `ok:true` —— 其中 7 条是对不存在的 id 报成功，见 18.5 ①），
+**业务写入效果**不在本轮范围。
+
+### 18.7 红线核对
+
+| 红线 | 做法 |
+|---|---|
+| 17（延迟结论只归 `hot`） | 本节 p50/p95 只作"链路耗时参考"，不作"快了多少"结论 |
+| 8①（没算成 vs 真的是 0） | 空壳判定区分 `ok:false` / 零计数 / HTML 边缘页；DEGRADED 不冒充 PASS |
+| 生产写 | 只跑可回滚（季节系数 1.5↔1.5002）与只读型 POST；破坏性写全部 `skip` 并写明原因 |
+| 数据四维 | 只读 DB 取真值；批次偏差如实报，不自动修 |
+| 判据唯一真源 | 性能仍 `run.py TH`；本节判据独立、可 `selftest` 反证 |
+
+---
+
+## 19. 评估接力 / 导出全量 / 空转成功根治（2026-11-16，§15.200~§15.202）
+
+> 本节回答四件事：**为什么"每天跑一次评估"这件事其实七天没跑成**、**导出说全量到底给了多少**、
+> **哪些接口报着"成功"其实一行没动**、**同一件事为什么会有两个数**。
+> 性能判据仍只在 `run.py TH`；本节判据是"链路是否真的执行", 由 `relay_selftest.py` 反证。
+
+### 19.1 每日评估：从同步 100s 改成接力（这是七天白跑的根因）
+
+`pipeline_runs` 里 `daily_rules` 从 11-10 到 11-16 每天 04:04 一条, 状态**全 timeout**,
+`finished_at` 比 `started_at` 晚 5~7 小时, error 恒为「挂起超时: running 超过 10 分钟」。
+
+不是算错, 是**跑不完**: `run_daily_rules(deep=True)` 在**一次请求内**做完
+孤儿清理 → 旧 SKU 级清理 → 无需求兜底 → 全渠道 9 万行评估 → 批次对账 → 健康快照。
+单渠道实测 83~117s, 超过 Makers 请求生命周期 → 实例被冻结 → 收尾语句不执行 →
+`maintenance_log` 停在 `#run#<fp>#<token>` → 当天既不再评也不再重跑。
+
+**改法（复用既有机制, 不新建表/不新建调度源）**：
+
+| 需要 | 复用什么 |
+|---|---|
+| 推进游标 | `sync_tasks(task_type='rule_eval')`, 与导出/导入/seed 同一张表 |
+| 防双跑 | `core.task_lease`(令牌 + 心跳 + 45s TTL) |
+| 谁来推 | cron 首跑 + `continue_tasks`(60s 请求驱动 / 平台调度 / `/health` 保活) |
+| 分片单位 | SKU 游标, 每片 4000 个, 调 `evaluate_stock_skus(ch, skus=batch)` 增量入口 |
+| 对外状态 | `eval_tasks` 一行(pending→running→done), 看板横幅零改动 |
+
+四阶段：`prep`（孤儿/旧 SKU 级/无需求）→ `eval`（SKU 游标分片）→ `post`（批次对账 + 健康快照）
+→ `kick`（采购告警重判）。`deep=False`（规则变更）直接 prep → eval → kick, 不进 post。
+
+**为什么不改评估算法一个字**：`evaluate_stock_skus(skus=[...])` 的关闭逻辑本来就带
+`_only` 集合 —— 只关本批 SKU 的 active 告警, 且不受"单轮关闭≥80% 视为数据异常"护栏限制。
+所以按 SKU 切片不会互相误关, 也不需要给评估器加"分片模式"（红线 2：没有第二套真源）。
+
+**为什么不按行 id 切片**：分片单位必须与 `evaluate_stock_skus(skus=)` 的语义一致 ——
+它按 SKU 取该 SKU 的全部仓行, 一个 SKU 的多仓行落进不同片会把单元聚合（BC 盘 = 平台+B）切开。
+分片大小 4000 < `metrics._SCOPE_MAX`(5000), 保证 ctx 加载仍走 scope 下推（不退化成全渠道）。
+
+**三个必须一起改的地方（否则"接力"等于没接）**：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `cron_daily_rules` | claim → 同步跑 → `settle_rules(ok=True)` | claim → 建任务推首片 → **不 settle**（由任务完成时落指纹） |
+| `dashboard._daily_rules_guard` | daemon 线程跑满 100s | 只推首片(8s 预算) |
+| `rules._drain_eval_tasks` | 跑完把 `eval_tasks` 置 done | 只排队；done 由接力任务收尾（否则横幅提前消失） |
+
+`maintenance_log` 的持有判定是 `created_at < NOW()-20min`（`_RUN_STALE_MIN`），
+所以每片推进时顺手 `UPDATE created_at`（`touch_claim`）—— 不续就会被看板兜底判成
+"持有者被冻结"而抢走, 再建一个任务把全量重跑一遍。
+
+### 19.2 导出：2000 行的"全量"与建任务时的全量试跑
+
+**两个独立缺陷**：
+
+1. **补货导出只有 2000 行**。`_build_export_rows` 裸调 `get_replenishment_suggestions(page=0)`,
+   而该接口无分页时按 `UNPAGED_CAP["repl"]=2000` 截断（防网关 413）。接口 `total` 说 10000,
+   下载的 xlsx 却是 2000 —— 用户以为导了全量。
+2. **建任务请求里真跑了一遍导出**。`create_export` 用 `_build_export_rows(...) is None` 判断
+   "类型认不认识" —— 那等于把整份导出真跑一遍只为判空。建任务本该是毫秒级(INSERT 一行)。
+
+**改法**：列表型导出（补货/采购/滞销）改**分页接力**：每片 `_EXPORT_PAGE=2000` 行,
+片内 CSV, 第 0 片带表头 + BOM, 后续片不带; `done` 判据是"本页不满"或"已取到 total"。
+建任务改为 `exp_type not in _EXPORT_NAMES` 的类型白名单。
+
+**为什么分片必须是 CSV**：`export_download` 的合并是 `merged += bytes`, 而 xlsx 是 zip ——
+拼两个 zip 出来的是坏文件。原来只有订单导出走 CSV 分片, 补货是单片 xlsx, 所以这个坑没暴露。
+补货改 CSV 分片后, 5 万行也不会把单个 part 推到网关 413 线。
+
+**顺带修好一个一直在的中段 BOM**：合并时给**每一片**都补 BOM, 3 片就在文件中段留 2 个
+`\ufeff`, Excel 里表现为一行 `ï»¿订单号,...` 的乱码。现在只保证第一片有, 后续片剥掉自带的
+（旧任务的历史分片都带 BOM, 剥掉正好兼容）。
+
+### 19.3 "删除成功"但一行没动（8 个端点）
+
+| 端点 | 原来 | 现在 |
+|---|---|---|
+| `DELETE /orders/{id}`、`/permanent-delete`、`/restore` | 对任意 id 回 `ok({})` | `rowcount==0` → `ok:false` + 原因 |
+| `DELETE /rules/{id}`、`/rules/{id}/restore`、`/permanent-delete` | 同上；`restore` 还会**拉起一次全渠道评估** | 同上；不存在时不排评估 |
+| `DELETE /suppliers/{id}` | 同上 | 同上 |
+| `DELETE /cleansing/templates/{id}` | 恒回「已删除」 | 同上, 并回 `deleted` 行数 |
+
+`restore_rule` 那条最贵: 一个打错的 id 会触发一次 9 万行重算（现在是接力任务, 但仍是全渠道）。
+
+**踩到的坑（本地验证抓到）**：`rules.deleted_at` 的空值是**空串不是 NULL**
+（线上 14 行全是 `''`）—— 初版写 `AND deleted_at IS NULL` 会让删除**永远不生效**。
+改成 `IFNULL(deleted_at,'')=''`。`relay_selftest` 专门守这条。
+
+### 19.4 同一个"BC 分组计数"有两个数
+
+`aux.alertCounts.by_warehouse.bc` 恒 0, 而 `/alerts/counts` 同日 **554**。
+
+根因是两份实现: `routes/alerts.py` 的映射早就补了 `bc` 桶（2026-10-30 修过"140 条 low_stock 失踪"）,
+而 `routes/dashboard.py` 自己又写了一份, 用 `"bc": b + c`（把 bc 当成 B+C 的别名）——
+bbcc 模式下真正的 `warehouse_type='bc'`（B+C 合计行）被整类丢弃。
+
+**改法（红线 2）**：把映射提成 `routes.alerts.wh_map()`, 看板 import 它, 删掉本地那份。
+两份必然漂移, 所以只留一处。
+
+### 19.5 `/cron/agg-sweep` 没有窗口
+
+`cron/_authed` 按设计**对匿名放行**（平台调度无法注入 header, 见 `docs/security.md`）,
+防护只有"时间窗 + 当日一次抢占"。`agg-sweep` 两样都没有 —— 任何人 GET 一次就能让服务端
+扫 48h 脏日期并触发物化重建。
+
+补进 `_WINDOWS`：(3,0,5,30), 与 snapshot/freshness 同档；再加 600s 进程内限频。
+
+### 19.6 未登录首屏 5 个 401
+
+App 顶层挂载即 `loadAll()`, summary/aux/stock-risk/alerts/orders 各带 token 请求 —— 没登录时
+5 条齐发全 401。功能无影响（页面正常显示登录页）, 但控制台 5 条红字、服务端白跑 5 次鉴权。
+
+`loadAll` 开头加 `if (!safeGet('c_token')) return`。只判"有没有 token", 不判有效性:
+过期 token 仍让接口如实回 401, 由拦截器统一去登录页。
+
+### 19.7 批次对账：造数问题, 不是链路缺失（更正 §18.4 ②）
+
+按 SKU 验算 `Σbatches.qty` vs `期初 + Σ入库 − Σ出库`：
+
+| SKU | available | beginning | Σ批次 | 期初+入−出 | 一致 |
+|---|---|---|---|---|---|
+| SKU-00291-J | 87 | 87 | 120 | 120 | ✓ |
+| SKU-01091-J | 0 | 0 | 149 | 149 | ✓ |
+| SKU-02163-J | 6 | 6 | 646 | 646 | ✓ |
+| SKU-08475-J | 4 | 4 | 77 | 77 | ✓ |
+
+jd 自有仓 **10100 行里 10097 行（99.97%）自洽**。而 `available_qty` **恒等于 `beginning_stock`** ——
+库存数是导入时直接给的期初值，出入库流水是另一套独立造的数据。
+
+所以：`_allocate_to_batches`（精确优先 + FEFO 降级，2026-11-01 上线）实现完整、也确实在跑；
+对账偏差来自 **seed 造数时"库存数"与"流水"不同源**。按用户定案**不动**。
+
+### 19.8 红线核对
+
+| 红线 | 本轮做法 |
+|---|---|
+| 2 一处真源 | 评估只有一套（旧同步全量删除）；仓型映射只有 `wh_map`；失效只有 `_finish` 一处 |
+| 6 读路径不做全量 | 接力跑在后台任务；建任务不再试跑导出；游标分页走 `IndexRangeScan`（无 temp/filesort） |
+| 9 算法不复制 | 评估仍调 `core.rule_eval.evaluate_stock_skus`，公式零改动 |
+| 14 SQL 真库验证 | 5 条新 SQL 全部 `EXPLAIN` 通过；sku 游标分页为 `IndexRangeScan + StreamAgg`，无临时表 |
+| 15 状态带新鲜度 | 每片刷 `updated_at` + 45s 租约；`pipeline_runs` 只在渠道跑完时写一条已完成记录（不写 running） |
+| 17 延迟分层 | 本轮不出"快了多少"，只出"是否真的执行完"（timeout 归零 / 分片数 / 行数） |
+| 20 跳过自保证 | 任务落 `sync_tasks`（DB 持久事实），冻结不丢；`continue_tasks` 按 updated_at 接手 |
+| 4/5 全局预算 | 接力仍单片单飞（租约），不并发开多片 |
+
+### 19.9 未做 / 待办
+
+| # | 事项 | 原因 |
+|---|---|---|
+| 1 | 8 个归档/批量写端点（`orders/batch`、`rules/batch`、`inventory` 批量）| 已有 `ids` 非空校验，不存在 id 时静默跳过；语义是"部分成功"，需先定义返回结构 |
+| 2 | `rules.restore` 的评估触发粒度 | 现在是全渠道浅档；精确到"该规则产出过的 alert_type"更省，但要先有 alert_type→规则的反查索引 |
+| 3 | 前端评估进度条 | 目前只有"重算中"横幅；接力任务有 `progress`（stage/chunks/skus），可做进度条，但属产品决策 |
+| 4 | 批次对账的 seed 一致性修复 | 用户定案不动（§19.7） |

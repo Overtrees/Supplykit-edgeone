@@ -97,6 +97,8 @@ python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale b
 | `perf/run.py` | **统一入口**: `hot`(快了多少) / `storm`(会不会停摆) / `cold`(重建分段) / `first`(真首建) / `noise`(测量可信度); 判据在文件头 `TH` |
 | `perf/endpoints.py` | 页面→模块→接口→数据来源→机制的唯一真源; `run.py --list-md` 生成 `docs/PERF.md` 的表格 |
 | `perf/smoke.py` | **只读冒烟**：DB 额度耗尽/接口异常时判定失败面（含 200+全 0 的静默空壳）；后端降级时打 `[DEGRADED]`（`X-App-Degraded` 头）；见 `docs/PERF.md` §8 |
+| `perf/relay_selftest.py` | **评估接力/导出全量/空转成功 的守门自检**（36 条, 零网络）；见 `docs/PERF.md` §19 |\n| `perf/e2e_chain.py` | **全链路消费方验收**：`inventory` 现读 124 路径 + 前端调用扫描 / `run` 三身份 × 全量 GET + 安全写闭环 + 11 项一致性 / `checks` / `selftest`。见 `docs/PERF.md` §18 |
+| `perf/pages_probe.py` | **16 页浏览器链路实测**：未捕获异常 / 4xx5xx / 白屏 / 错误边界。视觉细节仍归 `ui_shot_matrix.py` |
 | `perf/scenes.py` `perf/kit.py` | 场景实现 / 登录态与相位工具 |
 | `perf/seed_preflight.py` | **seed 一次性作业**：零 RU 开跑门禁 + 只读 DB 前置 + 跑完取证；判据独立于接口基准，见 `docs/PERF.md` §9 |
 | `seed_drive.py` | seed 单驱动（路径从脚本位置推导仓库根，`SK_REPO` 可覆盖）；配合 `perf/seed_preflight.py` 保证「只跑一次全程」 |

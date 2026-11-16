@@ -37,13 +37,37 @@ def _batch_pct(prod, exp):
     except Exception:
         return 0
 
-def _build_export_rows(exp_type, mode, channel, wh_type=""):
-    """按类型生成导出行(复用现有路由逻辑, 均为字典列表)"""
+_EXPORT_PAGE = 2000     # 导出单片行数: 2000 行 CSV 约 0.5MB, 远低于网关 413 线
+
+
+def _pg_of(resp, key):
+    """从列表型接口响应里取 (items, total)。
+
+    分页形状 `{<key>: [...], total: N}`; 裸调是列表(补货/滞销)或 `{suggestions: [...]}`(采购)。
+    只做结构收敛, 不判断业务语义 —— 语义在各接口里。
+    """
+    d = (resp.get("data") if isinstance(resp, dict) else resp)
+    if isinstance(d, dict):
+        it = d.get(key)
+        if it is None:
+            it = d.get("items") or d.get("suggestions") or []
+        return (it or []), int(d.get("total") or 0)
+    return (d or []), len(d or [])
+
+
+def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0):
+    """按类型生成导出行 —— 返回 {"rows": [...], "total": N}
+
+    page/page_size > 0 时只取该页(1-based, 分页接力用); 全 0 时按各接口的"裸调"口径取。
+    注意: 补货裸调会被 `UNPAGED_CAP["repl"]=2000` 截断(网关 413 防护), **导出禁止走裸调**
+    —— 导出必须传 page_size, 否则用户拿到 2000 行却以为全量(§15.201)。
+    """
     if exp_type in ("replen", "purchase"):
         # 补货导出(采购建议不再走此——曾 purchase_suggestions 误用补货数据组装成采购样式)
         from routes.replenishment import get_replenishment_suggestions
-        r = get_replenishment_suggestions(days=28, mode=mode, channel=channel)
-        items = (r.get("data") or []) if isinstance(r, dict) else (r or [])
+        r = get_replenishment_suggestions(days=28, mode=mode, channel=channel,
+                                          page=page, page_size=page_size)
+        items, total = _pg_of(r, "items")
         # 补货导出: 转中文表头(曾直接 return items——接口英文字段作表头; 补周转列齐全)
         out = []
         for it in items:
@@ -64,13 +88,12 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "建议补货量": it.get("suggested_qty", ""), "B建议补": it.get("b_suggested", ""),
                 "备注": it.get("note", ""),
             })
-        return out
+        return {"rows": out, "total": total}
     if exp_type == "purchase_suggestions":
         # 采购导出: 采购建议接口(供应商级参数/MOQ/actual_purchase——曾误用补货数据组装成采购样式)
         from routes.purchase import purchase_suggestions
-        r = purchase_suggestions(channel=channel, mode=mode)
-        dd = r.get("data") if isinstance(r, dict) else r
-        items = dd.get("suggestions") if isinstance(dd, dict) else (dd or [])
+        r = purchase_suggestions(channel=channel, mode=mode, page=page, page_size=page_size)
+        items, total = _pg_of(r, "suggestions")
         out = []
         for it in items:
             out.append({
@@ -87,14 +110,12 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "补后周转": it.get("after_turnover", ""), "目标周转": it.get("target_turnover", ""),
                 "安全线": it.get("safety_qty", ""), "备注": it.get("note", ""),
             })
-        return out
-        return items
+        return {"rows": out, "total": total}
     if exp_type == "slow":
         # 滞销导出: 与页面同源(disposal-suggestions——多因素 level/原因/建议; 曾用 slow_moving 基础7字段表头不全)
         from routes.purchase import disposal_suggestions
-        r = disposal_suggestions(channel=channel)
-        data = (r.get("data") or {}) if isinstance(r, dict) else (r or [])
-        items = data.get("items") if isinstance(data, dict) else (data or [])
+        r = disposal_suggestions(channel=channel, page=page, page_size=page_size)
+        items, total = _pg_of(r, "items")
         out = []
         for it in items:
             out.append({
@@ -109,7 +130,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "临期至": str(it.get("best_before") or "")[:10] or "",
                 "B仓超期": "是" if it.get("b_storage") else "",
             })
-        return out
+        return {"rows": out, "total": total}
     if exp_type == "orders":
         # 订单导出(当前渠道, 最多 5 万行)
         from routes.orders import list_orders
@@ -129,7 +150,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                 "入库日期": str(o.get("paid_at") or "")[:10],
                 "平台": o.get("platform", ""), "渠道": o.get("channel", ""),
             })
-        return out
+        return {"rows": out, "total": int(data.get("total") or 0) if isinstance(data, dict) else len(out)}
     if exp_type == "inventory":
         # 进销存导出(当前渠道+仓型, 最多 5 万行)——含批次级明细(每批次一行, 主字段重复;
         # 曾只导出汇总行(batch_* 摘要)——用户要求"全量明细看多批次对应数量")
@@ -193,7 +214,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type=""):
                         "平均库存": it.get("avg_stock", ""),
                     })
                 out.append(_row)
-        return out
+        return {"rows": out, "total": len(out)}
     return None
 
 async def create_export(request: Request):
@@ -209,7 +230,10 @@ async def create_export(request: Request):
     # 致传统模式导出变 BBCC(前端漏传时静默错误); 现在缺失显式报错, 无兜底
     if exp_type in ("replen", "purchase_suggestions", "purchase") and not mode:
         return fail("导出补货/采购需传 mode 参数(当前补货模式: bbcc / traditional)")
-    if _build_export_rows(exp_type, mode, channel, wh_type) is None:
+    # 2026-11-16 §15.201: 原来用 `_build_export_rows(...) is None` 判类型 —— 那是在**建任务
+    #   请求里**把整份导出真跑一遍(补货 = 物化全量 + 5 万行组装)只为判断"类型认不认识"。
+    #   建任务本该是毫秒级(它只是 INSERT 一行), 这一步让它在数据大时直接撞 120s 边界。
+    if exp_type not in _EXPORT_NAMES:
         return fail("未知导出类型: " + str(exp_type))
     from routes.tasks import _new_task_id  # 延迟(防循环: tasks→task_export→tasks)
     task_id = _new_task_id("exp")
@@ -310,39 +334,48 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
                 _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
                 parts.append(part_name)
             done = len(items) < page_size or page * page_size + len(items) >= total
+        elif exp_type == "inventory":
+            # 进销存明细: 单次全量(接口本身就是物化读, 不分页), 单片 CSV
+            _r0 = _build_export_rows(exp_type, mode, channel, wh_type)
+            rows = _r0["rows"]
+            total = len(rows)
+            got = len(rows)
+            buf = io.StringIO()
+            if rows:
+                import csv as _csv
+                w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+                w.writeheader()
+                w.writerows(rows)
+            part_name = "exp_part_%s_%d.csv" % (task_id, page)
+            _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
+            parts.append(part_name)
+            done = True
         else:
-            rows = _build_export_rows(exp_type, mode, channel, wh_type)
-            # 非订单类型: 一次生成(小数据量)
-            if exp_type in ("inventory",):
+            # 列表型导出(补货/采购/滞销): **分页接力**, 每片 _EXPORT_PAGE 行写一个 CSV 分片。
+            # 2026-11-16 §15.201 根治: 原来 `_build_export_rows` 一次裸调(补货走 page=0 →
+            #   被 UNPAGED_CAP 截断 2000 行), 用户以为导了全量; 且一次组装 5 万行 xlsx
+            #   会把建任务/续跑请求推到 120s 边界。现在与订单导出同款: 分页 + 分片 + 下载合并。
+            #   分片格式必须是 CSV(多片可字节拼接); xlsx 是 zip, 拼两片 = 坏文件。
+            _r1 = _build_export_rows(exp_type, mode, channel, wh_type,
+                                     page=page + 1, page_size=_EXPORT_PAGE)
+            rows = _r1["rows"]
+            total = int(_r1.get("total") or 0)
+            got = page * _EXPORT_PAGE + len(rows)
+            if rows or page == 0:
                 buf = io.StringIO()
                 if rows:
                     import csv as _csv
                     w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
-                    w.writeheader()
+                    if page == 0:
+                        w.writeheader()      # 只有第一片带表头
                     w.writerows(rows)
-                part_name = "exp_part_%s_%d.csv" % (task_id, 0)
-                _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
+                part_name = "exp_part_%s_%d.csv" % (task_id, page)
+                # BOM 只在第一片: 后续片带 BOM 会在合并文件的中段出现 \ufeff(旧 bug, 见下载侧注释)
+                _save_export_part(part_name, buf.getvalue().encode(
+                    "utf-8-sig" if page == 0 else "utf-8"))
                 parts.append(part_name)
-                done = True
-            else:
-                from openpyxl import Workbook
-                from openpyxl.styles import Font
-                bbuf = io.BytesIO()
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "导出"
-                if rows:
-                    headers = list(rows[0].keys())
-                    ws.append(headers)
-                    for c in ws[1]:
-                        c.font = Font(bold=True)
-                    for r in rows:
-                        ws.append([r.get(k) for k in headers])
-                wb.save(bbuf)
-                part_name = "exp_part_%s_0.xlsx" % task_id
-                _save_export_part(part_name, bbuf.getvalue())
-                parts.append(part_name)
-                done = True
+            # 完成判据: 本页不满 → 到底了; 或已取到 total 行
+            done = (len(rows) < _EXPORT_PAGE) or (total > 0 and got >= total)
         if done:
             # 分片不合并(2026-10-09: TiDB 单行 entry 上限 6MB——20MB CSV 单行存不下):
             # result 记分片列表, 下载时按 task 读分片合并返回
@@ -416,10 +449,16 @@ def export_download(filename: str):
                             except Exception as _eb:
                                 try_err('tasks', '分片解码降级(%s)' % p, _eb)
                         else:
-                            # 2026-10-30 双 BOM 修复: 存储的文本本身已带 BOM, encode('utf-8-sig')
-                            #   会再加一个 → Excel 首列出现 "ï»¿"。这里保证恰好一个 BOM
+                            # BOM 只允许出现在**文件开头**。旧实现在这里给每一片都保证一个 BOM,
+                            #   合并 3 片就有 2 个 BOM 落在文件中段 → Excel 里表现为一行
+                            #   "ï»¿订单号,..." 的乱码行(§15.201, 订单导出 5 万行时必现)。
+                            #   现在: 第一片保证恰好一个; 后续片剥掉自带的。
                             _b = c.encode("utf-8")
-                            merged += _b if _b.startswith(b"\xef\xbb\xbf") else b"\xef\xbb\xbf" + _b
+                            _bom = b"\xef\xbb\xbf"
+                            if not merged:
+                                merged = _b if _b.startswith(_bom) else _bom + _b
+                            else:
+                                merged += _b[3:] if _b.startswith(_bom) else _b
                     elif c is not None:
                         merged += bytes(c)
                 filename = res.get("name") or filename  # 下载文件名用正式名(分片模式 filename=task_id)

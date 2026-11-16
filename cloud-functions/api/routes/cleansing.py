@@ -930,8 +930,11 @@ def cleansing_task(task_id: str):
 @traced
 def cleansing_templates_delete(tid: int):
     """删除清洗模板"""
-    execute("DELETE FROM cleansing_templates WHERE id=%s", [tid])
-    return ok({"message": "已删除"})
+    _n = execute("DELETE FROM cleansing_templates WHERE id=%s", [tid])
+    if not _n:
+        # 2026-11-16 §15.202: 原来无论删没删到都回"已删除"
+        return fail("模板不存在")
+    return ok({"message": "已删除", "deleted": int(_n)})
 
 
 @router.get("/cleansing/templates")

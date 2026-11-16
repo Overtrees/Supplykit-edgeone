@@ -529,8 +529,10 @@ from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa:
 
 _SH = _tz(_td(hours=8))
 _arch = _WINDOWS.get("archive")
-check("cron 窗口: 覆盖 9 个重任务(含 2026-11-04 账期结账)", len(_WINDOWS) == 9,
-      str(sorted(_WINDOWS)))
+# 2026-11-16 §15.202: 9 → 10 —— 新增 agg_sweep(原来既无窗口也无抢占, 而 cron 鉴权按设计
+#   对匿名放行, 等于任何人可让服务端扫 48h 脏日期)
+check("cron 窗口: 覆盖 10 个重任务(含 2026-11-04 账期结账 / 2026-11-16 agg_sweep)",
+      len(_WINDOWS) == 10, str(sorted(_WINDOWS)))
 check("cron 窗口: ledger_close = 00:30-03:00 CST(每月 1 号结上月)",
       _WINDOWS.get("ledger_close") == (0, 30, 3, 0), str(_WINDOWS.get("ledger_close")))
 check("cron 窗口: archive = 00:30-04:00 CST", _arch == (0, 30, 4, 0), str(_arch))
@@ -1923,9 +1925,15 @@ try:
     _sp4 = open('routes/suppliers.py', encoding='utf-8').read()
     check("S2-1 供应商评分变更触发规则重算(评分是规则 ctx 输入)",
           '_schedule_rule_eval' in _sp4 and 'if "score" in d' in _sp4, "suppliers.py")
+    # 2026-11-16 §15.200: 评估改接力后, "评估完补一次失效"从 rules.py 的消费循环
+    #   移到了 core/rule_eval_task._finish(全部阶段跑完才算完)。断言跟着指向新位置,
+    #   并额外要求 rules.py 里**不再**在排队时就失效(那会让缓存白重建一轮)。
     _rl4 = open('routes/rules.py', encoding='utf-8').read()
-    check("S2-1 后台评估完补一次失效(否则告警变了看板还旧)",
-          '_inv("rules")' in _rl4, "rules.py")
+    _rt4 = open('core/rule_eval_task.py', encoding='utf-8').read()
+    check("S2-1 后台评估完补一次失效(否则告警变了看板还旧) —— 已随接力任务收尾",
+          '_inv("rules")' in _rt4 and "def _finish(" in _rt4, "core/rule_eval_task.py")
+    check("S2-1 排队阶段不再提前失效(评估一个 SKU 都没评, 失效只会白重建)",
+          '_inv("rules")' not in _rl4, "rules.py")
 
     # S2-2 删掉"写操作后全量重建日销三窗口"却没补增量 → 线上 sku_sales_stats 比订单晚一天。
     #   补货/采购/断货/健康全读它, 不修的话"缓存失效后重建出来的还是旧数"。
@@ -2702,8 +2710,11 @@ try:
     check("D4 run_daily_rules 三参数(channels/deep/alert_types)",
           "def run_daily_rules(channels=None, deep=True, alert_types=None)" in _cron_src,
           "routes/cron.py")
-    check("D4 浅档真的跳过重活(循环范围判空, 不是注释)",
-          _cron_src.count("(_chs if deep else [])") >= 2, "routes/cron.py")
+    # 2026-11-16 §15.200: 评估改接力后, "浅档跳过重活"由阶段机表达 ——
+    #   deep=False 时 eval 结束直接进 kick, 不进 post(批次对账 + 健康快照)。
+    _rt_src = open('core/rule_eval_task.py', encoding='utf-8').read()
+    check("D4 浅档真的跳过重活(阶段直接跳到 kick, 不是注释)",
+          'STAGE_POST if p.get("deep") else STAGE_KICK' in _rt_src, "core/rule_eval_task.py")
     check("D4 可按 alert_type 精确评估(only_ats 过滤三组规则)",
           "only_ats" in _re_src and "_want_ats" in _re_src, "core/rule_eval.py")
     check("D4 文案类变更不触发评估(实质变更才调度, 否则只同步显示字段)",
