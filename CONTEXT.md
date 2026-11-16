@@ -369,8 +369,12 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   严格相等，且 `available_qty` 恒等于 `beginning_stock` —— 扣减链路（`_allocate_to_batches`：
   精确优先 + FEFO 降级）完整在跑，偏差来自 **seed 把库存数与流水当两套数据生成**。
   用户定案：不动。
-- ~~**P6-11 `aux.alertCounts.by_warehouse.bc` 恒 0（中）**~~ → **已根治（§15.202）**：
-  映射提为 `routes.alerts.wh_map()` 唯一实现，dashboard 删掉自写的 `"bc": b+c`。
+- ~~**P6-11 `aux.alertCounts.by_warehouse.bc` 恒 0（中）**~~ → **已根治（§15.202 + §15.203，两层）**：
+  ① 映射提为 `routes.alerts.wh_map()` 唯一实现，dashboard 删掉自写的 `"bc": b+c`；
+  ② 收敛后线上仍报 0 —— 根因在**物化**：fp 只由 `data_version_dom`（数据写入）算，
+     改代码口径它一分不变 → `serve` 判定"命中"直接返旧物化。给 `unit_store._fp_of`
+     加第三维 `_FP_VER`（红线 22），四家读模型（unit/dash/list/own）一起失配重建。
+  线上复验：aux 与 alerts 三次完全一致 `bc=554`。
 - ~~**P6-12 补货导出上限 2000 行（低）**~~ → **已根治（§15.201）**：列表型导出改分页接力
   （每片 2000 行 CSV），`done` 按 `total` 判；顺带修好多分片合并的中段 BOM。
 - ~~**P6-13 `/cron/agg-sweep` 无窗口、匿名可触发（低）**~~ → **已根治（§15.202）**：
@@ -388,6 +392,18 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   可做进度条；当前只有"重算中"横幅。
 - **P7-4 并发只压到 8~19 会话**：100 万单/1 万 SKU 仍是结构预测，未做等比例实测（历史遗留，未变）。
 - **P7-5 `admin123` 弱口令**：多脚本依赖，`--reset` 能力已就位，未改（历史遗留，未变）。
+
+### 2026-11-16 遗留（§15.203 之后新增）
+
+- **P8-1 日销四套口径"同名不同值"（中，产品决策）**：`daily_sales` 这个字段名在进销存与补货
+  都返回，但值不同（实测差 −29.7%~+89%）。**维度层四处已完全一致**（都读 `__C__` + 69 码优先），
+  差异只在融合公式：告警 `ds28` 单值 / 进销存 `rolling_predict(ds7,14,28)` /
+  采购 `ds14·ds28` 自权重 / 补货 `rolling_predict(ds*_cut)×season×act`。
+  `biz/sales.py:370` 明写这是有意设计（物化只存底料、各消费方现场算），`rolling_predict`
+  只有一份（非公式复制）。所以**不建议改数值**（会动判定阈值与建议量），
+  建议区分命名（`daily_sales_raw` / `daily_sales_cut`）或进销存加一列对照。详见 `docs/PERF.md` §19.11。
+- **P8-2 `season` 系数已配置但全 disabled（低）**：`jd` 的 `season_config_bbcc` 有 618/1111/年货节
+  三条（1.3~1.5），当前 `enabled:false` 不生效。启用前要确认补货建议量能接受 30~50% 的上浮。
 
 
 ## 用户偏好

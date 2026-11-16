@@ -1734,6 +1734,65 @@ bbcc 模式下真正的 `warehouse_type='bc'`（B+C 合计行）被整类丢弃�
 **改法（红线 2）**：把映射提成 `routes.alerts.wh_map()`, 看板 import 它, 删掉本地那份。
 两份必然漂移, 所以只留一处。
 
+#### 但收敛之后 aux 还是 0 —— 第二层根因：物化 fp 不含代码口径
+
+改完部署（`a94044f` → `dp24txlvjkin` Success/Prod=yes），`/alerts/counts` 报 `bc=554`,
+`/dashboard/aux` **仍然报 `bc=0`**。当时第一反应是"没部署成功", 于是拿同一版的 6 条删除判据
+反证 —— 全过, 说明代码确实在线上。真正原因是**物化语义**：
+
+```python
+# routes/dashboard.py
+_data, _swr = _DS.serve("dash_aux", "dash_aux|jd|bbcc", "jd", "bbcc",
+                        lambda: _build_aux("jd", "bbcc"))
+# core/dash_store.py
+base = _US.fp_of(_deps("dash_aux"), channel, mode)   # 域: orders/inventory/products/suppliers/rules/config
+return md5("%s|%s|%s" % (base, family, scope))
+```
+
+`_deps("dash_aux")` 里**没有"仓型映射"这个东西** —— 它是数据域清单, 而映射是**代码**。
+只要没人写数据, `data_version_dom` 一个都不涨 → fp 不变 → `serve` 判定"这是最新答案"
+→ 直接返回旧物化, 连后台重建都不起。要等下一次导入撞上域计数才自愈。
+
+这不是 BC 计数一例, 而是**全族**：`unit_store` / `dash_store` / `list_store` / `own_store`
+四家都靠同一个 `fp_of`, 改任何输出口径（映射、公式、取数范围、聚合维度）都会静默返旧值。
+
+**改法（红线 22, 本届新增）**：给 fp 加第三维「代码口径版本」——
+
+```python
+_FP_VER = 2
+raw = "|".join("%s=%d" % (d, vals.get(d, 0)) for d in domains)
+raw += "|g=%s|m=%s" % (_g, _m)
+raw += "|c=%d" % _FP_VER          # ← 新增
+```
+
+一处改、四家跟着失配（因为它们都经 `fp_of`，这正是红线 2 的回报）。+1 不新增查询/表/开关,
+旧 gen 继续服务到新 gen 完整落盘（红线 6/19）。
+
+**配套（红线 20 的延伸）**：这四家的冷态行为**不对称** ——
+
+| 读模型 | fp 失配时 | 自愈 |
+|---|---|---|
+| `list_store.serve` | 返上一版 + `submit_background` | ✅ |
+| `own_store.serve` | 返上一版 + `submit_rebuild` | ✅ |
+| `dash_store.serve` | 返上一版 + `submit_background` | ✅ |
+| `unit_store.tally_of` | **`return None`**（调用方退回现算） | ❌ |
+
+`tally_of` 是纯读原语，重建的唯一入口是**写入路径**的失效钩子。于是"改口径部署后没人导入"
+就会一直慢（正确但每次都回退现算 3.8s）。补 `continue_tasks` 的 `_bootstrap_materialized`：
+600s 限频 + 只调 `ensure_async()`（内部按 `head.fp` 判 fresh + 单飞 + 30s 冷却），
+**不自己算 fp、不起裸线程**（否则是第二套闸门）。它 bump 不了任何域计数、打不了任何墓碑,
+所以不违反红线 19「读路径禁止触发失效」。
+
+**线上复验（2026-11-16 13:12）**：
+
+```
+aux 第1次: {b:0, c:0, own:8235, bc:554, unknown:619}   swr=True
+aux 第2次: {b:0, c:0, own:8235, bc:554, unknown:619}   swr=False
+alerts/counts: {b:0, c:0, own:8235, bc:554, unknown:619}
+```
+
+`relay_verify --only delmap,sweep` → **4/4 通过**（此前这两条恒红）。
+
 ### 19.5 `/cron/agg-sweep` 没有窗口
 
 `cron/_authed` 按设计**对匿名放行**（平台调度无法注入 header, 见 `docs/security.md`）,
@@ -1788,3 +1847,82 @@ jd 自有仓 **10100 行里 10097 行（99.97%）自洽**。而 `available_qty` 
 | 2 | `rules.restore` 的评估触发粒度 | 现在是全渠道浅档；精确到"该规则产出过的 alert_type"更省，但要先有 alert_type→规则的反查索引 |
 | 3 | 前端评估进度条 | 目前只有"重算中"横幅；接力任务有 `progress`（stage/chunks/skus），可做进度条，但属产品决策 |
 | 4 | 批次对账的 seed 一致性修复 | 用户定案不动（§19.7） |
+
+### 19.10 线上实测（2026-11-16）
+
+判据只看"真的做完没有"，不看"快了多少"（红线 17）。
+
+| 项 | 数据 | 来源 |
+|---|---|---|
+| 规则评估 | `ev_1794804393_6117` **379s done**，`chunks=6 skus=20000 hits=30` | `sync_tasks` + `pipeline_runs` |
+| 评估前 | `daily_rules` 11-10~11-16 **连续 7 天 100% timeout**（单请求 83~117s > 生命周期） | `pipeline_runs` |
+| 评估后 | 最近 4 条 `['ok','ok','timeout','timeout']`，无残留 `running`，`eval_tasks` 已 done，`maintenance_log` 落指纹 `170200\|166420\|45505475` | 同上 |
+| 补货导出 | `parts=5 rows=10000 total=10000`，下载 `got=10000`，三处一致；BOM 次数 0 | `sync_tasks.params/result` + 下载对账 |
+| 导出耗时 | 10000 行 82s；小批量 2~10s | `sync_tasks` |
+| 删除空转 | 8 端点线上实测全部 `ok:false`（不存在的 id） | `relay_verify --only delmap` |
+| BC 计数 | `aux.bc=554` == `alerts.bc=554`（此前 aux 恒 0） | 同上 |
+| agg-sweep | `{"skipped":true,"reason":"窗口外(非调度时段)"}` | `relay_verify --only sweep` |
+| 未登录首屏 | 5 个 401 → 0（`loadAll` 判 token） | 浏览器 |
+
+门禁：`preflight` **8/8**、`local_test` **864/0**、`test_audit` **82/0**、
+`relay_selftest` **36/36**、真实 SQL 冒烟 **309/0**。
+
+### 19.11 日销到底有几套口径（2026-11-16 核实）
+
+用户提问："补货/进销存/采购有三套融合值？进销存应该对齐 bbcc 的日销取值。"
+
+核实结论分两层，**必须分开说**，否则会误以为维度不一致：
+
+**① 维度层：四处已经完全一致** ✓
+
+| 消费方 | 取值维度 | 69 码优先 |
+|---|---|---|
+| 补货（bbcc） | `__C__` 全国 C 仓 | 该码 → SKU 合计 |
+| 补货（traditional） | 逐仓 | 该码 → SKU 合计 |
+| 进销存（own 行） | `__C__` 全国 C 仓 | 该码 → SKU 合计 |
+| 进销存（platform 行） | 逐仓 | 该码 → SKU 合计 |
+| 采购 | `WH_C`（=`__C__`） | 该码 → SKU 合计 |
+| 告警/看板 | `metrics.dim_of` → `__C__` | 该码 → SKU 合计 |
+
+即用户说的"全国 C 仓总计 + 69 码组合优先"，**六处都已经是**。`dim_of()` 是唯一决定处
+（BC 盘 / 自有仓 / B 仓一律 `__C__`，因为 B 仓是调拨中转不产生销售）。
+
+**② 公式层：四套，且差异可观**（同一个 SKU、同一维度、同一份底料）
+
+| 消费方 | 融合公式 | 设计依据 |
+|---|---|---|
+| 告警判定 / 规则页 | `ds28` **单窗口** | 保守；最新 28 天最贴近当下 |
+| 进销存（台账） | `rolling_predict(ds7, ds14, ds28)` | 三窗口九宫格趋势 |
+| 采购 | `ds14 / ds28` 自权重（`>1.15→.55/.45`、`<0.85→.35/.65`、否则 `.5/.5`） | 采购周期长，7 天噪音不该进来 |
+| 补货 | `rolling_predict(ds7_cut, ds14_cut, ds28_cut) × season × act` | 抗促销峰值；再叠季节/活动系数 |
+
+线上真实数据（`jd` / `__C__` / 合计行，按 ds28 降序取 6 个 SKU）：
+
+| SKU | 进销存（原始） | 补货（cut） | 差 | 采购（14/28） | 告警（ds28） |
+|---|---|---|---|---|---|
+| SKU-00488-J | 3.36 | 3.25 | −3.4% | 5.73 | 6.36 |
+| SKU-04846-J | 3.31 | 3.10 | −6.3% | 4.70 | 5.04 |
+| SKU-00355-J | 4.08 | 3.94 | −3.3% | 4.88 | 4.73 |
+| SKU-04132-J | 4.00 | 3.92 | −1.9% | 4.91 | 4.68 |
+| SKU-05121-J | 4.25 | 2.99 | **−29.7%** | 5.44 | 4.68 |
+| SKU-05037-J | 2.92 | 2.67 | −8.5% | 4.02 | 4.61 |
+
+`season` 当前**不生效**（`season_config_bbcc` 三条 618/1111/年货节全 `enabled:false`），
+但一旦启用会再乘 1.3~1.5。`act` 在 7/14 天无销量时 ×0.5（断货后复售的保守处理）。
+
+**③ 这是有意设计，不是 bug —— 但确实是"同名不同值"**
+
+`biz/sales.py:370-371` 的注释写得明确：
+
+> 不固化 fused(rolling_predict)列 —— 采购用 14/28 自权重、看板/断货用 rolling_predict、
+> 补货用削峰+shrink 组合，各消费方口径不同，现场 O(1) 计算
+
+物化只存**慢变底料**（ds7/14/28 + cut），四套公式各在消费方现场算（红线 9：算法只有一份
+`rolling_predict`，四套是**输入不同**而非**公式复制**）。
+
+问题在于**字段名相同**：进销存与补货都返回 `daily_sales`，值可能差 30%。
+用户看到"同一个 SKU 两个日销"，无法判断哪个对。这才是要解决的**表达问题**，
+不是口径问题 —— 改口径会动到线上已有的判定阈值与建议量（红线 1：不理解就别动）。
+
+**待定（需产品决策）**：是否给两处字段区分命名（如 `daily_sales_raw` / `daily_sales_cut`），
+或在进销存增加一列对照。**不改数值**。
