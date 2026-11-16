@@ -238,8 +238,8 @@ def matrix(T):
         ("APIRouter", "routes/*.py", T["routers"], "DEVELOPMENT 24"),
         ("路由文件", "routes/*.py", T["route_files"], "DEVELOPMENT 34"),
         ("导入 target", "TARGET_FIELDS", T["import_targets"], "README 9 类（正确保留）"),
-        ("日期分卷", "docs/history/2026-*", T["date_volumes"], "DEVELOPMENT §12 = 14"),
-        ("专题卷", "docs/history/非日期", T["topic_volumes"], "DEVELOPMENT §12 = 3"),
+        ("日期分卷", "docs/history/2026-*", T["date_volumes"], "DEVELOPMENT §12 = %d" % T["date_volumes"]),
+        ("专题卷", "docs/history/非日期", T["topic_volumes"], "DEVELOPMENT §12 = %d" % T["topic_volumes"]),
         ("最大章节号", "标题级 §15.x", "§15.%d" % T["max_section"], "DEVELOPMENT §12"),
         ("跨卷重号数", "标题级同号多文件", T["dup_sections"], "§12 注明非全局唯一"),
     ]
