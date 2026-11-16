@@ -854,19 +854,11 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
             #   rows_imported 用覆盖不用累加 —— 它的语义是"上一批导了多少行",
             #   累加会让重跑一次导入(幂等重导)变成双倍计数。
             try:
-                from db import execute as _efr
-                _bizd = ""
-                for _c in (cleaned_all or []):
-                    for _k in ("ordered_at", "inbound_date", "outbound_date", "date",
-                               "arrived_time", "paid_at", "arrival_date"):
-                        _v = str(_c.get(_k) or "")[:10]
-                        if _v and _v > _bizd:
-                            _bizd = _v
-                _efr("INSERT INTO data_freshness(doc_type, channel, last_import_at, "
-                     "last_biz_date, rows_imported) VALUES(%s,%s,NOW(),%s,%s) "
-                     "ON DUPLICATE KEY UPDATE last_import_at=NOW(), "
-                     "last_biz_date=VALUES(last_biz_date), rows_imported=VALUES(rows_imported)",
-                     [target, channel, _bizd, success + failed])
+                # 2026-11-16: 记账下沉到 `common.record_freshness`(唯一写入点)。
+                #   原来在这里取「本批 cleaned 行里的最大业务日期」→ 被跳过/去重的行不进库,
+                #   记出来的是"文件到哪天"而不是"库里到哪天"(实测差 3 天假新鲜)。
+                from routes.common import record_freshness as _rf
+                _rf(channel, target, success + failed)
             except Exception as _frx:
                 try_err('cleansing', '新鲜度记录降级', _frx)
             from routes.analysis_cache import invalidate

@@ -468,4 +468,12 @@ async def put_seasons(request: Request):
             (key, json.dumps(items, ensure_ascii=False), channel))
     from routes.analysis_cache import invalidate
     invalidate("config")  # 季节参数变更 → 补货/采购缓存即时失效
+    # 2026-11-16: 季节系数现在由 `core.metrics.season_factor` 读 `channel_cfg`(60s 进程内缓存)
+    #   —— 不失效的话"改完季节系数 → 补货/采购 60s 内仍按旧值算", 与 invalidate("config") 的
+    #   即时性承诺不一致(参数保存必须当天可见)。
+    try:
+        from core import metrics as _M
+        _M.invalidate_cfg(channel)
+    except Exception as _ein:
+        try_err('suppliers', '季节配置缓存失效降级', _ein)
     return ok({"updated": len(items)})

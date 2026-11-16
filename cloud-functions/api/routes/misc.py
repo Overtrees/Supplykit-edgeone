@@ -721,15 +721,53 @@ def flow_records_list(target: str = "inbound", page: int = 1, page_size: int = 5
                "extra_label": "供应商" if target == "inbound" else "仓库"})
 
 
+# ── 新鲜度阈值(2026-11-16 P0 修复) ────────────────────────────────────
+# 原实现两个缺陷叠在一起, 结果是**停更完全静默**:
+#   ① 判据只认 `last_import_at`(操作时间)。有人今天导一份 9 月的文件 → 判"今天很新",
+#      而 `order.last_biz_date` 实测 11-12、库里 orders 真实最大 11-09 —— 记账值本身也不可信;
+#   ② 阈值一刀切 `d<=7 正常`, 而日更数据停 7 天恰好在阈值内 → level=0、圆点不渲染。
+#      2026-11-09 断更到 11-16 正好 7 天, 前端连一个圆点都没有(用户实测反馈)。
+# 现在: 天数取「业务日期差」与「导入时间差」的**更差者**(内容旧就是旧, 不问谁导的);
+#      阈值按该源真实更新节奏分档, 日更源 1 天就橙。
+_FRESH_TTL = {          # doc_type → (转橙, 转红) 天数
+    "order": (1, 3),           # 订单: 日更, 隔一天没单就是异常
+    "inventory": (1, 3),       # 库存快照: 日更
+    "platform_inv": (1, 3),
+    "inventory_b": (1, 3),
+    "inbound": (7, 30),        # 出入库流水: 随业务发生, 一周没动静正常
+    "outbound": (7, 30),
+    "gmv_flow": (30, 60),      # 回款: 按月导入(上月 GMV), 月中差 15 天是常态
+    "product": (14, 60),       # 商品/供应商档案: 极少变
+    "supplier": (14, 60),
+}
+_FRESH_TTL_DEFAULT = (7, 30)
+# 只用导入时间的源: 无业务日期语义(档案/库存), 或业务日期天然滞后(回款账期)。
+#   gmv_flow 的 last_biz_date 是**账期月份**(实测 2026-08-13), 拿它比今天会永久报红。
+_FRESH_IMPORT_ONLY = ("inventory", "platform_inv", "inventory_b",
+                      "product", "supplier", "gmv_flow")
+
+
+def _fresh_ttl(doc_type):
+    return _FRESH_TTL.get(str(doc_type or ""), _FRESH_TTL_DEFAULT)
+
+
+def _fresh_level(days, doc_type=""):
+    """天数 → 档位(0 正常 / 1 橙 / 2 红)。阈值按源分档, 纯函数便于回归直测。"""
+    if days is None:
+        return 0
+    _warn, _err = _fresh_ttl(doc_type)
+    return 0 if days <= _warn else (1 if days <= _err else 2)
+
+
 @router.get("/data-freshness")
 @traced
 def data_freshness(channel: str = "jd"):
-    """数据新鲜度(2026-10-29): 各导入源最后导入时间 + 看板指标级推导
+    """数据新鲜度(2026-10-29): 各导入源的停更天数 + 看板指标级推导
 
     背景: 所有数据源=ERP/平台导出快照, 停更时界面无感知(日销摊薄→建议失真)
     返回:
-      sources: 各源 {doc_type,label,last_import_at,last_biz_date,days,level}
-      staleLevel: 0 正常(≤7天) / 1 橙(8-30) / 2 红(>30)  ← 取最差
+      sources: 各源 {doc_type,label,last_import_at,last_biz_date,days,level,missing}
+      staleLevel: 0 正常 / 1 橙 / 2 红  ← 取各源最差(阈值分源, 见 _FRESH_TTL)
       metrics: 看板指标 → 依赖源的最旧状态
     """
     from datetime import datetime as _dt, timezone as _tz
@@ -759,10 +797,24 @@ def data_freshness(channel: str = "jd"):
                 continue
         return None
 
-    def _lvl(d):
-        if d is None:
-            return 0
-        return 0 if d <= 7 else (1 if d <= 30 else 2)
+    def _lvl(d, doc_type=""):
+        """天数 → 档位。阈值按源分档(见 `_FRESH_TTL`), 不再一刀切 7 天。"""
+        return _fresh_level(d, doc_type)
+
+    def _days_of(_r):
+        """该源停更天数 = max(业务日期差, 导入时间差)
+
+        两者都要看: 只听导入时间 → "导旧文件"判新鲜; 只听业务日期 → 档案/库存无此列。
+        业务日期天然滞后的源(`_FRESH_IMPORT_ONLY`)只认导入时间。
+        """
+        _dtp = str(_r.get("doc_type") or "")
+        _imp = _days(_r.get("last_import_at"))
+        _biz = None if _dtp in _FRESH_IMPORT_ONLY else _days(_r.get("last_biz_date"))
+        if _imp is None:
+            return _biz
+        if _biz is None:
+            return _imp
+        return max(_imp, _biz)
 
     # 2026-10-29 兜底: data_freshness 无记录(新表/历史数据) → 从业务表 MAX(业务日期) 反推
     # 用**预置完整 SQL 字符串**(不做 % 格式化, 避免与 WHERE 内 %s 冲突)
@@ -799,12 +851,21 @@ def data_freshness(channel: str = "jd"):
     src = {}
     for r in rows:
         _dtp = str(r.get("doc_type") or "")
-        # 优先导入时间; 无则用业务日期(兜底反推) —— 两者都代表"数据截至"
-        _d = _days(r.get("last_import_at")) if r.get("last_import_at") else _days(r.get("last_biz_date"))
+        # 天数 = 业务日期差 与 导入时间差 的**更差者**(内容旧就是旧, 不问谁导的)
+        _d = _days_of(r)
         src[_dtp] = {"doc_type": _dtp, "label": _LBL.get(_dtp, _dtp),
                      "last_import_at": str(r.get("last_import_at") or "")[:19],
                      "last_biz_date": str(r.get("last_biz_date") or "")[:10],
-                     "days": _d, "level": _lvl(_d)}
+                     "days": _d, "level": _lvl(_d, _dtp)}
+    # 缺失源也要可见(2026-11-16): 「从未导入」不等于「新鲜」。
+    #   原实现只返回**有记录**的源 —— jd 9 类只有 3 类, other 只有 3 类,
+    #   另外几类在弹层里连一行都没有, 用户看不出"少了一半"。
+    #   这里补齐为 level=0/days=None(不报红: 新部署/新渠道不该一上线就红), 但**看得见**。
+    for _dtp in _FRESH_TTL:
+        if _dtp not in src:
+            src[_dtp] = {"doc_type": _dtp, "label": _LBL.get(_dtp, _dtp),
+                         "last_import_at": "", "last_biz_date": "",
+                         "days": None, "level": 0, "missing": True}
     # 缺记录 = 从未导入 → 视为未知(不报红, 避免新部署全红)
     def _worse(*keys):
         """取依赖源中最差(天数最大); 用于指标级推导"""
@@ -818,7 +879,7 @@ def data_freshness(channel: str = "jd"):
                     best = s
         if not best:
             return {"days": None, "level": 0, "from": ""}
-        return {"days": best["days"], "level": _lvl(best["days"]),
+        return {"days": best["days"], "level": _lvl(best["days"], best.get("doc_type")),
                 "from": "/".join(names[:2])}
 
     metrics = [

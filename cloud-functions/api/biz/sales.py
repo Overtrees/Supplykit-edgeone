@@ -244,6 +244,9 @@ def get_sales_digest(channel, days=28):
 
     看板健康指数/低库存卡/规则引擎共享——避免每请求重复查快照+计算;
     与看板 summary/aux 缓存同频(30s/60s), 实时性不劣化; 数据变更后最迟 30s 反映
+
+    2026-11-16: `days` **只剩缓存分键作用** —— 取数固定 90 天(削峰基线在 28 天窗口之外,
+    只取 28 天等于静默不削峰, 见下方降级分支注释)。窗口恒为 7/14/28。
     """
     import time as _t
     import json as _json
@@ -331,9 +334,13 @@ def get_sales_digest(channel, days=28):
     except Exception as _e:
         from routes.common import try_err
         try_err('sales', 'digest 物化读取降级(走直算)', _e)
-    by_sku, _, _ = load_daily_sales_grouped(days, channel)
-    # 2026-11-16: 降级直算与物化同口径(削峰 + shrink), 否则物化挂掉就换了一套数
-    _m = calc_sales_multi({k: smooth_promo_spikes(v) for k, v in by_sku.items()},
+    # 降级直算: 必须与物化**逐位同口径**(削峰基线 + shrink), 否则物化挂掉就换了一套数。
+    #   2026-11-16 修: 原实现 `load_daily_sales_grouped(28)` + `smooth_promo_spikes` ——
+    #   削峰基线取 28~60 天, 而数据只取了 28 天 → 基线恒空 → 削峰静默失效(不报错、不降级),
+    #   实测 11.1% 的 SKU 日销偏高、最大 2.06 倍(促销尖峰整根算进日均)。
+    #   物化侧是"取 90 天 → cut_series(28) → shrink", 降级必须同法。
+    by_sku, _, _ = load_daily_sales_grouped(90, channel)
+    _m = calc_sales_multi({k: cut_series(v) for k, v in by_sku.items()},
                           windows=[7, 14, 28], sparse="shrink")
     fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
     sigma = {}
@@ -460,6 +467,72 @@ def _ensure_stats_table():
     from db import execute as _e
     _e(_SKU_STATS_DDL)
     _STATS_DDL_READY = True
+
+
+# ── 列级完整性守卫(2026-11-16 P0) ────────────────────────────────────────────
+# 背景: 给物化表**加列**只改 DDL, 存量行不会自己回填 —— 新列恒 0, 而读侧
+#   `float(r.get(col) or 0)` 把 0 当成"真的没有", 于是既不报错也不降级。
+#   实测 other 渠道 82,264 行 `ds56_cut=0` 而 `ds28_cut>0` → 趋势箭头恒判"上升"
+#   (近 28 天有量、近 56 天为 0), 前端看起来完全正常。补货/采购只按 jd 验过, other 全漏。
+#
+# 做法: 哨兵 = 「窗口内确实有销量, 但长基准为 0」的行存在。命中则**后台**重建该渠道一次。
+#   · 单条 `LIMIT 1` 点查(走 channel 索引, 命中即返回), 每渠道每进程最多一次;
+#   · 重建 191s/12.6 万行,**绝不能放请求路径**(会直接超时) —— daemon 线程 + 进程内单飞;
+#   · 重建完确认产出行才 `invalidate("orders")`(红线 19: 读路径禁止无产出失效);
+#   · 失败留 10 分钟冷却可重试, 成功则本进程不再查(标记住)。
+_STATS_COL_GUARD = {}   # channel → (checked_ts, state)  state: "ok"/"rebuild"/"fail"
+_COL_GUARD_RETRY = 600
+
+
+def _col_guard(channel):
+    """检查新列是否回填; 缺则后台重建一次(读侧永不等待)"""
+    import time as _t
+    _now = _t.time()
+    _st = _STATS_COL_GUARD.get(channel)
+    if _st:
+        if _st[1] in ("ok", "rebuild", "checking"):
+            return
+        if _now - _st[0] < _COL_GUARD_RETRY:   # fail: 冷却后再试
+            return
+    _STATS_COL_GUARD[channel] = (_now, "checking")
+    try:
+        from db import one as _o
+        _bad = _o("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s "
+                  "AND ds28_cut>0 AND ds56_cut=0 LIMIT 1", [channel]) or {}
+    except Exception as _e:
+        from routes.common import try_err
+        try_err('sales', '列级守卫探针降级(%s)' % channel, _e)
+        _STATS_COL_GUARD.pop(channel, None)
+        return
+    if not _bad:
+        _STATS_COL_GUARD[channel] = (_now, "ok")
+        return
+
+    def _bg():
+        try:
+            _n = _rebuild_sku_sales_stats(channel, 90)
+            from db import one as _o2
+            _still = _o2("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s "
+                         "AND ds28_cut>0 AND ds56_cut=0 LIMIT 1", [channel]) or {}
+            if _still or not _n:
+                _STATS_COL_GUARD[channel] = (_t.time(), "fail")
+                from routes.common import try_err
+                try_err('sales', '列级守卫重建未清干净(%s)' % channel,
+                        RuntimeError("rows=%r still_bad=1" % (_n,)))
+                return
+            _STATS_COL_GUARD[channel] = (_t.time(), "rebuild")
+            try:
+                from routes.analysis_cache import invalidate as _inv
+                _inv("orders")
+            except Exception:
+                pass
+        except Exception as _e:
+            _STATS_COL_GUARD[channel] = (_t.time(), "fail")
+            from routes.common import try_err
+            try_err('sales', '列级守卫重建失败(%s)' % channel, _e)
+
+    import threading as _th
+    _th.Thread(target=_bg, daemon=True, name="col-guard-" + str(channel)).start()
 
 # 行维度白名单(防魔法值): 物化行 warehouse 取值枚举
 WH_C = "__C__"      # 全国 platform 合计(bbcc 补货/断货 C)
@@ -817,10 +890,18 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None, fiel
     - 不返回 fused——消费方现场 rolling_predict/own 权重, 口径零冲突
     - fields: 只取点名的指标列(2026-11-06)。aux 的自有仓块要 2 万行但只用 ds7/ds14/ds28,
       全字段是白传 8 列(线上实测 ~2.5MB/次)。缺列在返回 dict 里按 0 补齐 —— 读侧本来就是
-      `float(r.get(x) or 0)`, 无需改消费方。None = 全部列(原行为)。"""
+      `float(r.get(x) or 0)`, 无需改消费方。None = 全部列(原行为)。
+      ⚠️ 裁剪后 `nnz*` 也会是 0, 而 0 的语义是"窗口内一天都没卖" —— 这只对**重建侧**
+      无害(重建不走本函数), 但消费方若拿 nnz 判稀疏会全判成稀疏。2026-11-16 核查:
+      全仓除 `_rebuild_sku_sales_stats` 自算外, 无任何 route/core 读返回值的 nnz 键
+      (唯一一处 replenishment 降级是自建 `_st["nnz28"]`)。要读就先加进 fields。
+    """
     try:
         from db import query as _q, one as _o
         _ensure_stats_table()
+        # 列级完整性守卫(2026-11-16): 加列不回填 → 新列恒 0 且无信号。见 `_col_guard` 注释。
+        #   命中只起后台重建, 读侧照常用当前(可能是 0 的)值返回, 永不等待。
+        _col_guard(channel)
         # 存在性判断: 原 COUNT(*) 要扫该渠道全部行(3 万+), 只为回答"有没有"。
         #   LIMIT 1 命中索引即返回, 语义等价(c<=0 ⇔ 无行)。
         _c = _o("SELECT 1 AS c FROM sku_sales_stats WHERE channel=%s LIMIT 1", [channel]) or {}

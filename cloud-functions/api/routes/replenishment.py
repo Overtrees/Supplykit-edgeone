@@ -3,7 +3,7 @@ import os
 import time as _time
 from fastapi import APIRouter, Request
 
-from db import query, one
+from db import query
 from routes.common import ok, fail, traced, try_err, INVENTORY_COLS as _INV_COLS
 from biz.sales import (rolling_predict,  # 物化 fused 现场计算(降级路径亦用)
                         TREND_UP_RATIO, TREND_DOWN_RATIO)
@@ -341,20 +341,24 @@ def _build_repl(channel, mode):
             # note: 趋势 + 建议 + 仓储费/周转风险(与 PA 同构)
             # 2026-11-04 结构化: segs 是唯一真源, note = zh_note(segs)(文案与 segs 永不漂移);
             #   前端按 note_segs 走 i18n 出双语; note(中文)仍产出, 导出/历史/告警不受影响
-            t7 = "up" if ds7 > ds14 * 1.15 else ("down" if ds7 < ds14 * 0.85 else "flat")
-            t14 = "up" if ds14 > ds28 * 1.15 else ("down" if ds14 < ds28 * 0.85 else "flat")
+            # 阈值走 biz.sales 的单一常量(与 rolling_predict 的 9 档权重表同源)。
+            #   原处 6 个 1.15/0.85 字面量: 改一处漏五处 → 箭头说涨、权重表按平算。
+            t7 = "up" if ds7 > ds14 * TREND_UP_RATIO else (
+                "down" if ds7 < ds14 * TREND_DOWN_RATIO else "flat")
+            t14 = "up" if ds14 > ds28 * TREND_UP_RATIO else (
+                "down" if ds14 < ds28 * TREND_DOWN_RATIO else "flat")
             trend = {"k": "trend", "t7": t7, "t14": t14}
             if ds > 0 and ds < 5 and combined_turnover_current is not None and combined_turnover_current > 90:
                 trend["x"] = "very_low"
             elif ds7 == 0 and ds14 == 0 and ds28 > 0:
                 trend["x"] = "down14"
-            elif ds7 > ds14 * 1.15 and ds14 > ds28 * 1.1:
+            elif ds7 > ds14 * TREND_UP_RATIO and ds14 > ds28 * 1.1:
                 trend["x"] = "up"
-            elif ds7 < ds14 * 0.85 and ds14 < ds28 * 0.9:
+            elif ds7 < ds14 * TREND_DOWN_RATIO and ds14 < ds28 * 0.9:
                 trend["x"] = "down"
-            elif ds7 > ds14 * 1.15:
+            elif ds7 > ds14 * TREND_UP_RATIO:
                 trend["x"] = "up7"
-            elif ds7 < ds14 * 0.85:
+            elif ds7 < ds14 * TREND_DOWN_RATIO:
                 trend["x"] = "down7"
             else:
                 trend["x"] = "flat"
@@ -441,7 +445,6 @@ def _build_repl(channel, mode):
     else:
         # 传统: 逐仓(物化表逐仓行 cut 列——已含削峰+shrink, 与原 _wh_sm+shrink 口径一致)
         tw90 = int(cfg.get("turnover_warning_90") or 90)
-        tw90 = int(cfg.get("turnover_warning_90") or 90)
         # 安全天数口径(与 bbcc 同构): mode_traditional_safety_multiplier → cfg["safety_multiplier"]
         # 静态 inventory.safety_qty 不再参与补货量(早期遗留, 仅看板断货卡/低库存规则作兜底)
         safety_days = float(cfg.get("safety_multiplier") or 0)
@@ -525,20 +528,13 @@ def _config(channel, mode):
 
 
 def _season_factor(channel, mode):
-    row = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s",
-              ("season_config_%s" % mode, channel))
-    if not row or not row.get("value"):
-        return 1.0
-    try:
-        import json
-        cfg = json.loads(row["value"])
-    except Exception:
-        return 1.0
-    factor = 1.0
-    for s in (cfg or []):
-        if isinstance(s, dict) and s.get("enabled") and float(s.get("factor", 1.0)) > factor:
-            factor = float(s["factor"])
-    return factor
+    """季节/活动系数 —— 2026-11-16 收敛到 `core.metrics.season_factor`(采购共用同一份)
+
+    原实现只查本渠道行、缺行即 1.0 且不认全局默认; 采购是「本渠道 + channel=''」dict
+    互相覆盖(顺序由 MySQL 决定) → 同一 SKU 同一天, 补货与采购用两个系数。
+    """
+    from core import metrics as _M
+    return _M.season_factor(channel, mode)
 
 
 def _products(channel):

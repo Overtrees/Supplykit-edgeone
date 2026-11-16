@@ -33,6 +33,48 @@ FUNNEL_STAGES = ("待确认", "待发货", "已发货", "已完成", "申请退�
 SALES_SQL = ",".join("'%s'" % s for s in SALES_STATUSES)
 
 
+# ── 数据新鲜度记账(唯一写入点, 2026-11-16) ─────────────────────────────
+# 原来两个写入点(cleansing 的 done 分支 / cleanse_write 的旧 finalize)各写一遍, 且都取
+#   「**这批文件里**的最大业务日期」—— 被清洗跳过、去重丢弃、deleted_at 非空的行不进库,
+#   记它等于谎报"数据已经到那天"。实测 `order.last_biz_date=2026-11-12`, 而库里
+#   `MAX(ordered_at)=2026-11-09` —— 整整 3 天的假新鲜, 叠加旧的 7 天阈值就是彻底静默。
+# 现在: last_biz_date 取**库里真实最大业务日期**; 无业务日期语义的源(库存/档案)留空,
+#   由读侧只用 last_import_at(见 misc.data_freshness 的 _FRESH_IMPORT_ONLY)。
+# 成本: 导入完成时一次(不在读路径); order 无 (channel, ordered_at) 索引 → 单次全表扫
+#   6 万行, 一天几次可接受 —— 读路径绝不能这么查(首屏 4 个页面都会调新鲜度)。
+_FRESH_BIZ_SQL = {
+    "order": ("SELECT MAX(ordered_at) AS m FROM orders "
+              "WHERE (deleted_at IS NULL OR deleted_at='') AND channel=%s"),
+    "inbound": "SELECT MAX(inbound_date) AS m FROM inbound_records WHERE channel=%s",
+    "outbound": "SELECT MAX(outbound_date) AS m FROM outbound_records WHERE channel=%s",
+    # 回款: 到账时间优先, 无则用建单时间(与 misc 兜底同一条 SQL)
+    "gmv_flow": ("SELECT MAX(COALESCE(arrived_time, created_at)) AS m "
+                 "FROM gmv_flows WHERE channel=%s"),
+}
+
+
+def record_freshness(channel, target, rows_imported=0):
+    """导入完成 → UPSERT data_freshness(时间用 DB 时钟, 不用实例本地时间)
+
+    :param channel: 渠道
+    :param target:  导入目标(doc_type): order/inventory/inbound/... 与 data_freshness.doc_type 同名
+    :param rows_imported: 本批成功行数(覆盖不累加 —— 语义是"上一批导了多少")
+    """
+    from db import query as _q, execute as _e
+    _bizd = ""
+    _sql = _FRESH_BIZ_SQL.get(str(target or ""))
+    if _sql:
+        try:
+            _r = _q(_sql, [channel])
+            _bizd = str((_r[0] or {}).get("m") or "")[:10] if _r else ""
+        except Exception as _ex:
+            try_err('common', '新鲜度业务日期反查降级(%s)' % target, _ex)
+    _e("INSERT INTO data_freshness(doc_type, channel, last_import_at, last_biz_date, rows_imported) "
+       "VALUES(%s,%s,NOW(),%s,%s) ON DUPLICATE KEY UPDATE last_import_at=NOW(), "
+       "last_biz_date=VALUES(last_biz_date), rows_imported=VALUES(rows_imported)",
+       [target, channel, _bizd, int(rows_imported or 0)])
+
+
 def status_cond(col="order_status"):
     """GMV 已支付口径条件(2026-10-11 从 dashboard 提为公共——maintain 与 dashboard 共享同口径)"""
     _paid = tuple(PAID_STATUSES)

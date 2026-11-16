@@ -67,15 +67,14 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     moq_default = int(float(raw.get("moq") or 0))
     purchase_safety_days = float(raw.get("purchase_safety_days") or 0)
     target_turn = int(float(raw.get("max_turnover_days") or 0))
-    # 活动系数
+    # 活动系数(2026-11-16: 收敛到 core.metrics.season_factor —— 与补货同一份;
+    #   原来这里用 raw dict「本渠道 + channel=''」互相覆盖, 全局行会盖掉本渠道的季节配置)
     active_factor = 1.0
     try:
-        sv = json.loads(raw.get("season_config_%s" % mode) or "[]")
-        for s in (sv or []):
-            if isinstance(s, dict) and s.get("enabled") and float(s.get("factor", 1.0)) > active_factor:
-                active_factor = float(s["factor"])
+        from core import metrics as _M
+        active_factor = _M.season_factor(channel, mode)
     except Exception as _e:
-            try_err('purchase', '静默降级', _e)
+        try_err('purchase', '静默降级', _e)
 
     from routes.common import ch_supports_b as _csb
     _ch_b = _csb(channel)   # 该渠道是否走 BBCC(B 仓调拨链) —— 原 `channel == "jd"`
@@ -247,11 +246,19 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
         # 2026-10-29 按 69码: 有码读按码日销, 缺失则**降级**读合计(不含69)
         _ds_src = _bc_stats.get("%s|%s" % (sku, _bc)) if _bc else None
         if _ds_src:
-            _base_ds = round(rolling_predict_2w(float(_ds_src.get("ds14_cut") or 0),
-                                                float(_ds_src.get("ds28_cut") or 0)), 1)
+            # 2026-11-16: 14/28/56 三列全部取**同一行**(码级), 与主值同粒度。
+            #   原实现 56 取码行、14/28 取 sku 合计行 → 同一行的三个展示值来自两个粒度:
+            #   多码 SKU 的主值按码算、箭头却按整 SKU 比(实测 120 行受影响, 57 行箭头方向反了,
+            #   如 SKU-00082-J 展示 0.7/0.2 上升, 同码真值 0.2/0.2 持平)。
+            #   补货侧 `_rd()` 一直是「有码读码行、无码降级合计」, 采购对齐同一口径。
+            _src14 = float(_ds_src.get("ds14_cut") or 0)
+            _src28 = float(_ds_src.get("ds28_cut") or 0)
+            _base_ds = round(rolling_predict_2w(_src14, _src28), 1)
             # 长基准取**同一行**(码级), 与主值同粒度; 不足 69 码时随主值一起降到合计行
             _src56 = float(_ds_src.get("ds56_cut") or 0)
         else:
+            _src14 = s14m.get(sku, 0)
+            _src28 = s28m.get(sku, 0)
             _base_ds = fused.get(sku, 0)   # 无码 / 按码缺失 → 降级合计
             _src56 = s56m.get(sku, 0)
         ds = round(_base_ds * active_factor, 1)
@@ -307,7 +314,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
             "b_transit": st["b_transit"], "plat_available": st["plat_avail"],
             "plat_transit": st["plat_transit"], "b_available": st["b_avail"],
             "safety_qty": round(ds * _purchase_period, 1), "daily_sales": ds,
-            "daily_sales_14": round(s14m.get(sku, 0), 1), "daily_sales_28": round(s28m.get(sku, 0), 1),
+            "daily_sales_14": round(_src14, 1), "daily_sales_28": round(_src28, 1),
             # 2026-11-16 长基准: 近 56 天(8 周, 恰为 28 的 2 倍)cut 日均, 同粒度同口径。
             #   原键 `daily_sales_60` 装的是 `fused`(14/28 融合值): 名字说 60 天、内容不是;
             #   且融合值结构上恒低于 ds28(ds28/fused 中位 2.00) → 75% 朝上、2.7% 朝下。

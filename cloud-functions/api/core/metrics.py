@@ -204,6 +204,38 @@ def grain_of(channel, mode=None, cfg=None):
     return GRAIN_BARCODE if m == "bbcc" else GRAIN_SKU
 
 
+def season_factor(channel, mode=None, cfg=None):
+    """季节/活动系数 —— 补货与采购**共用一份**(2026-11-16 收敛)
+
+    原来两套读法, 结果会在同一天对同一 SKU 不同:
+      · 补货 `_season_factor`: 只查**本渠道**行, 缺行直接 1.0(不认全局默认)
+      · 采购: 一次读「本渠道 + channel=''」塞进 dict, **后者覆盖前者**, 顺序由 MySQL 返回序
+        决定 → 只要存在全局行, 本渠道设的季节系数就被全局值盖掉
+    现在统一走 `channel_cfg`(渠道行覆盖全局默认, 语义唯一), 解析规则也只写一次:
+      多档同时启用 → 取最高(前端"启用即生效、不累乘"; 原补货取 max、采购也取 max, 逐位一致)。
+    """
+    import json as _json
+    m = mode_of(channel, mode)
+    _cfg = channel_cfg(channel) if cfg is None else (cfg or {})
+    for _k in ("season_config_%s" % m, "season_config"):
+        _v = _cfg.get(_k)
+        if not _v:
+            continue
+        try:
+            _arr = _json.loads(_v) if isinstance(_v, str) else _v
+        except Exception:
+            continue
+        _f = 1.0
+        for _s in (_arr or []):
+            if isinstance(_s, dict) and _s.get("enabled"):
+                try:
+                    _f = max(_f, float(_s.get("factor", 1.0)))
+                except Exception:
+                    pass
+        return _f
+    return 1.0
+
+
 def invalidate_cfg(channel=""):
     """清配置缓存(配置保存后调用)"""
     if not channel:

@@ -123,7 +123,7 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
             try_err("dash_stock", "risk 物化读取降级(走现算)", _e)
     from routes.dashboard import _hourly_accel  # 延迟 import(防模块级循环)
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
-    from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict, smooth_promo_spikes
+    from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict, cut_series
     from db import query as _q
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
@@ -234,11 +234,14 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
         _terr2('dash_stock', 'stock_risk 物化读取降级(走直算)', _e)
     # ── 降级直算(仅物化表空/失败——与旧口径完全一致) ──
     if not _has_materialized:
-        by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(28, channel, skus=skus)
+        # 2026-11-16: 取 90 天 + cut_series(28) —— 削峰基线在 28 天窗口**之外**,
+        #   只取 28 天时 `smooth_promo_spikes` 拿不到基线 → 静默不削峰 → 11.1% SKU 日销偏高
+        #   (最大 2.06 倍)。与物化重建(_rebuild_sku_sales_stats 取 90)完全同法。
+        by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(90, channel, skus=skus)
 
         def _cutm(d):
             """降级直算也走 cut 口径 —— 物化挂掉不能等于换一套算法(否则又是两套数)"""
-            return calc_sales_multi({k: smooth_promo_spikes(v) for k, v in (d or {}).items()},
+            return calc_sales_multi({k: cut_series(v) for k, v in (d or {}).items()},
                                     windows=[7, 14, 28], sparse="shrink")
 
         multi = _cutm(by_sku)

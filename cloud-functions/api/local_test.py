@@ -5400,6 +5400,132 @@ try:
 except Exception as _e60:
     check("§15.209 长基准字段扫描无异常", False, str(_e60)[:200])
 
+# ── 2026-11-16 §15.210: 四维验证暴露的四项缺陷(根治) ────────────────────────
+# 这一节挡的都是"不抛异常、页面看起来正常、结论全错"的静默缺陷:
+#   ① 新鲜度停更 7 天仍判正常 → 圆点不渲染, 用户不知道数据停了;
+#   ② 采购 14/28 取 SKU 合计、主值与 56 取 69码 → 同一行两个粒度, 箭头与主值互相打脸;
+#   ③ 降级直算只取 28 天, 削峰基线(28~60 天)恒空 → 削峰静默失效, 11.1% SKU 日销偏高;
+#   ④ 季节系数两套读法, 采购侧被全局行覆盖 → 同一天同一 SKU, 补货与采购用两个系数。
+try:
+    from routes.misc import _fresh_level as _fl210
+
+    check("§15.210 新鲜度: 日更源停 2 天转橙", _fl210(2, "order") == 1,
+          "level=%r" % _fl210(2, "order"))
+    check("§15.210 新鲜度: 日更源停 7 天转红(原实现 7 天仍判正常 → 圆点不渲染)",
+          _fl210(7, "order") == 2, "level=%r" % _fl210(7, "order"))
+    check("§15.210 新鲜度: 日更源当天/昨天仍正常(不制造狼来了)",
+          _fl210(0, "order") == 0 and _fl210(1, "order") == 0)
+    check("§15.210 新鲜度: 低频源不误报(流水第 7 天 / 档案第 14 天仍正常)",
+          _fl210(7, "inbound") == 0 and _fl210(14, "product") == 0)
+    check("§15.210 新鲜度: 未知源走默认档 7/30",
+          _fl210(7, "unknown_x") == 0 and _fl210(8, "unknown_x") == 1)
+    check("§15.210 新鲜度: 从未导入(days=None) 不报红(新渠道不该一上线就红)",
+          _fl210(None, "order") == 0)
+except Exception as _e210a:
+    check("§15.210 新鲜度分档用例无异常", False, str(_e210a)[:200])
+
+try:
+    # 判据必须**同时**看业务日期与导入时间(取更差): 只听导入时间 → "导旧文件"判新鲜;
+    #   只听业务日期 → 库存/档案无此列。两处静态点: max(...) + 只认导入时间的白名单。
+    _src210 = open("routes/misc.py", encoding="utf-8").read()
+    check("§15.210 新鲜度判据 = max(业务日期差, 导入时间差)",
+          "return max(_imp, _biz)" in _src210 and "_FRESH_IMPORT_ONLY" in _src210)
+    check("§15.210 新鲜度缺失源也进 sources(不再静默少一半)",
+          "for _dtp in _FRESH_TTL:" in _src210 and '"missing": True' in _src210)
+
+    # 记账单一写入点: 两个调用方都不许再自己拼 INSERT(否则又各写一套日期口径)
+    _bad_ins = []
+    for _f210 in ("routes/cleansing.py", "routes/cleanse_write.py"):
+        _t210 = open(_f210, encoding="utf-8").read()
+        if "INSERT INTO data_freshness" in _t210:
+            _bad_ins.append(_f210)
+    check("§15.210 新鲜度记账收敛到 common.record_freshness(无第二处 INSERT)",
+          not _bad_ins, str(_bad_ins))
+    check("§15.210 record_freshness 取库里真实 MAX(业务日期)",
+          "MAX(ordered_at)" in open("routes/common.py", encoding="utf-8").read())
+except Exception as _e210b:
+    check("§15.210 新鲜度静态断言无异常", False, str(_e210b)[:200])
+
+try:
+    # 采购三列必须同源: 有码取码行、无码降级合计。原实现 14/28 取合计行 → 与主值混粒度
+    _pc210 = open("routes/purchase_calc.py", encoding="utf-8").read()
+    check("§15.210 采购 14/28 与主值同粒度(_src14/_src28)",
+          "_base_ds = round(rolling_predict_2w(_src14, _src28), 1)" in _pc210
+          and '"daily_sales_14": round(_src14, 1)' in _pc210)
+    check("§15.210 采购不再从 SKU 合计取 14/28(原混粒度写法已删)",
+          "round(s14m.get(sku, 0)" not in _pc210 and "round(s28m.get(sku, 0)" not in _pc210)
+except Exception as _e210c:
+    check("§15.210 采购粒度静态断言无异常", False, str(_e210c)[:200])
+
+try:
+    # 降级直算: 必须取 90 天再按 28 削峰。任何消费方直接调 smooth_promo_spikes 都算回退
+    _bad_sm = []
+    for _root210, _dirs210, _files210 in os.walk("."):
+        if "_pycache__" in _root210 or "migrations" in _root210:
+            continue
+        for _fn210 in _files210:
+            if not _fn210.endswith(".py") or _fn210 == "local_test.py":
+                continue
+            _fp210 = os.path.join(_root210, _fn210)
+            for _i210, _ln210 in enumerate(open(_fp210, encoding="utf-8", errors="ignore"), 1):
+                if _ln210.lstrip().startswith("#"):
+                    continue
+                if "smooth_promo_spikes(" in _ln210 and "def smooth_promo_spikes" not in _ln210 \
+                        and "max_win=" not in _ln210 and "cut_series" not in _ln210:
+                    _bad_sm.append("%s:%d" % (_fp210, _i210))
+    check("§15.210 削峰只经 cut_series 入口(消费方不再直调 smooth_promo_spikes)",
+          not _bad_sm, str(_bad_sm[:5]))
+    check("§15.210 看板 digest 降级取 90 天 + cut_series",
+          "load_daily_sales_grouped(90, channel)" in open("biz/sales.py", encoding="utf-8").read())
+    check("§15.210 断货卡降级取 90 天 + cut_series",
+          "load_daily_sales_grouped(90, channel, skus=skus)"
+          in open("routes/dashboard_stock_risk.py", encoding="utf-8").read())
+except Exception as _e210d:
+    check("§15.210 削峰基线静态断言无异常", False, str(_e210d)[:200])
+
+try:
+    # 趋势阈值单一真源: 补货里的 6 个字面量必须全部改走常量(改一处漏五处 = 箭头/权重表打架)
+    _rp210 = [ln for ln in open("routes/replenishment.py", encoding="utf-8")
+              if not ln.lstrip().startswith("#")]
+    _lit210 = [i for i, ln in enumerate(_rp210, 1)
+               if ("* 1.15" in ln or "* 0.85" in ln)]
+    check("§15.210 补货趋势阈值无 1.15/0.85 字面量(全走 TREND_*_RATIO)",
+          not _lit210, str(_lit210[:5]))
+except Exception as _e210e:
+    check("§15.210 趋势阈值静态断言无异常", False, str(_e210e)[:200])
+
+try:
+    # 季节系数: 解析规则单一(注入 cfg 直测, 不连库)
+    from core import metrics as _M210
+    _cfgs = [
+        ({"season_config_bbcc": '[{"factor":1.5,"enabled":false}]'}, 1.0),
+        ({"season_config_bbcc": '[{"factor":1.5001,"enabled":true}]'}, 1.5001),
+        ({"season_config_bbcc": '[{"factor":1.5,"enabled":true},{"factor":1.2,"enabled":true}]'}, 1.5),
+        ({"season_config_bbcc": "not-json"}, 1.0),
+        ({}, 1.0),
+    ]
+    _ok210 = all(abs(_M210.season_factor("jd", "bbcc", cfg=c) - w) < 1e-9 for c, w in _cfgs)
+    check("§15.210 季节系数解析: 仅 enabled 生效 / 多档取最高 / 坏 JSON 回 1.0", _ok210)
+    check("§15.210 补货季节系数委托 metrics(不再自己查一条 SQL)",
+          "return _M.season_factor(channel, mode)"
+          in open("routes/replenishment.py", encoding="utf-8").read())
+    check("§15.210 采购季节系数同源(无第二处 json 解析 season_config)",
+          "season_config_%s" not in open("routes/purchase_calc.py", encoding="utf-8").read())
+except Exception as _e210f:
+    check("§15.210 季节系数用例无异常", False, str(_e210f)[:200])
+
+try:
+    # 列级守卫: 加列不回填是**结构性问题**(新列恒 0 且无信号), 必须有自动发现 + 后台重建
+    _bs210 = open("biz/sales.py", encoding="utf-8").read()
+    check("§15.210 列级守卫存在且被读入口调用",
+          "def _col_guard(" in _bs210 and "_col_guard(channel)" in _bs210)
+    check("§15.210 列级守卫探针形状: ds28 有值但 ds56=0",
+          "ds28_cut>0 AND ds56_cut=0" in _bs210)
+    check("§15.210 列级守卫后台重建(daemon, 不在请求路径等待)",
+          "daemon=True" in _bs210 and "col-guard-" in _bs210)
+except Exception as _e210g:
+    check("§15.210 列级守卫静态断言无异常", False, str(_e210g)[:200])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()
