@@ -4313,6 +4313,26 @@ try:
                                        "schema"),
           str(_US.JUDGE_DOMAINS))
 
+    # 2026-11-16 §15.203: fp 的**第三维 —— 代码口径版本**
+    #   域计数器只随数据写入涨。改映射/公式/取数范围这类"输出口径"的代码时, fp 一分
+    #   不变 → 物化静默返旧值。线上实测: BC 计数收敛到 alerts.wh_map 后部署完成,
+    #   /dashboard/aux 仍报 bc=0 而 /alerts/counts 报 554, 要等下一次导入才自愈。
+    _ussrc = _rd("core/unit_store.py")
+    check("unit_store: fp 含代码口径版本 _FP_VER(改映射/公式但不改数据也要一次性重建)",
+          _re.search(r"_FP_VER\s*=\s*\d+", _ussrc) is not None
+          and '|c=%d" % _FP_VER' in _ussrc,
+          "core/unit_store.py")
+    check("unit_store: _FP_VER 有'必须 +1'的纪律说明(不是埋一个没人知道要改的常量)",
+          "必须把本常量 +1" in _ussrc, "core/unit_store.py")
+    # 唯一的"该重建但没人建"的缺口: 三个 SWR 读侧(fp 失配 → 返上一版 + 后台重建)里
+    #   唯独 unit_store.tally_of 是纯读原语。continue_tasks 的后台自举必须还在。
+    _crn203 = _rd("routes/cron.py")
+    check("unit_store: continue_tasks 有物化自举(补 tally_of 失配不自愈的缺口)",
+          "_bootstrap_materialized(done)" in _crn203
+          and "_US.ensure_async()" in _crn203
+          and 'mat-bootstrap' in _crn203,
+          "routes/cron.py")
+
     # ⑥ schema: 三表 + 域版本表 + 版本号已 bump
     _sc18 = _rd("schema_create.py")
     check("unit_store: schema 声明四表(含断货快照) + data_version_dom + 版本 bump 到 20+",

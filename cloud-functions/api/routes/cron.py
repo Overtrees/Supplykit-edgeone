@@ -112,7 +112,54 @@ def continue_tasks(request: Request = None):
                 done["skipped"] += 1
     except Exception as _e:
         try_err('cron', 'continue-tasks 整体异常', _e)
+    _bootstrap_materialized(done)
     return ok(done)
+
+
+def _bootstrap_materialized(done):
+    """物化自举(2026-11-16 §15.203) —— 补上「判定读模型不自愈」这个缺口。
+
+    ## 为什么需要（线上实测，不是推测）
+
+    四个物化读模型的冷态行为**不是对称的**：
+
+    | 读模型 | fp 失配时 | 会不会自愈 |
+    |---|---|---|
+    | `list_store.serve`   | 返上一版 + `submit_background` | ✅ |
+    | `own_store.serve`    | 返上一版 + `submit_rebuild`    | ✅ |
+    | `dash_store.serve`   | 返上一版 + `submit_background` | ✅ |
+    | `unit_store.tally_of`| **return None**（调用方退回现算）| ❌ 没人起重建 |
+
+    前三个的读侧本身就是 SWR；`tally_of` 是纯读原语，它的调用方（dashboard 的
+    summary/库存卡片）在拿到 None 后只是回退 `metrics` 现算 —— **正确但慢 3.8s/次**，
+    而且没有任何一方会去把新 gen 建出来。重建的唯一入口是写入路径
+    `routes.analysis_cache` 的失效钩子 → `unit_store.ensure_async()`。
+
+    于是三种"没有写入"的情形下，慢态会一直挂着：
+      ① 代码口径变了（`_FP_VER` +1）—— 部署后 fp 立刻变，但当天可能没人导入；
+      ② 新库首建（红线 18 自举可证）—— 还没人写过数据，没有 invalidate 可触发；
+      ③ 实例冻结打断重建 —— 线程被杀，`_LAST` 进程内状态丢失，没人再叫它。
+
+    ## 为什么不重复实现判据（红线 2 / 5 / 15）
+
+    只调 `ensure_async()`：它内部按 `head.fp` 判 fresh、按 `(channel,mode)` 单飞
+    （`submit_rebuild` → `ensure()`，fp 相等就 `skipped=fresh` 零成本返回），并受
+    `db.heavy` 全局预算约束。这里**不自己算 fp、不自己起裸线程**，否则就是第二套闸门。
+
+    ## 为什么放在后台通道而不是读路径（红线 19）
+
+    这不是"读路径触发失效" —— 它 bump 不了任何域计数、打不了任何墓碑，只是把"已经
+    该建但没人建"的 gen 建出来。放在 `continue_tasks`（既有保洁通道，60s 一轮）里，
+    天然节流；再加 600s 进程内限频，常态开销≈0。
+    """
+    if not _throttle("mat-bootstrap", 600):
+        return
+    try:
+        from core import unit_store as _US
+        _US.ensure_async()
+        done["bootstrap"] = 1
+    except Exception as _e:
+        try_err('cron', '物化自举降级', _e)
 
 
 
