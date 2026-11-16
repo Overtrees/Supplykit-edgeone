@@ -34,7 +34,8 @@
 | 导出兼容清零 | 全仓核对 `type=purchase` **无任何消费方**（前端只传 `purchase_suggestions`）→ 删别名/文件名映射/mode 校验三处 + 前端死兜底；旧值在 `create_export` 明确报「未知导出类型」 |
 | 线上判据纠偏 | 补货「28>0 且 56=0」按接口 round(1) 判会误报 4459 行（库内原值 ds56>0，如 0.048→显示 0.0）；探针改为回库看原值，真缺口 0 行 |
 | 文档纠偏 | README/CONTEXT/SKILL/ARCHITECTURE 的「860 项回归」全部改「以运行输出为准」（实际已 895）；README 历史卷 14→15、补 56 长基准/新鲜度圆点；docs_probe 不再绑定用例数 |
-| 验证 | manual 3×2 窗口 0 超差；matrix 四维 4/4；online 12/12；export 3/3；selftest 11/11；回归 **895/0**；preflight 8/8 |
+| 性能文档纯净 | 按用户要求，`docs/PERF.md` §20 移除混入的日销口径计算逻辑（削峰/3σ/shrink 算式、手工复刻与四维覆盖数据）——这些不是性能判据，真源已在 `scripts/perf/caliber_probe.py TH` 与 history §15.211；§20 收敛为登记指针，§5 脚本索引加一行。PERF 回归性能基准本位。 |
+| 验证 | manual 3×2 窗口 0 超差；matrix 四维 4/4；online 12/12；export 3/3；selftest 11/11；回归 **895/0**；preflight 8/8；清理后 docs_probe 30/30 |
 
 ---
 
