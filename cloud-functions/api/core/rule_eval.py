@@ -344,16 +344,18 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
     _prod_sup = {}     # sku → supplier_code(ctx 构造处无条件 get, 500 行外)
 
     def _ds_of(_sku, _bc, _wh):
-        """日销取值: 该维该 69码 → 该维 SKU 合计 → 0
+        """日销取值: 该维该 69码 → 该维 SKU 合计 → 0（**统一口径**: cut 三窗口融合）
 
         维度(_wh)是既定业务对象, 不是可降级层级: bbcc→__BC__(一盘) / traditional+own→该仓。
         只做两级: ①该对象内该 69码 ②该对象内 SKU 合计(少码)—— 降级只降码, 不换维度。
         该维度无数据时返回 0(不触发): **绝不拿全国/全国C合计兜底**(会干扰本仓判断)。
-        2026-11-06 S3: 实现已收敛到 `core.metrics.Series.value`, 这里只留签名。
+        2026-11-06 S3: 实现收敛到 `core.metrics.Series`。
+        2026-11-16 口径统一: 由"取 ds28 单值"改为"cut 三窗口融合" —— 与补货/进销存/看板
+        同一份算法、同一组输入列, 四家只剩采购的双窗口差异(设计保留)。
         """
         if _SER is None:
             return 0.0
-        return _SER.value("ds28", _sku, _bc, _wh)
+        return _SER.fused(_sku, _bc, _wh)
 
     _sigma = {}
     _otif_map = {}
@@ -403,7 +405,8 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
             #   两趟 12 万行 —— 只取 ds28/sigma 两列, 传输量降到原来的 1/5。
             #   同时取代 get_sales_digest: 它给的是 SKU 级 `__C__` 一个数, 正是本模块要消灭的东西。
             _SER = _M.load(channel, dims=None, with_barcode=True,
-                           fields=("ds28", "sigma"), skus=_scope_sk or None)
+                           fields=("ds7_cut", "ds14_cut", "ds28_cut", "sigma"),
+                           skus=_scope_sk or None)
             _sigma = _SER.sigma_by_sku() if _SER is not None else {}
         except Exception as _e:
             try_err("rules", "评估日销聚合降级", _e)

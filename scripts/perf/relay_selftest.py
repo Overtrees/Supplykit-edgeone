@@ -76,7 +76,7 @@ def main(verbose=False):
     # ── 1. 评估接力 ────────────────────────────────────────────────
     rdr = fn_src(cron, "run_daily_rules")
     check("run_daily_rules 签名未被改(门禁 local_test 断言)",
-          "def run_daily_rules(channels=None, deep=True, alert_types=None)" in read(cron))
+          "def run_daily_rules(channels=None, deep=True, alert_types=None" in read(cron))
     check("run_daily_rules 体内不再同步跑全量评估(旧路径已删, 红线2)",
           rdr and "evaluate_stock_skus(" not in rdr,
           "残留: " + ("evaluate_stock_skus( 仍在" if "evaluate_stock_skus(" in rdr else "-"))
@@ -166,6 +166,22 @@ def main(verbose=False):
           '"agg_sweep":' in crsrc and '_off_window("agg_sweep"' in crsrc)
     check("agg_sweep 有限频(重复调用不重复扫)",
           '_throttle("agg_sweep"' in crsrc)
+
+    # ── 5b. 评估状态行(横幅)不许留僵尸 ────────────────────────────
+    #  §15.205: enqueue 建的行必须直接是 running+started_at, 不能靠表默认值落到
+    #  pending/NULL —— 那样 close_stale_runs 收不到, eval_live_cond 恒真, 横幅永久挂。
+    rtsrc = strip_comments(read(relay))
+    check("enqueue 建行直接写 status='running' + started_at(不留 pending 僵尸)",
+          "INSERT INTO eval_tasks(scope, status, started_at)" in rtsrc
+          and "'running',NOW())" in rtsrc)
+    check("超时路径有 abandon() 收尾 eval_tasks + 占位",
+          "def abandon(" in rtsrc and "_close_eval(p, ok=False, err=reason)" in rtsrc
+          and "_settle(p, ok=False)" in rtsrc)
+    check("continue_tasks 判超时时对 rule_eval 调 abandon(不只是一条 UPDATE)",
+          '_rt0.abandon(tid)' in crsrc)
+    mtsrc = strip_comments(read(os.path.join(API, "core", "maintenance.py")))
+    check("close_stale_runs 连 pending 一起收(§15.158 只堵了 running)",
+          "status='pending' AND created_at < DATE_SUB" in mtsrc)
 
     # ── 6. 未登录首屏 ─────────────────────────────────────────────
     st = read(store)

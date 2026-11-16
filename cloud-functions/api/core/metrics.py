@@ -217,20 +217,26 @@ _SERIES_TTL = 30
 _SERIES = {}   # (channel, dims, with_barcode, days, fields) → (ts, Series)
 
 
+_FUSE_FIELDS = ("ds7_cut", "ds14_cut", "ds28_cut")
+
+
 class Series(object):
-    """某渠道的日销切片。`value()` 实现"只降码、不降维"的取值规则与降级顺序。"""
+    """某渠道的日销切片。`fused()` 是唯一日销出口，`value()` 只给非融合场景用。"""
     __slots__ = ("rows", "channel", "fields")
 
-    def __init__(self, channel, rows, fields=("ds28",)):
+    def __init__(self, channel, rows, fields=_FUSE_FIELDS):
         self.channel = channel
         self.rows = rows            # {(sku, barcode, dim): {field: value}}
         self.fields = tuple(fields)
 
     def value(self, field, sku, barcode, dim, default=0.0):
-        """①该维该码 ②该维 SKU 合计 ③default
+        """单列取值：①该维该码 ②该维 SKU 合计 ③default
 
         判 `is not None` 而非 truthy: 该码有记录但销量为 0 就是 0,
         不该被合计顶上来(否则"这个码不卖了"会被当成"没细分到码")。
+
+        2026-11-16 口径统一后 **日销不走这里** —— 走 `fused()`。本方法保留给
+        非日销列(sigma/nnz/last_sale)与按单列比对的场景。
         """
         if barcode:
             v = self._one(field, sku, barcode, dim)
@@ -238,6 +244,32 @@ class Series(object):
                 return v
         v = self._one(field, sku, "", dim)
         return default if v is None else v
+
+    def _level(self, sku, barcode, dim):
+        """定"用哪一层"：该维该码 → 该维 SKU 合计 → None
+
+        只判一次, 三列必然同源(一行含全部列)。若逐列各降级, 理论上会出现
+        "7 天取码行、14 天取合计"的混搭 —— 物理上不会发生, 但代码不该留这个口子。
+        """
+        k = (str(sku), str(barcode or ""), str(dim))
+        if barcode and k in self.rows:
+            return k[1]
+        k2 = (str(sku), "", str(dim))
+        return "" if k2 in self.rows else None
+
+    def fused(self, sku, barcode, dim, default=0.0):
+        """**唯一日销口径**：cut 三列 → `rolling_predict` 三窗口融合
+
+        降级只降码不降维(与 `value` 同一条业务规则), 该维无行 → default(不触发),
+        绝不拿全国/全国C合计兜底。
+        """
+        lv = self._level(sku, barcode, dim)
+        if lv is None:
+            return default
+        r = self.rows[(str(sku), lv, str(dim))]
+        from biz.sales import rolling_predict as _rp
+        return _rp(float(r.get("ds7_cut") or 0.0), float(r.get("ds14_cut") or 0.0),
+                   float(r.get("ds28_cut") or 0.0))
 
     def _one(self, field, sku, barcode, dim):
         r = self.rows.get((str(sku), str(barcode or ""), str(dim)))
@@ -278,18 +310,23 @@ class Series(object):
 
         只为兼容老调用方传进来的 `_ds_map`(测试也这么注)。生产路径一律走 `load()`,
         因为那种 map 丢掉了**维度**信息 —— 正是本模块要消灭的东西。
+
+        2026-11-16: 把该值同时写进 cut 三列 —— 三列相等时 `fused()` 的趋势判据
+        全为"平", 权重 .10/.20/.70 之和为 1, 融合结果**恒等于原值**。这样降级路径
+        不用自己算融合, 语义与统一口径完全一致。
         """
         from biz.sales import WH_C
         rows = {}
         for k, v in (m or {}).items():
             try:
-                rows[(str(k), "", WH_C)] = {field: float(v or 0)}
+                _v = float(v or 0)
+                rows[(str(k), "", WH_C)] = dict({f: _v for f in _FUSE_FIELDS}, **{field: _v})
             except Exception:
                 continue
-        return cls(channel, rows, (field,))
+        return cls(channel, rows, _FUSE_FIELDS)
 
 
-def load(channel, dims=None, with_barcode=False, days=28, fields=("ds28",),
+def load(channel, dims=None, with_barcode=False, days=28, fields=_FUSE_FIELDS,
          ttl=_SERIES_TTL, fresh=False, skus=None):
     """取该渠道日销切片(进程内 30s) —— **唯一**的日销读取入口
 
@@ -575,19 +612,32 @@ def judge(u, ds, p, channel, mode=None, include_transit=True, sigma=0.0, z=1.65,
     }
 
 
-def judge_units(us, series, channel, mode=None, metric="ds28", include_transit=True,
+def _ds_at(series, metric, sku, barcode, dim):
+    """日销取值：`metric="fused"` → 统一口径(cut 三窗口融合)；否则按单列取
+
+    保留单列分支只为排障与历史调用（如按 ds28 做对照、按 sigma 取值），
+    业务判定一律走 fused —— 这是 2026-11-16 收敛后**唯一**的日销出口。
+    """
+    if series is None:
+        return 0.0
+    if metric == "fused":
+        return series.fused(sku, barcode, dim)
+    return series.value(metric, sku, barcode, dim)
+
+
+def judge_units(us, series, channel, mode=None, metric="fused", include_transit=True,
                 z=1.65, p=None):
     """批量判定: units → [(unit, verdict)]。ds 维度按桶类型自动解析。"""
     p = p or periods({})
     out = []
     for u in us:
         dim = dim_of(u.get("kind"), u.get("warehouse"), u.get("warehouse_type"))
-        ds = series.value(metric, u["sku"], u.get("barcode"), dim) if series is not None else 0.0
+        ds = _ds_at(series, metric, u["sku"], u.get("barcode"), dim)
         out.append((u, judge(u, ds, p, channel, mode, include_transit=include_transit, z=z)))
     return out
 
 
-def tally(us, series, channel, mode=None, metric="ds28", include_transit=True, p=None):
+def tally(us, series, channel, mode=None, metric="fused", include_transit=True, p=None):
     """批量判定 → **分档计数**(不造 per-unit verdict)
 
     返回 `{(kind, warehouse_type): {total/ok/low/out/idle/paused}}`。
@@ -601,12 +651,11 @@ def tally(us, series, channel, mode=None, metric="ds28", include_transit=True, p
     """
     _p = p or periods({})
     _cls, _line_of, _per_of, _dim_of = classify, safety_line, period_of, dim_of
-    _val = series.value if series is not None else None
     out = {}
     for u in us:
         _kind = u.get("kind")
         dim = _dim_of(_kind, u.get("warehouse"), u.get("warehouse_type"))
-        ds = _val(metric, u["sku"], u.get("barcode"), dim) if _val is not None else 0.0
+        ds = _ds_at(series, metric, u["sku"], u.get("barcode"), dim)
         qty = int(u.get("avail") or 0)
         tr = int(u.get("transit") or 0)
         cover = qty + tr if include_transit else qty

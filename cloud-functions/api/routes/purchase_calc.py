@@ -56,7 +56,8 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
       现在 builder 只算不写; 写入由 core.alert_jobs 的写入侧入口驱动。
     :param with_alerts: 仅供 alert_jobs 在"算完立刻同步"时使用(同一进程内复用结果, 不重算)
     """
-    from biz.sales import load_daily_sales, calc_sales_multi
+    from biz.sales import (load_daily_sales, calc_sales_multi, rolling_predict_2w,
+                           smooth_promo_spikes)
 
     raw = {}
     for r in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''",
@@ -134,8 +135,9 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
             # §15.172 取数裁剪(与 repl 同一做法, 单一真源 `biz.sales.slim_on`):
             #   一次 `barcode="all"` 取「合计 + 全部按码」, 只取 ds14/ds28 两列, 按行分流。
             #   原实现是 2 次往返、全 11 列; 线上 purchase `calc=3.5s` 里 `sql=3.3s/12 条`。
+            # 2026-11-16 口径统一: 采购取 cut 的 14/28(窗口数不变, 仍是两窗口)
             _all = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all",
-                                       fields=("ds14", "ds28")) or {}
+                                       fields=("ds14_cut", "ds28_cut")) or {}
             for _k, _r2 in _all.items():
                 _bc = str(_r2.get("barcode") or "")
                 if _bc:
@@ -158,30 +160,18 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
                 _bc_stats = {}
         for _r in (_rws or {}).values():
             _sku = str(_r.get("sku") or "")
-            _d14 = float(_r.get("ds14") or 0)
-            _d28 = float(_r.get("ds28") or 0)
-            if _d14 > _d28 * 1.15:
-                w14, w28 = 0.55, 0.45
-            elif _d14 < _d28 * 0.85:
-                w14, w28 = 0.35, 0.65
-            else:
-                w14, w28 = 0.20, 0.80
-            fused[_sku] = round(_d14 * w14 + _d28 * w28, 1)
+            fused[_sku] = round(rolling_predict_2w(float(_r.get("ds14_cut") or 0),
+                                                   float(_r.get("ds28_cut") or 0)), 1)
     except Exception as _e:
         try_err('purchase', '物化读降级(走直算)', _e)
     if not fused:
         daily = load_daily_sales(days, channel, skus=set(products.keys()))
-        multi = calc_sales_multi(daily, windows=[14, 28])
+        # 2026-11-16: 降级与物化同口径(削峰 + shrink), 否则物化挂掉就换一套数
+        multi = calc_sales_multi({k: smooth_promo_spikes(v) for k, v in daily.items()},
+                                 windows=[14, 28], sparse="shrink")
         s14m, s28m = multi[14], multi[28]
         for sku in set(list(s14m) + list(s28m)):
-            a, b = s14m.get(sku, 0), s28m.get(sku, 0)
-            if a > b * 1.15:
-                w14, w28 = 0.55, 0.45
-            elif a < b * 0.85:
-                w14, w28 = 0.35, 0.65
-            else:
-                w14, w28 = 0.20, 0.80
-            fused[sku] = round(a * w14 + b * w28, 1)
+            fused[sku] = round(rolling_predict_2w(s14m.get(sku, 0), s28m.get(sku, 0)), 1)
     # 2026-10-17 物化短路补 s14m/s28m(第 175 行展示字段引用——曾物化命中时 UnboundLocalError → 采购页无数据):
     # 从物化行现场取(与直算同构——物化行即三窗口底料)
     s14m = {}
@@ -189,8 +179,8 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     # 2026-10-29: 复用上面同一次物化读(原再次 _gss2(...) 全表查一遍, 纯重复往返)
     try:
         for _v2 in (_rws or {}).values():
-            s14m[_v2.get("sku") or ""] = float(_v2.get("ds14") or 0)
-            s28m[_v2.get("sku") or ""] = float(_v2.get("ds28") or 0)
+            s14m[_v2.get("sku") or ""] = float(_v2.get("ds14_cut") or 0)
+            s28m[_v2.get("sku") or ""] = float(_v2.get("ds28_cut") or 0)
     except Exception as _e14:
         try_err('purchase', 's14/s28 取值降级', _e14)
 
@@ -246,15 +236,8 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
         # 2026-10-29 按 69码: 有码读按码日销, 缺失则**降级**读合计(不含69)
         _ds_src = _bc_stats.get("%s|%s" % (sku, _bc)) if _bc else None
         if _ds_src:
-            _d14 = float(_ds_src.get("ds14") or 0)
-            _d28 = float(_ds_src.get("ds28") or 0)
-            if _d14 > _d28 * 1.15:
-                _w14, _w28 = 0.55, 0.45
-            elif _d14 < _d28 * 0.85:
-                _w14, _w28 = 0.35, 0.65
-            else:
-                _w14, _w28 = 0.20, 0.80
-            _base_ds = round(_d14 * _w14 + _d28 * _w28, 1)
+            _base_ds = round(rolling_predict_2w(float(_ds_src.get("ds14_cut") or 0),
+                                                float(_ds_src.get("ds28_cut") or 0)), 1)
         else:
             _base_ds = fused.get(sku, 0)   # 无码 / 按码缺失 → 降级合计
         ds = round(_base_ds * active_factor, 1)

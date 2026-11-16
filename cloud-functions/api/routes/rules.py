@@ -240,7 +240,7 @@ def _drain_eval_tasks():
                 _sc = json.loads(_t.get("scope") or "{}")
                 _r = run_daily_rules(channels=_sc.get("channels") or None,
                                      alert_types=_sc.get("ats") or None,
-                                     deep=bool(_sc.get("deep")))
+                                     deep=bool(_sc.get("deep")), source="rule_save")
                 # 2026-11-16 §15.200: **不再**在这里置 done。评估已改接力(sync_tasks),
                 #   本线程只负责"把任务排进去", 真正跑完由 core.rule_eval_task 收尾并写
                 #   rows_out/duration。原来在这里置 done = 横幅立刻消失但评估还在跑,

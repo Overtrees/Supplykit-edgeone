@@ -122,7 +122,7 @@ def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _
                 try_err('dash', '健康指数配置加载降级', _e)
         _p = _M.periods(_cfg)
         if _series is None:
-            _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode), fields=("ds28",))
+            _series = _M.load(channel, dims=_M.dims_needed(rows, channel, _mode))
     # 判定单元: 保留逐仓行(own/platform/platform_b 三个 tab 各看各的), **另外**追加 BC 单元
     #   传统模式下 B 仓不参与(它只是 jd 的中转仓) —— 与告警规则的 `_close_wt` 白名单同口径
     #
@@ -133,7 +133,7 @@ def _health_index(channel, mode=None, _inv_rows=None, _ds_map=None, _cfg=None, _
         _us = _M.units(rows, merge_bc=False, with_bc=True,
                        grain=_M.grain_of(channel, _mode, _cfg),
                        drop_platform_b=(_mode != "bbcc"))
-        _tally = _M.tally(_us, _series, channel, _mode, metric="ds28",
+        _tally = _M.tally(_us, _series, channel, _mode, metric="fused",
                           include_transit=_M.include_transit_default(), p=_p)
     _c_own = _M.roll(_tally, kinds=("own",))
     _c_plat = _M.roll(_tally, wt_in=("platform",))

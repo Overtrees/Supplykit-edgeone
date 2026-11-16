@@ -304,7 +304,7 @@ def get_sales_digest(channel, days=28):
     except Exception:
         pass
     # 2026-10-17 物化表优先(根治冷算; 表空/未重建 → 降级原直算): 物化行只存三窗口底料,
-    # fused/sigma 现场算(口径与旧 get_sales_digest 完全一致——rolling_predict(plain))
+    # fused/sigma 现场算(2026-11-16 起为 cut 三列融合, 与其他消费方同一口径)
     try:
         from biz.sales import get_sku_sales_stats, WH_ALL
         _rows = get_sku_sales_stats(channel, wh=WH_C, days=days)   # 2026-10-30: 全仓→C仓(__ALL__ 已删)
@@ -313,9 +313,10 @@ def get_sales_digest(channel, days=28):
             sigma = {}
             for _k, _r in _rows.items():
                 _sku = _r.get("sku") or ""
-                fused[_sku] = rolling_predict(float(_r.get("ds7") or 0),
-                                              float(_r.get("ds14") or 0),
-                                              float(_r.get("ds28") or 0))
+                # 2026-11-16 口径统一: cut 三列(此前 raw)
+                fused[_sku] = rolling_predict(float(_r.get("ds7_cut") or 0),
+                                              float(_r.get("ds14_cut") or 0),
+                                              float(_r.get("ds28_cut") or 0))
                 if abs(float(_r.get("sigma") or 0)) > 0:
                     sigma[_sku] = float(_r.get("sigma") or 0)
             # 写表缓存(跨实例共享; 数据量小 fused+sigma 970 SKU 数值; 覆盖 __CALC__ 标记为结果)
@@ -331,7 +332,9 @@ def get_sales_digest(channel, days=28):
         from routes.common import try_err
         try_err('sales', 'digest 物化读取降级(走直算)', _e)
     by_sku, _, _ = load_daily_sales_grouped(days, channel)
-    _m = calc_sales_multi(by_sku, windows=[7, 14, 28])
+    # 2026-11-16: 降级直算与物化同口径(削峰 + shrink), 否则物化挂掉就换了一套数
+    _m = calc_sales_multi({k: smooth_promo_spikes(v) for k, v in by_sku.items()},
+                          windows=[7, 14, 28], sparse="shrink")
     fused = {s: rolling_predict(_m[7].get(s, 0), _m[14].get(s, 0), _m[28].get(s, 0)) for s in by_sku}
     sigma = {}
     for _s, _d in by_sku.items():
@@ -352,7 +355,11 @@ def get_sales_digest(channel, days=28):
 
 
 def rolling_predict(s7, s14, s28):
-    """三窗口趋势加权融合——与旧版一致"""
+    """三窗口趋势加权融合 —— **唯一**的三窗口融合实现(4 家消费方共用)
+
+    输入固定是 `ds7_cut / ds14_cut / ds28_cut`(2026-11-16 口径统一, 用户定案)。
+    趋势判两段: 7 vs 14、14 vs 28, 各分 加速/平/减速, 查 9 档权重表。
+    """
     a7 = 1 if s7 > s14 * 1.15 else (-1 if s7 < s14 * 0.85 else 0)
     a14 = 1 if s14 > s28 * 1.15 else (-1 if s14 < s28 * 0.85 else 0)
     weights = {
@@ -364,11 +371,27 @@ def rolling_predict(s7, s14, s28):
     return s7 * w7 + s14 * w14 + s28 * w28
 
 
+def rolling_predict_2w(s14, s28):
+    """两窗口趋势加权融合 —— 采购专用(设计保留 14/28 两窗口)
+
+    同一套"判趋势→查权重表"机制, 只判一段(14 vs 28), 3 档权重。
+    权重沿用采购既有值, **逐位不变**: 收敛的是机制与输入列, 不是采购数值。
+    """
+    if s14 > s28 * 1.15:
+        return s14 * 0.55 + s28 * 0.45
+    if s14 < s28 * 0.85:
+        return s14 * 0.35 + s28 * 0.65
+    return s14 * 0.20 + s28 * 0.80
+
+
 # ── 2026-10-17 日销三窗口物化表(根治冷算 22s; 不改变输入集合/四维语义) ──────────────
 # 物化只存"慢变日销底料"(快照+订单派生的三窗口日均/σ/nnz); 库存/当天订单直查永不物化——
 # 动态安全线实时性由库存直查保证; 当天订单读时直查补足(物化行覆盖到快照, 当天增量现场合并)
-# 关键: 不固化 fused(rolling_predict)列——采购用 14/28 自权重、看板/断货用 rolling_predict、
-#      补货用削峰+shrink 组合, 各消费方口径不同, 现场 O(1) 计算(三窗口查表+乘加)
+# 关键(2026-11-16 口径统一, 用户定案): 消费方**一律**读 cut 三列做三窗口融合
+#      (补货/进销存/看板/告警), 采购读 cut 的 14/28 两窗口(设计保留两窗口)。
+#      融合仍现场算(O(1) 查表乘加), 不物化 fused 列 —— 口径只有一份
+#      (biz.sales.rolling_predict), 四家差异只剩"窗口数", 不再有"数据列不同"。
+#      订正旧注释: 此前写"各消费方口径不同"(补货 cut / 其余 raw / 告警 ds28), 正是漂移源头。
 # 行维度显式枚举(无 any 哨兵): '__C__'=全国platform合计 / '__BC__'=platform+platform_b 合计
 #     / '__ALL__'=全仓合计 / 具体仓名=逐仓(own 仓销量近零, 由消费方按 inventory.warehouse_type 现场筛)
 
@@ -445,7 +468,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
     - 行粒度: __C__/__BC__/__ALL__ 全国聚合三行 + 具体仓名逐仓行
     - plain = calc_sales_multi(默认三窗口) —— 看板/规则/进销存/断货消费
     - cut   = 削峰(smooth_promo_spikes)+ sparse=shrink 三窗口 —— 补货专属(与原 _build_repl 口径一致)
-    - 不存 fused: 消费方现场 rolling_predict(own 权重)/滚动融合, 口径零冲突
+    - 不存 fused: 消费方现场 rolling_predict(cut 三列) —— 口径唯一, 采购只是窗口数不同
     - upsert 幂等 ON DUPLICATE; 失败降级(消费方读表 miss 时降级直算)
     """
     from db import execute as _ex, executemany as _em, query as _q

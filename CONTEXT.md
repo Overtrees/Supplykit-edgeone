@@ -395,13 +395,13 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
 
 ### 2026-11-16 遗留（§15.203 之后新增）
 
-- **P8-1 日销四套口径"同名不同值"（中，产品决策）**：`daily_sales` 这个字段名在进销存与补货
-  都返回，但值不同（实测差 −29.7%~+89%）。**维度层四处已完全一致**（都读 `__C__` + 69 码优先），
-  差异只在融合公式：告警 `ds28` 单值 / 进销存 `rolling_predict(ds7,14,28)` /
-  采购 `ds14·ds28` 自权重 / 补货 `rolling_predict(ds*_cut)×season×act`。
-  `biz/sales.py:370` 明写这是有意设计（物化只存底料、各消费方现场算），`rolling_predict`
-  只有一份（非公式复制）。所以**不建议改数值**（会动判定阈值与建议量），
-  建议区分命名（`daily_sales_raw` / `daily_sales_cut`）或进销存加一列对照。详见 `docs/PERF.md` §19.11。
+- **P8-1 日销口径已收敛（2026-11-16，用户定案）**：四家（补货/进销存/看板/告警）统一读
+  `ds7_cut/14_cut/28_cut` + `rolling_predict`；采购保留 14/28 双窗口（设计，权重沿用原值）。
+  同名不同值消失。**代价**：进销存/看板日销中位 −23.9%，告警消失 0.8~0.9%，采购建议量约 −20%；
+  稀疏销售 SKU 的 `shrink` 收缩会压低日销（漏报风险，处置靠调阈值）。
+  口径见 `docs/ARCHITECTURE.md` §日销口径，影响数据见 `CHANGELOG.md` 第十五批。
+- **P8-4 `replenishment_config.active_factor` 是死配置（低）**：seed 写了 `'1.0'`，但采购/补货
+  实际读的是 `season_config_<mode>`，没有任何代码读这个键。要么接上要么删掉。
 - **P8-2 `season` 系数已配置但全 disabled（低）**：`jd` 的 `season_config_bbcc` 有 618/1111/年货节
   三条（1.3~1.5），当前 `enabled:false` 不生效。启用前要确认补货建议量能接受 30~50% 的上浮。
 - **P8-3 `rule_eval` 没有前端看守（中）**：`taskWatch._kindOf` 对未登记类型返回 `null` 不接管

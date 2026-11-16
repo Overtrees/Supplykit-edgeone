@@ -2150,7 +2150,7 @@ try:
 
     _bs7.get_sku_sales_stats = lambda *a, **k: {
         "SKU-A|BC-A|__C__": {"sku": "SKU-A", "barcode": "BC-A", "warehouse": "__C__",
-                             "ds7": 12, "ds14": 12, "ds28": 12}}
+                             "ds7_cut": 12, "ds14_cut": 12, "ds28_cut": 12}}
     _ohmod7.query = _fq7
     _ohmod7.one = lambda sql, params=None: {}
     try:
@@ -2178,11 +2178,11 @@ try:
     # 多码: 同 SKU 两个 69码 必须各判各的(合并判会用一个码的日销去判另一个码的库存)
     _bs7.get_sku_sales_stats = lambda *a, **k: {
         "SKU-M|BC-A|__C__": {"sku": "SKU-M", "barcode": "BC-A", "warehouse": "__C__",
-                             "ds7": 12, "ds14": 12, "ds28": 12},
+                             "ds7_cut": 12, "ds14_cut": 12, "ds28_cut": 12},
         "SKU-M|BC-B|__C__": {"sku": "SKU-M", "barcode": "BC-B", "warehouse": "__C__",
-                             "ds7": 0.5, "ds14": 0.5, "ds28": 0.5},
+                             "ds7_cut": 0.5, "ds14_cut": 0.5, "ds28_cut": 0.5},
         "SKU-M||__C__": {"sku": "SKU-M", "barcode": "", "warehouse": "__C__",
-                         "ds7": 12.5, "ds14": 12.5, "ds28": 12.5}}
+                         "ds7_cut": 12.5, "ds14_cut": 12.5, "ds28_cut": 12.5}}
     _ohmod7.query = lambda sql, params=None: (
         [{"sku": "SKU-M", "barcode": "BC-A", "warehouse": "集货仓", "avail": 10, "transit": 0},
          {"sku": "SKU-M", "barcode": "BC-B", "warehouse": "集货仓", "avail": 1, "transit": 0}]
@@ -2196,7 +2196,7 @@ try:
         _ohmod7.query = _fq7
         _bs7.get_sku_sales_stats = lambda *a, **k: {
             "SKU-A|BC-A|__C__": {"sku": "SKU-A", "barcode": "BC-A", "warehouse": "__C__",
-                                 "ds7": 12, "ds14": 12, "ds28": 12}}
+                                 "ds7_cut": 12, "ds14_cut": 12, "ds28_cut": 12}}
     check("S2-1d 多码 SKU 各码各判(BC-A 报缺, 日销 0.5 的 BC-B 不报)",
           len(_g8) == 1 and _g8[0].get("barcode") == "BC-A"
           and int(_g8[0]["available_qty"]) == 10, str(_g8)[:240])
@@ -2707,8 +2707,10 @@ try:
     _dash_src = open('routes/dashboard.py', encoding='utf-8').read()
 
     # ── D4: 改一条规则 ≠ 跑一整套每日任务 ──
-    check("D4 run_daily_rules 三参数(channels/deep/alert_types)",
-          "def run_daily_rules(channels=None, deep=True, alert_types=None)" in _cron_src,
+    # 2026-11-16 §15.205: 末尾新增 source="cron"(排障埋点, 带默认值不破坏既有调用方) ——
+    #   断言改为"三个业务参数都在且都带默认值", 不再锁右括号; 语义未放宽。
+    check("D4 run_daily_rules 三业务参数都在且带默认值(不破坏既有调用方)",
+          "def run_daily_rules(channels=None, deep=True, alert_types=None" in _cron_src,
           "routes/cron.py")
     # 2026-11-16 §15.200: 评估改接力后, "浅档跳过重活"由阶段机表达 ——
     #   deep=False 时 eval 结束直接进 kick, 不进 post(批次对账 + 健康快照)。
@@ -5287,6 +5289,28 @@ try:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", True)
 except Exception as _e38:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
+
+# ── 2026-11-16 口径唯一: 不许绕过 Series.fused 按单列取日销 ────────────────
+# 为什么要有这条: 口径收敛后, 任何人写回 `series.value("ds28", ...)` 都会在
+#   series 只装了 cut 三列时静默取到 0 —— 判定全不触发、页面"没异常"但结论全错。
+#   这种错不会抛异常, 只会让告警集体沉默, 所以必须用静态扫描挡住。
+try:
+    import re as _re
+    _bad = []
+    for _root, _dirs, _files in os.walk("."):
+        if "_pycache__" in _root or "migrations" in _root:
+            continue
+        for _fn in _files:
+            if not _fn.endswith(".py") or _fn in ("local_test.py", "metrics.py"):
+                continue
+            _fp = os.path.join(_root, _fn)
+            for _i, _ln in enumerate(open(_fp, encoding="utf-8", errors="ignore"), 1):
+                if _re.search(r'\.value\(\s*["\']ds7?28?', _ln) or 'value("ds28"' in _ln:
+                    _bad.append("%s:%d" % (_fp, _i))
+    check("口径唯一: 全仓无绕过 fused 的单列日销取值(.value(\"ds28\"))",
+          not _bad, str(_bad[:5]))
+except Exception as _ec:
+    check("口径唯一: 单列日销取值扫描无异常", False, str(_ec)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

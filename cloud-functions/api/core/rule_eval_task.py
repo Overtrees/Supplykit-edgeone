@@ -137,7 +137,16 @@ def enqueue(channels=None, deep=True, ats=None, token="", fp="", source="cron"):
                        "ORDER BY id DESC LIMIT 1")
         eid = int((_run_row or {}).get("id") or 0)
         if not eid:
-            eid = int(execute_id("INSERT INTO eval_tasks(scope) VALUES(%s)",
+            # 2026-11-16 §15.205: 显式写 status='running' + started_at=NOW()。
+            #   原来只写 scope, 靠表默认值落到 **pending 且 started_at=NULL** —— 而
+            #   `enqueue` 的行**从不属于"排队"**: 建完这一行, 调用方(run_daily_rules)
+            #   同一次请求里就推首片。pending 会带来两个后果:
+            #     ① `close_stale_runs` 只收 `running`, 收不到它 → 任务彻底停住时这行
+            #        永远 pending → `eval_live_cond()` 恒真 → 看板「规则重算中」永久挂
+            #        (§15.158 堵过同一类"永久挂着", 但只堵了 running、漏了 pending)
+            #     ② `started_at=NULL` → 状态接口的 age_min 恒空, 排障看不到跑了多久
+            eid = int(execute_id("INSERT INTO eval_tasks(scope, status, started_at) "
+                                 "VALUES(%s,'running',NOW())",
                                  [json.dumps({"channels": _chs, "ats": _ats, "deep": bool(deep),
                                               "task_id": tid}, ensure_ascii=False)]) or 0)
     except Exception as _e:
@@ -469,6 +478,31 @@ def _close_eval(p, ok=True, err=""):
                     [err[:200], int((time.time() - int(p.get("started") or time.time())) * 1000), eid])
     except Exception as _e:
         _try_err("rules", "接力任务收尾 eval_tasks 失败", _e)
+
+
+def abandon(task_id, reason="任务超时(30 分钟无更新)"):
+    """任务被外部判死(continue_tasks 的 30 分钟超时)时, 补做本模块的收尾。
+
+    为什么必须有: `continue_tasks` 判定超时只做了一件事 —— 把 `sync_tasks` 置 error。
+    它不知道这条任务还挂着一行 `eval_tasks`(看板横幅)和一个 `#run#` 占位:
+      · eval_tasks 停在 running → `eval_live_cond()` 恒真 → 「规则重算中」永久挂
+      · `#run#<fp>#<token>` 占位不退 → 当天只能靠 `_RUN_STALE_MIN`(20min) 自愈
+    进程内异常那条路径(step 的 except)本来就会收尾, 所以这里补的是**进程直接消失**
+    那条路径 —— 冻结/掐断时 except 不会执行。
+
+    幂等: `_close_eval` 与 `settle_rules` 都按状态条件写, 重复调用无副作用。
+    """
+    try:
+        row = one("SELECT params FROM sync_tasks WHERE task_id=%s", [task_id])
+        p = json.loads((row or {}).get("params") or "{}")
+        if not p:
+            return False
+        _close_eval(p, ok=False, err=reason)
+        _settle(p, ok=False)
+        return True
+    except Exception as _e:
+        _try_err("rules", "接力任务超时收尾降级(%s)" % task_id, _e)
+        return False
 
 
 def _finish(task_id, p):

@@ -209,6 +209,16 @@ def close_stale_runs(minutes=_STALE_MIN):
             "error='stale running: instance frozen (no done/error writeback)' "
             "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % _m
         ) or 0)
+        # 2026-11-16 §15.205: pending 也要收。`pending` 的语义是"排队等 `_drain_eval_tasks`
+        #   来抢", 而抢它的是一条 daemon 线程 —— 线程没起来(或实例当场被冻结)那行就永远
+        #   pending, 而 `eval_live_cond()` 把 pending 也算"在跑" → 看板「规则重算中」永久挂。
+        #   §15.158 当时只堵了 running, 漏了 pending(那一版还没有"cron 直接建任务"这条路径)。
+        #   判据用 created_at: pending 行没有 started_at。
+        out["eval_tasks"] += int(_ex(
+            "UPDATE eval_tasks SET status='timeout', finished_at=NOW(), "
+            "error='stale pending: nobody picked it up (worker thread never ran)' "
+            "WHERE status='pending' AND created_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % _m
+        ) or 0)
         if out["runs"]:
             try:
                 _ex("INSERT INTO quality_logs(log_type, level, message, source) "

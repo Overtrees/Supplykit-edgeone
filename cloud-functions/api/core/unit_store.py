@@ -79,7 +79,8 @@ RISK_DOMAINS = JUDGE_DOMAINS + ("suppliers",)
 # 代价与安全性: +1 不新增任何查询/表/开关, 只是让所有消费方(判定读模型 + 三个看板族 +
 #   补货/采购/滞销 + 自有仓, 全部经 fp_of 拿指纹)一次性失配 → 各自后台重建。旧 gen 继续
 #   服务到新 gen 完整落盘, 读路径零等待(红线 6/19), 不是"在读路径触发同步失效"。
-_FP_VER = 2   # 1 = 2026-11-07 初版(隐式, 不在 raw 里); 2 = 2026-11-16 纳入代码口径维
+_FP_VER = 3   # 1 = 2026-11-07 初版(隐式, 不在 raw 里); 2 = 2026-11-16 纳入代码口径维
+              # 3 = 2026-11-16 日销口径统一(cut 三窗口融合), 判定输出全变 → 旧指纹必须失效
 
 _READ_ON = ("1", "true", "yes", "on")
 _COOLDOWN = 30.0        # 同一 (channel, mode) 两次重建的最小间隔(秒) —— 防一次请求风暴重建N次
@@ -585,7 +586,7 @@ def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
     _t_units = time.time() - _tb
     _tc = time.time()
     if series is None:
-        series = M.load(channel, dims=M.dims_needed(rows, channel, _m), fields=("ds28",))
+        series = M.load(channel, dims=M.dims_needed(rows, channel, _m))
     _t_series = time.time() - _tc
     _td = time.time()
     p = M.periods(_cfg)
@@ -593,7 +594,7 @@ def scan(channel, mode=None, inv_rows=None, cfg=None, series=None):
     summ, alerts = {}, []
     for u in us:
         dim = M.dim_of(u.get("kind"), u.get("warehouse"), u.get("warehouse_type"))
-        ds = series.value("ds28", u["sku"], u.get("barcode"), dim) if series is not None else 0.0
+        ds = series.fused(u["sku"], u.get("barcode"), dim) if series is not None else 0.0
         v = M.judge(u, ds, p, channel, _m, include_transit=inc)
         _k = (str(u.get("kind")), str(u.get("warehouse_type") or ""))
         c = summ.get(_k)
@@ -638,7 +639,7 @@ def _validate(channel, mode, sc):
     # 独立路径复核: 同一批 units 再走一遍 metrics.tally()
     #   本模块的循环与 tally 是两段代码, 对上才说明"记账没错", 而不是同一个函数自己证明自己。
     try:
-        ref = M.tally(us, sc["series"], channel, mode, metric="ds28",
+        ref = M.tally(us, sc["series"], channel, mode, metric="fused",
                       include_transit=sc["inc"], p=sc["p"])
         for _k, rc in ref.items():
             # code_out 是本模块在 tally 之外多记的"码级复核"计数, 不属于分档口径,

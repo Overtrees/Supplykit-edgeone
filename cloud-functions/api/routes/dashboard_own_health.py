@@ -149,15 +149,16 @@ def _compute(channel, debug: int = 0):
         """
         _bc, _agg = {}, {}
         try:
-            # 2026-11-06: 只取 rolling_predict 用到的三列(原 14 列, 2 万行白传 8 列 ≈ 2.5MB)
+            # 2026-11-06: 只取融合用到的三列(原 14 列, 2 万行白传 8 列 ≈ 2.5MB)
+            # 2026-11-16 口径统一: 三列换成 cut(削峰+稀疏收缩), 与补货/进销存/告警同一口径
             rows = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all",
-                                      fields=("ds7", "ds14", "ds28")) or {}
+                                      fields=("ds7_cut", "ds14_cut", "ds28_cut")) or {}
             for _k, r in rows.items():
                 _s = str(r.get("sku") or "")
                 if not _s:
                     continue
-                _ds = rolling_predict(float(r.get("ds7") or 0), float(r.get("ds14") or 0),
-                                      float(r.get("ds28") or 0))
+                _ds = rolling_predict(float(r.get("ds7_cut") or 0), float(r.get("ds14_cut") or 0),
+                                      float(r.get("ds28_cut") or 0))
                 _bcv = str(r.get("barcode") or "")
                 if _bcv:
                     _bc[(_s, _bcv, WH_C)] = _ds

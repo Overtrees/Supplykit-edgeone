@@ -69,6 +69,15 @@ def continue_tasks(request: Request = None):
                 # 超时任务(>30 分钟无更新——前端轮询停/实例冻结)——标记 error 释放防重/结束卡住
                 _ec("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
                     [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——自动标记结束，请重新导入"}}), tid])
+                # 2026-11-16 §15.205: rule_eval 还要收尾它自己的 eval_tasks 行与占位 ——
+                #   否则 `eval_live_cond()` 恒真, 看板「规则重算中」永久挂。这里补的是
+                #   "进程直接消失"那条路径(冻结时 step 的 except 根本不执行)。
+                if tt == "rule_eval":
+                    try:
+                        from core import rule_eval_task as _rt0
+                        _rt0.abandon(tid)
+                    except Exception as _e0:
+                        try_err('cron', '接力任务超时收尾降级', _e0)
                 done["timeout"] += 1
                 continue
             try:
@@ -529,7 +538,7 @@ async def cron_cleanup_logs(request: Request):
     return ok(r)
 
 
-def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
+def run_daily_rules(channels=None, deep=True, alert_types=None, source="cron") -> dict:
     """规则评估入口 —— 只做编排: 建接力任务并推首片(§15.200, 2026-11-16 根治)
 
     ## 为什么不再是"同步跑完"
@@ -568,9 +577,9 @@ def run_daily_rules(channels=None, deep=True, alert_types=None) -> dict:
     _chs = [str(c) for c in (channels or _CHANNELS()) if c] or [str(c) for c in _CHANNELS()]
     _ats = [str(a) for a in (alert_types or []) if a]
     try:
-        _tid, _created = _RT.enqueue(_chs, deep=bool(deep), ats=_ats)
+        _tid, _created = _RT.enqueue(_chs, deep=bool(deep), ats=_ats, source=source)
         # 首片预算 8s: 让本请求(或看板后台线程)快速返回, 剩下的交给续跑
-        _r = _RT.step(_tid, budget=8.0, driver="frontend" if _created else "backend")
+        _r = _RT.step(_tid, budget=8.0, driver="backend")
         _log("info", "规则评估接力: task=%s %s channels=%s deep=%s ats=%s"
              % (_tid, "新建" if _created else "复用", ",".join(_chs), bool(deep),
                 ",".join(_ats[:6])))

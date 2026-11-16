@@ -175,7 +175,7 @@ def _daily_rules_guard():
             #   落指纹(settle_rules)交给 core.rule_eval_task: 全阶段跑完才算完成。
             try:
                 from routes.cron import run_daily_rules
-                _r = run_daily_rules()
+                _r = run_daily_rules(source="dashboard")
                 execute("INSERT INTO quality_logs(log_type, level, message, source) "
                         "VALUES('maint','info',%s,'dash')",
                         ("应用层兜底: 已排入规则评估接力任务 %s(阶段 %s)"
@@ -394,7 +394,7 @@ def _q_digest(channel, mode=None):
     """
     try:
         from core import metrics as _M
-        return _M.load(channel, dims=_M.dims_needed(None, channel, mode), fields=("ds28",))
+        return _M.load(channel, dims=_M.dims_needed(None, channel, mode))
     except Exception:
         return None
 
@@ -854,12 +854,11 @@ def _assemble(rows, channel, start_date, end_date, mode="bbcc", _inv_rows=None, 
                                [channel]))
             _ser_sum = _series
             if _ser_sum is None:
-                _ser_sum = _M.load(channel, dims=_M.dims_needed(_rows_sum, channel, _mode_sum),
-                                   fields=("ds28",))
+                _ser_sum = _M.load(channel, dims=_M.dims_needed(_rows_sum, channel, _mode_sum))
             _us_sum = _M.units(_rows_sum, merge_bc=False, with_bc=True,
                                grain=_M.grain_of(channel, _mode_sum, _cfg_sum),
                                drop_platform_b=(_mode_sum != "bbcc"))
-            _t_sum = _M.tally(_us_sum, _ser_sum, channel, _mode_sum, metric="ds28",
+            _t_sum = _M.tally(_us_sum, _ser_sum, channel, _mode_sum, metric="fused",
                               include_transit=_M.include_transit_default(), p=_p_sum)
         except Exception as _e:
             try_err('dashboard', '看板判定降级(健康/低库存各自重算)', _e)
@@ -1235,11 +1234,11 @@ def _build_aux(channel, mode):
                       "WHERE channel=%s AND warehouse IS NOT NULL AND warehouse!=''", [channel])
         _cfg_sl = _q_cfg(channel)
         _pp = _M.periods(_cfg_sl)
-        _ser = _M.load(channel, dims=_M.dims_needed(_rows, channel, mode), fields=("ds28",))
+        _ser = _M.load(channel, dims=_M.dims_needed(_rows, channel, mode))
         _us = _M.units(_rows, merge_bc=(mode == "bbcc"),
                        grain=_M.grain_of(channel, mode, _cfg_sl),
                        drop_platform_b=(mode != "bbcc"))
-        _pr = _M.judge_units(_us, _ser, channel, mode, metric="ds28",
+        _pr = _M.judge_units(_us, _ser, channel, mode, metric="fused",
                              include_transit=_M.include_transit_default(), p=_pp)
         # 只数**销售仓**(bbcc=BC 盘 / traditional=逐仓)。自有仓(集货仓)的"可用=0"是常态
         #   —— 货本来就在平台仓; 把它算成"缺货"就是纯噪音(线上实测 jd 201 个单元全来自集货仓,

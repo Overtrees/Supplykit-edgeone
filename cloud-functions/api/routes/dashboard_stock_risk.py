@@ -123,7 +123,7 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
             try_err("dash_stock", "risk 物化读取降级(走现算)", _e)
     from routes.dashboard import _hourly_accel  # 延迟 import(防模块级循环)
     """濒临断货 TOP: B(BBCC)/C(传统)/BC/own 维度"""
-    from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict
+    from biz.sales import load_daily_sales_grouped, calc_sales_multi, rolling_predict, smooth_promo_spikes
     from db import query as _q
     cfg_rows = _q("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [channel])
     cfg = {r.get("key"): r.get("value") for r in cfg_rows}
@@ -203,15 +203,16 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
         #   在内存里按 (barcode 是否为空 × warehouse 是否聚合维) 分流成原来那 5 个映射。
         #   语义逐项等价: 原 5 次各自筛的就是这些行的不同子集, 只是多绕了 4 趟往返。
         #   fields 裁剪: 只取 fused/sigma 需要的 4 列(原为 11 列, 白传 7 列 × 12 万行)。
+        # 2026-11-16 口径统一: 融合列由 raw 改为 cut(削峰+稀疏收缩), 与补货同口径
         _rws_all = get_sku_sales_stats(channel, days=28, barcode="all",
-                                       fields=("ds7", "ds14", "ds28", "sigma"))
+                                       fields=("ds7_cut", "ds14_cut", "ds28_cut", "sigma"))
         if _rws_all:
             for _r in _rws_all.values():
                 _sku = str(_r.get("sku") or "")
                 _bc = str(_r.get("barcode") or "")
                 _wh = str(_r.get("warehouse") or "")
-                _v = _rp(float(_r.get("ds7") or 0), float(_r.get("ds14") or 0),
-                         float(_r.get("ds28") or 0))
+                _v = _rp(float(_r.get("ds7_cut") or 0), float(_r.get("ds14_cut") or 0),
+                         float(_r.get("ds28_cut") or 0))
                 if _bc:
                     if _wh == WH_C:
                         # BC 判定的日销读 __C__(全国 C 仓) —— B 仓不产生销售
@@ -234,7 +235,13 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
     # ── 降级直算(仅物化表空/失败——与旧口径完全一致) ──
     if not _has_materialized:
         by_sku, by_sku_wh, by_sku_bc = load_daily_sales_grouped(28, channel, skus=skus)
-        multi = calc_sales_multi(by_sku, windows=[7, 14, 28])
+
+        def _cutm(d):
+            """降级直算也走 cut 口径 —— 物化挂掉不能等于换一套算法(否则又是两套数)"""
+            return calc_sales_multi({k: smooth_promo_spikes(v) for k, v in (d or {}).items()},
+                                    windows=[7, 14, 28], sparse="shrink")
+
+        multi = _cutm(by_sku)
         fused = {s: rolling_predict(multi[7].get(s, 0), multi[14].get(s, 0), multi[28].get(s, 0)) for s in skus}
         c_whs = {r.get("warehouse") for r in _q("SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''", [channel])}
         daily_c = {}
@@ -244,15 +251,15 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
                 m = daily_c.setdefault(base, {})
                 for d, q in wd.items():
                     m[d] = m.get(d, 0) + q
-        cmulti = calc_sales_multi(daily_c, windows=[7, 14, 28]) if daily_c else {7: {}, 14: {}, 28: {}}
+        cmulti = _cutm(daily_c) if daily_c else {7: {}, 14: {}, 28: {}}
         fused_c = {(s, WH_C): rolling_predict(cmulti[7].get(s, 0), cmulti[14].get(s, 0), cmulti[28].get(s, 0)) for s in daily_c}
         # 2026-10-29 按码直算
         if by_sku_bc:
-            _bcm = calc_sales_multi(by_sku_bc, windows=[7, 14, 28])
+            _bcm = _cutm(by_sku_bc)
             for _k in by_sku_bc:
                 fused_bc[tuple(str(_k).rsplit("|", 1))] = rolling_predict(_bcm[7].get(_k, 0), _bcm[14].get(_k, 0),
                                                _bcm[28].get(_k, 0))
-        wh_multi = calc_sales_multi(by_sku_wh, windows=[7, 14, 28])
+        wh_multi = _cutm(by_sku_wh)
         wh_fused = {tuple(str(k).rsplit("|", 1)): rolling_predict(wh_multi[7].get(k, 0), wh_multi[14].get(k, 0),
                                        wh_multi[28].get(k, 0)) for k in by_sku_wh}
         # P2: 动态安全库存 SS_dyn = Z(1.65) × 日销σ × √L/T —— 波动越大动态安全线越高, 更早濒临

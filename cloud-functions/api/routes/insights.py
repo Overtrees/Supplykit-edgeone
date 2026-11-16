@@ -165,8 +165,9 @@ def inventory_with_sales(wh_type: str = "own", channel: str = "jd", page: int = 
             for _r2 in (_gss_i(channel, skus=_sk_l, days=28, barcode="all") or {}).values():
                 _bc0 = str(_r2.get("barcode") or "")
                 _w0 = str(_r2.get("warehouse") or "")
-                _v2 = _rp_i(float(_r2.get("ds7") or 0), float(_r2.get("ds14") or 0),
-                            float(_r2.get("ds28") or 0))
+                # 2026-11-16 口径统一: 进销存台账用 cut 三列(此前 raw)
+                _v2 = _rp_i(float(_r2.get("ds7_cut") or 0), float(_r2.get("ds14_cut") or 0),
+                            float(_r2.get("ds28_cut") or 0))
                 if _bc0:
                     if _w0 == "__C__":
                         _c_ds["%s|%s" % (_r2.get("sku"), _bc0)] = _v2
