@@ -33,11 +33,12 @@
 | 第三次 | `core/eval_kick.py:15` 记着上次的事故（`cleansing_eval` 落到 cleansing 分支，看守永远推不动），当时只修了 `taskWatch`，**没修 TaskPage** —— 两处各自白名单、各自兜底 |
 | 修复 | 抽 `components/tasks/taskType.ts`（纯函数、无 React 依赖）：兜底改 `unknown`、`cleansing` 显式登记、渲染与完成提示共用一份。图标留页面（`TYPE_ICON`） |
 | 顺带修 | toast 判断 `task_type === 'clean'` 而实际值是 `'cleansing'` → 该分支**永远不命中** → 所有导入任务完成提示显示英文 `cleansing`。同一个病的症状，一并收敛 |
-| 文案 | `rule_eval` 与 `cleansing_eval` 共用标题「评估联动」（对用户是同一件事），副标题区分：新增 `task.eval_full` =「全量评估」，中英同步 |
+| 文案 | `rule_eval` 与 `cleansing_eval` 共用标题「评估联动」（对用户是同一件事），副标题区分：`task.eval_full` =「全量评估」/ `task.eval_delta` =「增量评估」，中英同步 |
+| 顺手清 | 改动时被 i18n 门禁点出的**既有死代码**：① `TaskPage.STATUS_LABEL` 全文件只出现 1 次（定义本身），状态文案实际走 `TaskCard` 的 `tc.*` → 删常量 + 4 个 `task.st_*` 词条；② `cleansing_eval` 的标题与副标题都是「评估联动」（`task.type_eval` 与 `task.eval` 同值）→ 改 `task.eval_delta`。死键从 4 归 0 |
 | 单测 | 新增 7 条。写完做**两次变异**验证断言分工：兜底改 cleansing → 只有"兜底不冒充"那条红；删 `rule_eval` 分支 → 只有"专属分支存在"那条红。两条缺一不可，已写进测试注释 |
 | 不做 | `rule_eval` **不纳入** TaskCard 评估进度条：它的 params 是 `{chunks,rows,hits,ch,cursor}`，无 `total/offset`，硬套显示「0/0 假进度」。要做需先在 `rule_eval_task` 落"总/已评"字段（CONTEXT P7-3） |
-| 副作用说明 | `taskWatch._kindOf` 对 `rule_eval` 返回 `null` 不接管 —— **安全**（不会误推、不会写成 error），但它只靠 `continue_tasks` 60s 一轮推进，没有前端 3s 加速层。要更快应加看守端点，不是放宽兜底（登记 P7-6） |
-| 门禁 | preflight **8/8**；回归 **864/0**；vitest **58/58**；i18n **1443/1443**（+1 键）；tsc 0 err |
+| 副作用说明 | `taskWatch._kindOf` 对 `rule_eval` 返回 `null` 不接管 —— **安全**（不会误推、不会写成 error），但它只靠 `continue_tasks` 60s 一轮推进，没有前端 3s 加速层。要更快应加看守端点，不是放宽兜底（登记 P8-3） |
+| 门禁 | preflight **8/8**；回归 **864/0**；vitest **58/58**；i18n **1439/1439**（死键 0）；tsc 0 err |
 | 详情 | `docs/history/2026-11-16.md` §15.204 |
 
 ## 2026-11-16（第十三批 · 物化 fp 补「代码口径」维 + 日销四套口径核实）

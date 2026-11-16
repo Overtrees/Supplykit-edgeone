@@ -69,7 +69,7 @@ describe('task_type 展示类型', () => {
     // 对用户是同一件事(规则评估), 但一个全量一个增量 —— 标题同、副标题不同
     expect(TYPE_LABEL_KEY.rule_eval).toBe(TYPE_LABEL_KEY.cleansing_eval)
     expect(zh['task.eval_full']).toBeTruthy()
-    expect(zh['task.eval']).toBeTruthy()
-    expect(zh['task.eval_full']).not.toBe(zh['task.eval'])
+    expect(zh['task.eval_delta']).toBeTruthy()
+    expect(zh['task.eval_full']).not.toBe(zh['task.eval_delta'])
   })
 })

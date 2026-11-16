@@ -286,7 +286,7 @@ export default function TaskPage() {
                               'task.import',
                           )
                         : type === 'cleansing_eval'
-                          ? t('task.eval')
+                          ? t('task.eval_delta')
                           : type === 'rule_eval'
                             ? t('task.eval_full')
                             : task.task_id.slice(0, 22)
