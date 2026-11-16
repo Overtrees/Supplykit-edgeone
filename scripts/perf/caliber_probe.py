@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -396,20 +397,22 @@ def cmd_export(_a):
                        "page_size": 50}, timeout=300)
     j = r.json() or {}
     tid = ((j.get("data") or j) or {}).get("task_id") or ""
-    hdr, parts = [], 0
+    hdr, parts, fn = [], 0, ""
     for _ in range(60):
         st = s.get(K.BASE + "/api/exports/status",
                    params={"task_id": tid, "page_size": 50}, timeout=300).json() or {}
         d = st.get("data") or st or {}
-        if d.get("status") in ("done", "failed"):
+        if str(d.get("status")) in ("done", "failed", "error"):
             parts = len(((d.get("result") or {}) if isinstance(d.get("result"), dict) else {}).get("parts") or [])
+            fn = str(d.get("filename") or "")   # 文件名由服务端给，别自己拼 tid_p1.csv
             break
-    if tid:
-        dl = s.get(K.BASE + "/api/exports/download/" + ("%s_p1.csv" % tid), timeout=300)
+        time.sleep(3)
+    if fn:
+        dl = s.get(K.BASE + "/api/exports/download/" + fn, timeout=300)
         if dl.status_code == 200:
-            hdr = (dl.text or "").lstrip("\ufeff").splitlines()[:1]
+            hdr = dl.content.decode("utf-8-sig", errors="ignore").splitlines()[:1]
     line = hdr[0] if hdr else ""
-    out["pos"] = {"task_id": tid, "parts": parts, "header": line[:400]}
+    out["pos"] = {"task_id": tid, "parts": parts, "filename": fn, "header": line[:400]}
     chk("日销56" in line, "采购导出表头含「日销56」（%s）" % (line[:80] or "未取到"))
     chk("日销60" not in line, "采购导出表头无「日销60」")
     return _dump("export", out)
