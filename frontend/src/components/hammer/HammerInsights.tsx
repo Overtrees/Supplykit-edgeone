@@ -96,14 +96,10 @@ export default function HammerInsights({ channel }: HammerInsightsProps) {
     try {
       const API = import.meta.env.VITE_API_BASE_URL || ''
       const _mode = mode // 组件内真实模式(含渠道强制: 非 jd→traditional)——曾用 window.__hammerReplenMode || 'bbcc' 兜底致传统导出变 bbcc
+      // 调用点只会传 slow/purchase/replen(见下方 doExport 三处); purchase → purchase_suggestions
+      // 曾有个死兜底返回旧 purchase 类型: 后端已删该类型(红线不留兼容), 留着只会让误传静默变错表
       const _type =
-        type === 'slow'
-          ? 'slow'
-          : type === 'purchase'
-            ? 'purchase_suggestions'
-            : type === 'replen'
-              ? 'replen'
-              : 'purchase'
+        type === 'slow' ? 'slow' : type === 'purchase' ? 'purchase_suggestions' : 'replen'
       // S3-2 收口: 导出是重操作, 超时 90s
       const d = await apiJson<OkResponse>(
         'POST',

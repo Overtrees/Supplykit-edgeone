@@ -89,7 +89,7 @@
 - **部署判据**: `scripts/deploy_status.py` 输出 `Commit == 本地 HEAD && Prod == yes && Status == Success` 才算部署完成;
   若本机走 `push_api.py`(见下), 本地 SHA 与远端不同 —— 改判「远端 HEAD 与本地 HEAD 逐文件一致」(脚本会自检)
 - **先看数据源实际返回什么**(拦截响应看真实分布), 再决定改前端还是后端 — 不要拿前端兜底掩盖口径问题
-- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 当前 860 通过/0 失败
+- **本地回归**: `cd cloud-functions/api && python3 local_test.py` → 0 失败即通过（项数高频变化，以运行输出为准）
   (目录必须在 `cloud-functions/api/`, 否则 `routes/cron.py` 找不到); 前端 `cd frontend && npm test` → 30
 - **多视口 UI 验证**: Playwright 实测, 参考 `scripts/ui_own_card_measure.py`; 视口 375/390/844/768/1024/1440
   - **i18n 专项快照**: `python3 scripts/ui_shot_matrix.py --serve --locale zh|en --viewport 375|390|844|1440`
@@ -438,6 +438,16 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   重建一次并复核，成功置 `ok`、失败冷却 600s 重试。**残余**：守卫是进程内的，云函数多实例
   会各查各的（一条 `LIMIT 1` 索引点查，代价可忽略）；重建 187s 在后台，期间页面仍读到
   旧值 —— 属可接受窗口。
+- **P8-11 采购导出 `type=purchase` 兼容别名已删（2026-11-16）**：§15.210 曾把旧值收成
+  `purchase_suggestions` 别名。本轮全仓核对**零消费方**（前端导出只传 slow /
+  purchase_suggestions / replen，三元末尾的 `: 'purchase'` 是死兜底），按红线删净后端
+  三处 + 前端兜底。旧值改为在 `create_export` 处明确报「未知导出类型」——静默给错表
+  变成显式失败。**别再加回别名**：要加先给出真实调用方。
+- **P8-12 稀疏 SKU 的显示层舍入伪影（低，不修）**：接口字段 `round(1)` 会把库内
+  `ds56=0.048` 显示成 `0.0`，而 `ds28=0.071` 显示成 `0.1` → 前端看到「28>0 但 56=0」，
+  实测 4459 行（jd/traditional 2255）。库里原值都 >0，**真覆盖缺口 0 行**。
+  验证脚本必须回库看原值（`caliber_probe.py online` 已这么做），不能用接口显示值判 0。
+  渲染按用户指令不动。
 - **P8-4 `replenishment_config.active_factor` 是死配置（低）**：seed 写了 `'1.0'`，但采购/补货
   实际读的是 `season_config_<mode>`，没有任何代码读这个键。要么接上要么删掉。
 - **P8-2 `season` 系数已配置但全 disabled（低）**：`jd` 的 `season_config_bbcc` 有 618/1111/年货节

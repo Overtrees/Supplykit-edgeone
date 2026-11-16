@@ -22,7 +22,7 @@ def now_stamp():
 
 # 导出文件名中文映射(2026-10-25: 曾 exports_<英文type>_<channel>_<ts>——改中文+日期+时分秒)
 _EXPORT_NAMES = {
-    "replen": "补货建议", "purchase_suggestions": "采购建议", "purchase": "采购建议",
+    "replen": "补货建议", "purchase_suggestions": "采购建议",
     "slow": "滞销处置建议", "orders": "订单明细", "inventory": "进销存明细",
 }
 
@@ -62,11 +62,9 @@ def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0)
     注意: 补货裸调会被 `UNPAGED_CAP["repl"]=2000` 截断(网关 413 防护), **导出禁止走裸调**
     —— 导出必须传 page_size, 否则用户拿到 2000 行却以为全量(§15.201)。
     """
-    # 2026-11-16 别名: 前端洞察页的"采购"导出传的是 `purchase_suggestions`, 但
-    #   `type=purchase` 曾被并进**补货**分支 → 用户点"采购导出"拿到的是补货数据 +
-    #   补货表头(B缺口/C仓周转/B建议补), 全程不报错。这里收成别名, 两种写法都进采购分支。
-    if exp_type == "purchase":
-        exp_type = "purchase_suggestions"
+    # 2026-11-16: `type=purchase` 曾并进补货分支 → 点"采购导出"拿到补货数据+补货表头,
+    #   全程不报错。全仓核对后**无任何消费方**传该值(前端只传 purchase_suggestions),
+    #   故按红线"不留兼容垃圾"直接删别名: 旧值在 create_export 处明确报「未知导出类型」。
     if exp_type == "replen":
         # 补货导出(曾 purchase_suggestions 误用补货数据组装成采购样式)
         from routes.replenishment import get_replenishment_suggestions
@@ -234,7 +232,7 @@ async def create_export(request: Request):
     wh_type = (qs.get("wh_type") or [""])[0]
     # 补货/采购导出必须显式传 mode(前端实际选择的当前补货模式)——曾默认 bbcc 兜底
     # 致传统模式导出变 BBCC(前端漏传时静默错误); 现在缺失显式报错, 无兜底
-    if exp_type in ("replen", "purchase_suggestions", "purchase") and not mode:
+    if exp_type in ("replen", "purchase_suggestions") and not mode:
         return fail("导出补货/采购需传 mode 参数(当前补货模式: bbcc / traditional)")
     # 2026-11-16 §15.201: 原来用 `_build_export_rows(...) is None` 判类型 —— 那是在**建任务
     #   请求里**把整份导出真跑一遍(补货 = 物化全量 + 5 万行组装)只为判断"类型认不认识"。

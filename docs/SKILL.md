@@ -22,7 +22,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条�
 | 数据库 | TiDB Cloud Serverless, `.env` 里 `TIDB_*` + `DB_BACKEND=tidb` + `JWT_SECRET` + `CRON_SECRET` |
 | 规模 | 24 个 APIRouter / 34 个路由文件 / 16 页面 / 13 组件 + 11 锤子面板 / 7 迁移步骤 |
 | 性能基线与判据 | `docs/PERF.md`（页面→模块）+ `scripts/perf/run.py`（hot/storm/cold/first/noise） |
-| 回归 | `local_test.py` **860 通过 / 0 失败**;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
+| 回归 | `local_test.py` **0 失败**（项数以运行输出为准）;加 `--sql-smoke` 顺带做真实 SQL 冒烟(435 条唯一 SQL / 290 条 EXPLAIN + schema 对账) |
 
 ```bash
 cd /workspace/supplykit
@@ -62,7 +62,7 @@ cloud-functions/api/
   db.py             原生数据层: pymysql DictCursor + 连接池(BoundedSemaphore 名额)
   schema_create.py  表/索引声明 + SCHEMA_VERSION 门禁(热路径零 DDL)
   migrations/       有序迁移框架: steps/*.py 单步事务 + schema_migrations 记账(只跑未应用的)
-  biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判)
+  biz/sales.py      三窗口日销(3σ 剔除非零日 + 近 3 天 1.5 倍加权 + 稀疏窗口特判) + 56 天长基准(仅趋势箭头)
   routes/common.py  @traced(异常统一 200 + ok:false) / try_err / 日志落库
   routes/*.py       24 个 APIRouter: auth dashboard orders products inventory replenishment ledger
                     purchase alerts insights history cleansing channels rules suppliers tasks
@@ -124,7 +124,7 @@ recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— `l
 ```bash
 bash scripts/preflight.sh
 # [1/8] 后端 Python 3.10 语法   [2/8] pyflakes(undefined name / 重定义)
-# [3/8] local_test 回归 860 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
+# [3/8] local_test 全量回归 (+SQL 冒烟)  [4/8] ESLint(含红线 C 禁 any)
 # [5/8] Prettier  [6/8] tsc  [7/8] vitest 单测
 # [8/8] i18n 门禁(红线 B: 中文硬编码为 0 + zh/en 键集相等 + 无死引用)
 ```

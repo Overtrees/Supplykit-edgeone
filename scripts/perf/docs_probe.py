@@ -165,7 +165,8 @@ def check(T):
     # ⑤ 明确不改的正确描述（防止误伤）
     chk(T["import_targets"] == 9 and "9 类导入" in readme,
         "README「9 类导入」= 前端 %d 个 target，正确保留" % T["import_targets"])
-    chk("860 项" in readme, "README「860 项回归」正确保留")
+    chk("以运行输出为准" in readme and "local_test.py" in readme,
+        "README 回归项数不写死（用例数高频变化，2026-11-16 纠偏）")
     chk("实例内 token 槽（3）" in readme and "heavy_slot`（2" in readme,
         "README 名额 3+2 描述正确保留")
 

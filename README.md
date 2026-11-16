@@ -30,7 +30,7 @@
 | 痛点 | 方案 |
 |------|------|
 | 京东/天猫后台导出数据杂乱，手动清洗费时 | 智能列名匹配 + 可视化映射，一次配置永久复用，导入即时联动库存/规则 |
-| 补货靠经验拍脑袋，不同人算出来不一样 | 三窗口滚动预测日销 + BBCC/传统双模式，结果可复现可追溯 |
+| 补货靠经验拍脑袋，不同人算出来不一样 | 三窗口融合日销 + 近 56 天趋势长基准 + BBCC/传统双模式，结果可复现可追溯 |
 | B 仓超期仓储费、C 仓断货风险没人盯 | 濒临断货**三级判定**（Adj-DOS vs 补货周期）+ 采购&补货告警卡，自动联动 |
 | 规则配置与看板计算脱节 | **规则=业务计算引擎配置**：断货/健康计算参数融合进规则编辑页，卡片同源读取 |
 | Excel 做报表，每次都要重新拉数 | 看板 30s 静默刷新 + 版本指纹轮询，打开即用 |
@@ -115,9 +115,9 @@
 
 | 页面 | 核心能力 |
 |------|---------|
-| 📊 **看板** | GMV趋势 / 店铺/品牌GMV / 漏斗 / 健康度 / 断货三级 / 低库存(模式过滤) / 采购&补货 / 待处理 / 30s刷新+版本指纹 |
-| 💡 **补货建议** | BBCC 两步法（C缺口→B调拨）/ 传统逐仓 / 三窗口日销 / B仓仓储费 / 已下单标记 / 导出 |
-| 📦 **采购建议** | 14+28 融合日销 / 系统总库存 / 供应商级参数+MOQ聚合 / 采购告警 / 导出 |
+| 📊 **看板** | GMV趋势 / 店铺/品牌GMV / 漏斗 / 健康度 / 断货三级 / 低库存(模式过滤) / 采购&补货 / 待处理 / 30s刷新+版本指纹 / 数据新鲜度圆点(按源阈值) |
+| 💡 **补货建议** | BBCC 两步法（C缺口→B调拨）/ 传统逐仓 / 三窗口日销 + 28vs56 趋势箭头 / B仓仓储费 / 已下单标记 / 导出 |
+| 📦 **采购建议** | 14+28 融合主值 + 28vs56 趋势箭头 / 系统总库存 / 供应商级参数+MOQ聚合 / 采购告警 / 导出 |
 | 🧹 **数据清洗** | 9 类导入 / 渠道标记 / 列名匹配 / 模板复用 / 异步进度 / 库存联动 / 规则评估 |
 | ⚙️ **规则引擎** | 计算参数融合(断货/健康) / 计算变量字段 / or 多组 / 类型模板 / 告警开关 / 立即运行 / 审计 |
 | 📋 **订单明细** | 分页 / 搜索 / 状态筛选 / 软删撤销+回收站 |
@@ -159,7 +159,7 @@ git clone https://github.com/Overtrees/Supplykit-edgeone.git
 cd Supplykit-edgeone
 
 # 后端本地回归（mock db + TestClient，改代码先跑）
-cd cloud-functions/api && python3 local_test.py        # 860 项全过
+cd cloud-functions/api && python3 local_test.py        # 全量回归（项数以运行输出为准，不写死）
 
 # 前端
 cd frontend && npm install && npm run dev
@@ -190,5 +190,5 @@ python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，14 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，15 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 
