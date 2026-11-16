@@ -1334,6 +1334,8 @@ export const zh: Record<string, string> = {
   'task.export': '导出',
   'task.import': '导入',
   'task.eval': '评估联动',
+  // `rule_eval`(每日/手动全量接力) 的副标题, 与导入后增量联动的「评估联动」区分
+  'task.eval_full': '全量评估',
   'task.subtitle': '{ch} · 异步任务',
   'task.ch_jd': '京东',
   'task.ch_other': '其他渠道',

@@ -6,6 +6,12 @@ import EmptyState from '../components/EmptyState'
 import { useAppStore } from '../store/useAppStore'
 import { useToast } from '../components/Toast'
 import TaskCard from '../components/tasks/TaskCard'
+import {
+  taskTypeOf,
+  TYPE_LABEL_KEY,
+  WHAT_LABEL_KEY,
+  type TaskType,
+} from '../components/tasks/taskType'
 import { IconRefresh, IconBroom, IconExport, IconClipboard, IconUndo } from '../components/Icons'
 import ErrorRetry from '../components/ErrorRetry'
 import { t } from '../locale'
@@ -29,18 +35,21 @@ const CLEAN_TARGET_NAME = {
   outbound: 'task.imp_outbound',
   product: 'task.imp_product',
 }
-const TYPE_LABEL = {
-  cleansing_eval: { label: 'task.type_eval', Icon: IconRefresh },
-  seed: { label: 'task.type_seed', Icon: IconRefresh },
-  cleansing: { label: 'task.type_cleansing', Icon: IconBroom },
-  export: { label: 'task.type_export', Icon: IconExport },
-  reset: { label: 'task.type_reset', Icon: IconUndo },
+/** 图标与文案分离: 文案键在 components/tasks/taskType.ts(纯函数可单测), 图标留此处 */
+const TYPE_ICON: Record<TaskType, typeof IconRefresh> = {
+  cleansing: IconBroom,
+  cleansing_eval: IconRefresh,
+  rule_eval: IconRefresh,
+  export: IconExport,
+  seed: IconRefresh,
+  reset: IconUndo,
+  unknown: IconClipboard,
 }
-const STATUS_LABEL = {
-  pending: 'task.st_pending',
-  running: 'task.st_running',
-  done: 'task.st_done',
-  error: 'task.st_error',
+
+/** 图标不能直接 `<TYPE_ICON[type] />` 写法, 取成变量再渲染 */
+function TypeIcon({ type }: { type: TaskType }) {
+  const Icon = TYPE_ICON[type]
+  return <Icon size={18} />
 }
 
 export default function TaskPage() {
@@ -118,18 +127,10 @@ export default function TaskPage() {
             doneTasks.current[task.task_id] = true
             if (firstLoad.current) return // 首载: 仅记录, 不弹历史完成提示
             if (task.status === 'done') {
+              const _ty = taskTypeOf(task)
               toast.success(
                 t('task.done_toast', {
-                  what:
-                    task.task_type === 'seed'
-                      ? t('task.what_seed')
-                      : task.task_type === 'clean'
-                        ? t('task.what_cleansing')
-                        : task.task_type === 'cleansing_eval'
-                          ? t('task.what_eval')
-                          : task.task_type === 'export'
-                            ? t('task.what_export')
-                            : task.task_type,
+                  what: t(WHAT_LABEL_KEY[_ty] || TYPE_LABEL_KEY[_ty]),
                 }),
               )
               // 数据已变更，通知各页面刷新；dashboard 强制同步重建拿最新值（不用旧值）
@@ -270,43 +271,32 @@ export default function TaskPage() {
             return (
               <>
                 {[..._active, ..._shown].map(task => {
-                  const type =
-                    task.task_type === 'export'
-                      ? 'export'
-                      : task.task_type === 'seed'
-                        ? 'seed'
-                        : task.task_type === 'reset' || task.task_id.startsWith('reset_')
-                          ? 'reset'
-                          : task.task_type === 'cleansing_eval'
-                            ? 'cleansing_eval'
-                            : 'cleansing'
-                  const meta = TYPE_LABEL[type] || {
-                    label: 'task.type_unknown',
-                    Icon: IconClipboard,
-                  }
+                  const type = taskTypeOf(task)
                   const result = task.result
                     ? typeof task.result === 'string'
                       ? safeParse(task.result)
                       : task.result
                     : null
                   const sub =
-                    task.task_type === 'export'
+                    type === 'export'
                       ? t(EXPORT_TYPE_NAME[result?.result?.type || result?.type] || 'task.export')
-                      : task.task_type === 'cleansing'
+                      : type === 'cleansing'
                         ? t(
                             CLEAN_TARGET_NAME[result?.result?.target || result?.target] ||
                               'task.import',
                           )
-                        : task.task_type === 'cleansing_eval'
+                        : type === 'cleansing_eval'
                           ? t('task.eval')
-                          : task.task_id.slice(0, 22)
+                          : type === 'rule_eval'
+                            ? t('task.eval_full')
+                            : task.task_id.slice(0, 22)
                   return (
                     <TaskCard
                       key={task.task_id}
                       task={task}
-                      label={t(meta.label)}
+                      label={t(TYPE_LABEL_KEY[type])}
                       sub={sub}
-                      icon={meta.Icon ? <meta.Icon size={18} /> : undefined}
+                      icon={<TypeIcon type={type} />}
                       downloading={downloading[task.task_id]}
                       onDownload={download}
                     />

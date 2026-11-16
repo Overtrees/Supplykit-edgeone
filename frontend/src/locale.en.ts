@@ -1348,6 +1348,8 @@ export const en: Record<string, string> = {
   'task.export': 'Export',
   'task.import': 'Import',
   'task.eval': 'Evaluation run',
+  // subtitle for `rule_eval` (daily/manual full relay), vs. post-import incremental eval
+  'task.eval_full': 'Full evaluation',
   'task.subtitle': '{ch} · async tasks',
   'task.ch_jd': 'JD',
   'task.ch_other': 'Other channels',

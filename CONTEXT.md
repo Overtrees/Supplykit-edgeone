@@ -404,6 +404,14 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   建议区分命名（`daily_sales_raw` / `daily_sales_cut`）或进销存加一列对照。详见 `docs/PERF.md` §19.11。
 - **P8-2 `season` 系数已配置但全 disabled（低）**：`jd` 的 `season_config_bbcc` 有 618/1111/年货节
   三条（1.3~1.5），当前 `enabled:false` 不生效。启用前要确认补货建议量能接受 30~50% 的上浮。
+- **P8-3 `rule_eval` 没有前端看守（中）**：`taskWatch._kindOf` 对未登记类型返回 `null` 不接管
+  —— **安全**（不会误推、不会把别人任务写成 error），但也意味着它只靠 `continue_tasks`
+  60s 一轮推进，缺前端 3s 轮询那层加速（实测 6 轮 384.7s）。要做快应**新增看守端点**
+  （仿 `/api/cleansing/eval-status?driver=frontend`），**不是**放宽 `_kindOf` 的兜底 ——
+  那正是 §15.204 与 `core/eval_kick.py:15` 两次事故的来源。详见 §15.204 七。
+- **P7-3 已部分完成**：`rule_eval` 的**显示**已修（不再叫"数据清洗导入"），但**进度条仍未做** ——
+  它的 params 是 `{chunks,rows,hits,ch,cursor}`，缺 `total/offset`。要做需先在
+  `core/rule_eval_task` 落"总 SKU 数/已评数"，属独立改（见 `TaskCard.tsx` 注释）。
 
 
 ## 用户偏好
