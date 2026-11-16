@@ -5526,6 +5526,16 @@ try:
 except Exception as _e210g:
     check("§15.210 列级守卫静态断言无异常", False, str(_e210g)[:200])
 
+try:
+    # 导出: `type=purchase` 曾被并进补货分支 → 点"采购导出"拿到补货数据+补货表头(B缺口/…)
+    _te210 = open("routes/task_export.py", encoding="utf-8").read()
+    check("§15.210 导出 purchase 不再落进补货分支(收成 purchase_suggestions 别名)",
+          'if exp_type in ("replen", "purchase")' not in _te210
+          and 'if exp_type == "purchase":' in _te210
+          and 'exp_type = "purchase_suggestions"' in _te210)
+except Exception as _e210h:
+    check("§15.210 导出别名静态断言无异常", False, str(_e210h)[:200])
+
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:
     FAIL += _sa.report()

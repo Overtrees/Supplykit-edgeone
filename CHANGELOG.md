@@ -34,6 +34,7 @@
 | 季节系数（P1） | 收敛到 `core.metrics.season_factor`（读 `channel_cfg`，渠道覆盖全局），补保存点 `invalidate_cfg` |
 | 加列回填（P0） | `get_sku_sales_stats` 加列级哨兵（`ds28>0 AND ds56=0`）→ 后台重建一次；other 渠道手工重建，`ds28>0 且 ds56=0` **82,264 → 0** |
 | 趋势阈值 | 补货 6 处 `1.15/0.85` 字面量改走 `TREND_UP_RATIO/DOWN_RATIO`；删掉重复的 `tw90` 赋值行 |
+| 导出 | `type=purchase` 曾落进补货分支（给出补货数据+补货表头）→ 收成 `purchase_suggestions` 别名；两张表的 `日销56` 列名线上实测正确、无 `日销60` |
 | 红线 22 | `_FP_VER` 4 → 5（采购 14/28 值与降级口径都变了） |
 | 回归 | **893 / 0**（+22 条 §15.210） |
 | 不做 | 活性门控（用户定案：0.04 这种极端稀疏不必补）；稀疏 SKU 的 shrink 不对称（P8-5 等产品定） |

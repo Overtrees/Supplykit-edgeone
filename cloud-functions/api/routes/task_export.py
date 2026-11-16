@@ -62,8 +62,13 @@ def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0)
     注意: 补货裸调会被 `UNPAGED_CAP["repl"]=2000` 截断(网关 413 防护), **导出禁止走裸调**
     —— 导出必须传 page_size, 否则用户拿到 2000 行却以为全量(§15.201)。
     """
-    if exp_type in ("replen", "purchase"):
-        # 补货导出(采购建议不再走此——曾 purchase_suggestions 误用补货数据组装成采购样式)
+    # 2026-11-16 别名: 前端洞察页的"采购"导出传的是 `purchase_suggestions`, 但
+    #   `type=purchase` 曾被并进**补货**分支 → 用户点"采购导出"拿到的是补货数据 +
+    #   补货表头(B缺口/C仓周转/B建议补), 全程不报错。这里收成别名, 两种写法都进采购分支。
+    if exp_type == "purchase":
+        exp_type = "purchase_suggestions"
+    if exp_type == "replen":
+        # 补货导出(曾 purchase_suggestions 误用补货数据组装成采购样式)
         from routes.replenishment import get_replenishment_suggestions
         r = get_replenishment_suggestions(days=28, mode=mode, channel=channel,
                                           page=page, page_size=page_size)
