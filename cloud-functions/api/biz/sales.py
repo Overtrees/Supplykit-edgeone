@@ -354,14 +354,20 @@ def get_sales_digest(channel, days=28):
     return by_sku, fused, sigma
 
 
+# 趋势判档阈值(单一常量): rolling_predict 的 9 档表、rolling_predict_2w、备注文案共用,
+#   防止"表里判 15%、前端再写一个 20%"这类静默漂移。
+TREND_UP_RATIO = 1.15
+TREND_DOWN_RATIO = 0.85
+
+
 def rolling_predict(s7, s14, s28):
     """三窗口趋势加权融合 —— **唯一**的三窗口融合实现(4 家消费方共用)
 
     输入固定是 `ds7_cut / ds14_cut / ds28_cut`(2026-11-16 口径统一, 用户定案)。
     趋势判两段: 7 vs 14、14 vs 28, 各分 加速/平/减速, 查 9 档权重表。
     """
-    a7 = 1 if s7 > s14 * 1.15 else (-1 if s7 < s14 * 0.85 else 0)
-    a14 = 1 if s14 > s28 * 1.15 else (-1 if s14 < s28 * 0.85 else 0)
+    a7 = 1 if s7 > s14 * TREND_UP_RATIO else (-1 if s7 < s14 * TREND_DOWN_RATIO else 0)
+    a14 = 1 if s14 > s28 * TREND_UP_RATIO else (-1 if s14 < s28 * TREND_DOWN_RATIO else 0)
     weights = {
         (1, 1): (0.50, 0.30, 0.20), (1, 0): (0.35, 0.40, 0.25), (1, -1): (0.25, 0.35, 0.40),
         (0, 1): (0.20, 0.40, 0.40), (0, 0): (0.10, 0.20, 0.70), (0, -1): (0.15, 0.35, 0.50),
@@ -382,6 +388,47 @@ def rolling_predict_2w(s14, s28):
     if s14 < s28 * 0.85:
         return s14 * 0.35 + s28 * 0.65
     return s14 * 0.20 + s28 * 0.80
+
+
+# ── 趋势对比的"长基准"(2026-11-16 用户定案) ──────────────────────────────────
+# 补货/采购的趋势箭头 = **近 28 天 vs 近 56 天**, 两侧都是同粒度、同 cut 口径的单窗口日均。
+# 为什么是 56 而不是 60: 28 = 4 周、56 = 8 周, 恰好 2 倍 → 两窗口的星期构成完全对称;
+#   60 天是 8 周 + 4 天, 两端错开 4 个星期位, 比值里会混进"这 28 天含几个周六"的伪影。
+# 为什么不能用融合值当基准: 融合(ds7/14/28 权重表)本身已把短期趋势吸收进权重, 且结构上
+#   恒低于 ds28(实测 ds28/fused 中位 2.00) → 拿它当分母, 75% 的 SKU 箭头朝上、仅 2.7% 朝下,
+#   那是权重表的产物, 不是需求变化。真值(近 28 vs 前 28 的销量总量)≈ 1 : 0.43, 见 §15.209。
+LONG_WIN = 56
+
+
+def nnz_window(daily, win, now=None):
+    """窗口内**有销量的天数**(与 calc_sales_multi 内部 nnz 同义)
+
+    用途: 物化 nnz 列的单一实现(重建路径原自带一份日期解析, 降级直算再抄一份 ——
+    时区/边界一改就两边不一致), 并供消费方判断"该窗口是否被 shrink 过"。
+    """
+    if now is None:
+        now = now_cn()
+    n = 0
+    for k, v in daily.items():
+        try:
+            # 与物化重建的原实现**逐位一致**: "距今 < win 天"含今天, 不含第 win 天
+            if v and v > 0 and (now - datetime.strptime(str(k)[:10], "%Y-%m-%d")
+                                .replace(tzinfo=CN_TZ)).days < win:
+                n += 1
+        except Exception:
+            continue
+    return n
+
+
+def cut_series(daily, win=28):
+    """削峰后的日销序列 —— 削峰窗口必须与取数窗口**配对**
+
+    原 `smooth_promo_spikes` 的 max_win 写死 28: 56 天窗口直接复用它时, 29~56 天前的
+    促销尖峰会原样留在窗口里 → 长基准被抬高 → 全体商品显示"下滑"。
+    `hist_days = win + 32` 让基线长度恒为 32 天 —— 28 天窗口的取值与收敛前**逐位一致**
+    (原默认就是 max_win=28 / hist_days=60), 56 天窗口才拿到与之同构的基线。
+    """
+    return smooth_promo_spikes(daily, max_win=win, hist_days=win + 32)
 
 
 # ── 2026-10-17 日销三窗口物化表(根治冷算 22s; 不改变输入集合/四维语义) ──────────────
@@ -520,23 +567,21 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                     m[d] = m.get(d, 0) + q
 
         def _nnz(daily, win):
-            n = 0
-            for k, v in daily.items():
-                try:
-                    if v > 0 and (now_d - datetime.strptime(str(k)[:10], "%Y-%m-%d").replace(tzinfo=CN_TZ)).days < win:
-                        n += 1
-                except Exception:
-                    continue
-            return n
+            # 2026-11-16: 收敛到 nnz_window(单一份日期解析), 判据与原实现逐位一致
+            return nnz_window(daily, win, now_d)
 
         def _to_rows(key_daily, wh_label):
-            """批量三窗口(plain+cut) → 行列表; 不存 fused(消费方现场算)"""
+            """批量三窗口(plain+cut)+ 56 天长基准 → 行列表; 不存 fused(消费方现场算)"""
             rows_out = []
             if not key_daily:
                 return rows_out
             m = calc_sales_multi(key_daily, windows=[7, 14, 28])
-            _cut = {k: smooth_promo_spikes(d) for k, d in key_daily.items()}
+            _cut = {k: cut_series(d) for k, d in key_daily.items()}
             mc = calc_sales_multi(_cut, windows=[7, 14, 28], sparse="shrink")
+            # 2026-11-16 趋势长基准: 56 = 8 周(28 的 2 倍), 削峰窗口同步放宽到 56
+            #   —— 不复用 28 天的削峰结果, 否则 29~56 天前的尖峰留在窗口里抬高基准
+            _cut56 = {k: cut_series(d, LONG_WIN) for k, d in key_daily.items()}
+            mc56 = calc_sales_multi(_cut56, windows=[LONG_WIN], sparse="shrink")[LONG_WIN]
             for k, daily in key_daily.items():
                 sigma = 0.0
                 # 2026-10-30 口径保护: sigma 固定用**最近 60 天**样本(原口径), 不随取数窗口(days)
@@ -558,6 +603,7 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                     "ds28": round(m[28].get(k, 0.0), 3), "sigma": round(sigma, 3),
                     "ds7_cut": round(mc[7].get(k, 0.0), 3), "ds14_cut": round(mc[14].get(k, 0.0), 3),
                     "ds28_cut": round(mc[28].get(k, 0.0), 3),
+                    "ds56_cut": round(mc56.get(k, 0.0), 3),
                     "nnz7": _nnz(daily, 7), "nnz14": _nnz(daily, 14), "nnz28": _nnz(daily, 28),
                     "last_sale": max(daily.keys()) if daily else None})
             return rows_out
@@ -616,10 +662,12 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
             #   要么看到新片(验收: 重建期间并发读 100 次, 无一次读到空/半量)。
             from db import transaction as _txn
             cols = ["channel", "sku", "barcode", "warehouse", "ds7", "ds14", "ds28", "sigma",
-                    "ds7_cut", "ds14_cut", "ds28_cut", "nnz7", "nnz14", "nnz28", "last_sale"]
+                    "ds7_cut", "ds14_cut", "ds28_cut", "ds56_cut", "nnz7", "nnz14", "nnz28",
+                    "last_sale"]
             _ins_sql = ("INSERT INTO sku_sales_stats(%s) VALUES(%s) ON DUPLICATE KEY UPDATE "
                         "ds7=VALUES(ds7), ds14=VALUES(ds14), ds28=VALUES(ds28), sigma=VALUES(sigma), "
                         "ds7_cut=VALUES(ds7_cut), ds14_cut=VALUES(ds14_cut), ds28_cut=VALUES(ds28_cut), "
+                        "ds56_cut=VALUES(ds56_cut), "
                         "nnz7=VALUES(nnz7), nnz14=VALUES(nnz14), nnz28=VALUES(nnz28), "
                         "last_sale=VALUES(last_sale), updated_at=CURRENT_TIMESTAMP(6)" % (
                             ", ".join("`%s`" % c for c in cols),
@@ -834,7 +882,7 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None, fiel
                 _params += _ck
             # 2026-11-06: 指标列按 fields 裁剪(键列 sku/barcode/warehouse 恒取)
             _all_cols = ("ds7", "ds14", "ds28", "sigma", "ds7_cut", "ds14_cut", "ds28_cut",
-                         "nnz7", "nnz14", "nnz28", "last_sale")
+                         "ds56_cut", "nnz7", "nnz14", "nnz28", "last_sale")
             _cols = [c for c in _all_cols if (not fields or c in fields)] or ["ds28"]
             rows = _q("SELECT sku, COALESCE(barcode,'') AS barcode, warehouse, "
                       + ", ".join(_cols)
@@ -850,6 +898,7 @@ def get_sku_sales_stats(channel, skus=None, wh=None, days=28, barcode=None, fiel
                            "ds28": float(r.get("ds28") or 0), "sigma": float(r.get("sigma") or 0),
                            "ds7_cut": float(r.get("ds7_cut") or 0), "ds14_cut": float(r.get("ds14_cut") or 0),
                            "ds28_cut": float(r.get("ds28_cut") or 0),
+                           "ds56_cut": float(r.get("ds56_cut") or 0),
                            "nnz7": int(r.get("nnz7") or 0), "nnz14": int(r.get("nnz14") or 0),
                            "nnz28": int(r.get("nnz28") or 0), "last_sale": str(r.get("last_sale") or "")[:10]}
         return out

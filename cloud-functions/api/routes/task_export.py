@@ -80,7 +80,8 @@ def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0)
                 "B仓库存": it.get("b_stock", ""), "C仓库存": it.get("c_stock", ""),
                 "B缺口": it.get("b_gap", ""), "日销": it.get("daily_sales", ""),
                 "日销7": it.get("daily_sales_7", ""), "日销14": it.get("daily_sales_14", ""),
-                "日销28": it.get("daily_sales_28", ""), "日销60": it.get("daily_sales_60", ""),
+                # 2026-11-16 口径: 长基准是近 56 天(8 周), 原"日销60"列名与内容都不对
+                "日销28": it.get("daily_sales_28", ""), "日销56": it.get("daily_sales_56", ""),
                 "库存可撑天数": it.get("days_to_empty", ""),
                 "C仓周转": it.get("c_turnover", ""), "B-C调拨周转": it.get("transit_turnover", ""),
                 "当前综转": it.get("combined_turnover_current", it.get("combined_turnover", "")),
@@ -101,7 +102,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0)
                 "69码": it.get("barcode", ""), "品牌": it.get("brand", ""),
                 "仓库": it.get("warehouse", ""), "供应商": it.get("supplier_code", ""),
                 "日销(融合)": it.get("daily_sales", ""), "日销14": it.get("daily_sales_14", ""),
-                "日销28": it.get("daily_sales_28", ""),
+                "日销28": it.get("daily_sales_28", ""), "日销56": it.get("daily_sales_56", ""),
                 "系统可用": it.get("sys_available", ""), "系统在途": it.get("sys_transit", ""),
                 "系统总库存": it.get("sys_total", ""), "自有可用": it.get("own_available", ""),
                 "平台可用": it.get("plat_available", ""),

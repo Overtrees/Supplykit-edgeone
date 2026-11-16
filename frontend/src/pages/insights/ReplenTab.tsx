@@ -37,7 +37,8 @@ export interface ReplenRow {
   daily_sales_7?: number
   daily_sales_14?: number
   daily_sales_28?: number
-  daily_sales_60?: number
+  /** 2026-11-16: 近 56 天(8 周)cut 日均 —— 28 天的趋势长基准; 原名 daily_sales_60(装的是融合值) */
+  daily_sales_56?: number
   c_turnover?: number
   transit_turnover?: number
   safety_qty?: number
@@ -410,12 +411,11 @@ export default function ReplenTab(props: Props) {
                                   />
                                 )}
                                 {(x.daily_sales_14 || 0).toFixed(1)}/
-                                {/* 2026-11-16 口径收敛: 基准原为 daily_sales_60 —— 那字段装的是
-                                    rolling_predict_2w(两窗口融合), 不是「60 天日均」, 名不副实。
-                                    cut 之后融合值降得比 28 天值多, 用它会令 5176 个 SKU 的箭头
-                                    集体朝上(实测 5073 朝上/103 朝下)。改为与采购页同口径:
-                                    近 14 天 vs 28 天, 两者都已是 cut, 自洽。 */}
-                                {(x.daily_sales_14 || 0) > (x.daily_sales_28 || 0) * 1.15 ? (
+                                {/* 2026-11-16: 这一档比的是 28 与长基准(第三个数)。渲染没动,
+                                    动的是 daily_sales_60 的**值**(键已改名 daily_sales_56): 原来装融合值
+                                    (不是 60 天, 且恒低于 ds28 → 75% 朝上、2.7% 朝下), 现在装
+                                    近 56 天(8 周, 恰 28 的 2 倍)cut 日均, 与 28 同粒度同口径。 */}
+                                {(x.daily_sales_28 || 0) > (x.daily_sales_56 || 0) * 1.15 ? (
                                   <IconTrendUp
                                     size={12}
                                     style={{
@@ -424,7 +424,7 @@ export default function ReplenTab(props: Props) {
                                       color: 'var(--success)',
                                     }}
                                   />
-                                ) : (x.daily_sales_14 || 0) < (x.daily_sales_28 || 0) * 0.85 ? (
+                                ) : (x.daily_sales_28 || 0) < (x.daily_sales_56 || 0) * 0.85 ? (
                                   <IconTrendDown
                                     size={12}
                                     style={{

@@ -278,6 +278,7 @@ _TABLES = {
         "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
         "sigma DECIMAL(12,3) DEFAULT 0, "
         "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
+        "ds56_cut DECIMAL(12,3) DEFAULT 0, "
         "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
         "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
         "UNIQUE KEY uq_stats_biz (channel, sku, barcode, warehouse))"
@@ -767,7 +768,10 @@ _COLUMN_ADDS = {
     "batches": [("barcode", "VARCHAR(64) DEFAULT ''")],
     # 2026-10-29 日销按 69码 精准绑定(用户定案: 补货也按码): 快照层与物化层都加, 空码降级
     "daily_sales_snapshot": [("barcode", "VARCHAR(64) DEFAULT ''")],
-    "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''")],
+    # 2026-11-16 趋势长基准(28 vs 56): 56 天 cut 日均单列入表 —— 消费方现场算不了
+    #   (要 90 天日销序列), 又不能拿 28 天削峰结果凑
+    "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''"),
+                        ("ds56_cut", "DECIMAL(12,3) DEFAULT 0")],
     # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
     "orders": [("ext_json", "TEXT"),
                ("synced_at", "DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)")],
@@ -849,7 +853,9 @@ _COLUMN_ADDS = {
 #   表缓存让"没写操作"也周期性在请求路径全量现算。物化后读侧按 seq 分页 + head 计数,
 #   重建由 data_version_dom 域计数驱动(无 TTL), 后台执行; LIST_READ=0 可秒级回滚。
 #   payload 存整行 JSON, 检索列单独落以支持 need_only/search 的 SQL 下推。
-SCHEMA_VERSION = 26
+# v27(2026-11-16 趋势长基准): sku_sales_stats 增 ds56_cut —— 补货/采购的趋势箭头 =
+#   近 28 vs 近 56(8 周, 恰 2 倍), 两侧同粒度同 cut; 原 daily_sales_60 装的是融合值, 名不副实。
+SCHEMA_VERSION = 27
 
 
 def table_ddl(name):

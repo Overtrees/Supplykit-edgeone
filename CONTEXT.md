@@ -400,6 +400,11 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   同名不同值消失。**代价**：进销存/看板日销中位 −23.9%，告警消失 0.8~0.9%，采购建议量约 −20%；
   稀疏销售 SKU 的 `shrink` 收缩会压低日销（漏报风险，处置靠调阈值）。
   口径见 `docs/ARCHITECTURE.md` §日销口径，影响数据见 `CHANGELOG.md` 第十五批。
+- **P8-5 趋势长基准的稀疏伪影（中，等产品定）**：补货第三档箭头 = 近 28 vs 近 56，两侧
+  都是 cut 单窗口。但 `nnz28<3` 的 SKU 只有 28 天窗口被 `shrink`（×nnz/3），56 天窗口大概率
+  不 shrink → 比值偏小。抽样 27.3% 的 SKU 属这类，其中 70.2% 判「下滑」，多半是伪影。
+  后端能识别（`nnz28` 列），前端判据在 JSX 里，加 `na` 要动渲染 —— 本轮按指令未动。
+  两种落法见 `docs/history/2026-11-16.md` §15.209 七。
 - **P8-4 `replenishment_config.active_factor` 是死配置（低）**：seed 写了 `'1.0'`，但采购/补货
   实际读的是 `season_config_<mode>`，没有任何代码读这个键。要么接上要么删掉。
 - **P8-2 `season` 系数已配置但全 disabled（低）**：`jd` 的 `season_config_bbcc` 有 618/1111/年货节

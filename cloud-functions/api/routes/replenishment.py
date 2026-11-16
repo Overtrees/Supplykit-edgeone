@@ -5,7 +5,11 @@ from fastapi import APIRouter, Request
 
 from db import query, one
 from routes.common import ok, fail, traced, try_err, INVENTORY_COLS as _INV_COLS
-from biz.sales import rolling_predict  # 物化 fused 现场计算(降级路径亦用)
+from biz.sales import (rolling_predict,  # 物化 fused 现场计算(降级路径亦用)
+                        TREND_UP_RATIO, TREND_DOWN_RATIO)
+#   2026-11-16 趋势长基准: 只动「原来那个 60 天位置」的**取值**(融合值 → 近 56 天 cut 日均),
+#     前端渲染/箭头判据一行不动(箭头本来就摆在 28 之后, 判 28 vs 该值)。
+#     阈值常量给**备注文案**用 —— 备注是服务端生成的文字, 与前端 JSX 各自独立, 别混。
 from core.note_segs import zh_note  # 2026-11-04 结构化备注: segs 单一真源, note=zh_note(segs)
 
 router = APIRouter(tags=["insights"])
@@ -102,8 +106,9 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
     """
     segs = []
     if ds > 0:
-        t7 = "up" if w7 > w14 * 1.15 else ("down" if w7 < w14 * 0.85 else "flat")
-        t14 = "up" if w14 > w28 * 1.15 else ("down" if w14 < w28 * 0.85 else "flat")
+        # 阈值取 biz.sales 常量 —— 备注文案里的"趋势"字样与前端箭头判据同源
+        t7 = "up" if w7 > w14 * TREND_UP_RATIO else ("down" if w7 < w14 * TREND_DOWN_RATIO else "flat")
+        t14 = "up" if w14 > w28 * TREND_UP_RATIO else ("down" if w14 < w28 * TREND_DOWN_RATIO else "flat")
         segs.append({"k": "trend", "t7": t7, "t14": t14})
     if ds <= 0:
         if avail > 0:
@@ -150,9 +155,11 @@ def _build_repl(channel, mode):
             #   仅取其中 1/6 的行、3/11 的列。
             #   `barcode="all"` 一次取「合计 + 按码」→ 1 次往返; wh 限定维度; fields 裁列。
             #   traditional 模式按**逐仓**取(`_rd(sku, wh)`), 故 wh 只能限 __C__, 不能限逐仓。
+            # 2026-11-16: +ds56_cut —— 趋势长基准(近 28 vs 近 56)的底料, 4 列
             _w = "__C__" if mode == "bbcc" else None
             _stats = get_sku_sales_stats(channel, days=90, barcode="all", wh=_w,
-                                         fields=("ds7_cut", "ds14_cut", "ds28_cut")) or {}
+                                         fields=("ds7_cut", "ds14_cut", "ds28_cut",
+                                                 "ds56_cut")) or {}
         else:
             _stats = get_sku_sales_stats(channel, days=90) or {}
             # 2026-10-29 按 69码: 合并按码行(原只加载合计行 → _rd 的 "sku|bc|wh" 查询永远 miss,
@@ -168,8 +175,9 @@ def _build_repl(channel, mode):
     # 直算降级(仅物化表空/不可用时——与旧口径一致; 构造同构 _stats 使主循环单一)
     if not _stats:
         try:
-            from biz.sales import load_daily_sales_grouped as _ldg, calc_sales_multi as _csm, \
-                smooth_promo_spikes as _sps, rolling_predict as _rp
+            from biz.sales import (load_daily_sales_grouped as _ldg, calc_sales_multi as _csm,
+                                   cut_series as _cut, nnz_window as _nnz, rolling_predict as _rp,
+                                   LONG_WIN as _LW)
             _by, _by_wh, _by_bc = _ldg(90, channel)
             _c_whs = {r.get("warehouse") for r in query(
                 "SELECT DISTINCT warehouse FROM inventory WHERE channel=%s AND warehouse_type='platform' AND warehouse!=''",
@@ -183,47 +191,40 @@ def _build_repl(channel, mode):
                         m[d] = m.get(d, 0) + q
             if not _by_c:
                 _by_c = _by
-            _mc = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[7, 14, 28], sparse="shrink")
-            for _k, _v in _mc.get(7, {}).items():
-                _st = _stats.setdefault("%s|__C__" % _k, {})
-                _st["ds7_cut"] = _v
-            _mc14 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[14], sparse="shrink")
-            _mc28 = _csm({k: _sps(v) for k, v in _by_c.items()}, windows=[28], sparse="shrink")
-            for _k in _mc.get(7, {}):
-                _st = _stats.setdefault("%s|__C__" % _k, {})
-                _st["ds14_cut"] = _mc14[14].get(_k, 0)
-                _st["ds28_cut"] = _mc28[28].get(_k, 0)
-            _ma = _csm({k: _sps(v) for k, v in _by.items()}, windows=[7, 14, 28], sparse="shrink")
-            _ma14 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[14], sparse="shrink")
-            _ma28 = _csm({k: _sps(v) for k, v in _by.items()}, windows=[28], sparse="shrink")
-            for _k in _ma.get(7, {}):
-                _st = _stats.setdefault("%s|__C__" % _k, {})   # 2026-10-30 全仓→C仓
-                _st["ds7_cut"] = _ma[7].get(_k, 0)
-                _st["ds14_cut"] = _ma14[14].get(_k, 0)
-                _st["ds28_cut"] = _ma28[28].get(_k, 0)
-            _mw = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[7, 14, 28], sparse="shrink")
-            _mw14 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[14], sparse="shrink")
-            _mw28 = _csm({k: _sps(v) for k, v in _by_wh.items()}, windows=[28], sparse="shrink")
-            for _k in _mw.get(7, {}):
-                _st = _stats.setdefault(_k, {})
-                _st["ds7_cut"] = _mw[7].get(_k, 0)
-                _st["ds14_cut"] = _mw14[14].get(_k, 0)
-                _st["ds28_cut"] = _mw28[28].get(_k, 0)
-            # 2026-10-29 按 69码 直算(与物化同构: key = "sku|barcode|WH_ALL")
-            try:
-                for _bk, _bd in (_by_bc or {}).items():
-                    _sk, _bc = _bk.rsplit("|", 1) if "|" in _bk else (_bk, "")
-                    if not _bc:
-                        continue
-                    _c7 = _csm({_bk: _sps(_bd)}, windows=[7], sparse="shrink")
-                    _c14 = _csm({_bk: _sps(_bd)}, windows=[14], sparse="shrink")
-                    _c28 = _csm({_bk: _sps(_bd)}, windows=[28], sparse="shrink")
-                    _st = _stats.setdefault("%s|%s|__C__" % (_sk, _bc), {})
-                    _st["ds7_cut"] = _c7[7].get(_bk, 0)
-                    _st["ds14_cut"] = _c14[14].get(_bk, 0)
-                    _st["ds28_cut"] = _c28[28].get(_bk, 0)
-            except Exception:
-                pass
+
+            def _fill(key_fn, key_daily):
+                """一份底料 → 4 个 cut 列 + nnz28(键由 key_fn 按业务维度生成)
+
+                2026-11-16 一并修掉两个既有缺陷:
+                  ① 逐仓行原来按 "sku|wh" 落键, 而 `_rd` 查的是 "sku||wh"(空码三段) ——
+                     降级路径下 traditional 整列读到 0(冷启动首建就是这条路), 补货全不报;
+                  ② 14/28 窗口原来各再算一遍(单窗口 csm), 与三窗口同义, 纯重复。
+                """
+                _c7 = {k: _cut(d) for k, d in key_daily.items()}          # 28 天削峰(现有口径)
+                _c56 = {k: _cut(d, _LW) for k, d in key_daily.items()}    # 56 天削峰(窗口配对)
+                _m = _csm(_c7, windows=[7, 14, 28], sparse="shrink")
+                _m56 = _csm(_c56, windows=[_LW], sparse="shrink")[_LW]
+                for _k, _d in key_daily.items():
+                    _st = _stats.setdefault(key_fn(_k), {})
+                    _st["ds7_cut"] = _m[7].get(_k, 0)
+                    _st["ds14_cut"] = _m[14].get(_k, 0)
+                    _st["ds28_cut"] = _m[28].get(_k, 0)
+                    _st["ds56_cut"] = _m56.get(_k, 0)
+                    _st["nnz28"] = _nnz(_d, 28)
+
+            _fill(lambda k: "%s|__C__" % k, _by_c)
+            # 2026-10-30 全仓合计并入 __C__(渠道内只有 platform 仓产生销售, 两者实测恒等;
+            #   先 C 后全仓, 顺序保持与原实现一致)
+            _fill(lambda k: "%s|__C__" % k, _by)
+            _fill(lambda k: "%s||%s" % tuple(k.rsplit("|", 1)), _by_wh)   # 逐仓(空码三段键)
+            _bc_by_sku = {}
+            for _bk, _bd in (_by_bc or {}).items():
+                if "|" not in _bk:
+                    continue
+                _sk, _bc = _bk.rsplit("|", 1)
+                if _bc:
+                    _bc_by_sku["%s|%s|__C__" % (_sk, _bc)] = _bd
+            _fill(lambda k: k, _bc_by_sku)   # 按 69码(物化同构: sku|barcode|__C__)
         except Exception as _e2:
             from routes.common import try_err
             try_err('repl', '物化直算降级失败', _e2)
@@ -301,6 +302,9 @@ def _build_repl(channel, mode):
             ds7 = round(float(_st8.get("ds7_cut") or 0), 1)
             ds14 = round(float(_st8.get("ds14_cut") or 0), 1)
             ds28 = round(float(_st8.get("ds28_cut") or 0), 1)
+            # 趋势长基准(2026-11-16): 近 56 天(8 周)cut 日均 —— 与 ds28 同维度同粒度,
+            #   原来是 `_fused_cut(...) or ds`(融合值冒充 60 天, 且 `or` 会吞掉真实的 0)
+            ds56 = round(float(_st8.get("ds56_cut") or 0), 1)
             # 活性门控: 近 7/14 天有销售=近期活跃(×1); 仅 28 天历史销售=弱化(×0.5); 全零=0
             _act = 1.0 if (ds7 > 0 or ds14 > 0) else (0.5 if ds28 > 0 else 0.0)
             ds = round(_fused_cut(_st8) * season * _act, 1)
@@ -421,7 +425,11 @@ def _build_repl(channel, mode):
                 "b_stock": b_available, "c_stock": avail, "b_gap": b_gap,
                 "daily_sales": ds, "daily_sales_7": ds7,
                 "daily_sales_14": ds14, "daily_sales_28": ds28,
-                "daily_sales_60": round(_fused_cut(_rd(sku, "__C__")) or ds, 1),
+                # 2026-11-16: 长基准 = 近 56 天(8 周)cut 日均。原键 daily_sales_60 装的是
+                #   rolling_predict 融合值 —— 不是 60 天, 且恒低于 ds28(中位比 2.00) → 75% 朝上、
+                #   2.7% 朝下, 箭头成了权重表的读数。56 = 28×2, 星期构成对称。
+                #   ⚠️ 只喂趋势箭头: 不进 rolling_predict、不进补货量。
+                "daily_sales_56": ds56,
                 "raw_suggested": c_gap, "suggested_qty": suggested,
                 "b_suggested": b_box, "b_replenish_raw": b_replenish,
                 "days_to_empty": days_to_empty, "after_turnover": after_turnover,
@@ -447,6 +455,9 @@ def _build_repl(channel, mode):
             w7 = round(float(_st9.get("ds7_cut") or 0), 1)
             w14 = round(float(_st9.get("ds14_cut") or 0), 1)
             w28 = round(float(_st9.get("ds28_cut") or 0), 1)
+            # 趋势长基准(2026-11-16): 同一逐仓行的 56 天 cut —— 原 `_fused_cut(_rd(sku,"__C__"))`
+            #   既不是 60 天, 还跨了维度(逐仓主值 vs 全渠道合计), 比出来的是"仓间结构差"
+            w56 = round(float(_st9.get("ds56_cut") or 0), 1)
             # 活性门控(逐仓): 近 7/14 天该仓有销售=活跃(×1); 仅 28 天历史=弱化(×0.5)
             _act = 1.0 if (w7 > 0 or w14 > 0) else (0.5 if w28 > 0 else 0.0)
             ds = round(_fused_cut(_st9) * season * _act, 1)
@@ -480,7 +491,7 @@ def _build_repl(channel, mode):
                 "effective_safety": effective_safety,
                 "daily_sales": round(ds, 1), "daily_sales_7": round(w7, 1),
                 "daily_sales_14": round(w14, 1), "daily_sales_28": round(w28, 1),
-                "daily_sales_60": round(_fused_cut(_rd(sku, "__C__")) or ds, 1),
+                "daily_sales_56": w56,
                 "suggested_qty": box_qty, "after_turnover": after_turnover,
                 "days_to_empty": round(avail / ds, 1) if ds > 0 else 999,
                 "note": _tn, "note_segs": _ts,

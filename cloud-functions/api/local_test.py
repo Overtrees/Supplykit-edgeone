@@ -4460,9 +4460,10 @@ try:
     check("建议行物化: 写操作失效链路已接(后台重建, 不等下一请求现算)",
           "list_store as _LS" in _ac18 and "_LS.ensure_async(_kind)" in _ac18,
           "routes/analysis_cache.py")
-    check("建议行物化: schema v26 声明 list_snapshot/list_head",
+    # 版本号钉住是故意的: 改 schema 忘 bump = 存量实例永远不执行新声明(v9 事故)
+    check("建议行物化: schema 声明 list_snapshot/list_head 且版本号已 bump",
           '"list_snapshot"' in _sc18b and '"list_head"' in _sc18b
-          and "SCHEMA_VERSION = 26" in _sc18b, "schema_create.py")
+          and "SCHEMA_VERSION = 27" in _sc18b, "schema_create.py")
     check("建议行物化: 新鲜度只由 fp 决定, 读侧无 TTL/时间判断",
           # §15.161: TIMESTAMPDIFF 只允许出现在 _swr_meta 里算**播报用 age_s**,
           #   绝不参与「数据新不新」的判定; allow_stale 是唯一跳过 fp 比对的路径,
@@ -5290,6 +5291,57 @@ try:
 except Exception as _e38:
     check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
 
+# ── 2026-11-16 趋势长基准(28 vs 56): 与三窗口同构, 只差窗口 ────────────────
+# 为什么要有这几条: 补货/采购的趋势箭头从"融合值当 60 天基准"改成"近 28 vs 近 56"
+#   之后, 新增的只有一个 ds56_cut 列 —— 它必须满足: ①28 天口径一位不动;
+#   ②56 天窗口用 56 天基线削峰(否则 29~56 天前的促销尖峰留在窗口里抬高基准);
+#   ③56 天基准与 28 天基准同粒度同 cut —— 两侧同为单窗口日均, 不掺融合值。
+try:
+    from datetime import timedelta as _td56
+    from core.clock import now_cn as _now56
+    from biz.sales import (cut_series as _cut56, calc_sales_multi as _csm56,
+                           LONG_WIN as _LW56)
+
+    _now56b = _now56()
+    _d56 = lambda n: (_now56b - _td56(days=n)).strftime("%Y-%m-%d")
+
+    # ① cut_series(28) 必须是 smooth_promo_spikes 默认参数的**相等**改写
+    _dd = {_d56(i): 5 for i in range(60)}
+    _dd[_d56(20)] = 100          # 28 天窗口内的 20 倍尖峰
+    check("§15.209 cut_series(28) == smooth_promo_spikes(默认) —— 28 天削峰口径未动",
+          _cut56(dict(_dd)) == smooth_promo_spikes(dict(_dd)), "28 天削峰被改了")
+
+    # ② 29~56 天前的尖峰: 28 天削峰看不见, 56 天削峰必须削掉
+    _dd2 = {_d56(i): 5 for i in range(90)}
+    _dd2[_d56(40)] = 400         # 56 天窗口内、28 天窗口外的 80 倍尖峰
+    _c28b, _c56b = _cut56(dict(_dd2)), _cut56(dict(_dd2), _LW56)
+    check("§15.209 56 天削峰覆盖 29~56 天前的尖峰(28 天削峰管不到该区间)",
+          _c28b[_d56(40)] == 400 and _c56b[_d56(40)] < 400,
+          "28=%s 56=%s" % (_c28b[_d56(40)], _c56b[_d56(40)]))
+
+    # ③ 平稳序列: 56 天 cut 日均 == 日均值(3σ 不会误剔, shrink 不触发)
+    _flat = {_d56(i): 10 for i in range(60)}
+    _m56b = _csm56({"S": _cut56(_flat, _LW56)}, windows=[_LW56], sparse="shrink")[_LW56]["S"]
+    # 平稳序列的期望值不是 10: 近 3 天 ×1.5 让 56 天窗口"等效 57.5 天"(+2.68%)。
+    #   同一个加权套在 28 天窗口上等效 29.5 天(+5.36%) —— 这就是 28 对 56 的**固有**上行偏置,
+    #   两侧都吃同一套权重, 相对偏置 ≈ +2.6%, 落在 ±15% 判档带内不改变方向判定。
+    _exp56 = 10.0 * (56 + 0.5 * 3) / 56
+    check("§15.209 平稳序列 56 天 cut 日均 == 近3天1.5倍加权后的日均(权重口径一致)",
+          abs(_m56b - _exp56) < 1e-9, "got %s 期望 %s" % (_m56b, _exp56))
+
+    # ④ 窗口相互独立: csm([14]) 与 csm([7,14,28]) 的 14 档必须逐位相同
+    #   —— 降级直算路径原来为 14/28 各重算一遍(单窗口 csm), 删掉它靠的就是这条
+    _mix = {}
+    for _i56 in range(40):
+        _mix["K%d" % _i56] = {_d56(j): ((_i56 * (j % 5)) % 9) for j in range(35)}
+    _a56 = _csm56(_mix, windows=[7, 14, 28], sparse="shrink")
+    _b56 = _csm56(_mix, windows=[14], sparse="shrink")
+    _diff56 = [k for k in _a56[14] if abs(_a56[14][k] - _b56[14].get(k, -1)) > 1e-12]
+    check("§15.209 窗口独立: csm([14])[14] == csm([7,14,28])[14]",
+          not _diff56, str(_diff56[:5]))
+except Exception as _e56:
+    check("§15.209 趋势长基准用例无异常", False, str(_e56)[:300])
+
 # ── 2026-11-16 口径唯一: 不许绕过 Series.fused 按单列取日销 ────────────────
 # 为什么要有这条: 口径收敛后, 任何人写回 `series.value("ds28", ...)` 都会在
 #   series 只装了 cut 三列时静默取到 0 —— 判定全不触发、页面"没异常"但结论全错。
@@ -5311,6 +5363,42 @@ try:
           not _bad, str(_bad[:5]))
 except Exception as _ec:
     check("口径唯一: 单列日销取值扫描无异常", False, str(_ec)[:200])
+
+# ── 2026-11-16 长基准: 字段叫 daily_sales_56, 且只管趋势箭头 ────────────────
+# 三条一起挡, 少一条都会静默出错:
+#   ① 键名残留 daily_sales_60 —— 那个键装过 rolling_predict 融合值(名字说 60 天、内容不是),
+#      已彻底退役; 残留 = 某个消费方读一个不存在的键, 箭头恒平/恒 0, 不抛异常;
+#   ② daily_sales_56 的值必须来自 ds56_cut —— 塞回 fused 就又变回"75% 朝上"的假趋势;
+#   ③ 56 天窗口**只喂箭头**: 一旦有人把它传进 rolling_predict / 采购量, 日销口径就多了一档,
+#      与"近 7/14/28 才是取值窗口"的定案冲突。
+try:
+    _bad56, _badw = [], []
+    for _root6, _dirs6, _files6 in os.walk("."):
+        if "_pycache__" in _root6 or "migrations" in _root6:
+            continue
+        for _fn6 in _files6:
+            if not _fn6.endswith(".py") or _fn6 == "local_test.py":
+                continue
+            _fp6 = os.path.join(_root6, _fn6)
+            for _i6, _ln6 in enumerate(open(_fp6, encoding="utf-8", errors="ignore"), 1):
+                if _ln6.lstrip().startswith("#"):
+                    continue
+                if "daily_sales_60" in _ln6:
+                    _bad56.append("%s:%d" % (_fp6, _i6))
+                # ② 赋值行: 必须含 56 来源, 不许出现 fused
+                if "daily_sales_56" in _ln6 and ":" in _ln6:
+                    if "56" not in _ln6 or "fused" in _ln6:
+                        _bad56.append("%s:%d(值不对)" % (_fp6, _i6))
+                # ③ 融合/采购量调用里出现 56 = 长基准混进取值窗口
+                import re as _re6
+                if _re6.search(r"rolling_predict(_2w)?\(", _ln6) and _re6.search(r"56|_src56|w56|ds56", _ln6):
+                    if "nnz" not in _ln6:
+                        _badw.append("%s:%d" % (_fp6, _i6))
+    check("§15.209 daily_sales_60 键名已退役(全仓无残留)", not _bad56, str(_bad56[:5]))
+    check("§15.209 56 天窗口只喂趋势箭头, 不进 rolling_predict/采购量",
+          not _badw, str(_badw[:5]))
+except Exception as _e60:
+    check("§15.209 长基准字段扫描无异常", False, str(_e60)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

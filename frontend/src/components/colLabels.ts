@@ -44,7 +44,8 @@ export const COL_ZH: Record<string, string> = {
   sales: '日销',
   sys_available: '可用',
   sys_transit: '在途',
-  daily_sales: '日销(融合/14/28)',
+  // 2026-11-16: 小字带两档箭头(14vs28、28vs56), 列名同步补上 56
+  daily_sales: '日销(融合/14/28/56)',
   actual_purchase: '建议采购(含箱规取整)',
   after_turnover: '补后周转',
   timing: '采购时机',
@@ -93,7 +94,7 @@ export const COL_EN: Record<string, string> = {
   sales: 'Daily sales',
   sys_available: 'Available',
   sys_transit: 'In transit',
-  daily_sales: 'Daily sales (blend/14/28)',
+  daily_sales: 'Daily sales (blend/14/28/56)',
   actual_purchase: 'Suggested purchase (box rounded)',
   after_turnover: 'After turnover',
   timing: 'Purchase timing',

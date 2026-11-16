@@ -57,7 +57,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     :param with_alerts: 仅供 alert_jobs 在"算完立刻同步"时使用(同一进程内复用结果, 不重算)
     """
     from biz.sales import (load_daily_sales, calc_sales_multi, rolling_predict_2w,
-                           smooth_promo_spikes)
+                           cut_series, LONG_WIN)
 
     raw = {}
     for r in query("SELECT `key`, value FROM replenishment_config WHERE channel=%s OR channel=''",
@@ -136,8 +136,9 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
             #   一次 `barcode="all"` 取「合计 + 全部按码」, 只取 ds14/ds28 两列, 按行分流。
             #   原实现是 2 次往返、全 11 列; 线上 purchase `calc=3.5s` 里 `sql=3.3s/12 条`。
             # 2026-11-16 口径统一: 采购取 cut 的 14/28(窗口数不变, 仍是两窗口)
+            # 2026-11-16 趋势长基准: +ds56_cut(近 56 天, 与 28 同粒度)
             _all = get_sku_sales_stats(channel, wh=WH_C, days=28, barcode="all",
-                                       fields=("ds14_cut", "ds28_cut")) or {}
+                                       fields=("ds14_cut", "ds28_cut", "ds56_cut")) or {}
             for _k, _r2 in _all.items():
                 _bc = str(_r2.get("barcode") or "")
                 if _bc:
@@ -164,25 +165,35 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
                                                    float(_r.get("ds28_cut") or 0)), 1)
     except Exception as _e:
         try_err('purchase', '物化读降级(走直算)', _e)
-    if not fused:
-        daily = load_daily_sales(days, channel, skus=set(products.keys()))
-        # 2026-11-16: 降级与物化同口径(削峰 + shrink), 否则物化挂掉就换一套数
-        multi = calc_sales_multi({k: smooth_promo_spikes(v) for k, v in daily.items()},
-                                 windows=[14, 28], sparse="shrink")
-        s14m, s28m = multi[14], multi[28]
-        for sku in set(list(s14m) + list(s28m)):
-            fused[sku] = round(rolling_predict_2w(s14m.get(sku, 0), s28m.get(sku, 0)), 1)
-    # 2026-10-17 物化短路补 s14m/s28m(第 175 行展示字段引用——曾物化命中时 UnboundLocalError → 采购页无数据):
-    # 从物化行现场取(与直算同构——物化行即三窗口底料)
+    # 展示/趋势字段底料(2026-11-16 重排): 原实现把 s14m/s28m 在这里无条件清空,
+    #   而直算分支刚算好的两份被覆盖 → 物化挂掉时采购页 14/28 列整列 0(无人发现)
     s14m = {}
     s28m = {}
-    # 2026-10-29: 复用上面同一次物化读(原再次 _gss2(...) 全表查一遍, 纯重复往返)
-    try:
-        for _v2 in (_rws or {}).values():
-            s14m[_v2.get("sku") or ""] = float(_v2.get("ds14_cut") or 0)
-            s28m[_v2.get("sku") or ""] = float(_v2.get("ds28_cut") or 0)
-    except Exception as _e14:
-        try_err('purchase', 's14/s28 取值降级', _e14)
+    s56m = {}
+    if not fused:
+        # 降级直算: 取 90 天(不是 days=28)—— 56 天基准要 56 天底料, 且削峰基线取 28 天之外,
+        #   只取 28 天时 `smooth_promo_spikes` 无基线可用 = 静默少一道处理, 与物化行不等价
+        daily = load_daily_sales(90, channel, skus=set(products.keys()))
+        _c28 = {k: cut_series(v) for k, v in daily.items()}
+        _c56 = {k: cut_series(v, LONG_WIN) for k, v in daily.items()}
+        multi = calc_sales_multi(_c28, windows=[14, 28], sparse="shrink")
+        _m56 = calc_sales_multi(_c56, windows=[LONG_WIN], sparse="shrink")[LONG_WIN]
+        for sku in set(list(multi[14]) + list(_m56)):
+            s14m[sku] = multi[14].get(sku, 0)
+            s28m[sku] = multi[28].get(sku, 0)
+            s56m[sku] = _m56.get(sku, 0)
+        for sku in s14m:
+            fused[sku] = round(rolling_predict_2w(s14m.get(sku, 0), s28m.get(sku, 0)), 1)
+    else:
+        # 2026-10-29: 复用上面同一次物化读(原再次 _gss2(...) 全表查一遍, 纯重复往返)
+        try:
+            for _v2 in (_rws or {}).values():
+                _sku2 = _v2.get("sku") or ""
+                s14m[_sku2] = float(_v2.get("ds14_cut") or 0)
+                s28m[_sku2] = float(_v2.get("ds28_cut") or 0)
+                s56m[_sku2] = float(_v2.get("ds56_cut") or 0)
+        except Exception as _e14:
+            try_err('purchase', 's14/s28/s56 取值降级', _e14)
 
     # 系统总库存(own/plat/B 口径: B 仓仅 jd+bbcc 参与链路)
     inv = {}
@@ -238,8 +249,11 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
         if _ds_src:
             _base_ds = round(rolling_predict_2w(float(_ds_src.get("ds14_cut") or 0),
                                                 float(_ds_src.get("ds28_cut") or 0)), 1)
+            # 长基准取**同一行**(码级), 与主值同粒度; 不足 69 码时随主值一起降到合计行
+            _src56 = float(_ds_src.get("ds56_cut") or 0)
         else:
             _base_ds = fused.get(sku, 0)   # 无码 / 按码缺失 → 降级合计
+            _src56 = s56m.get(sku, 0)
         ds = round(_base_ds * active_factor, 1)
         if ds <= 0:
             continue
@@ -294,7 +308,12 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
             "plat_transit": st["plat_transit"], "b_available": st["b_avail"],
             "safety_qty": round(ds * _purchase_period, 1), "daily_sales": ds,
             "daily_sales_14": round(s14m.get(sku, 0), 1), "daily_sales_28": round(s28m.get(sku, 0), 1),
-            "daily_sales_60": round(fused.get(sku, 0), 1),
+            # 2026-11-16 长基准: 近 56 天(8 周, 恰为 28 的 2 倍)cut 日均, 同粒度同口径。
+            #   原键 `daily_sales_60` 装的是 `fused`(14/28 融合值): 名字说 60 天、内容不是;
+            #   且融合值结构上恒低于 ds28(ds28/fused 中位 2.00) → 75% 朝上、2.7% 朝下。
+            #   键名已彻底改成 56, 不留"60 装 56"的过渡键。
+            #   ⚠️ 只喂趋势箭头: 不进 rolling_predict_2w、不进采购量。
+            "daily_sales_56": round(_src56, 1),
             "supplier_code": _sup,
             "purchase_qty": purchase_qty, "box_qty": box_qty, "actual_purchase": actual_purchase,
             "after_stock": after_stock, "after_turnover": after_turnover,

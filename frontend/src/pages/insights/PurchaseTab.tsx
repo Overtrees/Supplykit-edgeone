@@ -30,6 +30,8 @@ export interface PurchaseRow {
   daily_sales?: number
   daily_sales_14?: number
   daily_sales_28?: number
+  /** 2026-11-16: 近 56 天(8 周)cut 日均 —— 28 天的趋势长基准(原 daily_sales_60 装的是融合值) */
+  daily_sales_56?: number
   actual_purchase?: number
   [k: string]: unknown
 }
@@ -307,6 +309,37 @@ export default function PurchaseTab(props: Props) {
                                     />
                                   )}
                                   {(x.daily_sales_14 || 0).toFixed(1)}/
+                                  {/* 2026-11-16 补上缺失的一档: 28 vs 近 56 天(8 周 = 28 的 2 倍)。
+                                      两窗口同维度(都按该行的码级/合计)、同 cut 口径。
+                                      原先这里只有 14 vs 28 一个箭头, 长基准那一档在采购页整块缺失。 */}
+                                  {(x.daily_sales_28 || 0) > (x.daily_sales_56 || 0) * 1.15 ? (
+                                    <IconTrendUp
+                                      size={12}
+                                      style={{
+                                        display: 'inline',
+                                        verticalAlign: 'middle',
+                                        color: 'var(--success)',
+                                      }}
+                                    />
+                                  ) : (x.daily_sales_28 || 0) < (x.daily_sales_56 || 0) * 0.85 ? (
+                                    <IconTrendDown
+                                      size={12}
+                                      style={{
+                                        display: 'inline',
+                                        verticalAlign: 'middle',
+                                        color: 'var(--danger)',
+                                      }}
+                                    />
+                                  ) : (
+                                    <IconTrendFlat
+                                      size={12}
+                                      style={{
+                                        display: 'inline',
+                                        verticalAlign: 'middle',
+                                        color: 'var(--muted)',
+                                      }}
+                                    />
+                                  )}
                                   {(x.daily_sales_28 || 0).toFixed(1)}
                                 </>
                               }
