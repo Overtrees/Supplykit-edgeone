@@ -410,7 +410,12 @@ export default function ReplenTab(props: Props) {
                                   />
                                 )}
                                 {(x.daily_sales_14 || 0).toFixed(1)}/
-                                {(x.daily_sales_28 || 0) > (x.daily_sales_60 || 0) * 1.15 ? (
+                                {/* 2026-11-16 口径收敛: 基准原为 daily_sales_60 —— 那字段装的是
+                                    rolling_predict_2w(两窗口融合), 不是「60 天日均」, 名不副实。
+                                    cut 之后融合值降得比 28 天值多, 用它会令 5176 个 SKU 的箭头
+                                    集体朝上(实测 5073 朝上/103 朝下)。改为与采购页同口径:
+                                    近 14 天 vs 28 天, 两者都已是 cut, 自洽。 */}
+                                {(x.daily_sales_14 || 0) > (x.daily_sales_28 || 0) * 1.15 ? (
                                   <IconTrendUp
                                     size={12}
                                     style={{
@@ -419,7 +424,7 @@ export default function ReplenTab(props: Props) {
                                       color: 'var(--success)',
                                     }}
                                   />
-                                ) : (x.daily_sales_28 || 0) < (x.daily_sales_60 || 0) * 0.85 ? (
+                                ) : (x.daily_sales_14 || 0) < (x.daily_sales_28 || 0) * 0.85 ? (
                                   <IconTrendDown
                                     size={12}
                                     style={{

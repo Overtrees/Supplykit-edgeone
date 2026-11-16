@@ -497,7 +497,7 @@ def _flow_export(A):
         tid = (d.get("data") or {}).get("task_id") or d.get("task_id") or ""
     except Exception:
         pass
-    st, rows, fname = None, None, ""
+    st, rows, fname, parts = None, None, "", []
     if tid:
         for _ in range(40):
             q = probe(A, "GET", "/exports/status", [{"n": "task_id", "d": tid, "req": True},
@@ -507,24 +507,47 @@ def _flow_export(A):
                 st = d.get("status") or st
                 rows = d.get("total", rows)
                 fname = d.get("filename") or fname
-                if d.get("error"):
-                    rows = rows
+                parts = d.get("parts") or parts
             except Exception:
                 pass
             if st in ("done", "completed", "ok", "error", "failed"):
                 break
             time.sleep(1.0)
+        # done 与 parts 不是同一时刻落库(实测: 状态先到、parts 后到几百毫秒),
+        #   命中终态却拿到空 parts 会掉进旧 xlsx 分支 → 假红。补读一次终态。
+        if not parts and st in ("done", "completed", "ok"):
+            try:
+                _q2 = probe(A, "GET", "/exports/status", [{"n": "task_id", "d": tid, "req": True}])
+                _d2 = _q2["body"] if isinstance(_q2["body"], dict) else {}
+                parts = _d2.get("parts") or parts
+                fname = _d2.get("filename") or fname
+            except Exception:
+                pass
     dl = probe(A, "GET", "/exports/download/%s" % (fname or FAKE["filename"]))
     got = 0
-    if dl["status"] == 200:
-        # 导出真实格式是 xlsx（content-type 见下），不能按文本行数数
+    if parts:
+        # 2026-11-16 §15.201 起导出改为分片 CSV（每片 2000 行，仅首片带表头）:
+        #   status 不再回 total, 必须逐片下载数行。裸名整体下载仍可用, 但数行会
+        #   撞 2.2MB 一次性读 —— 逐片更稳且能定位是第几片断的。
+        tot = 0
+        for _i, _p in enumerate(parts):
+            try:
+                b = A.get(K.BASE + "/api/exports/download/%s" % _p, timeout=120).content
+                tot += b.count(b"\n") - (1 if _i == 0 else 0)
+            except Exception:
+                tot = -1
+                break
+        got = tot
+        rows = got if rows is None else rows
+    elif dl["status"] == 200:
+        # 老格式: 单文件 xlsx（read_only 下 max_row 是估算值，逐行数才准）
         try:
             import io as _io
             from openpyxl import load_workbook
             b = A.get(K.BASE + "/api/exports/download/%s" % (fname or FAKE["filename"]), timeout=90).content
             wb = load_workbook(_io.BytesIO(b), read_only=True)
             n = sum(1 for _ in wb.active.iter_rows(values_only=True))
-            got = max(0, n - 1)     # read_only 下 max_row 是估算值，逐行数才准
+            got = max(0, n - 1)
             wb.close()
         except Exception:
             got = -1
@@ -693,10 +716,20 @@ def consistency(A, res):
     # 这种情况如实标 DEGRADED（ok=None），既不假装 PASS，也不误判成缺陷。
     h = probe(A, "GET", "/health", [{"n": "detail", "d": 1}])
     running = []
+    # 2026-11-16 §15.205: 规则评估已改接力(sync_tasks + eval_tasks), **不在 pipeline_runs**,
+    #   所以 /health.last_runs 里 daily_rules 恒为 skipped/ok —— 只看它会漏判"评估正在写
+    #   alerts", 于是把收敛期的计数增长误报成缺陷。真源是 /rules/eval-status(running 计数,
+    #   内部就是 eval_live_cond)。两路都看, 任一为真即 DEGRADED。
     try:
         for x in (h["body"] or {}).get("last_runs") or []:
             if x.get("status") == "running" and str(x.get("pipeline")) in ("rule_eval", "daily_rules"):
                 running.append(x.get("scope"))
+    except Exception:
+        pass
+    try:
+        _es = probe(A, "GET", "/rules/eval-status")
+        if int((_es["body"] or {}).get("data", {}).get("running") or 0) > 0:
+            running.append("eval_tasks")
     except Exception:
         pass
     diffs = [abs(x - a1) for x in samples if x is not None and a1 is not None]
@@ -752,9 +785,11 @@ def consistency(A, res):
     an = probe(_sess(), "GET", "/dashboard/summary", [{"n": "channel", "d": "jd"}])
     out.append({"key": "anon 读 = 401", "desc": "未登录不得读业务接口",
                 "ok": an["status"] == 401, "a": an["status"], "b": 401})
-    res["snapshot"] = {"boot": bd, "summary": summ["body"].get("data"),
-                       "aux": aux["body"].get("data"), "counts": cnt["body"].get("data"),
-                       "stock_risk": sr["body"].get("data"), "unit_state": us["body"].get("data"),
+    # body 可能是 str(非 JSON / 解压失败) —— checks 模式复用旧结果时会撞到, 不能假设 dict
+    _d = lambda b: b if isinstance(b, dict) else {}
+    res["snapshot"] = {"boot": bd, "summary": _d(summ["body"]).get("data"),
+                       "aux": _d(aux["body"]).get("data"), "counts": _d(cnt["body"]).get("data"),
+                       "stock_risk": _d(sr["body"]).get("data"), "unit_state": _d(us["body"]).get("data"),
                        "repl": {k: pd.get(k) for k in ("total", "gen", "built_at", "__swr")}}
     return out
 
