@@ -333,7 +333,8 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
                 part_name = "exp_part_%s_%d.csv" % (task_id, page)
                 _save_export_part(part_name, buf.getvalue().encode("utf-8-sig"))
                 parts.append(part_name)
-            done = len(items) < page_size or page * page_size + len(items) >= total
+            got = page * page_size + len(items)
+            done = len(items) < page_size or got >= total
         elif exp_type == "inventory":
             # 进销存明细: 单次全量(接口本身就是物化读, 不分页), 单片 CSV
             _r0 = _build_export_rows(exp_type, mode, channel, wh_type)
@@ -376,19 +377,22 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
                 parts.append(part_name)
             # 完成判据: 本页不满 → 到底了; 或已取到 total 行
             done = (len(rows) < _EXPORT_PAGE) or (total > 0 and got >= total)
+        # 实际导出总行数: 订单按 total(接口说多少), 其余按"本片之前 + 本片"(got)。
+        # 2026-11-16 §15.201: 原来这里写 `len(rows)` —— 那是**本片**行数, 分页后恒等于
+        #   page_size(2000), 于是 10000 行的导出在 result 里自报 2000(用户和回归都会被骗)。
+        _rows_out = total if exp_type == "orders" else int(got)
         if done:
             # 分片不合并(2026-10-09: TiDB 单行 entry 上限 6MB——20MB CSV 单行存不下):
             # result 记分片列表, 下载时按 task 读分片合并返回
             realname = "%s_%s_%s.%s" % (_EXPORT_NAMES.get(exp_type, exp_type), channel, now_stamp(),
                                         "csv" if parts[0].endswith(".csv") else "xlsx")
             _r = {"filename": task_id, "name": realname, "type": exp_type, "parts": parts,
-                  "rows": total if exp_type == "orders" else len(rows),
-                  "success": total if exp_type == "orders" else len(rows), "failed": 0,
+                  "rows": _rows_out, "success": _rows_out, "failed": 0,
                   "elapsed": max(round(_ttx.time() - int(params.get("start_ts") or _ttx.time()), 1), 0.1)}
             _sqd = round(_ttx.time() - _t0x, 1)
             _sd = (params.get("steps") or []) + [{"name": "%s 窗%d" % (exp_type, page + 1), "elapsed": _sqd}]
             execute("UPDATE sync_tasks SET status='done', params=%s, result=%s, updated_at=NOW() WHERE task_id=%s",
-                    (json.dumps({**params, "page": page + 1, "parts": parts, "total": total if exp_type == "orders" else len(rows),
+                    (json.dumps({**params, "page": page + 1, "parts": parts, "total": _rows_out,
                                  "steps": _sd, "cur_step": None}, ensure_ascii=False),
                      json.dumps({"result": _r}, ensure_ascii=False), task_id))
             return {"ok": True, "task_id": task_id, "status": "done", "filename": task_id}
@@ -397,7 +401,7 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
         _curx = {"name": "%s 窗%d" % (exp_type, page + 2), "started": int(_ttx.time())}
         execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                 (json.dumps({**params, "page": page + 1, "parts": parts,
-                             "total": total if exp_type == "orders" else len(rows),
+                             "total": _rows_out,
                              "steps": _sr, "cur_step": _curx}, ensure_ascii=False), task_id))
         return {"ok": True, "task_id": task_id, "status": "running", "page": page + 1}
     except Exception as e:
