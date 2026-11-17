@@ -168,7 +168,8 @@ def _stock_risk(channel, full: int = 0, legacy: bool = False, limit: int = 0, of
     include_avail_zero = _cf("include_avail_zero", 1.0) > 0.5
     # OTIF 置信系数: suppliers.score/5 → 在途可信度(0.6~1.0, 未评分=1.0 维持现状口径)
     otif_map = {}
-    for r in _q("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
+    # 2026-11-17 P1-21: OTIF 按渠道(与 _sup_score / rule_eval 同口径)。旧写法跨渠道 MAX(score)。
+    for r in _q("SELECT supplier_code, MAX(score) AS score FROM suppliers WHERE channel=%s GROUP BY supplier_code", [channel]):
         try:
             sc = float(r.get("score") or 0)
             otif_map[r.get("supplier_code")] = max(min(sc / 5.0, 1.0), otif_min) if sc > 0 else 1.0

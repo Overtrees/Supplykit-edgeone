@@ -261,10 +261,10 @@ for _root, _dirs, _files in os.walk(_api_dir):
 check("周期公式只有 core/metrics.periods 一份(其余文件不再拼 b_to_c+c_safety)",
       not _dup, "重复实现: %s" % ",".join(_dup))
 
-# F2: 健康分不得再读 SKU 级单维日销(get_sales_digest 的 {sku: fused})
+# F2: 健康分读 core.metrics 多维口径(2026-11-17 P0-16: SKU 级单维日销 digest 已删)
 _hh = open(os.path.join(_api_dir, "routes", "dashboard_health.py"), encoding="utf-8").read()
-check("健康分不再用 get_sales_digest 的 SKU 级单维日销",
-      "get_sales_digest" not in _hh and "metrics" in _hh,
+check("健康分读 metrics 多维口径",
+      "metrics" in _hh,
       "那个 map 只有 __C__ 一个维度, 拿去判每个仓就是逐仓分虚低的根因")
 check("健康分 mode 不再默认 bbcc(默认值由渠道配置回答)",
       'mode="bbcc"' not in _hh.split("def _health_index")[1][:300],
@@ -320,6 +320,50 @@ _cr2 = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read(
 check("每日评估开始前先收尾挂起运行(再排接力任务)",
       0 <= _cr2.find("close_stale_runs") < _cr2.find("import rule_eval_task as _RT"),
       "顺序反了等于这轮还是被上一次的 running 误导")
+# 2026-11-17 P0-1: async def 不得直接调 evaluate_stock_skus(长耗时同步评估须走接力)。
+#   同步全量评估独占事件循环(实测 calc_load 19.3s, 同期读接口 0.9s→20~34s)。
+#   evaluate_stock_skus 只允许由接力(core/rule_eval_task._eval_batch, 同步函数)调;
+#   请求路径一律走 _schedule_rule_eval。注: execute/query/one 不在此列——36 处
+#   async def 用它们做毫秒级短查询(既有模式), 与 19s 级评估不是一回事; requests.*
+#   另属 P1-25(推送), 不在此处断言。
+import ast as _ast
+
+
+def _async_calls_eval(src):
+    try:
+        _t = _ast.parse(src)
+    except Exception:
+        return []
+    _hits = []
+    for _n in _ast.walk(_t):
+        if not isinstance(_n, _ast.AsyncFunctionDef):
+            continue
+        _stack = list(_n.body)
+        _found = False
+        while _stack and not _found:
+            _x = _stack.pop()
+            if isinstance(_x, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            if isinstance(_x, _ast.Call) and isinstance(_x.func, _ast.Name) \
+                    and _x.func.id == "evaluate_stock_skus":
+                _found = True
+                break
+            _stack.extend(_ast.iter_child_nodes(_x))
+        if _found:
+            _hits.append(_n.name)
+    return _hits
+
+
+_ru_src = open(os.path.join(_api_dir, "routes", "rules.py"), encoding="utf-8").read()
+_ev_hits = _async_calls_eval(_ru_src)
+check("P0-1 async def 不得直接调 evaluate_stock_skus(走 _schedule_rule_eval 接力)",
+      not _ev_hits,
+      "残留: %s" % (_ev_hits,))
+_ev_body = _ru_src.split("async def rules_evaluate")[1].split("\n@router.")[0] \
+    if "async def rules_evaluate" in _ru_src else ""
+check("P0-1 /rules/evaluate 返回 eval_task_id(前端轮询真实状态)",
+      '"eval_task_id"' in _ev_body and "_schedule_rule_eval" in _ev_body,
+      "不返回任务 id = 前端无法轮询, 只能靠猜时间")
 
 # ── H. 超卖口径 + 缺货粒度(2026-11-06 用户定案)──────────────────────────
 # 两件事:
@@ -607,6 +651,22 @@ check("换键迁移先建新键再删旧键, 且建键前把 channel 的 NULL/�
 check("读 products 的效期查询按渠道(换键后同 SKU 两行会互相覆盖)",
       "WHERE sku IN (%s) AND (channel=%%s OR COALESCE(channel,'')='')" in _cw8,
       "只按 sku 查会拿到两渠道两行, _em_map[sku] 被后写覆盖 → 出库效期策略随机")
+_re_sup21 = open(os.path.join(_api_dir, "core", "rule_eval.py"), encoding="utf-8").read()
+_dr_sup21 = open(os.path.join(_api_dir, "routes", "dashboard_stock_risk.py"), encoding="utf-8").read()
+check("suppliers 唯一键是 (channel, supplier_code), 不再是 supplier_code",
+      "UNIQUE KEY uq_suppliers_biz (channel, supplier_code)" in _sc8
+      and "UNIQUE KEY uk_suppliers_code (supplier_code)" not in _sc8,
+      "旧键让两渠道同名供应商编码无法并存: 第二个渠道导入 1062 → 单行降级 → 用户看到'成功 0 条'")
+check("suppliers 换键迁移先建新键再删旧键, 且建键前把 channel 的 NULL/空归一",
+      _sc8.index("ADD UNIQUE KEY uq_suppliers_biz") < _sc8.index("DROP INDEX uk_suppliers_code")
+      and "UPDATE suppliers SET channel='jd' WHERE channel IS NULL OR channel=''" in _sc8,
+      "先删后建有裸奔窗口(并发导入可写重); 多行 NULL 在唯一键里互不冲突 = 键没建成")
+check("OTIF 取数按渠道(与 _sup_score 同口径), 不再跨渠道 MAX(score)",
+      "FROM suppliers WHERE channel=%s GROUP BY supplier_code" in _re_sup21
+      and "FROM suppliers WHERE channel=%s GROUP BY supplier_code" in _dr_sup21
+      and "FROM suppliers GROUP BY supplier_code" not in _re_sup21
+      and "FROM suppliers GROUP BY supplier_code" not in _dr_sup21,
+      "同 code 两渠道不同分时, 跨渠道 MAX 会把另一渠道的分算进本渠道在途可信度")
 
 # ── N. 负库存口径(2026-11-06 用户定案: 保持负值)──────────────────────
 # 重算 SQL 是"期初 + Σ入 − Σ出"的结果, 负值 = 账实不符的证据。夹 0 会让"出库 30/期初 0"

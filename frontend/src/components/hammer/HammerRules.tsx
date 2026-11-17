@@ -34,7 +34,11 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [evaluating, setEvaluating] = useState(false)
-  // 立即运行: 规则改动后即时全量评估(双渠道 SKU×仓), 不等每日 cron; 完成后看板/建议页刷新
+  // 立即运行: 规则改动后即时全量评估(双渠道 SKU×仓), 不等每日 cron
+  // 2026-11-17 P0-1: 改走接力 —— 端点立即返回 eval_task_id, 不再等评估跑完
+  //   (同步全量评估独占事件循环, 前端 90s 先超时、后端仍在跑)。拿到 taskId 后
+  //   复用 OpsWatcher: 登记 rules op, App 层轮询 /rules/eval-status, done 后
+  //   派发 rules-changed 刷新看板/建议页。postHeavy 90s 只是单次请求上限。
   const runEvaluate = async () => {
     setEvaluating(true)
     try {
@@ -42,10 +46,17 @@ export default function HammerRules({ channel, onShowHistory }: HammerRulesProps
         // 2026-10-28 mode 生效: 按当前补货模式过滤规则(''=全部模式通用规则均生效)
         mode: useAppStore.getState().hammerReplenMode || '',
       })
-      const ev = (r.data && r.data.evaluated) || {}
-      toast.success(t('hr.eval_done', { jd: ev.jd ?? '-', ot: ev.other ?? '-' }))
-      window.dispatchEvent(new Event('rules-changed'))
-      window.dispatchEvent(new Event('insights-refresh'))
+      const tid = Number((r.data && r.data.eval_task_id) || 0)
+      if (!tid) throw new Error('no task')
+      useAppStore.getState().opAdd({
+        id: 'rules:' + tid,
+        kind: 'rules',
+        label: t('rp.recalc_op'),
+        scope: channel,
+        taskId: tid,
+        startedAt: Date.now(),
+      })
+      toast.success(t('hr.eval_started'))
     } catch (e) {
       toast.error(t('hr.eval_failed', { msg: e.message || '' }))
     }

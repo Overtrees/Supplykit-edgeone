@@ -186,11 +186,11 @@ async def update_rule(rid: int, request: Request):
             _close_alerts("alert_type=%s AND channel=%s AND source='rules_engine'",
                           [_at, _ch], "rule_alert_off")
         elif _new_ae == "1":
-            try:
-                from core.rules import evaluate_stock_skus
-                evaluate_stock_skus(_ch)
-            except Exception as _e:
-                    try_err('rules', '静默降级', _e)
+            # 2026-11-17 P0-1: 不再同步评估。params 变化已使 _material=True,
+            #   下方 _schedule_rule_eval 会接力重算(同渠道 + 本 alert_type);
+            #   仅当 _material=False(理论上不应发生)时才单独调度, 避免漏生成。
+            if not _material:
+                _schedule_rule_eval(channel=_ch, alert_types=[_at])
     from routes.analysis_cache import invalidate
     invalidate("rules")  # 规则编辑 → 缓存即时失效
     _tid = 0
@@ -240,7 +240,8 @@ def _drain_eval_tasks():
                 _sc = json.loads(_t.get("scope") or "{}")
                 _r = run_daily_rules(channels=_sc.get("channels") or None,
                                      alert_types=_sc.get("ats") or None,
-                                     deep=bool(_sc.get("deep")), source="rule_save")
+                                     deep=bool(_sc.get("deep")),
+                                     mode=_sc.get("mode") or None, source="rule_save")
                 # 2026-11-16 §15.200: **不再**在这里置 done。评估已改接力(sync_tasks),
                 #   本线程只负责"把任务排进去", 真正跑完由 core.rule_eval_task 收尾并写
                 #   rows_out/duration。原来在这里置 done = 横幅立刻消失但评估还在跑,
@@ -270,13 +271,15 @@ def _drain_eval_tasks():
             pass
 
 
-def _schedule_rule_eval(channel=None, alert_types=None, deep=False):
+def _schedule_rule_eval(channel=None, alert_types=None, deep=False, mode=None):
     """规则变更 → 评估任务入库 + 后台消费; **返回 task_id**(前端凭它轮询, 不靠猜时间)
 
     D4 精确影响面: 只评"受影响的渠道 × 受影响的 alert_type"。
       · channels   : str 或 list; None/空 = 全渠道
       · alert_types: list; 空 = 该渠道全部规则
       · deep       : True 才跑每日全量口径(孤儿全表清理/批次对账/健康快照)
+      · mode       : 前端当前补货模式(''=渠道默认); 透传给 evaluate_stock_skus,
+                     影响规则过滤与单元归并。不同 mode 不合并(各算各的)。
     实测背景: 原来保存一条规则 = 完整每日任务 —— 3 条全表 UPDATE + 10 万行 × N 渠道
     + 全表对账。改个错别字也要付这个代价, 而且改完还不知道跑没跑完。
 
@@ -284,7 +287,8 @@ def _schedule_rule_eval(channel=None, alert_types=None, deep=False):
     用户连续保存 3 次只评一次, 前端轮询的也是同一个任务。
     """
     _chs = [channel] if isinstance(channel, str) and channel else (list(channel or []) or [])
-    _scope = json.dumps({"channels": _chs, "ats": list(alert_types or []), "deep": bool(deep)},
+    _scope = json.dumps({"channels": _chs, "ats": list(alert_types or []), "deep": bool(deep),
+                         "mode": str(mode or "")},
                         ensure_ascii=False, sort_keys=True)
     # 2026-11-07 §15.158: 先把被冻结实例遗留的 running 收尾(只留痕, 不重跑)。
     #   不做的后果: 下面的合并语义会一直复用那条僵户 id → 之后再保存规则永远不产生新评估。
@@ -399,14 +403,8 @@ async def rules_batch(request: Request):
     ph = ",".join(["%s"] * len(ids))
     if action == "active":
         execute("UPDATE rules SET is_active=1 WHERE id IN (%s)" % ph, ids)
-        # 启用即时评估生成告警(四维: 启用即生效, 不等每日 cron; 幂等去重)
-        try:
-            from core.rules import evaluate_stock_skus
-            from routes.common import ch_codes as _chc0
-            for _ch in _chc0():   # 2026-11-02 S1-5: 渠道数据驱动(原硬编码 jd/other)
-                evaluate_stock_skus(_ch)
-        except Exception as _e:
-                try_err('rules', '静默降级', _e)
+        # 2026-11-17 P0-1: 启用即走接力重算(下方统一调度), 不再同步全量评估。
+        #   同步评估独占事件循环(实测 calc_load 19.3s); 接力仍"不等每日 cron"。
     elif action == "inactive":
         # 停用联动关闭该类告警(PA 行为)
         _close_alerts_for_rules(ids)
@@ -423,9 +421,8 @@ async def rules_batch(request: Request):
         return fail("未知操作: " + str(action))
     from routes.analysis_cache import invalidate
     invalidate("rules")  # 批量启用/停用/删除/恢复/永久删 → 看板告警计数/规则联动即时失效
-    # D4: active 分支已在上方同步评估过, 不再重复调度(否则同一批 SKU 被评两遍)
-    if action != "active":
-        _schedule_rule_eval()  # 浅档全渠道重评
+    # 2026-11-17 P0-1: 全部动作统一走接力重算(浅档全渠道); active 也不再同步评估。
+    _schedule_rule_eval()
     return ok({"updated": len(ids)})
 
 
@@ -460,8 +457,14 @@ def rules_eval_status(task_id: int = 0):
 @traced
 async def rules_evaluate(request: Request):
     """手动触发规则全量评估(规则页'立即运行' —— 规则改动后即时出告警, 不等每日 cron)
-    双渠道 evaluate_stock_skus 全量库存行(SKU×仓), 返回各渠道触发规则数"""
-    from core.rules import evaluate_stock_skus
+
+    2026-11-17 P0-1: 改走接力(_schedule_rule_eval, deep=False), 立即返回
+    eval_task_id, 不再同步跑 evaluate_stock_skus。同步全量评估独占事件循环
+    (实测 calc_load 19.3s, 同期读接口 0.9s→20~34s), 且前端 90s 先超时、
+    后端仍在跑。前端复用 OpsWatcher 轮询 /rules/eval-status, done 后刷新看板。
+    mode: 前端当前补货模式(''=渠道默认), 经接力透传给 evaluate_stock_skus。
+    缓存失效由接力 _finish 在评估完成后做(调度时失效会提前重建旧计数)。
+    """
     d = {}
     try:
         d = await request.json()
@@ -471,19 +474,10 @@ async def rules_evaluate(request: Request):
     channels = d.get("channels") or _chc1()   # 2026-10-30 渠道数据驱动
     # 2026-10-28 mode 生效: 前端传当前补货模式(bbcc/traditional), 据此过滤规则
     mode = d.get("mode") or ""
-    out = {}
-    for ch in channels:
-        try:
-            out[ch] = len(evaluate_stock_skus(ch, mode=mode or None))
-        except Exception as e:
-            out[ch] = "error: %s" % str(e)[:80]
-    from routes.analysis_cache import invalidate
-    invalidate("rules")  # 评估可能生成/变更告警 → 看板/接口缓存即时失效
-    try:
-        from core.rule_eval import LAST_DIAG as _diag
-    except Exception:
-        _diag = {}
-    return ok({"evaluated": out, "diag": _diag})
+    _tid = _schedule_rule_eval(channel=channels, deep=False, mode=mode or None)
+    if not _tid:
+        return fail("评估任务创建失败", 500)
+    return ok({"eval_task_id": _tid})
 
 
 @router.post("/rules/{rid}/test")

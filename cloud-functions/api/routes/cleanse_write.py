@@ -1429,6 +1429,10 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
                             cleaned, conflict_mode, "sku", channel=channel,
                             agg_key3="barcode", agg_overwrite=True)  # 同 SKU+69码 覆盖末行档案
     if target == "supplier":
+        # 2026-11-17 P1-21: 与商品同构 —— channel 由 _write_rows 注入(allowed_cols 含 channel),
+        #   唯一键已是 (channel, supplier_code): 同 code 跨渠道各行其是, 互不覆盖。
+        #   arch_upsert 的 ON DUPLICATE 仍排除 channel(与 products 一致): 同键即同渠道,
+        #   更新列含 channel 是 no-op; 排除可防将来键口径变化时把行“搬”到另一渠道。
         return _write_batch("suppliers",
                             ["supplier_code", "supplier_name", "contact_person", "contact_phone",
                              "score", "status", "channel", "brand"],

@@ -7,7 +7,7 @@ PA 版 APScheduler 10 任务中, TiDB 场景需要外部化的核心任务(备�
 - cleanup-logs:      每天清理 quality_logs(按天保留 30 天 + 2 万条硬上限)
 - daily-rules:       每天滞销识别告警 + 孤儿告警清理
 - recycle:           每天清理超 30 天软删数据(订单/规则)
-- push-alerts:       每 30 分钟推送新告警到 webhook(设置页 webhook_url)
+- push-alerts:       每天 8:30 水位驱动推送未推送告警到各渠道 webhook(设置页 webhook_url)
 
 安全: /cron/* 放行鉴权中间件, 路由内校验 CRON_SECRET(仅 X-Cron-Secret 头——弃 query; hmac.compare_digest)
 """
@@ -538,7 +538,7 @@ async def cron_cleanup_logs(request: Request):
     return ok(r)
 
 
-def run_daily_rules(channels=None, deep=True, alert_types=None, source="cron") -> dict:
+def run_daily_rules(channels=None, deep=True, alert_types=None, mode=None, source="cron") -> dict:
     """规则评估入口 —— 只做编排: 建接力任务并推首片(§15.200, 2026-11-16 根治)
 
     ## 为什么不再是"同步跑完"
@@ -566,6 +566,7 @@ def run_daily_rules(channels=None, deep=True, alert_types=None, source="cron") -
     deep=False 规则变更口径: 只评指定渠道 + 该渠道孤儿清理, 跳过三张全表与健康快照
     channels    None=全渠道
     alert_types 只评这些 alert_type; None=全部规则
+    mode        前端当前补货模式(None/''=渠道默认); 透传给接力与 evaluate_stock_skus
     """
     # 评估开始前先把挂住的 running 收尾 —— 上一次被掐断时收尾语句不会执行(线上停过 5 小时)
     try:
@@ -577,12 +578,12 @@ def run_daily_rules(channels=None, deep=True, alert_types=None, source="cron") -
     _chs = [str(c) for c in (channels or _CHANNELS()) if c] or [str(c) for c in _CHANNELS()]
     _ats = [str(a) for a in (alert_types or []) if a]
     try:
-        _tid, _created = _RT.enqueue(_chs, deep=bool(deep), ats=_ats, source=source)
+        _tid, _created = _RT.enqueue(_chs, deep=bool(deep), ats=_ats, mode=mode, source=source)
         # 首片预算 8s: 让本请求(或看板后台线程)快速返回, 剩下的交给续跑
         _r = _RT.step(_tid, budget=8.0, driver="backend")
-        _log("info", "规则评估接力: task=%s %s channels=%s deep=%s ats=%s"
+        _log("info", "规则评估接力: task=%s %s channels=%s deep=%s ats=%s mode=%s"
              % (_tid, "新建" if _created else "复用", ",".join(_chs), bool(deep),
-                ",".join(_ats[:6])))
+                ",".join(_ats[:6]), str(mode or "")))
         return {"task_id": _tid, "created": _created, "status": _r.get("status"),
                 "stage": _r.get("stage"), "progress": _r.get("progress"),
                 "scope": "deep" if deep else "light", "channels": _chs, "ats": _ats}
@@ -710,14 +711,84 @@ async def cron_recycle(request: Request):
     return ok({"deleted": total})
 
 
+# ── 告警推送水位(2026-11-17 P1-25) ─────────────────────────────────────────────
+# 水位 = 某渠道已推送告警的 created_at 上界, 存在 maintenance_log(details)。
+#   任务名: push_alerts_wm:<channel>；date=当天；details='YYYY-MM-DD HH:MM:SS'。
+#   沿用 core/maintenance.py claim_rules/settle_rules 的既有范式:
+#   maintenance_log(date+task) 主键 + details 作进度标记, 不另建表、不另发明存储。
+# 为什么按渠道分水位(不是全局一个):
+#   webhook 是按渠道配的(有的渠道没配)。全局一个水位时, 任一渠道推送失败/未配
+#   都会卡住所有渠道的水位；且某渠道后配 webhook 时, 其水位之前的积压永远够不到。
+#   分渠道后各渠道独立推进, 互不阻塞, 后配 webhook 的渠道水位仍在原点, 积压可达。
+# 为什么取 created_at >= 水位(不是 >):
+#   created_at 是秒级 DATETIME, 同一秒可有多条告警。分批 LIMIT 时若用 >,
+#   与水位同秒但 id 更大的告警会被漏掉；用 >= + pushed=0 去重, 同秒的不丢、
+#   已推的不重推。pushed=0 是去重真源, 水位只是扫描下界。
+_PUSH_WM_TASK = "push_alerts_wm"
+_PUSH_BATCH = 100        # 每条 webhook 消息最多带多少条告警(钉钉/企微文本长度上限)
+_PUSH_MAX_BATCHES = 10   # 每轮最多发多少条消息(1000 条/轮封顶, 防积压失控)
+
+
+def _push_wm_get(channel):
+    """读某渠道推送水位。无记录/非法值 → 1970-01-01(全量从头推)。"""
+    try:
+        row = one("SELECT details FROM maintenance_log WHERE task=%s "
+                  "ORDER BY `date` DESC LIMIT 1", [_PUSH_WM_TASK + ":" + channel]) or {}
+        wm = str((row or {}).get("details") or "").strip()
+        if len(wm) == 19 and wm[4] == "-" and wm[13] == ":":
+            return wm
+    except Exception as _e:
+        try_err("cron", "读推送水位失败(按全量推)", _e)
+    return "1970-01-01 00:00:00"
+
+
+def _push_wm_set(channel, wm):
+    """写某渠道推送水位(当天行 upsert)。失败只留痕, 不让水位写失败炸掉整轮推送。"""
+    try:
+        today = now_cn().strftime("%Y-%m-%d")
+        execute("INSERT INTO maintenance_log(`date`, task, details) VALUES(%s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE details=VALUES(details)",
+                [today, _PUSH_WM_TASK + ":" + channel, wm])
+    except Exception as _e:
+        try_err("cron", "写推送水位失败", _e)
+
+
+def _webhook_url(channel):
+    """按渠道取 webhook 地址: 渠道专属优先, 全局(channel='')兜底。
+    读法与 routes/replenishment.py:515 的 _config 一致
+    (WHERE channel=%s OR channel=''), 但这里显式分两步查, 不依赖返回顺序。"""
+    try:
+        row = one("SELECT value FROM replenishment_config "
+                  "WHERE `key`='webhook_url' AND channel=%s", [channel]) or {}
+        url = str((row or {}).get("value") or "").strip()
+        if url:
+            return url
+        row = one("SELECT value FROM replenishment_config "
+                  "WHERE `key`='webhook_url' AND channel=''", []) or {}
+        return str((row or {}).get("value") or "").strip()
+    except Exception as _e:
+        try_err("cron", "读 webhook 地址失败", _e)
+        return ""
+
+
 @router.api_route("/cron/push-alerts", methods=["GET","POST"])
 @traced
 @_pipe("push_alerts", rows_key="pushed")
 async def cron_push_alerts(request: Request):
-    """推送最近 60 分钟新增未推送告警到 webhook(钉钉/企微格式)
+    """水位驱动推送未推送告警到各渠道 webhook(钉钉/企微格式)
 
+    2026-11-17 P1-25 根治(原实现每天只推 7:30-8:30 新建且前 50 条, 其余 23 小时
+    永不外发, 界面却写"每 30 分钟"):
+      · 取数改水位驱动: pushed=0 AND created_at >= 上次水位, 按 created_at,id
+        排序分批(每批 100 条), 不再用 60 分钟窗口, 不再 LIMIT 50 截断；
+      · 水位按渠道存 maintenance_log(details), 各渠道独立推进；
+      · webhook 按渠道取(渠道专属优先, 全局兜底), 多渠道不串；
+      · requests.post 同步阻塞改 httpx AsyncClient, 不再占事件循环 15s；
+      · 推送失败(非 2xx/异常)留痕(try_err)且不推水位、不标 pushed, 下次重推。
     2026-11-02 S0: 本端点会向真实 webhook 发消息(可被用于骚扰/刷屏), 加 5 分钟限频。
-    不设当日抢占 —— pushed 标记本身幂等, 推送失败需要重试。"""
+    不设当日抢占 —— pushed 标记本身幂等, 推送失败需要重试。
+    调度仍是 edgeone.json 每天 8:30 一次(窗口 8:00-10:00 守卫不变)；
+    每轮最多发 10 批(1000 条), 积压多时分多轮推完, 水位保证不丢不重。"""
     if not await _authed(request):
         return fail("未授权", 401)
     _off = _off_window("push_alerts", force_ok=_force_ok(request))
@@ -725,34 +796,73 @@ async def cron_push_alerts(request: Request):
         return ok(_off)
     if not _throttle("push-alerts", 300):
         return ok({"skipped": True, "reason": "5 分钟内已推送"})
+    total = 0
+    by_channel = {}
+    failed = []
     try:
-        cfg = one("SELECT value FROM replenishment_config WHERE `key`='webhook_url'") or {}
-        url = (cfg.get("value") or "").strip()
-        if not url:
+        import httpx
+        try:
+            _chs = [str(c or "") for c in _CHANNELS()]
+        except Exception:
+            _chs = []
+        _chs = [c for c in _chs if c]
+        if not _chs:
+            return ok({"pushed": 0, "skipped": "no channel"})
+        _any_hook = False
+        for _ch in _chs:
+            url = _webhook_url(_ch)
+            if not url:
+                continue  # 该渠道未配 webhook: 不推、不标、不卡水位(水位按渠道独立)
+            _any_hook = True
+            wm = _push_wm_get(_ch)
+            _pushed_ch = 0
+            for _batch in range(_PUSH_MAX_BATCHES):
+                rows = query(
+                    "SELECT id, alert_type, title, description, severity, channel, "
+                    "related_sku, created_at FROM alerts "
+                    "WHERE channel=%s AND status='active' AND (pushed IS NULL OR pushed=0) "
+                    "AND created_at >= %s ORDER BY created_at ASC, id ASC LIMIT %s",
+                    [_ch, wm, _PUSH_BATCH])
+                if not rows:
+                    break
+                lines = ["【SupplyKit 告警】"]
+                for r in rows:
+                    _nm = str(_CH_CONF(r.get("channel") or "jd").get("name") or r.get("channel") or "jd")
+                    lines.append("%s: %s%s (%s%s)" % (r.get("severity", "info"), r.get("title", ""),
+                                                      (" - " + str(r.get("description"))) if r.get("description") else "",
+                                                      _nm, (" / " + str(r.get("related_sku"))) if r.get("related_sku") else ""))
+                try:
+                    async with httpx.AsyncClient(timeout=15) as _cli:
+                        resp = await _cli.post(url, json={"msgtype": "text", "text": {"content": "\n".join(lines)}})
+                    _code = resp.status_code
+                except Exception as _e:
+                    try_err("cron", "告警推送失败(%s): %s" % (_ch, str(_e)[:200]))
+                    failed.append(_ch)
+                    break
+                if _code in (200, 201, 204):
+                    ids = [r.get("id") for r in rows]
+                    execute("UPDATE alerts SET pushed=1 WHERE id IN (%s)" % ",".join(["%s"] * len(ids)), ids)
+                    _pushed_ch += len(ids)
+                    _mx = ""
+                    for r in rows:
+                        _c = str(r.get("created_at") or "")[:19]
+                        if _c and _c > _mx:
+                            _mx = _c
+                    if _mx:
+                        wm = _mx
+                        _push_wm_set(_ch, wm)
+                else:
+                    try_err("cron", "告警推送失败(%s): webhook 返回 HTTP %s" % (_ch, _code))
+                    failed.append(_ch)
+                    break
+            total += _pushed_ch
+            by_channel[_ch] = _pushed_ch
+        if not _any_hook:
             return ok({"pushed": 0, "skipped": "no webhook"})
-        rows = query(
-            "SELECT id, alert_type, title, description, severity, channel, related_sku FROM alerts "
-            "WHERE status='active' AND (pushed IS NULL OR pushed=0) "
-            "AND created_at >= DATE_SUB(NOW(), INTERVAL 60 MINUTE) LIMIT 50")
-        if not rows:
-            return ok({"pushed": 0})
-        import requests
-        lines = ["【SupplyKit 告警】"]
-        for r in rows:
-            # 2026-11-02 S1-5: 渠道中文名走配置(原 "京东"/"其他" 二元判断, 新增渠道恒显示"其他")
-            _ch = str(_CH_CONF(r.get("channel") or "jd").get("name") or r.get("channel") or "jd")
-            lines.append("%s: %s%s (%s%s)" % (r.get("severity", "info"), r.get("title", ""),
-                                              (" - " + str(r.get("description"))) if r.get("description") else "",
-                                              _ch, (" / " + str(r.get("related_sku"))) if r.get("related_sku") else ""))
-        resp = requests.post(url, json={"msgtype": "text", "text": {"content": "\n".join(lines)}}, timeout=15)
-        if resp.status_code in (200, 201, 204):
-            ids = [r.get("id") for r in rows]
-            execute("UPDATE alerts SET pushed=1 WHERE id IN (%s)" % ",".join(["%s"] * len(ids)), ids)
-            return ok({"pushed": len(ids)})
-        return ok({"pushed": 0, "http": resp.status_code})
+        return ok({"pushed": total, "by_channel": by_channel, "failed": failed})
     except Exception as e:
         _log("error", "告警推送失败: %s" % str(e)[:200])
-        return ok({"pushed": 0, "error": str(e)[:150]})
+        return ok({"pushed": total, "by_channel": by_channel, "failed": failed, "error": str(e)[:150]})
 
 
 def _reconcile_gmv(channel, start, end):

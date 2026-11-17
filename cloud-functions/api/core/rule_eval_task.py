@@ -109,7 +109,7 @@ def read_claim(task="daily_rules"):
         return "", ""
 
 
-def enqueue(channels=None, deep=True, ats=None, token="", fp="", source="cron"):
+def enqueue(channels=None, deep=True, ats=None, mode=None, token="", fp="", source="cron"):
     """建任务(单飞)。返回 (task_id, created)。
 
     已存在活跃任务 → 直接复用, 不新建: cron 与看板兜底可能在同一时刻都判定"该跑了",
@@ -148,10 +148,11 @@ def enqueue(channels=None, deep=True, ats=None, token="", fp="", source="cron"):
             eid = int(execute_id("INSERT INTO eval_tasks(scope, status, started_at) "
                                  "VALUES(%s,'running',NOW())",
                                  [json.dumps({"channels": _chs, "ats": _ats, "deep": bool(deep),
-                                              "task_id": tid}, ensure_ascii=False)]) or 0)
+                                              "mode": str(mode or ""), "task_id": tid},
+                                             ensure_ascii=False)]) or 0)
     except Exception as _e:
         _try_err("rules", "接力任务建 eval_tasks 行失败(横幅不显示, 不影响推进)", _e)
-    params = {"channels": _chs, "ats": _ats, "deep": bool(deep),
+    params = {"channels": _chs, "ats": _ats, "deep": bool(deep), "mode": str(mode or ""),
               "stage": STAGE_PREP, "ch": 0, "cursor": "", "chunks": 0,
               "rows": 0, "hits": 0, "cleaned": 0, "ch_started": int(time.time()),
               "token": token or "", "fp": fp or "", "source": source,
@@ -227,7 +228,7 @@ def _advance(p):
             ch = _chs[int(p["ch"])]
             batch = _next_skus(ch, str(p.get("cursor") or ""))
             if batch:
-                hits = _eval_batch(ch, batch, p.get("ats"))
+                hits = _eval_batch(ch, batch, p.get("ats"), p.get("mode"))
                 p["cursor"] = batch[-1]
                 p["chunks"] = int(p.get("chunks") or 0) + 1
                 p["hits"] = int(p.get("hits") or 0) + len(hits or [])
@@ -342,10 +343,14 @@ def _prep(p):
     return cleaned
 
 
-def _eval_batch(channel, skus, ats):
-    """评一片 SKU。算法/关闭语义全部在 `evaluate_stock_skus` 里, 这里只是调用点。"""
+def _eval_batch(channel, skus, ats, mode=None):
+    """评一片 SKU。算法/关闭语义全部在 `evaluate_stock_skus` 里, 这里只是调用点。
+
+    mode: 前端当前补货模式(None/''=渠道默认); 透传给 evaluate_stock_skus,
+    与同步入口的 mode 语义一致(规则过滤与单元归并按该模式算)。
+    """
     from core.rule_eval import evaluate_stock_skus
-    return evaluate_stock_skus(channel, skus=skus, only_ats=(ats or None))
+    return evaluate_stock_skus(channel, skus=skus, only_ats=(ats or None), mode=(mode or None))
 
 
 def _channel_done(channel, p):

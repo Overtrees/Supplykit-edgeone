@@ -390,7 +390,9 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
         except Exception as _e:
             try_err("rules", "评估加载看板计算参数降级", _e)
         try:
-            for _r3 in query("SELECT supplier_code, MAX(score) AS score FROM suppliers GROUP BY supplier_code"):
+            # 2026-11-17 P1-21: OTIF 按渠道(与 _sup_score 同口径)。旧写法跨渠道 MAX(score):
+            #   同 code 两渠道不同分时, 本渠道在途可信度会被另一渠道的分抬高/压低。
+            for _r3 in query("SELECT supplier_code, MAX(score) AS score FROM suppliers WHERE channel=%s GROUP BY supplier_code", [channel]):
                 try:
                     _sc = float(_r3.get("score") or 0)
                     _otif_map[_r3.get("supplier_code")] = max(min(_sc / 5.0, 1.0),
@@ -403,7 +405,7 @@ def evaluate_stock_skus(channel, limit=300000, mode=None, skus=None, only_ats=No
             from core import metrics as _M
             # 2026-11-06 S3: 一次取回(按码 + 逐仓 + 全维), 取代原来"按码一次 + 合计一次"
             #   两趟 12 万行 —— 只取 ds28/sigma 两列, 传输量降到原来的 1/5。
-            #   同时取代 get_sales_digest: 它给的是 SKU 级 `__C__` 一个数, 正是本模块要消灭的东西。
+            #   同时取代旧的日销 digest: 它给的是 SKU 级 `__C__` 一个数, 正是本模块要消灭的东西。
             _SER = _M.load(channel, dims=None, with_barcode=True,
                            fields=("ds7_cut", "ds14_cut", "ds28_cut", "sigma"),
                            skus=_scope_sk or None)

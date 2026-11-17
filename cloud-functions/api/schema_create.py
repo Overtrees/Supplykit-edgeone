@@ -106,7 +106,7 @@ _TABLES = {
         "supplier_name VARCHAR(128) DEFAULT '', contact_person VARCHAR(64) DEFAULT '', "
         "contact_phone VARCHAR(32) DEFAULT '', score INT DEFAULT 0, status VARCHAR(16) DEFAULT 'active', "
         "channel VARCHAR(20) DEFAULT 'jd', brand VARCHAR(128) DEFAULT '', ext_json TEXT, "
-        "UNIQUE KEY uk_suppliers_code (supplier_code))"
+        "UNIQUE KEY uq_suppliers_biz (channel, supplier_code))"
     ),
     # 2026-10-29 代理主键(根治): 业务键降为唯一索引 → 业务粒度变化(加/换 69码)只改唯一索引,
     # 永不触碰聚簇主键(TiDB 聚簇表 DROP PRIMARY KEY 不支持, 只能整表重建 → 见 routes/misc._migrate_surrogate)
@@ -946,6 +946,29 @@ def create_all_tables():
             _ep("ALTER TABLE products DROP INDEX idx_products_ch")
     except Exception as e:
         try_err('schema', 'products 渠道唯一键迁移降级(旧键仍在, 行为与迁移前一致)', e)
+    # 2026-11-17 S8/P1-21: suppliers 唯一键 (supplier_code) → (channel, supplier_code)
+    #   先建新键再删旧键(中间任何一步失败都还有一把约束在, 不会裸奔)。
+    #   channel 为 NULL/空 会让唯一键形同虚设(NULL 之间不算重复) —— 建键前先归一。
+    try:
+        from db import query as _qs, one as _qs1, execute as _es
+        _sidx = {str(r.get("Key_name") or "") for r in _qs("SHOW INDEX FROM suppliers")}
+        if "uq_suppliers_biz" not in _sidx:
+            _es("UPDATE suppliers SET channel='jd' WHERE channel IS NULL OR channel=''")
+            _dup = _qs1("SELECT COUNT(*) c FROM (SELECT 1 FROM suppliers "
+                        "GROUP BY channel, supplier_code HAVING COUNT(*)>1) t")
+            _dn = int((_dup or {}).get("c") or 0)
+            if _dn > 500:
+                raise RuntimeError("同渠道重复供应商编码 %d 组 > 500, 需人工清理后再建键" % _dn)
+            if _dn:
+                _es("DELETE FROM suppliers WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
+                    "(PARTITION BY channel, supplier_code ORDER BY id DESC) rn FROM suppliers) t WHERE t.rn > 1)")
+                log_info('schema', '供应商同渠道重复编码已合并(每组保留最新一行) %d 组' % _dn)
+            _es("ALTER TABLE suppliers ADD UNIQUE KEY uq_suppliers_biz (channel, supplier_code)")
+        _sidx2 = {str(r.get("Key_name") or "") for r in _qs("SHOW INDEX FROM suppliers")}
+        if "uk_suppliers_code" in _sidx2:
+            _es("ALTER TABLE suppliers DROP INDEX uk_suppliers_code")
+    except Exception as e:
+        try_err('schema', 'suppliers 渠道唯一键迁移降级(旧键仍在, 行为与迁移前一致)', e)
 
     # 2026-10-27 模板表迁移(幂等): 旧 uk_tpl_name(name 唯一) → uk_tpl_name_type(name, doc_type)
     # ——曾订单/库存同名模板互相覆盖; 改双键后旧唯一键必须移除(否则同名跨类型保存撞键报错)

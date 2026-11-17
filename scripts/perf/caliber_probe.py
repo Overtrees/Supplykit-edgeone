@@ -243,10 +243,14 @@ def cmd_matrix(_a):
                 ex.append({"key": k, "repl": x, "purch": y})
     chk(diff == 0, "补货 vs 采购 ds56 同键一致（%d 同 / %d 异 %s）" % (same, diff, ex or ""))
 
-    # ③ 可靠性：看板 digest 降级直算 vs 物化
+    # ③ 可靠性：物化表 vs 降级直算(2026-11-17 P0-16: get_sales_digest 已删, 物化侧直接读 sku_sales_stats)
     import biz.sales as BS
-    _, fused_m, _ = BS.get_sales_digest("jd")   # (by_sku, fused, sigma) —— 别取错第一项
-    # 必须与生产 get_sales_digest 降级分支同法: 90 天 → cut_series(28) → 三窗口 shrink
+    _rows_m = BS.get_sku_sales_stats("jd", wh=BS.WH_C, days=28)
+    fused_m = {(_r.get("sku") or ""): BS.rolling_predict(float(_r.get("ds7_cut") or 0),
+                                                          float(_r.get("ds14_cut") or 0),
+                                                          float(_r.get("ds28_cut") or 0))
+               for _k, _r in _rows_m.items()}
+    # 降级分支同法: 90 天 → cut_series(28) → 三窗口 shrink
     _b28, _, _ = BS.load_daily_sales_grouped(90, "jd")
     _m = BS.calc_sales_multi({k: BS.cut_series(v) for k, v in _b28.items()},
                              windows=[7, 14, 28], sparse="shrink")

@@ -74,7 +74,6 @@ _FAMILY_DEPS = {
     "orders":       {"orders"},
     "history":      {"orders"},
     "accel":        {"orders"},
-    "sales_digest": {"orders"},
     "dash_summary": {"orders", "inventory", "products", "suppliers", "rules", "config", "flows"},
     "dash_aux":     {"orders", "inventory", "products", "suppliers", "rules", "config"},
     "stock_risk":   {"orders", "inventory", "products", "suppliers", "rules", "config"},

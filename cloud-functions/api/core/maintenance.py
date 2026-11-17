@@ -284,7 +284,7 @@ def run(channel="jd"):
         _track_data(channel, None)
     except Exception as _e:
         try_err('dashboard', '后台维护-数据追平降级', _e)
-    # ② 每日维护(digest 预填 / 日志治理 / 导出清理 / 日志归档) —— 内部已按天原子抢占
+    # ② 每日维护(日志治理 / 导出清理 / 日志归档) —— 内部已按天原子抢占
     try:
         from routes.dashboard import _daily_maintenance
         _daily_maintenance(channel)

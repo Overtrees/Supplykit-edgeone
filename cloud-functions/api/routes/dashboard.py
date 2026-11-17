@@ -75,15 +75,6 @@ def _daily_maintenance(channel="jd"):
             return  # 今天已维护(本实例或其他实例)
         # 2026-11-02 S1-2: 维护耗时/成败留痕 —— 这是"每天第一次打开看板会卡一下"的那条路径
         with track_run("daily_maintenance", channel) as _mrec:
-            # ② digest 预填(每日维护——get_sales_digest 填表缓存——健康/低库存/规则/补货/断货消费方首访命中——首冷降频)
-            try:
-                from biz.sales import get_sales_digest
-                # 2026-10-30 渠道数据驱动: 预填所有启用渠道(原硬编码 jd/other 双渠道)
-                from routes.common import ch_codes as _chc
-                for _c0 in _chc():
-                    get_sales_digest(_c0)
-            except Exception as _e:
-                    try_err('dashboard', 'digest 预填降级', _e)
             # ③ quality_logs 膨胀治理(双保险, 不依赖 cron cleanup-logs)
             #   2026-11-02 S1-3: 与 cron 共用 common.prune_quality_logs(按天保留30天 + 2万条硬上限)。
             #   原实现「超 500 截断至 300」会把当天写的排障证据也一起冲掉(id 曾达 159 万级——
@@ -388,7 +379,7 @@ def _q_inventory(channel):
 def _q_digest(channel, mode=None):
     """日销切片(`core.metrics.load`) —— 判定类口径的唯一取数入口
 
-    原返回 `{sku: fused}`(`get_sales_digest`): 只有 `__C__` 一个维度的 SKU 级一个数。
+    原返回 `{sku: fused}`(旧的日销 digest): 只有 `__C__` 一个维度的 SKU 级一个数。
     那一个数被拿去判 7 个仓 × 每个 69码 —— 逐仓分虚低、单元不一致都是从这里来的。
     现在按**实际出现的仓型**取对应维度(见 `metrics.dims_needed`), 且只取 ds28 一列。
     """

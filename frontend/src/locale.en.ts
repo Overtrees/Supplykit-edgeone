@@ -842,7 +842,7 @@ export const en: Record<string, string> = {
   'set.alert_push': 'Alert push',
   'set.webhook': 'Webhook URL',
   'set.webhook_hint':
-    'DingTalk / WeCom bot URL. New alerts are pushed there every 30 minutes (leave empty to disable)',
+    'DingTalk / WeCom bot URL. Unpushed alerts created since the last push are sent there once daily around 8:30 (leave empty to disable)',
   'set.saving': 'Saving...',
   'set.footer': 'SupplyKit · Supply chain data workbench',
   'welcome.tagline1': 'E-commerce supply chain data cleansing',
@@ -1413,7 +1413,7 @@ export const en: Record<string, string> = {
   'tc.downloading': 'Downloading…',
   'tc.download': 'Download',
   'tc.eval_rules_suffix': 'SKU evaluated',
-  'hr.eval_done': 'Evaluation done · jd {jd} · other {ot}',
+  'hr.eval_started': 'Evaluation started, recalculating alerts',
   'hr.eval_failed': 'Evaluation failed: {msg}',
   'hr.pick_rules': 'Select rules first',
   'hr.confirm_delete': 'Delete {n} rules? They can be restored from the recycle bin',

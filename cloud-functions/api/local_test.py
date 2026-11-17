@@ -866,26 +866,6 @@ check("字段校验: 拼写错误拦截", len(validate_condition({"left": "inv.a
 check("字段校验: max 内字段校验", validate_condition({"left": "inv.available_qty", "op": "<", "right": "max(100, order.quantity)"}) == [])
 check("字段校验: params 通配", validate_condition({"left": "params.lit", "op": "<", "right": "10"}) == [])
 
-# ── 日销 digest 共享缓存(2026-10-08 性能优化: 准确性=与直算数学等价 / 完整性=全量 / 可靠性=幂等) ──
-from biz.sales import get_sales_digest, load_daily_sales_grouped, calc_sales_multi, rolling_predict
-_d0 = get_sales_digest("jd")
-_d1 = get_sales_digest("jd")
-check("digest: 缓存命中幂等(同一对象)", _d0 is _d1)
-# 等价性: 缓存结果 vs 直接计算(同一 mock 数据下)
-_b0, _f0, _s0 = _d0
-_bd, _, _ = load_daily_sales_grouped(28, "jd")
-_md = calc_sales_multi(_bd, windows=[7, 14, 28])
-_fd = {s: rolling_predict(_md[7].get(s, 0), _md[14].get(s, 0), _md[28].get(s, 0)) for s in _bd}
-_sd = {}
-for _s, _d in _bd.items():
-    if len(_d) >= 7:
-        _vl = list(_d.values())
-        _mm = sum(_vl) / len(_vl)
-        _vv = sum((x - _mm) ** 2 for x in _vl) / len(_vl)
-        _sd[_s] = _vv ** 0.5
-check("digest: fused 与直算等价", set(_f0.keys()) == set(_fd.keys()) and all(abs(_f0[k] - _fd[k]) < 1e-9 for k in _f0))
-check("digest: sigma 与直算等价", set(_s0.keys()) == set(_sd.keys()) and all(abs(_s0[k] - _sd[k]) < 1e-9 for k in _s0))
-check("digest: by_sku 全量(完整性)", len(_b0) == len(_bd))
 
 # ── agg 路径回归(2026-10-09: _build_summary_agg 缺 mode 曾线上 NameError——local_test 未覆盖 agg 路径) ──
 def fake_agg_query(sql, params=None):
@@ -1898,8 +1878,8 @@ try:
           str({f for f, d in _FD4.items() if "purchases" in d}))
     check("S2-1 订单域必须波及全部派生聚合(4维任一改都会改数)",
           {f for f, d in _FD4.items() if "orders" in d} == set(_FD4), "矩阵漏项")
-    check("S2-1 参数域不动订单/历史/加速/日销摘要",
-          not ({"orders", "history", "accel", "sales_digest"} & {f for f, d in _FD4.items() if "config" in d}),
+    check("S2-1 参数域不动订单/历史/加速",
+          not ({"orders", "history", "accel"} & {f for f, d in _FD4.items() if "config" in d}),
           "config 域过宽")
 
     # 动态: 桩掉 db 只看"该清哪些族"
@@ -1920,8 +1900,6 @@ try:
     _ds4 = open('routes/dashboard.py', encoding='utf-8').read()
     check("S2-1 断货风险键族归首(否则域级匹配不到)",
           '"stock_risk|' in _ds4 and '"%s|stock_risk|' not in _ds4, "dashboard.py")
-    _sv4 = open('biz/sales.py', encoding='utf-8').read()
-    check("S2-1 日销摘要走 cache_put(令牌)", "cache_put" in _sv4 and "tok=_w_tok" in _sv4, "sales.py")
     _sp4 = open('routes/suppliers.py', encoding='utf-8').read()
     check("S2-1 供应商评分变更触发规则重算(评分是规则 ctx 输入)",
           '_schedule_rule_eval' in _sp4 and 'if "score" in d' in _sp4, "suppliers.py")
@@ -5475,8 +5453,6 @@ try:
                     _bad_sm.append("%s:%d" % (_fp210, _i210))
     check("§15.210 削峰只经 cut_series 入口(消费方不再直调 smooth_promo_spikes)",
           not _bad_sm, str(_bad_sm[:5]))
-    check("§15.210 看板 digest 降级取 90 天 + cut_series",
-          "load_daily_sales_grouped(90, channel)" in open("biz/sales.py", encoding="utf-8").read())
     check("§15.210 断货卡降级取 90 天 + cut_series",
           "load_daily_sales_grouped(90, channel, skus=skus)"
           in open("routes/dashboard_stock_risk.py", encoding="utf-8").read())
