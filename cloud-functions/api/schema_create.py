@@ -275,10 +275,10 @@ _TABLES = {
         "id BIGINT AUTO_INCREMENT PRIMARY KEY, "
         "channel VARCHAR(20) NOT NULL, sku VARCHAR(64) NOT NULL, barcode VARCHAR(64) NOT NULL DEFAULT '', "
         "warehouse VARCHAR(64) NOT NULL DEFAULT '', "
-        "ds7 DECIMAL(12,3) DEFAULT 0, ds14 DECIMAL(12,3) DEFAULT 0, ds28 DECIMAL(12,3) DEFAULT 0, "
-        "sigma DECIMAL(12,3) DEFAULT 0, "
-        "ds7_cut DECIMAL(12,3) DEFAULT 0, ds14_cut DECIMAL(12,3) DEFAULT 0, ds28_cut DECIMAL(12,3) DEFAULT 0, "
-        "ds56_cut DECIMAL(12,3) DEFAULT 0, "
+        "ds7 DECIMAL(12,6) DEFAULT 0, ds14 DECIMAL(12,6) DEFAULT 0, ds28 DECIMAL(12,6) DEFAULT 0, "
+        "sigma DECIMAL(12,6) DEFAULT 0, "
+        "ds7_cut DECIMAL(12,6) DEFAULT 0, ds14_cut DECIMAL(12,6) DEFAULT 0, ds28_cut DECIMAL(12,6) DEFAULT 0, "
+        "ds56_cut DECIMAL(12,6) DEFAULT 0, "
         "nnz7 INT DEFAULT 0, nnz14 INT DEFAULT 0, nnz28 INT DEFAULT 0, "
         "last_sale DATE, updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6), "
         "UNIQUE KEY uq_stats_biz (channel, sku, barcode, warehouse))"
@@ -771,7 +771,7 @@ _COLUMN_ADDS = {
     # 2026-11-16 趋势长基准(28 vs 56): 56 天 cut 日均单列入表 —— 消费方现场算不了
     #   (要 90 天日销序列), 又不能拿 28 天削峰结果凑
     "sku_sales_stats": [("barcode", "VARCHAR(64) DEFAULT ''"),
-                        ("ds56_cut", "DECIMAL(12,3) DEFAULT 0")],
+                        ("ds56_cut", "DECIMAL(12,6) DEFAULT 0")],
     # 2026-09-10 自定义扩展列 ext_json(用户动态新增列数据存放, 方案 B)
     "orders": [("ext_json", "TEXT"),
                ("synced_at", "DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)")],
@@ -855,7 +855,7 @@ _COLUMN_ADDS = {
 #   payload 存整行 JSON, 检索列单独落以支持 need_only/search 的 SQL 下推。
 # v27(2026-11-16 趋势长基准): sku_sales_stats 增 ds56_cut —— 补货/采购的趋势箭头 =
 #   近 28 vs 近 56(8 周, 恰 2 倍), 两侧同粒度同 cut; 原 daily_sales_60 装的是融合值, 名不副实。
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 def table_ddl(name):
@@ -969,6 +969,25 @@ def create_all_tables():
             _es("ALTER TABLE suppliers DROP INDEX uk_suppliers_code")
     except Exception as e:
         try_err('schema', 'suppliers 渠道唯一键迁移降级(旧键仍在, 行为与迁移前一致)', e)
+
+    # 2026-11-17 漂移根治: sku_sales_stats ds 列精度 DECIMAL(12,3) → DECIMAL(12,6)
+    #   根因: 物化 ds 值 3 位小数 + rolling_predict 严格不等式, 比值恰好落在趋势阈值
+    #   (1.15/0.85)上时四舍五入推过阈值 → 判档翻转 → 6 个 SKU 的 fused 差 0.10-0.34。
+    #   只提 fused/安全线链路上的 8 列(ds7/ds14/ds28/sigma/ds7_cut/ds14_cut/ds28_cut/ds56_cut);
+    #   unit_alert.ds 是快照输出、不参与 fused 计算, 不动。
+    #   MySQL/TiDB 改 DECIMAL 精度不丢数据(12,3 → 12,6 只加小数位); 幂等: 先查类型,
+    #   已是 12,6 则跳过。失败降级留痕(旧精度仍在, 行为与迁移前一致)。
+    try:
+        from db import query as _qd2
+        _cols = {str(r.get("Field") or ""): str(r.get("Type") or "")
+                 for r in _qd2("SHOW COLUMNS FROM sku_sales_stats")}
+        for _c in ["ds7", "ds14", "ds28", "sigma",
+                   "ds7_cut", "ds14_cut", "ds28_cut", "ds56_cut"]:
+            if _c in _cols and "decimal(12,3)" in _cols[_c].lower():
+                execute("ALTER TABLE sku_sales_stats MODIFY COLUMN `%s` DECIMAL(12,6) DEFAULT 0" % _c)
+                log_info('schema', 'sku_sales_stats 精度提升 %s: DECIMAL(12,3) → DECIMAL(12,6)' % _c)
+    except Exception as e:
+        try_err('schema', 'sku_sales_stats 精度迁移降级(旧精度仍在, 行为与迁移前一致)', e)
 
     # 2026-10-27 模板表迁移(幂等): 旧 uk_tpl_name(name 唯一) → uk_tpl_name_type(name, doc_type)
     # ——曾订单/库存同名模板互相覆盖; 改双键后旧唯一键必须移除(否则同名跨类型保存撞键报错)

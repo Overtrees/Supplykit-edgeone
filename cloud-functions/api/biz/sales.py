@@ -239,6 +239,14 @@ def calc_sales_multi(daily_by_sku, windows=None, sparse="plain"):
 #   防止"表里判 15%、前端再写一个 20%"这类静默漂移。
 TREND_UP_RATIO = 1.15
 TREND_DOWN_RATIO = 0.85
+# 趋势判档容差(2026-11-17): 严格不等式 + DECIMAL(12,6) 舍入会让恰好落在阈值上的
+#   比值随机越线(3 位精度时 6 个 SKU 翻、6 位精度时 SKU-05927-J 翻)——任何固定精度
+#   都根除不了, 必须在比较端留死区: 比值落在阈值 ±TREND_EPS 内一律判"平"。
+#   取值 1e-4 的计算: 全量 254,435 行实测, 6 位舍入造成的比值误差上界 5.571e-06
+#   (近阈值 1,348 对全部 ≤1e-5, 最小 ds 0.142857); 1e-4 是该上界的 ~18 倍, 又是
+#   有业务意义的最小档位差 0.002(55 个 SKU 聚在阈值 ±0.002 内)的 1/20 —— 只吞舍入
+#   噪声, 不吞真实趋势。
+TREND_EPS = 1e-4
 
 
 def rolling_predict(s7, s14, s28):
@@ -247,8 +255,8 @@ def rolling_predict(s7, s14, s28):
     输入固定是 `ds7_cut / ds14_cut / ds28_cut`(2026-11-16 口径统一, 用户定案)。
     趋势判两段: 7 vs 14、14 vs 28, 各分 加速/平/减速, 查 9 档权重表。
     """
-    a7 = 1 if s7 > s14 * TREND_UP_RATIO else (-1 if s7 < s14 * TREND_DOWN_RATIO else 0)
-    a14 = 1 if s14 > s28 * TREND_UP_RATIO else (-1 if s14 < s28 * TREND_DOWN_RATIO else 0)
+    a7 = 1 if s7 > s14 * (TREND_UP_RATIO + TREND_EPS) else (-1 if s7 < s14 * (TREND_DOWN_RATIO - TREND_EPS) else 0)
+    a14 = 1 if s14 > s28 * (TREND_UP_RATIO + TREND_EPS) else (-1 if s14 < s28 * (TREND_DOWN_RATIO - TREND_EPS) else 0)
     weights = {
         (1, 1): (0.50, 0.30, 0.20), (1, 0): (0.35, 0.40, 0.25), (1, -1): (0.25, 0.35, 0.40),
         (0, 1): (0.20, 0.40, 0.40), (0, 0): (0.10, 0.20, 0.70), (0, -1): (0.15, 0.35, 0.50),
@@ -264,9 +272,9 @@ def rolling_predict_2w(s14, s28):
     同一套"判趋势→查权重表"机制, 只判一段(14 vs 28), 3 档权重。
     权重沿用采购既有值, **逐位不变**: 收敛的是机制与输入列, 不是采购数值。
     """
-    if s14 > s28 * 1.15:
+    if s14 > s28 * (TREND_UP_RATIO + TREND_EPS):
         return s14 * 0.55 + s28 * 0.45
-    if s14 < s28 * 0.85:
+    if s14 < s28 * (TREND_DOWN_RATIO - TREND_EPS):
         return s14 * 0.35 + s28 * 0.65
     return s14 * 0.20 + s28 * 0.80
 
@@ -546,11 +554,11 @@ def _rebuild_sku_sales_stats(channel, days=90, skus=None):
                     sigma = (sum((x - mm) ** 2 for x in vals) / len(vals)) ** 0.5
                 rows_out.append({
                     "channel": channel, "sku": str(k), "warehouse": wh_label,
-                    "ds7": round(m[7].get(k, 0.0), 3), "ds14": round(m[14].get(k, 0.0), 3),
-                    "ds28": round(m[28].get(k, 0.0), 3), "sigma": round(sigma, 3),
-                    "ds7_cut": round(mc[7].get(k, 0.0), 3), "ds14_cut": round(mc[14].get(k, 0.0), 3),
-                    "ds28_cut": round(mc[28].get(k, 0.0), 3),
-                    "ds56_cut": round(mc56.get(k, 0.0), 3),
+                    "ds7": round(m[7].get(k, 0.0), 6), "ds14": round(m[14].get(k, 0.0), 6),
+                    "ds28": round(m[28].get(k, 0.0), 6), "sigma": round(sigma, 6),
+                    "ds7_cut": round(mc[7].get(k, 0.0), 6), "ds14_cut": round(mc[14].get(k, 0.0), 6),
+                    "ds28_cut": round(mc[28].get(k, 0.0), 6),
+                    "ds56_cut": round(mc56.get(k, 0.0), 6),
                     "nnz7": _nnz(daily, 7), "nnz14": _nnz(daily, 14), "nnz28": _nnz(daily, 28),
                     "last_sale": max(daily.keys()) if daily else None})
             return rows_out

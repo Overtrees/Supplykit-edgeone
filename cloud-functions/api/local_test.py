@@ -4441,7 +4441,7 @@ try:
     # 版本号钉住是故意的: 改 schema 忘 bump = 存量实例永远不执行新声明(v9 事故)
     check("建议行物化: schema 声明 list_snapshot/list_head 且版本号已 bump",
           '"list_snapshot"' in _sc18b and '"list_head"' in _sc18b
-          and "SCHEMA_VERSION = 27" in _sc18b, "schema_create.py")
+          and "SCHEMA_VERSION = 28" in _sc18b, "schema_create.py")
     check("建议行物化: 新鲜度只由 fp 决定, 读侧无 TTL/时间判断",
           # §15.161: TIMESTAMPDIFF 只允许出现在 _swr_meta 里算**播报用 age_s**,
           #   绝不参与「数据新不新」的判定; allow_stale 是唯一跳过 fp 比对的路径,

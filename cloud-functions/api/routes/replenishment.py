@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from db import query
 from routes.common import ok, fail, traced, try_err, INVENTORY_COLS as _INV_COLS
 from biz.sales import (rolling_predict,  # 物化 fused 现场计算(降级路径亦用)
-                        TREND_UP_RATIO, TREND_DOWN_RATIO)
+                        TREND_UP_RATIO, TREND_DOWN_RATIO, TREND_EPS)
 #   2026-11-16 趋势长基准: 只动「原来那个 60 天位置」的**取值**(融合值 → 近 56 天 cut 日均),
 #     前端渲染/箭头判据一行不动(箭头本来就摆在 28 之后, 判 28 vs 该值)。
 #     阈值常量给**备注文案**用 —— 备注是服务端生成的文字, 与前端 JSX 各自独立, 别混。
@@ -107,8 +107,8 @@ def _trad_note(ds, w7, w14, w28, avail, safety, box_qty, suggested, after_turnov
     segs = []
     if ds > 0:
         # 阈值取 biz.sales 常量 —— 备注文案里的"趋势"字样与前端箭头判据同源
-        t7 = "up" if w7 > w14 * TREND_UP_RATIO else ("down" if w7 < w14 * TREND_DOWN_RATIO else "flat")
-        t14 = "up" if w14 > w28 * TREND_UP_RATIO else ("down" if w14 < w28 * TREND_DOWN_RATIO else "flat")
+        t7 = "up" if w7 > w14 * (TREND_UP_RATIO + TREND_EPS) else ("down" if w7 < w14 * (TREND_DOWN_RATIO - TREND_EPS) else "flat")
+        t14 = "up" if w14 > w28 * (TREND_UP_RATIO + TREND_EPS) else ("down" if w14 < w28 * (TREND_DOWN_RATIO - TREND_EPS) else "flat")
         segs.append({"k": "trend", "t7": t7, "t14": t14})
     if ds <= 0:
         if avail > 0:
@@ -343,22 +343,22 @@ def _build_repl(channel, mode):
             #   前端按 note_segs 走 i18n 出双语; note(中文)仍产出, 导出/历史/告警不受影响
             # 阈值走 biz.sales 的单一常量(与 rolling_predict 的 9 档权重表同源)。
             #   原处 6 个 1.15/0.85 字面量: 改一处漏五处 → 箭头说涨、权重表按平算。
-            t7 = "up" if ds7 > ds14 * TREND_UP_RATIO else (
-                "down" if ds7 < ds14 * TREND_DOWN_RATIO else "flat")
-            t14 = "up" if ds14 > ds28 * TREND_UP_RATIO else (
-                "down" if ds14 < ds28 * TREND_DOWN_RATIO else "flat")
+            t7 = "up" if ds7 > ds14 * (TREND_UP_RATIO + TREND_EPS) else (
+                "down" if ds7 < ds14 * (TREND_DOWN_RATIO - TREND_EPS) else "flat")
+            t14 = "up" if ds14 > ds28 * (TREND_UP_RATIO + TREND_EPS) else (
+                "down" if ds14 < ds28 * (TREND_DOWN_RATIO - TREND_EPS) else "flat")
             trend = {"k": "trend", "t7": t7, "t14": t14}
             if ds > 0 and ds < 5 and combined_turnover_current is not None and combined_turnover_current > 90:
                 trend["x"] = "very_low"
             elif ds7 == 0 and ds14 == 0 and ds28 > 0:
                 trend["x"] = "down14"
-            elif ds7 > ds14 * TREND_UP_RATIO and ds14 > ds28 * 1.1:
+            elif ds7 > ds14 * (TREND_UP_RATIO + TREND_EPS) and ds14 > ds28 * 1.1:
                 trend["x"] = "up"
-            elif ds7 < ds14 * TREND_DOWN_RATIO and ds14 < ds28 * 0.9:
+            elif ds7 < ds14 * (TREND_DOWN_RATIO - TREND_EPS) and ds14 < ds28 * 0.9:
                 trend["x"] = "down"
-            elif ds7 > ds14 * TREND_UP_RATIO:
+            elif ds7 > ds14 * (TREND_UP_RATIO + TREND_EPS):
                 trend["x"] = "up7"
-            elif ds7 < ds14 * TREND_DOWN_RATIO:
+            elif ds7 < ds14 * (TREND_DOWN_RATIO - TREND_EPS):
                 trend["x"] = "down7"
             else:
                 trend["x"] = "flat"
