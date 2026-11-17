@@ -417,7 +417,9 @@ def _seed_inventory(skus_data, channel='', wh_group='', sku_from=0, sku_to=None)
                                 'warehouse_type': wt, 'available_qty': _ln['q'],
                                 'beginning_stock': _ln['beg'],
                                 'in_transit_qty': 0 if low else random.randint(0, 200),
-                                'safety_qty': 0,  # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds×周期
+                                # 静态安全线已退役(2026-10-08): 全链路动态安全线 ds x 周期 --
+                                # seed 不再写 safety_qty(导入链路按列缺省写 0); 告警由 _seed_alerts
+                                # 按 core.metrics 的动态安全线(ds x 周期)重算, 不读静态列。
                                 'locked_qty': 0,
                                 'c_transit': 0,
                                 'month_inbound': 0,   # 由 _sync_inv_month 按流水回填
@@ -1023,49 +1025,96 @@ def _seed_config():
 
 
 def _seed_alerts():
-    """规则引擎告警(仿原版 _seed_rules): 按库存行(SKU×仓)逐仓生成低库存/紧急补货 + 关闭已恢复
+    """规则引擎告警(仿原版 _seed_rules): 按库存行(SKU x 69码 x 仓)逐单元生成低库存告警 + 关闭已恢复
 
-    逐仓粒度(与规则引擎 evaluate_many 去重 key 一致: alert_type+sku+warehouse+channel):
-    传统多仓下每个仓的库存风险独立成条, 告警弹窗按 warehouse 列显示实际仓名
+    动态安全线(与规则引擎同源, 口径唯一真源在 core/metrics.py):
+      - 日销 ds = core.metrics.Series.fused -- cut 三列(ds7/14/28)经
+        biz.sales.rolling_predict 三窗口趋势加权融合(9 档权重表; TREND_UP/DOWN=1.15/0.85)。
+        维度按桶类型解析(core.metrics.dim_of): BC 盘/自有仓/platform_b 读 __C__,
+        其余读本仓; 降级只降码不换维, 该维无数据 -> ds=0 不触发。
+      - 周期 period = core.metrics.periods(replenishment_config): bbcc 全周期 12 天
+        (b_to_c 3 + c_safety 3 + ship_to_b 3 + safety_multiplier 3)、传统 9 天
+        (lead_time 6 + safety_multiplier 3)、自有仓采购周期 17 天
+        (purchase_lead 14 + purchase_safety 3)。手工 safety_qty>0 优先 --
+        seed 数据手工值恒为 0, 故恒走动态。
+      - 安全线 line = ds x period(core.metrics.safety_line, 保留 1 位小数)。
+      - 触发: 可售 + 在途 < 安全线 -- 与低库存规则
+        inv.available_qty + inv.in_transit_qty < inv.safety_qty(规则引擎注入的动态线)
+        同口径; 仅低库存告警, "紧急补货"(replenish)已退役(同原注释)。
+    粒度(与规则引擎 evaluate_many 一致: SKU x 69码 x 仓, 去重键 uq_alerts_dim
+    = channel + alert_type + related_sku + barcode + warehouse + source):
+    同 SKU 同仓多码行各码独立判定(§15.84: 告警维度是 SKU x 69码 x 仓) --
+    按仓 SUM 会把单码缺货掩掉(2026-11-17 实测 200 组多码)。
+    告警行带 barcode, 与引擎产物同一维度去重, 不再出现"种子无码 + 引擎有码"
+    的平行两套。
     """
-    closed = 0
-    for ch in ('jd', 'other'):
-        closed += int(_close_alerts(
-            "source='rules_engine' AND channel=%s "
-            "AND alert_type IN ('low_stock','replenish') "
-            "AND related_sku IS NOT NULL AND related_sku != '' AND NOT EXISTS ("
-            "SELECT 1 FROM inventory i WHERE i.channel=%s AND i.sku=alerts.related_sku "  # no-barcode-ok: 存在性判断(SELECT 1)
-            "AND i.warehouse=alerts.warehouse AND i.available_qty < i.safety_qty)",
-            [ch, ch], "seed_reset", status="closed") or 0)
+    from core import metrics as _M
+    from routes.common import ch_default_mode as _ch_mode
     existing = set()
-    for r in query("SELECT alert_type, channel, related_sku, warehouse, source FROM alerts WHERE status='active'"):
-        existing.add((r.get('alert_type'), r.get('channel') or 'jd', r.get('related_sku'),
-                      r.get('warehouse') or '', r.get('source') or ''))
+    for r in query("SELECT alert_type, channel, related_sku, barcode, warehouse, source FROM alerts WHERE status=%s", ["active"]):
+        existing.add((r.get("alert_type"), r.get("channel") or "jd", r.get("related_sku"),
+                      r.get("barcode") or "", r.get("warehouse") or "", r.get("source") or ""))
     inserts = []
-    for ch in ['jd', 'other']:  # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
+    new_keys = set()
+    for ch in ["jd", "other"]:
+        # 演示数据固定双渠道(seed 专用, 不随 channels 表扩展)
+        # 补货配置(与规则引擎同源: core.metrics.periods)
+        _cfg = {r.get("key"): r.get("value") for r in
+                query("SELECT `key`, value FROM replenishment_config WHERE channel=%s", [ch])}
+        _p = _M.periods(_cfg)
+        _mode = _ch_mode(ch)
+        # 日销切片(与规则引擎同源: core.metrics.load, 按码 + 全维; 融合只读三列;
+        # fresh=True 跳过进程内缓存 -- 刚由 stats 两段重建, 必须读最新物化结果)
+        # 红线 8: 加载失败必须让本段失败(抛异常), 不许降级成"0 条告警还算成功" --
+        # "没算成"与"真的是 0"必须可分; 本文件其他段(库存/订单/流水)同样直接抛异常。
+        _ser = _M.load(ch, dims=None, with_barcode=True, fresh=True)
         rows = query(
-            "SELECT sku, warehouse, warehouse_type, MAX(product_name) AS name, "
-            "MAX(available_qty) AS avail, MAX(in_transit_qty) AS transit, MAX(safety_qty) AS safety "
-            "FROM inventory WHERE channel=%s GROUP BY sku, warehouse, warehouse_type", [ch])  # no-barcode-ok: seed 告警按 sku×仓生成(演示数据)
+            "SELECT sku, COALESCE(barcode,'') AS bc, warehouse, warehouse_type, MAX(product_name) AS name, "
+            "SUM(available_qty) AS avail, SUM(in_transit_qty) AS transit, MAX(safety_qty) AS safety "
+            "FROM inventory WHERE channel=%s GROUP BY sku, COALESCE(barcode,''), warehouse, warehouse_type", [ch])
         for r in rows:
-            sku, name = r.get('sku'), r.get('name') or r.get('sku')
-            avail, safety = int(r.get('avail') or 0), int(r.get('safety') or 0)
-            wh = str(r.get('warehouse') or '')
-            # 仅低库存告警(avail < safety); "紧急补货"(replenish)已退役——
-            # 看板采购&补货告警卡改读补货/采购建议接口(动态缺口), 与静态 30% 阈值告警 100% 重叠, 无独立信息价值
-            if avail < safety and ('low_stock', ch, sku, wh, 'rules_engine') not in existing:
-                existing.add(('low_stock', ch, sku, wh, 'rules_engine'))
-                inserts.append(("low_stock", "低库存预警: %s" % name, "可售 %d < 动态安全线 %d" % (avail, safety),
-                                "warning", ch, sku, r.get('warehouse_type') or '', wh))
-    # 2026-11-06 修数据正确性缺陷: 步长 500 但切片只有 200 → 每 500 行静默漏 300 行,
+            sku, name = r.get("sku"), r.get("name") or r.get("sku")
+            bc = str(r.get("bc") or "")
+            avail = int(r.get("avail") or 0)
+            transit = int(r.get("transit") or 0)
+            wh = str(r.get("warehouse") or "")
+            wt = str(r.get("warehouse_type") or "")
+            manual = int(r.get("safety") or 0)
+            # 桶类型与日销维度(与规则引擎同源: core.metrics.dim_of; own/platform_b 读 __C__)
+            _kind = (_M.DIM_BC if wt == "bc"
+                     else (_M.DIM_OWN if wt == "own" else _M.DIM_WH))
+            _dim = _M.dim_of(_kind, wh, wt)
+            _ds = _ser.fused(sku, bc, _dim)
+            _per = _M.period_of(_kind, ch, _mode, _p)
+            _line, _src = _M.safety_line(_ds, _per, manual)
+            # 触发口径 = 低库存规则: 可售 + 在途 < 动态安全线
+            if _line > 0 and avail + transit < _line:
+                new_keys.add((ch, sku, bc, wh))
+                if ("low_stock", ch, sku, bc, wh, "rules_engine") not in existing:
+                    existing.add(("low_stock", ch, sku, bc, wh, "rules_engine"))
+                    _desc = ("可售 %d < 动态安全线 %.1f (日销 %.1f/天 x %d 天)"
+                             % (avail + transit, _line, _ds, _per))
+                    if bc:
+                        _desc += " [69码 %s]" % bc
+                    inserts.append(("low_stock", "低库存预警: %s" % name, _desc,
+                                    "warning", "rules_engine", ch, sku, bc, "active", wt, wh))
+    # 关闭已恢复: 仍在 active 的低库存/紧急补货告警, 其 (渠道, SKU, 69码, 仓) 不在本次新算的告警集里
+    # (含库存行已删/已恢复两种情形; 原 SQL 版用静态 safety_qty 比较, 已随静态线退役)
+    closed = 0
+    for r in query("SELECT id, channel, related_sku, COALESCE(barcode,'') AS bc, warehouse FROM alerts "
+                   "WHERE status=%s AND source=%s "
+                   "AND alert_type IN (%s,%s)", ["active", "rules_engine", "low_stock", "replenish"]):
+        if (r.get("channel") or "jd", r.get("related_sku"), r.get("bc") or "", r.get("warehouse") or "") not in new_keys:
+            closed += int(_close_alerts("id=%s", [r.get("id")], "seed_reset", status="closed") or 0)
+    # 2026-11-06 修数据正确性缺陷: 步长 500 但切片只有 200, 每 500 行静默漏 300 行,
     #   返回值却是 len(inserts)(看起来全写了), 对账也发现不了。两处必须同值。
     #   500 行/批是 TiDB serverless 单条多值 INSERT 的实测上限, 不要改步长, 改切片。
     for i in range(0, len(inserts), 500):
         # 2026-11-06 S2-4: 加 ON DUPLICATE KEY UPDATE id=id(等价 DO NOTHING)。
-        #   seed 的语义是"造演示数据", 已存在的维度不该被覆盖 —— 否则一次重新 seed
+        #   seed 的语义是造演示数据, 已存在的维度不该被覆盖 -- 否则一次重新 seed
         #   会把用户手动关掉的告警重新点亮。这里只需要它不撞 uq_alerts_dim 报 1062。
         executemany("INSERT INTO alerts(alert_type, title, description, severity, source, channel, "
-                    "related_sku, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,'rules_engine',%s,%s,'active',%s,%s) "
+                    "related_sku, barcode, status, warehouse_type, warehouse) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON DUPLICATE KEY UPDATE id=id",
                     inserts[i:i + 500])
     return len(inserts)
@@ -1358,11 +1407,14 @@ _SEED_MONTH = _SETTLE_SEGS[-1][0] + 1                  # 22 月汇总 + 配置
 # 尾段 5 段: 原一段同时跑 alerts + snapshot + 两渠道物化(历史实测 456s, 必然踩穿),
 #   拆成独立单请求, 每个只做一件事。2026-11-06 追加 gmv_flows(GMV 回款, 按渠道各发一份
 #   导入文件, 数据量小、不依赖物化结果但依赖 orders_day_agg, 故排在两渠道物化之后)。
+# 尾段顺序有意义: alerts 必须在 stats_jd/stats_other 之后 -- 告警按动态安全线
+# (ds x 周期)判定, 日销读物化表 sku_sales_stats, 而该表由 stats 两段重建; 原顺序
+# alerts 排第一, 读到的是空表 -> ds 全 0 -> 0 条告警。snapshot/gmv 不依赖物化结果。
 _TAIL_SEGS = (
-    (_SEED_MONTH + 1, 'alerts'),
-    (_SEED_MONTH + 2, 'snapshot'),
-    (_SEED_MONTH + 3, 'stats_jd'),
-    (_SEED_MONTH + 4, 'stats_other'),
+    (_SEED_MONTH + 1, 'snapshot'),
+    (_SEED_MONTH + 2, 'stats_jd'),
+    (_SEED_MONTH + 3, 'stats_other'),
+    (_SEED_MONTH + 4, 'alerts'),
     (_SEED_MONTH + 5, 'gmv_flows'),
 )
 _SEED_TAIL = _TAIL_SEGS[0][0]                          # 兼容别名: 尾段起点
