@@ -59,7 +59,7 @@ Makers 函数生产域名直连 → **401 `X-EOP-MSG: eo_time missing`**(鉴权�
 - `ModifyPagesProjectEnvs` 只改项目配置,**运行中的函数实例 env 是部署时快照**,改完必须重新部署(Git 集成项目 = push 触发 webhook)
 - 日志无公开 API:官方文档确认日志只在**控制台"日志分析"页**(按时间/状态/关键字,保留 24h);DescribePages*Logs 类 Action 均不存在(107)
 - 入口文件检测:构建器要求行首 `app =`(/^app\s*=/m),`from x import app` 不满足
-- 函数包 = 仅 cloud-functions/ 目录,独立模块(api/ 下的 .py)在运行时 import 可能失败 → **入口自包含单文件最稳**
+- 函数包 = 仅 cloud-functions/ 目录,独立模块(api/ 下的 .py)在运行时 import 可能失败 → **入口自包含单文件最稳**（2026-09-05 旧结论：现行是多文件 `routes/` + `sys.path.insert`，见 `docs/SKILL.md` §3 坑 3；单文件入口已不再是现行做法）
 
 ## 6. 2026-09-06 新增实测
 - **新 Action 补充**: `ModifyPagesProject`(BuildCmd/OutputDir/InstallCmd 可 API 设置; Area 改静默忽略不可用); `DescribePagesProjects` 返回 Area(global/overseas)/CustomDomains/EnvVars/Deployment——项目详情/域名/区域/环境审计用
@@ -72,5 +72,35 @@ Makers 函数生产域名直连 → **401 `X-EOP-MSG: eo_time missing`**(鉴权�
 - **TiDB Cloud Serverless API**: 基地址 **serverless.tidbapi.com/v1beta1**(api.tidbcloud.com 全 404); 认证 **HTTP Digest** `curl --digest -u "$TIDB_PUBLIC_KEY:$TIDB_PRIVATE_KEY"`(public=用户名/private=密码, 非 Basic)
 - **建集群 POST /clusters**: body 需 `displayName`(≥6 字符, 过短报 "Cluster name not allowed")+ `region.name` **完整形态**("regions/alicloud-ap-southeast-1"; regionId/cloudProvider 短格式报 "Invalid region")+ `clusterType=DEVELOPER` + `rootPassword`(8-64 位; **无改密 API**, 只能控制台 Set Root Password)+ `projectId`; 创建即 ACTIVE, host=endpoints.public.host, user=userPrefix.root
 - **环境变量名**: TIDB_PUBLIC_KEY/TIDB_PRIVATE_KEY(TiDB Cloud API 凭据)——与 TIDB_HOST/USER/PASSWORD(连接凭据)分离
-- **iSH 沙箱 DNS 劫持**: pages-api.cloud.tencent.com 本地解析 198.19.0.3 合成 IP → curl HTTP 000; **DoH 拿真实 IP**(CNAME eo.dnse5.com → 43.159.104.94)→ `curl --resolve pages-api.cloud.tencent.com:443:43.159.104.94` 直连(09-06 同法, 固化为标准)
+- **iSH 沙箱 DNS 劫持**: pages-api.cloud.tencent.com 本地解析 198.19.0.3 合成 IP → curl HTTP 000; **DoH 拿真实 IP**(CNAME eo.dnse5.com → 43.159.104.94)→ `curl --resolve pages-api.cloud.tencent.com:443:43.159.104.94` 直连(09-06 同法, 固化为标准)（2026-10-17 在 iSH 沙箱实测；2026-11-17 在当前 InstaBox 机器实测解析正常，直出 43.159.104.94、无 198.19.0.3 劫持，该绕法在此机上不需要；WBY 沙箱是否适用仍未验证）
 - **Makers env 修改**: `ModifyPagesProjectEnvs`(原项目 EnvVars:[{Key,Value}])——Code 0 即成功; env 是部署时快照, 改后必须 push 触发重新部署
+
+## 8. cron 约束与外部驱动(2026-11-17 增量)
+
+- **schedules 上限 10 条、已满**: `edgeone.json` 的 `schedules` 最多 10 条(maxItems),
+  加第 11 条整组 schedules 路由丢失。当前 10 条: archive-orders / cleanup-logs /
+  snapshot-freshness / build-snapshot / reconcile-sales / daily-rules / recycle-cleanup /
+  push-alerts / schedule-ping / continue-tasks。`routes/cron.py` 有 12 个端点,
+  `ledger-close` 与 `agg-sweep` 未挂 schedules(月结嵌入 `cleanup-logs` 内调用)。
+- **cron 最小间隔一天**: `*/5` 实测不支持且致路由丢失(见 §6)。1 分钟级驱动不要打
+  EdgeOne cron 的主意, 改走外部驱动。
+- **Deployments 查询用法**: `DescribePagesDeployments`(ProjectId / Offset / Limit /
+  OrderBy / Order, Bearer token), 返回 `Deployments[]`(DeploymentId / Status /
+  RepoCommitHash / RepoCommitMsg / PreviewUrl / ProjectUrl / MetaData / UsedInProd)。
+  部署判据脚本 `scripts/deploy_status.py` 就是调它: 最新部署行 `Status=Success` 且
+  `Prod=yes`(`UsedInProd`)且 Commit 是本次推送的提交, 才算部署完成。脚本依赖
+  `.edgeone/auth.json`(`EDGEONE_PAGES_API_TOKEN`) + `.edgeone/project.json`
+  (ProjectId `makers-8gstkvheqm2c`), 两个文件已 gitignore, 查完即删。
+  只读验证看不出部署(生产告警卡在新代码下无外部可区分变化)时, 必须用它查, 不能靠调业务接口猜。
+- **Cloudflare Worker 作外部驱动(既有实践, 2026-11-17)**: Worker
+  `supplykit-relay-driver`(Overtrees 账号), cron `* * * * *`(每分钟),
+  每分钟 GET `https://supplykit.top/api/health` 驱动接力任务续跑。
+  实测: 评估任务从无人用时的 20–37 分钟缩到 247 秒(4.1 分钟)。`/health` 无运行任务时
+  零开销(只读任务数 + data_version), 有运行任务时才调 `continue_tasks`;
+  `/cron/continue-tasks` 有 30s 进程内限流 + `task_lease` 单持有者, 不会请求风暴。
+- **cf.py 两个坑**:
+  - `workers schedules` 发错 body: `{"crons": [...]}` → API 10026「Could not parse request body」;
+    正确是 JSON **数组** `[{"cron": "..."}]`(workaround 脚本见 `supplykit-relay-driver/set_schedule.py`,
+    直接调 API 绕过 cf.py)。
+  - `workers put` 只支持 Service Worker 格式(`addEventListener`): ES-modules 语法
+    (`export default`)报 10021「Unexpected token 'export'」。Worker 代码必须用经典格式写。

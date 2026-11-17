@@ -84,7 +84,7 @@
 - 条件字段支持看板同源计算变量（`inv.adj_dos`/`inv.buffer`/`health.score`/`params.lit` 等）+ `or` 多组
 - **类型模板化**：选类型自动带出事件+条件+参数（超卖→order.created+quantity>avail 等），防事件-变量错配
 - **告警开关**：内置断货/健康规则为参数载体（不重复告警，卡片已承载）；自定义规则默认开告警，开关即时联动（关=清存量/开=评估生成）
-- 触发即命中恢复关闭、动作审计（params.log 写 quality_logs）、立即运行（双渠道全量 3s）
+- 触发即命中恢复关闭、动作审计（params.log 写 quality_logs）、立即运行（双渠道全量 3s，接力改造前旧数，现行见 CONTEXT.md P6-8）
 
 ### 🧹 数据清洗，告别 Excel 手工
 
@@ -142,7 +142,7 @@
 | 日销/物化增量重建 | 脏日期队列（按**业务日期**，不是导入时间）+ 连续区间合并；>2000 SKU 才全量 |
 | 取数下推聚合 + 列裁剪 | 补货 8 万→2 万行、采购 9 万→3 万行在 SQL 里先聚合；重建取数只取 9 列 |
 | 启动零 DDL | schema 声明收敛单一真源 + 版本门禁，热路径一条 SELECT |
-| 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s |
+| 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s（接力改造前旧数） |
 | 实时性 | stock-risk 独立 30s TTL；aux 60s；事件驱动全链路刷新；30s 兜底 |
 
 > **性能基准与压测**：[`docs/PERF.md`](docs/PERF.md) 按页面 → 模块给出基线与机制；
@@ -190,5 +190,5 @@ python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，15 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，16 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

@@ -9,7 +9,7 @@
   ④ 昨天 100 万单 / 10000 SKU 的预测性能是否站得住脚。
 
 红线 7：本脚本**只做结构/代码判定**，零本地计时、不产出任何 Xms/Xs 结论。
-所有时间/行数系数只引用线上实测：docs/PERF.md §9.7（一次全程）、§3（模块基准）、
+所有时间/行数系数只引用线上实测：docs/history/2026-11-09.md §15.187（一次全程）、§3（模块基准）、
 /workspace/predict_scale.json（11-08 容量预测）。本脚本不连线上接口计时。
 
 用法（默认零 RU，纯静态）：
@@ -93,9 +93,9 @@ def _src(rel):
     return p if os.path.isfile(p) else os.path.join(ROOT, rel)
 
 
-# ── 一次全程实测的线上系数（docs/PERF.md §9.7，禁止改成本地计时） ──────────
+# ── 一次全程实测的线上系数（docs/history/2026-11-09.md §15.187，禁止改成本地计时） ──────────
 REAL = {
-    "source": "docs/PERF.md §9.7 / docs/history/2026-11-09.md §15.187（线上 X-Srv-Ms / params.steps）",
+    "source": "docs/history/2026-11-09.md §15.187（线上 X-Srv-Ms / params.steps）",
     "wall_s": 1265.0, "pure_s": 1123.6,
     "segments": 20, "windows": 36, "drive_requests": 50,
     "orders": 446974, "products": 20000, "inventory": 170200,
@@ -248,7 +248,7 @@ NODES = [
      ("alerts", "alert_delta"),
      "§15.189 P3: judge_evidence 判已生成 + 显式不取瞬时值"),
     ("集中导入作业是否完成且等价", "execute-async→status 接力→行数/四维键对账",
-     "行数变化 0、四维键重复组 0、0 次重灌（§9.3 第四类判据）",
+     "行数变化 0、四维键重复组 0、0 次重灌（§15.187 第四类判据）",
      ("import_equivalent", "watermark", "rowcount", "equivalent"),
      ("before", "tables"),
      "§15.189 P3: judge_evidence 用 before/after.tables 判行数对账"),
@@ -269,7 +269,7 @@ def _judged(th, texts, keys):
     """判据层：TH 键 或 判据定义行（丢纯注释行），是否含对应精确关键字。
 
     §15.189: 从「只扫 run.py 的 _judge_*」扩到「run.py + import_smoke 第四类判据
-    + endpoints 白名单」—— 第四类判据按 §9.2 独立、不进 TH, 但同样是真判据,
+    + endpoints 白名单」—— 第四类判据按 §15.187 独立、不进 TH, 但同样是真判据,
     覆盖矩阵必须一起扫, 否则「只看 run.py」会得出恒 GAP 的错误结论。
     丢纯注释行是必须的: 历史注释里写过判据名, 只按字面扫会假 PASS。
     """
@@ -294,7 +294,7 @@ def coverage(th=None, quiet=False):
     # §15.189 判据层 = 接口稳态 TH/_judge_*(run.py) + **独立**第四类作业/联动判据
     #   (import_smoke.judge_evidence) + 已知空接口白名单事实(endpoints.KNOWN_EMPTY)。
     #   采集层 = scenes.py + import_smoke.verify 取证 + endpoints.complete 执行。
-    #   §9.2/§10.5 纪律: 第四类判据独立、不进 run.py 的 TH —— 所以只看 run.py
+    #   §15.187/§15.188 纪律: 第四类判据独立、不进 run.py 的 TH —— 所以只看 run.py
     #   会把它们误判成 GAP；把它们纳入扫描才是「基准体系」的真实覆盖。
     judge_text = run + "\n" + im + "\n" + ep
     collect_text = sc + "\n" + im + "\n" + ep
@@ -413,7 +413,7 @@ def predict(quiet=False):
     tgt_orders = 1000000
     tgt_sku = 10000
     days = REAL["order_days"]
-    # 当前实测规模：单渠道 10000 SKU，全库 orders 446,974（§9.7）
+    # 当前实测规模：单渠道 10000 SKU，全库 orders 446,974（§15.187）
     cur_orders = REAL["orders"]
     ratio_orders = tgt_orders / float(cur_orders)
     # SKU 维度：目标 10000 SKU == 当前单渠道 SKU 数 → 物化/读接口行数不放大
@@ -429,7 +429,7 @@ def predict(quiet=False):
     # 实测系数：agg_incremental 全量 110.6s（predict_scale.json pipeline_runs）
     agg_cur = 110.602
     agg_full_tgt = agg_cur * ratio_dss
-    # seed 阶段线性外推（行数线性，§9.7 已证「规模 10× 是主因」）
+    # seed 阶段线性外推（行数线性，§15.187 已证「规模 10× 是主因」）
     ord_phase = [p for p in REAL["phase"] if p[0] == "订单"][0]
     ord_s_tgt = ord_phase[1] * ratio_orders
     ord_win_tgt = ord_phase[2] * ratio_orders
@@ -543,7 +543,7 @@ def selftest():
         chk(False, "endpoints 可导入（%s）" % str(_e)[:60])
 
     # 反证 ③ 行为级：第四类判据在「repl gen 未推进」上必须报红，推进后转 PASS
-    #   （正是 §10.9 确定性实证的尾巴；证明判据既非恒 PASS 也非恒 FAIL）
+    #   （正是 §15.188 确定性实证的尾巴；证明判据既非恒 PASS 也非恒 FAIL）
     try:
         import import_smoke as IS
         fr = {"before": {"list_head": [{"kind": "repl", "gen": 40}],

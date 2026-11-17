@@ -1418,26 +1418,6 @@ cleansing/exports/tasks/purchase 低频路由；前端切 Makers（需解决 eo_
 | **seed 场景** | 低库存 SKU 在途=0 + C 仓 avail 0-5（7 仓汇总 < 需求）→ **补货/采购必触发**（bbcc/传统 20/20 需补） |
 | **UX** | 看板空白兜底（summary data 异常也显示 ErrorRetry）；清洗页冲突处理标题居中+间距；欢迎页触发 seed 填充期间友好提示 |
 
-## 2026-08-27 订单消失根治 + 看板实时性重构 + 监控防护
-| 模块 | 改动 |
-|------|------|
-| **🔴 订单消失根治** | `_task_cleanup_recycle` 的 `deleted_at IS NOT NULL` 匹配 `''`(active)——每天 04:30 删光所有 active 订单（rules 同款 bug）。修复：`deleted_at != ''`（只删真软删超 30 天）。本地复现+验证。**这是 8-27 凌晨 12 万订单消失的根因** |
-| **归档保护** | daily_stats INSERT 有任何失败 → ABORT 不删除 orders（防再次数据丢失）；归档执行写 quality_logs（数量/ABORT 原因） |
-| **reset 提速** | orders 分批 DELETE 5000×36 次 commit（PA 卡死 10 分钟）→ **一次性 DELETE**（35s）；保留历史 journal_mode=DELETE 切换（防卡机制） |
-| **看板实时性重构** | 静默刷新**绕过前端缓存**（`?t=`，之前命中缓存失效）；首次加载同绕过；次级合并（summary 独立 + aux 聚合 alerts/stockRisk/stockOverview，4→2 请求）；有旧数据不骨架（无感刷新） |
-| **规则操作增量** | 规则启用/停用**增量修正看板 active_alerts**（替代 invalidate_dashboard 触发 summary 重建 14.6s）→ 回看板 **2.7s**（5 倍提速） |
-| **批次主体隔离** | `/api/batches` 加 `warehouse_type` 参数（实际业务清洗导入按目标标记），各维度展开态不再混其他主体批次 |
-| **看板缺货 SQL 聚合** | `/api/inventory/stock-overview`（SQL 一次查缺货列表+低库存/总数），替代全量 inventory（33s→轻量）；缺货列表修复（stockOverview.items 无 avail 字段导致 filter 失败） |
-| **数据变更即时新** | 订单/商品/进销存/供应商**进入清缓存**（导入后立即显示新数据，不命中前端 30s 缓存） |
-| **监控补强** | main.py **全局异常捕获**（未捕获异常→quality_logs 堆栈+友好 500）；归档/recycle 执行日志；静默刷新防堆积（busy 标志） |
-| **清洗导入** | execute-async 改 postHeavy（90s）；**阈值防护**（<400 行同步直接结果，≥400 行异步 submit_task+WS 进度推送）；WS 按类型分发（cleansing_progress 不触发全局 loadAll） |
-| **seed 场景** | 低库存 SKU 在途=0 + C 仓 avail 0-5（7 仓汇总 < 需求）→ **补货/采购必触发**（bbcc/传统 20/20 需补） |
-| **UX** | 看板空白兜底（summary data 异常也显示 ErrorRetry）；清洗页冲突处理标题居中+间距；欢迎页触发 seed 填充期间友好提示 |
-| **🔴 滞销等级修复** | **时区 bug**：`today=datetime.now(UTC)`(aware) 与 `strptime`(naive) 相减 TypeError 被吞 → **days_zero 恒 999 + black 不触发**（滞销全 red 根因）。修复 `replace(tzinfo=None)` → black/yellow/red 恢复 |
-| **资金占用线配置化** | `fund>=10000` 硬编 → 读 `slow_fund_threshold`（默认 10000 可自定义）；规则页「滞销参数」UI 加"资金占用线(¥)"输入（可视化设置） |
-| **seed 各等级场景** | problem SKU 比例 6%→2%（black 减少）；低动销偏移 18 天（observe 级）；_DEMO_SLOW/_DEMO_LOW 跨函数共享（滞销 SKU avail 小→yellow）——**需重新填充含完整四等级** |
-| **主体隔离确认** | 滞销参数按 channel 隔离持久化（`UNIQUE(key,channel)` + 读写按 channel，实测 jd/other 独立） |
-
 ## 2026-08-25/26 数据库异常防治 + 大数据分页 + 四维一致性核验
 | 模块 | 改动 |
 |------|------|
@@ -2028,6 +2008,8 @@ P2: 447dc49(Sentry DSN) / 3a925d0(规则测试) / e9447b8(回收站) / 717265f(�
 
 ---
 # SupplyKit 更新日志
+
+> 注记：以下更早的日志原文直接粘贴，格式与前文不同。
 
 ## 2026-08-07 性能优化 + 渠道隔离 + 可靠性根治（44 个提交）
 

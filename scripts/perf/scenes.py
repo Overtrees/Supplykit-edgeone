@@ -86,7 +86,7 @@ def hot(keys=None, readers=8, secs=15, rounds=5, gap=15.0, quiet=True):
     for i in range(1, rounds + 1):
         ph = K.wait_quiet(60) if quiet else K.phase_now()
         # §15.189 P5: 相位未静默(仍有重建在跑) → **跳轮**, 不把导入后冷算相位
-        #   混进纯读判据。§9.7 第 3 轮 p95 1703ms 正是冷算相位被误判成性能退化;
+        #   混进纯读判据。§15.187 第 3 轮 p95 1703ms 正是冷算相位被误判成性能退化;
         #   红线 17 要求「快了多少」只能用纯读 + 静默相位。跳轮显式留痕, 不静默丢弃。
         if quiet and not ph.get("ok"):
             out["skipped_rounds"].append(

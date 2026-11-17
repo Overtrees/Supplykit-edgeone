@@ -7,7 +7,7 @@
   ② 变更史索引是 11-06 快照（卷数 / 节数 / 「§15.x 全局唯一」全部过时）。
 另有一批静态数字（preflight 步数 / cron 端点 / 路由数）随代码漂移。
 
-本脚本只核对**活文档**（README/CONTEXT/CHANGELOG 头/docs/*/scripts README），
+本脚本只核对**活文档**（README/CONTEXT/CHANGELOG 头/docs/*），
 历史卷 docs/history/*.md 与 CHANGELOG 历史批次**一律不检查**（红线：历史记录不改写）。
 
 用法：
@@ -182,8 +182,8 @@ def check(T):
     _cl_head = "\n".join(text("CHANGELOG.md").splitlines()[:60])
     chk(_sec in _hist, "history 最新节 %s 存在（本轮记录已落档）" % _sec)
     chk(_sec in _cl_head, "CHANGELOG 顶部批次引用最新节 %s" % _sec)
-    chk("## 13." in text("docs/PERF.md"), "PERF 有 §13 复验章节")
-    chk("suite_p6.py" in text("scripts/perf/README.md"), "perf README 收录 suite_p6.py")
+    chk("§15.191" in text("docs/PERF.md"), "PERF §20 指针覆盖 §13（history §15.191）")
+    chk("suite_p6.py" in text("docs/PERF.md"), "PERF §5 脚本索引收录 suite_p6.py")
 
     ok = all(v for v, _ in _RES)
     print("  → docs_probe %s（%d 项，FAIL %d）" % (

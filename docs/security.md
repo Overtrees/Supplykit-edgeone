@@ -104,10 +104,15 @@ daily-rules 04:05 → 20:04:01 UTC = 04:04:01 CST
 **验证平台是否变了**（每次大版本或怀疑时跑一次，30 秒）：
 
 ```bash
-TOKEN=$(curl -s -X POST https://supplykit.top/api/auth/login \
+# 1. 先登录取 token（公开演示账号 demo/demo123；不要用真实管理员账号跑这段验证）
+TOKEN=$(curl -s https://supplykit.top/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-# 期望 401(网关仍改写); 若返回 200 → 平台已不改写, 可以评估切回标准头
+  -d '{"username":"demo","password":"demo123"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+# 2. 对照：X-Auth-Token 应 200（现行走通的头）
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://supplykit.top/api/dashboard/summary?channel=jd -H "X-Auth-Token: $TOKEN"
+# 3. 探针：Authorization: Bearer 应 401（网关仍改写）；若返回 200 → 平台已不改写，可以评估切回标准头
 curl -s -o /dev/null -w '%{http_code}\n' \
   https://supplykit.top/api/dashboard/summary?channel=jd -H "Authorization: Bearer $TOKEN"
 ```
@@ -122,7 +127,7 @@ Makers 的 env 由平台托管，值是否被平台日志/工单系统暴露，�
 
 | 措施 | 做法 |
 |---|---|
-| 最小化 | env 只放运行必需的 12 个（`audit_secrets.py` 的 [4] 段自动列出，加新变量会被看到） |
+| 最小化 | env 只放运行必需的：本地 `.env` 实测 8 个（TiDB 连接 6 个 + `JWT_SECRET` + `CRON_SECRET`，2026-11-17 核；`README.md` env 表另列 `DB_BACKEND`，共 9 个名）；其余 `os.environ` 引用均为带默认值的可选调优开关，不计入“必需”。`audit_secrets.py` [4] 段列出的是后端代码引用的全部环境变量名，新增引用会被看到 |
 | 不主动外泄 | 禁跑 `edgeone makers env ls`（明文回显 `TIDB_PASSWORD`/`JWT_SECRET`）；不在对话/commit 里贴值 |
 | 轮换 | 按下表，或"疑似泄露立即执行" |
 | 本地副本 | `.env` 是 600 + gitignored；`.edgeone/` 同理（且已被审计脚本跳过，不参与硬编码判定） |
@@ -146,3 +151,5 @@ Makers 的 env 由平台托管，值是否被平台日志/工单系统暴露，�
 | 2026-11-02 | cron 加 `_throttle` + `_claim` + 失败回滚 | 路径公开 → 防重复执行/RU 打爆 |
 | 2026-11-03 | **cron 加时间窗守卫** | 把"随时可触发"收敛到"每日窗口内 + 当日一次" |
 | 2026-11-03 | **历史 blob 扫描进 CI（`fetch-depth: 0` + 每周定时）** | 实测 424 blob 只要 3.4s，"只能人工"不成立 |
+| 2026-11-17 | CF Worker 接力驱动上线（`supplykit-relay-driver`，每分钟 GET `/api/health`），接力任务不再因实例冻结而饥饿；生产评估 20–37 分钟 → 247 秒 | EdgeOne serverless 实例冻结 + 无请求推进（§15.223/§15.225） |
+| 2026-11-17 | `_FP_VER` 9：`rolling_predict` 趋势判档加 `TREND_EPS=1e-4` 死区，阈值 ±1e-4 内一律判“平” | DECIMAL(12,6) 精度下恰阈值比值仍随机越线（§15.224） |

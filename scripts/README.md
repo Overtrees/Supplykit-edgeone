@@ -11,7 +11,7 @@
 |---|---|
 | `env_check.py` | 换机/新会话第一条: 缺 .env、EDGEONE token、push 凭据一次性列出 |
 | `bootstrap_admin.py` | **账号引导/修复**（空库必备）: `--check` 只体检（退出码 2=无账号）、`--create` 缺则建、`--reset` 覆盖口令；口令走 `ADMIN_PASSWORD`，不回显明文 |
-| `deploy_status.py` | 部署判据: `Commit == HEAD && Prod == yes && Status == Success` |
+| `deploy_status.py` | 部署判据: 远端 HEAD 与本地 HEAD 逐文件一致 + `Prod == yes && Status == Success` |
 | `push_api.py` | 推代码(github:443 在沙箱不可达, 走 API, 一次一个 squash 提交) |
 | `smoke_check.py` | 线上冒烟: health JSON + 首页 #root |
 | `audit_secrets.py` | 提交前查密钥/明文口令泄漏 |
@@ -27,7 +27,7 @@
 | `test_inv_recalc.py` | 库存重算口径 |
 | `test_inv_idempotent.py` | 库存批量操作幂等 |
 | `test_barcode_q3.py` | 条码/两码合并 |
-| `cloud-functions/api/local_test.py` | **主回归**: 860 条用例。必须在 `cloud-functions/api/` 目录跑 |
+| `cloud-functions/api/local_test.py` | **主回归**: 项数以运行输出为准。必须在 `cloud-functions/api/` 目录跑 |
 | `cloud-functions/api/sql_smoke.py` | 真实 SQL 冒烟(表名/列名 mock 测不出), `local_test.py --sql-smoke` 顺带跑 |
 
 ## 三、前端/界面
@@ -103,5 +103,5 @@ python3 scripts/ui_overlap_check.py --serve --page all --viewport all --locale b
 | `perf/seed_preflight.py` | **seed 一次性作业**：零 RU 开跑门禁 + 只读 DB 前置 + 跑完取证；判据独立于接口基准，见 `docs/PERF.md` §9 |
 | `seed_drive.py` | seed 单驱动（路径从脚本位置推导仓库根，`SK_REPO` 可覆盖）；配合 `perf/seed_preflight.py` 保证「只跑一次全程」 |
 
-详见 [`perf/README.md`](perf/README.md) 与 [`docs/PERF.md`](../docs/PERF.md)。
+详见 [`docs/PERF.md`](../docs/PERF.md) §5 脚本索引。
 **注意**: 带写压测的 p50 不能用来判断"快了多少"（同配置轮间极差 22 倍），判延迟只用 `hot`。

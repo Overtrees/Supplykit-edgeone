@@ -12,19 +12,20 @@
     补账号: `python3 scripts/bootstrap_admin.py --create`(`--check` 退出码 2 = 无账号)。
     `/auth/setup` 只在配了 `SETUP_TOKEN` 时可用, 生产默认关闭 —— 这不是密码问题（2026-11-09 §15.198）。
 - 仓库: https://github.com/Overtrees/Supplykit-edgeone.git (分支 `feat/edgeone`)
-- 本地路径: `/workspace/supplykit` (前端 `frontend/`, 云函数 `cloud-functions/api/`)
+- 本地路径: `/workspace/supplykit`（WBX 沙箱路径，InstaBox 机器上是 `/data/supplykit/Supplykit-edgeone`） (前端 `frontend/`, 云函数 `cloud-functions/api/`)
 
 ## 必读文档索引
 
 | 主题 | 位置 |
 |---|---|
-| **一屏入口(坑位/八步闭环/失败黑名单/三条红线)** | `docs/SKILL.md` |
+| **一屏入口(坑位/八步闭环/失败黑名单/四条红线)** | `docs/SKILL.md` |
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
-| **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 250 行） |
+| **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 320 行） |
 | **性能基准**(按 页面→模块 查基线/机制/压测命令) | `docs/PERF.md` + `scripts/perf/run.py` |
 | 根因与变更史(按日期分卷；各卷范围/节数以 `DEVELOPMENT.md` §12 当前表为准，编号有跨卷重号，不假定唯一) | `docs/history/` — `grep -rn '<编号或关键词>' docs/history/` 按命中文件+日期判断 |
 | 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.105 |
+| 2026-11-17 全天：种子告警、审计四修、漂移根治、评估驱动、CF Worker | `docs/history/2026-11-17.md` §15.212 起 |
 | 低库存卡明细丢失三层根因(最顽固 bug) | `docs/history/` §15.104 第五节 |
 | 自有仓为什么不能用低库存口径 | `docs/history/` §15.102 |
 | 库存导入职责边界(期初/在途 vs 批次) | `docs/history/` §15.98 |
@@ -51,6 +52,13 @@
 7. **期初两场景** — 窗口(上月末最后一天 ~ 当月 3 号)内**导入过库存** → 本期期初以导入实盘为准
    (台账 `ledger_begin_adj` + 用户日志 `ledger_override`), 换算 `期初 = 导入量 − 本期净流水`;
    否则用上月期末结转。已结账的期不回改, 要改走 `/ledger/reclose`
+8. **趋势等级比较一律走共享常量 + TREND_EPS 死区** — `rolling_predict` 的 1.15/0.85
+   及同源补货箭头, 比较时用 `TREND_UP_RATIO`/`TREND_DOWN_RATIO` + `TREND_EPS=1e-4`
+   (比值落在阈值 ±1e-4 内一律判"平"); 字面量 1.15/0.85 不得出现在比较处。
+   固定精度只能缩小舍入误差、换一批翻转, 根除不了。见 `DEVELOPMENT.md` §7.5 红线 23
+9. **长接力任务必须有外部驱动** — EdgeOne serverless 无请求即冻结, 接力任务只靠请求驱动;
+   心跳/租约只保块内租约、不推下一块。不能假设有人一直在用 App, 长任务必须配专用外部驱动
+   (当前为 Cloudflare Worker 每分钟调 `/health`)。见 `DEVELOPMENT.md` §7.5 红线 24
 
 ## 工作流程铁律
 
@@ -60,7 +68,7 @@
   - **C 禁用显式 any**: 源码不得出现 `any` 类型关键字; 精确 `interface` + `[k:string]:unknown`
     索引签名 + `String()`/`Number()` 边界收敛, API 动态数据用 `api.get<T>()` 显式泛型。
     门禁: `.eslintrc.cjs` 的 `no-explicit-any` 为 `error`, `npx eslint src` 必须 0 error;
-    共享契约在 `frontend/src/api/types.ts`。见 `docs/SKILL.md` §11 红线 C / `DEVELOPMENT.md §15.38`
+    共享契约在 `frontend/src/api/types.ts`。见 `docs/SKILL.md` §12 红线 C / `history §15.38`
 - **B 不硬编码中文**: 界面文案一律 `t('key')`, 新增 key 必须 zh+en 双份且键集合相等;
   后端 `error` 属诊断文本可用中文, 但不能是唯一用户提示
   - **判据: "界面的说法" vs "世界的名字"**。是界面说法 → 翻; 是世界的名字(商品名/仓库名/
@@ -119,7 +127,7 @@ cd frontend && VITE_API_BASE_URL= npx vite build   # 本地验证留空走 proxy
 # i18n 门禁(残留 / 键集合 / 占位符 / 空串 / 列词条 / t 遮蔽)
 python3 scripts/i18n_audit.py --gate
 # 4 视口 × 双语界面快照(需先起 `cd frontend && npx vite preview --port 4173`)
-python3 .artifacts/i18n/shot.py --locale zh --viewport 375
+python3 scripts/ui_shot_matrix.py --locale zh --viewport 375
 # 本地回归(注意目录)
 cd cloud-functions/api && python3 local_test.py
 # git 提交(消息含特殊字符时用文件)
@@ -296,7 +304,7 @@ cat > /tmp/msg.txt <<'EOF' ... EOF && git commit -F /tmp/msg.txt
   照样返回假行、照样绿。`local_test.py --sql-smoke` 用 `EXPLAIN` 对生产库做名称解析(零副作用:
   不读行不加锁不执行)。首次运行抓到 3 个真缺陷, 其中"批次对账第④段从未跑成"和"采购在途恒 0"
   都是被 `except` 吞成降级的。**写了新 SQL 先问: 它会被冒烟收集到吗?** 未被测试触发的分支等于没验。
-- 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → ~~S2-9~~ → ~~S3-4(真实 SQL 冒烟)~~ → ~~S3-1(四大页+App 拆分全部完成: Dashboard 2070→1143 / Rules 2769→840 / 清洗 2398→1005 / 建议 2192→618 / App 1471→1040, §15.139)~~ → ~~S3-2/S3-3(42 处裸 fetch 收口到 apiJson, §15.140)~~ → S3-5(迁移框架); S3-6(async 化)明确不做
+- 审计待办: ~~S1~~ → ~~S2-3~~ → ~~S2-4/A~~ → ~~S2-2~~ → ~~S2-5~~ → ~~S2-1~~ → ~~S2-6~~ → ~~S2-9~~ → ~~S3-4(真实 SQL 冒烟)~~ → ~~S3-1(四大页+App 拆分全部完成: Dashboard 2070→1143 / Rules 2769→840 / 清洗 2398→1005 / 建议 2192→618 / App 1471→1040, §15.139)~~ → ~~S3-2/S3-3(42 处裸 fetch 收口到 apiJson, §15.140)~~ → ~~S3-5(迁移框架，2026-11-04 d11b551)~~; S3-6(async 化)明确不做（截至 2026-11-17：第二轮审计修复 #1–#4 已做，#5/#6 未批准，见 §15.214–§15.218）
 - **拆分必须连过两类门禁(2026-11-03 §15.141)**: S3-1 只验了行为等价, CI 红灯由另
   一类翻车补课——eslint 25 个残留未使用 import + local_test 四条静态断言 grep 的还是
   RulesPage.tsx 单文件。现 `_rp` 断言改扫「主页面 + rules/*.tsx 拼接」, 与拆分位置解耦。

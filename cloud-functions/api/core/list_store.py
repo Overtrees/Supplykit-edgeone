@@ -114,7 +114,7 @@ _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
 
 # ── §15.189 P0 根治: 物化有界补建自愈 ──────────────────────────────────
-# 起因(§10.9 确定性实证): HeavyBusy 跳过的 kind 只留痕 + 2s 冷却, 补建完全靠
+# 起因(§15.188 确定性实证): HeavyBusy 跳过的 kind 只留痕 + 2s 冷却, 补建完全靠
 #   「下一次读该页面」—— 集中导入跑完 9 分钟后 repl gen 仍停在 40、unit gen 14 未变。
 # 根治**不新增第二套重建机制**(红线 2): 把「待补建」的真源定义为 DB 持久事实 ——
 #   list_head 里 fp 已落后于当前数据版本、且 gen>0(有旧物化可服务) 的 head 行。
@@ -543,7 +543,7 @@ def _cold_worker(kind, scope, fp, fn, key):
             # 读侧仍返回上一版完整物化(数据四维-准确/完整不退化)。
             # §15.189 P0: 本轮跳过**不再等于永久丢失** —— head.fp 落后是 DB 持久
             #   事实, drain_pending() 会在下一次 60s 请求驱动里补建, 不再靠
-            #   「下一次读该页面」(§10.9 跑完 9 分钟 repl gen 仍为 40 的根因)。
+            #   「下一次读该页面」(§15.188 跑完 9 分钟 repl gen 仍为 40 的根因)。
             _STATS["busy"] += 1
             if _coalesce_on():
                 with _FLIGHT_LOCK:
@@ -622,7 +622,7 @@ def drain_pending(limit=None):
 
     「待补建」= list_head 里 **fp 已落后于当前数据版本、且 gen>0**(有旧物化可服务)
     的 head 行。这是 DB 持久事实: 实例冻结 / 重启 / 跨实例都不丢, 无需新表、
-    无需进程内队列, 也不受 §10.9 里「HeavyBusy 只留痕不重试」的影响。
+    无需进程内队列, 也不受 §15.188 里「HeavyBusy 只留痕不重试」的影响。
 
     补建仍走 submit_background → heavy(global_=True) → build(), 与读侧冷态、
     写侧 invalidate 是**同一条代码路径**(红线 2 不叠加); build() 发布前 COUNT

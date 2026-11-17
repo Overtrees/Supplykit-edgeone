@@ -701,7 +701,7 @@ def consistency(A, res):
     one("boot.risk == stock-risk", "首屏断货与独立断货同一物化",
         _num(bd, "stock_risk", "bcTotal"), _num(sr["body"], "data", "bcTotal"))
 
-    # 2) 同义但异源：物化 vs 实时。评估分片续跑时 alerts 本就在变（CONTEXT §10.9），
+    # 2) 同义但异源：物化 vs 实时。评估分片续跑时 alerts 本就在变（§15.188），
     #    判"3 次采样内差值收敛且 <=0.5%"，而不是拿某一瞬间判死。
     a1 = _num(summ["body"], "data", "summary", "active_alerts")
     samples, fail_samples = [], []
@@ -712,7 +712,7 @@ def consistency(A, res):
         time.sleep(2.0)
         cnt = probe(A, "GET", "/alerts/counts", [{"n": "channel", "d": "jd"}])
     samples.append(_num(cnt["body"], "data", "total"))
-    # 评估正在写 alerts 时，两边本就不可比（CONTEXT §10.9 收敛期 1419→22072）。
+    # 评估正在写 alerts 时，两边本就不可比（§15.188 收敛期 1419→22072）。
     # 这种情况如实标 DEGRADED（ok=None），既不假装 PASS，也不误判成缺陷。
     h = probe(A, "GET", "/health", [{"n": "detail", "d": 1}])
     running = []

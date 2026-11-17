@@ -509,7 +509,7 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
 def mark_progress():
     """§15.189 P1: 批量导入**中间态**的进度打点 —— 只 bump data_version, 零失效。
 
-    起因(§9.7 / §10.2 线上实数): seed 每窗口调一次 invalidate("all"), 36 窗口
+    起因(§15.187 / §15.188 线上实数): seed 每窗口调一次 invalidate("all"), 36 窗口
       = 36 轮「打全量墓碑 + bump 全部 8 个域计数 + 起 6 类 ensure_async 重建」。
       而下一窗口数据又变 → 上一轮刚建的物化立刻过期(缓存恒冷), 几乎全是白算;
       data_version 40→78 也几乎全是中间态, 并把 HeavyBusy 名额争抢放大 36 倍。

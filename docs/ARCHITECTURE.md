@@ -17,7 +17,7 @@
 │  ├─ 业务: dashboard(断货三级/健康) /         │
 │  │        replenishment / purchase / insights │
 │  │        cleansing / rules(计算参数融合) /   │
-│  │        cron(11端点) / tasks(seed分步) / ...│
+│  │        cron(12端点) / tasks(seed分步) / ...│
 │  ├─ 核心: core/rules.py(表达式引擎+计算变量)  │
 │  │        biz/sales.py(三窗口日销融合)       │
 │  └─ 基础: db.py(TiDB 原生)                   │
@@ -99,7 +99,7 @@ cloud-functions/api/
 ├── core/rules.py                 表达式引擎 + 计算变量注入 + 批量评估 + 恢复关闭
 ├── core/rule_cond.py             规则条件解析(2026-10-11 拆分)
 ├── core/alert_lifecycle.py       告警生命周期单一入口(维度键/关闭原因/重开复用, 2026-11-03 D8)
-├── routes/ (31个 = 22 router + 9 支撑)  路由模块 + 支撑模块(common/analysis_cache/ops/debug); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
+├── routes/ (34个 = 24 router + 10 支撑)  路由模块 + 支撑模块(common/analysis_cache/cleanse_write/dashboard_health/dashboard_maintain/dashboard_own_health/dashboard_stock_risk/purchase_calc/seed_fill/seed_import); 已按域拆分 dashboard_maintain/stock_risk/health/cleanse_write/purchase_calc/task_export/task_seed
 ├── test_audit.py                 静态审计(断言式: 缓存 key 含维度/无硬编码渠道/口径一致)
 ├── local_test.py                 本地全量回归（mock db + TestClient）
 └── sql_smoke.py                  真实 SQL 冒烟（EXPLAIN 396 条 + schema 对账, 2026-11-03 S3-4）
@@ -129,10 +129,12 @@ orders + 库存快照 ─→ biz/sales._rebuild_sku_sales_stats ─→ sku_sales
 | 进销存台账（own 行 / platform 行） | 7/14/28 | 同上（不含业务系数） |
 | 看板卡片（断货 / 库存 / 健康） | 7/14/28 | 同上 |
 | 告警 / 规则引擎 | 7/14/28 | 同上 |
-| 采购 | **14/28** | `rolling_predict_2w(ds14_cut, ds28_cut)` × `active_factor` |
+| 采购 | **14/28** | `rolling_predict_2w(ds14_cut, ds28_cut)` × `active_factor`¹ |
 
 采购保留两窗口是**设计**（采购周期长，7 天噪音不进），是四家唯一剩下的结构性差异；
 两窗口权重表沿用原值（`>1.15→.55/.45`、`<.85→.35/.65`、平稳 `.20/.80`），采购结果逐位不变。
+
+> ¹ 表中 `active_factor` 是代码变量（`routes/purchase_calc.py:72` 取 `core.metrics.season_factor`；当前 season 全 disabled，恒 1.0）。同名的 `replenishment_config.active_factor` 配置键才是死配置（seed 写 `'1.0'`，无代码读取该键，见 `CONTEXT.md` P8-4；后文“`active_factor` 仍是死配置”指的也是配置键）。
 
 四条不变式：
 
@@ -222,7 +224,7 @@ orders + 库存快照 ─→ biz/sales._rebuild_sku_sales_stats ─→ sku_sales
 |---|---|
 | 记账 | `common.record_freshness(channel, target, rows)` 唯一写入点；`last_biz_date` 取**库里真实** `MAX(业务日期)`，不是"这批文件里的最大日期" |
 | 天数 | `max(业务日期差, 导入时间差)` —— 内容旧就是旧，不看谁导的；`_FRESH_IMPORT_ONLY` 里的源（库存/档案/回款）只认导入时间 |
-| 阈值 | 按源分档：日更（订单/库存/平台库存/B仓库存）2 天橙、4 天红；流水 8/31；回款 31/61；档案 15/61 |
+| 阈值 | 按源分档：日更（订单/库存/平台库存/B仓库存）1 天橙、3 天红；流水 7/30；回款 30/60；档案 14/60（代码 `routes/misc._FRESH_TTL`，2026-11-17 核） |
 | 缺失 | 未导入的源也进 `sources`（`days=null / level=0 / missing=true`）—— 看得见，但不报红 |
 | 聚合 | `staleLevel` = 各源最差；看板 4 个指标取依赖源的最旧 |
 
@@ -280,13 +282,14 @@ cd cloud-functions/api && python3 local_test.py --sql-smoke   # 另加 396 条 E
 
 | 组件 | 位置 | 方式 |
 |------|------|------|
-| 前端+后端 | **EdgeOne Makers**（Git 集成自动构建部署） | push `edgeone` 远程自动构建 |
+| 前端+后端 | **EdgeOne Makers**（Git 集成自动构建部署） | `python3 scripts/push_api.py -m "…"` 推送（GitHub Git Data API）→ 自动构建 |
 | 生产域名 | **supplykit.top**（免签公开访问） | CNAME → supplykit.top.pages.dnsoe6.com |
 | 数据库 | **TiDB Serverless** | pymysql 直连 |
 
 ```bash
-# 部署：提交后推送 edgeone 远程 → Makers Git 集成自动构建
-git push edgeone feat/edgeone
+# 部署：push_api.py 推送（GitHub Git Data API）→ Makers Git 集成自动构建
+# 注意：本机 git remote 只有 origin，无 edgeone 远端；github.com:443 在本沙箱不可达，不要用 git push
+python3 scripts/push_api.py -m "fix(x): ..."
 # 构建状态查询 + 部署后冒烟 /api/health（部署确认/细粒度指纹方法见 docs/DEVELOPMENT）
 ```
 
@@ -306,7 +309,7 @@ git push edgeone feat/edgeone
 
 ## 历史与迁移（2026-10-25 文档治理合并——原 MIGRATION_EDGEONE / EDGEONE_VERIFICATION / TIDB_MIGRATION / PRODUCTION_CHECKLIST 精华)
 
-> 迁移决策、验证结论、平台硬限制、上线防护的历史沉淀——全部并入本文档,原独立文档已删除(教训细节见 DEVELOPMENT §15 系列)。
+> 迁移决策、验证结论、平台硬限制、上线防护的历史沉淀——全部并入本文档,原独立文档已删除(教训细节见 history §15 系列)。
 
 ### 双源码分支与回退
 - `main` = PA+SQLite 备份版(已冻结,可回退);`feat/edgeone` = EdgeOne Makers + TiDB 主线;远程 `edgeone`=Overtrees/Supplykit-edgeone
@@ -315,7 +318,7 @@ git push edgeone feat/edgeone
 ### Makers 迁移验证结论(2026-09-05 实证)
 - 入口检测: 行首 `app =`(构建器正则 /^app\s*=/m);函数包=仅 cloud-functions/;依赖 uv+CPython 3.10;九路由线上全通
 - **生产公开访问**: supplykit.top(CNAME pages.dnsoe6.com, Area=overseas 免备案, 免 eo_token 签名)——与 EO 网站加速二选一(DNS CNAME 互斥)
-- 签名机制/框架规范细节: 见 docs/MAKERS_API.md §3 + DEVELOPMENT §15.19/§15.20
+- 签名机制/框架规范细节: 见 docs/MAKERS_API.md §3 + history §15.19/§15.20
 
 ### TiDB 硬限制(实测)与 RU 预算
 - ①单条多值 INSERT ~500 行上限 ②大 DELETE 全表内存取消(8176)→ 分批 LIMIT 10000 ③execute 返回 rowcount(非 lastrowid) ④DATETIME 读出 datetime 对象(比较/展示 str[:10]) ⑤TiDB 异步 DDL(索引并入 CREATE TABLE)
@@ -323,4 +326,4 @@ git push edgeone feat/edgeone
 - 迁移决策: SQLite ORM 适配 TiDB 边际成本失控 → **停适配, 方案B 原生重构**(数据层直写 TiDB 方言, 接口契约前端零改动)
 
 ### 上线防护清单(切真实数据前必做)
-- 异地备份(GitHub Release, 每日拉取) / 目标版本语法门禁 / 误删防护 / 备份恢复演练(下载→gzip 校验→integrity_check→抽样核对→记录)——事故红线细节见 DEVELOPMENT §15.9/§15.17/§15.18
+- 异地备份(GitHub Release, 每日拉取) / 目标版本语法门禁 / 误删防护 / 备份恢复演练(下载→gzip 校验→integrity_check→抽样核对→记录)——事故红线细节见 history §15.9/§15.17/§15.18

@@ -1,6 +1,6 @@
 ---
 name: supplykit
-description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含六条业务口径、24 个 APIRouter / 34 路由文件的架构事实、Makers 框架坑位、七步交付闭环(preflight 八步门禁 → 回归 → push_api → 部署判据 → 冒烟)、缓存/切线与 schema 版本铁律、UI 规范要点、失败模式黑名单。当用户提到 SupplyKit、补货建议、采购建议、数据清洗、规则引擎、看板、BBCC/传统补货、滞销、进销存、告警、GMV、TiDB、EdgeOne Makers、supplykit.top 时触发。"
+description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含七条业务口径、24 个 APIRouter / 34 路由文件的架构事实、Makers 框架坑位、七步交付闭环(preflight 八步门禁 → 回归 → push_api → 部署判据 → 冒烟)、缓存/切线与 schema 版本铁律、UI 规范要点、失败模式黑名单。当用户提到 SupplyKit、补货建议、采购建议、数据清洗、规则引擎、看板、BBCC/传统补货、滞销、进销存、告警、GMV、TiDB、EdgeOne Makers、supplykit.top 时触发。"
 ---
 
 # SupplyKit 开发手册
@@ -78,6 +78,9 @@ archive 01:05 / cleanup 03:05 / freshness 03:10 / snapshot 03:35 / daily-rules 0
 recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— `ledger-close`(账期月结)
 与 `agg-sweep` **不单独挂调度**, 月结嵌入 `cleanup-logs` 内调用(见 `docs/decisions/0002`)。
 **新增定时任务前必须先腾条数**: 加到 11 条会导致整组 schedules 路由丢失。
+cron **最小间隔一天**(`*/5` 实测不支持, 会致整组路由丢失)。**1 分钟级驱动不要打 EdgeOne cron
+的主意** —— 上限 10 条已满、间隔最小一天, 改走外部驱动(Cloudflare Worker 每分钟调 `/health`,
+见 `docs/MAKERS_API.md` §8 与 `DEVELOPMENT.md` §7.5 红线 24)。
 平台 schedules **无法注入 header**(schema 只有 name/cron/timezone/method/path/payload, 且 `edgeone.json`
 进公开仓库, 用 payload 传密钥等于公开) → **"鉴权"根治不了**, 所以守的是"危害":
 ① `_throttle` 进程内限频 ② `_claim` DB 当日抢占(多实例安全) ③ **时间窗守卫** ——
@@ -115,9 +118,9 @@ recycle 04:35 / continue-tasks 05:05 / push-alerts 08:30 / ping 13:55) —— `l
 
 ### ① 改前(缺一步都会返工)
 
-- `git status --short` 干净; 读 `DEVELOPMENT.md §15.8` 十条数据原则 + 同日 `CHANGELOG` 条目;
+- `git status --short` 干净; 读 `history §15.8` 十条数据原则 + 同日 `CHANGELOG` 条目;
 - **先把验收指标写成数字**("四维偏差 0 项" / "日均从 71.16 万降到 16.01 万"), 否则无法判断改完;
-- 涉及口径改动: 先确认六条口径哪条被触碰。
+- 涉及口径改动: 先确认七条口径哪条被触碰。
 
 ### ② 本地验证(preflight 八步)
 
@@ -150,6 +153,9 @@ python3 scripts/push_api.py -m "fix(x): ..."       # Git Data API, 一次 = 一�
 python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 ```
 代价: **本地 SHA ≠ 远端 SHA**(author/committer 时间戳不同), 这是预期, 不是失败。
+- **先本地 commit 再推**: 脚本比对的是**本地已提交 HEAD 的 tree**与远端 tree, 未提交的工作区改动**不推**。
+- **判据**: 脚本结束打印"逐文件复核: 一致" + `git ls-remote` 看到远端 HEAD 已更新为新 squash 提交。
+- **凭据**: `GITHUB_TOKEN`(env 或 `.edgeone/auth.json`, 需 `repo contents:write`)。
 
 ### ⑤ 部署判据
 
@@ -159,6 +165,15 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 | **走 `push_api.py`(实际路径)** | **远端 HEAD 与本地 HEAD 逐文件一致**(脚本结束自检打印) |
 
 外加 `Status=Success` + `Prod=yes`。**部署成功 ≠ 功能生效**。
+
+**部署完成以 `scripts/deploy_status.py` 为准**: 输出的最新部署行满足 `Status=Success` 且 `Prod=yes`,
+且 Commit 是本次推送的提交(git push 路径: `Commit == 本地 HEAD`; `push_api.py` 路径: 远端为
+squash 提交、SHA 与本地不同, 改判"远端 HEAD 与本地 HEAD 逐文件一致")。
+脚本依赖 `.edgeone/auth.json`(`EDGEONE_PAGES_API_TOKEN`) + `.edgeone/project.json`
+(ProjectId `makers-8gstkvheqm2c`), 两个文件已 gitignore, **查完即删**, 不要留在工作区、不要提交。
+**只读验证看不出部署**: 线上验证只读、不跑种子时, 生产告警卡在新代码下无外部可区分变化
+(种子改动不影响生产数据; `_FP_VER` 只触发一次 aux 重建, 结果仍是同一批告警) ——
+必须用 `deploy_status.py` 查部署状态, 不能只靠调业务接口猜"部署好了没有"。
 
 ### ⑥ 线上验证
 
@@ -219,18 +234,37 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 | 只信 `git push \| tail -2` 的退出码 | 那是 `tail` 的 0; 失败会被当成功 |
 | 两个重灌进程并发 | 批次删除是整段 DELETE, 会互相清表 |
 | 引用文档里的**具体实现**而不看代码 | 2026-11-06 前 `DEVELOPMENT.md` 一~十四章是 PA+SQLite 时代写的(`backend/`、WAL、Cloudflare 部署), 已整体重写; 但**任何文档都可能滞后于代码** —— 判据以代码 + ARCHITECTURE.md 为准, 文档只给方向 |
-| 往页面/路由文件里继续堆新逻辑 | 上帝文件是这么长出来的; 新逻辑落独立文件, 页面只编排 —— 见 §11 红线 A |
-| JSX / toast / placeholder 写中文字面量 | 语言切换立刻露馅; 文案一律 `t('key')` 且 zh/en 双份 —— 见 §11 红线 B |
+| 往页面/路由文件里继续堆新逻辑 | 上帝文件是这么长出来的; 新逻辑落独立文件, 页面只编排 —— 见 §12 红线 A |
+| JSX / toast / placeholder 写中文字面量 | 语言切换立刻露馅; 文案一律 `t('key')` 且 zh/en 双份 —— 见 §12 红线 B |
 
 **重灌顺序(错必出偏差)**: `seed step6 → _recalc_own_inventory → _rebuild_own_batches → best_before 回写`。
 
 ---
 
-## 8. 按需精读索引
+## 8. 沙箱环境差异与故障速查
+
+> 出问题先查这里。沙箱特有的环境差异（`github.com:443` 不可达、推送只能走 `push_api.py`、
+> 部署判据是“逐文件一致”）见 §4 ④⑤，不重复。2026-11-17 由 `docs/WBY_WORKFLOW.md` §7 并入；
+> 该文件 §6 检查清单已错（local_test 405→现 889；“SHA 匹配”错）未并入，文件已删除。
+
+| 现象 | 根因（一句话） | 动作 |
+|---|---|---|
+| `Failed to connect github.com port 443` / `GnuTLS recv error` | 沙箱到 github.com 不可达（见 §4 ④） | 不要重试，直接 `python3 scripts/push_api.py` |
+| push_api 报错或远端 HEAD 未变 | 凭据缺 `repo contents:write` / 网络抖动 | `python3 scripts/env_check.py` 看 PUSH 项；脚本可重跑（按内容 diff，幂等） |
+| 长任务“卡住”不动 | `tail` 缓冲 / 连接挂起 | 查 `information_schema.processlist`；改 `flush=True` 写文件 |
+| 对账全量偏差 | 重灌顺序错（漏 recalc）/ 两进程并发 | 按 §7 重灌顺序重跑，先确认无残留进程 |
+| seed 单步超时 | 逐条 UPDATE 往返太慢 | 改单条 `JOIN UPDATE`（200s → 0.3s） |
+| 部署状态查不到 | 误以为需要 SecretKey / token 失效 | `python3 scripts/env_check.py` 看 DEPLOY 项；或 `scripts/deploy_status.py` |
+| 改完线上数字没变 | 缓存 TTL 未过 / 未 invalidate | 等 TTL 或触发一次写操作 |
+| 配置类数据滞后 | localStorage 缓存 | 配置不缓存（§15.92） |
+
+---
+
+## 9. 按需精读索引
 
 | 场景 | 先读这份 |
 |---|---|
-| 任何改动 | `docs/DEVELOPMENT.md §15.8`(数据四维十条) + `§15.9`(生产红线) |
+| 任何改动 | `history §15.8`(数据四维十条) + `history §15.9`(生产红线) |
 | 接手/换机 | `CONTEXT.md`(口径 + 已知遗留逐条) |
 | 改 UI | `docs/UI_DESIGN.md`(卡片分档/动效/数字格式) |
 | 改路由/数据流 | `docs/ARCHITECTURE.md` |
@@ -246,7 +280,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 ---
 
-## 9. 环境红线
+## 10. 环境红线
 
 - `.env`(运行变量)、`.edgeone/`(token)已 gitignore; 提交前 `git status` 复核
 - 凭据分布: `.edgeone/auth.json` 的 `EDGEONE_PAGES_API_TOKEN`(查部署) 与 `GITHUB_TOKEN`(推送, 需
@@ -265,7 +299,7 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 ---
 
-## 10. 用户偏好 → 见 `CONTEXT.md`「用户偏好」
+## 11. 用户偏好 → 见 `CONTEXT.md`「用户偏好」
 
 交付方式偏好（中文交流、拍板要给推荐、彻底根治不要兜底、实测优先、敢认错）是**同一份**，
 两处维护必然漂移，只在 CONTEXT.md 更新。本手册只补充一条工程侧的：
@@ -275,9 +309,9 @@ python3 scripts/push_api.py -m "..." --dry-run     # 先看差异文件
 
 ---
 
-## 11. 四条红线(2026-11-04 定案 + 2026-11-07 增补, 与业务口径同级)
+## 12. 四条红线(2026-11-04 定案 + 2026-11-07 增补, 与业务口径同级)
 
-> 这三条不是"建议", 是**准入条件**。违反的改动不予提交, 已有代码顺手改到合规。
+> 这四条不是"建议", 是**准入条件**。违反的改动不予提交, 已有代码顺手改到合规。
 
 ### 红线 A: 非内联优先, 不造上帝文件
 

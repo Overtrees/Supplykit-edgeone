@@ -329,7 +329,7 @@ def run(force=False):
 
 
 def judge_evidence(run_obj, verify_obj):
-    """§15.189 P3 第四类「作业/联动」判据（§10.5）。
+    """§15.189 P3 第四类「作业/联动」判据（§15.188）。
 
     **独立于 `run.py` 的 `TH`**（不污染页面表与 `complete()`），**不判 p50**（红线 17）。
     纯函数：只吃两份取证 dict（run + verify），可喂历史 `out/*.json` 做反证，
@@ -348,7 +348,7 @@ def judge_evidence(run_obj, verify_obj):
     heads = (verify_obj or {}).get("list_head") or []
 
     # ① 物化集中重建是否全部建成：所有 kind 的 gen 相对导入前推进。
-    #    §10.9 实证 repl 40→40 未推进 → 这条历史取证上必须报红（反证）。
+    #    §15.188 实证 repl 40→40 未推进 → 这条历史取证上必须报红（反证）。
     adv = [{"kind": str(x.get("kind")), "gen": int(x.get("gen") or 0),
             "base_gen": bh.get(str(x.get("kind"))),
             "advanced": bool(bh) and int(x.get("gen") or 0) > bh.get(str(x.get("kind")), -1)}
@@ -363,7 +363,7 @@ def judge_evidence(run_obj, verify_obj):
                     (bool(ev) and not running) if ev else None,
                     {"tasks": len(ev), "running": len(running)}))
 
-    # ③ 告警生成增量：只判「确实生成了」，**不取瞬时值判增量**（§10.9 收敛期
+    # ③ 告警生成增量：只判「确实生成了」，**不取瞬时值判增量**（§15.188 收敛期
     #    1419→5258→10230→22072 是评估分片续跑，不是重复缺陷）
     alerts = (verify_obj or {}).get("alerts")
     checks.append(C("alert_delta_ok", "告警已生成且不用瞬时值判增量",
@@ -371,7 +371,7 @@ def judge_evidence(run_obj, verify_obj):
                     {"alerts": alerts, "note": "收敛期持续增长 = 评估续跑, 不取瞬时值"}))
 
     # ④ 集中导入作业完成且等价：源表行数变化全 0（原样回导幂等）+ 0 次重灌。
-    #    ⚠ alerts 是**派生表**（评估生成告警，§10.9 收敛期必然增长），混入「源表」
+    #    ⚠ alerts 是**派生表**（评估生成告警，§15.188 收敛期必然增长），混入「源表」
     #    对账会把合法告警增长误判成数据不等价 —— 历史取证反证抓到过这个假 FAIL。
     SRC_TABLES = ("orders", "inventory", "products", "suppliers", "gmv_flows")
     b_rows, a_rows = before.get("tables") or {}, after.get("tables") or {}
@@ -442,7 +442,7 @@ def verify():
         [x.get("gen") for x in heads], out["unit_gen"],
         out["heavybusy_logs_recent"], alerts), flush=True)
     print("  评估任务：%s" % [(x["task_type"], x["status"]) for x in ev[:6]], flush=True)
-    # §15.189 P3: 第四类「作业/联动」判据（§10.5）—— 独立、不判 p50（红线 17）。
+    # §15.189 P3: 第四类「作业/联动」判据（§15.188）—— 独立、不判 p50（红线 17）。
     #   纯函数喂最近一次 run.json + 本次 verify 取证；历史 json 可离线反证。
     try:
         import glob

@@ -41,9 +41,9 @@ OUT_DIR = os.path.join(HERE, "out")
 LOCK = os.path.join(OUT_DIR, ".suite_once.lock")
 BASELINE_JSON = os.path.join(OUT_DIR, "20261109_predeploy_baseline.json")
 
-# §9.2 导入后稳态基线（25 接口 / 13 页面 / 5 轮中位），docs/PERF.md §3
+# §15.187 导入后稳态基线（25 接口 / 13 页面 / 5 轮中位），docs/PERF.md §3
 BASELINE = {"srv_p50": 32, "srv_p95": 509,
-            "source": "docs/PERF.md §9.2 导入后稳态 25接口/13页面/5轮中位"}
+            "source": "docs/history/2026-11-09.md §15.187 导入后稳态 25接口/13页面/5轮中位"}
 
 # 一轮场景顺序不可随意调整：hot（纯读 + 锁相位）必须在最前，
 # 部署后 drain 补建完成、相位静默时取样，否则 wait_quiet 会跳轮（§15.189 P5）。

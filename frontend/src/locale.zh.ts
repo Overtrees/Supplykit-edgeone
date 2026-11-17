@@ -842,7 +842,8 @@ export const zh: Record<string, string> = {
   'set.welcome_reset': '欢迎页已重置',
   'set.alert_push': '告警推送',
   'set.webhook': 'Webhook 地址',
-  'set.webhook_hint': '钉钉/企业微信机器人地址，每天 8:30 左右推送一次自上次推送以来新增的未推送告警（留空不推送）',
+  'set.webhook_hint':
+    '钉钉/企业微信机器人地址，每天 8:30 左右推送一次自上次推送以来新增的未推送告警（留空不推送）',
   'set.saving': '保存中...',
   'set.footer': 'SupplyKit · 供应链数据工作台',
   'welcome.tagline1': '电商供应链数据清洗',

@@ -8,7 +8,7 @@
   · 不触发 /api/seed/fill、不导数据、不跑 storm/cold/first/hot、不连线上接口计时。
   · 只读仓库源码 + 历史取证 out/*.json（13:17 那次**唯一一次**线上跑）。
   · 断言全是**结构性**的（存在性 / AST 调用关系 / 有界参数 / 互斥性 / 4 维不退化），
-    红线 7：不产出任何本地 Xms/Xs 结论，时间系数只引用 §9.7 线上实测的**整数计数**。
+    红线 7：不产出任何本地 Xms/Xs 结论，时间系数只引用 §15.187 线上实测的**整数计数**。
   · 含反证：门禁必须能报红；第四类判据在历史取证上必须报红（repl 未补建），
     且把 gen 改成推进后必须转 PASS（证明不是恒红也不是恒绿）。
 
@@ -93,7 +93,7 @@ def count_call(source, func_name, first_arg=None):
 # 1. P0 物化有界补建自愈（结构 / 4 维 / 红线）
 # ─────────────────────────────────────────────────────────────────
 def check_p0():
-    print("\n=== 1. P0 物化有界补建自愈（§10.9 确定性实证的尾巴） ===")
+    print("\n=== 1. P0 物化有界补建自愈（§15.188 确定性实证的尾巴） ===")
     ls = text("core/list_store.py")
     idx = text("index.py")
     calls, names, seg = func_info(ls, "drain_pending")
@@ -221,14 +221,14 @@ def check_judges():
 
     hot_calls, _, hot_seg = func_info(sc, "hot")
     chk("phase_not_quiet" in hot_seg and "skipped_rounds" in hot_seg,
-        "hot 相位未静默 → 跳轮 + 留痕（§9.7 第 3 轮 1703ms 误判源）")
+        "hot 相位未静默 → 跳轮 + 留痕（§15.187 第 3 轮 1703ms 误判源）")
     chk("if not vals" in hot_seg,
         "hot 全部跳轮时 dispersion 不崩、不伪造（空 rounds 保护）")
     jh_calls, _, jh_seg = func_info(run, "_judge_hot")
     chk("if not rounds" in jh_seg and "skipped_rounds" in jh_seg,
         "_judge_hot 对空有效轮判 FAIL + 校验跳轮留痕（不是恒 PASS）")
     chk("storm_incomplete" in run and "known_empty" not in run.split("TH = {")[1].split("}")[0],
-        "第四类判据**独立**，未污染 run.py 的 TH（§9.2 纪律）")
+        "第四类判据**独立**，未污染 run.py 的 TH（§15.187 纪律）")
 
     cv_calls, _, cv_seg = func_info(pp, "coverage")
     chk("judge_text" in cv_seg and "collect_text" in cv_seg,
@@ -296,12 +296,12 @@ def check_four_dims_and_redlines():
 
 
 # ─────────────────────────────────────────────────────────────────
-# 5. 结构推演：联动轮数（只用 §9.7 线上实测的**整数计数**）
+# 5. 结构推演：联动轮数（只用 §15.187 线上实测的**整数计数**）
 # ─────────────────────────────────────────────────────────────────
 def structural_delta():
     print("\n=== 5. 结构推演：联动轮数（整数计数，红线 7 不产秒数） ===")
     ts = text("routes/task_seed.py")
-    # §9.7 一次全程实测：36 窗口 / 20 段
+    # §15.187 一次全程实测：36 窗口 / 20 段
     windows = 36
     before = windows + 1      # 每窗口失效 + 完成失效
     after = 1                 # 仅完成步全量失效；中间步只 bump data_version
@@ -312,7 +312,7 @@ def structural_delta():
     chk(count_call(ts, "mark_progress") >= 1,
         "中间态仍有 data_version 进度打点（/health 可感知，不静默）")
     print("    说明：轮数收敛来自「中间态不发布」，不是把重建变快；")
-    print("          每轮 6 类重建的成本、单行耗时一律引用 §9.7 线上实测，本脚本不测速。")
+    print("          每轮 6 类重建的成本、单行耗时一律引用 §15.187 线上实测，本脚本不测速。")
     return {"windows": windows, "linkage_rounds_before": before,
             "linkage_rounds_after": after,
             "note": "整数结构计数；红线 7 不产出任何 Xms/Xs 结论"}
@@ -353,7 +353,7 @@ def selftest():
               "eval_tasks": [{"status": "done"}], "alerts": 5,
               "heavybusy_logs_recent": 11, "data_version_converged": True}
         chk(IS.judge_evidence(fr, fv)["verdict"] == "FAIL",
-            "repl gen 未推进 → 判据报红（对应 §10.9 实证）")
+            "repl gen 未推进 → 判据报红（对应 §15.188 实证）")
         chk(IS.judge_evidence(fr, dict(fv, list_head=[{"kind": "repl", "gen": 41}]))
             ["verdict"] == "PASS", "repl gen 推进 → 判据转 PASS（非恒红）")
     except Exception as _e:
