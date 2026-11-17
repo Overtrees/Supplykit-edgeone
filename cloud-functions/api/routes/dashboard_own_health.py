@@ -396,7 +396,7 @@ def own_health(channel, full: int = 0, limit: int = 10, offset: int = 0,
     if not debug:
         try:
             from core import own_store as _OS
-            # §15.165: 走 SWR —— 稳态读物化 / 冷态读侧零等待返回上一版完整物化 +
+            # §15.181: 走 SWR —— 稳态读物化 / 冷态读侧零等待返回上一版完整物化 +
             # 顶层 __swr + 后台分舱单飞重建 / 首次单飞现算一次。失配不再同步
             # `_compute()` 全量(线上 7.9→25.5s + 连接池耗尽), 根治红线 6 违反。
             _d, _swr = _OS.serve(

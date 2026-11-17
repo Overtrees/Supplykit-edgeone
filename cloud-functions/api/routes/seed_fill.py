@@ -163,7 +163,7 @@ def _seed_products_suppliers(skus_data):
                               'expiry_managed': 'no' if _g == 'home' else 'yes'})
     # 2026-11-05 走导入链路(用户定案): 商品档案 i 也是"导入文件"进来的一份数据。
     #   原来直接 INSERT ... ON DUPLICATE, 于是"映射了供应商编码但写入白名单漏了它"
-    #   这类漏列问题在演示环境永远暴露不出来(§15.158 就是这么发现的)。
+    #   这类漏列问题在演示环境永远暴露不出来(§15.157 就是这么发现的)。
     from routes.seed_import import import_rows as _imp
     for ch in ('jd', 'other'):
         _prow = [p for p in prod_rows if p.get('channel') == ch]
@@ -180,7 +180,7 @@ def _seed_products_suppliers(skus_data):
             sup_rows.append({'supplier_code': '%s-%s' % (code, 'JD' if ch == 'jd' else 'OTHER'),
                              'supplier_name': name, 'contact_person': contact, 'contact_phone': phone,
                              'score': score, 'channel': ch, 'brand': '，'.join(_blist)})
-    # 2026-11-06 与商品同构: 供应商也按渠道各发一份导入文件(§15.160 定案)。
+    # 2026-11-06 与商品同构: 供应商也按渠道各发一份导入文件(§15.159 定案)。
     #   原来是 20 行 executemany 直写, 绕过了列映射/写入白名单/channel 注入 ——
     #   演示库「看着按渠道分好了」, 真实导入的供应商档案却可能丢 channel 列。
     #   channel 由导入参数注入, 两渠道各自一份, 互不覆盖; supplier_code 仍带 -JD/-OTHER。
@@ -447,7 +447,7 @@ def _seed_inventory(skus_data, channel='', wh_group='', sku_from=0, sku_to=None)
         if _own:
             # 期初由 core.ledger_adj.detect_scene 自己判: reset 清空 ledger_state 后
             #   → 场景 C 首建, 导入值即基线。这里不再传任何"建账模式"开关 ——
-            #   曾加过 baseline=True 来绕开实盘窗口, 那是文档 §15.152 之外的第三条口径,
+            #   曾加过 baseline=True 来绕开实盘窗口, 那是文档 §15.151 之外的第三条口径,
             #   会导致"同样的导入, seed 与真实客户算出不同的期初"。
             _r = _imp('inventory', ch, _own, label='自有仓库存')
             if _r.get('failed'):
@@ -1043,7 +1043,7 @@ def _seed_alerts():
         同口径; 仅低库存告警, "紧急补货"(replenish)已退役(同原注释)。
     粒度(与规则引擎 evaluate_many 一致: SKU x 69码 x 仓, 去重键 uq_alerts_dim
     = channel + alert_type + related_sku + barcode + warehouse + source):
-    同 SKU 同仓多码行各码独立判定(§15.84: 告警维度是 SKU x 69码 x 仓) --
+    同 SKU 同仓多码行各码独立判定(§15.81: 告警维度是 SKU x 69码 x 仓) --
     按仓 SUM 会把单码缺货掩掉(2026-11-17 实测 200 组多码)。
     告警行带 barcode, 与引擎产物同一维度去重, 不再出现"种子无码 + 引擎有码"
     的平行两套。
@@ -1140,7 +1140,7 @@ def _seed_gmv_flows():
 
     为什么需要它: 看板 month.payout 优先读 gmv_flows 的真实资金流水, 无流水时回落
       `payout=null`(前端不显示推算值)。seed 全链此前一行 gmv_flows 都没生成, 于是演示
-      环境的「回款」永远是空 —— 不是功能缺陷, 是底数缺失(同 §15.113 归档数据长度问题)。
+      环境的「回款」永远是空 —— 不是功能缺陷, 是底数缺失(同 §15.110 归档数据长度问题)。
 
     口径与现有 seed 结构对齐, 不另造一套:
       · 金额基准 = `orders_day_agg.gmv`(落账段按 `status_cond()` 物化的 GMV, 与看板同源),

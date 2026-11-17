@@ -260,7 +260,7 @@ async def slow_log_middleware(request: Request, next):
                     _thw.Thread(target=_notify, daemon=True).start()
             except Exception:
                 pass
-    # §15.175 服务端耗时自报: 验收脚本的 e2e 含沙箱→边缘 CDN 的 RTT(实测 /api/health
+    # §15.184 服务端耗时自报: 验收脚本的 e2e 含沙箱→边缘 CDN 的 RTT(实测 /api/health
     #   0.4~2.4s, 抖动大于被测量本身), 无法把「服务端变慢」与「链路抖动」分开。
     #   这里把应用内 elapsed 写进响应头, 供线上验收按**服务端时间**逐接口判定(不改任何数据口径,
     #   不影响缓存/物化/响应体; 红线 7 认可的线上事实来源)。
@@ -328,10 +328,10 @@ async def auth_middleware(request: Request, next):
                     continue_tasks()
                 except Exception as _e:
                     try_err('index', '请求驱动续跑线程异常', _e)
-                # §15.189 P0: 有界物化补建自愈 —— 与续跑**共用同一个 60s 请求驱动**
+                # §15.200 P0: 有界物化补建自愈 —— 与续跑**共用同一个 60s 请求驱动**
                 #   (不新增调度源/不新增表)。head.fp 落后是 DB 持久事实, 实例冻结或
                 #   重启都不丢; HeavyBusy 跳过的 kind 不再靠「下一次读该页面」才补建
-                #   (§15.188 确定性实证的尾巴)。仍是 daemon 线程、不阻塞响应,
+                #   (§15.199 确定性实证的尾巴)。仍是 daemon 线程、不阻塞响应,
                 #   异常只留痕, drain_pending 自带全局间隔/单 scope 冷却/单轮上限。
                 try:
                     from core import list_store as _ls
@@ -437,4 +437,4 @@ if os.environ.get("DB_BACKEND", "tidb") == "tidb":
 # 2026-11-02 S2-9(用户定案 方案B): 启动数据迁移(90天物化首建/订单69码补齐)与规则自愈
 # (内置参数载体规则软删恢复、已退役规则存量清理)四段整体删除。理由: 线上实证(2026-11-02)
 # 迁移标记均已写入、规则均处目标态 —— 四段使命完成, 每次冷启动 7 条探测 SQL 纯空转。
-# 复用方法(新库/备份恢复/物化缺失)见 docs/DEVELOPMENT.md §15.123 第三节。
+# 复用方法(新库/备份恢复/物化缺失)见 docs/DEVELOPMENT.md §15.120 第三节。

@@ -1,4 +1,4 @@
-"""§15.200~§15.202 线上验收（可复跑）
+"""§15.211~§15.213 线上验收（可复跑）
 
 用法:
     python3 scripts/perf/relay_verify.py            # 全部
@@ -154,7 +154,7 @@ def run_export(admin):
     if st != "done":
         return
     # 判据取自 **DB 真源**(sync_tasks.params/result), 不依赖 status 响应字段 ——
-    #   响应只是给前端的视图, 而"到底导了多少行"必须以落库的自报值为准(§15.201 修的正是它)。
+    #   响应只是给前端的视图, 而"到底导了多少行"必须以落库的自报值为准(§15.212 修的正是它)。
     _row = K.QY("SELECT params, result FROM sync_tasks WHERE task_id=%s", [tid]) or [{}]
     try:
         _pj = json.loads(_row[0].get("params") or "{}")

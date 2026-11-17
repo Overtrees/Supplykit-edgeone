@@ -69,7 +69,7 @@ def continue_tasks(request: Request = None):
                 # 超时任务(>30 分钟无更新——前端轮询停/实例冻结)——标记 error 释放防重/结束卡住
                 _ec("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
                     [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——自动标记结束，请重新导入"}}), tid])
-                # 2026-11-16 §15.205: rule_eval 还要收尾它自己的 eval_tasks 行与占位 ——
+                # 2026-11-16 §15.216: rule_eval 还要收尾它自己的 eval_tasks 行与占位 ——
                 #   否则 `eval_live_cond()` 恒真, 看板「规则重算中」永久挂。这里补的是
                 #   "进程直接消失"那条路径(冻结时 step 的 except 根本不执行)。
                 if tt == "rule_eval":
@@ -99,7 +99,7 @@ def continue_tasks(request: Request = None):
                     seed_fill_status(tid, driver="backend")
                     done["seed"] += 1
                 elif tt == "rule_eval":
-                    # 2026-11-16 §15.200: 每日评估已接力的推进点。单片预算 40s —— 一轮
+                    # 2026-11-16 §15.211: 每日评估已接力的推进点。单片预算 40s —— 一轮
                     #   continue 能把"取 SKU 片 + 评一片"推到接近请求边界, 又不至于被掐断;
                     #   剩下的下一轮继续。任务自身带租约(45s)与每片 updated_at 刷新。
                     from core import rule_eval_task as _rt
@@ -126,7 +126,7 @@ def continue_tasks(request: Request = None):
 
 
 def _bootstrap_materialized(done):
-    """物化自举(2026-11-16 §15.203) —— 补上「判定读模型不自愈」这个缺口。
+    """物化自举(2026-11-16 §15.214) —— 补上「判定读模型不自愈」这个缺口。
 
     ## 为什么需要（线上实测，不是推测）
 
@@ -247,7 +247,7 @@ _WINDOWS = {
     "push_alerts":  (8, 0, 10, 0),
     # 账期结账: 平台每月 1 号 00:40 CST 调度, 窗口给到 03:00(排队/取整余量)
     "ledger_close": (0, 30, 3, 0),
-    # 2026-11-16 §15.202: agg-sweep 原来**既无窗口也无抢占** —— 而 cron 鉴权按设计对
+    # 2026-11-16 §15.213: agg-sweep 原来**既无窗口也无抢占** —— 而 cron 鉴权按设计对
     #   匿名放行(平台调度无法注入请求头, 见 _authed), 等于任何人都能让服务端扫 48h 脏日期
     #   并触发物化重建。补窗口(每天 03:00~05:30, 与 snapshot/freshness 同档) + 限频。
     "agg_sweep":    (3, 0, 5, 30),
@@ -539,7 +539,7 @@ async def cron_cleanup_logs(request: Request):
 
 
 def run_daily_rules(channels=None, deep=True, alert_types=None, mode=None, source="cron") -> dict:
-    """规则评估入口 —— 只做编排: 建接力任务并推首片(§15.200, 2026-11-16 根治)
+    """规则评估入口 —— 只做编排: 建接力任务并推首片(§15.211, 2026-11-16 根治)
 
     ## 为什么不再是"同步跑完"
 
@@ -644,7 +644,7 @@ async def cron_daily_rules(request: Request, force: int = 0, channels: str = "",
         _claimed, _token = claim_rules(_fp)
         if not _claimed:
             return ok({"skipped": True, "reason": "今天已按当前库存依据评估, 或另一实例正在评估"})
-        # 2026-11-16 §15.200: 这里**不再** settle —— 评估已改接力(sync_tasks), 本请求只推首片。
+        # 2026-11-16 §15.211: 这里**不再** settle —— 评估已改接力(sync_tasks), 本请求只推首片。
         #   落指纹交给 core.rule_eval_task: 全部阶段跑完才 settle_rules(ok=True),
         #   中途失败则 settle_rules(ok=False) 回滚成待跑。若在此处 settle, 就变成
         #   "请求返回即宣告评估完成", 而那正是线上 7 天 timeout 时最误导的信号。

@@ -48,7 +48,7 @@ TH = {
 def _judge_hot(r):
     res = []
     rounds = r["rounds"]
-    # §15.189 P5: 相位未静默跳过的轮次显式计入判据 —— 全跳 = 没有有效纯读样本,
+    # §15.200 P5: 相位未静默跳过的轮次显式计入判据 —— 全跳 = 没有有效纯读样本,
     #   既不能判 PASS 也不能崩, 如实 FAIL 并说明原因(红线 17 的锁相位前置)。
     #   skipped_rounds 字段本身也是结构门禁(可反证), 防止脚本改了却没留痕。
     skipped = len(r.get("skipped_rounds") or [])

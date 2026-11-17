@@ -268,7 +268,7 @@ export default function App() {
           )
           if (!alive) return
           const st = j?.data?.status
-          // 2026-11-07 §15.158: timeout = 实例被冻结遗留的僵户(后端按新鲜度判定),
+          // 2026-11-07 §15.174: timeout = 实例被冻结遗留的僵户(后端按新鲜度判定),
           //   对前端等价于「已结束」——否则胶囊「规则重算中」会永远转下去
           if (st === 'done' || st === 'expired' || st === 'timeout') {
             useAppStore.getState().opDone(o.id)

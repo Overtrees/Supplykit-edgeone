@@ -9,7 +9,7 @@
   ④ 昨天 100 万单 / 10000 SKU 的预测性能是否站得住脚。
 
 红线 7：本脚本**只做结构/代码判定**，零本地计时、不产出任何 Xms/Xs 结论。
-所有时间/行数系数只引用线上实测：docs/history/2026-11-09.md §15.187（一次全程）、§3（模块基准）、
+所有时间/行数系数只引用线上实测：docs/history/2026-11-09.md §15.198（一次全程）、§3（模块基准）、
 /workspace/predict_scale.json（11-08 容量预测）。本脚本不连线上接口计时。
 
 用法（默认零 RU，纯静态）：
@@ -93,9 +93,9 @@ def _src(rel):
     return p if os.path.isfile(p) else os.path.join(ROOT, rel)
 
 
-# ── 一次全程实测的线上系数（docs/history/2026-11-09.md §15.187，禁止改成本地计时） ──────────
+# ── 一次全程实测的线上系数（docs/history/2026-11-09.md §15.198，禁止改成本地计时） ──────────
 REAL = {
-    "source": "docs/history/2026-11-09.md §15.187（线上 X-Srv-Ms / params.steps）",
+    "source": "docs/history/2026-11-09.md §15.198（线上 X-Srv-Ms / params.steps）",
     "wall_s": 1265.0, "pure_s": 1123.6,
     "segments": 20, "windows": 36, "drive_requests": 50,
     "orders": 446974, "products": 20000, "inventory": 170200,
@@ -181,7 +181,7 @@ def static_checks():
         "list_store 捕获 HeavyBusy")
     chk("_BUSY_COOL = 2.0" in lst, "HeavyBusy 后同 key 有界冷却 2s")
     chk("本轮跳过" in lst, "HeavyBusy = 本轮跳过（不排队、抢不到名额只留痕）")
-    # §15.189 P0: 跳过不再等于永久丢失 —— drain_pending 按 head.fp 落后统一补建。
+    # §15.200 P0: 跳过不再等于永久丢失 —— drain_pending 按 head.fp 落后统一补建。
     #   下面用 tokenize(丢注释/字符串) 切函数体, 避免「注释里提到」造成假 PASS。
     lst_toks = _toks(_src("core/list_store.py"), drop_strings=True)
     dp = lst_toks.split("def drain_pending")[1].split("def _swr_meta")[0]
@@ -199,7 +199,7 @@ def static_checks():
     chk("_KICK_LOCK" in ek and "_MAX_SEGMENTS = 60" in ek,
         "评估联动单线程 + 分片上限 60（多批导入串行，超出靠 60s 兜底）")
 
-    # ⑤ §15.189 P1: seed 中间窗口不再全清（36 轮 → 完成 1 轮）
+    # ⑤ §15.200 P1: seed 中间窗口不再全清（36 轮 → 完成 1 轮）
     n_all = _text(_src("routes/task_seed.py")).count('invalidate("all")')
     chk(n_all >= 3,
         "task_seed 保留 %d 处 invalidate(\"all\")（完成/回滚/reset/月汇总等一次性操作）" % n_all)
@@ -236,40 +236,40 @@ NODES = [
      "所有 kind 的 head.gen 推进、fp 追平；P0 drain_pending 对 HeavyBusy 跳过有界补建",
      ("materialize_gen_ok", "fp_match", "built_all"),
      ("list_head", "judge_evidence"),
-     "§15.189 P3: import_smoke.judge_evidence 判 materialize_gen_ok；P0 保证补建自愈"),
+     "§15.200 P3: import_smoke.judge_evidence 判 materialize_gen_ok；P0 保证补建自愈"),
     ("评估联动任务是否完成", "cleansing.done→kick_eval_task→cleansing_eval_status",
      "_eval 任务非 running（done / 兜底接上），新鲜度/租约未僵死（红线 15）",
      ("eval_task_done", "task_done", "lease_ok"),
      ("eval_tasks", "cleansing_eval_status"),
-     "§15.189 P3: judge_evidence 取 eval_tasks 判 running=0"),
+     "§15.200 P3: judge_evidence 取 eval_tasks 判 running=0"),
     ("告警是否真的生成", "评估→rules→alerts 表",
      "告警增量可核，且**不取瞬时值**（收敛期持续增长是评估分片续跑）",
      ("alert_delta_ok", "generated", "nonempty_alerts"),
      ("alerts", "alert_delta"),
-     "§15.189 P3: judge_evidence 判已生成 + 显式不取瞬时值"),
+     "§15.200 P3: judge_evidence 判已生成 + 显式不取瞬时值"),
     ("集中导入作业是否完成且等价", "execute-async→status 接力→行数/四维键对账",
-     "行数变化 0、四维键重复组 0、0 次重灌（§15.187 第四类判据）",
+     "行数变化 0、四维键重复组 0、0 次重灌（§15.198 第四类判据）",
      ("import_equivalent", "watermark", "rowcount", "equivalent"),
      ("before", "tables"),
-     "§15.189 P3: judge_evidence 用 before/after.tables 判行数对账"),
+     "§15.200 P3: judge_evidence 用 before/after.tables 判行数对账"),
     ("导入后冷算相位是否安静", "完成阶段集中重建→heavy_slot 占用",
      "hot 前 phase_now().busy==0；未静默则**跳轮**而非把 p95 判 FAIL（红线 17）",
      ("phase_quiet_gate", "skipped_rounds", "phase_not_quiet", "quiet_gate"),
      ("wait_quiet", "skipped_rounds"),
-     "§15.189 P5: scenes.hot 跳轮 + 留痕；run._judge_hot 对空有效轮判 FAIL"),
+     "§15.200 P5: scenes.hot 跳轮 + 留痕；run._judge_hot 对空有效轮判 FAIL"),
     ("已知空数据接口是否标注", "alerts 恒空（safety_qty=0）",
      "判据里显式列白名单，不把已知空接口算进 incomplete",
      ("known_empty", "KNOWN_EMPTY", "allow_empty", "whitelist"),
      ("KNOWN_EMPTY", "def complete"),
-     "§15.189 P5: endpoints.KNOWN_EMPTY 唯一真源，complete() 只对合法空形状豁免"),
+     "§15.200 P5: endpoints.KNOWN_EMPTY 唯一真源，complete() 只对合法空形状豁免"),
 ]
 
 
 def _judged(th, texts, keys):
     """判据层：TH 键 或 判据定义行（丢纯注释行），是否含对应精确关键字。
 
-    §15.189: 从「只扫 run.py 的 _judge_*」扩到「run.py + import_smoke 第四类判据
-    + endpoints 白名单」—— 第四类判据按 §15.187 独立、不进 TH, 但同样是真判据,
+    §15.200: 从「只扫 run.py 的 _judge_*」扩到「run.py + import_smoke 第四类判据
+    + endpoints 白名单」—— 第四类判据按 §15.198 独立、不进 TH, 但同样是真判据,
     覆盖矩阵必须一起扫, 否则「只看 run.py」会得出恒 GAP 的错误结论。
     丢纯注释行是必须的: 历史注释里写过判据名, 只按字面扫会假 PASS。
     """
@@ -291,10 +291,10 @@ def coverage(th=None, quiet=False):
     sc = _text(os.path.join(HERE, "scenes.py"))
     im = _text(os.path.join(HERE, "import_smoke.py"))
     ep = _text(os.path.join(HERE, "endpoints.py"))
-    # §15.189 判据层 = 接口稳态 TH/_judge_*(run.py) + **独立**第四类作业/联动判据
+    # §15.200 判据层 = 接口稳态 TH/_judge_*(run.py) + **独立**第四类作业/联动判据
     #   (import_smoke.judge_evidence) + 已知空接口白名单事实(endpoints.KNOWN_EMPTY)。
     #   采集层 = scenes.py + import_smoke.verify 取证 + endpoints.complete 执行。
-    #   §15.187/§15.188 纪律: 第四类判据独立、不进 run.py 的 TH —— 所以只看 run.py
+    #   §15.198/§15.199 纪律: 第四类判据独立、不进 run.py 的 TH —— 所以只看 run.py
     #   会把它们误判成 GAP；把它们纳入扫描才是「基准体系」的真实覆盖。
     judge_text = run + "\n" + im + "\n" + ep
     collect_text = sc + "\n" + im + "\n" + ep
@@ -413,7 +413,7 @@ def predict(quiet=False):
     tgt_orders = 1000000
     tgt_sku = 10000
     days = REAL["order_days"]
-    # 当前实测规模：单渠道 10000 SKU，全库 orders 446,974（§15.187）
+    # 当前实测规模：单渠道 10000 SKU，全库 orders 446,974（§15.198）
     cur_orders = REAL["orders"]
     ratio_orders = tgt_orders / float(cur_orders)
     # SKU 维度：目标 10000 SKU == 当前单渠道 SKU 数 → 物化/读接口行数不放大
@@ -429,7 +429,7 @@ def predict(quiet=False):
     # 实测系数：agg_incremental 全量 110.6s（predict_scale.json pipeline_runs）
     agg_cur = 110.602
     agg_full_tgt = agg_cur * ratio_dss
-    # seed 阶段线性外推（行数线性，§15.187 已证「规模 10× 是主因」）
+    # seed 阶段线性外推（行数线性，§15.198 已证「规模 10× 是主因」）
     ord_phase = [p for p in REAL["phase"] if p[0] == "订单"][0]
     ord_s_tgt = ord_phase[1] * ratio_orders
     ord_win_tgt = ord_phase[2] * ratio_orders
@@ -543,7 +543,7 @@ def selftest():
         chk(False, "endpoints 可导入（%s）" % str(_e)[:60])
 
     # 反证 ③ 行为级：第四类判据在「repl gen 未推进」上必须报红，推进后转 PASS
-    #   （正是 §15.188 确定性实证的尾巴；证明判据既非恒 PASS 也非恒 FAIL）
+    #   （正是 §15.199 确定性实证的尾巴；证明判据既非恒 PASS 也非恒 FAIL）
     try:
         import import_smoke as IS
         fr = {"before": {"list_head": [{"kind": "repl", "gen": 40}],

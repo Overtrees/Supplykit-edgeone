@@ -78,7 +78,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
 
     from routes.common import ch_supports_b as _csb
     _ch_b = _csb(channel)   # 该渠道是否走 BBCC(B 仓调拨链) —— 原 `channel == "jd"`
-    # §15.176 读侧并行(不改任何算法/口径, 只消除无依赖串行): 线上 list_head.timing
+    # §15.185 读侧并行(不改任何算法/口径, 只消除无依赖串行): 线上 list_head.timing
     #   (2026-11-08 14:56) purchase calc=3.0s / sql=4.0s/10 条 —— 四段取数严格串行:
     #   配置 → 商品(1 万行) → 日销物化(2 万行) → 库存(9 万行), 每段都在等自己的往返+传输。
     #   商品与库存两段与日销互不依赖, 先发出去并行取, 主线程照旧做日销与融合;
@@ -90,7 +90,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
         "SELECT sku, product_name, barcode, brand, store, category, box_qty, price, "
         "supplier_code FROM products WHERE (deleted_at IS NULL OR deleted_at='') "
         "AND channel=%s", [channel])
-    # §15.180 下推聚合(纯读侧, 算法一行未动): 主循环对每个 (sku, 69码) 只做无条件累加
+    # §15.190 下推聚合(纯读侧, 算法一行未动): 主循环对每个 (sku, 69码) 只做无条件累加
     #   (available/transit/safety) + 按 warehouse_type 分桶 + safety_days 取 max +
     #   own 首仓名, 全是可结合的聚合 —— 下推到 SQL 后线上 jd 实测 9 万行 → 3 万行。
     #   `warehouse_type<>'platform_b' OR 1=1` 复刻「非 BBCC 渠道/非 bbcc 模式跳过 B 仓行」,
@@ -131,7 +131,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     try:
         from biz.sales import get_sku_sales_stats, WH_C, slim_on
         if slim_on():
-            # §15.172 取数裁剪(与 repl 同一做法, 单一真源 `biz.sales.slim_on`):
+            # 旧 §15.172 取数裁剪(与 repl 同一做法, 单一真源 `biz.sales.slim_on`):
             #   一次 `barcode="all"` 取「合计 + 全部按码」, 只取 ds14/ds28 两列, 按行分流。
             #   原实现是 2 次往返、全 11 列; 线上 purchase `calc=3.5s` 里 `sql=3.3s/12 条`。
             # 2026-11-16 口径统一: 采购取 cut 的 14/28(窗口数不变, 仍是两窗口)
@@ -358,7 +358,7 @@ def _build_purchase(channel, mode, days=28, with_alerts=False):
     #   供 core.alert_jobs 在同一进程内复用本次结果(不重算一遍)。
     if with_alerts:
         sync_purchase_alerts(channel, result)
-    _ex.shutdown(wait=True)      # §15.176: 两个预取线程已 result() 过, 这里只回收池
+    _ex.shutdown(wait=True)      # §15.185: 两个预取线程已 result() 过, 这里只回收池
 
     result.sort(key=lambda x: x["days_to_empty"])
     return result
@@ -542,7 +542,7 @@ def _disposal_compute(channel="jd", debug: int = 0):
     _mk("pseudo")
     _cat_match = {}
     _ld_days = {}
-    # §15.176: best_before 只有几百个不同取值(同 SKU 多仓/多码共享同一日期), 但原实现对
+    # §15.185: best_before 只有几百个不同取值(同 SKU 多仓/多码共享同一日期), 但原实现对
     #   **每一行库存**(9 万行)都 strptime 一次 —— 线上 debug 分段实测 inventory_loop 1.6s,
     #   属纯 CPU 重复解析。按值缓存后同一日期只解析一次(与 _ld_days 同款, 结果逐行等价)。
     _bb_dd = {}
@@ -684,7 +684,7 @@ def _disposal_compute(channel="jd", debug: int = 0):
     _mk("inventory_loop")
     # 2026-11-07 P0: 排序补 (sku,barcode,warehouse) 成**全序 tie-breaker**(红线 12)。
     #   原来 key 只有 (level, -days_zero), 同值行顺序取决于 inventory 物理返回序(TiDB 不保证)。
-    #   物化落 seq 后读侧按 seq 切, 与现算的 Python sort 会错位(§15.154 断货快照同教训)。
+    #   物化落 seq 后读侧按 seq 切, 与现算的 Python sort 会错位(§15.170 断货快照同教训)。
     items.sort(key=lambda x: ({"black": 0, "red": 1, "yellow": 2, "observe": 3}.get(x["level"], 9),
                                -(x["days_zero"] if x["days_zero"] is not None else 1e9),
                                str(x.get("sku", "")), str(x.get("barcode", "")),
@@ -736,7 +736,7 @@ def disposal_suggestions(channel: str = "jd", page: int = 0, page_size: int = 0,
     _d = _LS.serve("disposal", scope, channel, "", 0, "",
                    lambda: _disposal_compute(channel)[0],
                    search=search, page=page, page_size=page_size)
-    # §15.161: __swr 放响应顶层, 无分页裸调的 data 仍是纯列表(形状契约)
+    # §15.177: __swr 放响应顶层, 无分页裸调的 data 仍是纯列表(形状契约)
     _hd = _LS.pop_swr(_d)
     # 无分页裸调: 旧契约 data 直接是列表(前端 `(d.items || d || [])` 兼容, 但形状要守住)
     if page <= 0 or page_size <= 0:

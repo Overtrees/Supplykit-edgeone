@@ -1,4 +1,4 @@
-"""§15.200~§15.202 改动的守门自检(零网络 / 零 DB / 零 RU)
+"""§15.211~§15.213 改动的守门自检(零网络 / 零 DB / 零 RU)
 
 跑法:
     python3 scripts/perf/relay_selftest.py          # 全部断言
@@ -168,7 +168,7 @@ def main(verbose=False):
           '_throttle("agg_sweep"' in crsrc)
 
     # ── 5b. 评估状态行(横幅)不许留僵尸 ────────────────────────────
-    #  §15.205: enqueue 建的行必须直接是 running+started_at, 不能靠表默认值落到
+    #  §15.216: enqueue 建的行必须直接是 running+started_at, 不能靠表默认值落到
     #  pending/NULL —— 那样 close_stale_runs 收不到, eval_live_cond 恒真, 横幅永久挂。
     rtsrc = strip_comments(read(relay))
     check("enqueue 建行直接写 status='running' + started_at(不留 pending 僵尸)",
@@ -180,7 +180,7 @@ def main(verbose=False):
     check("continue_tasks 判超时时对 rule_eval 调 abandon(不只是一条 UPDATE)",
           '_rt0.abandon(tid)' in crsrc)
     mtsrc = strip_comments(read(os.path.join(API, "core", "maintenance.py")))
-    check("close_stale_runs 连 pending 一起收(§15.158 只堵了 running)",
+    check("close_stale_runs 连 pending 一起收(§15.174 只堵了 running)",
           "status='pending' AND created_at < DATE_SUB" in mtsrc)
 
     # ── 6. 未登录首屏 ─────────────────────────────────────────────

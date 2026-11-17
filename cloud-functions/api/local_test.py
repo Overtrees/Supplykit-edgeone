@@ -7,7 +7,7 @@
 
 --sql-smoke 做的是: 把 mock 层收到的每条 SQL 拿去真库 `EXPLAIN`, 只做名称解析与计划,
 不读数据行、不执行写入, 因此能安全地对着生产库跑。它要抓的是"表名/列名/GROUP BY
-写错了"这类 mock 永远测不出的错(§15.106 三个 NameError 的根因)。实现见 sql_smoke.py。
+写错了"这类 mock 永远测不出的错(§15.103 三个 NameError 的根因)。实现见 sql_smoke.py。
 """
 import sys
 import os
@@ -60,7 +60,7 @@ def fake_query(sql, params=None):
     # health_index 查询(须在 FROM inventory WHERE 分支前, 避免被 _FAKE_INV 抢占致 total=0)
     if "GROUP BY warehouse_type" in sql and "SUM(" not in sql:
         return list(_INV)
-    # §15.180: 原来只匹配 `warehouse_type IN (...) GROUP BY sku` 前缀, 而补货/采购的
+    # §15.190: 原来只匹配 `warehouse_type IN (...) GROUP BY sku` 前缀, 而补货/采购的
     #   下推聚合 SQL 恰好也以这段开头(`... GROUP BY sku, barcode, warehouse_type`),
     #   被误判成"按 SKU 的健康度计数查询" → 返回一行 healthy/warning 结构, 全表 SKU 消失。
     #   mock 的分支必须精确到被替身的那条 SQL: 该计数查询必有 COUNT, 聚合取数没有。
@@ -529,7 +529,7 @@ from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa:
 
 _SH = _tz(_td(hours=8))
 _arch = _WINDOWS.get("archive")
-# 2026-11-16 §15.202: 9 → 10 —— 新增 agg_sweep(原来既无窗口也无抢占, 而 cron 鉴权按设计
+# 2026-11-16 §15.213: 9 → 10 —— 新增 agg_sweep(原来既无窗口也无抢占, 而 cron 鉴权按设计
 #   对匿名放行, 等于任何人可让服务端扫 48h 脏日期)
 check("cron 窗口: 覆盖 10 个重任务(含 2026-11-04 账期结账 / 2026-11-16 agg_sweep)",
       len(_WINDOWS) == 10, str(sorted(_WINDOWS)))
@@ -1614,7 +1614,7 @@ try:
           (_d2.get("cur") or {}).get("start") == "2026-09-01"
           and (_d2.get("days") or 0) == 63, r2.text[:220])
 
-    # §15.180b cache_get_swr: 只把「过期但有旧值」改成「立即返旧值 + 后台重建」,
+    # §15.191 cache_get_swr: 只把「过期但有旧值」改成「立即返旧值 + 后台重建」,
     #   命中与首建必须与 cache_get 完全一致(命中不调 builder; 首建同步算, 绝不给空)。
     from routes import analysis_cache as _AC
     _old_one = _db.one
@@ -1903,7 +1903,7 @@ try:
     _sp4 = open('routes/suppliers.py', encoding='utf-8').read()
     check("S2-1 供应商评分变更触发规则重算(评分是规则 ctx 输入)",
           '_schedule_rule_eval' in _sp4 and 'if "score" in d' in _sp4, "suppliers.py")
-    # 2026-11-16 §15.200: 评估改接力后, "评估完补一次失效"从 rules.py 的消费循环
+    # 2026-11-16 §15.211: 评估改接力后, "评估完补一次失效"从 rules.py 的消费循环
     #   移到了 core/rule_eval_task._finish(全部阶段跑完才算完)。断言跟着指向新位置,
     #   并额外要求 rules.py 里**不再**在排队时就失效(那会让缓存白重建一轮)。
     _rl4 = open('routes/rules.py', encoding='utf-8').read()
@@ -2664,14 +2664,14 @@ try:
 except Exception as _e22:
     check("S2-9 补列统一用例无异常", False, str(_e22)[:200])
 
-# ── S2-9(2): index.py 启动迁移/规则自愈四段退役(方案B, 复用说明留文档 §15.123) ──
+# ── S2-9(2): index.py 启动迁移/规则自愈四段退役(方案B, 复用说明留文档 §15.120) ──
 try:
     _src9b = open('index.py', encoding='utf-8').read()
     check("S2-9 启动迁移/规则自愈四段已退役(index.py 不再含 M0/M1/规则修复/退役)",
           all(k not in _src9b for k in ("day_agg_init", "m1_69code", "濒临断货预警",
                                         "滞销识别", "紧急补货")), "index.py")
     check("S2-9 退役说明含文档复用指引",
-          "§15.123" in _src9b, "index.py")
+          "§15.120" in _src9b, "index.py")
 except Exception as _e23:
     check("S2-9 探测统一用例无异常", False, str(_e23)[:200])
 
@@ -2685,12 +2685,12 @@ try:
     _dash_src = open('routes/dashboard.py', encoding='utf-8').read()
 
     # ── D4: 改一条规则 ≠ 跑一整套每日任务 ──
-    # 2026-11-16 §15.205: 末尾新增 source="cron"(排障埋点, 带默认值不破坏既有调用方) ——
+    # 2026-11-16 §15.216: 末尾新增 source="cron"(排障埋点, 带默认值不破坏既有调用方) ——
     #   断言改为"三个业务参数都在且都带默认值", 不再锁右括号; 语义未放宽。
     check("D4 run_daily_rules 三业务参数都在且带默认值(不破坏既有调用方)",
           "def run_daily_rules(channels=None, deep=True, alert_types=None" in _cron_src,
           "routes/cron.py")
-    # 2026-11-16 §15.200: 评估改接力后, "浅档跳过重活"由阶段机表达 ——
+    # 2026-11-16 §15.211: 评估改接力后, "浅档跳过重活"由阶段机表达 ——
     #   deep=False 时 eval 结束直接进 kick, 不进 post(批次对账 + 健康快照)。
     _rt_src = open('core/rule_eval_task.py', encoding='utf-8').read()
     check("D4 浅档真的跳过重活(阶段直接跳到 kick, 不是注释)",
@@ -2725,7 +2725,7 @@ try:
           and "/api/rules/eval-status" in open('../../frontend/src/App.tsx', encoding='utf-8').read(),
           "RulesPage/App")
 
-    # ── §15.158: 评估任务僵户(实例被冻结, done/error 回写永不执行) ──
+    # ── §15.174: 评估任务僵户(实例被冻结, done/error 回写永不执行) ──
     _maint_src = open('core/maintenance.py', encoding='utf-8').read()
     _own_src = open('core/own_store.py', encoding='utf-8').read()
     _app_src = open('../../frontend/src/App.tsx', encoding='utf-8').read()
@@ -3669,7 +3669,7 @@ try:
     #   ② 该状态让库存导入被判成「已建账」→ 期初挪进 snapshot_qty;
     #   ③ apply_import 又因"11-05 在实盘窗口外"直接 return → beginning_stock 无人写回,
     #      10,100 行期初 0; 而 other 无状态走首建账拿到 211 万 —— 同一份数据两种命运。
-    # 中途曾用 baseline=True 绕过窗口, 那是**在文档 §15.152 之外新造第三条口径**,
+    # 中途曾用 baseline=True 绕过窗口, 那是**在文档 §15.151 之外新造第三条口径**,
     #   会让"同样的导入, seed 与真实客户算出不同的期初", 已回退。
     # 现在的正解: 场景识别 + reset 清账期状态。
     _la11 = open("core/ledger_adj.py", encoding="utf-8").read()
@@ -4293,7 +4293,7 @@ try:
                                        "schema"),
           str(_US.JUDGE_DOMAINS))
 
-    # 2026-11-16 §15.203: fp 的**第三维 —— 代码口径版本**
+    # 2026-11-16 §15.214: fp 的**第三维 —— 代码口径版本**
     #   域计数器只随数据写入涨。改映射/公式/取数范围这类"输出口径"的代码时, fp 一分
     #   不变 → 物化静默返旧值。线上实测: BC 计数收敛到 alerts.wh_map 后部署完成,
     #   /dashboard/aux 仍报 bc=0 而 /alerts/counts 报 554, 要等下一次导入才自愈。
@@ -4390,7 +4390,7 @@ try:
 except Exception as _e31:
     check("P1 物化读模型用例无异常", False, str(_e31)[:300])
 
-# ── §15.159 P0: 补货/采购建议行「域指纹物化」(2026-11-07) ──────────────
+# ── §15.175 P0: 补货/采购建议行「域指纹物化」(2026-11-07) ──────────────
 try:
     _ls18 = _rd("core/list_store.py")
     _lp18 = _rd("core/list_page.py")
@@ -4408,7 +4408,7 @@ try:
           and "shape_cached" not in _rp18 and "shape_cached" not in _pu18
           and "_REPL_TTL" not in _rp18 and "_PURCHASE_TTL" not in _pu18,
           "core/list_page.py + 两路由")
-    check("建议行物化: 读侧走 list_store.serve, 形状契约不变(§15.161 __swr 走响应顶层)",
+    check("建议行物化: 读侧走 list_store.serve, 形状契约不变(§15.177 __swr 走响应顶层)",
           "_LS.serve(" in _rp18 and "_LS.serve(" in _pu18
           and "_items[:2000]" in _rp18
           and "return ok(_d, **_LS.pop_swr(_d))" in _pu18
@@ -4443,7 +4443,7 @@ try:
           '"list_snapshot"' in _sc18b and '"list_head"' in _sc18b
           and "SCHEMA_VERSION = 28" in _sc18b, "schema_create.py")
     check("建议行物化: 新鲜度只由 fp 决定, 读侧无 TTL/时间判断",
-          # §15.161: TIMESTAMPDIFF 只允许出现在 _swr_meta 里算**播报用 age_s**,
+          # §15.177: TIMESTAMPDIFF 只允许出现在 _swr_meta 里算**播报用 age_s**,
           #   绝不参与「数据新不新」的判定; allow_stale 是唯一跳过 fp 比对的路径,
           #   stale/哨兵/坏行校验一字不减。锁住这条边界, 防止后人拿时间当新鲜度。
           "created_at" not in _ls18
@@ -4511,7 +4511,7 @@ try:
         if "ON DUPLICATE KEY UPDATE gen" in s:
             _mem18["published"].append(params)
         elif "INSERT INTO list_head(kind,scope,stale,note,built_at)" in s:
-            # §15.164 同步: 标脏 SQL 改为参数化 stale(默认 0=失败保旧 gen,
+            # §15.180 同步: 标脏 SQL 改为参数化 stale(默认 0=失败保旧 gen,
             # LIST_SAFE_REBUILD=0 回退 1=旧行为)。桩按语句特征识别, 不再依赖
             # "stale=1" 字面; 断言强度不变 —— 仍要求「校验未过 + 未切 head + 有失败记录」。
             _mem18["stale"].append(params)
@@ -4565,9 +4565,9 @@ try:
           and set(_LS.DEPS["purchase"]) == _FD18["purchase"],
           str((_LS.DEPS, _FD18.get("purchase"))))
 except Exception as _e32:
-    check("§15.159 建议行物化用例无异常", False, str(_e32)[:300])
+    check("§15.175 建议行物化用例无异常", False, str(_e32)[:300])
 
-# ── §15.160 P0: 滞销处置建议物化(第三种 list_store kind) ─────────────
+# ── §15.176 P0: 滞销处置建议物化(第三种 list_store kind) ─────────────
 try:
     _pc19 = _rd("routes/purchase_calc.py")
     _ls19 = _rd("core/list_store.py")
@@ -4598,7 +4598,7 @@ try:
           in _ls19 and 'invalidate("purchases")' in _pu19, "list_store + purchase")
     # 形状契约: 分页 dict / 裸调列表 / debug 带 _perf
     check("disposal 物化: 形状契约不变(分页dict/裸调列表/debug _perf)",
-          # §15.161: __swr 摘到响应顶层, data 仍是纯列表/纯 dict, 形状一字未改
+          # §15.177: __swr 摘到响应顶层, data 仍是纯列表/纯 dict, 形状一字未改
           'return ok(_d["items"], **_hd)' in _pc19 and "return ok(_d, **_hd)" in _pc19
           and "_hd = _LS.pop_swr(_d)" in _pc19 and '"_perf": _PF' in _pc19,
           "purchase_calc.py")
@@ -4609,7 +4609,7 @@ try:
     check("disposal 物化: 失效链路自动覆盖(invalidate 遍历 DEPS 三 kind)",
           "_LS.ensure_async(_kind)" in _rd("routes/analysis_cache.py")
           and _ls19.count('": (') >= 3, "analysis_cache")
-    # §15.160 抓到的读写 fp 不对称: build 不得把登记的空 mode 兜底成 "bbcc",
+    # §15.176 抓到的读写 fp 不对称: build 不得把登记的空 mode 兜底成 "bbcc",
     #   否则写侧 fp ≠ 读侧 fp → 物化永不命中(每请求仍 2.5s 现算, 且白烧重建)。
     #   锁住整条同源链: register_scope 存 serve 传入的 mode 原值 → build 读回不改写。
     check("disposal 物化: 读写 fp 同源(register 存原值 + build 不兜底 bbcc)",
@@ -4633,9 +4633,9 @@ try:
     finally:
         _LS19.head, _LS19.fp_now = _o19
 except Exception as _e33:
-    check("§15.160 disposal 物化用例无异常", False, str(_e33)[:300])
+    check("§15.176 disposal 物化用例无异常", False, str(_e33)[:300])
 
-# ── §15.161 P1/P2: 冷算治理(全局预算/按 kind 分舱/单飞) + SWR ──────────
+# ── §15.177 P1/P2: 冷算治理(全局预算/按 kind 分舱/单飞) + SWR ──────────
 try:
     _ls20 = _rd("core/list_store.py")
     _rp20 = _rd("routes/replenishment.py")
@@ -4645,24 +4645,24 @@ try:
     import core.list_store as _LS20
 
     # ① 全局预算复用 db.heavy, 不另造第二套闸门(红线 2/4)
-    check("§15.161 冷算治理: 复用 db.heavy 全局预算, 不新造全局队列/worker/跨 kind 租约",
+    check("§15.177 冷算治理: 复用 db.heavy 全局预算, 不新造全局队列/worker/跨 kind 租约",
           "from db import heavy, HeavyBusy" in _ls20 and "with heavy(" in _ls20
           and "def _cold_worker" in _ls20
           and "queue.Queue" not in _ls20 and "lease_owner" not in _ls20,
           "core/list_store.py")
 
     # ② 同 key 单飞 + 按 kind 分舱 + 读侧不等待
-    check("§15.161 冷算治理: 同 (kind,scope,fp) 单飞, 不同 kind 并行, 读侧零等待",
+    check("§15.177 冷算治理: 同 (kind,scope,fp) 单飞, 不同 kind 并行, 读侧零等待",
           "def submit_background" in _ls20 and "_FLIGHTS[key]" in _ls20
           and "if prev is None:" in _ls20 and "ev.wait(" not in _ls20
           and 'name="list-cold-" + str(kind)' in _ls20
           and "threading.Thread(target=_cold_worker" in _ls20,
           "core/list_store.py")
 
-    # ③ §15.161 SWR 冷态分支不等后台结果(回应「方案比等重建还糟」); §15.165 首建
+    # ③ §15.177 SWR 冷态分支不等后台结果(回应「方案比等重建还糟」); §15.181 首建
     #    单飞只在「真·从未构建」时由 leader 算一次、follower 有界等同一份物化,
     #    不是每个读请求绑后台重建 30s; 绝不返回 0 条/空结构(数据四维-完整)。
-    check("§15.161/165: SWR 读侧零等待 + 首建单飞有界共享 + 不返回空数据",
+    check("§15.177/§15.181: SWR 读侧零等待 + 首建单飞有界共享 + 不返回空数据",
           "def _first_serve" in _ls20 and "FIRST_SINGLEFLIGHT=0" in _ls20
           and "_FIRST_WAIT = 20.0" in _ls20 and "_FIRST_TTL" in _ls20
           and "return _live()" in _ls20          # 极端降级单份现算兜底, 不返回 0 条
@@ -4672,7 +4672,7 @@ try:
           "core/list_store.py")
 
     # ④ 回滚与新鲜度(红线 15/16)
-    check("§15.161 冷算治理: 一刀回滚 + flight 带新鲜度 + 诊断口 mode 与 build 同源",
+    check("§15.177 冷算治理: 一刀回滚 + flight 带新鲜度 + 诊断口 mode 与 build 同源",
           "if not read_enabled() or legacy:" in _ls20
           and "_FLIGHT_TTL" in _ls20 and 'cur["t0"]' in _ls20
           and 'ch, md = str(h.get("channel") or "jd"), str(h.get("mode") or "")' in _ls20
@@ -4680,7 +4680,7 @@ try:
           "core/list_store.py")
 
     # ⑤ __swr 只在顶层, data 形状逐字不变(分页 dict / 裸调列表)
-    check("§15.161 SWR: __swr 走响应顶层, 三路由 data 形状不变",
+    check("§15.177 SWR: __swr 走响应顶层, 三路由 data 形状不变",
           "def pop_swr" in _ls20 and '"__swr": d.pop("__swr")' in _ls20
           and 'return ok(_items[:2000], **_hd)' in _rp20
           and 'return ok(_d, **_LS.pop_swr(_d))' in _pu20
@@ -4701,22 +4701,22 @@ try:
         _LS20.query = lambda sql, p=None: [{"payload": '{"sku":"S1"}'}]
         _LS20.one = lambda sql, p=None: {"age_s": 12}
         _d20 = _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True)
-        check("§15.161 SWR: fp 不等仍可读上一版完整物化(用户不等重建)",
+        check("§15.177 SWR: fp 不等仍可读上一版完整物化(用户不等重建)",
               isinstance(_d20, dict) and _d20.get("total") == 1
               and len(_d20.get("items") or []) == 1, str(_d20))
-        check("§15.161 SWR: 常态读(fp 不等)仍返回 None, 不静默返旧值",
+        check("§15.177 SWR: 常态读(fp 不等)仍返回 None, 不静默返旧值",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
         _H20["stale"] = 1
-        # §15.165: 默认放行「历史 stale=1 但 gen>0/row_cnt 正常」的完整旧 gen(冷态 SWR),
+        # §15.181: 默认放行「历史 stale=1 但 gen>0/row_cnt 正常」的完整旧 gen(冷态 SWR),
         # 稳态仍严格硬拒; `LIST_STALE_PREV=0` 一刀回退到旧行为(stale=1 一律拒读)。
-        check("§15.165 SWR: stale=1 完整旧 gen 冷态可放行(不再退回首建双算停摆)",
+        check("§15.181 SWR: stale=1 完整旧 gen 冷态可放行(不再退回首建双算停摆)",
               isinstance(_LS20.page_of("repl", "s", "jd", "bbcc", extra="s",
                                        allow_stale=True), dict))
-        check("§15.165 SWR: stale=1 稳态(allow_stale=False)仍严格硬拒(红线 8② 不打折)",
+        check("§15.181 SWR: stale=1 稳态(allow_stale=False)仍严格硬拒(红线 8② 不打折)",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
         _os20 = os.environ.get("LIST_STALE_PREV")
         os.environ["LIST_STALE_PREV"] = "0"
-        check("§15.165 一刀回滚: LIST_STALE_PREV=0 → stale=1 冷态也退回拒读",
+        check("§15.181 一刀回滚: LIST_STALE_PREV=0 → stale=1 冷态也退回拒读",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
         if _os20 is None:
             os.environ.pop("LIST_STALE_PREV", None)
@@ -4724,11 +4724,11 @@ try:
             os.environ["LIST_STALE_PREV"] = _os20
         _H20["stale"] = 0
         _H20["row_cnt"] = -1
-        check("§15.161 SWR: row_cnt=-1 哨兵 → 上一版也不可读",
+        check("§15.177 SWR: row_cnt=-1 哨兵 → 上一版也不可读",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
         _H20["row_cnt"] = 1
         _LS20.read_enabled = lambda: False
-        check("§15.161 SWR: LIST_READ=0 一刀回滚, 连上一版也不读",
+        check("§15.177 SWR: LIST_READ=0 一刀回滚, 连上一版也不读",
               _LS20.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
     finally:
         _LS20.head, _LS20.fp_now, _LS20.read_enabled, _LS20.query, _LS20.one = _o20
@@ -4737,13 +4737,13 @@ try:
     _p20 = {"items": [1], "total": 1, "page": 1, "page_size": 300,
             "__swr": {"state": "serving_previous"}}
     _hd20 = _LS20.pop_swr(_p20)
-    check("§15.161 SWR: pop_swr 摘出状态且 data 里不留 __swr",
+    check("§15.177 SWR: pop_swr 摘出状态且 data 里不留 __swr",
           "__swr" in _hd20 and "__swr" not in _p20
           and set(_p20) == {"items", "total", "page", "page_size"}, str(_p20))
 except Exception as _e34:
-    check("§15.161 冷算治理/SWR 用例无异常", False, str(_e34)[:300])
+    check("§15.177 冷算治理/SWR 用例无异常", False, str(_e34)[:300])
 
-# ── §15.162 看板冷算根治: 判定读模型 SWR 化 + 等待链收敛 + boot 冒泡 ─────────────
+# ── §15.178 看板冷算根治: 判定读模型 SWR 化 + 等待链收敛 + boot 冒泡 ─────────────
 try:
     _us22src = _rd("core/unit_store.py") if "_rd" in dir() else open(
         _os.path.join(_API_DIR, "core/unit_store.py"), encoding="utf-8").read()
@@ -4761,52 +4761,52 @@ try:
     _clisrc = open(_cli22, encoding="utf-8").read()
 
     # ① 静态: SWR 骨架复用不叠加(红线 2/4/5)
-    check("§15.162 后台重建复用 list_store 分舱单飞(db.heavy 全局预算), 不另造队列/worker",
+    check("§15.178 后台重建复用 list_store 分舱单飞(db.heavy 全局预算), 不另造队列/worker",
           "list_store as _LS" in _us22src and "_LS.submit_background(" in _us22src
           and "queue.Queue" not in _us22src and "_FLIGHTS = {}" not in _us22src,
           "core/unit_store.py")
-    check("§15.162 allow_stale 只跳过 fp 比对, 完整性哨兵一字不减(tally_of/risk_of)",
+    check("§15.178 allow_stale 只跳过 fp 比对, 完整性哨兵一字不减(tally_of/risk_of)",
           _us22src.count("if not allow_stale:") == 2
           and 'int(h.get("risk_rows", -1)) < 0' in _us22src
           and 'not int(h.get("stale") or 0)' in _us22src, "core/unit_store.py")
-    check("§15.162 serve_tally/serve_overview/serve_risk 三入口: 失配返回上一版, 不可用才现算",
+    check("§15.178 serve_tally/serve_overview/serve_risk 三入口: 失配返回上一版, 不可用才现算",
           all(("def serve_%s" % f) in _us22src for f in ("tally", "overview", "risk"))
           and _us22src.count("submit_rebuild(channel, _m)") >= 3, "core/unit_store.py")
-    check("§15.162 swr_meta 用 DB 时间算 freshness_s(不参与数据新鲜度判定, 只用于播报)",
+    check("§15.178 swr_meta 用 DB 时间算 freshness_s(不参与数据新鲜度判定, 只用于播报)",
           "TIMESTAMPDIFF(SECOND, built_at, NOW(6)) AS age_s" in _us22src
           and "def swr_meta" in _us22src, "core/unit_store.py")
-    check("§15.162 _store_tally 返回 (tally, swr), 快路径判据 _store_on 语义不变",
+    check("§15.178 _store_tally 返回 (tally, swr), 快路径判据 _store_on 语义不变",
           "return _US.serve_tally(channel, mode)" in _dashsrc
           and "_t_sum, _swr_tally = _store_tally(channel, mode)" in _dashsrc
           and "max_workers=3 if not _store_on else 1" in _dashsrc, "routes/dashboard.py")
 
-    # ② 静态: §15.163 P3 已把「TTL + 同步 builder + heavy + 单飞锁」整段替换掉,
-    #   等待链从「收敛到 2s」升级为「请求路径彻底不存在」。旧断言钉的是 §15.162 中间态,
+    # ② 静态: §15.179 P3 已把「TTL + 同步 builder + heavy + 单飞锁」整段替换掉,
+    #   等待链从「收敛到 2s」升级为「请求路径彻底不存在」。旧断言钉的是 §15.178 中间态,
     #   这里同步为新的等价红线约束(不放松, 只是更严)。
-    check("§15.163 三接口读路径全部收敛到 dash_store.serve, 请求路径无 heavy/单飞/TTL 同步builder",
+    check("§15.179 三接口读路径全部收敛到 dash_store.serve, 请求路径无 heavy/单飞/TTL 同步builder",
           _dashsrc.count("_DS.serve(") == 3
           and "timeout=_DASH_HEAVY_WAIT" not in _dashsrc
           and "_cache_stale(_key)" not in _dashsrc
           and "with _heavy(" not in _dashsrc, "routes/dashboard.py")
-    check("§15.162 单飞等锁 12s → 2s(analysis_cache 仍服务非看板族, 收敛保留)",
+    check("§15.178 单飞等锁 12s → 2s(analysis_cache 仍服务非看板族, 收敛保留)",
           "acquire(timeout=2)" in _acsrc22 and "acquire(timeout=12)" not in _acsrc22,
           "routes/analysis_cache.py")
-    check("§15.163 空旧值不返空结构: 无上一版 → 现算保证完整; 旧 cache_stale or {} 兜底已删除",
+    check("§15.179 空旧值不返空结构: 无上一版 → 现算保证完整; 旧 cache_stale or {} 兜底已删除",
           "_cache_stale(_key) or {}" not in _dashsrc
           and "_EMPTY_RISK" not in _dashsrc
           and "return ok(_build())" in _dashsrc, "routes/dashboard.py")
-    check("§15.163 SWR 播报统一由 dash_mat 产出(source=dash_mat), static stale_cache 兜底已删除",
+    check("§15.179 SWR 播报统一由 dash_mat 产出(source=dash_mat), static stale_cache 兜底已删除",
           '"source": "stale_cache"' not in _dashsrc
           and '"source": "dash_mat"' in _dssrc, "core/dash_store.py")
 
     # ③ 静态: 播报走响应顶层, data 形状不变 + boot 冒泡
-    check("§15.162 summary/aux/stock-risk 的 __swr 都 pop 到响应顶层(不进 data)",
+    check("§15.178 summary/aux/stock-risk 的 __swr 都 pop 到响应顶层(不进 data)",
           "_result.pop(\"__swr\", None)" in _dashsrc
           and "_data.pop(\"__swr\", None)" in _dashsrc
           and "_r.pop(\"__swr\", None)" in _dashsrc, "routes/dashboard.py")
-    check("§15.162 stock_risk 读侧 SWR: serve_risk 返回上一版并带 __swr, 对账 legacy 不 SWR",
+    check("§15.178 stock_risk 读侧 SWR: serve_risk 返回上一版并带 __swr, 对账 legacy 不 SWR",
           "_US.serve_risk(" in _dsrsrc and 'if not legacy:' in _dsrsrc, "dashboard_stock_risk.py")
-    check("§15.162 boot 把子项 __swr 冒泡到聚合顶层(从 ok 包装层取, data 形状逐字不变)",
+    check("§15.178 boot 把子项 __swr 冒泡到聚合顶层(从 ok 包装层取, data 形状逐字不变)",
           '__swr") if isinstance(_r, dict) else None' in _bundlesrc
           and '"parts": _swrs' in _bundlesrc
           and '"state": "serving_previous"' in _bundlesrc, "routes/dashboard_bundle.py")
@@ -4835,11 +4835,11 @@ try:
         _US22.submit_rebuild = lambda ch, m: (_subs22.append((ch, m)) or "started")
 
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.162 serve_tally: fp 命中 → 完整 tally, 无播报, 不触发重建",
+        check("§15.178 serve_tally: fp 命中 → 完整 tally, 无播报, 不触发重建",
               _t22 and _s22 is None and not _subs22, str(_s22))
         _US22.fp_now = lambda ch, m=None: "NEW"     # 数据变了 → 失配窗口
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.162 serve_tally: fp 失配 → 返回上一版完整 tally + __swr 显式播报 + 后台补建",
+        check("§15.178 serve_tally: fp 失配 → 返回上一版完整 tally + __swr 显式播报 + 后台补建",
               _t22 and _t22.get(("bc", "bc"), {}).get("total") == 10
               and _s22 and _s22.get("state") == "serving_previous"
               and _s22.get("fp_changed") is True and _s22.get("rebuild") == "started"
@@ -4847,78 +4847,78 @@ try:
         _H22["stale"] = 1
         _subs22.clear()
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.162 serve_tally: stale=1 → 上一版也不可读, 返回 (None, None) 现算保证完整",
+        check("§15.178 serve_tally: stale=1 → 上一版也不可读, 返回 (None, None) 现算保证完整",
               _t22 is None and _s22 is None and len(_subs22) == 1, str(_subs22))
         _H22["stale"] = 0
         _H22["gen"] = 0
         _t22, _s22 = _US22.serve_tally("jd", "bbcc")
-        check("§15.162 serve_tally: 从未构建(gen=0) → (None, None) 现算, 后台首建",
+        check("§15.178 serve_tally: 从未构建(gen=0) → (None, None) 现算, 后台首建",
               _t22 is None and _s22 is None and len(_subs22) == 2, str(_subs22))
         _H22["gen"] = 3
         _US22.fp_now = lambda ch, m=None: "NEW"
         _US22.fp_risk_now = lambda ch, m=None: "NEW"
         _pr22, _sr22 = _US22.serve_risk("jd")
-        check("§15.162 serve_risk: fp 失配 → 上一版完整 payload(计数与明细同 gen) + __swr",
+        check("§15.178 serve_risk: fp 失配 → 上一版完整 payload(计数与明细同 gen) + __swr",
               _pr22 and _pr22.get("bcTotal") == 1 and len(_pr22.get("bcItems") or []) == 1
               and _sr22 and _sr22.get("state") == "serving_previous", str(_sr22))
         _US22.fp_now = lambda ch, m=None: "OLD"
         _US22.fp_risk_now = lambda ch, m=None: "OLD"
         _pr22, _sr22 = _US22.serve_risk("jd")
-        check("§15.162 serve_risk: 双指纹全命中 → 正常返回, 无播报",
+        check("§15.178 serve_risk: 双指纹全命中 → 正常返回, 无播报",
               _pr22 and _sr22 is None, str(_sr22))
     finally:
         _US22.head, _US22.fp_now, _US22.read_enabled, _US22.query, _US22.submit_rebuild = _o22
 except Exception as _e35:
-    check("§15.162 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
+    check("§15.178 看板冷算 SWR 用例无异常", False, str(_e35)[:300])
 
-# ── §15.163 P3: 看板最终聚合结果物化 + 读侧零等待 SWR(收敛两套缓存) ────────
+# ── §15.179 P3: 看板最终聚合结果物化 + 读侧零等待 SWR(收敛两套缓存) ────────
 try:
     # ① 静态: 复用已上线骨架, 不叠加第二套闸门(红线 2/4/5/16)
-    check("§15.163 指纹复用 unit_store.fp_of 同一套域计数器(红线 16 fp 同源), 不另造语义",
+    check("§15.179 指纹复用 unit_store.fp_of 同一套域计数器(红线 16 fp 同源), 不另造语义",
           "_US.fp_of(_deps(family), channel, mode)" in _dssrc
           and "from routes.analysis_cache import _FAMILY_DEPS" in _dssrc, "core/dash_store.py")
-    check("§15.163 后台重建复用 list_store.submit_background(db.heavy 全局预算+同key单飞), 不另造队列/worker/租约",
+    check("§15.179 后台重建复用 list_store.submit_background(db.heavy 全局预算+同key单飞), 不另造队列/worker/租约",
           "_LS.submit_background(" in _dssrc and "queue.Queue" not in _dssrc
           and "lease_owner" not in _dssrc and "_FLIGHTS = {}" not in _dssrc,
           "core/dash_store.py")
-    check("§15.163 载体复用 analysis_cache 表(独立 dmat| 前缀), 不新建表/DDL",
+    check("§15.179 载体复用 analysis_cache 表(独立 dmat| 前缀), 不新建表/DDL",
           '_PREFIX = "dmat|"' in _dssrc and "cache_put(" in _dssrc
           and "CREATE TABLE" not in _dssrc, "core/dash_store.py")
-    check("§15.163 DASH_SWR=0 一刀回滚纯现算(互斥不并存, 红线 2)",
+    check("§15.179 DASH_SWR=0 一刀回滚纯现算(互斥不并存, 红线 2)",
           'os.environ.get("DASH_SWR")' in _dssrc and "def read_enabled" in _dssrc
           and "if not read_enabled():" in _dssrc, "core/dash_store.py")
-    check("§15.163 读侧零等待: serve 从不 wait 后台结果(无 ev.wait/join/.result)",
+    check("§15.179 读侧零等待: serve 从不 wait 后台结果(无 ev.wait/join/.result)",
           ".wait(" not in _dssrc and ".join()" not in _dssrc
           and "submit_background" in _dssrc, "core/dash_store.py")
 
     # ② 静态: 数据四维(准确/完整/可靠)与形状契约
-    check("§15.163 冷态返回上一版完整物化 + 顶层 __swr 显式播报(DB时间算 freshness, 不静默返旧值)",
+    check("§15.179 冷态返回上一版完整物化 + 顶层 __swr 显式播报(DB时间算 freshness, 不静默返旧值)",
           "def _swr_meta" in _dssrc and "TIMESTAMPDIFF(SECOND, FROM_UNIXTIME" in _dssrc
           and '"fp_changed": True' in _dssrc and '"source": "dash_mat"' in _dssrc,
           "core/dash_store.py")
-    check("§15.163 allow_stale 只跳 fp 比对, 完整性哨兵一字不减(gen/value可解析/dict非空)",
+    check("§15.179 allow_stale 只跳 fp 比对, 完整性哨兵一字不减(gen/value可解析/dict非空)",
           "def _read(family, scope, fp=None, allow_stale=False)" in _dssrc
           and "if not allow_stale and" in _dssrc
           and "not int(box.get(\"gen\") or 0)" in _dssrc
           and "not isinstance(data, dict) or not data" in _dssrc, "core/dash_store.py")
-    check("§15.163 底层判定读模型 __swr 不进最终物化(稳态不误播报) + 6MB 上限 + 发布前自校验",
+    check("§15.179 底层判定读模型 __swr 不进最终物化(稳态不误播报) + 6MB 上限 + 发布前自校验",
           'data.pop("__swr", None)' in _dssrc and "6 * 1024 * 1024" in _dssrc
           and "def _write" in _dssrc, "core/dash_store.py")
-    check("§15.163 首次/上一版不可用 → 现算保证完整(绝不返回空/0条) + 同步落物化不后台双算",
+    check("§15.179 首次/上一版不可用 → 现算保证完整(绝不返回空/0条) + 同步落物化不后台双算",
           "data = builder()" in _dssrc and "_write(family, scope, fp, data)" in _dssrc
           and "first_legacy" in _dssrc, "core/dash_store.py")
-    check("§15.163 fp 不可用 → 纯现算降级(不用无法判定新鲜度的数据)",
+    check("§15.179 fp 不可用 → 纯现算降级(不用无法判定新鲜度的数据)",
           "if not fp:" in _dssrc and "return builder(), None" in _dssrc, "core/dash_store.py")
-    check("§15.163 legacy=1 保持纯现算(红线16三重验证基准, 不接物化/预算/单飞)",
+    check("§15.179 legacy=1 保持纯现算(红线16三重验证基准, 不接物化/预算/单飞)",
           "if legacy:" in _dashsrc and "return ok(_build())" in _dashsrc,
           "routes/dashboard.py")
-    check("§15.163 __swr 播报 pop 到响应顶层, data 形状不变; 顶层物化播报优先于底层判定播报",
+    check("§15.179 __swr 播报 pop 到响应顶层, data 形状不变; 顶层物化播报优先于底层判定播报",
           _dashsrc.count("_swr = _swr_mat or _swr_low") == 3
           and _dashsrc.count('"__swr": _swr') >= 3, "routes/dashboard.py")
-    check("§15.163 前端收口从 insights 扩到看板(常规轮询拿到新数据也结束播报), 文案零改动",
+    check("§15.179 前端收口从 insights 扩到看板(常规轮询拿到新数据也结束播报), 文案零改动",
           "isSwrPath" in _clisrc and "'/dashboard/'" in _clisrc
           and "SWR_TOTAL_BUDGET = 3000" in _clisrc, "frontend/src/api/client.ts")
-    check("§15.163 P2 观测: unit-state 追加 dash_mat 概览(只加字段, 不改既有语义)",
+    check("§15.179 P2 观测: unit-state 追加 dash_mat 概览(只加字段, 不改既有语义)",
           '_st["dash_mat"] = _DS.overview()' in _dashsrc and "def overview()" in _dssrc,
           "routes/dashboard.py")
 
@@ -4940,7 +4940,7 @@ try:
         # 稳态: fp 命中 → 读物化, 零 builder、零播报
         _DS23._read = lambda f, s, fp=None, allow_stale=False: (dict(_box23) if fp == "FP1" else None)
         _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
-        check("§15.163 serve 稳态: fp 命中 → 完整物化, 无播报, builder 不执行",
+        check("§15.179 serve 稳态: fp 命中 → 完整物化, 无播报, builder 不执行",
               _d23 and _d23["summary"]["gmv"] == 1 and _s23 is None
               and _calls23["build"] == 0, str(_calls23))
 
@@ -4955,7 +4955,7 @@ try:
             _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
         finally:
             _LS23.submit_background = _o_sb23
-        check("§15.163 serve 冷态: 立即返回上一版完整物化 + __swr 显式播报, 读侧零 builder(全量只在后台)",
+        check("§15.179 serve 冷态: 立即返回上一版完整物化 + __swr 显式播报, 读侧零 builder(全量只在后台)",
               _d23["summary"]["gmv"] == 1 and _s23
               and _s23.get("state") == "serving_previous" and _s23.get("fp_changed") is True
               and _s23.get("rebuild") == "started" and _calls23["build"] == 0
@@ -4965,7 +4965,7 @@ try:
         _calls23.update(build=0, submit=0, write=0)
         _DS23._read = lambda f, s, fp=None, allow_stale=False: None
         _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
-        check("§15.163 serve 首次: 现算返回完整数据(非0条) + 同步落物化, 无后台双算",
+        check("§15.179 serve 首次: 现算返回完整数据(非0条) + 同步落物化, 无后台双算",
               _d23["summary"]["gmv"] == 999 and _s23 is None
               and _calls23["build"] == 1 and _calls23["write"] == 1
               and _calls23["submit"] == 0, str(_calls23))
@@ -4974,16 +4974,16 @@ try:
         _calls23.update(build=0, submit=0, write=0)
         _DS23.read_enabled = lambda: False
         _d23, _s23 = _DS23.serve("dash_summary", "k", "jd", "bbcc", _builder23)
-        check("§15.163 一刀回滚: DASH_SWR=0 → 纯现算, 不读物化/不写物化/不后台(互斥不并存)",
+        check("§15.179 一刀回滚: DASH_SWR=0 → 纯现算, 不读物化/不写物化/不后台(互斥不并存)",
               _d23["summary"]["gmv"] == 999 and _s23 is None
               and _calls23["build"] == 1 and _calls23["write"] == 0
               and _calls23["submit"] == 0, str(_calls23))
     finally:
         _DS23.fp_now, _DS23._read, _DS23._write, _DS23.read_enabled = _o23
 except Exception as _e36:
-    check("§15.163 看板最终结果物化/SWR 用例无异常", False, str(_e36)[:300])
+    check("§15.179 看板最终结果物化/SWR 用例无异常", False, str(_e36)[:300])
 
-# ── §15.164 尾巴根治: 新 gen 写入幂等 + 失败保旧 gen(红线 6/8②/15) ──────────
+# ── §15.180 尾巴根治: 新 gen 写入幂等 + 失败保旧 gen(红线 6/8②/15) ──────────
 # 线上现场 2026-11-08 09:05:23: 跨实例同 gen 重复写 → 1062 Duplicate entry '?'
 # → 失败却把 head 标 stale=1 → page_of(含 allow_stale) 拒读完整旧 gen → serve
 # 走 first_legacy 同步全量现算 12.858s / HTTP 503, 且 300s 退避被每次失败刷新, 17min 不收敛。
@@ -4995,24 +4995,24 @@ try:
     _ossrc24 = open(_os24.path.join(_os24.path.dirname(__file__), "core", "own_store.py"),
                     encoding="utf-8").read()
 
-    check("§15.164 新 gen 写入幂等: ON DUPLICATE KEY UPDATE 覆盖同主键行, 根治 1062 Duplicate entry '?'",
+    check("§15.180 新 gen 写入幂等: ON DUPLICATE KEY UPDATE 覆盖同主键行, 根治 1062 Duplicate entry '?'",
           "ON DUPLICATE KEY UPDATE need=VALUES(need)" in _lssrc24
           and "ON DUPLICATE KEY UPDATE alert_type=VALUES(alert_type)" in _ossrc24,
           "list_store/own_store")
-    check("§15.164 写前清目标 gen 尾部半批残留(seq>=len(rows)), 发布前 COUNT 自校验不被残留算多(红线 8②)",
+    check("§15.180 写前清目标 gen 尾部半批残留(seq>=len(rows)), 发布前 COUNT 自校验不被残留算多(红线 8②)",
           "DELETE FROM list_snapshot WHERE kind=%s AND scope=%s AND gen=%s AND seq>=%s" in _lssrc24
           and "DELETE FROM own_health_snapshot WHERE channel=%s AND gen=%s AND seq>=%s" in _ossrc24,
           "list_store/own_store")
-    check("§15.164 失败不误置 stale=1: 完整旧 gen 继续可读, 读侧不退回全量现算(红线 6)",
+    check("§15.180 失败不误置 stale=1: 完整旧 gen 继续可读, 读侧不退回全量现算(红线 6)",
           "stale=VALUES(stale)" in _lssrc24 and "stale=VALUES(stale)" in _ossrc24
           and "不再把完整旧 gen 标成不可用" in _lssrc24, "list_store/own_store")
-    check("§15.164 哨兵一字未删: page_of 的 gen>0 / stale=0 / row_cnt 校验仍保留(红线 8②), 只是不再被误置",
+    check("§15.180 哨兵一字未删: page_of 的 gen>0 / stale=0 / row_cnt 校验仍保留(红线 8②), 只是不再被误置",
           'int(h.get("stale") or 0)' in _lssrc24
           and 'int(h.get("row_cnt") or -1) < 0' in _lssrc24, "core/list_store.py")
-    check("§15.164 退避有界 20s(原 300/600s 被每次失败刷新无限续期), 不靠盲重试(红线 15)",
+    check("§15.180 退避有界 20s(原 300/600s 被每次失败刷新无限续期), 不靠盲重试(红线 15)",
           _LS24._STALE_BACKOFF == 20.0 and _OS24._STALE_BACKOFF == 20.0,
           "list=%s own=%s" % (_LS24._STALE_BACKOFF, _OS24._STALE_BACKOFF))
-    check("§15.164 一刀回滚开关: LIST_SAFE_REBUILD=0 / OWN_SAFE_REBUILD=0 回到修复前行为(不叠加新机制, 红线 2)",
+    check("§15.180 一刀回滚开关: LIST_SAFE_REBUILD=0 / OWN_SAFE_REBUILD=0 回到修复前行为(不叠加新机制, 红线 2)",
           'os.environ.get("LIST_SAFE_REBUILD")' in _lssrc24
           and 'os.environ.get("OWN_SAFE_REBUILD")' in _ossrc24, "list_store/own_store")
 
@@ -5032,7 +5032,7 @@ try:
         _LS24.execute = lambda sql, p=None: (_sql24.append((sql, p)) or 1)
         _LS24.executemany = lambda sql, seq: _em24.append((sql, len(list(seq))))
         _r24 = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
-        check("§15.164 动态: 同 gen 已有半批残留仍一次发布成功(1062 消失), 写入 SQL 幂等 + 清尾部残留",
+        check("§15.180 动态: 同 gen 已有半批残留仍一次发布成功(1062 消失), 写入 SQL 幂等 + 清尾部残留",
               _r24.get("ok") is True and _r24.get("gen") == 6
               and _em24 and all("ON DUPLICATE KEY UPDATE" in s for s, n in _em24)
               and any("seq>=%s" in s and p[3] == 3 for s, p in _sql24), str(_r24))
@@ -5045,7 +5045,7 @@ try:
         _LS24.executemany = _boom24
         _r24b = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
         _st24 = [p for s, p in _sql24 if "list_head" in s and "stale" in s and p]
-        check("§15.164 动态: 写失败(模拟 1062)只记 note 且 stale=0 → 完整旧 gen 继续可读, 读侧不再全量现算",
+        check("§15.180 动态: 写失败(模拟 1062)只记 note 且 stale=0 → 完整旧 gen 继续可读, 读侧不再全量现算",
               _r24b.get("error") == "write" and bool(_st24) and str(_st24[-1][2]) == "0",
               str(_st24[-1:]))
 
@@ -5053,7 +5053,7 @@ try:
         _sql24.clear(); _em24.clear()
         _r24c = _LS24.build("repl", "repl|jd|bbcc|28|", force=True)
         _st24c = [p for s, p in _sql24 if "list_head" in s and "stale" in s and p]
-        check("§15.164 动态: LIST_SAFE_REBUILD=0 一刀回退(写入不幂等 + 失败标 stale=1)",
+        check("§15.180 动态: LIST_SAFE_REBUILD=0 一刀回退(写入不幂等 + 失败标 stale=1)",
               _r24c.get("error") == "write" and bool(_st24c) and str(_st24c[-1][2]) == "1"
               and all("ON DUPLICATE KEY UPDATE" not in s for s, n in _em24), str(_st24c[-1:]))
         _os24.environ.pop("LIST_SAFE_REBUILD", None)
@@ -5061,11 +5061,11 @@ try:
         _ownsql24 = []
         _OS24.execute = lambda sql, p=None: (_ownsql24.append((sql, p)) or 1)
         _OS24._mark_stale("jd", "写入异常: 1062")
-        check("§15.164 动态(own): 写失败 stale=0, 旧 gen 14309 行继续可读, 不再退回现算 3.5~4.4s",
+        check("§15.180 动态(own): 写失败 stale=0, 旧 gen 14309 行继续可读, 不再退回现算 3.5~4.4s",
               bool(_ownsql24) and str(_ownsql24[-1][1][1]) == "0", str(_ownsql24[-1:]))
         _os24.environ["OWN_SAFE_REBUILD"] = "0"
         _OS24._mark_stale("jd", "写入异常: 1062")
-        check("§15.164 动态(own): OWN_SAFE_REBUILD=0 回退到 stale=1",
+        check("§15.180 动态(own): OWN_SAFE_REBUILD=0 回退到 stale=1",
               str(_ownsql24[-1][1][1]) == "1", str(_ownsql24[-1:]))
     finally:
         (_LS24.head, _LS24.fp_now, _LS24._builder_of, _LS24.execute,
@@ -5074,9 +5074,9 @@ try:
         _os24.environ.pop("LIST_SAFE_REBUILD", None)
         _os24.environ.pop("OWN_SAFE_REBUILD", None)
 except Exception as _e37:
-    check("§15.164 重建写入幂等/失败保旧 gen 用例无异常", False, str(_e37)[:300])
+    check("§15.180 重建写入幂等/失败保旧 gen 用例无异常", False, str(_e37)[:300])
 
-# ── §15.165 冷算本体 + 极端并发停摆根治(2026-11-08, stress_165 线上压测坐实) ──
+# ── §15.181 冷算本体 + 极端并发停摆根治(2026-11-08, stress_165 线上压测坐实) ──
 # 改前基线(线上真实链路): P1 单写单条 p95 10.4s / freshness 1065s; P2 任务风暴
 # p95 22.9s / HeavyBusy 19; P3 3写+16读 p95 39.3s / 1×503 / 连接池耗尽 2 条;
 # P4 首建 4 并发 4/4 非200(2×503) / 16.9s / 4/4 零数据(停摆); P5 停写16s 仍不收敛。
@@ -5096,21 +5096,21 @@ try:
                               "dashboard.py"), encoding="utf-8").read()
 
     # ① 单飞 key 去 fp + 有界 HeavyBusy 冷却(根治写风暴重建雪崩, 红线 4/5/15)
-    check("§15.165 单飞 key 去 fp: 同 (kind,scope) 写风暴期间只算一次(fp 不再进 key)",
+    check("§15.181 单飞 key 去 fp: 同 (kind,scope) 写风暴期间只算一次(fp 不再进 key)",
           "def _flight_key(kind, scope, fp):" in _ls25
           and 'return "%s|%s" % (kind, scope)' in _ls25
           and "_BUSY_UNTIL" in _ls25 and "cooling" in _ls25,
           "core/list_store.py")
-    check("§15.165 HeavyBusy 后有界冷却(_BUSY_COOL=2s), 不排队不盲重试(红线 4/15)",
+    check("§15.181 HeavyBusy 后有界冷却(_BUSY_COOL=2s), 不排队不盲重试(红线 4/15)",
           "_BUSY_COOL = 2.0" in _ls25 and "_BUSY_UNTIL[key] = time.time() + _BUSY_COOL" in _ls25
           and "return \"cooling\"" in _ls25, "core/list_store.py")
-    check("§15.165 FLIGHT_COALESCE=0 一刀回退到含 fp 的旧 key(红线 2 互斥不并存)",
+    check("§15.181 FLIGHT_COALESCE=0 一刀回退到含 fp 的旧 key(红线 2 互斥不并存)",
           "if not _coalesce_on():" in _ls25
           and 'return "%s|%s|%s" % (kind, scope, fp)' in _ls25
           and '_flag("FLIGHT_COALESCE")' in _ls25, "core/list_store.py")
 
     # ② 首建双算改单飞(根治 P4 停摆, 红线 6/10)
-    check("§15.165 首建单飞: 通用 first_shared(leader 一次 + follower 有界等 + 共享结果)",
+    check("§15.181 首建单飞: 通用 first_shared(leader 一次 + follower 有界等 + 共享结果)",
           "def first_shared(key, ttl, wait, leader_fn, readback_fn):" in _ls25
           and 'entry["data"] = leader_fn()' in _ls25
           and 'entry["event"].set()' in _ls25
@@ -5120,37 +5120,37 @@ try:
           and "build(kind, scope, force=True)" in _ls25
           and "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25,
           "core/list_store.py")
-    check("§15.165 三处首建共用同一骨架(不叠加机制, 红线 2): list/dash/own",
+    check("§15.181 三处首建共用同一骨架(不叠加机制, 红线 2): list/dash/own",
           "return first_shared(key, _FIRST_TTL, _FIRST_WAIT, _leader, _readback)" in _ls25
           and "_LS.first_shared(\"dmat:\"" in open(
               os.path.join(os.path.dirname(__file__), "core", "dash_store.py"),
               encoding="utf-8").read()
           and "_LS.first_shared(\"own_first|\"" in _os25,
           "list_store + dash_store + own_store")
-    check("§15.165 首建不再「前台 _live + 后台 build」双算(serve 的 prev is None 分支)",
+    check("§15.181 首建不再「前台 _live + 后台 build」双算(serve 的 prev is None 分支)",
           "if _first_sf_on():" in _ls25
           and "return _first_serve(kind, scope, fp, builder, channel, mode," in _ls25,
           "core/list_store.py")
 
     # ③ stale=1 完整旧 gen 冷态放行 + 顶层 prev_stale 播报(红线 8②/16, 准确维)
-    check("§15.165 stale=1 完整旧 gen 冷态放行, 稳态仍硬拒(哨兵一字不松)",
+    check("§15.181 stale=1 完整旧 gen 冷态放行, 稳态仍硬拒(哨兵一字不松)",
           "int(h.get(\"stale\") or 0) and not (allow_stale and _stale_prev_on())" in _ls25,
           "core/list_store.py")
-    check("§15.165 __swr 显式播报 prev_stale, 绝不静默伪装新值(数据四维-准确)",
+    check("§15.181 __swr 显式播报 prev_stale, 绝不静默伪装新值(数据四维-准确)",
           '"prev_stale": bool(int(h.get("stale") or 0))' in _ls25,
           "core/list_store.py")
 
     # ④ own-health SWR 化(根治 25.5s 全量现算 + 连接池耗尽, 红线 6)
-    check("§15.165 own-health 失配走 SWR, 不再同步 _compute 全量(红线 6)",
+    check("§15.181 own-health 失配走 SWR, 不再同步 _compute 全量(红线 6)",
           "_d, _swr = _OS.serve(" in _oh25 and "_OS.ensure_async(channel)" not in _oh25
           and "def serve(channel, full=0" in _os25,
           "own_store + dashboard_own_health")
-    check("§15.165 own SWR __swr 只经 swr_out 冒泡到顶层, aux 拿纯 data 不污染物化",
+    check("§15.181 own SWR __swr 只经 swr_out 冒泡到顶层, aux 拿纯 data 不污染物化",
           "swr_out[\"__swr\"] = _swr" in _oh25
           and "swr_out=_swr_box" in _db25 and "return ok(_d, **_swr_box)" in _db25
           and "own_health(channel, full=0, per_type=3)" in _db25,
           "dashboard + dashboard_own_health")
-    check("§15.165 own 后台重建收编进 list_store.submit_background(heavy 预算+单飞), 不再裸线程",
+    check("§15.181 own 后台重建收编进 list_store.submit_background(heavy 预算+单飞), 不再裸线程",
           "def submit_rebuild(channel):" in _os25
           and '_LS.submit_background("own:" + str(channel)' in _os25
           and "if _budget_on() and not force:" in _os25
@@ -5158,7 +5158,7 @@ try:
           "core/own_store.py")
 
     # ⑤ 三套开关族均可一刀回退(红线 2/15)
-    check("§15.165 全开关可一刀回滚: LIST_STALE_PREV / FIRST_SINGLEFLIGHT / OWN_SWR / "
+    check("§15.181 全开关可一刀回滚: LIST_STALE_PREV / FIRST_SINGLEFLIGHT / OWN_SWR / "
           "OWN_STALE_PREV / OWN_BUDGET / FLIGHT_COALESCE",
           all(x in (_ls25 + _os25) for x in
               ("_flag(\"FIRST_SINGLEFLIGHT\")", "_flag(\"LIST_STALE_PREV\")",
@@ -5171,7 +5171,7 @@ try:
     for _k in ("FLIGHT_COALESCE", "LIST_STALE_PREV", "FIRST_SINGLEFLIGHT",
                "OWN_SWR", "OWN_STALE_PREV", "OWN_BUDGET"):
         os.environ.pop(_k, None)
-    check("§15.165 动态: 去 fp 后不同 fp 的单飞 key 相同(写风暴不再起 N 个 flight)",
+    check("§15.181 动态: 去 fp 后不同 fp 的单飞 key 相同(写风暴不再起 N 个 flight)",
           _LS25._flight_key("repl", "s", "AAA") == _LS25._flight_key("repl", "s", "BBB"))
     _calls25 = []
     _OrigThread25 = _LS25.threading.Thread
@@ -5184,13 +5184,13 @@ try:
         _LS25.threading.Thread = _Null25          # 拦截起线程, 只测单飞判定
         _LS25.submit_background("repl", "s", "AAA", lambda: None)
         _r25 = _LS25.submit_background("repl", "s", "BBB", lambda: None)  # fp 变了仍 dedup
-        check("§15.165 动态: 同 scope 不同 fp 第二次 submit 直接 dedup(不新起线程)",
+        check("§15.181 动态: 同 scope 不同 fp 第二次 submit 直接 dedup(不新起线程)",
               _r25 == "dedup" and len(_calls25) == 1, "%s / calls=%d" % (_r25, len(_calls25)))
     finally:
         _LS25.threading.Thread = _OrigThread25   # 必须恢复, 否则污染后续所有用例
     _LS25._FLIGHTS.clear(); _LS25._BUSY_UNTIL.clear()
     os.environ["FLIGHT_COALESCE"] = "0"
-    check("§15.165 动态: FLIGHT_COALESCE=0 回退后不同 fp 的 key 重新不同",
+    check("§15.181 动态: FLIGHT_COALESCE=0 回退后不同 fp 的 key 重新不同",
           _LS25._flight_key("repl", "s", "AAA") != _LS25._flight_key("repl", "s", "BBB"))
     os.environ.pop("FLIGHT_COALESCE", None)
 
@@ -5204,13 +5204,13 @@ try:
         _LS25.read_enabled = lambda: True
         _LS25.query = lambda sql, p=None: [{"payload": '{"sku":"S1"}'}]
         _LS25.one = lambda sql, p=None: {"age_s": 12}
-        check("§15.165 动态: stale=1 完整旧 gen → 冷态放行(不再退回首建停摆)",
+        check("§15.181 动态: stale=1 完整旧 gen → 冷态放行(不再退回首建停摆)",
               isinstance(_LS25.page_of("repl", "s", "jd", "bbcc", extra="s",
                                        allow_stale=True), dict))
-        check("§15.165 动态: stale=1 稳态仍硬拒(红线 8②)",
+        check("§15.181 动态: stale=1 稳态仍硬拒(红线 8②)",
               _LS25.page_of("repl", "s", "jd", "bbcc", extra="s") is None)
         os.environ["LIST_STALE_PREV"] = "0"
-        check("§15.165 动态: LIST_STALE_PREV=0 回退 → stale=1 冷态也拒读",
+        check("§15.181 动态: LIST_STALE_PREV=0 回退 → stale=1 冷态也拒读",
               _LS25.page_of("repl", "s", "jd", "bbcc", extra="s", allow_stale=True) is None)
         os.environ.pop("LIST_STALE_PREV", None)
     finally:
@@ -5234,7 +5234,7 @@ try:
         _OS25.submit_rebuild = lambda c: "started"
         _OS25.swr_meta = lambda c, h, s: {"state": "serving_previous", "rebuild": s}
         _d25a, _s25a = _OS25.serve("jd", compute=lambda: {"items": [], "total": 0})
-        check("§15.165 动态: own 稳态命中 → 读物化, 无 __swr, 不调 compute",
+        check("§15.181 动态: own 稳态命中 → 读物化, 无 __swr, 不调 compute",
               _d25a.get("total") == 1 and _s25a is None, str((_d25a, _s25a)))
 
         # 真·冷态: 稳态 page_of(fp 命中) 返回 None, 冷态 allow_stale 返回上一版 →
@@ -5250,7 +5250,7 @@ try:
             _computed25["n"] += 1
             return {"items": [{"sku": "LIVE"}], "total": 1}
         _d25c, _s25c = _OS25.serve("jd", compute=_compute25)
-        check("§15.165 动态: own 冷态 → 读侧零等待返回上一版完整物化 + __swr + 后台补建, "
+        check("§15.181 动态: own 冷态 → 读侧零等待返回上一版完整物化 + __swr + 后台补建, "
               "绝不同步 compute 全量(红线 6)",
               _d25c["items"][0]["sku"] == "PREV" and _computed25["n"] == 0
               and isinstance(_s25c, dict) and _s25c.get("rebuild") == "started",
@@ -5258,16 +5258,16 @@ try:
         _OS25.page_of = _po25
         os.environ["OWN_SWR"] = "0"
         _d25b, _s25b = _OS25.serve("jd", compute=lambda: {"items": [{"sku": "LIVE"}], "total": 1})
-        check("§15.165 动态: OWN_SWR=0 一刀回退 → 直接 compute 现算, 无 swr",
+        check("§15.181 动态: OWN_SWR=0 一刀回退 → 直接 compute 现算, 无 swr",
               _d25b["items"][0]["sku"] == "LIVE" and _s25b is None, str((_d25b, _s25b)))
         os.environ.pop("OWN_SWR", None)
     finally:
         (_OS25.read_enabled, _OS25.page_of, _OS25.head, _OS25.submit_rebuild,
          _OS25.swr_meta) = _oo25
     _LS25._FLIGHTS.clear(); _LS25._BUSY_UNTIL.clear(); _LS25._FIRSTS.clear()
-    check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", True)
+    check("§15.181 冷算本体 + 极端并发停摆根治用例无异常", True)
 except Exception as _e38:
-    check("§15.165 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
+    check("§15.181 冷算本体 + 极端并发停摆根治用例无异常", False, str(_e38)[:300])
 
 # ── 2026-11-16 趋势长基准(28 vs 56): 与三窗口同构, 只差窗口 ────────────────
 # 为什么要有这几条: 补货/采购的趋势箭头从"融合值当 60 天基准"改成"近 28 vs 近 56"
@@ -5286,14 +5286,14 @@ try:
     # ① cut_series(28) 必须是 smooth_promo_spikes 默认参数的**相等**改写
     _dd = {_d56(i): 5 for i in range(60)}
     _dd[_d56(20)] = 100          # 28 天窗口内的 20 倍尖峰
-    check("§15.209 cut_series(28) == smooth_promo_spikes(默认) —— 28 天削峰口径未动",
+    check("§15.220 cut_series(28) == smooth_promo_spikes(默认) —— 28 天削峰口径未动",
           _cut56(dict(_dd)) == smooth_promo_spikes(dict(_dd)), "28 天削峰被改了")
 
     # ② 29~56 天前的尖峰: 28 天削峰看不见, 56 天削峰必须削掉
     _dd2 = {_d56(i): 5 for i in range(90)}
     _dd2[_d56(40)] = 400         # 56 天窗口内、28 天窗口外的 80 倍尖峰
     _c28b, _c56b = _cut56(dict(_dd2)), _cut56(dict(_dd2), _LW56)
-    check("§15.209 56 天削峰覆盖 29~56 天前的尖峰(28 天削峰管不到该区间)",
+    check("§15.220 56 天削峰覆盖 29~56 天前的尖峰(28 天削峰管不到该区间)",
           _c28b[_d56(40)] == 400 and _c56b[_d56(40)] < 400,
           "28=%s 56=%s" % (_c28b[_d56(40)], _c56b[_d56(40)]))
 
@@ -5304,7 +5304,7 @@ try:
     #   同一个加权套在 28 天窗口上等效 29.5 天(+5.36%) —— 这就是 28 对 56 的**固有**上行偏置,
     #   两侧都吃同一套权重, 相对偏置 ≈ +2.6%, 落在 ±15% 判档带内不改变方向判定。
     _exp56 = 10.0 * (56 + 0.5 * 3) / 56
-    check("§15.209 平稳序列 56 天 cut 日均 == 近3天1.5倍加权后的日均(权重口径一致)",
+    check("§15.220 平稳序列 56 天 cut 日均 == 近3天1.5倍加权后的日均(权重口径一致)",
           abs(_m56b - _exp56) < 1e-9, "got %s 期望 %s" % (_m56b, _exp56))
 
     # ④ 窗口相互独立: csm([14]) 与 csm([7,14,28]) 的 14 档必须逐位相同
@@ -5315,10 +5315,10 @@ try:
     _a56 = _csm56(_mix, windows=[7, 14, 28], sparse="shrink")
     _b56 = _csm56(_mix, windows=[14], sparse="shrink")
     _diff56 = [k for k in _a56[14] if abs(_a56[14][k] - _b56[14].get(k, -1)) > 1e-12]
-    check("§15.209 窗口独立: csm([14])[14] == csm([7,14,28])[14]",
+    check("§15.220 窗口独立: csm([14])[14] == csm([7,14,28])[14]",
           not _diff56, str(_diff56[:5]))
 except Exception as _e56:
-    check("§15.209 趋势长基准用例无异常", False, str(_e56)[:300])
+    check("§15.220 趋势长基准用例无异常", False, str(_e56)[:300])
 
 # ── 2026-11-16 口径唯一: 不许绕过 Series.fused 按单列取日销 ────────────────
 # 为什么要有这条: 口径收敛后, 任何人写回 `series.value("ds28", ...)` 都会在
@@ -5372,13 +5372,13 @@ try:
                 if _re6.search(r"rolling_predict(_2w)?\(", _ln6) and _re6.search(r"56|_src56|w56|ds56", _ln6):
                     if "nnz" not in _ln6:
                         _badw.append("%s:%d" % (_fp6, _i6))
-    check("§15.209 daily_sales_60 键名已退役(全仓无残留)", not _bad56, str(_bad56[:5]))
-    check("§15.209 56 天窗口只喂趋势箭头, 不进 rolling_predict/采购量",
+    check("§15.220 daily_sales_60 键名已退役(全仓无残留)", not _bad56, str(_bad56[:5]))
+    check("§15.220 56 天窗口只喂趋势箭头, 不进 rolling_predict/采购量",
           not _badw, str(_badw[:5]))
 except Exception as _e60:
-    check("§15.209 长基准字段扫描无异常", False, str(_e60)[:200])
+    check("§15.220 长基准字段扫描无异常", False, str(_e60)[:200])
 
-# ── 2026-11-16 §15.210: 四维验证暴露的四项缺陷(根治) ────────────────────────
+# ── 2026-11-16 §15.221: 四维验证暴露的四项缺陷(根治) ────────────────────────
 # 这一节挡的都是"不抛异常、页面看起来正常、结论全错"的静默缺陷:
 #   ① 新鲜度停更 7 天仍判正常 → 圆点不渲染, 用户不知道数据停了;
 #   ② 采购 14/28 取 SKU 合计、主值与 56 取 69码 → 同一行两个粒度, 箭头与主值互相打脸;
@@ -5387,28 +5387,28 @@ except Exception as _e60:
 try:
     from routes.misc import _fresh_level as _fl210
 
-    check("§15.210 新鲜度: 日更源停 2 天转橙", _fl210(2, "order") == 1,
+    check("§15.221 新鲜度: 日更源停 2 天转橙", _fl210(2, "order") == 1,
           "level=%r" % _fl210(2, "order"))
-    check("§15.210 新鲜度: 日更源停 7 天转红(原实现 7 天仍判正常 → 圆点不渲染)",
+    check("§15.221 新鲜度: 日更源停 7 天转红(原实现 7 天仍判正常 → 圆点不渲染)",
           _fl210(7, "order") == 2, "level=%r" % _fl210(7, "order"))
-    check("§15.210 新鲜度: 日更源当天/昨天仍正常(不制造狼来了)",
+    check("§15.221 新鲜度: 日更源当天/昨天仍正常(不制造狼来了)",
           _fl210(0, "order") == 0 and _fl210(1, "order") == 0)
-    check("§15.210 新鲜度: 低频源不误报(流水第 7 天 / 档案第 14 天仍正常)",
+    check("§15.221 新鲜度: 低频源不误报(流水第 7 天 / 档案第 14 天仍正常)",
           _fl210(7, "inbound") == 0 and _fl210(14, "product") == 0)
-    check("§15.210 新鲜度: 未知源走默认档 7/30",
+    check("§15.221 新鲜度: 未知源走默认档 7/30",
           _fl210(7, "unknown_x") == 0 and _fl210(8, "unknown_x") == 1)
-    check("§15.210 新鲜度: 从未导入(days=None) 不报红(新渠道不该一上线就红)",
+    check("§15.221 新鲜度: 从未导入(days=None) 不报红(新渠道不该一上线就红)",
           _fl210(None, "order") == 0)
 except Exception as _e210a:
-    check("§15.210 新鲜度分档用例无异常", False, str(_e210a)[:200])
+    check("§15.221 新鲜度分档用例无异常", False, str(_e210a)[:200])
 
 try:
     # 判据必须**同时**看业务日期与导入时间(取更差): 只听导入时间 → "导旧文件"判新鲜;
     #   只听业务日期 → 库存/档案无此列。两处静态点: max(...) + 只认导入时间的白名单。
     _src210 = open("routes/misc.py", encoding="utf-8").read()
-    check("§15.210 新鲜度判据 = max(业务日期差, 导入时间差)",
+    check("§15.221 新鲜度判据 = max(业务日期差, 导入时间差)",
           "return max(_imp, _biz)" in _src210 and "_FRESH_IMPORT_ONLY" in _src210)
-    check("§15.210 新鲜度缺失源也进 sources(不再静默少一半)",
+    check("§15.221 新鲜度缺失源也进 sources(不再静默少一半)",
           "for _dtp in _FRESH_TTL:" in _src210 and '"missing": True' in _src210)
 
     # 记账单一写入点: 两个调用方都不许再自己拼 INSERT(否则又各写一套日期口径)
@@ -5417,23 +5417,23 @@ try:
         _t210 = open(_f210, encoding="utf-8").read()
         if "INSERT INTO data_freshness" in _t210:
             _bad_ins.append(_f210)
-    check("§15.210 新鲜度记账收敛到 common.record_freshness(无第二处 INSERT)",
+    check("§15.221 新鲜度记账收敛到 common.record_freshness(无第二处 INSERT)",
           not _bad_ins, str(_bad_ins))
-    check("§15.210 record_freshness 取库里真实 MAX(业务日期)",
+    check("§15.221 record_freshness 取库里真实 MAX(业务日期)",
           "MAX(ordered_at)" in open("routes/common.py", encoding="utf-8").read())
 except Exception as _e210b:
-    check("§15.210 新鲜度静态断言无异常", False, str(_e210b)[:200])
+    check("§15.221 新鲜度静态断言无异常", False, str(_e210b)[:200])
 
 try:
     # 采购三列必须同源: 有码取码行、无码降级合计。原实现 14/28 取合计行 → 与主值混粒度
     _pc210 = open("routes/purchase_calc.py", encoding="utf-8").read()
-    check("§15.210 采购 14/28 与主值同粒度(_src14/_src28)",
+    check("§15.221 采购 14/28 与主值同粒度(_src14/_src28)",
           "_base_ds = round(rolling_predict_2w(_src14, _src28), 1)" in _pc210
           and '"daily_sales_14": round(_src14, 1)' in _pc210)
-    check("§15.210 采购不再从 SKU 合计取 14/28(原混粒度写法已删)",
+    check("§15.221 采购不再从 SKU 合计取 14/28(原混粒度写法已删)",
           "round(s14m.get(sku, 0)" not in _pc210 and "round(s28m.get(sku, 0)" not in _pc210)
 except Exception as _e210c:
-    check("§15.210 采购粒度静态断言无异常", False, str(_e210c)[:200])
+    check("§15.221 采购粒度静态断言无异常", False, str(_e210c)[:200])
 
 try:
     # 降级直算: 必须取 90 天再按 28 削峰。任何消费方直接调 smooth_promo_spikes 都算回退
@@ -5451,13 +5451,13 @@ try:
                 if "smooth_promo_spikes(" in _ln210 and "def smooth_promo_spikes" not in _ln210 \
                         and "max_win=" not in _ln210 and "cut_series" not in _ln210:
                     _bad_sm.append("%s:%d" % (_fp210, _i210))
-    check("§15.210 削峰只经 cut_series 入口(消费方不再直调 smooth_promo_spikes)",
+    check("§15.221 削峰只经 cut_series 入口(消费方不再直调 smooth_promo_spikes)",
           not _bad_sm, str(_bad_sm[:5]))
-    check("§15.210 断货卡降级取 90 天 + cut_series",
+    check("§15.221 断货卡降级取 90 天 + cut_series",
           "load_daily_sales_grouped(90, channel, skus=skus)"
           in open("routes/dashboard_stock_risk.py", encoding="utf-8").read())
 except Exception as _e210d:
-    check("§15.210 削峰基线静态断言无异常", False, str(_e210d)[:200])
+    check("§15.221 削峰基线静态断言无异常", False, str(_e210d)[:200])
 
 try:
     # 趋势阈值单一真源: 补货里的 6 个字面量必须全部改走常量(改一处漏五处 = 箭头/权重表打架)
@@ -5465,10 +5465,10 @@ try:
               if not ln.lstrip().startswith("#")]
     _lit210 = [i for i, ln in enumerate(_rp210, 1)
                if ("* 1.15" in ln or "* 0.85" in ln)]
-    check("§15.210 补货趋势阈值无 1.15/0.85 字面量(全走 TREND_*_RATIO)",
+    check("§15.221 补货趋势阈值无 1.15/0.85 字面量(全走 TREND_*_RATIO)",
           not _lit210, str(_lit210[:5]))
 except Exception as _e210e:
-    check("§15.210 趋势阈值静态断言无异常", False, str(_e210e)[:200])
+    check("§15.221 趋势阈值静态断言无异常", False, str(_e210e)[:200])
 
 try:
     # 季节系数: 解析规则单一(注入 cfg 直测, 不连库)
@@ -5481,44 +5481,44 @@ try:
         ({}, 1.0),
     ]
     _ok210 = all(abs(_M210.season_factor("jd", "bbcc", cfg=c) - w) < 1e-9 for c, w in _cfgs)
-    check("§15.210 季节系数解析: 仅 enabled 生效 / 多档取最高 / 坏 JSON 回 1.0", _ok210)
-    check("§15.210 补货季节系数委托 metrics(不再自己查一条 SQL)",
+    check("§15.221 季节系数解析: 仅 enabled 生效 / 多档取最高 / 坏 JSON 回 1.0", _ok210)
+    check("§15.221 补货季节系数委托 metrics(不再自己查一条 SQL)",
           "return _M.season_factor(channel, mode)"
           in open("routes/replenishment.py", encoding="utf-8").read())
-    check("§15.210 采购季节系数同源(无第二处 json 解析 season_config)",
+    check("§15.221 采购季节系数同源(无第二处 json 解析 season_config)",
           "season_config_%s" not in open("routes/purchase_calc.py", encoding="utf-8").read())
 except Exception as _e210f:
-    check("§15.210 季节系数用例无异常", False, str(_e210f)[:200])
+    check("§15.221 季节系数用例无异常", False, str(_e210f)[:200])
 
 try:
     # 列级守卫: 加列不回填是**结构性问题**(新列恒 0 且无信号), 必须有自动发现 + 后台重建
     _bs210 = open("biz/sales.py", encoding="utf-8").read()
-    check("§15.210 列级守卫存在且被读入口调用",
+    check("§15.221 列级守卫存在且被读入口调用",
           "def _col_guard(" in _bs210 and "_col_guard(channel)" in _bs210)
-    check("§15.210 列级守卫探针形状: ds28 有值但 ds56=0",
+    check("§15.221 列级守卫探针形状: ds28 有值但 ds56=0",
           "ds28_cut>0 AND ds56_cut=0" in _bs210)
-    check("§15.210 列级守卫后台重建(daemon, 不在请求路径等待)",
+    check("§15.221 列级守卫后台重建(daemon, 不在请求路径等待)",
           "daemon=True" in _bs210 and "col-guard-" in _bs210)
 except Exception as _e210g:
-    check("§15.210 列级守卫静态断言无异常", False, str(_e210g)[:200])
+    check("§15.221 列级守卫静态断言无异常", False, str(_e210g)[:200])
 
 try:
     # 导出: `type=purchase` 曾被并进补货分支 → 点"采购导出"拿到补货数据+补货表头(B缺口/…)。
-    #   2026-11-16 §15.211 排查确认**全仓无消费方**: 删别名/文件名映射/模式校验中的 purchase,
-    #   旧值改为明确报错(红线: 不留兼容垃圾)。§15.210 的"收成别名"方案被本条取代。
+    #   2026-11-16 §15.222 排查确认**全仓无消费方**: 删别名/文件名映射/模式校验中的 purchase,
+    #   旧值改为明确报错(红线: 不留兼容垃圾)。§15.221 的"收成别名"方案被本条取代。
     _te210 = open("routes/task_export.py", encoding="utf-8").read()
     _te_names = _te210[_te210.index("_EXPORT_NAMES"):_te210.index("def _batch_pct")]
-    check("§15.211 导出 purchase 兼容代码已删净(无消费方)",
+    check("§15.222 导出 purchase 兼容代码已删净(无消费方)",
           'if exp_type in ("replen", "purchase")' not in _te210
           and 'if exp_type == "purchase":' not in _te210
           and 'exp_type = "purchase_suggestions"' not in _te210
           and '"purchase":' not in _te_names
           and '"purchase_suggestions"' in _te_names)
     _fe210 = open("../../frontend/src/components/hammer/HammerInsights.tsx", encoding="utf-8").read()
-    check("§15.211 前端导出无 `: 'purchase'` 死兜底(调用只传三种 type)",
+    check("§15.222 前端导出无 `: 'purchase'` 死兜底(调用只传三种 type)",
           ": 'purchase'" not in _fe210 and "'purchase_suggestions'" in _fe210)
 except Exception as _e210h:
-    check("§15.211 导出兼容删除静态断言无异常", False, str(_e210h)[:200])
+    check("§15.222 导出兼容删除静态断言无异常", False, str(_e210h)[:200])
 
 # ── 真实 SQL 冒烟(可选, 必须在全部用例跑完之后: 此时 SQL 集合才完整) ──
 if _SQL_SMOKE:

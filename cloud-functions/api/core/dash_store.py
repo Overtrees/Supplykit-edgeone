@@ -1,8 +1,8 @@
-"""看板三接口「最终聚合结果」的域指纹物化 + 读侧零等待 SWR (2026-11-08 §15.163 / P3)
+"""看板三接口「最终聚合结果」的域指纹物化 + 读侧零等待 SWR (2026-11-08 §15.179 / P3)
 
 ## 为什么需要它(线上分层实测, 不是推测)
 
-§15.162 只把**判定读模型**(unit_store 的 tally/overview/risk)做了 SWR, 但看板三接口的
+§15.178 只把**判定读模型**(unit_store 的 tally/overview/risk)做了 SWR, 但看板三接口的
 **最终聚合结果**仍走 `analysis_cache.cache_get(TTL) + 请求路径同步 builder + heavy(2s)
 + 单飞锁(2s)`。2026-11-08 改前基线(p3_probe.py, 线上真实链路)把这条链钉死:
 
@@ -32,12 +32,12 @@ global heavy 名额(3)+ 同 key 单飞锁(2s), 等待链叠加成 8.1s。而且 
     不可用 → 直接现算保证完整数据, 绝不返回空结构/0 条。
   · 回滚: `DASH_SWR=0` 一刀退回纯现算(旧路径由路由层保留), 互斥不并存(红线 2)。
 
-## 与 §15.162 / list_store 的关系(红线 1: 先读懂再动手)
+## 与 §15.178 / list_store 的关系(红线 1: 先读懂再动手)
 
 · 本模块物化的是**路由函数的最终返回 dict**(summary/aux/stock_risk), 与 unit_store
   物化的「判定单元 tally」是**不同层次**: 前者是组装好的卡片数字, 后者是底层计数。
   两者不冲突、不重复计算 —— serve() 命中时连 builder 都不调, 判定读模型也不碰。
-· __swr / pop_swr / 顶层状态 / boot 冒泡 / 前端 __swrProbe: 全部复用 §15.161~162
+· __swr / pop_swr / 顶层状态 / boot 冒泡 / 前端 __swrProbe: 全部复用 §15.177~§15.178
   已上线的现成机制, 本模块只产出同构的 meta, 前端零改动。
 · 算法/_build_*/_assemble/排序: 一行不动(红线 9), 只换读路径的包装层。
 """
@@ -137,12 +137,12 @@ def _swr_meta(box, state):
 
 # ── 写物化 ──────────────────────────────────────────────────────────────
 def _write(family, scope, fp, data):
-    """发布前完整性自校验(§15.152 物化四维): data 必须是非空 dict; 用令牌守卫
+    """发布前完整性自校验(§15.168 物化四维): data 必须是非空 dict; 用令牌守卫
     的 cache_put 同源 UPSERT 落表(跨实例一致), 超大值不落表(= 下次重建, 不撑爆单行)。
     """
     if not isinstance(data, dict) or not data or not fp:
         return False
-    # 底层判定读模型(unit_store)可能往结果里塞 `__swr`(§15.162)——它是**响应顶层状态**,
+    # 底层判定读模型(unit_store)可能往结果里塞 `__swr`(§15.178)——它是**响应顶层状态**,
     # 绝不能被写进最终物化, 否则稳态命中会一直误播报"数据更新中"。浅拷贝后剥离,
     # 不影响首次现算路径里 builder() 原对象(那条由路由层 pop 到底层播报)。
     data = dict(data)
@@ -217,7 +217,7 @@ def serve(family, scope, channel, mode, builder):
         # ③ 首次/上一版不可用 → 直接现算保证完整数据(绝不返回空结构/0 条), **同步**落物化
         #    (一次轻量 UPSERT), 不后台双算。部署后 `dmat|` 新前缀首波全是首次路径,
         #    这一刀让第二发立即命中, 且不产生 N 个各自现算的后台线程(红线 4/9/10)。
-        # §15.165: 复用 list_store.first_shared 首建单飞 —— 极端并发(线上 stress_165
+        # §15.181: 复用 list_store.first_shared 首建单飞 —— 极端并发(线上 stress_165
         #    P4b 看板首建混合 8/36 非200)下同 (family,scope) 只让 leader 算一次 builder,
         #    follower 有界等后读回同一份物化, 不再 N 并发各跑一遍全量聚合抢 GIL/连接。
         from core import list_store as _LS

@@ -161,7 +161,7 @@ def _daily_rules_guard():
             return  # 今天已按此依据评估完成 / 另一实例正持有 / 已被别人抢到
 
         def _run():
-            # 2026-11-16 §15.200: 只推**首片**(预算 8s), 不再在这个后台线程里跑完 100s ——
+            # 2026-11-16 §15.211: 只推**首片**(预算 8s), 不再在这个后台线程里跑完 100s ——
             #   daemon 线程随实例冻结而中断, 那正是"评估永远跑不完"的机制。
             #   落指纹(settle_rules)交给 core.rule_eval_task: 全阶段跑完才算完成。
             try:
@@ -220,14 +220,14 @@ def dashboard_unit_state(channel: str = "jd", mode: str = "", detail: str = ""):
     """
     from core import unit_store as _US
     _st = _US.status(channel, mode)
-    # §15.163 P2: 追加最终结果物化观测(只加字段, 不改既有形状语义), 线上可查
+    # §15.179 P2: 追加最终结果物化观测(只加字段, 不改既有形状语义), 线上可查
     #   「物化建了没 / 冷态命中数 / 首次现算数 / 回滚开关」。
     try:
         from core import dash_store as _DS
         _st["dash_mat"] = _DS.overview()
     except Exception as _e:
         try_err("dashboard", "dash_mat 观测降级", _e)
-    # §15.165 P2 观测(只读): 冷算本体治理计数(去 fp 单飞 dedup / HeavyBusy 冷却 /
+    # §15.181 P2 观测(只读): 冷算本体治理计数(去 fp 单飞 dedup / HeavyBusy 冷却 /
     # 首建单飞共享 / stale 放行)与 own-health SWR 计数, 供线上四维验收核对, 不参与读决策。
     try:
         from core import list_store as _LS, own_store as _OS
@@ -270,7 +270,7 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
     更糟的是 `_rebuild_day_agg(90)` 这类重活会在**用户点开看板的那一刻**同步跑。
 
     这就是"每一轮性能优化都做过、又反复退化"的机制: 优化的是**计算**(往返次数/投影列数,
-    见 §15.120), 而**维护量**会随功能增加而重新长回请求路径里 —— 计算优化得再好,
+    见 §15.117), 而**维护量**会随功能增加而重新长回请求路径里 —— 计算优化得再好,
     也抵不住一条 `_rebuild_day_agg(90)` 随机插在冷算上。
     **计算的账和维护的账必须分开放, 否则永远在追一个移动靶。**
 
@@ -302,13 +302,13 @@ def dashboard_summary(channel: str = "jd", start_date: str = "", end_date: str =
                                     if isinstance(_r, dict) else None)
         return _r
 
-    # §15.163 P3: 收敛到建议页同款「域指纹物化 + 读侧零等待 SWR」—— 一次替换掉旧的
+    # §15.179 P3: 收敛到建议页同款「域指纹物化 + 读侧零等待 SWR」—— 一次替换掉旧的
     #   `cache_get(TTL) + 请求路径同步 builder + single-flight 2s`。稳态直接读物化(零 builder),
     #   冷态立即返回上一版完整物化 + 顶层 __swr + 后台分舱重建, 首次/不可用才现算。
     #   DASH_SWR=0 一刀回滚纯现算(互斥不并存, 红线 2/6)。_b 计算体一行不动(红线 9)。
     from core import dash_store as _DS
     _result, _swr_mat = _DS.serve("dash_summary", _key, channel, mode, _b)
-    # SWR 播报合并: 顶层物化播报优先, 否则用底层判定读模型塞进结果里的 __swr(§15.162)。
+    # SWR 播报合并: 顶层物化播报优先, 否则用底层判定读模型塞进结果里的 __swr(§15.178)。
     #   pop 必须在 part 过滤之前(白名单不认识 __swr), 且不进 data 形状。
     _swr_low = _result.pop("__swr", None) if isinstance(_result, dict) else None
     _swr = _swr_mat or _swr_low
@@ -552,7 +552,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
                 _st.get("stmt_max", 0.0), _parts, channel)))
     except Exception:
         pass
-    # §15.162: SWR 播报随结果带回(仍在 cache 值内), 由路由层 pop 到响应顶层
+    # §15.178: SWR 播报随结果带回(仍在 cache 值内), 由路由层 pop 到响应顶层
     if _swr_tally and isinstance(_ass, dict):
         _ass["__swr"] = _swr_tally
     return _ass
@@ -561,7 +561,7 @@ def _build_summary_agg(channel, days60, now, mode="bbcc"):
 def _store_tally(channel, mode):
     """判定读模型: 返回 (tally, swr_or_None)
 
-    2026-11-07 P0(§15.162) SWR 一刀 —— 线上实证: fp 失配窗口 summary 冷算 14~19s
+    2026-11-07 P0(§15.178) SWR 一刀 —— 线上实证: fp 失配窗口 summary 冷算 14~19s
     (_q_inventory 9万行 + _q_digest 6万行回退全量)、boot 24.5~29.0s/502; 命中窗口同样
     代码只有 0.8~1.0s。现在失配时由 `unit_store.serve_tally` 返回**上一版完整 tally**,
     `_store_on` 仍为 True → 快路径只跑 bundle, 全量路径不再进请求(红线 6);
@@ -654,7 +654,7 @@ def _build_summary(channel, start_date, end_date, mode="bbcc"):
     _t_sum, _swr_tally = _store_tally(channel, mode)
     _r = _assemble(rows, channel, (now - timedelta(days=29)).strftime("%Y-%m-%d"), today, mode,
                    _t_sum=_t_sum)
-    # §15.162: 直查降级分支同样带回 SWR 播报(判定快照与 agg 无关, 不跟着一起降级)
+    # §15.178: 直查降级分支同样带回 SWR 播报(判定快照与 agg 无关, 不跟着一起降级)
     if _swr_tally and isinstance(_r, dict):
         _r["__swr"] = _swr_tally
     return _r
@@ -1058,7 +1058,7 @@ _aux_cache = {}
 _AUX_TTL = 60
 _risk_cache = {}
 _RISK_TTL = 30
-# §15.162: 与 list_store 同源的全局预算等待 —— 2s 快速失败, 不再 15s 排队(等待链收敛)
+# §15.178: 与 list_store 同源的全局预算等待 —— 2s 快速失败, 不再 15s 排队(等待链收敛)
 _DASH_HEAVY_WAIT = 2.0
 
 
@@ -1078,17 +1078,17 @@ def dashboard_aux(channel: str = "jd", mode: str = ""):
     # 1MB 上限: aux 是"卡片聚合", 正常 30~80KB。超 1MB 说明又有明细列表被误塞进聚合响应,
     #   宁可这次不落缓存(也不至于把 TiDB 单条 6MB 事务打爆 / 让每个请求算两遍)。
     # 2026-11-07 S0 防雪崩: 重计算名额(全局 3) —— 拿不到就返回旧快照, 不再跟别人抢连接。
-    # 2026-11-07 §15.162 P1: 等待 15s → 2s 快速失败(与 insights 系同源); 旧快照带 __swr
+    # 2026-11-07 §15.178 P1: 等待 15s → 2s 快速失败(与 insights 系同源); 旧快照带 __swr
     #   显式播报(不再静默); **无旧值可退时排队现算而不是返回 {}** —— 空结构会让卡片清零
-    #   (完整性缺口, §15.162 排查实证)。
-    # §15.163 P3: 一次替换掉旧的 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
+    #   (完整性缺口, §15.178 排查实证)。
+    # §15.179 P3: 一次替换掉旧的 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
     #   D 组改前实测并发4 墙钟 8.10s 的等待链(HeavyBusy 已等2s ×N / 单飞超时2s)就此归零:
     #   稳态读物化零 builder, 冷态立即返回上一版完整物化 + 后台分舱重建(读侧不 wait)。
     #   计算体 _build_aux 一行不动(红线 9); DASH_SWR=0 互斥回滚纯现算(红线 2)。
     from core import dash_store as _DS
     _data, _swr_mat = _DS.serve("dash_aux", _key, channel, mode,
                                 lambda: _build_aux(channel, mode))
-    # 2026-11-03 D5 / §15.158: "规则重算中"标记 —— 异步评估新鲜度, **必须在物化之外实时读**:
+    # 2026-11-03 D5 / §15.174: "规则重算中"标记 —— 异步评估新鲜度, **必须在物化之外实时读**:
     #   进物化会出现"一直 true"或"评估完了还显示重算中"(eval_live_cond 带新鲜度/租约)。
     try:
         from core.maintenance import eval_live_cond as _live
@@ -1207,7 +1207,7 @@ def _build_aux(channel, mode):
         # 线上 aux 冷算因此仍是 4.1~5.5s(slow_request 自报), 是首屏 11s 的一半。
         # 命中条件与 summary 完全一致: fp 相等 + gen 非 0 + 未 stale; 任一不满足就落到原路径。
         from core import unit_store as _US
-        # 2026-11-07 §15.162 P0 SWR: serve_overview 失配时返回**上一版完整 overview**
+        # 2026-11-07 §15.178 P0 SWR: serve_overview 失配时返回**上一版完整 overview**
         #   (仍走物化口径, 卡面完整), __swr 随 dict 带回由路由层 pop 到顶层; 后台补建同 key
         #   去重(与 summary 侧 serve_tally 幂等)。绝不返回空结构。
         _ov, _swr_ov = _US.serve_overview(channel, mode)
@@ -1333,7 +1333,7 @@ def dashboard_own_health(channel: str = "jd", offset: int = 0, limit: int = 200,
     _d = _oh(channel, full=1, limit=_lim, offset=max(0, int(offset or 0)),
              only=only, per_type=int(per_type or 0), debug=int(debug or 0),
              swr_out=_swr_box)
-    # §15.165: own_health 冷态 SWR 的 __swr 放**响应顶层**(ok(data, **extra)),
+    # §15.181: own_health 冷态 SWR 的 __swr 放**响应顶层**(ok(data, **extra)),
     # 前端 __swrProbe 已收口 /dashboard/ 路径, 零改动; data 形状契约一字不变。
     return ok(_d, **_swr_box)
 
@@ -1396,7 +1396,7 @@ def stock_risk(channel: str = "jd", full: int = 0, legacy: int = 0, compare: int
                         "cItems": [], "cTotal": 0, "cCritical": 0, "cWarning": 0,
                         "ownItems": [], "ownTotal": 0, "ownCritical": 0, "ownWarning": 0}
 
-    # §15.163 P3: 一次替换 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
+    # §15.179 P3: 一次替换 `heavy(2s) + cache_get(TTL) + cache_stale + 单飞锁(2s)`。
     #   legacy=1 是红线 16 三重验证基准, 必须真实反映「不走物化」→ 该分支保持原样不加
     #   物化/预算/单飞(读侧 serve 内部由路由层用 legacy 短路)。_build 算法一行不动(红线 9)。
     from core import dash_store as _DS

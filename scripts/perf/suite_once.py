@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""§15.190 部署后一次性全套压测编排（**一轮**）。
+"""§15.201 部署后一次性全套压测编排（**一轮**）。
 
     python3 scripts/perf/suite_once.py probe     # 零写只读取证（可反复，极低 RU）
     python3 scripts/perf/suite_once.py run       # 一轮全套（30 分钟防重，只跑一次）
     python3 scripts/perf/suite_once.py report    # 把 probe+run 汇总成 Markdown
 
-背景：§15.189 的 P0（物化补建自愈）/ P1（seed 合并失效）/ P3（第四类判据）/
+背景：§15.200 的 P0（物化补建自愈）/ P1（seed 合并失效）/ P3（第四类判据）/
 P5（hot 相位跳轮 + 空接口白名单）都是**业务/脚本代码改动**，推送部署后才生效。
 本脚本用一次部署 + 一轮压测同时回答两件事：
   1) 单条 / 多并发读写的冷算态与热态，相对 §3 基线有没有性能退化；
   2) 上轮点名的尾巴，在线上真实数据上是否收敛达标。
 
-红线（延续 §9 / §15.187-189）：
+红线（延续 §9 / §15.198-§15.200）：
 - **只一轮**：`run` 带 30 分钟防重锁，拒绝第二次；不重跑 seed、不导数据。
 - **判据唯一真源**：直接 import `run.py` 的 `TH` / `_judge_*`，不另造阈值。
 - **红线 17**：`storm` 只判「停摆/完整」，不判延迟；只有 `hot`（纯读 + 锁相位）
@@ -41,12 +41,12 @@ OUT_DIR = os.path.join(HERE, "out")
 LOCK = os.path.join(OUT_DIR, ".suite_once.lock")
 BASELINE_JSON = os.path.join(OUT_DIR, "20261109_predeploy_baseline.json")
 
-# §15.187 导入后稳态基线（25 接口 / 13 页面 / 5 轮中位），docs/PERF.md §3
+# §15.198 导入后稳态基线（25 接口 / 13 页面 / 5 轮中位），docs/PERF.md §3
 BASELINE = {"srv_p50": 32, "srv_p95": 509,
-            "source": "docs/history/2026-11-09.md §15.187 导入后稳态 25接口/13页面/5轮中位"}
+            "source": "docs/history/2026-11-09.md §15.198 导入后稳态 25接口/13页面/5轮中位"}
 
 # 一轮场景顺序不可随意调整：hot（纯读 + 锁相位）必须在最前，
-# 部署后 drain 补建完成、相位静默时取样，否则 wait_quiet 会跳轮（§15.189 P5）。
+# 部署后 drain 补建完成、相位静默时取样，否则 wait_quiet 会跳轮（§15.200 P5）。
 SCENE_PLAN = [
     ("hot_multiconc", "热态·多并发纯读 8并发×5轮", "hot", dict(readers=8, secs=15, rounds=5)),
     ("hot_single", "热态·单条纯读 1并发×3轮", "hot", dict(readers=1, secs=10, rounds=3)),

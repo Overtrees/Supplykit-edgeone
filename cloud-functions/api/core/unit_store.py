@@ -10,7 +10,7 @@ S3 把「判定」搬进请求路径后，summary 每请求要搬 15 万行进 P
 `inventory` 90,100 行 2.08~2.76s、日销切片 63,186 行 1.87~2.53s，组装 1.2s，服务端 3.8s。
 物化之后，卡片 = 读 `unit_summary` 8 行（≈4 RU），列表 = 读 `unit_alert` 的异常行。
 
-## 这不是「把判定下推 SQL」（§15.151 拒绝过后者，理由我同意）
+## 这不是「把判定下推 SQL」（§15.167 拒绝过后者，理由我同意）
 
 | | 下推 SQL（被拒） | 本模块 |
 |---|---|---|
@@ -31,7 +31,7 @@ S3 把「判定」搬进请求路径后，summary 每请求要搬 15 万行进 P
 | 可回滚 | `UNIT_STATE_READ=0` 即回旧路径；`head` 是唯一切换点，失败不影响旧版本 |
 
 **读路径永不返回"可能过期的数"**：`fp` 不等就返回 `None`，调用方退回现算（今天的行为）。
-宁可慢，不可错 —— 这比"TTL 内把旧值当新值"强，也是 §15.120 否掉"拖 TTL"的同一条理由。
+宁可慢，不可错 —— 这比"TTL 内把旧值当新值"强，也是 §15.117 否掉"拖 TTL"的同一条理由。
 
 ## 发布语义
 
@@ -85,7 +85,7 @@ _FP_VER = 9   # 1 = 2026-11-07 初版(隐式, 不在 raw 里); 2 = 2026-11-16 �
               #     数据一分没动, 但**快照行里多了一个字段** —— 不 bump 的话 list_snapshot
               #     的旧行没有该键, 前端 `(x.daily_sales_56 || 0)` 得 0 → `28 > 0*1.15`
               #     恒真 → 所有行箭头朝上, 且全程零信号(正是本红线描述的病)。
-              # 5 = 2026-11-16 §15.210 四项根治里改到**输出值**的三项:
+              # 5 = 2026-11-16 §15.221 四项根治里改到**输出值**的三项:
               #     采购 daily_sales_14/28 由 SKU 合计改同源码行(值变了)、降级直算补削峰基线
               #     (值变了)、季节系数收敛读法(值可能变)。数据没动 + 指纹仍是 4 → 读侧会
               #     继续供旧行, 页面显示的还是"合计粒度的 14/28", 与后端新值不一致。
@@ -192,7 +192,7 @@ def tally_of(channel, mode=None, gen=None, allow_stale=False):
 
     None 的两种含义（调用方都退回现算, 语义一致）：
       ① 从未构建过；② 上次重建校验未通过（stale=1）。
-    fp 已变(源数据变了)时: 默认返回 None(宁慢不错, §15.120); 但 `allow_stale=True`
+    fp 已变(源数据变了)时: 默认返回 None(宁慢不错, §15.117); 但 `allow_stale=True`
     时返回**上一版完整快照** —— 这是 2026-11-07 P0 的 SWR 一刀(与 list_store.page_of
     同一骨架): 失配窗口读侧不再退回"拉 9 万行库存 + 6 万行日销"的全量路径,
     而是立即拿到上一版完整判定 + 由调用方在响应顶层显式播报新鲜度(绝不静默)。
@@ -458,11 +458,11 @@ def alerts_of(channel, mode=None, state=None, limit=200, offset=0, gen=None, fp=
         return None
 
 
-# ── SWR(2026-11-07 P0, §15.162) —— 失配窗口读侧永不回退全量 ────────────────
-# 线上实证(§15.162 排查): 判定读模型 fp 失配窗口内, summary 冷算 14~19s(_q_inventory
+# ── SWR(2026-11-07 P0, §15.178) —— 失配窗口读侧永不回退全量 ────────────────
+# 线上实证(§15.178 排查): 判定读模型 fp 失配窗口内, summary 冷算 14~19s(_q_inventory
 # 9万行 + _q_digest 6万行回退全量)、boot 24.5~29.0s/502; 而 fp 命中窗口同样代码只有 0.8~1.0s。
 # 根治 = 「失配→返回 None→回退全量」改为「失配→返回上一版完整快照→仍走快路径」,
-# 与 list_store(§15.161)同一套已验证骨架:
+# 与 list_store(§15.177)同一套已验证骨架:
 #   · allow_stale 只跳过 fp 比对, 完整性哨兵一字不减;
 #   · 后台重建复用 list_store.submit_background(db.heavy 全局预算 + 同 key 单飞, 红线 2/4/5,
 #     不另造队列/worker/租约);
@@ -565,7 +565,7 @@ def serve_risk(channel, full=0, limit=0, offset=0, level=""):
 
 
 # ── 构建 ────────────────────────────────────────────────────────
-# §15.182 重建专用列集: 只取**真正被消费的 9 列**。
+# §15.193 重建专用列集: 只取**真正被消费的 9 列**。
 #   消费方只有两个, 且都在本模块内(schema 无关, 不换口径):
 #     · metrics.units: sku / barcode / warehouse / warehouse_type / available_qty
 #                      / in_transit_qty / safety_qty / product_name
@@ -578,7 +578,7 @@ def serve_risk(channel, full=0, limit=0, offset=0, level=""):
 #   ⚠ 不改 routes.common.INVENTORY_COLS 本身 —— 那是共享常量, 改它会影响规则引擎
 #     (inv.locked_qty 是规则字段名, 去掉会让选中保存被拒, 见 rule_fields.py:11)。
 #   实测口径(线上 jd, 90,100 行): product_name 均长 11.4B 占 18%、3 个 int 列约 11%
-#     —— 传输量已接近下限(大头在 §15.180 之前就压掉了), 本项只作结构性收敛。
+#     —— 传输量已接近下限(大头在 §15.190 之前就压掉了), 本项只作结构性收敛。
 _INV_COLS_UNIT = ("sku, COALESCE(barcode,'') AS barcode, warehouse, warehouse_type, "
                   "available_qty, in_transit_qty, c_transit, safety_qty, product_name")
 
@@ -716,7 +716,7 @@ def _risk_rows(channel, mode, inv_rows=None):
     """按 stock-risk 现有口径算一遍 → 扁平行(落 risk_snapshot)
 
     **不复制算法**: 直接调 `_stock_risk(legacy=True)` —— 它是唯一的计算入口。
-    复制一份公式到本模块, 就是 §15.153 红线 D 说的"叠加成垃圾堆":
+    复制一份公式到本模块, 就是 §15.169 红线 D 说的"叠加成垃圾堆":
     以后改一处必漏另一处, 两张卡片的数会各自漂。
     重建在后台线程, 多花 4~5s 无感; 换来请求路径从"搬 21 万行"变成"读几百行"。
     """
@@ -939,7 +939,7 @@ def _dispatch_rebuilds():
 def ensure_async(force=False):
     """写操作后/读未命中时后台重建 —— 不在响应路径上等它
 
-    2026-11-07 P0(§15.162): 默认路径改为复用 list_store 的分舱单飞
+    2026-11-07 P0(§15.178): 默认路径改为复用 list_store 的分舱单飞
     (db.heavy 全局预算 2s 快速失败 + 同 (channel,mode) 去重, 红线 2/4/5) ——
     不再为每个渠道起裸线程直算全量(那会和读路径的重建互相抢 GIL/RU)。
     `force=True`(手动强制全量)保留原全渠道线程语义, 仅供诊断/显式重建用。
@@ -999,6 +999,6 @@ def status(channel, mode=None):
             "risk_rows": int(h.get("risk_rows", -1)),
             "risk_rows_actual": _risk_rows,
             "risk_fp_match": bool(_rfp) and str(h.get("risk_fp") or "") == _rfp,
-            # 冷算治理观测(§15.162): 与 list_store 共用的全局分舱单飞计数器 ——
+            # 冷算治理观测(§15.178): 与 list_store 共用的全局分舱单飞计数器 ——
             #   started/dedup/done/failed/busy + 在途 inflight。失败/繁忙在本页可查, 不靠猜。
             "cold": _cold_stats()}

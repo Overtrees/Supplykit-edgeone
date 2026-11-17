@@ -9,7 +9,7 @@
   3) **跨消费方联动**：同一份数据被多个消费方读时，数值是否同源一致
      （看板 summary / aux / boot、告警 counts、断货 stock-risk / unit-state、补货 vs 导出）。
 
-红线（与 §15.187-198 一脉）：
+红线（与 §15.198-§15.209 一脉）：
 - **判据只在这里，且只判"通不通、一不一致"**，不判延迟；延迟归 `run.py` 的 `TH`。
 - 只读为主；写只用**可回滚/只读型**端点（季节系数 1.5↔1.5001、日志上报、导出、规则试算），
   破坏性写（seed/月结/批量改数）一律 `skip` 并如实标注，不假装测过。
@@ -526,7 +526,7 @@ def _flow_export(A):
     dl = probe(A, "GET", "/exports/download/%s" % (fname or FAKE["filename"]))
     got = 0
     if parts:
-        # 2026-11-16 §15.201 起导出改为分片 CSV（每片 2000 行，仅首片带表头）:
+        # 2026-11-16 §15.212 起导出改为分片 CSV（每片 2000 行，仅首片带表头）:
         #   status 不再回 total, 必须逐片下载数行。裸名整体下载仍可用, 但数行会
         #   撞 2.2MB 一次性读 —— 逐片更稳且能定位是第几片断的。
         tot = 0
@@ -701,7 +701,7 @@ def consistency(A, res):
     one("boot.risk == stock-risk", "首屏断货与独立断货同一物化",
         _num(bd, "stock_risk", "bcTotal"), _num(sr["body"], "data", "bcTotal"))
 
-    # 2) 同义但异源：物化 vs 实时。评估分片续跑时 alerts 本就在变（§15.188），
+    # 2) 同义但异源：物化 vs 实时。评估分片续跑时 alerts 本就在变（§15.199），
     #    判"3 次采样内差值收敛且 <=0.5%"，而不是拿某一瞬间判死。
     a1 = _num(summ["body"], "data", "summary", "active_alerts")
     samples, fail_samples = [], []
@@ -712,11 +712,11 @@ def consistency(A, res):
         time.sleep(2.0)
         cnt = probe(A, "GET", "/alerts/counts", [{"n": "channel", "d": "jd"}])
     samples.append(_num(cnt["body"], "data", "total"))
-    # 评估正在写 alerts 时，两边本就不可比（§15.188 收敛期 1419→22072）。
+    # 评估正在写 alerts 时，两边本就不可比（§15.199 收敛期 1419→22072）。
     # 这种情况如实标 DEGRADED（ok=None），既不假装 PASS，也不误判成缺陷。
     h = probe(A, "GET", "/health", [{"n": "detail", "d": 1}])
     running = []
-    # 2026-11-16 §15.205: 规则评估已改接力(sync_tasks + eval_tasks), **不在 pipeline_runs**,
+    # 2026-11-16 §15.216: 规则评估已改接力(sync_tasks + eval_tasks), **不在 pipeline_runs**,
     #   所以 /health.last_runs 里 daily_rules 恒为 skipped/ok —— 只看它会漏判"评估正在写
     #   alerts", 于是把收敛期的计数增长误报成缺陷。真源是 /rules/eval-status(running 计数,
     #   内部就是 eval_live_cond)。两路都看, 任一为真即 DEGRADED。

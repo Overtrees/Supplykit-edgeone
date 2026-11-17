@@ -118,7 +118,7 @@ def cache_put(key, value, tok=None, raw=False):
 _CALC_INFLIGHT = {}
 
 
-# 2026-11-07 §15.159: 下面两个纯读探测工具原本服务于 list_page 的「全量分块缓存」,
+# 2026-11-07 §15.175: 下面两个纯读探测工具原本服务于 list_page 的「全量分块缓存」,
 #   该层已随补货/采购改为域指纹物化而整体删除（见 core/list_store.py）。
 #   目前无调用方; 保留为通用只读探测 API（不参与任何请求路径, 不构成两套机制并存）。
 def cache_peek(key, ttl):
@@ -244,7 +244,7 @@ def cache_get(key, ttl, builder, max_bytes=None):
         #   真正发生的是**同一份结果被并发算了 N 遍**, 每个都在抢同一实例的 CPU。
         #   原注释"并发重复算可接受"只在 build 200ms 时成立; build 4~9s 时它就是雪崩源。
         #   现在: 拿不到锁就等(最多 2s), 等到就二次读缓存; 等不到返回旧快照快速收尾。
-        #   2026-11-07 §15.162 P1: 12s → 2s —— 线上实证等待链(12s 单飞锁 + 15s heavy 名额)
+        #   2026-11-07 §15.178 P1: 12s → 2s —— 线上实证等待链(12s 单飞锁 + 15s heavy 名额)
         #   是 boot 24.5~29.0s/502 的叠加项; 与 list_store 的 heavy(2s) 快速失败同源收敛,
         #   等待不创造价值, 只把上游慢放大给同 key 的所有请求。
         _lk = _key_lock(key)
@@ -507,9 +507,9 @@ def _drain_agg_dirty(batch=40, max_rounds=6):
 
 
 def mark_progress():
-    """§15.189 P1: 批量导入**中间态**的进度打点 —— 只 bump data_version, 零失效。
+    """§15.200 P1: 批量导入**中间态**的进度打点 —— 只 bump data_version, 零失效。
 
-    起因(§15.187 / §15.188 线上实数): seed 每窗口调一次 invalidate("all"), 36 窗口
+    起因(§15.198 / §15.199 线上实数): seed 每窗口调一次 invalidate("all"), 36 窗口
       = 36 轮「打全量墓碑 + bump 全部 8 个域计数 + 起 6 类 ensure_async 重建」。
       而下一窗口数据又变 → 上一轮刚建的物化立刻过期(缓存恒冷), 几乎全是白算;
       data_version 40→78 也几乎全是中间态, 并把 HeavyBusy 名额争抢放大 36 倍。

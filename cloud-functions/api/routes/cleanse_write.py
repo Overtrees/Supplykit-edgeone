@@ -13,7 +13,7 @@ from routes.common import mark_agg_days
 
 # ── 是否做效期管理(2026-11-01)─────────────────────────────────────────────
 # 三态: 'yes' 做效期(精确扣减+FEFO) / 'no' 不做(到货序 FIFO, 批次不带日期) / '' 未标注
-# 职责边界(DEVELOPMENT §15.94): 列必填拦截在前端(映射校验), 后端只做写入——
+# 职责边界(DEVELOPMENT §15.91): 列必填拦截在前端(映射校验), 后端只做写入——
 #   故此处仅做**值归一化**(是/否→yes/no)与非法值留痕, 不做整批拒绝。
 _EXPIRY_YES = {"yes", "y", "是", "有", "true", "1", "做", "需要", "做效期管理"}
 _EXPIRY_NO = {"no", "n", "否", "无", "false", "0", "不做", "不需要", "不做效期管理"}
@@ -38,7 +38,7 @@ def _finalize_import(target, channel, mp, cleaned_all, success, failed, elapsed)
     2026-10-16 导入拆成两段后，实际链路是 cleansing.py 的:
       · cleansing_status(done 步只写计数) 
       · cleansing_eval_status(独立分片任务: 重算库存 / 重建批次 / 规则评估)
-    本函数自那以后**没有任何调用点**。代价已经出现过: §15.96 的"效期商品入库缺到期日"
+    本函数自那以后**没有任何调用点**。代价已经出现过: §15.93 的"效期商品入库缺到期日"
     提示写在这里面 —— 上线后从未显示过（用户零感知, 与"修了却没生效"等价）。
     保留仅为对照 _adjust_inventory(增量制)的旧实现；新增逻辑一律写 cleansing.py。
     """
@@ -1332,7 +1332,7 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
         #   `for it in cleaned` 循环里 → **每行一次往返**。
         #   线上实测: 库存·JD·自有仓 2600 行 → 2600 次往返 → 单段 121s 撞穿网关硬限(504),
         #   任务反复被切成僵尸租约; 同期平台仓 8 万行只要 24s(它不走 own 分支)。
-        #   账期状态在一次导入内不可能变, 循环外取一次即可, 与 §15.157「耗时只跟查询次数有关」
+        #   账期状态在一次导入内不可能变, 循环外取一次即可, 与 §15.156「耗时只跟查询次数有关」
         #   是同一条账: 这里砍掉的正是「查询次数」, 判定口径一个字节都没动。
         _ledger_on = _ledger_started(channel) if wt == "own" else False
         for it in cleaned:
@@ -1388,7 +1388,7 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
         #   窗口外只保留 snapshot_qty, 走正常结转。失败只留痕, 绝不阻断导入。
         #
         # 2026-11-05: 场景判定统一收到 core.ledger_adj.detect_scene —— 这里不再传"要不要建账"
-        #   之类的开关(曾加过 baseline=True, 等于在文档 §15.152 之外开第三条口径, 后来回退)。
+        #   之类的开关(曾加过 baseline=True, 等于在文档 §15.151 之外开第三条口径, 后来回退)。
         #   本层只负责"导入成功后接线", 走 A/B/C/D 哪个场景由账期状态与导入时刻自己决定。
         if wt == "own":
             try:
@@ -1401,7 +1401,7 @@ def _write_rows(target, channel, conflict_mode, cleaned, conflict_sql="", ctx=No
         return _s, _f, _ed
     if target == "product":
         # 2026-11-01 效期管理标记归一(是/否 → yes/no); 非法值留痕并留空,
-        #   不阻断写入(列必填拦在前端; 值非法由 cleansing.py done 步回显到结果 message, 见 §15.94)
+        #   不阻断写入(列必填拦在前端; 值非法由 cleansing.py done 步回显到结果 message, 见 §15.91)
         _bad_exp = []
         for it in cleaned:
             _v = _norm_expiry(it.get("expiry_managed"))

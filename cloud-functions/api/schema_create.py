@@ -463,7 +463,7 @@ _TABLES = {
     #     · unit_alert 判 state(ok/low/out), 安全线按 `period_of(kind)` 取,**不含**活动系数/加速倍率/OTIF;
     #     · 断货卡判 level(red/orange/yellow), 分子含"供应商在途×OTIF + B→C 调拨在途",
     #       分母含"活动系数 × 当天小时加速", 周期用 b2c 或 lead(分维度), 且 own 维取**该仓自己**的日销。
-    #   混一张表 → 两条口径互相污染(§15.153 红线 D: 不叠加)。故独立表、独立开关、独立 gen。
+    #   混一张表 → 两条口径互相污染(§15.169 红线 D: 不叠加)。故独立表、独立开关、独立 gen。
     #   只存**命中三级**的行(和黄灯也算命中): 卡片要 total/critical/warning, 明细要 TOP N。
     "risk_snapshot": (
         "CREATE TABLE IF NOT EXISTS risk_snapshot ("
@@ -543,7 +543,7 @@ _TABLES = {
         "stale TINYINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', "
         "built_at DATETIME(6) NULL, PRIMARY KEY (kind, scope))"
     ),
-    # 2026-11-08 §15.177 维护任务租约锁: 云函数多实例各有内存, 模块级 dict 挡不住
+    # 2026-11-08 §15.187 维护任务租约锁: 云函数多实例各有内存, 模块级 dict 挡不住
     #   "同一任务被 3 个实例各跑一遍"(线上实测连提 3 次全 started, 全站读 3.4s)。
     #   一行一把锁, 过期由下一个申请者回收 —— 与 db.heavy 的租约同一思路。
     "maint_lock": (
@@ -551,7 +551,7 @@ _TABLES = {
         "name VARCHAR(80) NOT NULL, ts DATETIME(6) NOT NULL, "
         "holder VARCHAR(80) NOT NULL DEFAULT '', PRIMARY KEY (name))"
     ),
-    # 2026-11-08 §15.178 跨实例重建名额: 进程内 _HEAVY_SLOTS 管不到别的实例,
+    # 2026-11-08 §15.188 跨实例重建名额: 进程内 _HEAVY_SLOTS 管不到别的实例,
     #   固定槽位 + 条件 UPDATE(租约 180s) 才能把"全局同时重建路数"压住。
     #   槽位行由 _gslot_init() 预置(HEAVY_GLOBAL 个), 缺行 = 该槽不可用 → 天然降级。
     "heavy_slot": (

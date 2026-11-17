@@ -113,7 +113,7 @@ if [ "$SKIP_FRONT" = "0" ]; then
 
   echo "── [8/8] i18n 门禁(红线 B: 界面文案禁硬编码中文 / zh-en 键集合相等) ──"
   # 2026-11-05: 红线 B 长期是「有判据、没执行」—— scripts/i18n_audit.py 早就写好了 --gate,
-  #   但 preflight 七步与 CI 都没调它, 于是红线只写在文档里。同理 §15.147「不跑的测试等于没有」。
+  #   但 preflight 七步与 CI 都没调它, 于是红线只写在文档里。同理 §15.146「不跑的测试等于没有」。
   #   它 0.3s, 一并跑; 前端段被跳过时这条也跳过(扫的就是 frontend/src)。
   # 先跑判定自检(正负例), 再跑业务扫描 —— 自检不过说明扫描规则本身坏了, 后面的 PASS 不可信
   _st_out=$(cd "$SK" && python3 scripts/i18n_audit.py --selftest 2>&1)

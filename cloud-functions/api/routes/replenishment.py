@@ -23,7 +23,7 @@ _MIN_DS = 0.1
 
 
 def _slim_on():
-    """§15.172 取数裁剪开关 —— 单一真源在 `biz.sales.slim_on()`, 这里只做委托,
+    """旧 §15.172 取数裁剪开关 —— 单一真源在 `biz.sales.slim_on()`, 这里只做委托,
     避免两个消费方各写一份环境变量判定(红线 2)。`SALES_SLIM=0` 一刀回退。"""
     from biz.sales import slim_on
     return slim_on()
@@ -62,10 +62,10 @@ def get_replenishment_suggestions(days: int = 28, source: str = "", mode: str = 
                    lambda: _build_repl(channel, mode),
                    need_only=need_only, search=search,
                    page=page, page_size=page_size, legacy=legacy)
-    # §15.161: __swr 从 data 里摘出来放响应顶层, 数组/对象两种形状都不被污染。
+    # §15.177: __swr 从 data 里摘出来放响应顶层, 数组/对象两种形状都不被污染。
     _hd = _LS.pop_swr(_d)
     if page <= 0 or page_size <= 0:
-        # 无分页裸调: 形状是契约(见 §15.153 打红教训), 截断 2000 防 EdgeOne 网关 413
+        # 无分页裸调: 形状是契约(见 §15.169 打红教训), 截断 2000 防 EdgeOne 网关 413
         _items = (_d.get("items") if isinstance(_d, dict) else None) or []
         return ok(_items[:2000], **_hd)
     return ok(_d, **_hd)
@@ -147,7 +147,7 @@ def _build_repl(channel, mode):
     try:
         from biz.sales import get_sku_sales_stats
         if _slim_on():
-            # §15.172 取数裁剪(纯读侧, 算法一行未动): 线上分段证据(list_head.timing,
+            # 旧 §15.172 取数裁剪(纯读侧, 算法一行未动): 线上分段证据(list_head.timing,
             #   2026-11-08 13:41 repl gen=25): calc=6.1s 里 sql=5.3s/8 条, 87% 在 SQL。
             #   而 sku_sales_stats 该渠道 254268 行里, 本接口**只用** `__C__` 维度
             #   (20093 行; `_rd` 只查 sku|bc|__C__), 且只读 ds7_cut/ds14_cut/ds28_cut 三列
@@ -546,7 +546,7 @@ def _products(channel):
 def _inventory(channel, mode="bbcc"):
     # 2026-10-29 修复(按码真根因): 原 SELECT 漏 barcode → 主循环 r.get("barcode") 恒 '' →
     #   agg key 退化为 (sku,'') 两码合并, 补货按码从未生效(输出 barcode 只是 products 兜底, 假象)
-    # §15.174 取数裁剪(纯读侧, 两个分支都不用 own 行):
+    # 旧 §15.174 取数裁剪(纯读侧, 两个分支都不用 own 行):
     #   bbcc 分支 `elif wt == "own": pass`、traditional 分支 `if wt != "platform": continue`
     #   —— own 仓行**一条都不用**。线上 jd 库存 90100 行里 own 10100 行(11%)。
     #   同时只取真正读到的 8 列(原 INVENTORY_COLS 12 列, 多 safety_days/locked_qty/
@@ -554,7 +554,7 @@ def _inventory(channel, mode="bbcc"):
     #   过滤条件按 mode 走: bbcc 要 platform+platform_b, traditional 只要 platform。
     from routes.common import check_cols as _cc
     if mode == "bbcc":
-        # §15.180 下推聚合(纯读侧, 算法一行未动):
+        # §15.190 下推聚合(纯读侧, 算法一行未动):
         #   bbcc 分支的循环体只有「按 (sku, 69码, 仓类型) 累加 4 个值列」——
         #   `agg[(sku,bc)]` 与 `b_stock/b_transit[(sku,bc)]`, 无顺序依赖、无逐行副作用。
         #   于是把 SUM 下推到 SQL: 线上 jd 实测 8 万行(platform+platform_b) → 2 万行,

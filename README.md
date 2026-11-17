@@ -76,7 +76,7 @@
 - **濒临断货三级预警**：Adj-DOS（修正可售天数：在仓+在途×OTIF置信+调拨）≤ 补货周期 L/T → 🔴 紧急 / 🟠 预警 / 🟡 关注；动态安全库存 SS、小时流速加速、季节系数全接入
 - **采购&补货告警卡**：与建议页同源（补货=建议需补、采购=需采，行标签区分）
 - 低库存卡按模式过滤维度（bbcc→BC盘+own / 传统→C仓+own）
-- 告警逐仓（SKU×仓）、恢复自动关闭、30s 静默刷新
+- 告警逐仓（SKU×69码×仓）、恢复自动关闭、30s 静默刷新
 
 ### ⚙️ 规则引擎 = 业务计算引擎配置
 
@@ -84,7 +84,7 @@
 - 条件字段支持看板同源计算变量（`inv.adj_dos`/`inv.buffer`/`health.score`/`params.lit` 等）+ `or` 多组
 - **类型模板化**：选类型自动带出事件+条件+参数（超卖→order.created+quantity>avail 等），防事件-变量错配
 - **告警开关**：内置断货/健康规则为参数载体（不重复告警，卡片已承载）；自定义规则默认开告警，开关即时联动（关=清存量/开=评估生成）
-- 触发即命中恢复关闭、动作审计（params.log 写 quality_logs）、立即运行（双渠道全量 3s，接力改造前旧数，现行见 CONTEXT.md P6-8）
+- 触发即命中恢复关闭、动作审计（params.log 写 quality_logs）、立即运行（异步接力任务：立即返回任务号，后台约 4–8 分钟完成）
 
 ### 🧹 数据清洗，告别 Excel 手工
 
@@ -140,9 +140,9 @@
 | 分析缓存按域失效 | 写操作只清受影响的缓存族（`invalidate("<域>")` + 依赖关系反推），不等 TTL |
 | **重建名额两级闸门** | 实例内 token 槽（3）+ 跨实例 `heavy_slot`（2，180s 租约，先全局后实例内）；一次写触发 7 个域时不会一起挤满实例 |
 | 日销/物化增量重建 | 脏日期队列（按**业务日期**，不是导入时间）+ 连续区间合并；>2000 SKU 才全量 |
-| 取数下推聚合 + 列裁剪 | 补货 8 万→2 万行、采购 9 万→3 万行在 SQL 里先聚合；重建取数只取 9 列 |
+| 取数下推聚合 + 列裁剪 | 在 SQL 里先聚合、只取必需列 |
 | 启动零 DDL | schema 声明收敛单一真源 + 版本门禁，热路径一条 SELECT |
-| 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量 3s（接力改造前旧数） |
+| 规则批量评估 | params 预解析 + 按事件计算变量检测 → 双渠道全量走异步接力任务（约 4–8 分钟） |
 | 实时性 | stock-risk 独立 30s TTL；aux 60s；事件驱动全链路刷新；30s 兜底 |
 
 > **性能基准与压测**：[`docs/PERF.md`](docs/PERF.md) 按页面 → 模块给出基线与机制；
@@ -190,5 +190,5 @@ python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，16 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号存在跨卷重号） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，16 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号自 2026-11-17 起连续唯一 §15.1~237） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

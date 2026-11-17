@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""文档一致性门禁（零 RU / 纯静态）：把 §15.191 的文档勘误固化成可复跑判据。
+"""文档一致性门禁（零 RU / 纯静态）：把 §15.202 的文档勘误固化成可复跑判据。
 
 起因：2026-11-09 用户指出「历史归档的天数可能存在不符」。复核发现两类实质漂移：
   ① 归档切线 365 → 180 天（真源 core/archive.py 的 ARCHIVE_KEEP_DAYS）；
@@ -9,6 +9,7 @@
 
 本脚本只核对**活文档**（README/CONTEXT/CHANGELOG 头/docs/*），
 历史卷 docs/history/*.md 与 CHANGELOG 历史批次**一律不检查**（红线：历史记录不改写）。
+2026-11-17：§15 编号彻底去重（用户授权一次破例，仅改编号；§12 注记与本脚本判据已同步更新）。
 
 用法：
     python3 scripts/perf/docs_probe.py check       # 一致性门禁
@@ -86,18 +87,20 @@ def truth():
     mx = 0
     for f in hs:
         for l in open(os.path.join(hdir, f), encoding="utf-8"):
-            if re.match(r"^#{2,4}\s", l):
-                z = re.search(r"(?:§)?15\.(\d+)", l)
-                if z:
+            # 只计行首紧跟 ## 的编号（节定义）；小节标题里引用的 §15.x 不计，
+            # 否则专题卷 changelog-2026-08~10.md 引用 §15.8/§15.47 的小节标题会被误判为重号。
+            z = re.match(r"^#{2,4}\s+(?:§)?15\.(\d+)", l)
+            if z:
                     mx = max(mx, int(z.group(1)))
     t["max_section"] = mx
     # §15.x 标题级重号数
     owner = {}
     for f in hs:
         for l in open(os.path.join(hdir, f), encoding="utf-8"):
-            if re.match(r"^#{2,4}\s", l):
-                z = re.search(r"(?:§)?15\.(\d+)", l)
-                if z:
+            # 只计行首紧跟 ## 的编号（节定义）；小节标题里引用的 §15.x 不计，
+            # 否则专题卷 changelog-2026-08~10.md 引用 §15.8/§15.47 的小节标题会被误判为重号。
+            z = re.match(r"^#{2,4}\s+(?:§)?15\.(\d+)", l)
+            if z:
                     owner.setdefault(int(z.group(1)), set()).add(f)
     t["dup_sections"] = len([k for k, v in owner.items() if len(v) > 1])
     return t
@@ -136,10 +139,10 @@ def check(T):
         "DEVELOPMENT §12 写明 %d 个专题卷" % T["topic_volumes"])
     chk("§15.%d" % T["max_section"] in dev,
         "DEVELOPMENT §12 章节号到 §15.%d" % T["max_section"])
-    chk("全局唯一" in dev and "已不再成立" in dev,
-        "DEVELOPMENT §12 如实标注「全局唯一已不再成立」")
-    chk(T["dup_sections"] >= 10,
-        "真源 §15.x 标题级跨卷重号 %d 个（≥10，故不能声称唯一）" % T["dup_sections"])
+    chk("全局唯一" in dev and "已恢复" in dev,
+        "DEVELOPMENT §12 如实标注「§15.x 全局唯一已恢复」")
+    chk(T["dup_sections"] == 0,
+        "真源 §15.x 标题级跨卷重号 %d 个（已彻底去重，应为 0）" % T["dup_sections"])
     for f, key in (("README.md", "readme"), ("CONTEXT.md", "context"),
                    ("CHANGELOG.md", "changelog_head"), ("docs/SKILL.md", "skill")):
         src = {"readme": readme, "context": context,
@@ -171,8 +174,8 @@ def check(T):
         "README 名额 3+2 描述正确保留")
 
     # ⑥ 勘误落档
-    # 「最新一批是否真的落档」——**不能写死批次号/章节号**：写死「第七批/§15.191」时，
-    #   下一批做完这条判据还在查旧批次，会给出「已记录」的假绿（2026-11-09 §15.192 就撞到了）。
+    # 「最新一批是否真的落档」——**不能写死批次号/章节号**：写死「第七批/§15.202」时，
+    #   下一批做完这条判据还在查旧批次，会给出「已记录」的假绿（2026-11-09 §15.203 就撞到了）。
     #   改从真源取：history 里最大的 §15.x = 本轮新增的那一节，再要求 CHANGELOG 顶部引用它。
     _sec = "§15.%s" % T["max_section"]
     # 不写死某一卷：按日期卷合并（新增日期的卷不必再改这里）
@@ -182,7 +185,7 @@ def check(T):
     _cl_head = "\n".join(text("CHANGELOG.md").splitlines()[:60])
     chk(_sec in _hist, "history 最新节 %s 存在（本轮记录已落档）" % _sec)
     chk(_sec in _cl_head, "CHANGELOG 顶部批次引用最新节 %s" % _sec)
-    chk("§15.191" in text("docs/PERF.md"), "PERF §20 指针覆盖 §13（history §15.191）")
+    chk("§15.202" in text("docs/PERF.md"), "PERF §20 指针覆盖 §13（history §15.202）")
     chk("suite_p6.py" in text("docs/PERF.md"), "PERF §5 脚本索引收录 suite_p6.py")
 
     ok = all(v for v, _ in _RES)
@@ -205,9 +208,9 @@ def selftest(T):
     chk(red == 1, "chk(False) 精确记 1 条 FAIL（实测 %d）" % red)
 
     # ② 注入篡改真源 → 核心判据必须失效（证明不是恒真）
-    bad_dup = dict(T, dup_sections=0)
-    chk(not (bad_dup["dup_sections"] >= 10),
-        "注入 dup_sections=0 → 「不能声称唯一」判据失效")
+    bad_dup = dict(T, dup_sections=3)
+    chk(not (bad_dup["dup_sections"] == 0),
+        "注入 dup_sections=3 → 「已彻底去重」判据失效")
     bad_keep = dict(T, keep_days=365)
     chk(bad_keep["keep_days"] != 180, "注入 keep_days=365 → 「真源=180」判据失效")
     bad_steps = dict(T, preflight_steps=7)
@@ -241,7 +244,7 @@ def matrix(T):
         ("日期分卷", "docs/history/2026-*", T["date_volumes"], "DEVELOPMENT §12 = %d" % T["date_volumes"]),
         ("专题卷", "docs/history/非日期", T["topic_volumes"], "DEVELOPMENT §12 = %d" % T["topic_volumes"]),
         ("最大章节号", "标题级 §15.x", "§15.%d" % T["max_section"], "DEVELOPMENT §12"),
-        ("跨卷重号数", "标题级同号多文件", T["dup_sections"], "§12 注明非全局唯一"),
+        ("跨卷重号数", "标题级同号多文件", T["dup_sections"], "§12 注明全局唯一已恢复"),
     ]
     print("  %-14s %-26s %-12s %s" % ("项", "真源位置", "真值", "文档应写"))
     for a, b, c, d in rows:

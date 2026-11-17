@@ -8,7 +8,7 @@
 但接口 5.17s —— **73% 的响应时间不在业务计算里**。
 
 这就是"性能优化做过很多轮、却反复退化"的机制:
-优化的是**计算**(减少 SQL 往返、收缩投影列, 见 DEVELOPMENT §15.120),
+优化的是**计算**(减少 SQL 往返、收缩投影列, 见 DEVELOPMENT §15.117),
 而**维护量**会随功能增加重新长回请求路径。计算优化得再好, 也抵不住一条
 `_rebuild_day_agg(90)` 随机插在用户的冷算上。**两笔账必须分开放。**
 
@@ -162,7 +162,7 @@ _STALE_MIN = EVAL_STALE_MIN   # 兼容既有 close_stale_runs(minutes=...) 默�
 def eval_live_cond():
     """「评估任务仍在跑」的唯一判定(读侧文案 / 状态接口 / 写侧任务合并共用)
 
-    2026-11-07 §15.158: 实例可被平台随时冻结, daemon 线程的 done/error 回写不保证执行。
+    2026-11-07 §15.174: 实例可被平台随时冻结, daemon 线程的 done/error 回写不保证执行。
     于是 `status='running'` 不等于「在跑」——必须带新鲜度: pending 或最近 _STALE_MIN
     分钟内才开始的 running 才算。超时 running 一律视为僵户, 由 close_stale_runs 留痕。
 
@@ -199,7 +199,7 @@ def close_stale_runs(minutes=_STALE_MIN):
             "error=CONCAT('挂起超时: running 超过 %d 分钟(实例被冻结/掐断, 收尾语句未执行)') "
             "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % (_m, _m)
         ) or 0)
-        # 2026-11-07 §15.158: eval_tasks 是同一类「实例被冻结就没人收尾」的表, 但 S4 当时
+        # 2026-11-07 §15.174: eval_tasks 是同一类「实例被冻结就没人收尾」的表, 但 S4 当时
         #   只收了 pipeline_runs(纯观测表)。线上实证: 13:21 那条 running 卡 3 小时 →
         #   aux.evaluating 恒 true → 看板「规则重算中」永久挂着; 且 _schedule_rule_eval 的
         #   合并语义会一直复用这个僵户 id, 之后保存规则再也不产生新评估。
@@ -209,10 +209,10 @@ def close_stale_runs(minutes=_STALE_MIN):
             "error='stale running: instance frozen (no done/error writeback)' "
             "WHERE status='running' AND started_at < DATE_SUB(NOW(), INTERVAL %d MINUTE)" % _m
         ) or 0)
-        # 2026-11-16 §15.205: pending 也要收。`pending` 的语义是"排队等 `_drain_eval_tasks`
+        # 2026-11-16 §15.216: pending 也要收。`pending` 的语义是"排队等 `_drain_eval_tasks`
         #   来抢", 而抢它的是一条 daemon 线程 —— 线程没起来(或实例当场被冻结)那行就永远
         #   pending, 而 `eval_live_cond()` 把 pending 也算"在跑" → 看板「规则重算中」永久挂。
-        #   §15.158 当时只堵了 running, 漏了 pending(那一版还没有"cron 直接建任务"这条路径)。
+        #   §15.174 当时只堵了 running, 漏了 pending(那一版还没有"cron 直接建任务"这条路径)。
         #   判据用 created_at: pending 行没有 started_at。
         out["eval_tasks"] += int(_ex(
             "UPDATE eval_tasks SET status='timeout', finished_at=NOW(), "

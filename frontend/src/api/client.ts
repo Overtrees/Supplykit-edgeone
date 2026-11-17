@@ -31,7 +31,7 @@ const isExpectedAuth = (status?: number) => status === 401 || status === 403
  * 所以只对 **GET（幂等）** 做 ≤2 次指数退避，总预算 ≤2s。
  * 红线（老债，别踩）：
  *   · 超时（ECONNABORTED）**不重试** —— 那是 timeout→retry→更多 miss 的
- *     metastable failure 放大器（§15.161 已否决；见 SWR 那段注释）；
+ *     metastable failure 放大器（§15.177 已否决；见 SWR 那段注释）；
  *   · 写请求（POST/PUT/DELETE）不重试 —— 非幂等，重复提交比失败更糟；
  *   · 401/403/主动取消不重试（各自有专门链路）；
  *   · `__swr` 有界探测不重试（它本身就在预算里，重试会双层放大）。
@@ -256,7 +256,7 @@ const instance = axios.create({
 })
 
 /**
- * §15.161 P2 —— 冷态 SWR(Stale-While-Revalidate) 读模型状态
+ * §15.177 P2 —— 冷态 SWR(Stale-While-Revalidate) 读模型状态
  *
  * 后端冷态(fp 不等)不再让用户等 15~30s 重建: 立即返回**上一版完整物化**,
  * 并在响应**顶层**带 __swr 新鲜度状态(data 形状一字不变)。前端要做三件事:
@@ -424,7 +424,7 @@ instance.interceptors.response.use(
     // 2026-11-06 P0-7: 键由请求拦截器算好(已含注入的 channel), 这里直接用 ——
     //   原来在这里重算, 拿到的 params 已带 channel, 与 apiGet 读侧不含 channel 的键不同源。
     const key = String(cfg.__cacheKey || cacheKey(method || 'get', url || '', params))
-    // §15.161: __swr 在响应顶层(不在 data 里), 解包前先摘; 旧快照绝不进 30s 缓存。
+    // §15.177: __swr 在响应顶层(不在 data 里), 解包前先摘; 旧快照绝不进 30s 缓存。
     const swr = _swrOf(response.data)
     const isProbe = Boolean(cfg.__swrProbe)
     // 2026-11-09 统一降级态: 顶层 __degraded(与 __swr 同款) —— DB 不可用时后端
@@ -451,7 +451,7 @@ instance.interceptors.response.use(
         _swrProbe(response.config, key, 0)
       }
     } else {
-      // §15.163: 收口判定从 insights 扩到看板 —— 看板 SWR 的普通轮询拿到新数据时也结束播报
+      // §15.179: 收口判定从 insights 扩到看板 —— 看板 SWR 的普通轮询拿到新数据时也结束播报
       //   (否则只靠 ≤3s 有界探测, 后台重建超过预算时播报要等下次访问 insights 才收)。
       const isSwrPath =
         String(url || '').includes('/insights/') || String(url || '').includes('/dashboard/')

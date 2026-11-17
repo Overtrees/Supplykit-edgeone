@@ -99,7 +99,7 @@ def _classify(status, srv, body):
 
     **不能只看 `app_headers`**：`@app.exception_handler(Exception)` 注册在 Starlette 的
     ServerErrorMiddleware（http 中间件之外），它的响应不经过 `@app.middleware("http")`，
-    所以**应用未捕获的 500 同样没有 `X-Srv-Ms`**（§15.196 已用 TestClient 最小复现）。
+    所以**应用未捕获的 500 同样没有 `X-Srv-Ms`**（§15.207 已用 TestClient 最小复现）。
     判来源必须看 body 形态：边缘/网关白页是 HTML（`<!doctype html>…Tencent…`），
     应用自己返回的是 JSON。
     """
@@ -136,7 +136,7 @@ def hit(key, path=None, timeout=90):
         srv = srv_ms(r)
         # 红线 8①「没算成 与 真的是 0 必须可分」：`complete()` 只吃 data、吃不到状态码，
         #   而白名单 `KNOWN_EMPTY={alerts}` 会把「HTTP 500 + {"data":[]}」判成"完整"
-        #   → 该接口对一切空响应免疫，三条 storm 判据全过（§15.196 实测的真实假 PASS 路径）。
+        #   → 该接口对一切空响应免疫，三条 storm 判据全过（§15.207 实测的真实假 PASS 路径）。
         #   非 200 一律不算完整，白名单只在 200 时才允许"空即合法"。
         rec = {"ep": key, "srv": srv, "e2e": round(time.time() - t0, 3),
                "status": r.status_code, "rows": _rows(d),
@@ -145,7 +145,7 @@ def hit(key, path=None, timeout=90):
                "kb": len(r.content) // 1024}
         # 非 200 必须留证：`srv=-1` 表示响应里没有 `X-Srv-Ms` —— 即**没经过应用的耗时中间件**。
         #   注意这句话**不能**升级成"响应由边缘生成"：应用未捕获的 500（ServerErrorMiddleware）
-        #   同样不带这个头（§15.196）。来源归类用 `src`（见 `_classify`），`app_headers` 只作旁证。
+        #   同样不带这个头（§15.207）。来源归类用 `src`（见 `_classify`），`app_headers` 只作旁证。
         #   截 400 字够看到 <title>Tencent ... 的错误标题，又不把整页 HTML 塞进取证 json。
         if r.status_code != 200:
             body = r.text or ""
@@ -168,7 +168,7 @@ def real_write():
     """改季节系数首条（enabled=false，不参与计算）的 factor：1.5 ↔ 1.5001。
 
     每次值都变 → 一定触发 `invalidate('config')`，偶数次写完回到原值，
-    **对业务结果零影响**（§15.174 起后端对"值未变"做幂等短路，写原值测不到失效）。
+    **对业务结果零影响**（旧 §15.174 起后端对"值未变"做幂等短路，写原值测不到失效）。
     """
     try:
         s = sess()

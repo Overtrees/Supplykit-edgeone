@@ -60,7 +60,7 @@ def _build_export_rows(exp_type, mode, channel, wh_type="", page=0, page_size=0)
 
     page/page_size > 0 时只取该页(1-based, 分页接力用); 全 0 时按各接口的"裸调"口径取。
     注意: 补货裸调会被 `UNPAGED_CAP["repl"]=2000` 截断(网关 413 防护), **导出禁止走裸调**
-    —— 导出必须传 page_size, 否则用户拿到 2000 行却以为全量(§15.201)。
+    —— 导出必须传 page_size, 否则用户拿到 2000 行却以为全量(§15.212)。
     """
     # 2026-11-16: `type=purchase` 曾并进补货分支 → 点"采购导出"拿到补货数据+补货表头,
     #   全程不报错。全仓核对后**无任何消费方**传该值(前端只传 purchase_suggestions),
@@ -234,7 +234,7 @@ async def create_export(request: Request):
     # 致传统模式导出变 BBCC(前端漏传时静默错误); 现在缺失显式报错, 无兜底
     if exp_type in ("replen", "purchase_suggestions") and not mode:
         return fail("导出补货/采购需传 mode 参数(当前补货模式: bbcc / traditional)")
-    # 2026-11-16 §15.201: 原来用 `_build_export_rows(...) is None` 判类型 —— 那是在**建任务
+    # 2026-11-16 §15.212: 原来用 `_build_export_rows(...) is None` 判类型 —— 那是在**建任务
     #   请求里**把整份导出真跑一遍(补货 = 物化全量 + 5 万行组装)只为判断"类型认不认识"。
     #   建任务本该是毫秒级(它只是 INSERT 一行), 这一步让它在数据大时直接撞 120s 边界。
     if exp_type not in _EXPORT_NAMES:
@@ -357,7 +357,7 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
             done = True
         else:
             # 列表型导出(补货/采购/滞销): **分页接力**, 每片 _EXPORT_PAGE 行写一个 CSV 分片。
-            # 2026-11-16 §15.201 根治: 原来 `_build_export_rows` 一次裸调(补货走 page=0 →
+            # 2026-11-16 §15.212 根治: 原来 `_build_export_rows` 一次裸调(补货走 page=0 →
             #   被 UNPAGED_CAP 截断 2000 行), 用户以为导了全量; 且一次组装 5 万行 xlsx
             #   会把建任务/续跑请求推到 120s 边界。现在与订单导出同款: 分页 + 分片 + 下载合并。
             #   分片格式必须是 CSV(多片可字节拼接); xlsx 是 zip, 拼两片 = 坏文件。
@@ -382,7 +382,7 @@ def export_status(task_id: str = "", page_size: int = 10000, driver: str = "fron
             # 完成判据: 本页不满 → 到底了; 或已取到 total 行
             done = (len(rows) < _EXPORT_PAGE) or (total > 0 and got >= total)
         # 实际导出总行数: 订单按 total(接口说多少), 其余按"本片之前 + 本片"(got)。
-        # 2026-11-16 §15.201: 原来这里写 `len(rows)` —— 那是**本片**行数, 分页后恒等于
+        # 2026-11-16 §15.212: 原来这里写 `len(rows)` —— 那是**本片**行数, 分页后恒等于
         #   page_size(2000), 于是 10000 行的导出在 result 里自报 2000(用户和回归都会被骗)。
         _rows_out = total if exp_type == "orders" else int(got)
         if done:
@@ -459,7 +459,7 @@ def export_download(filename: str):
                         else:
                             # BOM 只允许出现在**文件开头**。旧实现在这里给每一片都保证一个 BOM,
                             #   合并 3 片就有 2 个 BOM 落在文件中段 → Excel 里表现为一行
-                            #   "ï»¿订单号,..." 的乱码行(§15.201, 订单导出 5 万行时必现)。
+                            #   "ï»¿订单号,..." 的乱码行(§15.212, 订单导出 5 万行时必现)。
                             #   现在: 第一片保证恰好一个; 后续片剥掉自带的。
                             _b = c.encode("utf-8")
                             _bom = b"\xef\xbb\xbf"

@@ -222,7 +222,7 @@ def soft_delete_order(oid: int):
     #   每日对账才修正, 这段时间日销偏大(删掉的单仍计入)。批量删/恢复/永久删早已登记,
     #   只有这个单条入口漏了。日期必须在 UPDATE **之前**取 —— _days_of 依赖 deleted_at=''。
     _touch_days = _days_of([oid])
-    # 2026-11-16 §15.202: 按 rowcount 反馈真实结果 —— 原来对不存在的 id 也回 ok({}),
+    # 2026-11-16 §15.213: 按 rowcount 反馈真实结果 —— 原来对不存在的 id 也回 ok({}),
     #   前端提示"已删除", 实际 0 行; 而下面 invalidate/_close_orphan 全是空跑。
     _n = execute("UPDATE orders SET deleted_at=NOW() WHERE id=%s "
                  "AND (deleted_at IS NULL OR deleted_at='')", [oid])
@@ -281,7 +281,7 @@ def restore_order(oid: int):
                  "AND deleted_at IS NOT NULL AND deleted_at<>''", [oid])
     if not _n:
         # 不存在/本就没删 → 不触发评估。原来这里对任意 id 都调 `_evaluate_restored`,
-        # 等于让一个不存在的 id 拉起一次规则评估(§15.202)
+        # 等于让一个不存在的 id 拉起一次规则评估(§15.213)
         return fail("订单不存在或未删除")
     _mark_days(_tdays, reason="order_restore")
     from routes.analysis_cache import invalidate

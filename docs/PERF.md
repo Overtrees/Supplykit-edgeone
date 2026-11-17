@@ -273,7 +273,7 @@ p50 与 p95 几乎相等（1,093/1,093）说明是稳定的计算成本，不是
 | 测量可信度 | `noise --rounds 3` | — | — | `read_only` CV ≪ `with_write` CV |
 
 **极端场景的预期**：p95 1.7~4.6s（容量，非缺陷），**0 个 503 / 0 条不完整 / <10s** 是硬线。
-根因是"重建 25.9s 追不上写 1.2s 一次"，解法只有减重算量，不是调参数（§15.181 已证伪调参）。
+根因是"重建 25.9s 追不上写 1.2s 一次"，解法只有减重算量，不是调参数（§15.192 已证伪调参）。
 
 ---
 
@@ -295,18 +295,18 @@ p50 与 p95 几乎相等（1,093/1,093）说明是稳定的计算成本，不是
 | `kit.py` | 登录态会话、`X-Srv-Ms` 读取、百分位、相位查询（`heavy_slot` + `built_at`）、真实写操作 |
 | `scenes.py` | 五类场景：`hot` / `storm` / `cold` / `first` / `noise` |
 | `run.py` | CLI + **判据（阈值只在这里）** |
-| `seed_preflight.py` | **seed 一次性作业**的开跑门禁（零 RU 静态检查）/ 只读 DB 前置 / 跑完取证；判据独立，不进 `run.py` 的 `TH`。见 `docs/history/2026-11-09.md` §15.187 |
-| `pipeline_probe.py` | **零 RU** 全链路结构/代码验证：`check` 链路节点与机制常量、`coverage` 基准覆盖矩阵、`findings` 优化点→业务映射、`simulate` 集中导入结构推演、`predict` 100 万单复核、`selftest` 反证。见 `docs/history/2026-11-09.md` §15.188 |
-| `import_smoke.py` | **线上小批量拟真冒烟**：走前端导入链路（同步 + 异步），CSV 按 `spec()` 中文表头从线上真实行取样原样回导（零业务数据变化）；`plan` 零写 / `run` 只跑一次 / `verify` 只读取证 + **第四类作业/联动判据** `judge_evidence`（纯函数，可喂历史 json 反证）。见 `docs/history/2026-11-09.md` §15.188–§15.189 |
-| `converge_probe.py` | **优化后结构/代码验证**（§15.189）：零 RU、不重跑 seed、不连线上；`check` 用 AST 判 P0 补建自愈 / P1 合并失效 / 4 维不退化 / 红线合规，`selftest` 反证，`evidence` 把 13:17 历史取喂进第四类判据（应报红 `materialize_gen_ok`）。见 `docs/history/2026-11-09.md` §15.189 |
-| `suite_once.py` | **部署后一轮全套压测编排**（§15.190）：`probe` 零写取证（等 `drain_pending` 收敛 + 四维/联动快照 + 第四类判据）/ `run` 一轮 8 场景（hot 多并发+单条、storm S2/S4/S5、cold、first、noise；30 分钟防重锁）/ `report` 汇总；判据直接 import `run.py` 的 `TH`。见 `docs/history/2026-11-09.md` §15.190 |
-| `suite_p6.py` | **只跑未达标项的稳态复验**（§15.191/§15.192）：从 `suite_once.SCENE_PLAN` 筛场景，`--only a,b,c` 精确指定（**通过项不跑**），默认 5 个 P6 项；每场景前 `wait_quiet(≤90s)`、场景间 `--gap` 秒，让上一场景的写触发重建收敛；判据真源仍是 `run.py TH`，**一字未改、不改判据转绿**；独立 30 分钟防重锁（只一轮）；额外落 hot 逐接口空壳明细、cold 前后 `list_head` gen、跑前/跑后零写四维快照、**503 逐条归因**（`app_headers`/`body`/`writes.codes`）。见 `docs/history/2026-11-09.md` §15.191 |
-| `docs_probe.py` | **文档一致性门禁**（§15.191，零 RU 纯静态）：从代码/配置现读真源（`ARCHIVE_KEEP_DAYS` / preflight 步数 / cron 端点 / 路由数 / 分卷数 / §15.x 重号数），核对活文档 `check` 30 项、`selftest` 反证、`matrix` 真源→文档对照；历史卷与 CHANGELOG 历史批次按红线不检查。见 `docs/history/2026-11-09.md` §15.191；历史保留原文制度见 `docs/DEVELOPMENT.md` 十二、变更史 |
-| `e2e_chain.py` | **全链路消费方验收**（§15.199）：`inventory` 从 `app.routes` 现读路由 + 前端调用扫描（零网络）、`run` 三身份 × 全量 GET + 安全写闭环 + 11 项一致性、`checks` 只复跑一致性、`selftest` 11 条反证。判据只判"通不通/一不一致"，不判延迟（延迟归 `run.py TH`）。见 `docs/history/2026-11-16.md` §15.199 |
-| `caliber_probe.py` | **日销口径探针**（§15.211）：`manual` 独立复刻削峰→3σ→加权→shrink，与生产函数/物化列三方对拍（逐行可抄）；`matrix` 四维（覆盖≥99.5% / 补货↔采购同键一致 / 看板降级==物化 / 重建幂等）；`online` 线上采购三列+补货双模式全量、`daily_sales_60` 零残留、箭头分布、新鲜度可判档；`export` 导出正/负向闭环；`selftest` 11 条反证。判据只在文件头 `TH`/`judge_*`。见本手册 §20 / `docs/history/2026-11-16.md` §15.211 |
-| `pages_probe.py` | **16 页浏览器实测**（§15.199）：未捕获异常 / 4xx5xx / 白屏 / 错误边界 / 切页 abort，1 分钟出结论；截图 `.artifacts/e2e_pages/`。视觉细节（视口/双语/溢出）仍归 `ui_shot_matrix.py` |
-| `relay_selftest.py` | **§15.200~§15.202 守门自检**（36 条, 零网络/零 DB）：评估接力的四阶段与游标、导出的分页与 BOM、8 个删除端点的 rowcount、仓型映射唯一实现、agg_sweep 窗口、未登录 401。反证方式: 把旧写法改回去 → 必红 |
-| `p66_selftest.py` | **白页归类的守门自检**（§15.197，零 RU 纯打桩、不发请求）：34 项断言锁住四条修复 —— `complete` 带 HTTP 200 前置（堵 `KNOWN_EMPTY` + 空 data + 500 的假 PASS）、`_classify` 四类来源（`edge`/`app`/`app_uncaught`/`net`）、`bad_src` 分层计数、`srv_failed` 显式报分母；并复述 `run.py TH` 六条阈值，证明判据未被改动。见 `docs/history/2026-11-09.md` §15.197 |
+| `seed_preflight.py` | **seed 一次性作业**的开跑门禁（零 RU 静态检查）/ 只读 DB 前置 / 跑完取证；判据独立，不进 `run.py` 的 `TH`。见 `docs/history/2026-11-09.md` §15.198 |
+| `pipeline_probe.py` | **零 RU** 全链路结构/代码验证：`check` 链路节点与机制常量、`coverage` 基准覆盖矩阵、`findings` 优化点→业务映射、`simulate` 集中导入结构推演、`predict` 100 万单复核、`selftest` 反证。见 `docs/history/2026-11-09.md` §15.199 |
+| `import_smoke.py` | **线上小批量拟真冒烟**：走前端导入链路（同步 + 异步），CSV 按 `spec()` 中文表头从线上真实行取样原样回导（零业务数据变化）；`plan` 零写 / `run` 只跑一次 / `verify` 只读取证 + **第四类作业/联动判据** `judge_evidence`（纯函数，可喂历史 json 反证）。见 `docs/history/2026-11-09.md` §15.199–§15.200 |
+| `converge_probe.py` | **优化后结构/代码验证**（§15.200）：零 RU、不重跑 seed、不连线上；`check` 用 AST 判 P0 补建自愈 / P1 合并失效 / 4 维不退化 / 红线合规，`selftest` 反证，`evidence` 把 13:17 历史取喂进第四类判据（应报红 `materialize_gen_ok`）。见 `docs/history/2026-11-09.md` §15.200 |
+| `suite_once.py` | **部署后一轮全套压测编排**（§15.201）：`probe` 零写取证（等 `drain_pending` 收敛 + 四维/联动快照 + 第四类判据）/ `run` 一轮 8 场景（hot 多并发+单条、storm S2/S4/S5、cold、first、noise；30 分钟防重锁）/ `report` 汇总；判据直接 import `run.py` 的 `TH`。见 `docs/history/2026-11-09.md` §15.201 |
+| `suite_p6.py` | **只跑未达标项的稳态复验**（§15.202/§15.203）：从 `suite_once.SCENE_PLAN` 筛场景，`--only a,b,c` 精确指定（**通过项不跑**），默认 5 个 P6 项；每场景前 `wait_quiet(≤90s)`、场景间 `--gap` 秒，让上一场景的写触发重建收敛；判据真源仍是 `run.py TH`，**一字未改、不改判据转绿**；独立 30 分钟防重锁（只一轮）；额外落 hot 逐接口空壳明细、cold 前后 `list_head` gen、跑前/跑后零写四维快照、**503 逐条归因**（`app_headers`/`body`/`writes.codes`）。见 `docs/history/2026-11-09.md` §15.202 |
+| `docs_probe.py` | **文档一致性门禁**（§15.202，零 RU 纯静态）：从代码/配置现读真源（`ARCHIVE_KEEP_DAYS` / preflight 步数 / cron 端点 / 路由数 / 分卷数 / §15.x 重号数），核对活文档 `check` 30 项、`selftest` 反证、`matrix` 真源→文档对照；历史卷与 CHANGELOG 历史批次按红线不检查。见 `docs/history/2026-11-09.md` §15.202；历史保留原文制度见 `docs/DEVELOPMENT.md` 十二、变更史 |
+| `e2e_chain.py` | **全链路消费方验收**（§15.210）：`inventory` 从 `app.routes` 现读路由 + 前端调用扫描（零网络）、`run` 三身份 × 全量 GET + 安全写闭环 + 11 项一致性、`checks` 只复跑一致性、`selftest` 11 条反证。判据只判"通不通/一不一致"，不判延迟（延迟归 `run.py TH`）。见 `docs/history/2026-11-16.md` §15.210 |
+| `caliber_probe.py` | **日销口径探针**（§15.222）：`manual` 独立复刻削峰→3σ→加权→shrink，与生产函数/物化列三方对拍（逐行可抄）；`matrix` 四维（覆盖≥99.5% / 补货↔采购同键一致 / 看板降级==物化 / 重建幂等）；`online` 线上采购三列+补货双模式全量、`daily_sales_60` 零残留、箭头分布、新鲜度可判档；`export` 导出正/负向闭环；`selftest` 11 条反证。判据只在文件头 `TH`/`judge_*`。见本手册 §20 / `docs/history/2026-11-16.md` §15.222 |
+| `pages_probe.py` | **16 页浏览器实测**（§15.210）：未捕获异常 / 4xx5xx / 白屏 / 错误边界 / 切页 abort，1 分钟出结论；截图 `.artifacts/e2e_pages/`。视觉细节（视口/双语/溢出）仍归 `ui_shot_matrix.py` |
+| `relay_selftest.py` | **§15.211~§15.213 守门自检**（36 条, 零网络/零 DB）：评估接力的四阶段与游标、导出的分页与 BOM、8 个删除端点的 rowcount、仓型映射唯一实现、agg_sweep 窗口、未登录 401。反证方式: 把旧写法改回去 → 必红 |
+| `p66_selftest.py` | **白页归类的守门自检**（§15.208，零 RU 纯打桩、不发请求）：34 项断言锁住四条修复 —— `complete` 带 HTTP 200 前置（堵 `KNOWN_EMPTY` + 空 data + 500 的假 PASS）、`_classify` 四类来源（`edge`/`app`/`app_uncaught`/`net`）、`bad_src` 分层计数、`srv_failed` 显式报分母；并复述 `run.py TH` 六条阈值，证明判据未被改动。见 `docs/history/2026-11-09.md` §15.208 |
 | `out/` | 每次运行的 json（不入库） |
 
 仓库级：`scripts/preflight.sh`（回归 + 语法 + lint，每次提交前）、`scripts/deploy_status.py`（部署状态 Success + Prod，每次推送后）。
@@ -344,7 +344,7 @@ p50 与 p95 几乎相等（1,093/1,093）说明是稳定的计算成本，不是
 | 极端场景 p95 超 1.5s | 容量问题，非缺陷 | 用户感知慢 | 减重算量（唯一解） |
 | 100 万订单 | 日销三窗口 222~444s > 120s 函数上限 | 只能靠续跑 | 预聚合 / 下推 |
 | TiDB 侧争抢 | 7 个域重建打同一个库 | 尾部延迟由 DB 决定 | 域依赖图，只重建受影响域 |
-| ~~alerts 段恒产 0 条~~ | **已修 2026-11-17（`6eb3d79a`）**：动态安全线 + `_seed_alerts` 按 SKU×69码×仓 + `_FP_VER` 5→6；重种子后本地 aux alertCounts 9,017、线上 9,459，卡非空 | 告警卡曾恒空 | 详见 `docs/history/2026-11-17.md` §15.212 |
+| ~~alerts 段恒产 0 条~~ | **已修 2026-11-17（`6eb3d79a`）**：动态安全线 + `_seed_alerts` 按 SKU×69码×仓 + `_FP_VER` 5→6；重种子后本地 aux alertCounts 9,017、线上 9,459，卡非空 | 告警卡曾恒空 | 详见 `docs/history/2026-11-17.md` §15.223 |
 
 ---
 
@@ -429,7 +429,7 @@ python3 scripts/perf/smoke.py --base https://xxx   # 换环境
 `ensure_schema()` 在空库上建出 **61 张表** / 索引 / 7 条迁移 / 渠道种子 /
 `data_version` 初始行 / `data_version_dom('schema')` / `schema_state=v26`。
 **按红线不导业务数据、不重跑 seed** —— 新库是干净空库，业务页面空数据为预期，
-要恢复历史数据须你另行导入。空库首建踩到的 2 个 bug 与修法见 §15.186 / 红线 18。
+要恢复历史数据须你另行导入。空库首建踩到的 2 个 bug 与修法见 §15.197 / 红线 18。
 
 ### 8.5 恢复后的验证顺序（别一上来就压测）
 
@@ -444,7 +444,7 @@ python3 scripts/perf/run.py hot --rounds 1 --secs 10
 python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
 ```
 
-> 部署后 **≥3 分钟**再压测（§15.181：部署完成 2 分钟就打 19 并发出现过 12 个 503）。
+> 部署后 **≥3 分钟**再压测（§15.192：部署完成 2 分钟就打 19 并发出现过 12 个 503）。
 
 ### 8.6 止血与预防（避免恢复后秒穿）
 
@@ -460,11 +460,11 @@ python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
 - **空库首启必查 `data_version` 是否稳定**（红线 19）：空集群上「表空 → 自愈重建 →
   `invalidate`」会自我失效，每请求 bump 域计数 → 物化 fp 永远追不上 → 持续烧 RU。
   判据：发 4 个只读 GET，前后 `SELECT v FROM data_version WHERE id=1` 应不变。
-  详见 §15.186 第五节。
+  详见 §15.197 第五节。
 
 ### 8.7 两个健壮性缺口（2026-11-09 第二批已修并验证）
 
-两者都不是性能问题，属「故障时可观测性」，随新集群迁移一起修完（详见 §15.186）：
+两者都不是性能问题，属「故障时可观测性」，随新集群迁移一起修完（详见 §15.197）：
 
 | 缺口 | 修法 | 验证 |
 |---|---|---|
@@ -473,7 +473,7 @@ python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
 
 > **为什么只走响应头**：`@app.middleware("http")` 是 Starlette `BaseHTTPMiddleware`，
 > `call_next` 返回 `_StreamingResponse`（实测 `media_type=None` / 无 `body` 属性），
-> 响应体不可写；头可写且不碰 `content-length`。语义与 §15.161 的顶层 `__swr` 同款，
+> 响应体不可写；头可写且不碰 `content-length`。语义与 §15.177 的顶层 `__swr` 同款，
 > 前端一处收口。`scripts/perf/smoke.py` 会打 `[DEGRADED]` 标注，**分类判据不变**。
 >
 > **空库注意**：新集群按红线**不导业务数据、不重跑 seed**，业务接口返回空数据是预期。
@@ -497,23 +497,23 @@ python3 scripts/perf/run.py hot --rounds 5 --secs 15 --readers 8
 日销口径的削峰 / 3σ / 加权 / shrink 计算逻辑、手工复刻对拍、四维覆盖与一致性验证，
 **不是性能判据**，不属于本手册范围。判据真源在 `scripts/perf/caliber_probe.py` 文件头
 `TH` / `trend_of()` / `manual()`；本轮实测与两个「假红」的归因见
-`docs/history/2026-11-16.md` §15.211；口径本体见 `docs/ARCHITECTURE.md` §日销口径。
-性能侧只关心一件事——多读一列 `ds56_cut` 的请求路径开销，见 `docs/history/2026-11-16.md` §15.209（原 §19.11）。
+`docs/history/2026-11-16.md` §15.222；口径本体见 `docs/ARCHITECTURE.md` §日销口径。
+性能侧只关心一件事——多读一列 `ds56_cut` 的请求路径开销，见 `docs/history/2026-11-16.md` §15.220（原 §19.11）。
 
 > **§9–§19、§21–§22 已拆出本手册**（2026-11-17）：它们是 2026-11-09 / 11-16 / 11-17 的实测日志，真源在 history 对应日期卷；本手册只留现行基准（§0–§8）与本节指针。查日志按下表去 history 原文，不要按本手册旧节号引用。
 
 | 本手册旧节 | 内容 | 真源 |
 |---|---|---|
-| §9 seed 一次性作业 | seed 判据 / 一次全程实测 21.1 分钟 | `docs/history/2026-11-09.md` §15.187 |
-| §10 集中导入与联动任务 | 第四类判据 / 小批量拟真冒烟 13:17 | `docs/history/2026-11-09.md` §15.188 |
-| §11 尾巴根治收敛 | P0 补建自愈 / P1 合并失效 / 覆盖 0/6 | `docs/history/2026-11-09.md` §15.189 |
-| §12 部署后一轮全套压测 | 593s / 无退化 / P0 达标 | `docs/history/2026-11-09.md` §15.190 |
-| §13 只跑未达标项的稳态复验 + 文档勘误 | 472.8s / 503 归因 | `docs/history/2026-11-09.md` §15.191–§15.192 |
-| §14 冷启动白页 | 基准盲区与根治 | `docs/history/2026-11-09.md` §15.193 |
-| §15 治理后完整一轮复验 | 774.3s / boot 500 @ t=0.84s | `docs/history/2026-11-09.md` §15.194 |
-| §16 横向对比的可比性前提 | 三维不可比 / 四道闸 | `docs/history/2026-11-09.md` §15.195 |
-| §17 P6-6 白页归类 | 五个缺口 / 34 项守门自检 | `docs/history/2026-11-09.md` §15.196–§15.197 |
-| §18 全链路消费方验收 | 124 路径 / 11 项一致性 | `docs/history/2026-11-16.md` §15.199 |
-| §19 评估接力 / 导出全量 / 空转成功根治 | 379s 接力 / BC 554 / ds56 取数成本 | `docs/history/2026-11-16.md` §15.200–§15.202；379s 另见 §15.205，ds56 另见 §15.209 |
-| §21 ds 精度漂移与 epsilon 死区 | TREND_EPS=1e-4 / 6 位精度 | `docs/history/2026-11-17.md` §15.220 / §15.224 |
-| §22 规则评估驱动饥饿与 CF Worker 接力驱动 | 364s–2244s / 30s 节流 + task_lease / 四维变好 | `docs/history/2026-11-17.md` §15.221 / §15.223；270001 端到端实测另见 §15.225 |
+| §9 seed 一次性作业 | seed 判据 / 一次全程实测 21.1 分钟 | `docs/history/2026-11-09.md` §15.198 |
+| §10 集中导入与联动任务 | 第四类判据 / 小批量拟真冒烟 13:17 | `docs/history/2026-11-09.md` §15.199 |
+| §11 尾巴根治收敛 | P0 补建自愈 / P1 合并失效 / 覆盖 0/6 | `docs/history/2026-11-09.md` §15.200 |
+| §12 部署后一轮全套压测 | 593s / 无退化 / P0 达标 | `docs/history/2026-11-09.md` §15.201 |
+| §13 只跑未达标项的稳态复验 + 文档勘误 | 472.8s / 503 归因 | `docs/history/2026-11-09.md` §15.202–§15.203 |
+| §14 冷启动白页 | 基准盲区与根治 | `docs/history/2026-11-09.md` §15.204 |
+| §15 治理后完整一轮复验 | 774.3s / boot 500 @ t=0.84s | `docs/history/2026-11-09.md` §15.205 |
+| §16 横向对比的可比性前提 | 三维不可比 / 四道闸 | `docs/history/2026-11-09.md` §15.206 |
+| §17 P6-6 白页归类 | 五个缺口 / 34 项守门自检 | `docs/history/2026-11-09.md` §15.207–§15.208 |
+| §18 全链路消费方验收 | 124 路径 / 11 项一致性 | `docs/history/2026-11-16.md` §15.210 |
+| §19 评估接力 / 导出全量 / 空转成功根治 | 379s 接力 / BC 554 / ds56 取数成本 | `docs/history/2026-11-16.md` §15.211–§15.213；379s 另见 §15.216，ds56 另见 §15.220 |
+| §21 ds 精度漂移与 epsilon 死区 | TREND_EPS=1e-4 / 6 位精度 | `docs/history/2026-11-17.md` §15.231 / §15.235 |
+| §22 规则评估驱动饥饿与 CF Worker 接力驱动 | 364s–2244s / 30s 节流 + task_lease / 四维变好 | `docs/history/2026-11-17.md` §15.232 / §15.234；270001 端到端实测另见 §15.236 |

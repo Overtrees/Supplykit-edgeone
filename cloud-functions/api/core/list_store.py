@@ -10,7 +10,7 @@
 根因不是算法慢, 是「读时全量现算 + TTL 300s 表缓存」:
   · TTL 到点（**没有任何写操作**）→ 下一个请求在请求路径里同步跑 builder();
   · invalidate() 给整族打墓碑 → 任何相关域写操作也让下一个请求重算。
-即 §15.152 明令否决的「时间参与数据新不新的判断」（红线: 不加缓存 TTL）。
+即 §15.168 明令否决的「时间参与数据新不新的判断」（红线: 不加缓存 TTL）。
 
 ## 设计（与 unit_store / own_store 同一套骨架, 不另造轮子）
 - **指纹驱动, 不是 TTL**: fp = data_version_dom 各域计数（对齐 _FAMILY_DEPS 对应族）,
@@ -59,22 +59,22 @@ UNPAGED_CAP = {"repl": 2000, "purchase": None, "disposal": None}
 # 业务日期是**确定性输入域**(不是缓存 TTL): 滞销的 days_zero / B仓在库天数 / 临期天数 /
 #   30天已处置 / 14天补货线索全部读 now_cn()。跨天不改它们 = 用户看到昨天的"未销售天数"
 #   和过时的 level → 数据四维-准确性受损。把日期纳入 fp, 跨天首请求 fp 不等 → 退回现算
-#   + 后台重建(与 §15.152「时间不参与数据新不新」不矛盾: 那里指"数据没变不该因时间流逝
+#   + 后台重建(与 §15.168「时间不参与数据新不新」不矛盾: 那里指"数据没变不该因时间流逝
 #   重算", 这里指"日期变了计算结果本身就变", 属输入变化)。repl/purchase 公式不读日期, 不加。
 DATE_AWARE = ("disposal",)
 
 _CHUNK = 2000         # 明细批量插入行数（每行 9 列, 含 MEDIUMTEXT payload）
-# §15.174: 原 200。线上 list_head.timing(2026-11-08 14:05) 三个 kind 的 write 已超过 calc:
+# 旧 §15.174: 原 200。线上 list_head.timing(2026-11-08 14:05) 三个 kind 的 write 已超过 calc:
 #   repl 2.4s / purchase 1.9s / disposal 2.7s, 而 1 万行按 200 分 = 50 批 = 50 次往返。
 #   单批体积 = 行数 × payload 实测均值 853B(max 1128B) → 1000 行 ≈ 1.1MB,
 #   远低于 max_allowed_packet 64MB(线上已核); TiDB 解析 1MB 语句的成本低于一次跨区往返。
 #   批次数 50 → 10。**只改批量大小, 不改语义、不加闸门**(红线 4)。
-# §15.176: 1000 → 2000。线上 list_head.timing(2026-11-08 14:58) 写仍占重建 1/3:
+# §15.185: 1000 → 2000。线上 list_head.timing(2026-11-08 14:58) 写仍占重建 1/3:
 #   repl write=1.5s/10000 行、purchase write=1.4s/9625 行、disposal write=2.1s/15089 行。
 #   2000 行 × 853B ≈ 1.7MB/批(payload 最大 1128B → 2.2MB), 仍远低于 64MB packet;
 #   autocommit=1, 每批独立语句, 不受单事务大小限制。批次数再减半(10→5 / 8→4 / 16→8)。
 _COOLDOWN = 30.0      # 同一 (kind,scope) 两次重建最小间隔 —— 一次导入会连调多次 invalidate
-# §15.164: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
+# §15.180: 原来 300s。线上 09:05 现场: 写新 gen 撞主键 1062 后 head 被标 stale=1,
 # 每次读请求又刷新 built_at → 退避被无限续期, repl 连续 17min 每请求全量现算 12.8s/503。
 # 失败不再置 stale(见 _mark_stale), 退避只作防御性兜底, 有界 20s 即可(红线 15 不靠盲重试)。
 _STALE_BACKOFF = 20.0
@@ -84,14 +84,14 @@ _READ_ON = ("1", "true", "yes", "on")
 
 
 def _safe_rebuild():
-    """§15.164 总开关: 未设置=开; `LIST_SAFE_REBUILD=0` 一刀回退到修复前行为
+    """§15.180 总开关: 未设置=开; `LIST_SAFE_REBUILD=0` 一刀回退到修复前行为
     (幂等写 / 失败保旧 gen 同时关掉), 不必发版。红线 2: 不新增机制, 只是同一路径的开关。"""
     _v = os.environ.get("LIST_SAFE_REBUILD")
     if _v is None or str(_v).strip() == "":
         return True
     return str(_v).strip().lower() in _READ_ON
 
-# ── §15.161 P1 冷算治理: 全局预算 + 同 key 单飞 + 读侧零等待 ────────────────
+# ── §15.177 P1 冷算治理: 全局预算 + 同 key 单飞 + 读侧零等待 ────────────────
 # 线上实测 2026-11-07 19:12~19:22(本报告改前基线, 全部真实链路):
 #   纯现算单跑  repl 5.99~7.79s / purchase 3.01~3.88s / disposal 2.67~3.24s
 #   同类并发 2 → 2.2~2.5×; 并发 4 → 4~6×, repl 4/4 HTTP 503(等 33s 零数据)
@@ -105,16 +105,16 @@ def _safe_rebuild():
 # 实例可被平台冻结: flight 带 t0 新鲜度, 超 _FLIGHT_TTL 判僵尸丢弃(红线 15)。
 _FLIGHT_TTL = 60.0
 _HEAVY_WAIT = 2.0     # 抢全局名额的最长等待; 抢不到 = 快速失败, 绝不排长队
-_BUSY_COOL = 2.0      # §15.165 HeavyBusy 后同 key 的有界冷却, 防写风暴下每个读都重抢名额
-_FIRST_WAIT = 20.0    # §15.165 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
+_BUSY_COOL = 2.0      # §15.181 HeavyBusy 后同 key 的有界冷却, 防写风暴下每个读都重抢名额
+_FIRST_WAIT = 20.0    # §15.181 首建单飞: 同组并发等 leader 落物化的上限(覆盖最慢 repl build 16.5s)
 _FIRST_TTL = 60.0     # 首建 flight 僵尸判定(红线 15)
 _FLIGHT_LOCK = threading.Lock()
 _FLIGHTS = {}         # key -> {"t0": float, "kind": str}
 _BUSY_UNTIL = {}      # key -> float, HeavyBusy 冷却截止(有界, 不排队)
 _FIRSTS = {}          # key -> {"t0": float, "event": threading.Event}, 首建单飞(同实例共享一次计算)
 
-# ── §15.189 P0 根治: 物化有界补建自愈 ──────────────────────────────────
-# 起因(§15.188 确定性实证): HeavyBusy 跳过的 kind 只留痕 + 2s 冷却, 补建完全靠
+# ── §15.200 P0 根治: 物化有界补建自愈 ──────────────────────────────────
+# 起因(§15.199 确定性实证): HeavyBusy 跳过的 kind 只留痕 + 2s 冷却, 补建完全靠
 #   「下一次读该页面」—— 集中导入跑完 9 分钟后 repl gen 仍停在 40、unit gen 14 未变。
 # 根治**不新增第二套重建机制**(红线 2): 把「待补建」的真源定义为 DB 持久事实 ——
 #   list_head 里 fp 已落后于当前数据版本、且 gen>0(有旧物化可服务) 的 head 行。
@@ -139,7 +139,7 @@ _STATS = {"started": 0, "dedup": 0, "done": 0, "failed": 0, "busy": 0,
 
 
 def _flag(name, default=True):
-    """§15.165 总开关族: 未设置=开; 置 "0" 一刀回退到本轮修复前行为(不必发版)。
+    """§15.181 总开关族: 未设置=开; 置 "0" 一刀回退到本轮修复前行为(不必发版)。
     红线 2: 不新增机制, 只是同一路径上的开关; 互斥不并存。"""
     _v = os.environ.get(name)
     if _v is None or str(_v).strip() == "":
@@ -220,7 +220,7 @@ def register_scope(kind, scope, channel, mode, days, source):
 
 
 def _mark_stale(kind, scope, note):
-    """§15.164: 记录重建失败原因, 但**不再把完整旧 gen 标成不可用**。
+    """§15.180: 记录重建失败原因, 但**不再把完整旧 gen 标成不可用**。
 
     线上现场(09:05:23, 90min 日志 3 条 1062): 新 gen 写一半撞主键失败, 旧 gen
     (gen=5 / row_cnt=10000 / 发布前 COUNT 自校验通过过) 其实完整可读, 却被这里置
@@ -281,7 +281,7 @@ def page_of(kind, scope, channel, mode, need_only=0, search="", page=0, page_siz
     total 与 items 同源: 无筛选直接读 head.row_cnt（物化计数, 红线 11）;
     带 need_only/search 时用**同一条 WHERE** 的 COUNT, 不会出现"标题 N 条、翻到底 N-2"。
 
-    `allow_stale=True`(§15.161 SWR): 只跳过 fp 比对, **其余完整性校验一字不减** ——
+    `allow_stale=True`(§15.177 SWR): 只跳过 fp 比对, **其余完整性校验一字不减** ——
     gen>0 / stale=0 / row_cnt 哨兵 / 坏行整页退回。当前 gen 是上一次**发布前 COUNT
     自校验通过**的完整快照, 不是半截数据; 调用方必须带上 freshness_s 与 fp_changed
     明确播报, 绝不静默伪装成新值(§15.8 准确/完整/可靠)。
@@ -291,8 +291,8 @@ def page_of(kind, scope, channel, mode, need_only=0, search="", page=0, page_siz
     h = h if h is not None else head(kind, scope)
     if not h or not int(h.get("gen") or 0):
         return None
-    # §15.165: 历史/并发遗留的 stale=1, 只要 gen>0 且完整旧快照可读, 冷态(allow_stale)
-    # 下仍可作为「上一版」返回 + __swr 显式播报 stale_prev。§15.164 只修了「不再误置
+    # §15.181: 历史/并发遗留的 stale=1, 只要 gen>0 且完整旧快照可读, 冷态(allow_stale)
+    # 下仍可作为「上一版」返回 + __swr 显式播报 stale_prev。§15.180 只修了「不再误置
     # stale」, 没修「已 stale 的完整旧 gen 仍被 page_of 硬拒 → serve 退回首建双算 →
     # P4 压测 4 并发 16.9s / 2×503 / 4/4 零数据(停摆)」。稳态(allow_stale=False)
     # 仍严格硬拒 stale=1, 红线 8② 哨兵一字不松。`LIST_STALE_PREV=0` 回退。
@@ -373,7 +373,7 @@ def build(kind, scope, force=False):
     # mode 必须与 page_of / register 登记的**原始值同源**: disposal 传空串, 若这里兜底成
     # "bbcc", 写侧 fp(mode_of("bbcc")="bbcc") 与读侧 fp(mode_of("")=渠道默认) 不等 →
     # page_of 永远判 fp 不命中 → 物化白做、每请求仍 2.5s 现算。空串交给 mode_of 自己查
-    # 渠道默认, 读写两侧查同一份配置, 必然一致。(§15.160 抓到的读写 fp 不对称)
+    # 渠道默认, 读写两侧查同一份配置, 必然一致。(§15.176 抓到的读写 fp 不对称)
     mode = str(h.get("mode") or "")
     fp = fp_now(kind, channel, mode, scope)
     if not fp:
@@ -392,7 +392,7 @@ def build(kind, scope, force=False):
         _LAST[_key] = (_now, fp)
 
     _t0 = time.time()
-    # §15.172 只读分段埋点(红线 7): calc 到底贵在 SQL 往返还是 Python 循环 —— 决定
+    # 旧 §15.172 只读分段埋点(红线 7): calc 到底贵在 SQL 往返还是 Python 循环 —— 决定
     #   下一步是加索引/减往返, 还是向量化/下推。只写 list_head.timing, 不改执行路径。
     #   同实例并发 build 时 STATS 会互串, 因此**只用于判断量级**(谁是大头), 不当精确值;
     #   精确值只能靠线上 e2e 与 perf_debug(红线 7 禁止用本地计时下结论)。
@@ -430,7 +430,7 @@ def build(kind, scope, force=False):
             need_cnt += need
             payload.append([kind, scope, gen, i, need, sku, pn, bc, js])
         if _safe:
-            # §15.164 根治 1062: 跨实例并发领到同一 gen(或上次失败留下半批)时,
+            # §15.180 根治 1062: 跨实例并发领到同一 gen(或上次失败留下半批)时,
             # 先清掉目标 gen 中**超出本轮行数**的尾部残留(线上 repl gen=6 残留 5600 行),
             # 再用 ON DUPLICATE KEY UPDATE 幂等覆盖同名行。同 fp 结果同源, 覆盖不损数据。
             execute("DELETE FROM list_snapshot WHERE kind=%s AND scope=%s AND gen=%s AND seq>=%s",
@@ -438,7 +438,7 @@ def build(kind, scope, force=False):
         _upsert = (" ON DUPLICATE KEY UPDATE need=VALUES(need), sku=VALUES(sku), "
                    "product_name=VALUES(product_name), barcode=VALUES(barcode), "
                    "payload=VALUES(payload)") if _safe else ""
-        # §15.176 分批**并行**写: 线上实测 write 与行数严格线性(156µs/行), 且批量
+        # §15.185 分批**并行**写: 线上实测 write 与行数严格线性(156µs/行), 且批量
         #   200→1000→2000 都没有变化 —— 说明成本在 TiDB 逐行解析/索引/落盘, 不在往返。
         #   批与批之间的 seq 段**互不重叠**(切片互斥), 并发 INSERT 不会写同一行;
         #   跨实例同 gen 的重叠由上面的 DELETE 尾部残留 + ON DUPLICATE KEY UPDATE 兜住。
@@ -459,7 +459,7 @@ def build(kind, scope, force=False):
         return {"ok": False, "error": "write"}
     _t_write = time.time() - _t_w0
 
-    # 发布前自校验（红线 8② / §15.152 完整性）: 行数与 need 数必须与计算产出一致。
+    # 发布前自校验（红线 8② / §15.168 完整性）: 行数与 need 数必须与计算产出一致。
     # 写一半 / 写重复 / 序列化截断都在这里暴露, 不过就**不切 head**, 旧 gen 继续服务。
     errs = []
     try:
@@ -499,9 +499,9 @@ def build(kind, scope, force=False):
             "elapsed": round(time.time() - _t0, 2)}
 
 
-# ── 触发 / 冷算治理(§15.161 / §15.165) ──────────────────────────
+# ── 触发 / 冷算治理(§15.177 / §15.181) ──────────────────────────
 def _flight_key(kind, scope, fp):
-    """§15.165: fp **不进单飞 key**。
+    """§15.181: fp **不进单飞 key**。
 
     线上压测(stress_165 P2/P3)坐实: 任务页多任务每 0.2~0.3s bump 一次域计数 → fp
     每次都变 → 旧 key(kind|scope|fp)使同 (kind,scope) 每次都是「新 flight」, 单飞
@@ -522,13 +522,13 @@ def _cold_worker(kind, scope, fp, fn, key):
 
     与「全局单 worker」的区别是**按 kind 分舱**: 3 个 kind 各占 1 个名额并行跑,
     不是一条队列串行 15.54s。抢不到全局名额 = 快速失败, 不排队(红线 4/10)。
-    §15.165: HeavyBusy 后给同 key 一个有界冷却(_BUSY_COOL), 防写风暴下每个读请求
+    §15.181: HeavyBusy 后给同 key 一个有界冷却(_BUSY_COOL), 防写风暴下每个读请求
     都立刻重抢名额、把 3 个名额反复打满却不收敛(红线 15: 有界, 不排队)。
     """
     try:
         from db import heavy, HeavyBusy
         try:
-            # §15.178: global_=True → 除实例内名额, 再抢一张跨实例槽位(heavy_slot 表)。
+            # §15.188: global_=True → 除实例内名额, 再抢一张跨实例槽位(heavy_slot 表)。
             #   实例内名额是进程内 dict, 多实例下管不到全局; 实测 7 kind 同时重建时
             #   全站 p95 962ms(单 kind 只 117ms), 读侧被"同时"拖慢, 不是"重建"拖慢。
             with heavy("list:" + kind, timeout=_HEAVY_WAIT, global_=True):
@@ -541,9 +541,9 @@ def _cold_worker(kind, scope, fp, fn, key):
         except HeavyBusy as _hb:
             # 全局名额已满: 快速失败并留痕, 不排队、不拖住读侧(红线 4/15)。
             # 读侧仍返回上一版完整物化(数据四维-准确/完整不退化)。
-            # §15.189 P0: 本轮跳过**不再等于永久丢失** —— head.fp 落后是 DB 持久
+            # §15.200 P0: 本轮跳过**不再等于永久丢失** —— head.fp 落后是 DB 持久
             #   事实, drain_pending() 会在下一次 60s 请求驱动里补建, 不再靠
-            #   「下一次读该页面」(§15.188 跑完 9 分钟 repl gen 仍为 40 的根因)。
+            #   「下一次读该页面」(§15.199 跑完 9 分钟 repl gen 仍为 40 的根因)。
             _STATS["busy"] += 1
             if _coalesce_on():
                 with _FLIGHT_LOCK:
@@ -559,7 +559,7 @@ def _cold_worker(kind, scope, fp, fn, key):
 
 
 def submit_background(kind, scope, fp, fn):
-    """同 (kind,scope) 只算一次(§15.165 去 fp); 不同 kind 并行; 读侧**永不等待**。
+    """同 (kind,scope) 只算一次(§15.181 去 fp); 不同 kind 并行; 读侧**永不等待**。
 
     :return: state 字符串(started / dedup / cooling / error), 只用于 __swr 状态播报。
     """
@@ -591,7 +591,7 @@ def submit_background(kind, scope, fp, fn):
 def ensure_async(kind, scope=None, force=False):
     """写侧 invalidate / 读侧冷态的后台重建入口 —— 不在响应路径上等它。
 
-    §15.161: 改走 submit_background(全局预算 + 同 key 单飞)。旧版每次起裸 daemon
+    §15.177: 改走 submit_background(全局预算 + 同 key 单飞)。旧版每次起裸 daemon
     线程、3 个 kind 各起一个、无名额管理, 是并发互抢的真源(红线 4/10)。
     """
     try:
@@ -618,11 +618,11 @@ def ensure_async(kind, scope=None, force=False):
 
 
 def drain_pending(limit=None):
-    """§15.189 P0 根治: 有界物化补建自愈 —— 不再依赖「下一次读该页面」。
+    """§15.200 P0 根治: 有界物化补建自愈 —— 不再依赖「下一次读该页面」。
 
     「待补建」= list_head 里 **fp 已落后于当前数据版本、且 gen>0**(有旧物化可服务)
     的 head 行。这是 DB 持久事实: 实例冻结 / 重启 / 跨实例都不丢, 无需新表、
-    无需进程内队列, 也不受 §15.188 里「HeavyBusy 只留痕不重试」的影响。
+    无需进程内队列, 也不受 §15.199 里「HeavyBusy 只留痕不重试」的影响。
 
     补建仍走 submit_background → heavy(global_=True) → build(), 与读侧冷态、
     写侧 invalidate 是**同一条代码路径**(红线 2 不叠加); build() 发布前 COUNT
@@ -675,7 +675,7 @@ def drain_pending(limit=None):
                           lambda k=_k, s=_s: build(k, s, force=False))
         out["submitted"] += 1
         _STATS["drain_submitted"] += 1
-    # 判定读模型 / 自有仓已收编进同一个 submit_background(§15.165)。这里**不自己算
+    # 判定读模型 / 自有仓已收编进同一个 submit_background(§15.181)。这里**不自己算
     # 它们的 fp**(避免 mode 归一漂移, 红线 16), 只在「确有物化落后」且有界冷却后
     # 顺带触发一次各自 ensure_async()(内部按 head.fp 判 fresh + 单飞去重, 不白算全量)。
     if (out["pending"] or out["submitted"]) and \
@@ -716,7 +716,7 @@ def _swr_meta(kind, scope, h, state):
         "freshness_s": age,
         "built_at": str(h.get("built_at") or ""),
         "fp_changed": True,
-        # §15.165 准确维: 放行「历史 stale=1 完整旧 gen」时显式播报, 绝不静默伪装成新值
+        # §15.181 准确维: 放行「历史 stale=1 完整旧 gen」时显式播报, 绝不静默伪装成新值
         "prev_stale": bool(int(h.get("stale") or 0)),
         "rebuild": state,
         "retry_after_ms": 900,
@@ -735,7 +735,7 @@ def pop_swr(d):
 
 
 def first_shared(key, ttl, wait, leader_fn, readback_fn):
-    """§15.165 通用首建单飞骨架(供 list_store / dash_store / own_store 复用, 红线 2 不叠加)。
+    """§15.181 通用首建单飞骨架(供 list_store / dash_store / own_store 复用, 红线 2 不叠加)。
 
     同 key 并发只让 leader 跑一次 `leader_fn`(算+落物化), 其返回值作为**共享结果**
     直接交给所有人的 `readback_fn(shared)`; follower 有界等 `wait` 后读同一份,
@@ -768,7 +768,7 @@ def first_shared(key, ttl, wait, leader_fn, readback_fn):
 
 def _first_serve(kind, scope, fp, builder, channel, mode,
                  need_only, search, page, page_size):
-    """§15.165 首建单飞: 仅「从未构建 / 物化全坏行」的一次性初始化入口。
+    """§15.181 首建单飞: 仅「从未构建 / 物化全坏行」的一次性初始化入口。
 
     改前(线上 stress_165 P4 实测): `submit_background(build)` 后台算一遍 +
     `return _live()` 前台同步全量再算一遍 = **双算**; 4 并发 = 8 份 13s 全量 Python
@@ -778,7 +778,7 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
     发布前 COUNT 自校验+切 head, 复用红线 8②/9 的既有写入链), follower 有界等
     `_FIRST_WAIT` 后**读回同一份物化**(不重复全量); 全部返回完整数据, 绝不 0 条。
     等待是「等 leader 算完这一份」, 不是「等后台重建 30s」; 且只在真·从未构建时发生
-    (§15.165 第 2 刀后, 有完整旧 gen 的 stale=1 已改走 SWR, 根本不进这里)。
+    (§15.181 第 2 刀后, 有完整旧 gen 的 stale=1 已改走 SWR, 根本不进这里)。
     `FIRST_SINGLEFLIGHT=0` 一刀回退到旧双算路径。
     """
     key = _flight_key(kind, scope, fp)
@@ -806,7 +806,7 @@ def _first_serve(kind, scope, fp, builder, channel, mode,
 
 def serve(kind, scope, channel, mode, days, source, builder,
           need_only=0, search="", page=0, page_size=0, legacy=0):
-    """路由唯一入口(§15.161): 稳态读物化 / 冷态 SWR 立即返回上一版 / 首次直接现算。
+    """路由唯一入口(§15.177): 稳态读物化 / 冷态 SWR 立即返回上一版 / 首次直接现算。
 
     · 稳态(fp 命中): 零额外开销、零额外字段, 形状一字不变。
     · 冷态(有上一版但 fp 不等): 后台按 kind 分舱重建(**读侧不等待**), 立即返回上一版
@@ -869,7 +869,7 @@ def serve(kind, scope, channel, mode, days, source, builder,
 
 
 def status(kind, scope):
-    """诊断口: 四维逐项可查, 不靠猜; §15.161 追加冷算治理计数。"""
+    """诊断口: 四维逐项可查, 不靠猜; §15.177 追加冷算治理计数。"""
     h = head(kind, scope) or {}
     # mode 必须与 build/page_of 同源: 空串交给 mode_of 查渠道默认, 不兜底 "bbcc"
     # (红线 16: 诊断口自己造一个 mode 会让 fp_now 与读写两侧不一致, 显示假的 fp 不命中)。
@@ -891,9 +891,9 @@ def status(kind, scope):
         "need_cnt": int(h.get("need_cnt") or 0), "timing": str(h.get("timing") or ""),
         "stale": int(h.get("stale") or 0), "note": str(h.get("note") or ""),
         "built_at": str(h.get("built_at") or ""),
-        # §15.161 冷算治理实时播报: 有没有真的撞车/降级, 可查可告警, 不靠猜。
+        # §15.177 冷算治理实时播报: 有没有真的撞车/降级, 可查可告警, 不靠猜。
         "cold": dict(_STATS, inflight=len(_FLIGHTS)),
-        # §15.189 P0 补建自愈: 扫了几个 head / 几个落后 / 投了几个 / 有界拦截了多少,
+        # §15.200 P0 补建自愈: 扫了几个 head / 几个落后 / 投了几个 / 有界拦截了多少,
         # 以及有界参数, 全部可查(作业级达标不再靠「打开页面看看」)。
         "drain": {"gap_s": _DRAIN_GAP, "scope_cool_s": _DRAIN_SCOPE_COOL,
                   "limit": _DRAIN_LIMIT, "aux_cool_s": _DRAIN_AUX_COOL,

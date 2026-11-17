@@ -138,7 +138,7 @@ def _rows(d):
     return -1
 
 
-# §15.189 P5: 已知「空是合法业务态」的接口 —— §15.187 的 22 条 incomplete 误报
+# §15.200 P5: 已知「空是合法业务态」的接口 —— §15.198 的 22 条 incomplete 误报
 #   全部来自 alerts 恒空(safety_qty=0 / 无触发规则时 alerts 表本来就是 0 行)。
 #   红线 8① 要求「没算成」与「真的是 0」可分: 这里的 0 是**真的 0**, 应显式列
 #   白名单, 不混入 incomplete; 但 HTTP 非 200 / 响应非 dict|list 仍判失败。
@@ -155,7 +155,7 @@ def complete(key, data):
     if not isinstance(data, (dict, list)):
         return False                     # 形状都不对 = 真失败, 白名单不豁免
     if not data:
-        return key in KNOWN_EMPTY        # 空结构: 仅已知空接口合法(§15.189 P5)
+        return key in KNOWN_EMPTY        # 空结构: 仅已知空接口合法(§15.200 P5)
     if key == "boot":
         return (bool(data.get("summary")) and isinstance(data.get("aux"), dict) and bool(data.get("aux"))
                 and isinstance(data.get("stock_risk"), dict) and "total" in data.get("stock_risk", {}))

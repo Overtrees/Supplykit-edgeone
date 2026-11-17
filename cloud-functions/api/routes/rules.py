@@ -242,7 +242,7 @@ def _drain_eval_tasks():
                                      alert_types=_sc.get("ats") or None,
                                      deep=bool(_sc.get("deep")),
                                      mode=_sc.get("mode") or None, source="rule_save")
-                # 2026-11-16 §15.200: **不再**在这里置 done。评估已改接力(sync_tasks),
+                # 2026-11-16 §15.211: **不再**在这里置 done。评估已改接力(sync_tasks),
                 #   本线程只负责"把任务排进去", 真正跑完由 core.rule_eval_task 收尾并写
                 #   rows_out/duration。原来在这里置 done = 横幅立刻消失但评估还在跑,
                 #   比"一直显示重算中"更误导。
@@ -255,7 +255,7 @@ def _drain_eval_tasks():
                             [str(_e)[:200], int((_tm.time() - _t0) * 1000), _id])
                 except Exception:
                     pass
-            # 2026-11-16 §15.200: 失效动作移到接力任务收尾(core.rule_eval_task._finish)。
+            # 2026-11-16 §15.211: 失效动作移到接力任务收尾(core.rule_eval_task._finish)。
             #   这里只是"排进任务", 一个 SKU 都还没评, 此刻失效等于让缓存白重建一轮
             #   (旧值 → 打墓碑 → 下个请求重算 → 评估跑完又失效), 纯浪费 RU。
     except Exception as _e:
@@ -290,7 +290,7 @@ def _schedule_rule_eval(channel=None, alert_types=None, deep=False, mode=None):
     _scope = json.dumps({"channels": _chs, "ats": list(alert_types or []), "deep": bool(deep),
                          "mode": str(mode or "")},
                         ensure_ascii=False, sort_keys=True)
-    # 2026-11-07 §15.158: 先把被冻结实例遗留的 running 收尾(只留痕, 不重跑)。
+    # 2026-11-07 §15.174: 先把被冻结实例遗留的 running 收尾(只留痕, 不重跑)。
     #   不做的后果: 下面的合并语义会一直复用那条僵户 id → 之后再保存规则永远不产生新评估。
     try:
         from core.maintenance import close_stale_runs as _csr
@@ -346,7 +346,7 @@ def _close_alerts_for_rules(ids, reason="rule_disabled"):
 @router.delete("/rules/{rid}")
 @traced
 def delete_rule(rid: int):
-    # 2026-11-16 §15.202: 先按 rowcount 判存在, 再联动 —— 原实现对不存在的 id 也关告警、
+    # 2026-11-16 §15.213: 先按 rowcount 判存在, 再联动 —— 原实现对不存在的 id 也关告警、
     #   也回 ok({}), 前端“删除成功”而库里 0 行。
     # deleted_at 的空值是**空串**不是 NULL(线上 14 行全为 ''), 用 IS NULL 会让删除永不生效
     _n = execute("UPDATE rules SET deleted_at=NOW(), is_active=0 WHERE id=%s "
@@ -367,7 +367,7 @@ def restore_rule(rid: int):
                  "AND IFNULL(deleted_at,'')<>''", [rid])
     if not _n:
         # 不存在/本就未删 → **不排评估**。原来这里任何 id 都会拉起一次全渠道评估,
-        # 一个打错的 id 就能换一次 9 万行重算(§15.202)
+        # 一个打错的 id 就能换一次 9 万行重算(§15.213)
         return fail("规则不存在或未删除")
     from routes.analysis_cache import invalidate
     invalidate("rules")
@@ -441,7 +441,7 @@ def rules_eval_status(task_id: int = 0):
                  "FROM eval_tasks WHERE id=%s", [task_id])
         if not _r:
             return ok({"id": task_id, "status": "expired", "rows_out": 0})
-        # 2026-11-07 §15.158: 僵户 running 对前端等价于「已结束」——否则 OpsWatcher
+        # 2026-11-07 §15.174: 僵户 running 对前端等价于「已结束」——否则 OpsWatcher
         #   会永远轮询下去, 胶囊「规则重算中」也不消失。收尾留痕由 close_stale_runs 负责。
         if _r.get("status") == "running":
             _age = _r.get("age_min")

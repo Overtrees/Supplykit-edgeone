@@ -15,8 +15,8 @@
 | `.env` 入库 | `git ls-files` 检查 + `.gitignore` | CI `secrets` job |
 | **git 历史残留** | 扫 ① 全部历史 blob ② commit message ③ reflog 脱分支提交 | CI `secrets` job（`fetch-depth: 0`）+ 每周定时 |
 | cron 被恶意重复触发 | ① `_throttle` 进程内限频 ② `_claim` DB 当日抢占（多实例安全）③ **时间窗守卫**：窗口外零 SQL 直接 skipped ④ 失败 `_unclaim` 回滚 | `local_test` 5 条新用例（含"防漏接"静态断言） |
-| 堆栈回传浏览器 | `@traced` 统一 200 + `ok:false`，堆栈只写 `quality_logs` | §15.110 |
-| `except: pass` 吞异常 | 静默失败 = 事故源；一律 `try_err(src, what, exc)` | 代码评审 + §15.106 三例实证 |
+| 堆栈回传浏览器 | `@traced` 统一 200 + `ok:false`，堆栈只写 `quality_logs` | §15.107 |
+| `except: pass` 吞异常 | 静默失败 = 事故源；一律 `try_err(src, what, exc)` | 代码评审 + §15.103 三例实证 |
 
 ### A1. git 历史扫描：曾经"只能人工"，现在不成立
 
@@ -151,5 +151,5 @@ Makers 的 env 由平台托管，值是否被平台日志/工单系统暴露，�
 | 2026-11-02 | cron 加 `_throttle` + `_claim` + 失败回滚 | 路径公开 → 防重复执行/RU 打爆 |
 | 2026-11-03 | **cron 加时间窗守卫** | 把"随时可触发"收敛到"每日窗口内 + 当日一次" |
 | 2026-11-03 | **历史 blob 扫描进 CI（`fetch-depth: 0` + 每周定时）** | 实测 424 blob 只要 3.4s，"只能人工"不成立 |
-| 2026-11-17 | CF Worker 接力驱动上线（`supplykit-relay-driver`，每分钟 GET `/api/health`），接力任务不再因实例冻结而饥饿；生产评估 20–37 分钟 → 247 秒 | EdgeOne serverless 实例冻结 + 无请求推进（§15.223/§15.225） |
-| 2026-11-17 | `_FP_VER` 9：`rolling_predict` 趋势判档加 `TREND_EPS=1e-4` 死区，阈值 ±1e-4 内一律判“平” | DECIMAL(12,6) 精度下恰阈值比值仍随机越线（§15.224） |
+| 2026-11-17 | CF Worker 接力驱动上线（`supplykit-relay-driver`，每分钟 GET `/api/health`），接力任务不再因实例冻结而饥饿；生产评估 20–37 分钟 → 247 秒 | EdgeOne serverless 实例冻结 + 无请求推进（§15.234/§15.236） |
+| 2026-11-17 | `_FP_VER` 9：`rolling_predict` 趋势判档加 `TREND_EPS=1e-4` 死区，阈值 ±1e-4 内一律判“平” | DECIMAL(12,6) 精度下恰阈值比值仍随机越线（§15.235） |

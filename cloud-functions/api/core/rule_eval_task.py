@@ -1,4 +1,4 @@
-"""每日规则评估接力任务(§15.200, 2026-11-16)
+"""每日规则评估接力任务(§15.211, 2026-11-16)
 
 ## 为什么要有这个模块
 
@@ -137,13 +137,13 @@ def enqueue(channels=None, deep=True, ats=None, mode=None, token="", fp="", sour
                        "ORDER BY id DESC LIMIT 1")
         eid = int((_run_row or {}).get("id") or 0)
         if not eid:
-            # 2026-11-16 §15.205: 显式写 status='running' + started_at=NOW()。
+            # 2026-11-16 §15.216: 显式写 status='running' + started_at=NOW()。
             #   原来只写 scope, 靠表默认值落到 **pending 且 started_at=NULL** —— 而
             #   `enqueue` 的行**从不属于"排队"**: 建完这一行, 调用方(run_daily_rules)
             #   同一次请求里就推首片。pending 会带来两个后果:
             #     ① `close_stale_runs` 只收 `running`, 收不到它 → 任务彻底停住时这行
             #        永远 pending → `eval_live_cond()` 恒真 → 看板「规则重算中」永久挂
-            #        (§15.158 堵过同一类"永久挂着", 但只堵了 running、漏了 pending)
+            #        (§15.174 堵过同一类"永久挂着", 但只堵了 running、漏了 pending)
             #     ② `started_at=NULL` → 状态接口的 age_min 恒空, 排障看不到跑了多久
             eid = int(execute_id("INSERT INTO eval_tasks(scope, status, started_at) "
                                  "VALUES(%s,'running',NOW())",

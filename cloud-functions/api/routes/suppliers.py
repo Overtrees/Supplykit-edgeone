@@ -83,7 +83,7 @@ async def update_supplier(sid: int, request: Request):
 def delete_supplier(sid: int):
     _n = execute("DELETE FROM suppliers WHERE id=%s", [sid])
     if not _n:
-        # 2026-11-16 §15.202: 不存在 → 如实回失败, 不再"删除成功但 0 行"
+        # 2026-11-16 §15.213: 不存在 → 如实回失败, 不再"删除成功但 0 行"
         return fail("供应商不存在")
     from routes.analysis_cache import invalidate
     invalidate("suppliers")
@@ -440,7 +440,7 @@ async def put_seasons(request: Request):
         d = await request.json()
     except Exception as _e:
             try_err('suppliers', '静默降级', _e)
-    # §15.174 修既有 bug: 前端把 channel/mode 放在 **query**(`?mode=..&channel=..`)、
+    # 旧 §15.174 修既有 bug: 前端把 channel/mode 放在 **query**(`?mode=..&channel=..`)、
     #   body 只带 items。原实现只读 body → 非 jd 渠道保存会被写到 jd 名下。
     #   取值优先级: body → query → 默认(与读接口一致)。
     channel = d.get("channel") or request.query_params.get("channel") or "jd"
@@ -449,7 +449,7 @@ async def put_seasons(request: Request):
     key = "season_config_%s" % mode
     old = one("SELECT value FROM replenishment_config WHERE `key`=%s AND channel=%s", [key, channel])
     _oldv = str((old or {}).get("value") or "")
-    # §15.174 幂等短路: 值未变 → 不写库、不记历史、不 invalidate。
+    # 旧 §15.174 幂等短路: 值未变 → 不写库、不记历史、不 invalidate。
     #   为什么: 前端重复保存 / 用户点开弹窗直接确定 / 压测幂等写, 每次都会跑一遍
     #   "写库 + 记 config_history + invalidate('config')" —— 而 invalidate 会让
     #   repl/purchase 整域重建(calc 2.0~2.4s + write 1.4~1.7s), 纯属白烧 CPU,

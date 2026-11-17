@@ -46,7 +46,7 @@ DOMAINS = ("orders", "inventory", "products", "rules", "config", "schema")
 
 _CHUNK = 400          # 明细批量插入行数(400 × 17 列 = 6800 占位符, 远低于单语句上限)
 _COOLDOWN = 60.0      # 同一渠道两次重建最小间隔(秒) —— 一次导入会连调多次 invalidate
-# §15.164: 原 600s。写新 gen 撞主键后标脏 + 每次刷新 built_at 会把退避无限续期,
+# §15.180: 原 600s。写新 gen 撞主键后标脏 + 每次刷新 built_at 会把退避无限续期,
 # 失败不再置 stale(见 _mark_stale), 这里只作有界防御(红线 15 不靠盲重试)。
 _STALE_BACKOFF = 20.0
 _LOCK = threading.Lock()
@@ -57,7 +57,7 @@ _READ_ON = ("1", "true", "yes", "on")
 
 
 def _safe_rebuild():
-    """§15.164 总开关: 未设置=开; `OWN_SAFE_REBUILD=0` 一刀回退到修复前行为。"""
+    """§15.180 总开关: 未设置=开; `OWN_SAFE_REBUILD=0` 一刀回退到修复前行为。"""
     _v = os.environ.get("OWN_SAFE_REBUILD")
     if _v is None or str(_v).strip() == "":
         return True
@@ -65,7 +65,7 @@ def _safe_rebuild():
 
 
 def _flag(name, default=True):
-    """§15.165 开关族: 未设置=开, 置 "0" 一刀回退(不必发版), 红线 2 互斥不叠加。"""
+    """§15.181 开关族: 未设置=开, 置 "0" 一刀回退(不必发版), 红线 2 互斥不叠加。"""
     _v = os.environ.get(name)
     if _v is None or str(_v).strip() == "":
         return default
@@ -121,7 +121,7 @@ def submit_rebuild(channel):
 
 def serve(channel, full=0, limit=10, offset=0, per_type=0, only="",
           compute=None, legacy=0):
-    """own-health 读路径唯一入口(§15.165) → (data, swr_meta_or_None)。与 list_store /
+    """own-health 读路径唯一入口(§15.181) → (data, swr_meta_or_None)。与 list_store /
     unit_store / dash_store 同构: 稳态读物化 / 冷态**读侧零等待**返回上一版完整物化 +
     顶层 __swr + 后台分舱单飞重建 / 首次单飞现算一次。
 
@@ -257,7 +257,7 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only="",
     h = head(channel)
     if not h or not int(h.get("gen") or 0):
         return None
-    # §15.165: 冷态(allow_stale)放行「历史 stale=1 但 gen>0 且 stat 可解析」的完整旧
+    # §15.181: 冷态(allow_stale)放行「历史 stale=1 但 gen>0 且 stat 可解析」的完整旧
     # 快照; 稳态仍严格硬拒(红线 8②)。`OWN_STALE_PREV=0` 回退。与 list_store 同构。
     if int(h.get("stale") or 0) and not (allow_stale and _stale_prev_on()):
         return None
@@ -277,7 +277,7 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only="",
         _where += " AND alert_type=%s"
         _p.append(only)
     rows = []
-    # 2026-11-07 §15.158: LIMIT/OFFSET 一律 str() 显式拼接, SQL 里不许残留 `%d`。
+    # 2026-11-07 §15.174: LIMIT/OFFSET 一律 str() 显式拼接, SQL 里不许残留 `%d`。
     #   db._guard_fmt 会把所有参数转成字符串再模拟 `sql % args`, 残留的 `%d` 必抛
     #   "a real number is required, not str" → 线上 per_type 明细一直静默降级回现算。
     #   (另两条 `% (_lim,_off)` 因 % 优先级高于 + 只格式化了尾段, 结果虽对但太脆, 一并收紧)
@@ -314,7 +314,7 @@ def page_of(channel, full=0, limit=10, offset=0, per_type=0, only="",
 
 # ── 写 ──────────────────────────────────────────────────────────
 def _mark_stale(channel, note):
-    """§15.164: 记失败原因, 但**不把完整旧 gen 标成不可用**(与 list_store 同源修订)。
+    """§15.180: 记失败原因, 但**不把完整旧 gen 标成不可用**(与 list_store 同源修订)。
 
     线上 09:03:01 自有仓重建撞 `own_health_snapshot.PRIMARY` 1062, 旧 gen(14309 行,
     发布前计数自校验通过过) 完整却被置 stale=1 → 读侧退回现算 3.5~4.4s。
@@ -375,7 +375,7 @@ def build(channel, force=False):
     _safe = _safe_rebuild()
     try:
         if _safe:
-            # §15.164: 清掉目标 gen 中超出本轮行数的半批残留, 避免下次写同 gen 1062,
+            # §15.180: 清掉目标 gen 中超出本轮行数的半批残留, 避免下次写同 gen 1062,
             # 也避免残留行把发布前计数自校验算多(红线 8② 完整性)。
             execute("DELETE FROM own_health_snapshot WHERE channel=%s AND gen=%s AND seq>=%s",
                     [channel, gen, len(items)])
@@ -465,7 +465,7 @@ def _channels():
 def ensure_async(channel=None, force=False):
     """读未命中/写后失效的后台重建 —— 不在响应路径上等它。
 
-    §15.165: 默认收编进 `list_store.submit_background`(db.heavy 全局预算 + 去 fp 单飞),
+    §15.181: 默认收编进 `list_store.submit_background`(db.heavy 全局预算 + 去 fp 单飞),
     根治线上 stress_165 P1~P3 里「每次 invalidate 起一个裸 daemon 线程直接 build,
     绕过 3 个 heavy 名额 → 任务风暴下 6+ 类重建同时抢 10 个连接 → 连接池耗尽
     (上限 10, 等待 20s 无归还)」。不新建队列/worker/租约(红线 4/5), 只复用既有闸门。

@@ -63,13 +63,13 @@ def dashboard_boot(channel: str = "jd", mode: str = "", page: int = 1, page_size
     from routes.orders import list_orders
 
     _res = {}
-    _swrs = {}   # §15.162: 子项 __swr 收集 → 聚合响应顶层冒泡(data 形状逐字不变)
+    _swrs = {}   # §15.178: 子项 __swr 收集 → 聚合响应顶层冒泡(data 形状逐字不变)
 
     def _one(_name, _fn, **kw):
         try:
             _r = _fn(**kw)
             # 各路由返回 {ok, data}; 这里解包成前端直接可用的结构, 与单独请求的 response.data 同形
-            # 2026-11-07 §15.162 P2: 子项冷态 SWR 的播报在 ok() 包装的**响应顶层**
+            # 2026-11-07 §15.178 P2: 子项冷态 SWR 的播报在 ok() 包装的**响应顶层**
             #   (不在 data 里 —— data 形状契约不变), 必须从包装层取, 再冒泡到聚合顶层。
             _s = (_r or {}).get("__swr") if isinstance(_r, dict) else None
             _d = (_r or {}).get("data") if isinstance(_r, dict) and "data" in _r else _r
@@ -96,7 +96,7 @@ def dashboard_boot(channel: str = "jd", mode: str = "", page: int = 1, page_size
         ]
         for _f in _futs:
             _f.result()
-    # §15.162 P2: 任一子项在冷态 SWR → 聚合顶层播报(freshness 取最旧, parts 带各子项明细);
+    # §15.178 P2: 任一子项在冷态 SWR → 聚合顶层播报(freshness 取最旧, parts 带各子项明细);
     # 没有子项冷态 → 响应与旧版逐字相同(顶层无 __swr, data 形状不变)。
     if _swrs:
         _ages = [int(v.get("freshness_s") if v.get("freshness_s") is not None else -1)

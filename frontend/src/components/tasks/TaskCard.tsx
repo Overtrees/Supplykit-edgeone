@@ -157,7 +157,7 @@ export default function TaskCard({
   const lastStep = steps.length ? steps[steps.length - 1] : null
   // 2026-10-17 评估联动任务(cleansing_eval)专属: 窗口推进/评估计数/联动库存数——与导入任务同款
   //
-  // 2026-11-16 §15.204: `rule_eval`(每日/手动全量接力)**故意不纳入**这里。
+  // 2026-11-16 §15.215: `rule_eval`(每日/手动全量接力)**故意不纳入**这里。
   //   它的 params 是 {chunks, rows, hits, ch, cursor}, 没有 total/offset/rules_evaluated ——
   //   套进来会让 evalTotal=0 → evalSeg=0, 卡片上显示"0/0 窗口"这种假进度。
   //   要做它的进度条得先在 core/rule_eval_task 里把"总 SKU 数/已评数"落进 params,

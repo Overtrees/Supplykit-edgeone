@@ -171,7 +171,7 @@ for f, s in srcs.items():
 check("无 DATE_FORMAT 单 % 格式串(参数化 SQL 须 %%)", not single_pct, "; ".join(single_pct[:5]))
 for u in single_pct[:10]:
     print("  单%处(人工核对, 无参数查询 %Y 合法):", u)
-# index.py 迁移段已于 2026-11-02 S2-9 整体退役(见 docs §15.123), 原"迁移 SQL DATE_FORMAT
+# index.py 迁移段已于 2026-11-02 S2-9 整体退役(见 docs §15.120), 原"迁移 SQL DATE_FORMAT
 # 必须 %% 转义"检查会变成恒真空跑; 改为全库同口径(任何文件的 DATE_FORMAT 格式串都不得用单 %),
 # 与上一条 D 段互补: 上一条查裸 %Y 字面量, 这条查 DATE_FORMAT 内格式串。
 _mig_ok = True
@@ -220,7 +220,7 @@ check("采购读路由不调用 alert_jobs / sync_purchase_alerts",
 
 # 触发源必须存在(四个写侧入口), 否则"零副作用"退化成"永不更新"
 _trig = 0
-# 2026-11-16 §15.200: "评估完成"那一源随评估本体搬到 core/rule_eval_task.py
+# 2026-11-16 §15.211: "评估完成"那一源随评估本体搬到 core/rule_eval_task.py
 for _rel in ("routes/cleansing.py", "core/rule_eval_task.py", "routes/suppliers.py"):
     _src = open(os.path.join(_api_dir, *_rel.split("/")), encoding="utf-8").read()
     if "kick_purchase_alerts" in _src:
@@ -281,7 +281,7 @@ check("看板低库存两处计数都走 metrics(不再出现 _mcl/_mc2 自拼�
 
 # F4: cron 不得重复计算健康分, 且必须传渠道模式
 _cr = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
-# 2026-11-16 §15.200: 健康快照段随评估本体搬到 core/rule_eval_task.py
+# 2026-11-16 §15.211: 健康快照段随评估本体搬到 core/rule_eval_task.py
 _rt_f = open(os.path.join(_api_dir, "core", "rule_eval_task.py"), encoding="utf-8").read()
 check("评估每渠道只算一次健康分, 且按渠道默认模式传入",
       "_health_index(channel, _cdm(channel))" in _rt_f and "_hix(" not in _rt_f,
@@ -316,7 +316,7 @@ check("收尾只动 pipeline_runs(观测表), 不 UPDATE sync_tasks 状态机",
       "UPDATE pipeline_runs" in _csr_body and "UPDATE sync_tasks" not in _csr_body,
       "改 sync_tasks 会让前端把失败当进行中")
 _cr2 = open(os.path.join(_api_dir, "routes", "cron.py"), encoding="utf-8").read()
-# 2026-11-16 §15.200: 评估已接力, 入口里"先收尾 → 再排任务"的顺序仍必须成立
+# 2026-11-16 §15.211: 评估已接力, 入口里"先收尾 → 再排任务"的顺序仍必须成立
 check("每日评估开始前先收尾挂起运行(再排接力任务)",
       0 <= _cr2.find("close_stale_runs") < _cr2.find("import rule_eval_task as _RT"),
       "顺序反了等于这轮还是被上一次的 running 误导")

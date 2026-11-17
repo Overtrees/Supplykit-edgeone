@@ -112,7 +112,7 @@ def wh_map(m):
     **本项目唯一实现**(红线 2): 看板 `dashboard._build_aux` 曾自己写了一份
     `"bc": b + c`, 把 bbcc 模式下真正的 `warehouse_type='bc'`(B+C 合计行)整类丢弃 ——
     结果 `aux.alertCounts.by_warehouse.bc` 恒 0, 而 `/alerts/counts` 同日 554 条
-    (前端低库存 BC 分组计数直接丢失, §15.202)。两份映射必然漂移, 所以收敛到这里。
+    (前端低库存 BC 分组计数直接丢失, §15.213)。两份映射必然漂移, 所以收敛到这里。
     """
     return {"b": m.get("platform_b", 0), "c": m.get("platform", 0),
             "own": m.get("own", 0), "bc": m.get("bc", 0), "unknown": m.get("", 0)}

@@ -499,7 +499,7 @@ const initAppStore = (set, get) => ({
   },
 
   async loadAll(page?, opts?) {
-    // 2026-11-16 §15.202: 未登录时不发业务请求。
+    // 2026-11-16 §15.213: 未登录时不发业务请求。
     //   App 顶层挂载即 `loadAll()`, 而 summary/aux/stock-risk/alerts/orders 都会带 token 去请求 ——
     //   没有 token 时 5 条齐发、全 401: 控制台 5 条红字, 服务端白跑 5 次鉴权。
     //   只判"有没有 token", 不判有效性: 过期 token 仍让接口如实回 401, 由拦截器统一去登录页。
