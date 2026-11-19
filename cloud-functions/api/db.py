@@ -364,7 +364,14 @@ def _acquire():
                     % (_POOL_LIMIT, _POOL_WAIT),
                     retry_after_ms=800)
     try:
-        c.ping(reconnect=True)
+        # 2026-11-19 根治: 只许 ping(reconnect=False) 验活, 不许静默复活 ——
+        #   pymysql 的 ping(reconnect=True) 会在连接已死时绕过 _connect_db_inner
+        #   直接重建底层连接, 会话级的 SET time_zone='+08:00' 随之丢失, 该连接
+        #   之后所有 NOW() 按 UTC 落库(比北京时间慢 8 小时), 且连接回池继续复用。
+        #   线上实证: sync_tasks.updated_at 时而北京时间时而 UTC, 超时判定因此
+        #   误杀刚建的评估任务。死了就走 _new_conn() 工厂重建, 保证池里每条
+        #   连接都完整经过工厂的会话初始化(口径在源头对齐)。
+        c.ping(reconnect=False)
     except Exception:
         _close_conn(c)   # 坏连接: 关闭并**归还名额**
         c = _new_conn()  # 重新占名额

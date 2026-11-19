@@ -555,8 +555,9 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
     #   原来 mark_driver 在 SELECT 之前、且不校验 task_type —— export/cleansing_eval 的 id
     #   打进来会被当清洗任务推进: 读不到 clean_<id> → 抛"源文件不存在" → 下面的 except
     #   执行 UPDATE status='error', 导出 3 秒内被判死。详见 common.type_ok 的 docstring。
-    row = one("SELECT status, params, result, updated_at, task_type FROM sync_tasks "
-              "WHERE task_id=%s", [task_id])
+    row = one("SELECT status, params, result, updated_at, task_type, "
+              "(updated_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)) AS is_stale "
+              "FROM sync_tasks WHERE task_id=%s", [task_id])
     if not row:
         return {"ok": False, "error": "任务不存在"}
     if not _type_ok(row, "cleansing"):
@@ -566,8 +567,9 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
     status = row.get("status") or ""
     if status == "running":
         # 2026-10-14 超时自愈: running 超过 30 分钟无更新(前端轮询停/实例冻结)——标记 error 防永久卡(释放防重拦截)
-        ua = str(row.get("updated_at") or "")[:19]
-        if ua and ua < (now_cn() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"):
+        # 2026-11-19 根治: 判据用上面 SELECT 的 is_stale(SQL 侧同口径, 与
+        #   continue_tasks 同款) —— 此前字符串比时间, 口径漂移时误判超时。
+        if int(row.get("is_stale") or 0):
             execute("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
                     [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——已自动标记结束，请重新导入"}}), task_id])
             row["status"] = "error"
@@ -596,9 +598,10 @@ def cleansing_status(task_id: str = "", page_size: int = 5000, driver: str = "fr
         # → 清标记允许重跑 done 步(事务幂等——重跑干净——根治进程死永久卡)
         try:
             if params.get("finalizing"):
-                _fs = one("SELECT updated_at FROM sync_tasks WHERE task_id=%s", [task_id])
-                _fu = str((_fs or {}).get("updated_at") or "")[:19].replace("T", " ")
-                if _fu and _fu < (now_cn() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"):
+                # 2026-11-19 根治: 5 分钟判据同样改 SQL 侧同口径, 不再字符串比时间。
+                _fs = one("SELECT (updated_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)) AS fin_stale "
+                          "FROM sync_tasks WHERE task_id=%s", [task_id])
+                if int((_fs or {}).get("fin_stale") or 0):
                     execute("UPDATE sync_tasks SET params=%s, updated_at=NOW() WHERE task_id=%s",
                             [json.dumps({**params, "finalizing": 0}, ensure_ascii=False), task_id])
                     try_err('cleansing', 'finalizing 超时恢复(>5min——done 步死连接已回滚——重跑)', '')

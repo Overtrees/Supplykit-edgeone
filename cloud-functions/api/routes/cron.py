@@ -52,8 +52,14 @@ def continue_tasks(request: Request = None):
     done = {"cleansing": 0, "cleansing_eval": 0, "seed": 0, "export": 0, "rule_eval": 0,
             "timeout": 0, "skipped": 0}
     try:
-        rows = _qc("SELECT task_id, task_type, updated_at FROM sync_tasks WHERE status='running' LIMIT 20")
-        _cutoff = (now_cn() - _td2(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+        # 2026-11-19 根治: 超时判定在 SQL 侧同口径比较 —— updated_at 由 DB 时钟
+        #   (NOW())写入, 判据也用 DB 时钟, 两边同源, 漂移在结构上不可能。此前用
+        #   Python now_cn() 字符串比 DB 时间字符串: 线上 updated_at 按 UTC 读出而
+        #   cutoff 是北京时间, 新任务一出生就显得"8 小时没更新", 第一片跑完就在
+        #   交接处被误杀(2026-11-19 评估连续超时失败的真因)。阈值/文案不变。
+        rows = _qc("SELECT task_id, task_type, "
+                   "(updated_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)) AS is_stale "
+                   "FROM sync_tasks WHERE status='running' LIMIT 20")
         # 2026-11-05 根治「非真异常连续噪音」: 这行诊断原无条件走 try_err(静默吞异常
         #   通道, 固定 warning/quiet_error)。而空库/无 running 任务时 rows=0 是**正常空态**,
         #   中间件每 60s 调一次 → 每分钟一条警告, 永不停止, 把真异常淹掉。
@@ -64,8 +70,7 @@ def continue_tasks(request: Request = None):
         for r in (rows or []):
             tt = r.get("task_type") or ""
             tid = r.get("task_id") or ""
-            ua = str(r.get("updated_at") or "")[:19].replace("T", " ")  # T vs 空格分隔——字符串比较需归一(否则 10:34 T 版 > cutoff 空格版误判不超时)
-            if ua and ua < _cutoff:
+            if int(r.get("is_stale") or 0):
                 # 超时任务(>30 分钟无更新——前端轮询停/实例冻结)——标记 error 释放防重/结束卡住
                 _ec("UPDATE sync_tasks SET status='error', result=%s WHERE task_id=%s",
                     [json.dumps({"result": {"error": "任务超时(30 分钟无更新)——自动标记结束，请重新导入"}}), tid])
