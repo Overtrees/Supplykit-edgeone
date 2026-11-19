@@ -194,5 +194,5 @@ python3 scripts/perf/run.py --list-md                  # 打印 docs/PERF.md 的
 
 ## 架构与技术细节
 
-[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，16 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号自 2026-11-17 起连续唯一 §15.1~237） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
+[📐 架构与路由](docs/ARCHITECTURE.md) · [⚡ 性能基准](docs/PERF.md) · [📝 变更日志](CHANGELOG.md) · [🗂 变更史](docs/history/)（按日期分卷，17 卷 + 3 专题；各卷范围/节数以 [DEVELOPMENT.md §12](docs/DEVELOPMENT.md) 当前表为准，编号自 2026-11-17 起连续唯一 §15.1~242） · [🔧 开发规范](docs/DEVELOPMENT.md) · [🧭 项目技能 SKILL.md](docs/SKILL.md)（一屏速览：坑位/交付闭环/红线） · [🤖 CONTEXT.md](CONTEXT.md)（给 AI 助手的新会话引导）
 

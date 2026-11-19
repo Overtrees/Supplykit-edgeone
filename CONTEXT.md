@@ -22,7 +22,7 @@
 | UI 设计规范(小卡/大卡/弹窗/图标/数字格式) | `docs/UI_DESIGN.md` |
 | **现行规范**(怎么写代码/门禁/数据流) | `docs/DEVELOPMENT.md`（规范册，约 320 行） |
 | **性能基准**(按 页面→模块 查基线/机制/压测命令) | `docs/PERF.md` + `scripts/perf/run.py` |
-| 根因与变更史(按日期分卷；各卷范围/节数以 `DEVELOPMENT.md` §12 当前表为准，编号自 2026-11-17 起连续唯一 §15.1~237) | `docs/history/` — `grep -rn '§15.<号>' docs/history/` 直达 |
+| 根因与变更史(按日期分卷；各卷范围/节数以 `DEVELOPMENT.md` §12 当前表为准，编号自 2026-11-17 起连续唯一 §15.1~242) | `docs/history/` — `grep -rn '§15.<号>' docs/history/` 直达 |
 | 平台架构与技术细节 | `docs/ARCHITECTURE.md` |
 | 2026-11-01 全天 56 提交总览(18 条问题→根因→验证) | `docs/history/` §15.102 |
 | 2026-11-17 全天：种子告警、审计四修、漂移根治、评估驱动、CF Worker | `docs/history/2026-11-17.md` §15.223 起 |

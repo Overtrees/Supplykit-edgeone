@@ -6,7 +6,7 @@ description: "SupplyKit 开发手册(EdgeOne Makers + TiDB 原生)。含七条�
 # SupplyKit 开发手册
 
 > 这是**入口索引**, 不是全量文档。每条只给判据、命令、禁止项; 根因与实测数据在
-> `docs/history/`（按日期分卷，索引见 `DEVELOPMENT.md` §12；编号自 2026-11-17 起连续唯一 §15.1~237，
+> `docs/history/`（按日期分卷，索引见 `DEVELOPMENT.md` §12；编号自 2026-11-17 起连续唯一 §15.1~242，
 > 直接按号定位），改动前精读对应章节。
 > 冲突时以**代码 + 用户最新指令**为准, 本文与 `CONTEXT.md` 同步维护。
 
