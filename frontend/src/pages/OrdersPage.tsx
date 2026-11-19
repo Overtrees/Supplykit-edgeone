@@ -194,7 +194,16 @@ export default function OrdersPage() {
         </div>
       )}
       <div className="card">
-        <div style={{ fontSize: 'var(--font-18)', fontWeight: 'var(--fw-bold)', marginBottom: 8 }}>
+        {/* 2026-11-19 根治: overflow:hidden 让标题行包含 float:right 的历史链接 —— 窄屏下链接换行后
+            溢出标题行高度, 会把下方 overflow:auto 的表格容器(BFC)整高压窄一个链接宽度, 右侧出现空白竖条 */}
+        <div
+          style={{
+            fontSize: 'var(--font-18)',
+            fontWeight: 'var(--fw-bold)',
+            marginBottom: 8,
+            overflow: 'hidden',
+          }}
+        >
           {t('nav.orders')} {/* 2026-10-28 全站统一: 已加载 N/M 条 · 显示 x/y 列(同一行并排) */}
           <span
             className="small muted"
